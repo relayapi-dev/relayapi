@@ -72,6 +72,30 @@ function mapObjectiveToMeta(objective: string): string {
 	return map[objective] ?? "OUTCOME_ENGAGEMENT";
 }
 
+export function mapMetaObjectiveToLocal(objective?: string): string {
+	const map: Record<string, string> = {
+		OUTCOME_AWARENESS: "awareness",
+		OUTCOME_TRAFFIC: "traffic",
+		OUTCOME_ENGAGEMENT: "engagement",
+		OUTCOME_LEADS: "leads",
+		OUTCOME_SALES: "conversions",
+		OUTCOME_APP_PROMOTION: "conversions",
+		BRAND_AWARENESS: "awareness",
+		REACH: "awareness",
+		LINK_CLICKS: "traffic",
+		TRAFFIC: "traffic",
+		POST_ENGAGEMENT: "engagement",
+		PAGE_LIKES: "engagement",
+		MESSAGES: "engagement",
+		LEAD_GENERATION: "leads",
+		CONVERSIONS: "conversions",
+		PRODUCT_CATALOG_SALES: "conversions",
+		VIDEO_VIEWS: "video_views",
+	};
+
+	return map[objective ?? ""] ?? "engagement";
+}
+
 function mapMetaStatusToLocal(status: string): string {
 	const map: Record<string, string> = {
 		ACTIVE: "active",
@@ -813,7 +837,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 			platformAdId: ad.id,
 			adName: ad.name,
 			status: mapMetaStatusToLocal(ad.effective_status),
-			objective: ad.campaign?.objective,
+			objective: mapMetaObjectiveToLocal(ad.campaign?.objective),
 			dailyBudgetCents: ad.adset?.daily_budget
 				? Number(ad.adset.daily_budget)
 				: undefined,

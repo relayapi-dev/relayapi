@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { FilterBar } from "@/components/dashboard/filter-bar";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi, useMutation } from "@/hooks/use-api";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
@@ -188,6 +189,7 @@ export function AdsPage() {
   const [discovering, setDiscovering] = useState(false);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [accountActionError, setAccountActionError] = useState<string | null>(null);
+  const [accountActionSuccess, setAccountActionSuccess] = useState<string | null>(null);
 
   // --- Data ---
   const adsQuery = {
@@ -273,12 +275,21 @@ export function AdsPage() {
 
   const handleSync = useCallback(async (accountId: string) => {
     setAccountActionError(null);
+    setAccountActionSuccess(null);
     try {
       const res = await fetch(`/api/ads/accounts/${accountId}/sync`, { method: "POST" });
       if (!res.ok) {
         const json = await res.json().catch(() => null) as { error?: { message?: string } } | null;
         throw new Error(json?.error?.message || "Failed to sync ad account.");
       }
+      const json = await res.json().catch(() => null) as {
+        ads_created?: number;
+        ads_updated?: number;
+        metrics_updated?: number;
+      } | null;
+      setAccountActionSuccess(
+        `Sync finished: ${json?.ads_created ?? 0} imported, ${json?.ads_updated ?? 0} updated, ${json?.metrics_updated ?? 0} metrics refreshed.`,
+      );
       accountsRefetch();
     } catch (err) {
       setAccountActionError(err instanceof Error ? err.message : "Failed to sync ad account.");
@@ -356,22 +367,27 @@ export function AdsPage() {
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => switchTab(tab.key)}
-            className={cn(
-              "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-              activeTab === tab.key
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
+      {/* Tabs + filters */}
+      <div className="flex items-end justify-between gap-x-4 border-b border-border">
+        <div className="flex gap-4 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => switchTab(tab.key)}
+              className={cn(
+                "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
+                activeTab === tab.key
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="pb-2 shrink-0">
+          <FilterBar />
+        </div>
       </div>
 
       {/* ====== ADS TAB ====== */}
@@ -685,10 +701,19 @@ export function AdsPage() {
       {/* ====== ACCOUNTS TAB ====== */}
       {activeTab === "accounts" && (
         <>
-          {(accountsError || accountActionError) && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-              {accountsError || accountActionError}
-            </div>
+          {(accountsError || accountActionError || accountActionSuccess) && (
+            <>
+              {accountActionSuccess && (
+                <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600 dark:text-emerald-400">
+                  {accountActionSuccess}
+                </div>
+              )}
+              {(accountsError || accountActionError) && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  {accountsError || accountActionError}
+                </div>
+              )}
+            </>
           )}
           {accountsLoading ? (
             <div className="flex items-center justify-center py-20"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
