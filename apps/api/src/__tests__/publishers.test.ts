@@ -7,10 +7,10 @@ import { PLATFORMS } from "../schemas/common";
 // ===========================================================================
 
 describe("Publisher registry", () => {
-	const POSTING_PLATFORMS = PLATFORMS.filter((p) => p !== "whatsapp");
+	const PUBLISHER_PLATFORMS = PLATFORMS;
 
-	it("has publishers for all 16 posting platforms", () => {
-		for (const platform of POSTING_PLATFORMS) {
+	it("has publishers for every declared platform", () => {
+		for (const platform of PUBLISHER_PLATFORMS) {
 			const publisher = getPublisher(platform);
 			expect(publisher).toBeDefined();
 			expect(publisher?.platform).toBe(platform);
@@ -18,14 +18,15 @@ describe("Publisher registry", () => {
 	});
 
 	it("reports supported platforms correctly", () => {
-		for (const platform of POSTING_PLATFORMS) {
+		for (const platform of PUBLISHER_PLATFORMS) {
 			expect(isSupportedPlatform(platform)).toBe(true);
 		}
 	});
 
-	it("does not have a publisher for whatsapp (messaging platform)", () => {
-		expect(getPublisher("whatsapp")).toBeUndefined();
-		expect(isSupportedPlatform("whatsapp")).toBe(false);
+	it("has a publisher for whatsapp", () => {
+		expect(getPublisher("whatsapp")).toBeDefined();
+		expect(getPublisher("whatsapp")?.platform).toBe("whatsapp");
+		expect(isSupportedPlatform("whatsapp")).toBe(true);
 	});
 
 	it("returns undefined for unknown platforms", () => {
@@ -38,9 +39,9 @@ describe("Publisher registry", () => {
 // ===========================================================================
 
 describe("Publisher interface compliance", () => {
-	const POSTING_PLATFORMS = PLATFORMS.filter((p) => p !== "whatsapp");
+	const PUBLISHER_PLATFORMS = PLATFORMS;
 
-	for (const platform of POSTING_PLATFORMS) {
+	for (const platform of PUBLISHER_PLATFORMS) {
 		it(`${platform} publisher has correct platform and publish method`, () => {
 			const publisher = getPublisher(platform);
 			expect(publisher).toBeDefined();

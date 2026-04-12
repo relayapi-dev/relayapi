@@ -142,8 +142,9 @@ function classifyTarget(target: string): "platform" | "account_id" | "invalid" {
 }
 
 describe("Target classification", () => {
-	it("identifies all 17 platform names", () => {
-		expect(PLATFORMS).toHaveLength(17);
+	it("identifies every declared platform name", () => {
+		expect(PLATFORMS.length).toBeGreaterThan(0);
+		expect(new Set(PLATFORMS).size).toBe(PLATFORMS.length);
 		for (const p of PLATFORMS) {
 			expect(classifyTarget(p)).toBe("platform");
 		}

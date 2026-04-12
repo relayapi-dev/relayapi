@@ -169,6 +169,11 @@ mock.module("../services/external-post-sync/index", () => ({
 	getSupportedSyncPlatforms: () => ["instagram", "twitter"],
 }));
 
+const mockDiscoverAdAccounts = mock(async () => []);
+mock.module("../services/ad-service", () => ({
+	discoverAdAccounts: mockDiscoverAdAccounts,
+}));
+
 // ── Import the function under test (AFTER all mocks) ──
 
 const { exchangeAndSaveAccount } = await import("../routes/connect");
