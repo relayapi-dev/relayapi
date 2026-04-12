@@ -17,7 +17,24 @@ import { getAdPlatformAdapter } from "./ad-platforms";
 import { resolveAdsAccessToken } from "./ad-access-token";
 import { fetchAndStoreAdMetrics } from "./ad-analytics";
 
-type Database = ReturnType<typeof createDb>;
+type SyncedCampaignObjective = (typeof adCampaigns.$inferInsert)["objective"];
+type SyncedAdStatus = (typeof ads.$inferInsert)["status"];
+type SyncedTargeting = (typeof ads.$inferInsert)["targeting"];
+
+function asCampaignObjective(
+	objective: string | undefined,
+	fallback: SyncedCampaignObjective = "engagement",
+): SyncedCampaignObjective {
+	return (objective ?? fallback) as SyncedCampaignObjective;
+}
+
+function asAdStatus(status: string): SyncedAdStatus {
+	return status as SyncedAdStatus;
+}
+
+function asAdTargeting(targeting: unknown): SyncedTargeting {
+	return targeting as SyncedTargeting;
+}
 
 // ---------------------------------------------------------------------------
 // Sync external ads for a single ad account
@@ -63,8 +80,6 @@ export async function syncExternalAds(
 	let metricsUpdated = 0;
 	let error: string | undefined;
 
-	const logStart = new Date();
-
 	try {
 		const result = await adapter.syncExternalAds(
 			accessToken,
@@ -92,20 +107,51 @@ export async function syncExternalAds(
 					.insert(adCampaigns)
 					.values({
 						organizationId: orgId,
+						workspaceId: ctx.adAccount.workspaceId,
 						adAccountId,
 						platform: ctx.adAccount.platform,
 						platformCampaignId: externalAd.platformCampaignId,
 						name: externalAd.campaignName,
-						objective: (externalAd.objective as any) ?? "engagement",
-						status: externalAd.status as any,
+						objective: asCampaignObjective(externalAd.objective),
+						status: asAdStatus(externalAd.status),
 						dailyBudgetCents: externalAd.dailyBudgetCents,
 						lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
+						currency: ctx.adAccount.currency,
 						isExternal: true,
 						metadata: {
 							platformAdSetId: externalAd.platformAdSetId,
 						},
 					})
 					.returning();
+			} else {
+				[campaign] = await db
+					.update(adCampaigns)
+					.set({
+						workspaceId: ctx.adAccount.workspaceId,
+						adAccountId,
+						name: externalAd.campaignName,
+						objective: asCampaignObjective(
+							externalAd.objective,
+							campaign.objective,
+						),
+						status: asAdStatus(externalAd.status),
+						dailyBudgetCents: externalAd.dailyBudgetCents,
+						lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
+						currency: ctx.adAccount.currency,
+						metadata: {
+							platformAdSetId: externalAd.platformAdSetId,
+						},
+						updatedAt: new Date(),
+					})
+					.where(eq(adCampaigns.id, campaign.id))
+					.returning();
+			}
+
+			if (!campaign) {
+				console.warn(
+					`[Ad Sync] Skipping ad ${externalAd.platformAdId} because its campaign could not be upserted`,
+				);
+				continue;
 			}
 
 			// Upsert ad
@@ -124,8 +170,26 @@ export async function syncExternalAds(
 				await db
 					.update(ads)
 					.set({
-						status: externalAd.status as any,
+						workspaceId: ctx.adAccount.workspaceId,
+						campaignId: campaign.id,
+						adAccountId,
+						status: asAdStatus(externalAd.status),
 						name: externalAd.adName,
+						headline: externalAd.creative?.headline,
+						body: externalAd.creative?.body,
+						imageUrl: externalAd.creative?.imageUrl,
+						videoUrl: externalAd.creative?.videoUrl,
+						linkUrl: externalAd.creative?.linkUrl,
+						callToAction: externalAd.creative?.callToAction,
+						targeting: asAdTargeting(externalAd.targeting),
+						dailyBudgetCents: externalAd.dailyBudgetCents,
+						lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
+						startDate: externalAd.startDate
+							? new Date(externalAd.startDate)
+							: null,
+						endDate: externalAd.endDate
+							? new Date(externalAd.endDate)
+							: null,
 						updatedAt: new Date(),
 					})
 					.where(eq(ads.id, existingAd.id));
@@ -133,19 +197,20 @@ export async function syncExternalAds(
 			} else {
 				await db.insert(ads).values({
 					organizationId: orgId,
-					campaignId: campaign!.id,
+					workspaceId: ctx.adAccount.workspaceId,
+					campaignId: campaign.id,
 					adAccountId,
 					platform: ctx.adAccount.platform,
 					platformAdId: externalAd.platformAdId,
 					name: externalAd.adName,
-					status: externalAd.status as any,
+					status: asAdStatus(externalAd.status),
 					headline: externalAd.creative?.headline,
 					body: externalAd.creative?.body,
 					imageUrl: externalAd.creative?.imageUrl,
 					videoUrl: externalAd.creative?.videoUrl,
 					linkUrl: externalAd.creative?.linkUrl,
 					callToAction: externalAd.creative?.callToAction,
-					targeting: externalAd.targeting as any,
+					targeting: asAdTargeting(externalAd.targeting),
 					dailyBudgetCents: externalAd.dailyBudgetCents,
 					lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
 					startDate: externalAd.startDate

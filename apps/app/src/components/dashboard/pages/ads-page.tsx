@@ -418,8 +418,14 @@ export function AdsPage() {
           ) : ads.length === 0 ? (
             <div className="rounded-md border border-dashed border-border p-12 text-center">
               <Megaphone className="size-8 text-muted-foreground/40 mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">No ads yet</p>
-              <p className="text-xs text-muted-foreground mt-1">Create an ad or boost a published post to get started</p>
+              <p className="text-sm text-muted-foreground">
+                {adAccounts.length > 0 ? "No synced ads yet" : "No ads yet"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {adAccounts.length > 0
+                  ? "Your ad accounts are connected, but external ads only appear after an account sync."
+                  : "Create an ad or boost a published post to get started"}
+              </p>
             </div>
           ) : (
             <>
@@ -517,7 +523,14 @@ export function AdsPage() {
           ) : campaigns.length === 0 ? (
             <div className="rounded-md border border-dashed border-border p-12 text-center">
               <Megaphone className="size-8 text-muted-foreground/40 mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">No campaigns yet</p>
+              <p className="text-sm text-muted-foreground">
+                {adAccounts.length > 0 ? "No synced campaigns yet" : "No campaigns yet"}
+              </p>
+              {adAccounts.length > 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  External campaigns are imported when you sync an ad account.
+                </p>
+              )}
             </div>
           ) : (
             <>
