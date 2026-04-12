@@ -103,10 +103,10 @@ describe("API key admin hardening", () => {
 			calls_included: 10_000,
 		});
 
-		const res = await app.fetch(makeApiKeyRequest(token), env, mockCtx);
+			const res = await app.fetch(makeApiKeyRequest(token), env, mockCtx);
 
-		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ ok: true });
+			expect(res.status).toBe(200);
+			expect((await res.json()) as { ok: boolean }).toEqual({ ok: true });
 	});
 });
 
@@ -194,18 +194,18 @@ describe("URL validation hardening", () => {
 		).toBe(true);
 	});
 
-	it("rejects hostnames whose DNS resolves to private IPs", async () => {
-		globalThis.fetch = mock(async () =>
-			Response.json({ Answer: [{ type: 1, data: "127.0.0.1" }] }),
-		) as typeof fetch;
+		it("rejects hostnames whose DNS resolves to private IPs", async () => {
+			globalThis.fetch = mock(async () =>
+				Response.json({ Answer: [{ type: 1, data: "127.0.0.1" }] }),
+			) as unknown as typeof fetch;
 
 		expect(await isBlockedUrlWithDns("https://ssrf-private.example")).toBe(true);
 	});
 
-	it("allows hostnames whose DNS resolves only to public IPs", async () => {
-		globalThis.fetch = mock(async () =>
-			Response.json({ Answer: [{ type: 1, data: "93.184.216.34" }] }),
-		) as typeof fetch;
+		it("allows hostnames whose DNS resolves only to public IPs", async () => {
+			globalThis.fetch = mock(async () =>
+				Response.json({ Answer: [{ type: 1, data: "93.184.216.34" }] }),
+			) as unknown as typeof fetch;
 
 		expect(await isBlockedUrlWithDns("https://ssrf-public.example")).toBe(false);
 	});

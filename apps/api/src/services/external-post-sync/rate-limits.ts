@@ -96,13 +96,24 @@ export function parseRateLimitHeaders(
 	if (bizUsage) {
 		try {
 			const parsed = JSON.parse(bizUsage);
+			if (!parsed || typeof parsed !== "object") return null;
 			// Structure: { "<biz_id>": [{ "call_count": N, "estimated_time_to_regain_access": N, ... }] }
-			const firstKey = Object.keys(parsed)[0];
-			const entry = Array.isArray(parsed[firstKey]) ? parsed[firstKey][0] : parsed[firstKey];
-			if (entry) {
-				const callCount = typeof entry.call_count === "number" ? entry.call_count : 0;
-				const regainMin = typeof entry.estimated_time_to_regain_access === "number"
-					? entry.estimated_time_to_regain_access
+			const usageByBusiness = parsed as Record<string, unknown>;
+			const [firstKey] = Object.keys(usageByBusiness);
+			if (!firstKey) return null;
+
+			const firstValue = usageByBusiness[firstKey];
+			const entry = Array.isArray(firstValue) ? firstValue[0] : firstValue;
+			if (entry && typeof entry === "object") {
+				const usageEntry = entry as {
+					call_count?: unknown;
+					estimated_time_to_regain_access?: unknown;
+				};
+				const callCount = typeof usageEntry.call_count === "number"
+					? usageEntry.call_count
+					: 0;
+				const regainMin = typeof usageEntry.estimated_time_to_regain_access === "number"
+					? usageEntry.estimated_time_to_regain_access
 					: 0;
 				return {
 					remaining: Math.max(0, 100 - callCount),

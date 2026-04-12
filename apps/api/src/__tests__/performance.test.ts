@@ -12,6 +12,7 @@ import {
 import { PLATFORM_LIMITS, countChars } from "../config/platform-limits";
 import { PRICING } from "../types";
 import type { Env } from "../types";
+import { createMockEnv as createSharedMockEnv } from "./__mocks__/env";
 
 // ===========================================================================
 // Helpers
@@ -105,7 +106,7 @@ function printResult(r: BenchResult) {
 // Mock Cloudflare Bindings
 // ===========================================================================
 
-class MockKV implements KVNamespace {
+class MockKV {
 	private store = new Map<string, string>();
 
 	async get(key: string, opts?: unknown): Promise<unknown> {
@@ -160,27 +161,7 @@ async function createApp() {
 }
 
 function createMockEnv(): Env {
-	const kv = new MockKV();
-	// Seed a valid API key
-	const testKeyData = JSON.stringify({
-		org_id: "org_perftest",
-		key_id: "key_perftest",
-		permissions: [],
-		expires_at: null,
-		rate_limit_max: 10000,
-		rate_limit_window: 60,
-	});
-	// We'll set this after hashing
-	return {
-		KV: kv as unknown as KVNamespace,
-		MEDIA_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
-		HYPERDRIVE: {
-			connectionString: "postgresql://mock:mock@localhost:5432/mock",
-		} as unknown as Hyperdrive,
-		PUBLISH_QUEUE: {
-			send: async () => {},
-		} as unknown as Queue,
-	};
+	return createSharedMockEnv().env;
 }
 
 // Pre-computed hash for "rlay_live_perftestkey000000000000000000000000000000"

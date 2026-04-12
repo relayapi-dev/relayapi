@@ -13,6 +13,14 @@ import { authMiddleware } from "../middleware/auth";
 import { MockKV, createMockEnv, seedApiKeyInKV, hashKey } from "./__mocks__/env";
 
 const TEST_KEY = "rlay_live_testauthkey0000000000000000000000000000000";
+type AuthErrorResponse = { error: { code: string; message: string } };
+type AuthSuccessResponse = {
+	orgId: string;
+	keyId: string;
+	plan: "free" | "pro";
+	callsIncluded: number;
+};
+
 let kv: MockKV;
 let env: Env;
 let app: Hono<{ Bindings: Env; Variables: Variables }>;
@@ -29,6 +37,10 @@ const mockCtx = {
 	waitUntil: () => {},
 	passThroughOnException: () => {},
 } as unknown as ExecutionContext;
+
+async function readJson<T>(response: Response): Promise<T> {
+	return (await response.json()) as T;
+}
 
 beforeEach(async () => {
 	const mock = createMockEnv();
@@ -51,7 +63,7 @@ describe("authMiddleware", () => {
 	it("rejects missing Authorization header with 401", async () => {
 		const res = await app.fetch(makeRequest(), env, mockCtx);
 		expect(res.status).toBe(401);
-		const body = await res.json();
+		const body = await readJson<AuthErrorResponse>(res);
 		expect(body.error.code).toBe("UNAUTHORIZED");
 		expect(body.error.message).toBe("Missing API key");
 	});
@@ -63,7 +75,7 @@ describe("authMiddleware", () => {
 			mockCtx,
 		);
 		expect(res.status).toBe(401);
-		const body = await res.json();
+		const body = await readJson<AuthErrorResponse>(res);
 		expect(body.error.message).toBe("Missing API key");
 	});
 
@@ -74,7 +86,7 @@ describe("authMiddleware", () => {
 			mockCtx,
 		);
 		expect(res.status).toBe(401);
-		const body = await res.json();
+		const body = await readJson<AuthErrorResponse>(res);
 		expect(body.error.message).toBe("Invalid API key format");
 	});
 
@@ -85,7 +97,7 @@ describe("authMiddleware", () => {
 			mockCtx,
 		);
 		expect(res.status).toBe(401);
-		const body = await res.json();
+		const body = await readJson<AuthErrorResponse>(res);
 		expect(body.error.message).toBe("Invalid API key");
 	});
 
@@ -106,7 +118,7 @@ describe("authMiddleware", () => {
 			mockCtx,
 		);
 		expect(res.status).toBe(401);
-		const body = await res.json();
+		const body = await readJson<AuthErrorResponse>(res);
 		expect(body.error.message).toBe("API key expired");
 	});
 
@@ -127,7 +139,7 @@ describe("authMiddleware", () => {
 			mockCtx,
 		);
 		expect(res.status).toBe(200);
-		const body = await res.json();
+		const body = await readJson<AuthSuccessResponse>(res);
 		expect(body.orgId).toBe("org_123");
 		expect(body.keyId).toBe("key_456");
 		expect(body.plan).toBe("pro");
@@ -151,7 +163,7 @@ describe("authMiddleware", () => {
 			mockCtx,
 		);
 		expect(res.status).toBe(200);
-		const body = await res.json();
+		const body = await readJson<AuthSuccessResponse>(res);
 		expect(body.plan).toBe("free");
 		expect(body.callsIncluded).toBe(200);
 	});
@@ -173,7 +185,7 @@ describe("authMiddleware", () => {
 			mockCtx,
 		);
 		expect(res.status).toBe(200);
-		const body = await res.json();
+		const body = await readJson<AuthSuccessResponse>(res);
 		expect(body.plan).toBe("pro");
 		expect(body.callsIncluded).toBe(10_000);
 	});
@@ -196,7 +208,8 @@ describe("authMiddleware", () => {
 			mockCtx,
 		);
 		expect(first.status).toBe(200);
-		expect((await first.json()).plan).toBe("pro");
+		const firstBody = await readJson<AuthSuccessResponse>(first);
+		expect(firstBody.plan).toBe("pro");
 
 		await seedApiKeyInKV(kv, hash, {
 			org_id: "org_cached",
@@ -214,7 +227,7 @@ describe("authMiddleware", () => {
 			mockCtx,
 		);
 		expect(second.status).toBe(200);
-		const body = await second.json();
+		const body = await readJson<AuthSuccessResponse>(second);
 		expect(body.plan).toBe("free");
 		expect(body.callsIncluded).toBe(200);
 	});

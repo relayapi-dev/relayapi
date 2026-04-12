@@ -15,6 +15,10 @@ import { PRICING } from "../types";
 
 const app = new Hono<{ Bindings: Env }>();
 
+interface ApiKeyLookupDb {
+	select(...args: any[]): any;
+}
+
 /** Extract subscription ID from an invoice's parent field */
 function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
 	const details = invoice.parent?.subscription_details;
@@ -418,16 +422,16 @@ async function handleEvent(event: Stripe.Event, env: Env): Promise<void> {
 
 async function syncOrgKeysToKV(
 	env: Env,
-	db: ReturnType<typeof createDb>,
+	db: ApiKeyLookupDb,
 	orgId: string,
 	plan: "free" | "pro",
 	callsIncluded: number,
 	opts?: { aiEnabled?: boolean; dailyToolLimit?: number },
 ): Promise<void> {
-	const orgKeys = await db
+	const orgKeys = (await db
 		.select({ key: apikey.key })
 		.from(apikey)
-		.where(eq(apikey.organizationId, orgId));
+		.where(eq(apikey.organizationId, orgId))) as Array<{ key: string }>;
 
 	for (const k of orgKeys) {
 		const existing = await env.KV.get<KVKeyData>(`apikey:${k.key}`, "json");

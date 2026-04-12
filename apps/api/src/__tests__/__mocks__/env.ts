@@ -1,6 +1,6 @@
 import type { Env, KVKeyData } from "../../types";
 
-export class MockKV implements KVNamespace {
+export class MockKV {
 	private store = new Map<string, string>();
 
 	async get(key: string, opts?: unknown): Promise<unknown> {
@@ -21,18 +21,23 @@ export class MockKV implements KVNamespace {
 
 	async list(
 		_opts?: unknown,
-	): Promise<{ keys: Array<{ name: string }>; list_complete: boolean }> {
+	): Promise<{
+		keys: Array<{ name: string }>;
+		list_complete: boolean;
+		cacheStatus: null;
+	}> {
 		return {
 			keys: Array.from(this.store.keys()).map((name) => ({ name })),
 			list_complete: true,
+			cacheStatus: null,
 		};
 	}
 
 	async getWithMetadata(
 		key: string,
 		_opts?: unknown,
-	): Promise<{ value: string | null; metadata: unknown }> {
-		return { value: this.store.get(key) ?? null, metadata: null };
+	): Promise<{ value: string | null; metadata: unknown; cacheStatus: null }> {
+		return { value: this.store.get(key) ?? null, metadata: null, cacheStatus: null };
 	}
 
 	/** Test helper: inspect raw store */
@@ -44,6 +49,10 @@ export class MockKV implements KVNamespace {
 	_clear(): void {
 		this.store.clear();
 	}
+}
+
+function createMockQueue(): Queue {
+	return { send: async () => {} } as unknown as Queue;
 }
 
 export class MockR2Bucket {
@@ -67,11 +76,14 @@ export function createMockEnv(kvOverride?: MockKV): { env: Env; kv: MockKV } {
 		HYPERDRIVE: {
 			connectionString: "postgresql://mock:mock@localhost:5432/mock",
 		} as unknown as Hyperdrive,
-		PUBLISH_QUEUE: { send: async () => {} } as unknown as Queue,
-		EMAIL_QUEUE: { send: async () => {} } as unknown as Queue,
-		REFRESH_QUEUE: { send: async () => {} } as unknown as Queue,
-		INBOX_QUEUE: { send: async () => {} } as unknown as Queue,
-		SYNC_QUEUE: { send: async () => {} } as unknown as Queue,
+		PUBLISH_QUEUE: createMockQueue(),
+		EMAIL_QUEUE: createMockQueue(),
+		REFRESH_QUEUE: createMockQueue(),
+		INBOX_QUEUE: createMockQueue(),
+		TOOLS_QUEUE: createMockQueue(),
+		ADS_QUEUE: createMockQueue(),
+		SYNC_QUEUE: createMockQueue(),
+		REALTIME: {} as unknown as DurableObjectNamespace,
 		FREE_RATE_LIMITER: {
 			limit: async () => ({ success: true }),
 		} as unknown as RateLimit,

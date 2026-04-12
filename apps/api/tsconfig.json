@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "types": ["@cloudflare/workers-types"],
+    "types": ["bun-types", "@cloudflare/workers-types"],
     "outDir": "./dist",
     "paths": {
       "@relayapi/db": ["../../packages/db/src/index.ts"]

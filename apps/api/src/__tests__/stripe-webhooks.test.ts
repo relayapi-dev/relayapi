@@ -103,6 +103,13 @@ const PRICING = {
 	monthlyPriceCents: 500,
 };
 
+function requireValue<T>(value: T | undefined, message: string): T {
+	if (value === undefined) {
+		throw new Error(message);
+	}
+	return value;
+}
+
 function makeKVData(overrides?: Partial<KVKeyData>): KVKeyData {
 	return {
 		org_id: ORG_ID,
@@ -318,7 +325,10 @@ describe("Stripe webhook handler", () => {
 			await handleEvent(event, env);
 
 			expect(mockDb._updates).toHaveLength(1);
-			const update = mockDb._updates[0];
+			const update = requireValue(
+				mockDb._updates[0],
+				"expected organization subscription update",
+			);
 			expect(update.table).toBe("organizationSubscriptions");
 			expect(update.set.status).toBe("active");
 			expect(update.set.cancelAtPeriodEnd).toBe(false);
@@ -503,7 +513,10 @@ describe("Stripe webhook handler", () => {
 			await handleEvent(event, env);
 
 			expect(mockDb._inserts).toHaveLength(1);
-			const insert = mockDb._inserts[0];
+			const insert = requireValue(
+				mockDb._inserts[0],
+				"expected invoice insert",
+			);
 			expect(insert.table).toBe("invoices");
 			expect(insert.values.organizationId).toBe(ORG_ID);
 			expect(insert.values.status).toBe("finalized");
@@ -528,7 +541,10 @@ describe("Stripe webhook handler", () => {
 			// Should update, not insert
 			expect(mockDb._inserts).toHaveLength(0);
 			expect(mockDb._updates).toHaveLength(1);
-			const update = mockDb._updates[0];
+			const update = requireValue(
+				mockDb._updates[0],
+				"expected invoice update",
+			);
 			expect(update.table).toBe("invoices");
 			expect(update.set.status).toBe("finalized");
 			expect(update.set.totalCents).toBe(500);

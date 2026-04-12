@@ -260,11 +260,11 @@ describe("exchangeAndSaveAccount", () => {
 
 	beforeEach(() => {
 		activeDb = createMockDb();
-		const mockEnv = createMockEnv();
-		env = mockEnv.env;
-		kv = mockEnv.kv;
-		mockFetch = createMockFetch();
-		globalThis.fetch = mockFetch as typeof fetch;
+			const mockEnv = createMockEnv();
+			env = mockEnv.env;
+			kv = mockEnv.kv;
+			mockFetch = createMockFetch();
+			globalThis.fetch = mockFetch as unknown as typeof fetch;
 
 		// Reset mocks
 		mockExchangeCode.mockReset();
@@ -396,7 +396,7 @@ describe("exchangeAndSaveAccount", () => {
 			// Make profile fetch return 500
 			globalThis.fetch = createMockFetch({
 				"/users/me": () => new Response("Server Error", { status: 500 }),
-			}) as typeof fetch;
+			}) as unknown as typeof fetch;
 
 			const result = await exchangeAndSaveAccount({
 				env,
@@ -419,7 +419,7 @@ describe("exchangeAndSaveAccount", () => {
 			// Make all fetches return errors (profile + long-lived token)
 			globalThis.fetch = createMockFetch({
 				"graph.instagram.com": () => new Response("Server Error", { status: 500 }),
-			}) as typeof fetch;
+			}) as unknown as typeof fetch;
 
 			const result = await exchangeAndSaveAccount({
 				env,
