@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "bun ./scripts/postinstall.ts && next build",
-    "build:worker": "cd ../.. && bun install && cd apps/docs && bun run build && npx @opennextjs/cloudflare build",
+    "build": "opennextjs-cloudflare build",
+    "build:next": "bun ./scripts/postinstall.ts && next build",
+    "build:worker": "bun run build",
     "start": "next start",
     "generate-docs": "bun ./scripts/generate-docs.ts",
     "postinstall": "bun ./scripts/postinstall.ts"
