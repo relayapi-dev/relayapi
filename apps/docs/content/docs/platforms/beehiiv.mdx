@@ -1,0 +1,74 @@
+---
+title: Beehiiv API
+description: Send newsletters to your Beehiiv subscribers via RelayAPI — cross-post social content to email in a single API call.
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `beehiiv` |
+| Auth method | API Key |
+| Content format | HTML (plain text auto-wrapped) |
+| Scheduling | Yes |
+| Analytics | No |
+
+## Before You Start
+
+<Callout type="info">
+You need a Beehiiv API key and your publication ID. Get these from your [Beehiiv dashboard](https://app.beehiiv.com/) under Settings > Integrations > API.
+</Callout>
+
+## Connect
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/connect/beehiiv \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "api_key": "your-beehiiv-api-key",
+    "publication_id": "pub_xxxxxxxx"
+  }'
+```
+
+## Send a Newsletter
+
+Cross-post to Beehiiv alongside social platforms:
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Our weekly product update...",
+    "targets": ["twitter", "acc_beehiiv123"],
+    "scheduled_at": "now",
+    "target_options": {
+      "beehiiv": {
+        "subject": "Weekly Update #42",
+        "preview_text": "New features, bug fixes, and more",
+        "content_html": "<h1>Weekly Update</h1><p>Here is what we shipped...</p>"
+      }
+    }
+  }'
+```
+
+## `target_options` Fields
+
+All fields go inside `target_options.beehiiv` on your post request.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `subject` | string | No | Email subject line. Falls back to first line of content. |
+| `preview_text` | string | No | Preview text shown in email clients. |
+| `content_html` | string | No | Full HTML body. If omitted, plain text content is auto-wrapped in HTML. |
+
+## Discovery
+
+List your publication info:
+
+```
+GET /v1/accounts/{id}/lists
+```
+
+Returns the publication as a single list entry.

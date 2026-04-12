@@ -1,0 +1,2 @@
+ALTER TABLE "social_accounts" ADD COLUMN "webhook_account_id" text;--> statement-breakpoint
+CREATE INDEX "social_accounts_webhook_id_idx" ON "social_accounts" USING btree ("platform","webhook_account_id");

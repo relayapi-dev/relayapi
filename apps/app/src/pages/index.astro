@@ -1,0 +1,10 @@
+---
+import Layout from "../layouts/Layout.astro";
+import SEO from "../components/SEO.astro";
+import App from "../components/App";
+---
+
+<Layout>
+  <SEO slot="head" />
+  <App client:load />
+</Layout>

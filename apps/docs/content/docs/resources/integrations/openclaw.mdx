@@ -1,0 +1,122 @@
+---
+title: OpenClaw
+description: Install the RelayAPI skill for OpenClaw to manage social media posts from your AI assistant.
+---
+
+The RelayAPI skill for [OpenClaw](https://openclawlab.com) lets your AI assistant create posts, manage accounts, upload media, and track analytics across 17 social platforms.
+
+## Quick Reference
+
+| | |
+|---|---|
+| **Platform** | OpenClaw AI assistant |
+| **Version** | 1.0.0 |
+| **Auth** | `RELAYAPI_API_KEY` environment variable |
+| **Requires** | `curl` binary |
+| **Distribution** | ClawHub |
+
+## Install
+
+### From ClawHub
+
+Search and install the skill directly:
+
+```bash
+openclaw skills install relayapi
+```
+
+Or browse [ClawHub](https://clawhub.com) and search for "relayapi".
+
+### Manual Install
+
+Copy the skill file to your OpenClaw skills directory:
+
+```bash
+mkdir -p ~/.openclaw/skills
+cp packages/integrations/openclaw/SKILL.md ~/.openclaw/skills/relayapi.md
+```
+
+Restart OpenClaw to load the skill.
+
+## Setup
+
+### 1. Install OpenClaw
+
+If you haven't installed OpenClaw yet:
+
+```bash
+npm install -g openclaw@latest
+```
+
+Requires Node.js 22+. See the [OpenClaw install guide](https://openclawlab.com/en/docs/install/) for other methods.
+
+### 2. Configure Your API Key
+
+Store your key using OpenClaw's secrets system (recommended):
+
+```bash
+openclaw secrets configure
+```
+
+Or set it as an environment variable:
+
+```bash
+export RELAYAPI_API_KEY="rlay_live_your_key_here"
+```
+
+Get your key from [relayapi.dev](https://relayapi.dev/signup) under **Settings > API Keys**.
+
+### 3. Verify
+
+Ask OpenClaw to list your accounts:
+
+```
+List my connected social media accounts using RelayAPI
+```
+
+## Usage
+
+### Example: Create a Post
+
+```
+Post "Hello from OpenClaw!" to Twitter and LinkedIn using RelayAPI
+```
+
+### Example: Schedule a Post
+
+```
+Schedule a RelayAPI post for tomorrow at 9am: "Weekly product update"
+```
+
+### Example: Upload Media
+
+```
+Upload banner.png to RelayAPI and create a post with it on Instagram
+```
+
+### Example: Check Accounts
+
+```
+Show me all my connected RelayAPI accounts and their health status
+```
+
+## How It Works
+
+The skill provides OpenClaw with full documentation of the RelayAPI, including:
+
+- **Authentication** — Bearer token via `RELAYAPI_API_KEY`
+- **Post creation** — Content, scheduling, multi-platform targeting, media attachments
+- **Account management** — List, connect, disconnect, health checks
+- **Media uploads** — Pre-signed URL upload flow
+- **Webhooks** — Registration and HMAC-SHA256 signature verification
+- **Validation tools** — Pre-publish content validation
+- **Usage and billing** — Check API call limits
+
+OpenClaw uses `curl` under the hood to make requests to `https://api.relayapi.dev`.
+
+## Links
+
+- [OpenClaw](https://openclawlab.com)
+- [ClawHub](https://clawhub.com)
+- [Quickstart](/quickstart)
+- [API Reference](/api-reference)

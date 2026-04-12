@@ -1,0 +1,16 @@
+diff --git a/lib/web/fetch/util.js b/lib/web/fetch/util.js
+index fe63cb3a9b07e57198f08d6237d2b7b39bfd057d..729568dbeb73405ae08c4ab964ab5ae7a984630b 100644
+--- a/lib/web/fetch/util.js
++++ b/lib/web/fetch/util.js
+@@ -1447,8 +1447,9 @@ function includesCredentials (url) {
+  * @param {object|string} navigable
+  */
+ function isTraversableNavigable (navigable) {
+-  // TODO
+-  return true
++  // Node.js/workerd cannot prompt users for credentials — return false.
++  // See https://github.com/nodejs/undici/issues/4910
++  return false
+ }
+ 
+ class EnvironmentSettingsObjectBase {

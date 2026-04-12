@@ -1,0 +1,12 @@
+---
+import Layout from "../layouts/Layout.astro";
+import SEO from "../components/SEO.astro";
+import { LoginForm } from "../components/auth/login-form";
+---
+
+<Layout>
+  <SEO slot="head" title="Log In" noIndex={true} />
+  <div class="relative">
+    <LoginForm client:load />
+  </div>
+</Layout>

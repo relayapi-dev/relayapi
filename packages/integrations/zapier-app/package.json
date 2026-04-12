@@ -1,0 +1,25 @@
+{
+  "name": "zapier-relayapi",
+  "version": "0.1.0",
+  "description": "RelayAPI integration for Zapier — post to 17+ social media platforms",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest --testTimeout 10000",
+    "zapier:push": "zapier push",
+    "zapier:validate": "zapier validate"
+  },
+  "dependencies": {
+    "zapier-platform-core": "15.*"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "zapier-platform-cli": "15.*",
+    "typescript": "~5.7.0",
+    "@types/jest": "^29.0.0"
+  },
+  "zapier": {
+    "id": 0,
+    "key": "relayapi"
+  }
+}

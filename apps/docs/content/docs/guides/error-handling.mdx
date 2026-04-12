@@ -1,0 +1,62 @@
+---
+title: Error Handling
+description: Understanding and handling API errors.
+icon: TriangleAlert
+---
+
+## Error Format
+
+All errors follow a consistent format:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Content is required",
+    "details": {
+      "field": "content",
+      "issue": "required"
+    }
+  }
+}
+```
+
+## HTTP Status Codes
+
+| Code | Description |
+|------|-------------|
+| `400` | Bad Request — Invalid parameters or request body |
+| `401` | Unauthorized — Missing or invalid API key |
+| `403` | Forbidden — Insufficient permissions |
+| `404` | Not Found — Resource doesn't exist |
+| `409` | Conflict — Resource already exists |
+| `422` | Unprocessable — Valid request but cannot be processed |
+| `429` | Rate Limited — Too many requests |
+| `500` | Internal Error — Something went wrong on our end |
+
+## Error Codes
+
+| Code | Description |
+|------|-------------|
+| `VALIDATION_ERROR` | Request body or parameters failed validation |
+| `AUTHENTICATION_ERROR` | API key is missing, invalid, or expired |
+| `AUTHORIZATION_ERROR` | API key lacks required permissions |
+| `NOT_FOUND` | The requested resource was not found |
+| `RATE_LIMITED` | Request rate limit exceeded |
+| `PLATFORM_ERROR` | The target platform returned an error |
+| `PUBLISH_FAILED` | Post could not be published to one or more platforms |
+
+## Retry Strategy
+
+For `429` and `500` errors, implement exponential backoff:
+
+```typescript
+async function withRetry(fn: () => Promise<Response>, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    const response = await fn();
+    if (response.status !== 429 && response.status < 500) return response;
+    await new Promise((r) => setTimeout(r, Math.pow(2, i) * 1000));
+  }
+  throw new Error("Max retries exceeded");
+}
+```

@@ -1,0 +1,16 @@
+{
+	"label": "Comment Received",
+	"description": "Triggers when a new comment is received on any post.",
+	"type": "instant",
+	"webhook": "relay-webhook",
+	"parameters": [
+		{
+			"name": "events",
+			"type": "hidden",
+			"default": ["comment.received"]
+		}
+	],
+	"response": {
+		"output": "{{body}}"
+	}
+}

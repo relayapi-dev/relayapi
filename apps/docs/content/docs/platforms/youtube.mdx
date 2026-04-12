@@ -1,0 +1,777 @@
+---
+title: YouTube API
+description: Schedule and automate YouTube uploads with RelayAPI — videos, Shorts, custom thumbnails, first comments, and COPPA compliance.
+icon: youtube
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `youtube` |
+| Auth method | OAuth 2.0 (Google) |
+| Title limit | 100 characters |
+| Description limit | 5,000 characters |
+| Tags limit | 500 characters total (all tags combined) |
+| Videos per post | 1 (required) |
+| Video formats | MP4, MOV, AVI, WMV, FLV, 3GP, WebM |
+| Video max size | 256 GB |
+| Video max duration | 15 min (unverified), 12 hours (verified) |
+| Thumbnail formats | JPEG, PNG, GIF |
+| Thumbnail max size | 2 MB |
+| Post types | Video, Shorts (auto-detected) |
+| Scheduling | Yes |
+| Analytics | Yes (likes, comments, shares, views) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+YouTube is a **video-only platform** — every post requires exactly one video file. There are no image-only or text-only posts. Setting `made_for_kids: true` is **permanent and cannot be undone** — it disables comments, notifications, and personalized ads. COPPA violations carry fines of **$42,000+**. Unverified channels are limited to **15-minute** video uploads. Large videos (1 GB+) can take 30-60+ minutes to process — do not retry during processing.
+</Callout>
+
+## Quick Start
+
+Upload a video to YouTube:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const post = await client.posts.create({
+  content: 'In this tutorial, I walk through building a REST API from scratch.',
+  targets: ['youtube'],
+  media: [
+    { url: 'https://cdn.example.com/tutorial.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    youtube: {
+      title: 'Build a REST API from Scratch',
+      visibility: 'public',
+      made_for_kids: false,
+    },
+  },
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+post = client.posts.create(
+    content='In this tutorial, I walk through building a REST API from scratch.',
+    targets=['youtube'],
+    media=[
+        {'url': 'https://cdn.example.com/tutorial.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'youtube': {
+            'title': 'Build a REST API from Scratch',
+            'visibility': 'public',
+            'made_for_kids': False,
+        },
+    },
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("In this tutorial, I walk through building a REST API from scratch."),
+    Targets: relaygo.F([]string{"youtube"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/tutorial.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "youtube": map[string]interface{}{
+            "title":         "Build a REST API from Scratch",
+            "visibility":    "public",
+            "made_for_kids": false,
+        },
+    }),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("In this tutorial, I walk through building a REST API from scratch.")
+    .addTarget("youtube")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/tutorial.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("youtube", JsonValue.from(Map.of(
+            "title", "Build a REST API from Scratch",
+            "visibility", "public",
+            "made_for_kids", false
+        )))
+        .build())
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "In this tutorial, I walk through building a REST API from scratch.",
+    "targets": ["youtube"],
+    "media": [
+      {"url": "https://cdn.example.com/tutorial.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "youtube": {
+        "title": "Build a REST API from Scratch",
+        "visibility": "public",
+        "made_for_kids": false
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Regular Video
+
+Any video longer than 3 minutes or with a horizontal aspect ratio becomes a regular YouTube video. Supports custom thumbnails, tags, and categories.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'In this tutorial, I walk through building a REST API from scratch.\n\n#programming #tutorial',
+  targets: ['youtube'],
+  media: [
+    { url: 'https://cdn.example.com/tutorial.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    youtube: {
+      title: 'Build a REST API from Scratch',
+      visibility: 'public',
+      category_id: '27',
+      made_for_kids: false,
+      tags: ['api', 'tutorial', 'programming'],
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='In this tutorial, I walk through building a REST API from scratch.\n\n#programming #tutorial',
+    targets=['youtube'],
+    media=[
+        {'url': 'https://cdn.example.com/tutorial.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'youtube': {
+            'title': 'Build a REST API from Scratch',
+            'visibility': 'public',
+            'category_id': '27',
+            'made_for_kids': False,
+            'tags': ['api', 'tutorial', 'programming'],
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("In this tutorial, I walk through building a REST API from scratch.\n\n#programming #tutorial"),
+    Targets: relaygo.F([]string{"youtube"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/tutorial.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "youtube": map[string]interface{}{
+            "title":         "Build a REST API from Scratch",
+            "visibility":    "public",
+            "category_id":   "27",
+            "made_for_kids": false,
+            "tags":          []string{"api", "tutorial", "programming"},
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("In this tutorial, I walk through building a REST API from scratch.\n\n#programming #tutorial")
+    .addTarget("youtube")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/tutorial.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("youtube", JsonValue.from(Map.of(
+            "title", "Build a REST API from Scratch",
+            "visibility", "public",
+            "category_id", "27",
+            "made_for_kids", false,
+            "tags", List.of("api", "tutorial", "programming")
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "In this tutorial, I walk through building a REST API from scratch.\n\n#programming #tutorial",
+    "targets": ["youtube"],
+    "media": [
+      {"url": "https://cdn.example.com/tutorial.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "youtube": {
+        "title": "Build a REST API from Scratch",
+        "visibility": "public",
+        "category_id": "27",
+        "made_for_kids": false,
+        "tags": ["api", "tutorial", "programming"]
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### YouTube Shorts
+
+Auto-detected: video must be 3 minutes or shorter AND have a vertical (9:16) aspect ratio. No separate flag is needed. Custom thumbnails are **not** supported for Shorts via the API.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Quick tip for better API design!',
+  targets: ['youtube'],
+  media: [
+    { url: 'https://cdn.example.com/short.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    youtube: {
+      title: 'Quick API Tip',
+      visibility: 'public',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Quick tip for better API design!',
+    targets=['youtube'],
+    media=[
+        {'url': 'https://cdn.example.com/short.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'youtube': {
+            'title': 'Quick API Tip',
+            'visibility': 'public',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Quick tip for better API design!"),
+    Targets: relaygo.F([]string{"youtube"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/short.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "youtube": map[string]interface{}{
+            "title":      "Quick API Tip",
+            "visibility": "public",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Quick tip for better API design!")
+    .addTarget("youtube")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/short.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("youtube", JsonValue.from(Map.of(
+            "title", "Quick API Tip",
+            "visibility", "public"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Quick tip for better API design!",
+    "targets": ["youtube"],
+    "media": [
+      {"url": "https://cdn.example.com/short.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "youtube": {
+        "title": "Quick API Tip",
+        "visibility": "public"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Shorts are auto-detected based on duration (3 minutes or less) and aspect ratio (9:16 vertical). Videos under 15 seconds loop automatically. You do not need to set any special flag.
+</Callout>
+
+### Video with Custom Thumbnail
+
+Upload a custom thumbnail for regular videos. Not supported for Shorts.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Full tutorial on modern API architecture.',
+  targets: ['youtube'],
+  media: [
+    {
+      url: 'https://cdn.example.com/video.mp4',
+      type: 'video',
+      thumbnail: 'https://cdn.example.com/thumbnail.jpg',
+    },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    youtube: {
+      title: 'How to Build Modern APIs',
+      visibility: 'public',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Full tutorial on modern API architecture.',
+    targets=['youtube'],
+    media=[
+        {
+            'url': 'https://cdn.example.com/video.mp4',
+            'type': 'video',
+            'thumbnail': 'https://cdn.example.com/thumbnail.jpg',
+        },
+    ],
+    scheduled_at='now',
+    target_options={
+        'youtube': {
+            'title': 'How to Build Modern APIs',
+            'visibility': 'public',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Full tutorial on modern API architecture."),
+    Targets: relaygo.F([]string{"youtube"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {
+            URL:       relaygo.F("https://cdn.example.com/video.mp4"),
+            Type:      relaygo.F(relaygo.PostNewParamsMediaTypeVideo),
+            Thumbnail: relaygo.F("https://cdn.example.com/thumbnail.jpg"),
+        },
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "youtube": map[string]interface{}{
+            "title":      "How to Build Modern APIs",
+            "visibility": "public",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Full tutorial on modern API architecture.")
+    .addTarget("youtube")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .thumbnail("https://cdn.example.com/thumbnail.jpg")
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("youtube", JsonValue.from(Map.of(
+            "title", "How to Build Modern APIs",
+            "visibility", "public"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Full tutorial on modern API architecture.",
+    "targets": ["youtube"],
+    "media": [
+      {
+        "url": "https://cdn.example.com/video.mp4",
+        "type": "video",
+        "thumbnail": "https://cdn.example.com/thumbnail.jpg"
+      }
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "youtube": {
+        "title": "How to Build Modern APIs",
+        "visibility": "public"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video with First Comment
+
+Automatically post and pin a comment after the video is published.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Tutorial on building REST APIs from scratch.',
+  targets: ['youtube'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    youtube: {
+      title: 'API Tutorial',
+      visibility: 'public',
+      first_comment: 'Thanks for watching! Links to all resources mentioned are below.',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Tutorial on building REST APIs from scratch.',
+    targets=['youtube'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'youtube': {
+            'title': 'API Tutorial',
+            'visibility': 'public',
+            'first_comment': 'Thanks for watching! Links to all resources mentioned are below.',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Tutorial on building REST APIs from scratch."),
+    Targets: relaygo.F([]string{"youtube"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "youtube": map[string]interface{}{
+            "title":         "API Tutorial",
+            "visibility":    "public",
+            "first_comment": "Thanks for watching! Links to all resources mentioned are below.",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Tutorial on building REST APIs from scratch.")
+    .addTarget("youtube")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("youtube", JsonValue.from(Map.of(
+            "title", "API Tutorial",
+            "visibility", "public",
+            "first_comment", "Thanks for watching! Links to all resources mentioned are below."
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Tutorial on building REST APIs from scratch.",
+    "targets": ["youtube"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "youtube": {
+        "title": "API Tutorial",
+        "visibility": "public",
+        "first_comment": "Thanks for watching! Links to all resources mentioned are below."
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Scheduled Video
+
+When scheduling a YouTube video, the upload happens immediately but the video remains private. At the scheduled time, visibility switches to your target setting and the first comment is posted.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'New video dropping tomorrow!',
+  targets: ['youtube'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' },
+  ],
+  scheduled_at: '2026-03-15T14:00:00Z',
+  target_options: {
+    youtube: {
+      title: 'Big Announcement',
+      visibility: 'public',
+      first_comment: 'What do you think? Let me know in the comments!',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='New video dropping tomorrow!',
+    targets=['youtube'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
+    ],
+    scheduled_at='2026-03-15T14:00:00Z',
+    target_options={
+        'youtube': {
+            'title': 'Big Announcement',
+            'visibility': 'public',
+            'first_comment': 'What do you think? Let me know in the comments!',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("New video dropping tomorrow!"),
+    Targets: relaygo.F([]string{"youtube"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("2026-03-15T14:00:00Z"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "youtube": map[string]interface{}{
+            "title":         "Big Announcement",
+            "visibility":    "public",
+            "first_comment": "What do you think? Let me know in the comments!",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("New video dropping tomorrow!")
+    .addTarget("youtube")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("2026-03-15T14:00:00Z")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("youtube", JsonValue.from(Map.of(
+            "title", "Big Announcement",
+            "visibility", "public",
+            "first_comment", "What do you think? Let me know in the comments!"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "New video dropping tomorrow!",
+    "targets": ["youtube"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "2026-03-15T14:00:00Z",
+    "target_options": {
+      "youtube": {
+        "title": "Big Announcement",
+        "visibility": "public",
+        "first_comment": "What do you think? Let me know in the comments!"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Scheduled YouTube videos upload immediately as private. The video URL exists right away, but the video is not publicly visible until the scheduled time. The `first_comment` is posted at the scheduled time, not at upload time.
+</Callout>
+
+## Media Requirements
+
+### Videos
+
+| Property | Shorts | Regular Video |
+|----------|--------|---------------|
+| Max duration | 3 minutes | 12 hours (verified), 15 min (unverified) |
+| Max file size | 256 GB | 256 GB |
+| Formats | MP4, MOV, AVI, WMV, FLV, 3GP, WebM | Same |
+| Aspect ratio | 9:16 (vertical) | 16:9 (horizontal) |
+| Recommended resolution | 1080 x 1920 px | 3840 x 2160 px (4K) |
+| Frame rate | 30 fps | 24-60 fps |
+| Codec | H.264 | H.264 or H.265 |
+| Audio | AAC, 128 kbps | AAC, 384 kbps |
+
+### Thumbnails
+
+| Property | Requirement |
+|----------|-------------|
+| Formats | JPEG, PNG, GIF |
+| Max size | 2 MB |
+| Recommended | 1280 x 720 px (16:9) |
+| Min width | 640 px |
+| Shorts support | Not supported via API |
+
+## `target_options` Fields
+
+All fields go inside `target_options.youtube` on your post request.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | string | Override video description for YouTube specifically |
+| `title` | string | Video title (max 100 chars). Falls back to first line of content if not provided. |
+| `visibility` | string | `"public"`, `"private"`, or `"unlisted"` (default: `"public"`) |
+| `made_for_kids` | boolean | COPPA compliance flag. Default: false. **Permanently** disables comments if set to true. |
+| `contains_synthetic_media` | boolean | AI-generated content disclosure |
+| `category_id` | string | YouTube category. Default: `"22"` (People & Blogs). Common: `"1"` Film, `"10"` Music, `"20"` Gaming, `"27"` Education, `"28"` Sci & Tech |
+| `tags` | string[] | Video tags. Each tag max 100 chars, total max 500 chars combined. |
+| `first_comment` | string | Auto-posted and pinned comment (max 10,000 chars) |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Account suspended (403) | YouTube channel is suspended | Check channel status via the account health endpoint. |
+| Upload initialization failed (403) | Channel suspended, quota exceeded, or missing permissions | Verify channel status, quota, and OAuth scopes. |
+| Failed to fetch video (404) | Video URL expired or inaccessible | Verify the media URL is still valid and publicly accessible. |
+| Permission error | Missing required OAuth scopes | Reconnect the account with `youtube.upload` and `youtube` scopes. |
+
+## Known Quirks
+
+- **Video-only platform** — every post requires exactly one video file. No image or text posts.
+- **Shorts are auto-detected** from duration (3 minutes or less) AND vertical aspect ratio (9:16).
+- **Videos under 15 seconds loop automatically** when detected as Shorts.
+- **Custom thumbnails not supported for Shorts** via the API.
+- **Large videos (1 GB+)** can take 30-60+ minutes to process. Do not retry during processing.
+- **`made_for_kids: true` is permanent** — it cannot be undone and disables comments, notifications, and personalized ads.
+- **COPPA violations carry fines of $42,000+** — use the `made_for_kids` flag carefully.
+- **Unverified channels** are limited to 15-minute video uploads.
+- **Daily upload quotas** vary by channel and are enforced by YouTube.
+- **Scheduled videos upload immediately as private** — the URL exists right away but is not publicly visible.

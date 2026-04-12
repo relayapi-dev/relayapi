@@ -1,0 +1,294 @@
+---
+title: Quickstart
+description: Get started with the RelayAPI unified social media API in minutes.
+icon: Rocket
+---
+
+## Overview
+
+RelayAPI is a unified API that lets you post to 17 social media platforms with a single API call. Connect your social accounts, create posts, and publish everywhere — all through one consistent interface.
+
+## Authentication
+
+Sign up at [relayapi.dev](https://relayapi.dev) and create an API key from your dashboard.
+
+### Getting Your API Key
+
+1. Log in to your RelayAPI account at [relayapi.dev](https://relayapi.dev)
+2. Go to **Settings > API Keys**
+3. Click **Create API Key**
+4. Copy the key immediately — you won't be able to see it again
+
+### Key Format
+
+API keys are prefixed with `rlay_live_` for production or `rlay_test_` for testing. Keys are stored as SHA-256 hashes and are only shown once at creation.
+
+## Install the SDK
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```bash
+npm install @relayapi/sdk
+```
+</Tab>
+<Tab value="Python">
+```bash
+pip install relay
+```
+</Tab>
+<Tab value="Go">
+```bash
+go get github.com/relayapi-dev/relay-go
+```
+</Tab>
+<Tab value="Java">
+```bash
+# Gradle
+implementation("dev.relayapi:relay-java:0.0.1")
+```
+</Tab>
+<Tab value="curl">
+```bash
+# No installation needed — use curl directly
+```
+</Tab>
+</Tabs>
+
+### Set Up the Client
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay(); // reads RELAY_API_KEY from environment
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()  # reads RELAY_API_KEY from environment
+```
+</Tab>
+<Tab value="Go">
+```go
+import relaygo "github.com/relayapi-dev/relay-go"
+
+client := relaygo.NewClient() // reads RELAY_API_KEY from environment
+```
+</Tab>
+<Tab value="Java">
+```java
+import dev.relayapi.api.client.RelayClient;
+import dev.relayapi.api.client.okhttp.RelayOkHttpClient;
+
+RelayClient client = RelayOkHttpClient.fromEnv(); // reads RELAY_API_KEY from environment
+```
+</Tab>
+<Tab value="curl">
+```bash
+# Set your API key as an environment variable
+export RELAY_API_KEY="rlay_live_your_api_key"
+```
+</Tab>
+</Tabs>
+
+## Connect a Social Account
+
+Before posting, connect at least one social media account through the dashboard or via the API.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const flow = await client.connect.startOAuthFlow('twitter');
+// Redirect user to flow.auth_url to authorize
+```
+</Tab>
+<Tab value="Python">
+```python
+flow = client.connect.start_oauth_flow('twitter')
+# Redirect user to flow.auth_url to authorize
+```
+</Tab>
+<Tab value="Go">
+```go
+flow, err := client.Connect.StartOAuthFlow(context.TODO(), "twitter", relaygo.ConnectStartOAuthFlowParams{})
+// Redirect user to flow.AuthURL to authorize
+```
+</Tab>
+<Tab value="Java">
+```java
+ConnectStartOAuthFlowResponse flow = client.connect().startOAuthFlow("twitter");
+// Redirect user to flow.authUrl() to authorize
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl https://api.relayapi.dev/v1/connect/twitter/oauth \
+  -H "Authorization: Bearer $RELAY_API_KEY"
+```
+</Tab>
+</Tabs>
+
+### Available Platforms
+
+See [Platforms Overview](/platforms) for the full list of supported platforms and their capabilities.
+
+## Create and Publish a Post
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['twitter', 'linkedin'],
+  scheduled_at: 'now',
+});
+
+console.log(post.id);     // "post_abc123"
+console.log(post.status); // "published"
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['twitter', 'linkedin'],
+    scheduled_at='now',
+)
+
+print(post.id)      # "post_abc123"
+print(post.status)  # "published"
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"twitter", "linkedin"}),
+    ScheduledAt: relaygo.F("now"),
+})
+
+fmt.Println(post.ID)     // "post_abc123"
+fmt.Println(post.Status) // "published"
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("twitter")
+    .addTarget("linkedin")
+    .scheduledAt("now")
+    .build());
+
+System.out.println(post.id());     // "post_abc123"
+System.out.println(post.status()); // "published"
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["twitter", "linkedin"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Posting to Multiple Platforms
+
+Target multiple accounts in a single API call. RelayAPI handles platform-specific formatting automatically.
+
+### Scheduling Posts
+
+Schedule posts for future publishing by adding `scheduled_at` and `timezone`:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Scheduled post!',
+  targets: ['twitter'],
+  scheduled_at: '2024-01-16T12:00:00',
+  timezone: 'America/New_York',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Scheduled post!',
+    targets=['twitter'],
+    scheduled_at='2024-01-16T12:00:00',
+    timezone='America/New_York',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Scheduled post!"),
+    Targets:     relaygo.F([]string{"twitter"}),
+    ScheduledAt: relaygo.F("2024-01-16T12:00:00"),
+    Timezone:    relaygo.F("America/New_York"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Scheduled post!")
+    .addTarget("twitter")
+    .scheduledAt("2024-01-16T12:00:00")
+    .timezone("America/New_York")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Scheduled post!",
+    "targets": ["twitter"],
+    "scheduled_at": "2024-01-16T12:00:00",
+    "timezone": "America/New_York"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Supported Platforms
+
+| Platform | Post | Schedule | Media | Analytics |
+|----------|------|----------|-------|-----------|
+| Twitter/X | ✅ | ✅ | ✅ | ✅ |
+| Instagram | ✅ | ✅ | ✅ | ✅ |
+| Facebook | ✅ | ✅ | ✅ | ✅ |
+| LinkedIn | ✅ | ✅ | ✅ | ✅ |
+| TikTok | ✅ | ✅ | ✅ | ✅ |
+| YouTube | ✅ | ✅ | ✅ | ✅ |
+| Pinterest | ✅ | ✅ | ✅ | ✅ |
+| Reddit | ✅ | ✅ | ✅ | ✅ |
+| Bluesky | ✅ | ✅ | ✅ | ✅ |
+| Threads | ✅ | ✅ | ✅ | ✅ |
+| Telegram | ✅ | ✅ | ✅ | ✅ |
+| Snapchat | ✅ | ✅ | ✅ | ✅ |
+| Discord | ✅ | ✅ | ✅ | — |
+| Mastodon | ✅ | ✅ | ✅ | — |
+| WhatsApp | ✅ | ✅ | ✅ | — |
+| Google Business | ✅ | ✅ | ✅ | ✅ |
+| SMS | ✅ | ✅ | ✅ | — |
+
+## What's Next?
+
+- [Platforms Overview](/platforms) — Learn about platform-specific features
+- [API Reference](/api-reference) — Full endpoint documentation
+- [Guides](/guides/connecting-accounts) — Step-by-step guides

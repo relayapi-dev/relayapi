@@ -1,0 +1,203 @@
+---
+title: Short Link Management
+description: Shorten URLs in your posts and track click statistics.
+icon: Link
+---
+
+## Overview
+
+Short link management lets you automatically shorten URLs in your social media posts using third-party providers like Dub.co, Short.io, or Bitly. Each organization configures their own provider and credentials, and all shortened URLs are tracked with click statistics.
+
+This is a **Pro** feature. Short link configuration and the `/v1/short-links` endpoints require a Pro plan.
+
+## How It Works
+
+1. **Configure a provider** with your API key in organization settings
+2. **Choose a mode** — always shorten, ask per-post, or never
+3. When creating posts, URLs are detected and shortened before the post is stored
+4. Click counts are fetched from the provider and cached for fast retrieval
+
+```bash
+# Configure Dub.co as your provider
+curl -X PUT https://api.relayapi.dev/v1/short-links/config \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "always",
+    "provider": "dub",
+    "api_key": "dub_xxxxxxxxxxxxxxxx"
+  }'
+
+# Test the connection
+curl -X POST https://api.relayapi.dev/v1/short-links/test \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+## Modes
+
+The `mode` field controls when URLs in posts are shortened:
+
+| Mode | Behavior |
+|------|----------|
+| `always` | All URLs in every post are automatically shortened |
+| `ask` | URLs are only shortened when `shorten_urls: true` is passed in the post create request |
+| `never` | URL shortening is disabled |
+
+When mode is `ask`, the dashboard shows a toggle in the post creation dialog. API clients pass the `shorten_urls` boolean field on `POST /v1/posts`.
+
+## Supported Providers
+
+| Provider | Value | API Key Required | Setup Guide |
+|----------|-------|-----------------|-------------|
+| **RelayAPI (built-in)** | `relayapi` | No | No setup needed — uses your RelayAPI infrastructure. Short URLs served at `api.relayapi.dev/r/{code}`. |
+| **Dub.co** | `dub` | Yes | Create a token at [app.dub.co/settings/tokens](https://app.dub.co/settings/tokens) |
+| **Short.io** | `short_io` | Yes | Get your API key from [short.io/users/integrations](https://short.io/users/integrations). Requires a custom domain. |
+| **Bitly** | `bitly` | Yes | Generate a token at [app.bitly.com/settings/api](https://app.bitly.com/settings/api) |
+
+### Built-in Provider
+
+The built-in `relayapi` provider is the fastest way to get started — no external accounts or API keys needed. It generates short codes, stores redirects in Cloudflare KV, and tracks clicks natively.
+
+```bash
+# Configure the built-in provider (no api_key needed)
+curl -X PUT https://api.relayapi.dev/v1/short-links/config \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "always", "provider": "relayapi"}'
+```
+
+Short URLs are served at `https://api.relayapi.dev/r/{code}` (e.g., `https://api.relayapi.dev/r/aBc1234`). When someone clicks a short link, they are redirected to the original URL and the click is counted automatically.
+
+### Custom Domains
+
+All providers support custom short domains (e.g., `link.mybrand.com`). Pass the `domain` field when configuring:
+
+```bash
+curl -X PUT https://api.relayapi.dev/v1/short-links/config \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "always",
+    "provider": "dub",
+    "api_key": "dub_xxxxxxxxxxxxxxxx",
+    "domain": "link.mybrand.com"
+  }'
+```
+
+## Post Creation Integration
+
+When URL shortening is active, all `http://` and `https://` URLs in the post content are detected, shortened via the configured provider, and replaced before the post is stored. URLs already on the provider's domain are skipped.
+
+```bash
+# Create a post with URL shortening (when mode is "ask")
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out our new blog post: https://myblog.com/a-very-long-url-slug",
+    "targets": ["twitter"],
+    "scheduled_at": "now",
+    "shorten_urls": true
+  }'
+```
+
+The resulting post content will contain the shortened URL (e.g., `Check out our new blog post: https://dub.sh/abc123`).
+
+### Graceful Degradation
+
+If shortening fails for a specific URL (provider rate limit, network error, etc.), that URL is left as-is in the content. Other URLs in the same post are still shortened. URL shortening failures never block post creation.
+
+## Manually Shorten a URL
+
+You can shorten any URL independently of post creation:
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/short-links/shorten \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/my-long-url"}'
+```
+
+Response:
+```json
+{
+  "original_url": "https://example.com/my-long-url",
+  "short_url": "https://dub.sh/abc123"
+}
+```
+
+## Click Statistics
+
+All shortened URLs are tracked in a `short_links` table with cached click counts. When you request stats for a specific link, the system fetches the latest count from the provider and updates the cache.
+
+```bash
+# Get stats for a specific short link
+curl https://api.relayapi.dev/v1/short-links/sl_abc123/stats \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+Response:
+```json
+{
+  "id": "sl_abc123",
+  "short_url": "https://dub.sh/xyz",
+  "original_url": "https://myblog.com/post",
+  "click_count": 142,
+  "last_synced_at": "2026-04-05T10:30:00.000Z"
+}
+```
+
+### Per-Post Short Links
+
+View all short links created for a specific post:
+
+```bash
+curl https://api.relayapi.dev/v1/short-links/by-post/post_abc123 \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+## SDK Usage
+
+```typescript
+import Relay from "@relayapi/sdk";
+
+const client = new Relay({ apiKey: "rlay_live_..." });
+
+// Configure provider
+await client.shortLinks.updateConfig({
+  mode: "always",
+  provider: "dub",
+  api_key: "dub_xxxxxxxxxxxxxxxx",
+});
+
+// Test the connection
+const test = await client.shortLinks.testConfig();
+console.log(test.success, test.short_url);
+
+// List all short links
+const links = await client.shortLinks.list({ limit: 20 });
+
+// Get stats
+const stats = await client.shortLinks.getStats("sl_abc123");
+console.log(stats.click_count);
+
+// Create a post with URL shortening
+await client.posts.create({
+  content: "Visit https://example.com",
+  targets: ["twitter"],
+  scheduled_at: "now",
+  shorten_urls: true,
+});
+```
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/v1/short-links/config` | Get short link configuration |
+| `PUT` | `/v1/short-links/config` | Create or update configuration |
+| `POST` | `/v1/short-links/test` | Test the configured provider |
+| `GET` | `/v1/short-links` | List all short links (paginated) |
+| `GET` | `/v1/short-links/by-post/:postId` | List short links for a post |
+| `POST` | `/v1/short-links/shorten` | Manually shorten a URL |
+| `GET` | `/v1/short-links/:id/stats` | Get click stats for a short link |

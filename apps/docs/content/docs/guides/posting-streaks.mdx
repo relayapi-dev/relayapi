@@ -1,0 +1,98 @@
+---
+title: Posting Streaks
+description: Track and maintain your organization's posting consistency with streak tracking.
+icon: Flame
+---
+
+## Overview
+
+Posting streaks track how many consecutive days your organization has maintained an active posting cadence. Every time a post is successfully published, a 24-hour window starts. Publish another post within that window to keep the streak going.
+
+Streaks are available on **all plans** and are tracked per-organization.
+
+## How Streaks Work
+
+1. **Publish a post** — this starts or extends your streak
+2. **24-hour window** — you have 24 hours from your last post to publish again
+3. **Warning at 22 hours** — team members receive a notification 2 hours before the streak expires
+4. **Streak breaks at 24 hours** — if no post is published within the window, the streak resets to zero
+
+The streak counter shows how many days have elapsed since the streak started, not the number of posts. Publishing multiple posts in a single day still counts as one day.
+
+## API Reference
+
+### Get Streak Status
+
+```bash
+curl https://api.relayapi.dev/v1/streak \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+**Response:**
+
+```json
+{
+  "active": true,
+  "current_streak_days": 15,
+  "streak_started_at": "2026-03-21T14:30:00Z",
+  "last_post_at": "2026-04-05T10:00:00Z",
+  "best_streak_days": 42,
+  "total_streaks_broken": 3,
+  "hours_remaining": 14.5
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `active` | boolean | Whether there is a current active streak |
+| `current_streak_days` | integer | Current streak length in days |
+| `streak_started_at` | string \| null | ISO 8601 timestamp of when the streak started |
+| `last_post_at` | string \| null | ISO 8601 timestamp of the most recent post |
+| `best_streak_days` | integer | Longest streak ever achieved |
+| `total_streaks_broken` | integer | Total number of streaks that have ended |
+| `hours_remaining` | number \| null | Hours remaining before the current streak expires |
+
+### SDK Usage
+
+```typescript
+import Relay from "@relayapi/sdk";
+
+const relay = new Relay({ apiKey: "rlay_live_..." });
+
+const streak = await relay.streaks.retrieve();
+
+if (streak.active) {
+  console.log(`Current streak: ${streak.current_streak_days} days`);
+  console.log(`Hours remaining: ${streak.hours_remaining}`);
+}
+```
+
+## Webhook Events
+
+Subscribe to streak events via [webhooks](/guides/error-handling) to integrate streak data into your workflows:
+
+| Event | Description |
+|-------|-------------|
+| `streak.started` | First post after no active streak |
+| `streak.warning` | 22 hours since the last post (2 hours remaining) |
+| `streak.broken` | 24 hours passed without a post, streak reset |
+| `streak.milestone` | Streak reached a milestone: 7, 30, 100, or 365 days |
+
+## Notification Preferences
+
+Streak notifications are enabled by default for all team members. Each user can opt out from the dashboard settings under **Notifications > Streak Warnings**.
+
+Notification channels:
+- **In-app** — badge and notification in the dashboard
+- **Email** — warning email 2 hours before expiry, and a notification when the streak ends
+
+## Best Streak Tracking
+
+Unlike simple streak counters, RelayAPI tracks your organization's best streak ever. When a streak breaks, the `best_streak_days` field is updated if the broken streak was longer than the previous record. This lets you gamify your posting goals.
+
+## Dashboard Integration
+
+The posting streak appears in two places in the dashboard:
+
+- **Sidebar** — a flame icon with the current day count, always visible during an active streak. Turns red and pulses when less than 2 hours remain.
+- **Analytics page** — a detailed streak card showing current streak, best streak, start date, and time remaining.

@@ -1,0 +1,42 @@
+{
+	"label": "List Posts",
+	"description": "List posts with optional status and date filters.",
+	"url": "/posts",
+	"method": "GET",
+	"qs": {
+		"status": "{{parameters.status}}",
+		"limit": "{{parameters.limit}}",
+		"cursor": "{{parameters.cursor}}"
+	},
+	"parameters": [
+		{
+			"name": "status",
+			"type": "select",
+			"label": "Status",
+			"options": [
+				{ "label": "All", "value": "" },
+				{ "label": "Draft", "value": "draft" },
+				{ "label": "Scheduled", "value": "scheduled" },
+				{ "label": "Published", "value": "published" },
+				{ "label": "Failed", "value": "failed" },
+				{ "label": "Partial", "value": "partial" }
+			]
+		},
+		{
+			"name": "limit",
+			"type": "uinteger",
+			"label": "Limit",
+			"default": 20
+		},
+		{
+			"name": "cursor",
+			"type": "text",
+			"label": "Cursor",
+			"help": "Pagination cursor from a previous response"
+		}
+	],
+	"response": {
+		"output": "{{body.data}}",
+		"iterate": true
+	}
+}

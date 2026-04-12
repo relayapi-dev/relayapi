@@ -1,0 +1,797 @@
+---
+title: Facebook API
+description: Schedule and automate Facebook Page posts with RelayAPI — feed posts, multi-image, stories, reels, and first comments.
+icon: facebook
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `facebook` |
+| Auth method | OAuth 2.0 |
+| Character limit | 63,206 (truncated at ~480 with "See more") |
+| Images per post | 10 |
+| Videos per post | 1 |
+| Image formats | JPEG, PNG, GIF (WebP auto-converted to JPEG) |
+| Image max size | 4 MB |
+| Video formats | MP4, MOV |
+| Video max size | 4 GB |
+| Video max duration | 240 min (feed), 120 sec (stories) |
+| Post types | Feed (text/image/video/multi-image), Story, Reel |
+| Scheduling | Yes |
+| Analytics | Yes (impressions, likes, comments, shares, clicks, views) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Facebook API posting only works with **Pages** — you cannot post to personal profiles. The user must be a **Page Admin or Editor**. After connecting via OAuth, you must select which Facebook Page to post to. Facebook tokens expire frequently, so subscribe to the `account.disconnected` webhook to catch token expirations proactively. Images over 4 MB are frequently rejected in practice even though the stated limit is higher.
+</Callout>
+
+## Quick Start
+
+Post to a Facebook Page:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+
+const post = await client.posts.create({
+  content: 'Exciting news from our Page!',
+  targets: ['facebook'],
+  scheduled_at: 'now'
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+
+post = client.posts.create(
+    content='Exciting news from our Page!',
+    targets=['facebook'],
+    scheduled_at='now'
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Exciting news from our Page!"),
+    Targets:     relaygo.F([]string{"facebook"}),
+    ScheduledAt: relaygo.F("now"),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Exciting news from our Page!")
+    .addTarget("facebook")
+    .scheduledAt("now")
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Exciting news from our Page!",
+    "targets": ["facebook"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text-Only Post
+
+Facebook is one of few platforms that supports text-only posts. First ~480 characters are visible before the "See more" fold.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Just a text update for our followers.',
+  targets: ['facebook'],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Just a text update for our followers.',
+    targets=['facebook'],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Just a text update for our followers."),
+    Targets:     relaygo.F([]string{"facebook"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Just a text update for our followers.")
+    .addTarget("facebook")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Just a text update for our followers.",
+    "targets": ["facebook"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Single Image Post
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out this photo!',
+  targets: ['facebook'],
+  media: [
+    { url: 'https://cdn.example.com/photo.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out this photo!',
+    targets=['facebook'],
+    media=[
+        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Check out this photo!"),
+    Targets: relaygo.F([]string{"facebook"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/photo.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out this photo!")
+    .addTarget("facebook")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out this photo!",
+    "targets": ["facebook"],
+    "media": [
+      {"url": "https://cdn.example.com/photo.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Multi-Image Post (Up to 10)
+
+Up to 10 images per post. Cannot mix images and videos in the same post.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Photo dump from our event!',
+  targets: ['facebook'],
+  media: [
+    { url: 'https://cdn.example.com/photo1.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo2.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo3.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Photo dump from our event!',
+    targets=['facebook'],
+    media=[
+        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo3.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Photo dump from our event!"),
+    Targets: relaygo.F([]string{"facebook"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/photo1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo3.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Photo dump from our event!")
+    .addTarget("facebook")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo1.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo2.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo3.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Photo dump from our event!",
+    "targets": ["facebook"],
+    "media": [
+      {"url": "https://cdn.example.com/photo1.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo2.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo3.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video Post
+
+Single video per post. Up to 4 GB, max 240 minutes for feed videos.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Watch our latest video!',
+  targets: ['facebook'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Watch our latest video!',
+    targets=['facebook'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Watch our latest video!"),
+    Targets: relaygo.F([]string{"facebook"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Watch our latest video!")
+    .addTarget("facebook")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Watch our latest video!",
+    "targets": ["facebook"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Story
+
+Media is required for stories. Text captions are **not** displayed on Facebook Stories. Interactive stickers are **not** available via the API.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  targets: ['facebook'],
+  media: [
+    { url: 'https://cdn.example.com/story.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    facebook: {
+      content_type: 'story'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    targets=['facebook'],
+    media=[
+        {'url': 'https://cdn.example.com/story.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'facebook': {
+            'content_type': 'story'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Targets: relaygo.F([]string{"facebook"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/story.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "facebook": map[string]interface{}{
+            "content_type": "story",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .addTarget("facebook")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/story.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("facebook", JsonValue.from(Map.of(
+            "content_type", "story"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targets": ["facebook"],
+    "media": [
+      {"url": "https://cdn.example.com/story.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "facebook": {
+        "content_type": "story"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Reel
+
+Single vertical video, 3-60 seconds. Reels support a separate `title` field.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Behind the scenes of our latest shoot',
+  targets: ['facebook'],
+  media: [
+    { url: 'https://cdn.example.com/reel.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    facebook: {
+      content_type: 'reel',
+      title: 'Studio day'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Behind the scenes of our latest shoot',
+    targets=['facebook'],
+    media=[
+        {'url': 'https://cdn.example.com/reel.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'facebook': {
+            'content_type': 'reel',
+            'title': 'Studio day'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Behind the scenes of our latest shoot"),
+    Targets: relaygo.F([]string{"facebook"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/reel.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "facebook": map[string]interface{}{
+            "content_type": "reel",
+            "title":        "Studio day",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Behind the scenes of our latest shoot")
+    .addTarget("facebook")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/reel.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("facebook", JsonValue.from(Map.of(
+            "content_type", "reel",
+            "title", "Studio day"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Behind the scenes of our latest shoot",
+    "targets": ["facebook"],
+    "media": [
+      {"url": "https://cdn.example.com/reel.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "facebook": {
+        "content_type": "reel",
+        "title": "Studio day"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Post with First Comment
+
+Automatically post a first comment after publishing. Useful for adding links without suppressing reach.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'New product launch!',
+  targets: ['facebook'],
+  media: [
+    { url: 'https://cdn.example.com/product.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    facebook: {
+      first_comment: 'Link to purchase: https://shop.example.com'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='New product launch!',
+    targets=['facebook'],
+    media=[
+        {'url': 'https://cdn.example.com/product.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'facebook': {
+            'first_comment': 'Link to purchase: https://shop.example.com'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("New product launch!"),
+    Targets: relaygo.F([]string{"facebook"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/product.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "facebook": map[string]interface{}{
+            "first_comment": "Link to purchase: https://shop.example.com",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("New product launch!")
+    .addTarget("facebook")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/product.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("facebook", JsonValue.from(Map.of(
+            "first_comment", "Link to purchase: https://shop.example.com"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "New product launch!",
+    "targets": ["facebook"],
+    "media": [
+      {"url": "https://cdn.example.com/product.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "facebook": {
+        "first_comment": "Link to purchase: https://shop.example.com"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+First comments only work with feed posts. They are not supported on Stories or Reels.
+</Callout>
+
+### Multi-Page Posting
+
+Post to multiple Facebook Pages in a single request by targeting different account IDs.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'News from all our brands!',
+  targets: ['acc_fb_brand1', 'acc_fb_brand2'],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='News from all our brands!',
+    targets=['acc_fb_brand1', 'acc_fb_brand2'],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("News from all our brands!"),
+    Targets:     relaygo.F([]string{"acc_fb_brand1", "acc_fb_brand2"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("News from all our brands!")
+    .addTarget("acc_fb_brand1")
+    .addTarget("acc_fb_brand2")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "News from all our brands!",
+    "targets": ["acc_fb_brand1", "acc_fb_brand2"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Media Requirements
+
+### Images
+
+| Property | Feed Post | Story |
+|----------|-----------|-------|
+| Max images | 10 | 1 |
+| Formats | JPEG, PNG, GIF (WebP auto-converted) | JPEG, PNG |
+| Max file size | 4 MB | 4 MB |
+| Recommended | 1200 x 630 px | 1080 x 1920 px |
+
+### Videos
+
+| Property | Feed Video | Story | Reel |
+|----------|------------|-------|------|
+| Max videos | 1 | 1 | 1 |
+| Formats | MP4, MOV | MP4, MOV | MP4, MOV |
+| Max file size | 4 GB | 4 GB | — |
+| Max duration | 240 min | 120 sec | 60 sec |
+| Min duration | 1 sec | 1 sec | 3 sec |
+| Recommended | 1280 x 720 min, H.264, 30fps | 1080 x 1920 | 9:16 vertical |
+
+## `target_options` Fields
+
+All fields go inside `target_options.facebook` on your post request.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | string | Override content for Facebook specifically |
+| `media` | object[] | Override media for Facebook specifically |
+| `content_type` | string | `"story"` or `"reel"` (default: feed post) |
+| `title` | string | Reel title (only for reels, separate from content/caption) |
+| `first_comment` | string | Auto-posted first comment (feed posts only, not stories or reels) |
+| `page_id` | string | Target a specific Page for multi-page accounts |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Photos should be smaller than 4 MB | Image exceeds practical size limit | Reduce to under 4 MB. Use JPEG or PNG. |
+| Missing or invalid image file | Corrupt file, wrong format, or inaccessible URL | Verify the URL returns actual media bytes. Use JPEG or PNG under 4 MB. |
+| Unable to fetch video from URL | Video URL is inaccessible to Facebook servers | Use a direct, publicly accessible CDN URL. |
+| Tokens expired | OAuth token has expired | Reconnect the account. Facebook tokens have shorter lifespans than most platforms. |
+| Confirm your identity | Facebook security check triggered | The user must complete identity verification directly on Facebook. |
+
+## Known Quirks
+
+- **Pages only** — you cannot post to personal Facebook profiles via the API.
+- **Cannot mix images and videos** in the same post.
+- **WebP images are auto-converted** to JPEG by Facebook.
+- **Story text captions are not displayed** — only the media is shown.
+- **Story interactive stickers** are not available via the API.
+- **Facebook often rejects images over 4 MB** in practice, even though the documented limit is higher.
+- **Tokens expire frequently** — subscribe to the `account.disconnected` webhook to detect token expirations.
+- **GIFs should use `type: "video"`** — they auto-play and loop when sent as video type.
+- **First ~480 characters visible** before the "See more" fold on feed posts.

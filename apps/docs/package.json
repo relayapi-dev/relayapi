@@ -1,0 +1,38 @@
+{
+  "name": "@relayapi/docs",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "bun ./scripts/postinstall.ts && next build",
+    "build:worker": "cd ../.. && bun install && cd apps/docs && bun run build && npx @opennextjs/cloudflare build",
+    "start": "next start",
+    "generate-docs": "bun ./scripts/generate-docs.ts",
+    "postinstall": "bun ./scripts/postinstall.ts"
+  },
+  "dependencies": {
+    "@radix-ui/react-popover": "^1.1.15",
+    "@tailwindcss/postcss": "^4.2.1",
+    "class-variance-authority": "^0.7.1",
+    "fumadocs-core": "^16.6.16",
+    "fumadocs-mdx": "^14.2.9",
+    "fumadocs-openapi": "^10.3.18",
+    "fumadocs-ui": "^16.6.16",
+    "lucide-react": "^0.552.0",
+    "next": "~16.1.6",
+    "react": "^19",
+    "react-dom": "^19",
+    "shiki": "^3.7.0",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4.2.1"
+  },
+  "devDependencies": {
+    "@opennextjs/cloudflare": "^1.0.0",
+    "@types/mdx": "^2.0.13",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "json-schema-typed": "^8.0.2",
+    "typescript": "^5.8"
+  }
+}

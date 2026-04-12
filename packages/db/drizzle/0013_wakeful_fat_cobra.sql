@@ -1,0 +1,2 @@
+ALTER TABLE "cross_post_actions" ALTER COLUMN "execute_at" SET NOT NULL;--> statement-breakpoint
+CREATE INDEX "engagement_rule_logs_rule_post_idx" ON "engagement_rule_logs" USING btree ("rule_id","post_target_id");

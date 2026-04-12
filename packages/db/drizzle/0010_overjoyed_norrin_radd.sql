@@ -1,0 +1,1 @@
+ALTER TABLE "comment_automations" ADD COLUMN "once_per_user" boolean DEFAULT true NOT NULL;

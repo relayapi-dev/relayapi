@@ -1,0 +1,8 @@
+interface:
+  display_name: "RelayAPI"
+  short_description: "Post to 17 social media platforms via a single API"
+  brand_color: "#6366F1"
+  default_prompt: "Use RelayAPI to post to my social media accounts"
+
+policy:
+  allow_implicit_invocation: false

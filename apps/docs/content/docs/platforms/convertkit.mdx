@@ -1,0 +1,62 @@
+---
+title: ConvertKit (Kit) API
+description: Create newsletter broadcasts via ConvertKit using RelayAPI — draft email campaigns alongside social media posts.
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `convertkit` |
+| Auth method | API Key + Secret |
+| Content format | HTML (plain text auto-wrapped) |
+| Scheduling | Yes |
+| Analytics | No |
+
+<Callout type="info">
+By default, broadcasts are **sent immediately** when published. Set `send_at` in target_options to schedule for a specific time, or omit it for instant delivery.
+</Callout>
+
+## Before You Start
+
+You need a ConvertKit API key and API secret. Get these from your [ConvertKit account settings](https://app.convertkit.com/account_settings/advanced_settings).
+
+## Connect
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/connect/convertkit \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "api_key": "your-convertkit-api-key",
+    "api_secret": "your-convertkit-api-secret"
+  }'
+```
+
+## Send a Broadcast
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Our latest newsletter content...",
+    "targets": ["acc_convertkit123"],
+    "scheduled_at": "now",
+    "target_options": {
+      "convertkit": {
+        "subject": "Weekly Newsletter #10",
+        "preview_text": "What we shipped this week"
+      }
+    }
+  }'
+```
+
+## `target_options` Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `subject` | string | No | Email subject line. Falls back to first line of content. |
+| `preview_text` | string | No | Description/preview text. |
+| `content_html` | string | No | Full HTML body. If omitted, plain text is auto-wrapped. |
+| `send_at` | string | No | ISO 8601 timestamp to schedule delivery. If omitted, sends immediately. |

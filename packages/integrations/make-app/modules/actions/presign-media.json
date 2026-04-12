@@ -1,0 +1,26 @@
+{
+	"label": "Presign Media URL",
+	"description": "Get a presigned upload URL for media files (images, videos, documents).",
+	"url": "/media/presign",
+	"method": "POST",
+	"parameters": [
+		{
+			"name": "filename",
+			"type": "text",
+			"label": "Filename",
+			"required": true,
+			"help": "e.g. photo.jpg, video.mp4"
+		},
+		{
+			"name": "content_type",
+			"type": "text",
+			"label": "Content Type",
+			"required": true,
+			"default": "image/jpeg",
+			"help": "MIME type: image/jpeg, image/png, video/mp4, etc."
+		}
+	],
+	"response": {
+		"output": "{{body}}"
+	}
+}

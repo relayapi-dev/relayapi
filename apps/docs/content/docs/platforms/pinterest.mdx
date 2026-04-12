@@ -1,0 +1,557 @@
+---
+title: Pinterest API
+description: Schedule and automate Pinterest pins with RelayAPI — image pins, video pins, board targeting, destination links, and SEO optimization.
+icon: pinterest
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `pinterest` |
+| Auth method | OAuth 2.0 |
+| Title limit | 100 characters |
+| Description limit | 500 characters |
+| Images per pin | 1 |
+| Videos per pin | 1 |
+| Image formats | JPEG, PNG, WebP, GIF |
+| Image max size | 32 MB |
+| Video formats | MP4, MOV |
+| Video max size | 2 GB |
+| Video duration | 4 sec - 15 min |
+| Post types | Image Pin, Video Pin |
+| Scheduling | Yes |
+| Analytics | Limited (impressions, saves, clicks) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Pinterest is a **search engine, not a social feed**. Pins are discovered through search and browse, not by followers. SEO (title, description, board name) matters more than posting time. Pins have a **3-6 month lifespan** unlike hours on other platforms. The `board_id` field is effectively **required** — always provide it. Media is required for all pins; there are no text-only posts. Only **1 image or 1 video** per pin — no carousels or multi-image posts.
+</Callout>
+
+## Quick Start
+
+Create a pin on Pinterest:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const post = await client.posts.create({
+  content: 'Modern kitchen renovation ideas for small spaces',
+  targets: ['pinterest'],
+  media: [
+    { url: 'https://cdn.example.com/kitchen.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    pinterest: {
+      title: 'Modern Kitchen Renovation Ideas',
+      board_id: 'YOUR_BOARD_ID',
+      link: 'https://myblog.com/kitchen-renovation',
+    },
+  },
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+post = client.posts.create(
+    content='Modern kitchen renovation ideas for small spaces',
+    targets=['pinterest'],
+    media=[
+        {'url': 'https://cdn.example.com/kitchen.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'pinterest': {
+            'title': 'Modern Kitchen Renovation Ideas',
+            'board_id': 'YOUR_BOARD_ID',
+            'link': 'https://myblog.com/kitchen-renovation',
+        },
+    },
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Modern kitchen renovation ideas for small spaces"),
+    Targets: relaygo.F([]string{"pinterest"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/kitchen.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "pinterest": map[string]interface{}{
+            "title":    "Modern Kitchen Renovation Ideas",
+            "board_id": "YOUR_BOARD_ID",
+            "link":     "https://myblog.com/kitchen-renovation",
+        },
+    }),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Modern kitchen renovation ideas for small spaces")
+    .addTarget("pinterest")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/kitchen.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("pinterest", JsonValue.from(Map.of(
+            "title", "Modern Kitchen Renovation Ideas",
+            "board_id", "YOUR_BOARD_ID",
+            "link", "https://myblog.com/kitchen-renovation"
+        )))
+        .build())
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Modern kitchen renovation ideas for small spaces",
+    "targets": ["pinterest"],
+    "media": [
+      {"url": "https://cdn.example.com/kitchen.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "pinterest": {
+        "title": "Modern Kitchen Renovation Ideas",
+        "board_id": "YOUR_BOARD_ID",
+        "link": "https://myblog.com/kitchen-renovation"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Image Pin
+
+Use 2:3 aspect ratio (1000 x 1500 px) for optimal feed display. The `link` field is critical for driving traffic to your website.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Modern kitchen renovation ideas for small spaces',
+  targets: ['pinterest'],
+  media: [
+    { url: 'https://cdn.example.com/kitchen.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    pinterest: {
+      title: 'Modern Kitchen Renovation Ideas',
+      board_id: 'YOUR_BOARD_ID',
+      link: 'https://myblog.com/kitchen-renovation',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Modern kitchen renovation ideas for small spaces',
+    targets=['pinterest'],
+    media=[
+        {'url': 'https://cdn.example.com/kitchen.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'pinterest': {
+            'title': 'Modern Kitchen Renovation Ideas',
+            'board_id': 'YOUR_BOARD_ID',
+            'link': 'https://myblog.com/kitchen-renovation',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Modern kitchen renovation ideas for small spaces"),
+    Targets: relaygo.F([]string{"pinterest"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/kitchen.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "pinterest": map[string]interface{}{
+            "title":    "Modern Kitchen Renovation Ideas",
+            "board_id": "YOUR_BOARD_ID",
+            "link":     "https://myblog.com/kitchen-renovation",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Modern kitchen renovation ideas for small spaces")
+    .addTarget("pinterest")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/kitchen.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("pinterest", JsonValue.from(Map.of(
+            "title", "Modern Kitchen Renovation Ideas",
+            "board_id", "YOUR_BOARD_ID",
+            "link", "https://myblog.com/kitchen-renovation"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Modern kitchen renovation ideas for small spaces",
+    "targets": ["pinterest"],
+    "media": [
+      {"url": "https://cdn.example.com/kitchen.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "pinterest": {
+        "title": "Modern Kitchen Renovation Ideas",
+        "board_id": "YOUR_BOARD_ID",
+        "link": "https://myblog.com/kitchen-renovation"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video Pin
+
+Single video per pin. Supports a custom cover image.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Quick 5-minute breakfast recipe',
+  targets: ['pinterest'],
+  media: [
+    { url: 'https://cdn.example.com/recipe.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    pinterest: {
+      title: '5-Minute Breakfast Recipe',
+      board_id: 'YOUR_BOARD_ID',
+      link: 'https://myrecipes.com/quick-breakfast',
+      cover_image_url: 'https://cdn.example.com/recipe-cover.jpg',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Quick 5-minute breakfast recipe',
+    targets=['pinterest'],
+    media=[
+        {'url': 'https://cdn.example.com/recipe.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'pinterest': {
+            'title': '5-Minute Breakfast Recipe',
+            'board_id': 'YOUR_BOARD_ID',
+            'link': 'https://myrecipes.com/quick-breakfast',
+            'cover_image_url': 'https://cdn.example.com/recipe-cover.jpg',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Quick 5-minute breakfast recipe"),
+    Targets: relaygo.F([]string{"pinterest"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/recipe.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "pinterest": map[string]interface{}{
+            "title":           "5-Minute Breakfast Recipe",
+            "board_id":        "YOUR_BOARD_ID",
+            "link":            "https://myrecipes.com/quick-breakfast",
+            "cover_image_url": "https://cdn.example.com/recipe-cover.jpg",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Quick 5-minute breakfast recipe")
+    .addTarget("pinterest")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/recipe.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("pinterest", JsonValue.from(Map.of(
+            "title", "5-Minute Breakfast Recipe",
+            "board_id", "YOUR_BOARD_ID",
+            "link", "https://myrecipes.com/quick-breakfast",
+            "cover_image_url", "https://cdn.example.com/recipe-cover.jpg"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Quick 5-minute breakfast recipe",
+    "targets": ["pinterest"],
+    "media": [
+      {"url": "https://cdn.example.com/recipe.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "pinterest": {
+        "title": "5-Minute Breakfast Recipe",
+        "board_id": "YOUR_BOARD_ID",
+        "link": "https://myrecipes.com/quick-breakfast",
+        "cover_image_url": "https://cdn.example.com/recipe-cover.jpg"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video Pin with Auto-Generated Cover
+
+Instead of providing a cover image, extract a frame from the video at a specific timestamp.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'DIY home project walkthrough',
+  targets: ['pinterest'],
+  media: [
+    { url: 'https://cdn.example.com/diy.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    pinterest: {
+      title: 'DIY Bookshelf Build',
+      board_id: 'YOUR_BOARD_ID',
+      link: 'https://myblog.com/diy-bookshelf',
+      cover_image_key_frame_time: 5,
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='DIY home project walkthrough',
+    targets=['pinterest'],
+    media=[
+        {'url': 'https://cdn.example.com/diy.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'pinterest': {
+            'title': 'DIY Bookshelf Build',
+            'board_id': 'YOUR_BOARD_ID',
+            'link': 'https://myblog.com/diy-bookshelf',
+            'cover_image_key_frame_time': 5,
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("DIY home project walkthrough"),
+    Targets: relaygo.F([]string{"pinterest"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/diy.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "pinterest": map[string]interface{}{
+            "title":                      "DIY Bookshelf Build",
+            "board_id":                   "YOUR_BOARD_ID",
+            "link":                       "https://myblog.com/diy-bookshelf",
+            "cover_image_key_frame_time": 5,
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("DIY home project walkthrough")
+    .addTarget("pinterest")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/diy.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("pinterest", JsonValue.from(Map.of(
+            "title", "DIY Bookshelf Build",
+            "board_id", "YOUR_BOARD_ID",
+            "link", "https://myblog.com/diy-bookshelf",
+            "cover_image_key_frame_time", 5
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "DIY home project walkthrough",
+    "targets": ["pinterest"],
+    "media": [
+      {"url": "https://cdn.example.com/diy.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "pinterest": {
+        "title": "DIY Bookshelf Build",
+        "board_id": "YOUR_BOARD_ID",
+        "link": "https://myblog.com/diy-bookshelf",
+        "cover_image_key_frame_time": 5
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+The `link` field is critical on Pinterest. It determines where users go when they click the pin. Without it, your pin cannot drive traffic.
+</Callout>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per pin | 1 |
+| Formats | JPEG, PNG, WebP, GIF |
+| Max file size | 32 MB |
+| Recommended | 1000 x 1500 px (2:3 portrait) |
+| Min dimensions | 100 x 100 px |
+
+#### Aspect Ratios
+
+| Type | Ratio | Notes |
+|------|-------|-------|
+| Portrait | 2:3 | Optimal for feed display |
+| Square | 1:1 | Works well in feed |
+| Long pin | 1:2.1 | Maximum vertical ratio |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per pin | 1 |
+| Formats | MP4, MOV |
+| Max file size | 2 GB |
+| Duration | 4 sec - 15 min |
+| Aspect ratio | 2:3, 1:1, or 9:16 |
+| Recommended | 1080p, 25+ fps |
+
+## `target_options` Fields
+
+All fields go inside `target_options.pinterest` on your post request.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | string | Override description for Pinterest specifically |
+| `media` | object[] | Override media for Pinterest specifically |
+| `title` | string | Pin title (max 100 chars). Falls back to first line of content. |
+| `board_id` | string | Target board ID. Effectively required for all pins. |
+| `link` | string | Destination URL when users click the pin. Critical for driving traffic. |
+| `cover_image_url` | string | Custom cover image URL for video pins |
+| `cover_image_key_frame_time` | number | Auto-extract a video frame at N seconds for the cover |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Invalid URL or request data | Media URL is inaccessible or returns non-media content | Verify the URL is a publicly accessible HTTPS link returning actual media bytes. |
+| Unable to reach URL | Pinterest servers cannot fetch the media | Test the URL in an incognito browser window. If you see a webpage instead of media, it will not work. |
+| Rate limit reached | Too many API calls in a short window | Space out pin creation. Avoid bursts of 10+ pins. |
+| Requires boardId | No board was specified | Always provide the `board_id` field. |
+
+## Known Quirks
+
+- **Search engine, not social feed** — SEO (title, description, board name) matters more than posting time.
+- **Pins have a 3-6 month lifespan** — unlike hours on Twitter or Instagram, pins continue driving traffic for months.
+- **`board_id` is effectively required** — always specify which board to pin to.
+- **`link` field is critical** for driving traffic. Without it, users cannot click through to your content.
+- **No text-only pins** — media is required for every pin.
+- **No carousels or multi-image pins** — only 1 image or 1 video per pin.
+- **Animated GIFs are supported** and auto-play in the Pinterest feed.
+- **2:3 aspect ratio (1000 x 1500 px)** gets the best feed placement and engagement.

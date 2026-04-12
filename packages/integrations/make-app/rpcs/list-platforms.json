@@ -1,0 +1,25 @@
+{
+	"label": "List Platforms",
+	"description": "Static list of supported social media platforms.",
+	"response": {
+		"output": [
+			{ "label": "Twitter/X", "value": "twitter" },
+			{ "label": "Instagram", "value": "instagram" },
+			{ "label": "Facebook", "value": "facebook" },
+			{ "label": "LinkedIn", "value": "linkedin" },
+			{ "label": "TikTok", "value": "tiktok" },
+			{ "label": "YouTube", "value": "youtube" },
+			{ "label": "Pinterest", "value": "pinterest" },
+			{ "label": "Reddit", "value": "reddit" },
+			{ "label": "Bluesky", "value": "bluesky" },
+			{ "label": "Threads", "value": "threads" },
+			{ "label": "Telegram", "value": "telegram" },
+			{ "label": "Snapchat", "value": "snapchat" },
+			{ "label": "Google Business", "value": "googlebusiness" },
+			{ "label": "WhatsApp", "value": "whatsapp" },
+			{ "label": "Mastodon", "value": "mastodon" },
+			{ "label": "Discord", "value": "discord" },
+			{ "label": "SMS", "value": "sms" }
+		]
+	}
+}

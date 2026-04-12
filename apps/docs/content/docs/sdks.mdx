@@ -1,0 +1,90 @@
+---
+title: SDKs
+description: Official SDKs and client libraries for the RelayAPI.
+icon: Package
+---
+
+## Official SDKs
+
+### Node.js / TypeScript
+
+```bash
+npm install @relayapi/sdk
+```
+
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay(); // reads RELAY_API_KEY from environment
+```
+
+[GitHub](https://github.com/relayapi-dev/relay-node) · [npm](https://www.npmjs.com/package/@relayapi/sdk)
+
+### Python
+
+```bash
+pip install relay
+```
+
+```python
+from relay import Relay
+
+client = Relay()  # reads RELAY_API_KEY from environment
+```
+
+[GitHub](https://github.com/relayapi-dev/relay-python) · [PyPI](https://pypi.org/project/relay/)
+
+### Go
+
+```bash
+go get github.com/relayapi-dev/relay-go
+```
+
+```go
+import relaygo "github.com/relayapi-dev/relay-go"
+
+client := relaygo.NewClient() // reads RELAY_API_KEY from environment
+```
+
+[GitHub](https://github.com/relayapi-dev/relay-go)
+
+### Java
+
+<Tabs items={['Gradle', 'Maven']}>
+<Tab value="Gradle">
+```groovy
+implementation("dev.relayapi:relay-java:0.0.1")
+```
+</Tab>
+<Tab value="Maven">
+```xml
+<dependency>
+  <groupId>dev.relayapi</groupId>
+  <artifactId>relay-java</artifactId>
+  <version>0.0.1</version>
+</dependency>
+```
+</Tab>
+</Tabs>
+
+```java
+import dev.relayapi.api.client.RelayClient;
+import dev.relayapi.api.client.okhttp.RelayOkHttpClient;
+
+RelayClient client = RelayOkHttpClient.fromEnv(); // reads RELAY_API_KEY from environment
+```
+
+[GitHub](https://github.com/relayapi-dev/relay-java)
+
+## REST API
+
+You can also use the API directly with any HTTP client. See the [API Reference](/api-reference) for full endpoint documentation.
+
+## OpenAPI Specification
+
+The full OpenAPI 3.1.0 specification is available at:
+
+- **JSON**: [/api/openapi](/api/openapi)
+- **Interactive Docs**: [API Reference](/api-reference)
+
+Use the spec to generate client libraries in any language using tools like [OpenAPI Generator](https://openapi-generator.tech/).

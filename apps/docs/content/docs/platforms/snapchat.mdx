@@ -1,0 +1,576 @@
+---
+title: Snapchat API
+description: Schedule and automate Snapchat posts with RelayAPI — stories, saved stories, Spotlight videos, and Public Profile publishing.
+icon: snapchat
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `snapchat` |
+| Auth method | OAuth 2.0 |
+| Title limit | 45 characters (Saved Stories) |
+| Description limit | 160 characters (Spotlight, including hashtags) |
+| Media per post | 1 (single image or video only) |
+| Image formats | JPEG, PNG |
+| Image max size | 20 MB |
+| Video format | MP4 only |
+| Video max size | 500 MB |
+| Video duration | 5 - 60 seconds |
+| Post types | Story, Saved Story, Spotlight |
+| Scheduling | Yes |
+| Analytics | Yes (views, viewers, screenshots, shares, completion rate) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Snapchat requires a **Public Profile** (Person, Business, or Official) — regular accounts cannot use the API. Only **1 media item per post** is allowed, making Snapchat the most restrictive platform for content format. There are **no text-only posts**. Vertical orientation (**9:16**) is practically required for all content types. Stories are **ephemeral** and disappear after 24 hours. Regular Stories do **not** support captions.
+</Callout>
+
+## Quick Start
+
+Post a story to Snapchat:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+const client = new Relay();
+
+const post = await client.posts.create({
+  targets: ['snapchat'],
+  media: [
+    { url: 'https://cdn.example.com/photo.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    snapchat: {
+      content_type: 'story'
+    }
+  }
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+client = Relay()
+
+post = client.posts.create(
+    targets=['snapchat'],
+    media=[
+        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'snapchat': {
+            'content_type': 'story'
+        }
+    }
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Targets:     relaygo.F([]string{"snapchat"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/photo.jpg"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "snapchat": map[string]interface{}{
+            "content_type": "story",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .addTarget("snapchat")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
+            "content_type", "story"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targets": ["snapchat"],
+    "media": [
+      {"url": "https://cdn.example.com/photo.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "snapchat": {
+        "content_type": "story"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Story (Ephemeral, 24 Hours)
+
+Basic story that disappears after 24 hours. No caption or text is supported on regular stories.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  targets: ['snapchat'],
+  media: [
+    { url: 'https://cdn.example.com/image.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    snapchat: {
+      content_type: 'story'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    targets=['snapchat'],
+    media=[
+        {'url': 'https://cdn.example.com/image.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'snapchat': {
+            'content_type': 'story'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Targets:     relaygo.F([]string{"snapchat"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/image.jpg"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "snapchat": map[string]interface{}{
+            "content_type": "story",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .addTarget("snapchat")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/image.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
+            "content_type", "story"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targets": ["snapchat"],
+    "media": [
+      {"url": "https://cdn.example.com/image.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "snapchat": {
+        "content_type": "story"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Saved Story (Permanent on Public Profile)
+
+Saved stories are permanent and displayed on the user's Public Profile. The `content` field becomes the title (max 45 characters).
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Behind the scenes look!',
+  targets: ['snapchat'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    snapchat: {
+      content_type: 'saved_story'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Behind the scenes look!',
+    targets=['snapchat'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'snapchat': {
+            'content_type': 'saved_story'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Behind the scenes look!"),
+    Targets:     relaygo.F([]string{"snapchat"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/video.mp4"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "snapchat": map[string]interface{}{
+            "content_type": "saved_story",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Behind the scenes look!")
+    .addTarget("snapchat")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
+            "content_type", "saved_story"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Behind the scenes look!",
+    "targets": ["snapchat"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "snapchat": {
+        "content_type": "saved_story"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Spotlight (Entertainment Feed)
+
+Spotlight is Snapchat's entertainment feed, similar to TikTok. Video only. The `content` field becomes the description (max 160 chars, supports hashtags).
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Amazing sunset! #sunset #nature #viral',
+  targets: ['snapchat'],
+  media: [
+    { url: 'https://cdn.example.com/sunset.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    snapchat: {
+      content_type: 'spotlight'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Amazing sunset! #sunset #nature #viral',
+    targets=['snapchat'],
+    media=[
+        {'url': 'https://cdn.example.com/sunset.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'snapchat': {
+            'content_type': 'spotlight'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Amazing sunset! #sunset #nature #viral"),
+    Targets:     relaygo.F([]string{"snapchat"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/sunset.mp4"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "snapchat": map[string]interface{}{
+            "content_type": "spotlight",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Amazing sunset! #sunset #nature #viral")
+    .addTarget("snapchat")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/sunset.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
+            "content_type", "spotlight"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Amazing sunset! #sunset #nature #viral",
+    "targets": ["snapchat"],
+    "media": [
+      {"url": "https://cdn.example.com/sunset.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "snapchat": {
+        "content_type": "spotlight"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Spotlight only accepts video content. Use vertical 9:16 format for best results. The description (max 160 characters) supports hashtags for discoverability.
+</Callout>
+
+### Story with Video
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  targets: ['snapchat'],
+  media: [
+    { url: 'https://cdn.example.com/clip.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    snapchat: {
+      content_type: 'story'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    targets=['snapchat'],
+    media=[
+        {'url': 'https://cdn.example.com/clip.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'snapchat': {
+            'content_type': 'story'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Targets:     relaygo.F([]string{"snapchat"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/clip.mp4"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "snapchat": map[string]interface{}{
+            "content_type": "story",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .addTarget("snapchat")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/clip.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
+            "content_type", "story"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targets": ["snapchat"],
+    "media": [
+      {"url": "https://cdn.example.com/clip.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "snapchat": {
+        "content_type": "story"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 |
+| Formats | JPEG, PNG |
+| Max file size | 20 MB |
+| Recommended | 1080 x 1920 px |
+| Aspect ratio | 9:16 (portrait) |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 |
+| Format | MP4 only |
+| Max file size | 500 MB |
+| Duration | 5 - 60 seconds |
+| Min resolution | 540 x 960 px |
+| Recommended | 1080 x 1920 px, 9:16 vertical |
+
+## `target_options` Fields
+
+All fields go inside `target_options.snapchat` on your post request.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `content` | string | — | Override content for Snapchat specifically |
+| `media` | object[] | — | Override media for Snapchat specifically |
+| `content_type` | string | `"story"` | Post type: `"story"` (ephemeral 24h), `"saved_story"` (permanent), or `"spotlight"` (entertainment feed, video only) |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Public Profile required | Account does not have a Public Profile | Set up a Public Profile (Person, Business, or Official) in the Snapchat app. |
+| Media is required | No media was provided | Add an image or video. Snapchat does not support text-only posts. |
+| Only one media item | Multiple media items were attached | Remove extras. Snapchat only allows 1 image or 1 video per post. |
+| Video rejected | Duration, format, or resolution does not meet requirements | Check: 5-60 seconds, MP4 only, minimum 540 x 960 px resolution. |
+| Title too long | Saved Story title exceeds 45 characters | Shorten the content to 45 characters or less. |
+| Description too long | Spotlight description exceeds 160 characters | Shorten the content including hashtags to 160 characters or less. |
+
+## Known Quirks
+
+- **Most restrictive platform** — only 1 media item per post, no text-only posts, no carousels.
+- **Public Profile required** — must be Person, Business, or Official type. Regular accounts cannot use the API.
+- **Media is encrypted with AES-256-CBC** before upload — RelayAPI handles this internally.
+- **Stories are ephemeral** — they disappear after 24 hours. No caption or text is displayed.
+- **Saved Stories are permanent** — displayed on the Public Profile with a title limited to 45 characters.
+- **Spotlight is video-only** — description limited to 160 characters (including hashtags).
+- **9:16 vertical is practically required** for all content types.
+- **No multi-image or carousel support** — unlike Instagram or Threads.

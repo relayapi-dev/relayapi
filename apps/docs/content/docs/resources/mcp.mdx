@@ -1,0 +1,301 @@
+---
+title: MCP Server
+description: Give any AI assistant full access to the RelayAPI through the Model Context Protocol.
+icon: Bot
+---
+
+Connect any AI assistant to RelayAPI using the [Model Context Protocol](https://modelcontextprotocol.io/). Create posts, manage accounts, check analytics, and more — all through natural language.
+
+## What You Can Do
+
+Ask your AI assistant things like:
+
+- *"Post 'Hello world!' to Twitter"*
+- *"List my connected social accounts"*
+- *"Cross-post this announcement to Twitter and LinkedIn"*
+- *"Show my analytics for the past week"*
+- *"Upload this image and post it to Instagram"*
+- *"Schedule a LinkedIn post for tomorrow at 9am"*
+
+## Quick Reference
+
+| | |
+|---|---|
+| **Package** | [`@relayapi/mcp`](https://www.npmjs.com/package/@relayapi/mcp) |
+| **Protocol** | [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) |
+| **Auth** | `RELAY_API_KEY` environment variable |
+| **Transport** | stdio (default), HTTP |
+| **Tools** | `search_docs`, `execute` |
+| **Source** | [GitHub](https://github.com/relayapi-dev/relay-mcp) |
+
+## How It Works
+
+The MCP server exposes two tools that give the AI full access to the RelayAPI SDK:
+
+<Steps>
+<Step>
+### Search Documentation
+
+The AI calls `search_docs` to find the right SDK methods and parameters for your request.
+</Step>
+
+<Step>
+### Execute Code
+
+The AI calls `execute` with TypeScript code that uses a pre-authenticated SDK client to perform the action.
+</Step>
+
+<Step>
+### Return Results
+
+The code runs in a sandboxed environment and returns the results to the AI, which formats them for you.
+</Step>
+</Steps>
+
+<Callout type="info">
+Unlike MCP servers that expose one tool per API action, RelayAPI gives the AI access to the **entire SDK surface** through code execution. This means the AI can compose complex multi-step workflows, handle conditionals, and use new API features as soon as they ship — without waiting for MCP tool updates.
+</Callout>
+
+## Setup
+
+<Callout type="warn">
+You need a RelayAPI API key. Get one from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**. Keys start with `rlay_live_` (production) or `rlay_test_` (testing).
+</Callout>
+
+<Tabs items={['Claude Desktop', 'Claude Code', 'Cursor', 'VS Code']}>
+<Tab value="Claude Desktop">
+Open Claude Desktop settings and go to **Developer > Edit Config**. Add the RelayAPI MCP server to `claude_desktop_config.json`:
+
+```json title="claude_desktop_config.json"
+{
+  "mcpServers": {
+    "relayapi_mcp_api": {
+      "command": "npx",
+      "args": ["-y", "relay-mcp"],
+      "env": {
+        "RELAY_API_KEY": "rlay_live_your_key_here"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving.
+</Tab>
+
+<Tab value="Claude Code">
+Run this command in your terminal:
+
+```bash
+claude mcp add relay_mcp_api --env RELAY_API_KEY="rlay_live_your_key_here" -- npx -y relay-mcp
+```
+
+The MCP server is available immediately in your next Claude Code session.
+</Tab>
+
+<Tab value="Cursor">
+Add a new MCP server in **Cursor Settings > Tools & MCP > New MCP Server** with this configuration:
+
+```json
+{
+  "mcpServers": {
+    "relayapi_mcp_api": {
+      "command": "npx",
+      "args": ["-y", "relay-mcp"],
+      "env": {
+        "RELAY_API_KEY": "rlay_live_your_key_here"
+      }
+    }
+  }
+}
+```
+</Tab>
+
+<Tab value="VS Code">
+Open the Command Palette and run **MCP: Open User Configuration**. Add the server:
+
+```json
+{
+  "mcpServers": {
+    "relayapi_mcp_api": {
+      "command": "npx",
+      "args": ["-y", "relay-mcp"],
+      "env": {
+        "RELAY_API_KEY": "rlay_live_your_key_here"
+      }
+    }
+  }
+}
+```
+</Tab>
+</Tabs>
+
+## Tool Reference
+
+### `search_docs`
+
+Search SDK documentation to find methods, parameters, and usage examples. Use this to discover the right approach before writing code.
+
+| Parameter | Type | Required | Values | Description |
+|-----------|------|----------|--------|-------------|
+| `query` | string | Yes | — | The search query |
+| `language` | string | Yes | `http`, `python`, `go`, `typescript`, `javascript`, `terraform`, `ruby`, `java`, `kotlin` | Target SDK language |
+| `detail` | string | No | `default`, `verbose` | Amount of detail to return |
+
+### `execute`
+
+Execute TypeScript code against a pre-authenticated SDK client in a sandbox. Your code must define an async `run` function that receives the client:
+
+```typescript
+async function run(client) {
+  const result = await client.posts.list();
+  console.log(result.data);
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `code` | string | Yes | TypeScript code defining an async `run(client)` function |
+| `intent` | string | No | Description of the intended purpose |
+
+<Callout type="warn">
+**Execution constraints:** Individual API requests have a 30-second timeout. Total code execution has a limit of approximately 5 minutes. The sandbox has no filesystem or web access except through the SDK client. Variables do not persist between separate `execute` calls.
+</Callout>
+
+## Example Conversations
+
+### Simple Post
+
+> **You:** Post "Just shipped our new API!" to Twitter
+>
+> **AI:** I'll create that post for you.
+
+The AI searches the docs for the `posts.create` method, then executes:
+
+```typescript
+async function run(client) {
+  const post = await client.posts.create({
+    content: 'Just shipped our new API!',
+    targets: ['acc_twitter_123'],
+    schedule: 'now',
+  });
+  console.log(post);
+}
+```
+
+> **AI:** Done! Your post has been published to Twitter.
+
+### List Accounts
+
+> **You:** Show me my connected social accounts
+
+The AI executes:
+
+```typescript
+async function run(client) {
+  const accounts = await client.accounts.list();
+  console.log(accounts.data);
+}
+```
+
+> **AI:** You have 3 connected accounts:
+> - Twitter — @yourcompany
+> - LinkedIn — Your Company Page
+> - Instagram — @yourcompany
+
+### Cross-Post to Multiple Platforms
+
+> **You:** Post "Big announcement coming tomorrow!" to all my accounts
+
+The AI lists accounts first, then creates a post targeting each one:
+
+```typescript
+async function run(client) {
+  const accounts = await client.accounts.list();
+  const accountIds = accounts.data.map((a) => a.id);
+
+  const post = await client.posts.create({
+    content: 'Big announcement coming tomorrow!',
+    targets: accountIds,
+    schedule: 'now',
+  });
+  console.log(post);
+}
+```
+
+> **AI:** Published to Twitter, LinkedIn, and Instagram.
+
+## CLI Options
+
+When running the MCP server directly, these flags are available:
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--transport` | `stdio` \| `http` | `stdio` | Connection transport |
+| `--port` | number | `3000` | Port for HTTP transport |
+| `--socket` | string | — | Unix socket path for HTTP transport |
+| `--code-execution-mode` | `stainless-sandbox` \| `local` | `stainless-sandbox` | Where to run code execution |
+| `--docs-search-mode` | `stainless-api` \| `local` | `stainless-api` | Where to search documentation |
+| `--tools` | string | — | Tools to enable: `code`, `docs` |
+| `--no-tools` | string | — | Tools to disable: `code`, `docs` |
+| `--debug` | boolean | `false` | Enable debug logging |
+| `--log-format` | `json` \| `pretty` | auto | Log output format |
+
+## Remote Deployment
+
+Run the MCP server as an HTTP service for remote or shared access:
+
+```bash
+npx -y relay-mcp@latest --transport=http --port=3000
+```
+
+Clients authenticate via headers:
+
+- `Authorization: Bearer rlay_live_your_key_here`
+- `x-relay-api-key: rlay_live_your_key_here`
+
+Configure a remote client:
+
+```json
+{
+  "mcpServers": {
+    "relayapi_mcp_api": {
+      "url": "http://localhost:3000",
+      "headers": {
+        "Authorization": "Bearer rlay_live_your_key_here"
+      }
+    }
+  }
+}
+```
+
+## Troubleshooting
+
+### API key not found
+
+Make sure the `RELAY_API_KEY` environment variable is set in your MCP client configuration. The key must start with `rlay_live_` or `rlay_test_`.
+
+### Tool execution timeout
+
+Individual API requests have a 30-second timeout. If a request times out, try a smaller query or add filters. Total code execution has a limit of approximately 5 minutes — simplify complex workflows or break them into smaller steps.
+
+### Command not found: npx
+
+The MCP server requires Node.js 18 or later. Install it from [nodejs.org](https://nodejs.org/) and make sure `npx` is in your PATH.
+
+### Stale package version
+
+If you're not seeing the latest features, clear the npx cache:
+
+```bash
+npx -y relay-mcp@latest
+```
+
+The `@latest` tag ensures you always get the most recent version.
+
+## Links
+
+- [GitHub](https://github.com/relayapi-dev/relay-mcp)
+- [SDKs](/sdks)
+- [API Reference](/api-reference)
+- [Quickstart](/quickstart)

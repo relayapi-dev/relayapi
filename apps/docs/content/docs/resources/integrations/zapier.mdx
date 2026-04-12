@@ -1,0 +1,123 @@
+---
+title: Zapier
+description: Automate social media with the official RelayAPI app for Zapier. Connect with 7,000+ apps to trigger posts from any source.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Automate social media publishing across 17+ platforms using the official RelayAPI app on Zapier. Connect with 7,000+ apps to trigger posts from Google Sheets, Notion, CRMs, and more.
+
+## Quick Reference
+
+| Detail | Value |
+|---|---|
+| **Zapier App** | RelayAPI |
+| **Auth Method** | API Key |
+| **Role** | Action + Trigger app |
+
+## Available Operations
+
+### Triggers
+
+| Trigger | Description |
+|---|---|
+| **Post Published** | Fires when a post publishes successfully |
+| **Post Failed** | Fires when a post fails |
+| **Post Scheduled** | Fires when a post is scheduled |
+| **Comment Received** | Fires on new comments across platforms |
+| **Message Received** | Fires on new DMs across platforms |
+
+### Actions
+
+| Action | Description |
+|---|---|
+| **Create Post** | Publish or schedule a post to any platform |
+| **Update Post** | Edit a draft or scheduled post |
+| **Delete Post** | Remove a post |
+| **Upload Media** | Get a presigned URL and attach media |
+
+### Searches
+
+| Search | Description |
+|---|---|
+| **Find Account** | Look up a connected social account |
+| **Find Post** | Search posts by status or date |
+
+## Setup
+
+<Steps>
+
+<Step>
+### Find the RelayAPI App
+
+Go to [zapier.com](https://zapier.com) and create a new Zap. When adding an action step, search for **"RelayAPI"**.
+</Step>
+
+<Step>
+### Connect Your Account
+
+1. Click **Sign in** when prompted
+2. Enter your API key from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**
+3. Click **Continue**
+</Step>
+
+<Step>
+### Test the Connection
+
+Select any RelayAPI action, configure it, and click **Test step** to verify the connection.
+</Step>
+
+</Steps>
+
+## Create a Post
+
+1. Add a trigger (Google Sheets, Schedule, Notion, etc.)
+2. Add **RelayAPI** as the action
+3. Choose **Create Post**
+4. Select **Target Accounts** from the dropdown
+5. Enter the post **Content** (or map from the trigger)
+6. Set **Schedule** to `now` or a future timestamp
+7. Click **Test step** to verify
+
+### Dynamic Data
+
+Map fields from previous steps:
+- **Content**: `{{1.content}}` from a spreadsheet column
+- **Media**: `{{2.imageUrl}}` from a file upload step
+- **Schedule**: `{{1.publishDate}}` from a date column
+
+## Popular Triggers
+
+| Trigger App | Use Case |
+|---|---|
+| **Schedule** | Daily/weekly automated posting |
+| **Google Sheets** | Content calendar automation |
+| **Notion** | Post when database entry status changes |
+| **RSS** | Auto-share new blog articles |
+| **Ghost / WordPress** | Post on new article publish |
+| **Gmail** | Post when receiving specific emails |
+| **Slack** | Post from a Slack command |
+
+## Zap Examples
+
+### Content Calendar (Google Sheets)
+
+1. **Google Sheets > New Row** — Content calendar spreadsheet
+2. **Filter** — Only continue if "Status" = "Ready"
+3. **RelayAPI > Create Post** — Map columns to fields
+
+### Blog-to-Social Pipeline
+
+1. **RSS > New Item** — Your blog feed
+2. **RelayAPI > Create Post** — Share to Twitter + LinkedIn
+
+### Failed Post Alerts
+
+1. **RelayAPI Trigger > Post Failed**
+2. **Slack > Send Message** — Notify your team channel
+
+## Links
+
+- [Zapier](https://zapier.com)
+- [API Reference](/api-reference)

@@ -1,0 +1,16 @@
+{
+	"label": "List Workspaces",
+	"description": "Fetch workspaces for dropdown selection.",
+	"url": "/workspaces",
+	"method": "GET",
+	"qs": {
+		"limit": "100"
+	},
+	"response": {
+		"iterate": "{{body.data}}",
+		"output": {
+			"label": "{{item.name}}",
+			"value": "{{item.id}}"
+		}
+	}
+}

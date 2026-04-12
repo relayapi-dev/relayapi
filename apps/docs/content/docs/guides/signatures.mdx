@@ -1,0 +1,102 @@
+---
+title: Signatures
+description: Auto-append or prepend text blocks to your posts.
+icon: Pen
+---
+
+## Overview
+
+Signatures are short text blocks that can be automatically added to every new post. RelayAPI injects signatures **server-side**, so they work for both dashboard-created and API-created posts.
+
+Each organization can have multiple signatures, but only one can be the **default**. The default signature is automatically applied to new posts unless explicitly skipped.
+
+## How It Works
+
+1. **Create a signature** with a name, content, and position (append or prepend)
+2. **Set one as default** — it will automatically be added to new posts
+3. **Skip per-post** by passing `skip_signature: true` when creating a post via the API
+
+```bash
+# Create a signature and set it as default
+curl -X POST https://api.relayapi.dev/v1/signatures \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Company Footer",
+    "content": "\n---\nPowered by Acme Corp | acme.com",
+    "position": "append",
+    "is_default": true
+  }'
+```
+
+## Position
+
+The `position` field controls where the signature is injected:
+
+| Position | Behavior |
+|----------|----------|
+| `append` | Added after the post content (default) |
+| `prepend` | Added before the post content |
+
+The signature is separated from the post content by a double newline (`\n\n`).
+
+## Default Signature Mutex
+
+Only one signature per organization can be the default. When you set a signature as default, all others are automatically cleared:
+
+```bash
+# Set a specific signature as default
+curl -X POST https://api.relayapi.dev/v1/signatures/sig_abc123/set-default \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+You can also set `is_default: true` when creating or updating a signature — the mutex is enforced automatically.
+
+## Skipping Signatures
+
+Server-side signature injection during post creation is coming soon. When available, you will be able to pass `skip_signature: true` on `POST /v1/posts` to prevent the default signature from being applied to that specific post.
+
+## SDK Usage
+
+```typescript
+import Relay from "@relayapi/sdk";
+
+const client = new Relay({ apiKey: "rlay_live_..." });
+
+// Create a signature
+const sig = await client.signatures.create({
+  name: "Brand Footer",
+  content: "\n---\nFollow us @acmecorp",
+  position: "append",
+  is_default: true,
+});
+
+// List all signatures
+const { data } = await client.signatures.list();
+
+// Get the default signature
+const defaultSig = await client.signatures.getDefault();
+
+// Set a different signature as default
+await client.signatures.setDefault("sig_xyz789");
+
+// Update a signature
+await client.signatures.update("sig_abc123", {
+  content: "\n---\nFollow us @newhandle",
+});
+
+// Delete a signature
+await client.signatures.delete("sig_abc123");
+```
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/signatures` | Create a signature |
+| `GET` | `/v1/signatures` | List signatures (paginated) |
+| `GET` | `/v1/signatures/:id` | Get signature details |
+| `PATCH` | `/v1/signatures/:id` | Update a signature |
+| `DELETE` | `/v1/signatures/:id` | Delete a signature |
+| `GET` | `/v1/signatures/default` | Get the default signature |
+| `POST` | `/v1/signatures/:id/set-default` | Set as default (clears others) |

@@ -1,0 +1,26 @@
+{
+	"label": "RelayAPI Webhook",
+	"description": "Manages webhook registration for instant triggers.",
+	"attach": {
+		"url": "/webhooks",
+		"method": "POST",
+		"body": {
+			"url": "{{webhook.url}}",
+			"events": "{{parameters.events}}"
+		},
+		"response": {
+			"id": "{{body.id}}"
+		}
+	},
+	"detach": {
+		"url": "/webhooks",
+		"method": "DELETE",
+		"body": {
+			"id": "{{webhook.id}}"
+		}
+	},
+	"verify": {
+		"condition": "{{body.event}}",
+		"output": "{{body}}"
+	}
+}

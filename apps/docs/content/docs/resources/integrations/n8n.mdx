@@ -1,0 +1,112 @@
+---
+title: n8n
+description: Automate social media posting with the official RelayAPI node for n8n. Post to 17+ platforms with visual workflows.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Automate social media publishing across 17+ platforms using the official RelayAPI node for n8n. Build visual workflows with dedicated operations for posts, accounts, media, and webhooks.
+
+## Quick Reference
+
+| Detail | Value |
+|---|---|
+| **Node Package** | `n8n-nodes-relayapi` |
+| **npm** | [npmjs.com/package/n8n-nodes-relayapi](https://www.npmjs.com/package/n8n-nodes-relayapi) |
+| **Auth Method** | API Key (Bearer token) |
+| **Works On** | n8n Cloud and self-hosted |
+
+## Available Operations
+
+| Resource | Operations |
+|---|---|
+| **Posts** | Create, Get, List, Update, Delete |
+| **Accounts** | List, Get, Health Check |
+| **Media** | Presign URL, List |
+| **Usage** | Get plan and usage stats |
+| **Triggers** | Post Published, Post Failed, Post Scheduled, Comment Received, Message Received |
+
+## Setup
+
+<Steps>
+
+<Step>
+### Install the Node
+
+In n8n, go to **Settings > Community Nodes > Install** and enter:
+
+```
+n8n-nodes-relayapi
+```
+
+For self-hosted instances, install via npm:
+
+```bash
+npm install n8n-nodes-relayapi
+```
+
+Restart n8n after installation.
+</Step>
+
+<Step>
+### Add Your API Key
+
+When you first add a RelayAPI node to a workflow, n8n will prompt you to create a credential.
+
+1. Click **Create New Credential**
+2. Paste your API key from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**
+3. Click **Save**
+</Step>
+
+<Step>
+### Test the Connection
+
+Add a RelayAPI node, select **Usage > Get Usage**, and click **Execute Node**. You should see your plan and usage stats.
+</Step>
+
+</Steps>
+
+## Create a Post
+
+1. Add a **RelayAPI** node to your workflow
+2. Set **Resource** to **Posts**, **Operation** to **Create**
+3. Select your **Target Accounts** from the dropdown
+4. Enter your post **Content**
+5. Set **Schedule** to `now` (publish immediately) or a future timestamp
+
+## Webhook Triggers
+
+The **RelayAPI Trigger** node receives real-time events:
+
+1. Add a **RelayAPI Trigger** node
+2. Select the events you want (e.g., Post Published, Post Failed)
+3. Activate the workflow — n8n automatically registers a webhook with RelayAPI
+
+When a matching event fires, the trigger starts your workflow with the event data.
+
+## Workflow Examples
+
+### Google Sheets Content Calendar
+
+1. **Schedule Trigger** > Run daily at 9am
+2. **Google Sheets** > Read next row
+3. **RelayAPI** > Create Post with the row's content
+
+### RSS Feed to Social Media
+
+1. **RSS Feed Read** > Your blog feed
+2. **Code** > Format the post text
+3. **RelayAPI** > Create Post to Twitter + LinkedIn
+
+### Failed Post Recovery
+
+1. **RelayAPI Trigger** > Post Failed event
+2. **Wait** > 5 minutes
+3. **RelayAPI** > Retry the failed post
+
+## Links
+
+- [npm Package](https://www.npmjs.com/package/n8n-nodes-relayapi)
+- [GitHub](https://github.com/relayapi-dev/relayapi)
+- [API Reference](/api-reference)

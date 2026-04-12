@@ -1,0 +1,22 @@
+[project]
+name = "relayapi-downloader"
+version = "0.1.0"
+description = "Internal media downloader microservice for RelayAPI"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "yt-dlp>=2025.3.0",
+    "youtube-transcript-api>=1.0.0",
+    "pydantic-settings>=2.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.28.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"

@@ -1,0 +1,18 @@
+{
+	"type": "apikey",
+	"label": "RelayAPI",
+	"instructions": "Enter your RelayAPI API key. Get one at https://relayapi.dev under Settings > API Keys.",
+	"fields": [
+		{
+			"name": "apiKey",
+			"type": "text",
+			"label": "API Key",
+			"required": true,
+			"help": "Starts with rlay_live_ (production) or rlay_test_ (test mode)"
+		}
+	],
+	"test": {
+		"url": "/usage",
+		"method": "GET"
+	}
+}

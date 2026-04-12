@@ -1,0 +1,111 @@
+---
+title: Make
+description: Automate social media with the official RelayAPI app for Make.com. 13+ modules for posts, accounts, media, and webhooks.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Automate social media publishing across 17+ platforms using the official RelayAPI app on Make.com. Build visual scenarios with dedicated modules for each operation.
+
+## Quick Reference
+
+| Detail | Value |
+|---|---|
+| **Make App** | RelayAPI |
+| **Module Count** | 13+ dedicated modules |
+| **Auth Method** | API Key connection |
+
+## Available Modules
+
+### Actions
+
+| Module | Description |
+|---|---|
+| **Create Post** | Publish or schedule a post to any platform |
+| **Get Post** | Retrieve a post by ID |
+| **List Posts** | List posts with status/date filters |
+| **Update Post** | Edit draft or scheduled posts |
+| **Delete Post** | Remove draft, scheduled, or failed posts |
+| **List Accounts** | List all connected social accounts |
+| **Get Account Health** | Check token and permission status |
+| **Presign Media URL** | Get an upload URL for media files |
+| **Get Usage** | View current plan and usage stats |
+
+### Instant Triggers
+
+| Module | Description |
+|---|---|
+| **Post Published** | Fires when a post publishes successfully |
+| **Post Failed** | Fires when a post fails to publish |
+| **Comment Received** | Fires on new comments across platforms |
+| **Message Received** | Fires on new DMs across platforms |
+
+## Setup
+
+<Steps>
+
+<Step>
+### Find the RelayAPI App
+
+In your Make scenario editor, click **+** to add a module. Search for **"RelayAPI"** in the app picker.
+</Step>
+
+<Step>
+### Create a Connection
+
+1. Click **Add** to create a new connection
+2. Name it (e.g., "My RelayAPI Account")
+3. Paste your API key from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**
+4. Click **Save**
+</Step>
+
+<Step>
+### Test the Connection
+
+Select the **Get Usage** module, choose your connection, and click **Run once**. You should see your plan details.
+</Step>
+
+</Steps>
+
+## Create a Post
+
+1. Add a RelayAPI module, select **Create Post**
+2. Select your **Connection**
+3. Select **Target Accounts** from the dropdown (fetched from your connected accounts)
+4. Enter the post **Content**
+5. Set **Schedule** — `now` to publish immediately, or a future ISO 8601 timestamp
+6. Optionally add **Media URLs**
+
+## Cross-Post to Multiple Platforms
+
+Use Make's **Router** module to split into parallel paths:
+
+1. **Trigger** (Google Sheets, Webhook, Schedule, etc.)
+2. **Router** > Split into paths
+3. **Path A** > RelayAPI: Create Post (Twitter, short content)
+4. **Path B** > RelayAPI: Create Post (LinkedIn, long content)
+
+## Scenario Examples
+
+### Scheduled Posting from Google Sheets
+
+1. **Google Sheets > Watch Rows** — Trigger on new rows
+2. **RelayAPI > Create Post** — Map columns to content, accounts, schedule
+
+### Webhook-Triggered Posting
+
+1. **Webhooks > Custom Webhook** — Receive POST from your app
+2. **RelayAPI > Create Post** — Post the incoming content
+
+### Retry Failed Posts
+
+1. **Schedule > Every Hour**
+2. **RelayAPI > List Posts** — Filter by `failed` status
+3. **Iterator** — Loop through results
+4. **HTTP > Make a Request** — Call retry endpoint
+
+## Links
+
+- [Make.com](https://www.make.com)
+- [API Reference](/api-reference)

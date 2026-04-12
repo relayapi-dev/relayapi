@@ -1,0 +1,73 @@
+---
+title: ListMonk API
+description: Send newsletters via your self-hosted ListMonk instance using RelayAPI — cross-post social content to email subscribers.
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `listmonk` |
+| Auth method | Username + Password (Basic Auth) |
+| Content format | HTML (plain text auto-wrapped) |
+| Scheduling | Yes |
+| Analytics | No |
+
+<Callout type="warn">
+Your ListMonk instance must be accessible via **HTTPS** on a public URL. Private/internal URLs are blocked for security.
+</Callout>
+
+## Before You Start
+
+You need your ListMonk instance URL, admin username, and password.
+
+## Connect
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/connect/listmonk \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instance_url": "https://listmonk.example.com",
+    "username": "admin",
+    "password": "your-password"
+  }'
+```
+
+## Send a Campaign
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Newsletter content...",
+    "targets": ["acc_listmonk123"],
+    "scheduled_at": "now",
+    "target_options": {
+      "listmonk": {
+        "subject": "Weekly Digest",
+        "list_id": 1,
+        "template_id": 2
+      }
+    }
+  }'
+```
+
+## `target_options` Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `subject` | string | No | Email subject line. Falls back to first line of content. |
+| `list_id` | number | No | ListMonk list ID to send to. If omitted, uses the first list. |
+| `template_id` | number | No | ListMonk template ID. |
+| `content_html` | string | No | Full HTML body. If omitted, plain text is auto-wrapped. |
+
+## Discovery
+
+List your ListMonk lists and templates:
+
+```
+GET /v1/accounts/{id}/lists      # Returns ListMonk subscriber lists
+GET /v1/accounts/{id}/templates  # Returns ListMonk email templates
+```

@@ -1,0 +1,10 @@
+{
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"paths": {
+			"@relayapi/sdk": ["../../packages/sdk/src/index.ts"]
+		}
+	},
+	"include": ["src"]
+}

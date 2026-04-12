@@ -1,0 +1,71 @@
+{
+	"label": "Create Post",
+	"description": "Create and publish or schedule a post to one or more social media platforms.",
+	"url": "/posts",
+	"method": "POST",
+	"parameters": [
+		{
+			"name": "content",
+			"type": "text",
+			"label": "Content",
+			"help": "Post text. Optional if using per-target content in target_options."
+		},
+		{
+			"name": "targets",
+			"type": "array",
+			"label": "Target Accounts",
+			"required": true,
+			"spec": {
+				"type": "text",
+				"label": "Account ID or Platform"
+			},
+			"help": "Account IDs (acc_*), platform names (twitter), or workspace IDs (grp_*). Use the List Accounts RPC to find IDs."
+		},
+		{
+			"name": "scheduled_at",
+			"type": "text",
+			"label": "Schedule",
+			"required": true,
+			"default": "now",
+			"help": "\"now\" to publish immediately, \"draft\" to save as draft, or an ISO 8601 timestamp (e.g. 2025-01-15T09:00:00Z)."
+		},
+		{
+			"name": "media",
+			"type": "array",
+			"label": "Media",
+			"spec": {
+				"type": "collection",
+				"spec": [
+					{
+						"name": "url",
+						"type": "url",
+						"label": "URL",
+						"required": true
+					},
+					{
+						"name": "type",
+						"type": "select",
+						"label": "Type",
+						"options": [
+							{ "label": "Image", "value": "image" },
+							{ "label": "Video", "value": "video" },
+							{ "label": "GIF", "value": "gif" },
+							{ "label": "Document", "value": "document" }
+						],
+						"default": "image"
+					}
+				]
+			}
+		},
+		{
+			"name": "timezone",
+			"type": "text",
+			"label": "Timezone",
+			"default": "UTC",
+			"help": "IANA timezone (e.g. America/New_York). Only used with scheduled timestamps."
+		}
+	],
+	"response": {
+		"output": "{{body}}"
+	}
+}

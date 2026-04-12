@@ -1,0 +1,16 @@
+{
+	"label": "Message Received",
+	"description": "Triggers when a new DM is received on any platform.",
+	"type": "instant",
+	"webhook": "relay-webhook",
+	"parameters": [
+		{
+			"name": "events",
+			"type": "hidden",
+			"default": ["message.received"]
+		}
+	],
+	"response": {
+		"output": "{{body}}"
+	}
+}

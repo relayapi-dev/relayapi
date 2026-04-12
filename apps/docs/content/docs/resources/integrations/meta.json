@@ -1,0 +1,13 @@
+{
+  "title": "Integrations",
+  "icon": "Blocks",
+  "pages": [
+    "n8n",
+    "make",
+    "zapier",
+    "claude",
+    "cursor",
+    "codex",
+    "openclaw"
+  ]
+}

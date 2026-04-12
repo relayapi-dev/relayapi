@@ -1,0 +1,20 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import SEO from "../../components/SEO.astro";
+import { InvitationPage } from "../../components/invitation/invitation-page";
+
+const { id } = Astro.params;
+const u = Astro.locals.user;
+const user = u
+  ? {
+      id: u.id as string,
+      name: (u.name as string) || "",
+      email: u.email as string,
+    }
+  : null;
+---
+
+<Layout>
+  <SEO slot="head" title="Team Invitation" noIndex={true} />
+  <InvitationPage client:load invitationId={id!} user={user} />
+</Layout>

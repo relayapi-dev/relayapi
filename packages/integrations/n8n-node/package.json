@@ -1,0 +1,28 @@
+{
+  "name": "n8n-nodes-relayapi",
+  "version": "0.1.0",
+  "description": "n8n community node for RelayAPI — post to 17+ social media platforms",
+  "keywords": ["n8n-community-node-package"],
+  "license": "MIT",
+  "main": "index.js",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc && cp nodes/RelayApi/relayapi.svg dist/nodes/RelayApi/",
+    "prepublishOnly": "npm run build"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": ["dist/credentials/RelayApi.credentials.js"],
+    "nodes": [
+      "dist/nodes/RelayApi/RelayApi.node.js",
+      "dist/nodes/RelayApi/RelayApiTrigger.node.js"
+    ]
+  },
+  "devDependencies": {
+    "n8n-workflow": "^1.0.0",
+    "typescript": "~5.7.0"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}

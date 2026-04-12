@@ -1,0 +1,25 @@
+---
+description: RelayAPI integration conventions — use when working with social media posting, the RelayAPI SDK, or @relayapi/sdk imports
+alwaysApply: false
+---
+
+When working with the RelayAPI SDK (`@relayapi/sdk`):
+
+- Always use `process.env['RELAYAPI_API_KEY']` for the API key — never hardcode keys
+- Keys are prefixed `rlay_live_` (production) or `rlay_test_` (testing)
+- Use `scheduled_at: "now"` for immediate posting, `"draft"` for drafts, or ISO 8601 for scheduling
+- Always check post status after creation — multi-platform posts can be `partial` (some targets succeeded, others failed)
+- **Targets accept 3 formats** (can mix in one request):
+  - Platform name (e.g. `"twitter"`) → all accounts on that platform
+  - Account ID (e.g. `"acc_abc123"`) → specific account
+  - Workspace ID (e.g. `"ws_xyz"`) → all accounts in the group
+- Use `target_options` to customize content per platform (different hashtags, character limits, etc.)
+- Use validation tools (`client.tools.validatePost()`) before publishing to catch issues early
+- Upload media via `client.media.getPresignURL()` for reliable attachments
+- Handle errors with specific error classes: `AuthenticationError`, `RateLimitError`, `NotFoundError`
+- Platform character limits: Twitter (280), LinkedIn (3000), Instagram (2200), Bluesky (300), Threads (500), Pinterest (500), Mastodon (500), Reddit (40000), Facebook (63206), Google Business (1500), Snapchat (250)
+- All list endpoints use cursor-based pagination: `{ data, next_cursor, has_more }`
+- `workspace_id` (optional) is available on list and create endpoints for posts, webhooks, inbox, automations, sequences, broadcasts, custom fields, and contacts — scope the request to a specific workspace, or omit to operate across all workspaces
+- Use `client.workspaces.list()` to find workspace IDs by name when the user refers to account collections
+- Use `client.analytics.platformOverview()` for live analytics, `client.analytics.get()` for historical
+- Use `client.inbox.comments()` and `client.inbox.messages()` for inbox management

@@ -1,0 +1,37 @@
+---
+title: Connecting Accounts
+description: Learn how to connect social media accounts to your workspace.
+icon: Link
+---
+
+## Overview
+
+Before you can post to a social media platform, you need to connect at least one account. RelayAPI supports OAuth-based connections for most platforms.
+
+## Connecting via Dashboard
+
+1. Navigate to **Connections** in your dashboard
+2. Click **Connect Account**
+3. Select the platform you want to connect
+4. Authorize RelayAPI in the platform's OAuth flow
+5. Your account will appear in the connected accounts list
+
+## Connecting via API
+
+You can also initiate account connections programmatically using the [Connect Account](/api-reference/accounts/connect-account) endpoint:
+
+```bash
+curl https://api.relayapi.dev/v1/connect/{platform} \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+This returns an OAuth URL. Redirect the user to complete authorization.
+
+## Managing Connected Accounts
+
+- **List accounts**: `GET /v1/accounts`
+- **Disconnect**: `DELETE /v1/accounts/{id}`
+
+## Token Refresh
+
+RelayAPI automatically refreshes OAuth tokens before they expire. If a token becomes invalid, the account status will change to `disconnected` and you'll receive a webhook notification.

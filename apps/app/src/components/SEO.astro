@@ -1,0 +1,139 @@
+---
+import { siteConfig } from "../lib/site";
+
+interface Props {
+  title?: string;
+  description?: string;
+  keywords?: string[];
+  image?: string;
+  type?: "website" | "article" | "product";
+  canonicalUrl?: string;
+  noIndex?: boolean;
+  noFollow?: boolean;
+  faqs?: { question: string; answer: string }[];
+}
+
+const {
+  title,
+  description = siteConfig.description,
+  keywords = [],
+  image = siteConfig.ogImage,
+  type = "website",
+  canonicalUrl,
+  noIndex = false,
+  noFollow = false,
+  faqs = [],
+} = Astro.props;
+
+const fullTitle = title ? `${title} – ${siteConfig.name}` : siteConfig.name;
+const canonical = canonicalUrl || new URL(Astro.url.pathname, siteConfig.url).href;
+const absoluteImage = image.startsWith("http") ? image : new URL(image, siteConfig.url).href;
+
+// --- JSON-LD Structured Data ---
+
+const jsonLd: Record<string, unknown>[] = [
+  // WebSite schema
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "@id": `${siteConfig.url}/#website`,
+    url: siteConfig.url,
+    name: siteConfig.name,
+    description: siteConfig.description,
+    publisher: { "@id": `${siteConfig.url}/#organization` },
+  },
+  // Organization schema
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "@id": `${siteConfig.url}/#organization`,
+    name: siteConfig.name,
+    url: siteConfig.url,
+    logo: new URL("/favicon.svg", siteConfig.url).href,
+    sameAs: [siteConfig.links.twitter, siteConfig.links.github],
+  },
+];
+
+// SoftwareApplication schema (homepage only)
+if (Astro.url.pathname === "/") {
+  jsonLd.push({
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: siteConfig.name,
+    applicationCategory: "DeveloperApplication",
+    operatingSystem: "Web",
+    description: siteConfig.description,
+    url: siteConfig.url,
+    offers: {
+      "@type": "Offer",
+      price: "0",
+      priceCurrency: "USD",
+    },
+  });
+}
+
+// FAQPage schema
+if (faqs.length > 0) {
+  jsonLd.push({
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: faqs.map((faq) => ({
+      "@type": "Question",
+      name: faq.question,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: faq.answer,
+      },
+    })),
+  });
+}
+
+// BreadcrumbList schema
+const pathSegments = Astro.url.pathname.split("/").filter(Boolean);
+const breadcrumbItems = [
+  { "@type": "ListItem", position: 1, name: "Home", item: siteConfig.url },
+  ...pathSegments.map((segment, i) => ({
+    "@type": "ListItem",
+    position: i + 2,
+    name: segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, " "),
+    item: new URL(pathSegments.slice(0, i + 1).join("/"), siteConfig.url).href,
+  })),
+];
+
+if (pathSegments.length > 0) {
+  jsonLd.push({
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: breadcrumbItems,
+  });
+}
+---
+
+<!-- Basic Meta -->
+<title>{fullTitle}</title>
+<meta name="description" content={description} />
+{keywords.length > 0 && <meta name="keywords" content={keywords.join(", ")} />}
+<link rel="canonical" href={canonical} />
+{(noIndex || noFollow) && (
+  <meta name="robots" content={`${noIndex ? "noindex" : "index"}, ${noFollow ? "nofollow" : "follow"}`} />
+)}
+
+<!-- Open Graph -->
+<meta property="og:title" content={fullTitle} />
+<meta property="og:description" content={description} />
+<meta property="og:image" content={absoluteImage} />
+<meta property="og:type" content={type} />
+<meta property="og:url" content={canonical} />
+<meta property="og:site_name" content={siteConfig.name} />
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={fullTitle} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={absoluteImage} />
+<meta name="twitter:site" content={siteConfig.twitterHandle} />
+
+<!-- JSON-LD Structured Data -->
+{jsonLd.map((schema) => (
+  <script type="application/ld+json" set:html={JSON.stringify(schema)} />
+))}

@@ -1,0 +1,866 @@
+---
+title: Twitter/X API
+description: Schedule and automate Twitter/X posts with RelayAPI — tweets, threads, polls, images, videos, GIFs, and reply settings.
+icon: twitter
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `twitter` |
+| Auth method | OAuth 2.0 |
+| Character limit | 280 (free) / 25,000 (Premium) |
+| Images per post | 4 (or 1 GIF) |
+| Videos per post | 1 |
+| Image formats | JPEG, PNG, WebP, GIF |
+| Image max size | 5 MB (images), 15 MB (GIFs) |
+| Video formats | MP4, MOV |
+| Video max size | 512 MB |
+| Video max duration | 140 seconds |
+| Post types | Tweet, Thread, Reply, Poll |
+| Scheduling | Yes |
+| Analytics | Yes |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Twitter has a strict **280 character limit** for free accounts (25,000 for Premium). URLs always count as **23 characters** regardless of actual length, and emojis count as **2 characters**. If you are cross-posting from platforms with higher limits (LinkedIn at 3,000, Facebook at 63,000), use `target_options.twitter.content` to provide a shorter version or your post **will** fail. Duplicate tweets are rejected by Twitter, even very similar content.
+</Callout>
+
+## Quick Start
+
+Post a tweet immediately:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['twitter'],
+  scheduled_at: 'now',
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['twitter'],
+    scheduled_at='now',
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"twitter"}),
+    ScheduledAt: relaygo.F("now"),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("twitter")
+    .scheduledAt("now")
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["twitter"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text Tweet
+
+Simple text-only tweet. 280 character limit for free accounts, 25,000 for Premium.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Just shipped a new feature! Check it out.',
+  targets: ['twitter'],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Just shipped a new feature! Check it out.',
+    targets=['twitter'],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Just shipped a new feature! Check it out."),
+    Targets:     relaygo.F([]string{"twitter"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Just shipped a new feature! Check it out.")
+    .addTarget("twitter")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Just shipped a new feature! Check it out.",
+    "targets": ["twitter"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Tweet with Images
+
+Up to 4 images per tweet. Cannot mix images and videos. Cannot mix images and GIFs.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out these photos!',
+  targets: ['twitter'],
+  media: [
+    { url: 'https://cdn.example.com/photo1.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo2.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out these photos!',
+    targets=['twitter'],
+    media=[
+        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Check out these photos!"),
+    Targets: relaygo.F([]string{"twitter"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/photo1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out these photos!")
+    .addTarget("twitter")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo1.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo2.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out these photos!",
+    "targets": ["twitter"],
+    "media": [
+      {"url": "https://cdn.example.com/photo1.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo2.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Tweet with Video
+
+Single video per tweet. MP4 or MOV, up to 512 MB, max 140 seconds.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Watch this!',
+  targets: ['twitter'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Watch this!',
+    targets=['twitter'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Watch this!"),
+    Targets: relaygo.F([]string{"twitter"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Watch this!")
+    .addTarget("twitter")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Watch this!",
+    "targets": ["twitter"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Tweet with GIF
+
+1 GIF per tweet (consumes all 4 image slots). Max 15 MB, 1280 x 1080 px. Auto-plays in timeline.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check this out!',
+  targets: ['twitter'],
+  media: [
+    { url: 'https://cdn.example.com/animation.gif', type: 'gif' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check this out!',
+    targets=['twitter'],
+    media=[
+        {'url': 'https://cdn.example.com/animation.gif', 'type': 'gif'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Check this out!"),
+    Targets: relaygo.F([]string{"twitter"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/animation.gif"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeGif)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check this out!")
+    .addTarget("twitter")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/animation.gif")
+        .type(PostCreateParams.Media.Type.GIF)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check this out!",
+    "targets": ["twitter"],
+    "media": [
+      {"url": "https://cdn.example.com/animation.gif", "type": "gif"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Thread (Multi-Tweet)
+
+Create Twitter threads with multiple connected tweets using `target_options.twitter.thread`. Each item becomes a reply to the previous tweet and can have its own content and media.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  targets: ['twitter'],
+  scheduled_at: 'now',
+  target_options: {
+    twitter: {
+      thread: [
+        { content: '1/ Starting a thread about API design...' },
+        { content: '2/ First, always use proper HTTP methods.' },
+        {
+          content: '3/ Second, version your APIs from day one.',
+          media: [{ url: 'https://cdn.example.com/diagram.png', type: 'image' }],
+        },
+        { content: '4/ Finally, document everything! /end' },
+      ],
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    targets=['twitter'],
+    scheduled_at='now',
+    target_options={
+        'twitter': {
+            'thread': [
+                {'content': '1/ Starting a thread about API design...'},
+                {'content': '2/ First, always use proper HTTP methods.'},
+                {
+                    'content': '3/ Second, version your APIs from day one.',
+                    'media': [{'url': 'https://cdn.example.com/diagram.png', 'type': 'image'}],
+                },
+                {'content': '4/ Finally, document everything! /end'},
+            ],
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Targets:     relaygo.F([]string{"twitter"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "twitter": map[string]interface{}{
+            "thread": []map[string]interface{}{
+                {"content": "1/ Starting a thread about API design..."},
+                {"content": "2/ First, always use proper HTTP methods."},
+                {"content": "3/ Second, version your APIs from day one.",
+                    "media": []map[string]interface{}{
+                        {"url": "https://cdn.example.com/diagram.png", "type": "image"},
+                    }},
+                {"content": "4/ Finally, document everything! /end"},
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .addTarget("twitter")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("twitter", JsonValue.from(Map.of(
+            "thread", List.of(
+                Map.of("content", "1/ Starting a thread about API design..."),
+                Map.of("content", "2/ First, always use proper HTTP methods."),
+                Map.of("content", "3/ Second, version your APIs from day one.",
+                    "media", List.of(Map.of("url", "https://cdn.example.com/diagram.png", "type", "image"))),
+                Map.of("content", "4/ Finally, document everything! /end")
+            )
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targets": ["twitter"],
+    "scheduled_at": "now",
+    "target_options": {
+      "twitter": {
+        "thread": [
+          {"content": "1/ Starting a thread about API design..."},
+          {"content": "2/ First, always use proper HTTP methods."},
+          {"content": "3/ Second, version your APIs from day one.",
+           "media": [{"url": "https://cdn.example.com/diagram.png", "type": "image"}]},
+          {"content": "4/ Finally, document everything! /end"}
+        ]
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Each thread item has its own 280-character limit (free accounts). Thread replies are posted sequentially since each one needs the parent tweet ID.
+</Callout>
+
+### Reply to Tweet
+
+Reply to an existing tweet using `reply_to`. Provide the tweet ID of the tweet you want to reply to.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: "Great point! Here's my take...",
+  targets: ['twitter'],
+  scheduled_at: 'now',
+  target_options: {
+    twitter: {
+      reply_to: '1748391029384756102',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content="Great point! Here's my take...",
+    targets=['twitter'],
+    scheduled_at='now',
+    target_options={
+        'twitter': {
+            'reply_to': '1748391029384756102',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Great point! Here's my take..."),
+    Targets:     relaygo.F([]string{"twitter"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "twitter": map[string]interface{}{
+            "reply_to": "1748391029384756102",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Great point! Here's my take...")
+    .addTarget("twitter")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("twitter", JsonValue.from(Map.of(
+            "reply_to", "1748391029384756102"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Great point! Here'\''s my take...",
+    "targets": ["twitter"],
+    "scheduled_at": "now",
+    "target_options": {
+      "twitter": {
+        "reply_to": "1748391029384756102"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Reply Settings
+
+Control who can reply to your tweet using `reply_settings`.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Important announcement for our followers.',
+  targets: ['twitter'],
+  scheduled_at: 'now',
+  target_options: {
+    twitter: {
+      reply_settings: 'following',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Important announcement for our followers.',
+    targets=['twitter'],
+    scheduled_at='now',
+    target_options={
+        'twitter': {
+            'reply_settings': 'following',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Important announcement for our followers."),
+    Targets:     relaygo.F([]string{"twitter"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "twitter": map[string]interface{}{
+            "reply_settings": "following",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Important announcement for our followers.")
+    .addTarget("twitter")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("twitter", JsonValue.from(Map.of(
+            "reply_settings", "following"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Important announcement for our followers.",
+    "targets": ["twitter"],
+    "scheduled_at": "now",
+    "target_options": {
+      "twitter": {
+        "reply_settings": "following"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+`reply_to` cannot be combined with `reply_settings`. For threads, reply settings apply to the first tweet only.
+</Callout>
+
+### Poll
+
+Create a tweet with a poll using `target_options.twitter.poll`. Polls support 2-4 options (each up to 25 characters) and a duration from 5 minutes to 7 days.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'What should we build next?',
+  targets: ['twitter'],
+  scheduled_at: 'now',
+  target_options: {
+    twitter: {
+      poll: {
+        options: ['Dark mode', 'New analytics', 'More integrations'],
+        duration_minutes: 1440,
+      },
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='What should we build next?',
+    targets=['twitter'],
+    scheduled_at='now',
+    target_options={
+        'twitter': {
+            'poll': {
+                'options': ['Dark mode', 'New analytics', 'More integrations'],
+                'duration_minutes': 1440,
+            },
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("What should we build next?"),
+    Targets:     relaygo.F([]string{"twitter"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "twitter": map[string]interface{}{
+            "poll": map[string]interface{}{
+                "options":          []string{"Dark mode", "New analytics", "More integrations"},
+                "duration_minutes": 1440,
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("What should we build next?")
+    .addTarget("twitter")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("twitter", JsonValue.from(Map.of(
+            "poll", Map.of(
+                "options", List.of("Dark mode", "New analytics", "More integrations"),
+                "duration_minutes", 1440
+            )
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "What should we build next?",
+    "targets": ["twitter"],
+    "scheduled_at": "now",
+    "target_options": {
+      "twitter": {
+        "poll": {
+          "options": ["Dark mode", "New analytics", "More integrations"],
+          "duration_minutes": 1440
+        }
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="warn">
+Polls **cannot** be combined with media attachments or threads. Each poll option must be 1-25 characters. Duration must be between 5 and 10,080 minutes (7 days).
+</Callout>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per tweet | 4 |
+| Formats | JPEG, PNG, WebP |
+| Max file size | 5 MB |
+| Min dimensions | 4 x 4 px |
+| Max dimensions | 8192 x 8192 px |
+| Recommended | 1200 x 675 px (16:9) |
+
+#### Aspect Ratios
+
+| Type | Ratio | Dimensions |
+|------|-------|------------|
+| Landscape | 16:9 | 1200 x 675 px |
+| Square | 1:1 | 1200 x 1200 px |
+| Portrait | 4:5 | 1080 x 1350 px |
+
+### GIFs
+
+| Property | Requirement |
+|----------|-------------|
+| Max per tweet | 1 (consumes all 4 image slots) |
+| Max file size | 15 MB |
+| Max dimensions | 1280 x 1080 px |
+| Behavior | Auto-plays in timeline |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per tweet | 1 |
+| Formats | MP4, MOV |
+| Max file size | 512 MB |
+| Max duration | 140 seconds (2 min 20 sec) |
+| Min duration | 0.5 seconds |
+| Min dimensions | 32 x 32 px |
+| Max dimensions | 1920 x 1200 px |
+| Frame rate | 40 fps max |
+| Bitrate | 25 Mbps max |
+
+#### Recommended Video Specs
+
+| Property | Recommended |
+|----------|-------------|
+| Resolution | 1280 x 720 px (720p) |
+| Aspect ratio | 16:9 (landscape) or 1:1 (square) |
+| Frame rate | 30 fps |
+| Codec | H.264 |
+| Audio | AAC, 128 kbps |
+
+## `target_options` Fields
+
+All fields go inside `target_options.twitter` on your post request.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | string | Override post content for Twitter specifically |
+| `media` | object[] | Override media for Twitter specifically |
+| `thread` | object[] | Array of `{content, media?}` for multi-tweet threads. Each item becomes a reply to the previous tweet. |
+| `reply_to` | string | Tweet ID to reply to. The published tweet appears as a reply in that tweet's thread. |
+| `reply_settings` | string | Who can reply: `"following"`, `"mentioned_users"`, `"subscribers"`, `"verified"`. Cannot be combined with `reply_to`. |
+| `poll` | object | Poll with `options` (array of 2-4 strings, each 1-25 chars) and `duration_minutes` (5-10,080). Cannot be combined with media or threads. |
+
+## Character Counting
+
+Twitter uses weighted character counting:
+
+- **URLs** always count as **23 characters** regardless of actual length (t.co shortening)
+- **Emojis** count as **2 characters** each
+- **All other characters** count as 1
+
+<Callout type="info">
+A tweet with a 200-character URL still only uses 23 of your 280-character budget. But a tweet with 260 characters of text plus one URL would be 283 characters (260 + 23), exceeding the limit.
+</Callout>
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Character limit exceeded | Content exceeds 280 chars (free account) | Use `target_options.twitter.content` to provide a shorter version. Remember: URLs = 23 chars, emojis = 2 chars. |
+| Duplicate content | Same or very similar text posted recently | Modify the text, even slightly. Twitter rejects near-duplicate tweets. |
+| Rate limit hit | Too many posts in a short window | Space posts at least 4 minutes apart. Limit is ~300 tweets per 3-hour window. |
+| Media processing failed | Unsupported format or corrupt file | Verify media format and file integrity. |
+| Missing tweet.write scope | OAuth token lacks required permissions | Reconnect the account with all required scopes. |
+| Token expired | OAuth access was revoked or expired | Reconnect the account via the dashboard or Connect API. |
+| INVALID_POLL | Poll validation failed | Ensure 2-4 options (each 1-25 chars), duration 5-10,080 minutes, and no media or thread attached. |
+
+## Known Quirks
+
+- **Duplicate tweets are rejected** — even very similar content gets blocked. Modify text meaningfully between posts.
+- **URLs always count as 23 characters** regardless of actual length due to t.co shortening.
+- **Cannot mix images and videos** in the same tweet.
+- **Cannot mix images and GIFs** in the same tweet.
+- **GIF consumes all 4 image slots** — you cannot attach a GIF alongside other images.
+- **Free vs Premium character limits** — free accounts get 280 chars, Premium gets 25,000. You must know the account type.
+- **Rate limit** — approximately 300 tweets per 3-hour window for creation.
+- **Thread replies must be posted sequentially** since each reply needs the parent tweet ID.
+- **Emojis count as 2 characters** — a tweet with 140 emojis uses all 280 characters.
+- **Polls cannot have media or threads** — polls are mutually exclusive with media attachments and thread items.

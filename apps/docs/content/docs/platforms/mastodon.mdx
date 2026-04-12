@@ -1,0 +1,720 @@
+---
+title: Mastodon API
+description: Schedule and automate Mastodon posts with RelayAPI — text statuses, images, videos, GIFs, content warnings, visibility controls, and reply threads.
+icon: mastodon
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `mastodon` |
+| Auth method | OAuth 2.0 (per-instance) |
+| Text limit | 500 characters (default, varies by instance) |
+| Images per post | 4 |
+| Videos per post | 1 |
+| Image formats | JPEG, PNG, GIF, WebP |
+| Image max size | 16 MB |
+| Video formats | MP4, WebM, MOV |
+| Video max size | 99 MB |
+| Post types | Text, Image, Video, GIF, Media Gallery |
+| Visibility | Public, Unlisted, Private, Direct |
+| Scheduling | Yes |
+| Analytics | No |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Each Mastodon account is tied to a **specific instance** (e.g., mastodon.social, fosstodon.org). The instance URL is stored during account connection. The **500-character limit is the default** but individual instances can set their own limit. You can attach up to **4 images OR 1 video/GIF** per post — mixing images and videos in one post is not allowed. Video and GIF uploads are **processed asynchronously** and may take a few seconds.
+</Callout>
+
+## Quick Start
+
+Post a status to Mastodon:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI! 🐘',
+  targets: ['mastodon'],
+  scheduled_at: 'now',
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+post = client.posts.create(
+    content='Hello from RelayAPI! 🐘',
+    targets=['mastodon'],
+    scheduled_at='now',
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI! 🐘"),
+    Targets:     relaygo.F([]string{"mastodon"}),
+    ScheduledAt: relaygo.F("now"),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI! 🐘")
+    .addTarget("mastodon")
+    .scheduledAt("now")
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI! 🐘",
+    "targets": ["mastodon"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text Status
+
+Plain text status up to 500 characters (default instance limit).
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['mastodon'],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['mastodon'],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"mastodon"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("mastodon")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["mastodon"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Status with Images (Up to 4)
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Photo gallery from today\'s hike!',
+  targets: ['mastodon'],
+  media: [
+    { url: 'https://cdn.example.com/photo1.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo2.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo3.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo4.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Photo gallery from today\'s hike!',
+    targets=['mastodon'],
+    media=[
+        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo3.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo4.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Photo gallery from today's hike!"),
+    Targets: relaygo.F([]string{"mastodon"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/photo1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo3.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo4.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Photo gallery from today's hike!")
+    .addTarget("mastodon")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo1.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo2.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo3.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo4.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Photo gallery from today'\''s hike!",
+    "targets": ["mastodon"],
+    "media": [
+      {"url": "https://cdn.example.com/photo1.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo2.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo3.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo4.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Status with Video
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Watch our latest update!',
+  targets: ['mastodon'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Watch our latest update!',
+    targets=['mastodon'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Watch our latest update!"),
+    Targets: relaygo.F([]string{"mastodon"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Watch our latest update!")
+    .addTarget("mastodon")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Watch our latest update!",
+    "targets": ["mastodon"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Content Warning (Spoiler Text)
+
+Add a content warning that hides the status behind a toggle.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Detailed discussion of the season finale plot twists.',
+  targets: ['mastodon'],
+  scheduled_at: 'now',
+  target_options: {
+    mastodon: {
+      spoiler_text: 'Season 3 finale spoilers',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Detailed discussion of the season finale plot twists.',
+    targets=['mastodon'],
+    scheduled_at='now',
+    target_options={
+        'mastodon': {
+            'spoiler_text': 'Season 3 finale spoilers',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Detailed discussion of the season finale plot twists."),
+    Targets:     relaygo.F([]string{"mastodon"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "mastodon": map[string]interface{}{
+            "spoiler_text": "Season 3 finale spoilers",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Detailed discussion of the season finale plot twists.")
+    .addTarget("mastodon")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("mastodon", JsonValue.from(Map.of(
+            "spoiler_text", "Season 3 finale spoilers"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Detailed discussion of the season finale plot twists.",
+    "targets": ["mastodon"],
+    "scheduled_at": "now",
+    "target_options": {
+      "mastodon": {
+        "spoiler_text": "Season 3 finale spoilers"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Sensitive Media
+
+Mark media as sensitive so it is hidden behind a warning.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Street art from the city.',
+  targets: ['mastodon'],
+  media: [
+    { url: 'https://cdn.example.com/art.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    mastodon: {
+      sensitive: true,
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Street art from the city.',
+    targets=['mastodon'],
+    media=[
+        {'url': 'https://cdn.example.com/art.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'mastodon': {
+            'sensitive': True,
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Street art from the city."),
+    Targets: relaygo.F([]string{"mastodon"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/art.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "mastodon": map[string]interface{}{
+            "sensitive": true,
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Street art from the city.")
+    .addTarget("mastodon")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/art.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("mastodon", JsonValue.from(Map.of(
+            "sensitive", true
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Street art from the city.",
+    "targets": ["mastodon"],
+    "media": [
+      {"url": "https://cdn.example.com/art.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "mastodon": {
+        "sensitive": true
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Visibility Controls
+
+Control who can see the post.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Only my followers can see this.',
+  targets: ['mastodon'],
+  scheduled_at: 'now',
+  target_options: {
+    mastodon: {
+      visibility: 'private',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Only my followers can see this.',
+    targets=['mastodon'],
+    scheduled_at='now',
+    target_options={
+        'mastodon': {
+            'visibility': 'private',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Only my followers can see this."),
+    Targets:     relaygo.F([]string{"mastodon"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "mastodon": map[string]interface{}{
+            "visibility": "private",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Only my followers can see this.")
+    .addTarget("mastodon")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("mastodon", JsonValue.from(Map.of(
+            "visibility", "private"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Only my followers can see this.",
+    "targets": ["mastodon"],
+    "scheduled_at": "now",
+    "target_options": {
+      "mastodon": {
+        "visibility": "private"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Reply to a Status
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: '@user Great point! Here\'s my take...',
+  targets: ['mastodon'],
+  scheduled_at: 'now',
+  target_options: {
+    mastodon: {
+      in_reply_to_id: '110123456789012345',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='@user Great point! Here\'s my take...',
+    targets=['mastodon'],
+    scheduled_at='now',
+    target_options={
+        'mastodon': {
+            'in_reply_to_id': '110123456789012345',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("@user Great point! Here's my take..."),
+    Targets:     relaygo.F([]string{"mastodon"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "mastodon": map[string]interface{}{
+            "in_reply_to_id": "110123456789012345",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("@user Great point! Here's my take...")
+    .addTarget("mastodon")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("mastodon", JsonValue.from(Map.of(
+            "in_reply_to_id", "110123456789012345"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "@user Great point! Here'\''s my take...",
+    "targets": ["mastodon"],
+    "scheduled_at": "now",
+    "target_options": {
+      "mastodon": {
+        "in_reply_to_id": "110123456789012345"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 4 |
+| Formats | JPEG, PNG, GIF, WebP |
+| Max file size | 16 MB |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 |
+| Formats | MP4, WebM, MOV |
+| Max file size | 99 MB |
+| Processing | Asynchronous (may take a few seconds) |
+
+## `target_options` Fields
+
+All fields go inside `target_options.mastodon` on your post request.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `content` | string | — | Override post content for Mastodon specifically |
+| `media` | object[] | — | Override media for Mastodon specifically |
+| `visibility` | string | `"public"` | Post visibility: `"public"`, `"unlisted"`, `"private"` (followers only), or `"direct"` (mentioned users only) |
+| `spoiler_text` | string | — | Content warning text displayed above the post |
+| `sensitive` | boolean | `false` | Mark media as sensitive (hidden behind a warning) |
+| `in_reply_to_id` | string | — | Mastodon status ID to reply to |
+| `instance_url` | string | — | Override the instance URL (defaults to the one stored during account connection) |
+
+## Visibility Reference
+
+| Visibility | Description |
+|------------|-------------|
+| `public` | Visible to everyone, appears on public timelines |
+| `unlisted` | Visible to everyone, but hidden from public timelines |
+| `private` | Visible to followers only |
+| `direct` | Visible only to mentioned users (like a DM) |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Content too long | Text exceeds the instance's character limit | Shorten the content. Use `target_options.mastodon.content` for a shorter version. |
+| Media upload failed | Media URL inaccessible or unsupported format | Use a direct HTTPS URL with a supported format (JPEG, PNG, GIF, WebP, MP4, WebM, MOV). |
+| Media processing timeout | Video or GIF took too long to process | Try a smaller or shorter video file. |
+| Too many media | More than 4 images or more than 1 video | Reduce to 4 images or 1 video per post. |
+
+## Known Quirks
+
+- **Instance-specific limits** — the 500-character default can vary. Some instances allow 5,000+ characters.
+- **4 images OR 1 video** — you cannot mix images and videos in the same post.
+- **Video processing is asynchronous** — uploads return immediately but the media may take a few seconds to be ready.
+- **Alt text support** — images support alt text descriptions for accessibility (passed via media `alt` field).
+- **Federated delivery** — posts are distributed to other Fediverse instances, which may take a moment.
+- **Content warnings** are a strong community norm on Mastodon — consider using `spoiler_text` for sensitive topics.
+- **Direct messages are statuses** — `"direct"` visibility creates a DM visible only to mentioned users.

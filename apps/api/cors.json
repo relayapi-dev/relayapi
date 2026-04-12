@@ -1,0 +1,8 @@
+[
+  {
+    "AllowedOrigins": ["https://relayapi.dev"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["Content-Type"],
+    "MaxAgeSeconds": 3600
+  }
+]

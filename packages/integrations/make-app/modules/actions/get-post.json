@@ -1,0 +1,18 @@
+{
+	"label": "Get Post",
+	"description": "Retrieve a single post by ID.",
+	"url": "/posts/{{parameters.postId}}",
+	"method": "GET",
+	"parameters": [
+		{
+			"name": "postId",
+			"type": "text",
+			"label": "Post ID",
+			"required": true,
+			"help": "The post ID (e.g. post_abc123)"
+		}
+	],
+	"response": {
+		"output": "{{body}}"
+	}
+}

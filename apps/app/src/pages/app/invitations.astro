@@ -1,0 +1,11 @@
+---
+import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import { PendingInvitations } from "../../components/invitation/pending-invitations";
+
+const u = Astro.locals.user;
+const userEmail = (u?.email as string) || "";
+---
+
+<DashboardLayout>
+  <PendingInvitations client:load userEmail={userEmail} />
+</DashboardLayout>

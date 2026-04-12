@@ -1,0 +1,12 @@
+---
+import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import Dashboard from "../../components/dashboard/dashboard";
+const u = Astro.locals.user;
+const user = u ? { id: u.id as string, name: u.name as string, email: u.email as string, image: (u.image as string) || null, role: (u.role as string) || null } : null;
+const o = Astro.locals.organization;
+const org = o ? { id: o.id as string, name: o.name as string, slug: o.slug as string, logo: (o.logo as string) || null } : null;
+---
+
+<DashboardLayout>
+  <Dashboard client:load initialPage="team" user={user} organization={org} />
+</DashboardLayout>

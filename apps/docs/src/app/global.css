@@ -1,0 +1,105 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+@import "fumadocs-ui/style.css";
+@import "fumadocs-openapi/css/preset.css";
+
+@theme {
+	--font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+		Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+@source "../../../../node_modules/fumadocs-openapi/dist/**/*.js";
+@source "../../../../node_modules/fumadocs-ui/dist/**/*.js";
+
+/* Amber/gold accent color */
+:root {
+	--color-fd-primary: oklch(0.62 0.14 55);
+	--color-fd-primary-foreground: oklch(1 0 0);
+}
+
+.dark {
+	--color-fd-primary: oklch(0.87 0.1 85);
+	--color-fd-primary-foreground: oklch(0.15 0 0);
+	--color-fd-background: oklch(0.17 0 0);
+}
+
+/* Ensure sidebar footer never shrinks — always pinned at bottom */
+aside>div:last-child {
+	flex-shrink: 0 !important;
+}
+
+/* Hide the dot at the end of the clerk TOC indicator */
+div.size-1.rounded-full.bg-fd-primary {
+	display: none !important;
+}
+
+/* ─── API page header ─── */
+.api-page-header {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	margin-bottom: 1.5rem;
+}
+
+.api-page-title {
+	font-size: 2rem;
+	font-weight: 700;
+	line-height: 1.2;
+	letter-spacing: -0.025em;
+	margin: 0;
+}
+
+.api-page-description {
+	font-size: 1rem;
+	line-height: 1.6;
+	color: var(--color-fd-muted-foreground);
+	margin: 0;
+}
+
+article h1 {
+	font-size: 1.75rem !important;
+	line-height: 2.625rem !important;
+	font-weight: 600 !important;
+}
+
+article h2 {
+	font-size: 1.2rem !important;
+	line-height: 1.6rem !important;
+}
+
+article h3 {
+	font-size: 1rem !important;
+	line-height: 1.6rem !important;
+}
+
+/* ─── Response body status code labels ─── */
+article h3.not-prose {
+	font-size: 0.875rem !important;
+	line-height: 1.25rem !important;
+}
+
+/* ─── Fix container query precedence for fumadocs-openapi two-column layout ─── */
+/* Tailwind v4 outputs @4xl: container query utilities before base utilities like */
+/* .flex-col, causing the base rule to override the container query variant.      */
+/* These overrides at the end of the file ensure correct precedence.              */
+@container (min-width: 56rem) {
+	.\@4xl\:flex-row {
+		flex-direction: row;
+	}
+
+	.\@4xl\:items-start {
+		align-items: flex-start;
+	}
+
+	.\@4xl\:sticky {
+		position: sticky;
+	}
+
+	.\@4xl\:w-\[400px\] {
+		width: 400px;
+	}
+
+	.\@4xl\:top-\[calc\(var\(--fd-docs-row-1\,2rem\)\+1rem\)\] {
+		top: calc(var(--fd-docs-row-1, 2rem) + 1rem);
+	}
+}

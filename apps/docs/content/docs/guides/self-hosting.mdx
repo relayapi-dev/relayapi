@@ -1,0 +1,343 @@
+---
+title: Self-Hosting
+description: Deploy your own instance of RelayAPI on Cloudflare Workers with step-by-step instructions.
+icon: Server
+---
+
+## Overview
+
+RelayAPI runs entirely on Cloudflare's developer platform. This guide walks you through setting up every resource from scratch and deploying both the API and dashboard.
+
+## Prerequisites
+
+- [Node.js](https://nodejs.org) v20+ or [Bun](https://bun.sh) v1.0+
+- [Git](https://git-scm.com)
+- A PostgreSQL 15+ database (any provider — Neon, Supabase, Railway, self-hosted, etc.)
+
+## 1. Create a Cloudflare Account
+
+1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) and sign up for a free account
+2. After signing in, navigate to **Workers & Pages** in the sidebar to confirm your account is activated
+
+## 2. Install Wrangler
+
+Wrangler is Cloudflare's CLI for managing Workers and resources.
+
+```bash
+npm install -g wrangler
+```
+
+Authenticate with your Cloudflare account:
+
+```bash
+wrangler login
+```
+
+This opens a browser window. Authorize Wrangler and return to your terminal. Verify it works:
+
+```bash
+wrangler whoami
+```
+
+## 3. Clone the Repository
+
+```bash
+git clone https://github.com/nicely-gg/relayapi.git
+cd relayapi
+bun install
+```
+
+## 4. Create Cloudflare Resources
+
+### KV Namespace
+
+KV is used to cache API keys (24-hour TTL) for fast authentication.
+
+```bash
+wrangler kv namespace create KV
+```
+
+This outputs a namespace ID. Save it — you'll need it for the wrangler config.
+
+```
+# Example output:
+# 🌀 Creating namespace with title "relayapi-KV"
+# ✅ Success! Add the following to your wrangler configuration:
+# [[kv_namespaces]]
+# binding = "KV"
+# id = "abc123..."
+```
+
+### R2 Buckets
+
+RelayAPI uses three R2 buckets for file storage:
+
+```bash
+# Media uploads (images, videos attached to posts)
+wrangler r2 bucket create relayapi-media
+
+# User avatars
+wrangler r2 bucket create relayapi-avatars
+
+# Public assets
+wrangler r2 bucket create relayapi-public-assets
+```
+
+### Queues
+
+RelayAPI uses queues for async job processing. Create each one:
+
+```bash
+# Core publishing queue
+wrangler queues create relayapi-publish
+
+# Email notifications
+wrangler queues create relayapi-email
+
+# Dead letter queue for failed emails
+wrangler queues create relayapi-email-dlq
+
+# OAuth token refresh
+wrangler queues create relayapi-refresh
+
+# Inbox sync (comments, messages)
+wrangler queues create relayapi-inbox
+
+# Background tools (validation, processing)
+wrangler queues create relayapi-tools
+
+# Ad campaign sync
+wrangler queues create relayapi-ads
+
+# Account data sync
+wrangler queues create relayapi-sync
+
+# Media cleanup
+wrangler queues create relayapi-media-cleanup
+```
+
+### Hyperdrive
+
+Hyperdrive provides connection pooling for your PostgreSQL database. You need a running PostgreSQL instance first.
+
+```bash
+wrangler hyperdrive create relayapi-db \
+  --connection-string="postgresql://user:password@host:5432/relayapi"
+```
+
+Save the Hyperdrive ID from the output.
+
+<Callout type="info">
+Replace the connection string with your actual PostgreSQL credentials. The database must be accessible from Cloudflare's network — use a cloud-hosted provider like Neon, Supabase, or Railway for the easiest setup.
+</Callout>
+
+## 5. Update Wrangler Configuration
+
+Open `apps/api/wrangler.jsonc` and replace the resource IDs with your own:
+
+```jsonc
+{
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "<your-kv-namespace-id>"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "relayapi-media"
+    }
+  ],
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "<your-hyperdrive-id>"
+    }
+  ]
+}
+```
+
+Do the same for `apps/app/wrangler.jsonc`:
+
+```jsonc
+{
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "<your-kv-namespace-id>"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "AVATARS_BUCKET",
+      "bucket_name": "relayapi-avatars"
+    },
+    {
+      "binding": "PUBLIC_ASSETS",
+      "bucket_name": "relayapi-public-assets"
+    }
+  ],
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "<your-hyperdrive-id>"
+    }
+  ]
+}
+```
+
+## 6. Set Up Secrets
+
+Secrets are environment variables that are encrypted and not visible in your config files. Set them for the API worker:
+
+```bash
+# Database connection (used by Drizzle for migrations, not Hyperdrive)
+wrangler secret put DATABASE_URL --name relayapi
+
+# Encryption key for sensitive fields (generate a random 32-byte hex string)
+wrangler secret put ENCRYPTION_KEY --name relayapi
+
+# Better Auth secret (generate a random string)
+wrangler secret put BETTER_AUTH_SECRET --name relayapi
+
+# Google OAuth (for dashboard login)
+wrangler secret put GOOGLE_CLIENT_ID --name relayapi
+wrangler secret put GOOGLE_CLIENT_SECRET --name relayapi
+```
+
+For each social media platform you want to support, set the corresponding OAuth credentials:
+
+```bash
+# Example: Twitter/X
+wrangler secret put TWITTER_CLIENT_ID --name relayapi
+wrangler secret put TWITTER_CLIENT_SECRET --name relayapi
+
+# Example: Facebook/Instagram/Threads
+wrangler secret put FACEBOOK_APP_ID --name relayapi
+wrangler secret put FACEBOOK_APP_SECRET --name relayapi
+
+# Repeat for each platform you want to enable
+```
+
+<Callout type="warn">
+You only need to configure OAuth credentials for platforms you plan to support. Platforms without credentials will simply be unavailable for account connections.
+</Callout>
+
+## 7. Set Up the Database
+
+Generate and apply the Drizzle ORM migrations:
+
+```bash
+# Generate migration files from the schema
+bun run db:generate
+
+# Apply migrations to your PostgreSQL database
+bun run db:migrate
+```
+
+This creates all required tables in both the `auth` schema (managed by Better Auth) and the `public` schema (business data).
+
+## 8. Local Development
+
+For local development, you need to tell Wrangler how to reach your database without Hyperdrive.
+
+Set the local connection string as an environment variable:
+
+```bash
+export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgresql://user:password@localhost:5432/relayapi"
+```
+
+Then start the dev servers:
+
+```bash
+# API server (localhost:8787)
+bun run dev:api
+
+# Dashboard (localhost:4321)
+bun run dev:app
+
+# Docs site
+bun run dev:docs
+```
+
+<Callout type="info">
+If your database is remote, set up an SSH tunnel to forward a local port to the remote PostgreSQL port, then point the connection string at `localhost`.
+</Callout>
+
+## 9. Deploy to Cloudflare
+
+Deploy each app using Wrangler:
+
+```bash
+# Deploy the API
+cd apps/api
+wrangler deploy
+
+# Deploy the dashboard
+cd ../app
+wrangler deploy
+```
+
+After deployment, Wrangler outputs the URL for each worker (e.g., `https://relayapi.<your-subdomain>.workers.dev`).
+
+### Custom Domains
+
+To use a custom domain, go to your worker in the Cloudflare dashboard:
+
+1. Navigate to **Workers & Pages > your worker > Settings > Domains & Routes**
+2. Click **Add** and enter your domain (e.g., `api.yourdomain.com`)
+3. Cloudflare automatically provisions SSL
+
+## 10. CI/CD (Optional)
+
+The repository includes GitHub Actions workflows that deploy each app independently on push to `main` when relevant paths change. To enable:
+
+1. In your GitHub repository, go to **Settings > Secrets and variables > Actions**
+2. Add the following secret:
+   - `CLOUDFLARE_API_TOKEN` — create an API token in the Cloudflare dashboard with **Workers** edit permissions
+
+Pushes to `main` will automatically deploy changed apps.
+
+## Architecture Overview
+
+Once deployed, your self-hosted RelayAPI instance consists of:
+
+| Component | Cloudflare Service | Purpose |
+|-----------|-------------------|---------|
+| API | Worker (`relayapi`) | REST API handling all requests |
+| Dashboard | Worker (`relayapi-app`) | Astro SSR web application |
+| Database | Hyperdrive + external PostgreSQL | Data storage with connection pooling |
+| Media | R2 (`relayapi-media`) | Uploaded images and videos |
+| Avatars | R2 (`relayapi-avatars`) | User profile pictures |
+| Assets | R2 (`relayapi-public-assets`) | Public static files |
+| Cache | KV | API key cache for fast auth |
+| Jobs | Queues (9 queues) | Async publishing, email, sync |
+| AI | Workers AI | Content generation features |
+| Realtime | Durable Object (`RealtimeDO`) | WebSocket connections |
+
+## Troubleshooting
+
+### "Hyperdrive connection failed"
+
+Ensure your PostgreSQL database is accessible from Cloudflare's network. Most home/office databases are behind firewalls. Use a cloud-hosted database provider instead.
+
+### "KV namespace not found"
+
+Double-check that the KV namespace ID in your `wrangler.jsonc` matches the one from `wrangler kv namespace create`. You can list existing namespaces with:
+
+```bash
+wrangler kv namespace list
+```
+
+### "Queue not found"
+
+Verify queues were created in the same Cloudflare account:
+
+```bash
+wrangler queues list
+```
+
+### Migrations fail
+
+Make sure `DATABASE_URL` is set and points to your PostgreSQL instance. For local development, the connection string should use the local port (e.g., `localhost:5432` or your SSH tunnel port).

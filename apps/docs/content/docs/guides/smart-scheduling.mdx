@@ -1,0 +1,104 @@
+---
+title: Smart Scheduling
+description: Auto-schedule posts to the best available time using queue slots, engagement data, and collision avoidance.
+---
+
+## Overview
+
+Smart scheduling combines three signals to find the optimal posting time:
+1. **Queue slots** — your configured recurring weekly schedule
+2. **Engagement data** — historical best-performing times
+3. **Collision avoidance** — avoids times when other posts are already scheduled
+
+## Auto-Schedule a Post
+
+Set `scheduled_at` to `"auto"` and the API picks the best time:
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out our latest update!",
+    "targets": ["twitter", "linkedin"],
+    "scheduled_at": "auto"
+  }'
+```
+
+The response includes the resolved `scheduled_at` timestamp.
+
+## Find Slot Endpoint
+
+Query available slots directly:
+
+```
+GET /v1/queue/find-slot?strategy=smart&count=3
+```
+
+### Parameters
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy` | string | `smart` | `queue` (slots only), `best-time` (engagement only), or `smart` (combined) |
+| `count` | number | 1 | Number of suggestions (1-10) |
+| `account_id` | string | — | Optimize for a specific account's preferences |
+| `after` | string | now | Earliest allowed time (ISO 8601) |
+
+### Response
+
+```json
+{
+  "slots": [
+    {
+      "slot_at": "2026-04-07T14:00:00.000Z",
+      "score": 85,
+      "reason": "hybrid",
+      "conflicts": 0
+    }
+  ],
+  "fallback": false
+}
+```
+
+- `score` — confidence from 0-100 (40 points for queue match, 40 for engagement, 20 for no conflicts)
+- `reason` — `queue_slot`, `best_time`, or `hybrid`
+- `conflicts` — number of existing posts near this time
+- `fallback` — true if no ideal slot was found
+
+## Per-Account Preferences
+
+Set scheduling preferences on individual accounts:
+
+```bash
+curl -X PATCH https://api.relayapi.dev/v1/accounts/acc_xxx \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "scheduling_preferences": {
+      "posting_windows": [
+        { "day_of_week": 1, "start_hour": 9, "end_hour": 17 },
+        { "day_of_week": 2, "start_hour": 9, "end_hour": 17 }
+      ],
+      "min_gap_minutes": 120,
+      "max_posts_per_day": 3
+    }
+  }'
+```
+
+When `account_id` is passed to `find-slot`, these preferences influence the scoring.
+
+## Bulk Auto-Scheduling
+
+Use `"auto"` in bulk post creation. Each post in the batch gets a unique slot:
+
+```json
+{
+  "posts": [
+    { "content": "Post 1", "targets": ["twitter"], "scheduled_at": "auto" },
+    { "content": "Post 2", "targets": ["twitter"], "scheduled_at": "auto" },
+    { "content": "Post 3", "targets": ["twitter"], "scheduled_at": "auto" }
+  ]
+}
+```
+
+The API spreads them across different slots automatically.

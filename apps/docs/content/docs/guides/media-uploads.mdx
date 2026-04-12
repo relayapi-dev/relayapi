@@ -1,0 +1,40 @@
+---
+title: Media Uploads
+description: Upload images, videos, and other media to include in your posts.
+icon: Image
+---
+
+## Overview
+
+RelayAPI supports media uploads through pre-signed URLs. Upload media first, then reference it in your posts.
+
+## Upload Flow
+
+1. Request a pre-signed upload URL via `POST /v1/media/upload`
+2. Upload your file directly to the pre-signed URL
+3. Reference the media ID in your post's content
+
+```bash
+# Step 1: Get upload URL
+curl -X POST https://api.relayapi.dev/v1/media/upload \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"filename": "photo.jpg", "mime_type": "image/jpeg", "size": 1048576}'
+
+# Step 2: Upload to the pre-signed URL
+curl -X PUT "https://media.relayapi.dev/upload/..." \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @photo.jpg
+```
+
+## Supported Formats
+
+| Type | Formats | Max Size |
+|------|---------|----------|
+| Image | JPEG, PNG, GIF, WebP | 10 MB |
+| Video | MP4, MOV, AVI | 100 MB |
+| Document | PDF | 25 MB |
+
+## Platform-Specific Limits
+
+Each platform has its own media requirements. RelayAPI automatically validates and, where possible, converts media to meet platform specifications. See individual [platform pages](/platforms) for details.

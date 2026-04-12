@@ -1,0 +1,10 @@
+{
+	"label": "Get Usage",
+	"description": "Get current plan details and usage statistics.",
+	"url": "/usage",
+	"method": "GET",
+	"parameters": [],
+	"response": {
+		"output": "{{body}}"
+	}
+}

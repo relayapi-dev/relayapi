@@ -1,0 +1,319 @@
+import { defineMiddleware } from "astro:middleware";
+import { env } from "cloudflare:workers";
+import { createAuth } from "@relayapi/auth";
+import { createDb, invitation } from "@relayapi/db";
+import { eq, and } from "drizzle-orm";
+import { render } from "@react-email/render";
+import { Resend } from "resend";
+import { InvitationEmail } from "../lib/emails/invitation-email";
+
+const PROTECTED_PATHS = ["/app"];
+
+function extractSessionToken(headers: Headers): string | null {
+	const cookies = headers.get("Cookie") || "";
+	const match = cookies.match(
+		/(?:__Secure-)?better-auth\.session_token=([^;]+)/,
+	);
+	return match?.[1] || null;
+}
+
+// In-memory session cache (60s TTL)
+interface CachedSession {
+	user: Record<string, unknown>;
+	session: Record<string, unknown>;
+	organization: Record<string, unknown> | null;
+	timestamp: number;
+}
+
+const sessionCache = new Map<string, CachedSession>();
+const CACHE_TTL = 60_000;
+const CACHE_MAX_SIZE = 500;
+
+export const onRequest = defineMiddleware(async (context, next) => {
+	const path = context.url.pathname;
+
+	// Skip static assets
+	const ext = path.split(".").pop();
+	if (
+		ext &&
+		/^(js|css|woff2?|svg|png|jpg|jpeg|gif|ico|webp|map|ttf|eot)$/.test(ext)
+	) {
+		return next();
+	}
+
+	// Skip auth API routes from the outer try-catch redirect
+	// (they need to return proper JSON errors, not redirects)
+	const isAuthRoute = path.startsWith("/api/auth/");
+
+	try {
+		// --- Per-request lazy DB + Auth (Cloudflare workerd requires fresh I/O) ---
+		const cfEnv = env as Record<string, any>;
+
+		let _db: ReturnType<typeof createDb> | undefined;
+		let _auth: ReturnType<typeof createAuth> | undefined;
+
+		const getDb = () => {
+			if (!_db) {
+				const connStr =
+					cfEnv.HYPERDRIVE?.connectionString || cfEnv.DATABASE_URL;
+				_db = createDb(connStr);
+			}
+			return _db;
+		};
+
+		const getAuth = () => {
+			if (!_auth) {
+				_auth = createAuth(getDb(), {
+					BETTER_AUTH_SECRET: cfEnv.BETTER_AUTH_SECRET,
+					BETTER_AUTH_URL: cfEnv.BETTER_AUTH_URL || context.url.origin,
+					GOOGLE_CLIENT_ID: cfEnv.GOOGLE_CLIENT_ID,
+					GOOGLE_CLIENT_SECRET: cfEnv.GOOGLE_CLIENT_SECRET,
+					sendInvitationEmail: async (data) => {
+						const baseUrl =
+							cfEnv.BETTER_AUTH_URL || context.url.origin;
+						const inviteUrl = `${baseUrl}/invite/${data.id}`;
+
+						const html = await render(
+							InvitationEmail({
+								invitedByEmail: data.inviterEmail,
+								organizationName: data.organizationName,
+								role: data.role,
+								inviteUrl,
+							}),
+						);
+
+						const emailMessage = {
+							id: crypto.randomUUID(),
+							to: data.email,
+							subject: `You've been invited to join ${data.organizationName} on RelayAPI`,
+							html,
+							from: "RelayAPI <notifications@relayapi.dev>",
+						};
+
+						const queue = cfEnv.EMAIL_QUEUE as
+							| { send(message: unknown): Promise<void> }
+							| undefined;
+						if (queue) {
+							await queue.send(emailMessage);
+							console.log(
+								`[Email] Enqueued invitation email to ${data.email}`,
+							);
+						} else if (cfEnv.RESEND_API_KEY) {
+							const resend = new Resend(cfEnv.RESEND_API_KEY);
+							await resend.emails.send({
+								from: emailMessage.from,
+								to: emailMessage.to,
+								subject: emailMessage.subject,
+								html: emailMessage.html,
+							});
+							console.log(
+								`[Email] Sent invitation email directly to ${data.email}`,
+							);
+						} else {
+							console.warn(
+								`[Email] No EMAIL_QUEUE or RESEND_API_KEY — invitation email to ${data.email} skipped`,
+							);
+						}
+					},
+				});
+			}
+			return _auth;
+		};
+
+		// Expose lazy getters on locals
+		Object.defineProperty(context.locals, "db", {
+			get: getDb,
+			configurable: true,
+			enumerable: true,
+		});
+		Object.defineProperty(context.locals, "auth", {
+			get: getAuth,
+			configurable: true,
+			enumerable: true,
+		});
+
+		// Expose KV binding
+		if (cfEnv.KV) {
+			context.locals.kv = cfEnv.KV;
+		}
+
+		// --- Session resolution ---
+		const sessionToken = extractSessionToken(context.request.headers);
+
+		const isAuthMutation =
+			(context.request.method === "POST" ||
+				context.request.method === "DELETE") &&
+			path.startsWith("/api/auth/");
+
+		if (isAuthMutation && sessionToken) {
+			sessionCache.delete(sessionToken);
+		}
+
+		let user: Record<string, unknown> | null = null;
+		let session: Record<string, unknown> | null = null;
+		let org: Record<string, unknown> | null = null;
+		let cacheHit = false;
+
+		if (!isAuthMutation && sessionToken) {
+			const cached = sessionCache.get(sessionToken);
+			if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+				user = cached.user;
+				session = cached.session;
+				org = cached.organization;
+				cacheHit = true;
+			} else if (cached) {
+				sessionCache.delete(sessionToken);
+			}
+		}
+
+		if (!cacheHit && sessionToken) {
+			try {
+				const auth = getAuth();
+				const result = await auth.api.getSession({
+					headers: context.request.headers,
+				});
+				if (result) {
+					user = result.user as Record<string, unknown>;
+					session = result.session as Record<string, unknown>;
+
+					// Resolve active organization
+					const activeOrgId = (session as any)?.activeOrganizationId;
+					if (activeOrgId) {
+						try {
+							const fullOrg = await (auth.api as any).getFullOrganization({
+								headers: context.request.headers,
+								query: { organizationId: activeOrgId },
+							});
+							if (fullOrg) {
+								org = fullOrg as unknown as Record<string, unknown>;
+							}
+						} catch (e) {
+							console.error("Failed to get active organization:", e);
+						}
+					}
+
+					if (!isAuthMutation) {
+						if (sessionCache.size >= CACHE_MAX_SIZE) {
+							const entries = [...sessionCache.entries()].sort(
+								(a, b) => a[1].timestamp - b[1].timestamp,
+							);
+							const evictCount = Math.floor(CACHE_MAX_SIZE / 4);
+							for (let i = 0; i < evictCount; i++) {
+								const entry = entries[i];
+								if (entry) sessionCache.delete(entry[0]);
+							}
+						}
+						sessionCache.set(sessionToken, {
+							user,
+							session,
+							organization: org,
+							timestamp: Date.now(),
+						});
+					}
+				}
+			} catch (error) {
+				console.error("Failed to get session:", error);
+			}
+		}
+
+		context.locals.user = user;
+		context.locals.session = session;
+		context.locals.organization = org;
+
+		// --- Route protection ---
+		const isProtectedPath = PROTECTED_PATHS.some((p) => path.startsWith(p));
+
+		if (isProtectedPath && !user) {
+			return context.redirect(`/login?redirect=${encodeURIComponent(path)}`);
+		}
+
+		// --- Admin route protection ---
+		if (user && path.startsWith("/app/admin")) {
+			const userRole = (user as any).role;
+			if (userRole !== "admin") {
+				return context.redirect("/app");
+			}
+		}
+
+		// --- Organization resolution for /app/* (except /app/onboarding and /app/invitations) ---
+		if (
+			user &&
+			path.startsWith("/app") &&
+			path !== "/app/onboarding" &&
+			path !== "/app/invitations"
+		) {
+			const activeOrgId = (session as any)?.activeOrganizationId;
+			if (!activeOrgId && !org) {
+				// Check if user has any organizations
+				try {
+					const auth = getAuth();
+					const orgs = await (auth.api as any).listOrganizations({
+						headers: context.request.headers,
+					});
+					if (!orgs || orgs.length === 0) {
+						// Check if user has pending invitations
+						try {
+							const db = getDb();
+							const userEmail = (user as any).email as string;
+							const pending = await db
+								.select({ id: invitation.id })
+								.from(invitation)
+								.where(
+									and(
+										eq(invitation.email, userEmail),
+										eq(invitation.status, "pending"),
+									),
+								)
+								.limit(1);
+							if (pending.length > 0) {
+								return context.redirect("/app/invitations");
+							}
+						} catch (e) {
+							console.error("Failed to check pending invitations:", e);
+						}
+						return context.redirect("/app/onboarding");
+					}
+					// User has orgs but none active — client will set active on load
+				} catch (e) {
+					console.error("Failed to list organizations:", e);
+					return context.redirect("/app/onboarding");
+				}
+			}
+		}
+
+		// Redirect away from onboarding if user already has active org
+		if (user && path === "/app/onboarding" && org) {
+			return context.redirect("/app");
+		}
+
+		// Redirect logged-in users away from auth pages
+		if (user && (path === "/login" || path === "/signup")) {
+			const redirectParam = context.url.searchParams.get("redirect");
+			if (redirectParam && redirectParam.startsWith("/invite/")) {
+				return context.redirect(redirectParam);
+			}
+			return context.redirect("/app");
+		}
+
+		const response = await next();
+
+		// Prevent browsers/CDN from caching HTML pages so they always
+		// fetch fresh references to hashed assets after a new deploy.
+		const ct = response.headers.get("Content-Type") || "";
+		if (ct.includes("text/html")) {
+			response.headers.set(
+				"Cache-Control",
+				"no-cache, no-store, must-revalidate",
+			);
+		}
+
+		return response;
+	} catch (error) {
+		console.error("Middleware error:", error);
+		const isProtectedPath = PROTECTED_PATHS.some((p) => path.startsWith(p));
+		if (isProtectedPath && !isAuthRoute) {
+			return context.redirect(`/login?redirect=${encodeURIComponent(path)}`);
+		}
+		return next();
+	}
+});

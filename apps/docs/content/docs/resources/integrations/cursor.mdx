@@ -1,0 +1,119 @@
+---
+title: Cursor
+description: Install the RelayAPI plugin for Cursor IDE to manage social media posts directly from your editor.
+---
+
+The RelayAPI plugin for [Cursor](https://cursor.com) brings social media management into your IDE. Ask Cursor's AI to create posts, check account status, or schedule content — all without switching windows.
+
+## Quick Reference
+
+| | |
+|---|---|
+| **Platform** | Cursor IDE 2.5+ |
+| **Version** | 1.0.0 |
+| **Auth** | `RELAYAPI_API_KEY` environment variable |
+| **Distribution** | Cursor Marketplace, self-hosted, or team admin |
+
+## Install
+
+### From the Cursor Marketplace
+
+Once published, install from Cursor's plugin browser or search for "RelayAPI" in the marketplace.
+
+### Self-Hosted Marketplace
+
+Add a marketplace repository and install:
+
+1. Clone or reference the plugin marketplace repo
+2. Cursor auto-discovers plugins on restart
+
+### Manual Install
+
+Copy the plugin files into your project:
+
+```bash
+# Add skills
+mkdir -p .cursor/skills
+cp -R packages/integrations/cursor-plugin/skills/* .cursor/skills/
+
+# Add rules
+mkdir -p .cursor/rules
+cp packages/integrations/cursor-plugin/rules/*.mdc .cursor/rules/
+```
+
+Restart Cursor after copying.
+
+## Setup
+
+Set your API key as an environment variable. Add it to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.):
+
+```bash
+export RELAYAPI_API_KEY="rlay_live_your_key_here"
+```
+
+Or create a `.env` file in your project root:
+
+```bash
+RELAYAPI_API_KEY=rlay_live_your_key_here
+```
+
+Get your key from [relayapi.dev](https://relayapi.dev/signup) under **Settings > API Keys**.
+
+## Usage
+
+### Commands
+
+| Command | Description |
+|---|---|
+| `/relayapi:post` | Compose and publish a social media post |
+| `/relayapi:accounts` | List connected social accounts |
+| `/relayapi:posts` | List recent posts and their status |
+
+### Example: Create a Post
+
+Type in Cursor's AI chat:
+
+```
+/relayapi:post Ship our v2.0 announcement to Twitter and LinkedIn
+```
+
+Or use natural language:
+
+```
+Post "Just shipped dark mode support!" to all my social accounts
+```
+
+```
+Show me which social accounts are connected
+```
+
+```
+Schedule a post for Friday at 10am EST: "New blog post is live"
+```
+
+## What's Included
+
+### Skills
+
+- **RelayAPI Reference** — Full API knowledge with TypeScript SDK examples
+- **Social Post Composer** — Guided post creation with validation
+
+### Commands
+
+- `/relayapi:post` — Compose and publish posts
+- `/relayapi:accounts` — List connected accounts
+- `/relayapi:posts` — List recent posts
+
+### Agents
+
+- **Social Publisher** — Complex publishing workflows with platform limits and validation
+
+### Rules
+
+- **RelayAPI Conventions** — Persistent AI guidance for RelayAPI SDK usage covering API key handling, scheduling, media uploads, error handling, platform character limits, and pagination
+
+## Links
+
+- [Cursor](https://cursor.com)
+- [Quickstart](/quickstart)
+- [API Reference](/api-reference)

@@ -1,0 +1,1 @@
+ALTER TABLE "external_posts" ADD COLUMN "notes" text;

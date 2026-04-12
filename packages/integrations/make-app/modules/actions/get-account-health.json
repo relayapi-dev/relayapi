@@ -1,0 +1,11 @@
+{
+	"label": "Get Account Health",
+	"description": "Check health status of all connected accounts (token validity, permissions).",
+	"url": "/accounts/health",
+	"method": "GET",
+	"parameters": [],
+	"response": {
+		"output": "{{body.data}}",
+		"iterate": true
+	}
+}

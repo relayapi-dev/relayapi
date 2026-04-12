@@ -1,0 +1,16 @@
+{
+	"label": "List Accounts",
+	"description": "Fetch connected social accounts for dropdown selection.",
+	"url": "/accounts",
+	"method": "GET",
+	"qs": {
+		"limit": "100"
+	},
+	"response": {
+		"iterate": "{{body.data}}",
+		"output": {
+			"label": "{{item.display_name}} ({{item.platform}})",
+			"value": "{{item.id}}"
+		}
+	}
+}

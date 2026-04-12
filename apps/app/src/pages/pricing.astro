@@ -1,0 +1,15 @@
+---
+import Layout from "../layouts/Layout.astro";
+import SEO from "../components/SEO.astro";
+import { PricingPage } from "../components/pages/pricing-page";
+---
+
+<Layout>
+  <SEO
+    slot="head"
+    title="Pricing"
+    description="Simple, transparent pricing for RelayAPI. Start free, scale as you grow."
+    keywords={["api pricing", "social media api pricing", "relayapi pricing"]}
+  />
+  <PricingPage client:load />
+</Layout>

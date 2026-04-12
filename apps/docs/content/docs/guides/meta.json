@@ -1,0 +1,20 @@
+{
+  "title": "Guides",
+  "icon": "BookOpen",
+  "pages": [
+    "connecting-accounts",
+    "media-uploads",
+    "short-links",
+    "content-templates",
+    "signatures",
+    "auto-post-rules",
+    "engagement-rules",
+    "cross-post-actions",
+    "threads",
+    "smart-scheduling",
+    "posting-streaks",
+    "error-handling",
+    "rate-limits",
+    "self-hosting"
+  ]
+}

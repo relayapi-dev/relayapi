@@ -1,0 +1,17 @@
+{
+	"label": "Delete Post",
+	"description": "Delete a draft, scheduled, or failed post.",
+	"url": "/posts/{{parameters.postId}}",
+	"method": "DELETE",
+	"parameters": [
+		{
+			"name": "postId",
+			"type": "text",
+			"label": "Post ID",
+			"required": true
+		}
+	],
+	"response": {
+		"output": "{{body}}"
+	}
+}

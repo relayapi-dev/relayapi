@@ -1,0 +1,56 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"command": "bun run dev:api",
+			"name": "API",
+			"request": "launch",
+			"type": "node-terminal",
+			"cwd": "${workspaceFolder}",
+			"internalConsoleOptions": "neverOpen",
+			"preLaunchTask": "SSH Tunnel to Database"
+		},
+		{
+			"command": "bun run dev:app",
+			"name": "App Server",
+			"request": "launch",
+			"type": "node-terminal",
+			"cwd": "${workspaceFolder}",
+			"internalConsoleOptions": "neverOpen",
+			"preLaunchTask": "SSH Tunnel to Database"
+		},
+		{
+			"type": "chrome",
+			"request": "launch",
+			"name": "App Client",
+			"url": "http://localhost:4321",
+			"webRoot": "${workspaceFolder}/apps/app/src",
+			"sourceMapPathOverrides": {
+				"vite:///src/*": "${workspaceFolder}/apps/app/src/*"
+			},
+			"skipFiles": [
+				"**/node_modules/**"
+			]
+		}
+	],
+	"compounds": [
+		{
+			"name": "Debug App",
+			"configurations": [
+				"App Server",
+				"App Client"
+			],
+			"stopAll": true
+		},
+		{
+			"name": "Debug All",
+			"configurations": [
+				"API",
+				"App Server",
+				"App Client"
+			],
+			"preLaunchTask": "Start Docs",
+			"stopAll": true
+		}
+	]
+}

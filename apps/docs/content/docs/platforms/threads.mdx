@@ -1,0 +1,558 @@
+---
+title: Threads API
+description: Schedule and automate Threads posts with RelayAPI — text posts, images, videos, carousels, and thread sequences.
+icon: threads
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `threads` |
+| Auth method | OAuth 2.0 (via Instagram/Facebook) |
+| Character limit | 500 |
+| Images per post | 10 (carousel) |
+| Videos per post | 1 |
+| Image formats | JPEG, PNG, WebP, GIF |
+| Image max size | 8 MB (auto-compressed) |
+| Video formats | MP4, MOV |
+| Video max size | 1 GB |
+| Video max duration | 5 minutes |
+| Post types | Text, Image, Video, Carousel, Thread sequence |
+| Scheduling | Yes |
+| Analytics | Limited (impressions, likes, comments, shares, views) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Threads has a **500-character limit** — the #1 failure cause when cross-posting from LinkedIn (3,000) or Facebook (63,000). Always use `target_options.threads.content` to provide a shorter version. Threads is connected via **Instagram** — losing Instagram access means losing Threads access. Requires an Instagram **Business or Creator account** with Threads enabled. Threads enforces a **250 API-published posts per 24-hour window** limit. WebP images may fail — use JPEG or PNG for reliability.
+</Callout>
+
+## Quick Start
+
+Post to Threads:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const post = await client.posts.create({
+  content: 'Hot take: the best API is the one with the best docs.',
+  targets: ['threads'],
+  scheduled_at: 'now',
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+post = client.posts.create(
+    content='Hot take: the best API is the one with the best docs.',
+    targets=['threads'],
+    scheduled_at='now',
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hot take: the best API is the one with the best docs."),
+    Targets:     relaygo.F([]string{"threads"}),
+    ScheduledAt: relaygo.F("now"),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hot take: the best API is the one with the best docs.")
+    .addTarget("threads")
+    .scheduledAt("now")
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hot take: the best API is the one with the best docs.",
+    "targets": ["threads"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text Post
+
+One of the few platforms that supports text-only posts. Up to 500 characters.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Hot take: the best API is the one with the best docs.',
+  targets: ['threads'],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Hot take: the best API is the one with the best docs.',
+    targets=['threads'],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hot take: the best API is the one with the best docs."),
+    Targets:     relaygo.F([]string{"threads"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hot take: the best API is the one with the best docs.")
+    .addTarget("threads")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hot take: the best API is the one with the best docs.",
+    "targets": ["threads"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Image Post
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'New office setup!',
+  targets: ['threads'],
+  media: [
+    { url: 'https://cdn.example.com/office.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='New office setup!',
+    targets=['threads'],
+    media=[
+        {'url': 'https://cdn.example.com/office.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("New office setup!"),
+    Targets: relaygo.F([]string{"threads"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/office.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("New office setup!")
+    .addTarget("threads")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/office.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "New office setup!",
+    "targets": ["threads"],
+    "media": [
+      {"url": "https://cdn.example.com/office.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video Post
+
+Max 1 GB, up to 5 minutes.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Behind the scenes',
+  targets: ['threads'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Behind the scenes',
+    targets=['threads'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Behind the scenes"),
+    Targets: relaygo.F([]string{"threads"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Behind the scenes")
+    .addTarget("threads")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Behind the scenes",
+    "targets": ["threads"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Carousel (Up to 10 Images)
+
+Swipeable image carousel. Mix of images supported.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Product launch day!',
+  targets: ['threads'],
+  media: [
+    { url: 'https://cdn.example.com/feature1.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/feature2.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/feature3.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Product launch day!',
+    targets=['threads'],
+    media=[
+        {'url': 'https://cdn.example.com/feature1.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/feature2.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/feature3.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Product launch day!"),
+    Targets: relaygo.F([]string{"threads"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/feature1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/feature2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/feature3.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Product launch day!")
+    .addTarget("threads")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/feature1.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/feature2.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/feature3.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Product launch day!",
+    "targets": ["threads"],
+    "media": [
+      {"url": "https://cdn.example.com/feature1.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/feature2.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/feature3.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Thread Sequence
+
+Create a connected sequence of posts. The first item is the root post, and each subsequent item is a reply. Each item can have its own content and media.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  targets: ['threads'],
+  scheduled_at: 'now',
+  target_options: {
+    threads: {
+      thread: [
+        {
+          content: "Here's a thread about API design",
+          media: [{ url: 'https://cdn.example.com/cover.jpg', type: 'image' }],
+        },
+        { content: '1/ First, REST principles...' },
+        { content: '2/ Authentication is crucial...' },
+        { content: '3/ Always version your API! /end' },
+      ],
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    targets=['threads'],
+    scheduled_at='now',
+    target_options={
+        'threads': {
+            'thread': [
+                {
+                    'content': "Here's a thread about API design",
+                    'media': [{'url': 'https://cdn.example.com/cover.jpg', 'type': 'image'}],
+                },
+                {'content': '1/ First, REST principles...'},
+                {'content': '2/ Authentication is crucial...'},
+                {'content': '3/ Always version your API! /end'},
+            ],
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Targets:     relaygo.F([]string{"threads"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "threads": map[string]interface{}{
+            "thread": []map[string]interface{}{
+                {"content": "Here's a thread about API design",
+                    "media": []map[string]interface{}{
+                        {"url": "https://cdn.example.com/cover.jpg", "type": "image"},
+                    }},
+                {"content": "1/ First, REST principles..."},
+                {"content": "2/ Authentication is crucial..."},
+                {"content": "3/ Always version your API! /end"},
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .addTarget("threads")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("threads", JsonValue.from(Map.of(
+            "thread", List.of(
+                Map.of("content", "Here's a thread about API design",
+                    "media", List.of(Map.of("url", "https://cdn.example.com/cover.jpg", "type", "image"))),
+                Map.of("content", "1/ First, REST principles..."),
+                Map.of("content", "2/ Authentication is crucial..."),
+                Map.of("content", "3/ Always version your API! /end")
+            )
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targets": ["threads"],
+    "scheduled_at": "now",
+    "target_options": {
+      "threads": {
+        "thread": [
+          {"content": "Here'\''s a thread about API design",
+           "media": [{"url": "https://cdn.example.com/cover.jpg", "type": "image"}]},
+          {"content": "1/ First, REST principles..."},
+          {"content": "2/ Authentication is crucial..."},
+          {"content": "3/ Always version your API! /end"}
+        ]
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Each item in a thread sequence has its own 500-character limit. The root post is published first, and each subsequent item becomes a reply to the previous one.
+</Callout>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 10 (carousel) |
+| Formats | JPEG, PNG, WebP, GIF |
+| Max file size | 8 MB (auto-compressed) |
+| Recommended | 1080 x 1350 px (4:5 portrait) |
+| Aspect ratios | 4:5, 1:1, 16:9 |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 |
+| Formats | MP4, MOV |
+| Max file size | 1 GB |
+| Max duration | 5 minutes |
+| Recommended | 1080p, H.264, AAC, 30fps |
+
+## `target_options` Fields
+
+All fields go inside `target_options.threads` on your post request.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | string | Override content for Threads specifically. Use this to provide a version under 500 characters when cross-posting. |
+| `media` | object[] | Override media for Threads specifically |
+| `thread` | object[] | Array of `{content, media?}` for thread sequences. Each item has its own 500-char limit. |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Text must be at most 500 characters | Content exceeds the 500-character limit | Use `target_options.threads.content` to provide a shorter version. |
+| Media download failed (2207052) | URL returns HTML instead of media bytes | Use a direct CDN URL. WebP images may fail — use JPEG or PNG instead. |
+| Instagram account restricted (2207050) | Linked Instagram account has policy violations | Resolve any policy violations on the Instagram account first. |
+| Publishing failed | Max retries exhausted | Usually temporary. Wait and retry manually. |
+
+## Known Quirks
+
+- **500-character limit** — the #1 failure cause when cross-posting from platforms with higher limits like LinkedIn (3,000) or Facebook (63,000).
+- **Connected via Instagram** — losing Instagram access means losing Threads access. Requires Instagram Business or Creator account.
+- **WebP images may fail** — use JPEG or PNG for best reliability.
+- **Cannot post new top-level comments** — only replies are supported.
+- **Cannot like or unlike comments** via the API.
+- **Cannot edit posts** after publishing.
+- **No DMs** available via the Threads API.
+- **250 API-published posts per 24-hour window** — this limit applies to all content types.
+- **Posts cannot be edited** after publishing.

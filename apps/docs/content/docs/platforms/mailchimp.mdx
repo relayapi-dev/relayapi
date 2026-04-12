@@ -1,0 +1,73 @@
+---
+title: Mailchimp API
+description: Send Mailchimp campaigns via RelayAPI — create and send email campaigns alongside social media posts in a single API call.
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `mailchimp` |
+| Auth method | API Key (includes datacenter) |
+| Content format | HTML (plain text auto-wrapped) |
+| Scheduling | Yes |
+| Analytics | No |
+
+## Before You Start
+
+You need a Mailchimp API key. Get one from [Mailchimp Account > Extras > API Keys](https://admin.mailchimp.com/account/api/). The key includes your datacenter suffix (e.g., `abc123def-us21`).
+
+You also need at least one audience/list in your Mailchimp account, and a valid `from_email` address.
+
+## Connect
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/connect/mailchimp \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "api_key": "your-mailchimp-api-key-us21"
+  }'
+```
+
+## Send a Campaign
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Our latest newsletter...",
+    "targets": ["twitter", "acc_mailchimp123"],
+    "scheduled_at": "now",
+    "target_options": {
+      "mailchimp": {
+        "subject": "Monthly Update",
+        "preview_text": "What happened this month",
+        "from_email": "hello@example.com",
+        "from_name": "Your Company",
+        "list_id": "abc123"
+      }
+    }
+  }'
+```
+
+## `target_options` Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `subject` | string | No | Email subject line. Falls back to first line of content. |
+| `preview_text` | string | No | Preview text for email clients. |
+| `from_email` | string | **Yes** | Sender email address. |
+| `from_name` | string | No | Sender display name. |
+| `list_id` | string | No | Audience/list ID. If omitted, uses the first list in your account. |
+| `content_html` | string | No | Full HTML body. If omitted, plain text is auto-wrapped. |
+
+## Discovery
+
+List audiences and templates:
+
+```
+GET /v1/accounts/{id}/lists      # Returns Mailchimp audiences
+GET /v1/accounts/{id}/templates  # Returns Mailchimp templates
+```

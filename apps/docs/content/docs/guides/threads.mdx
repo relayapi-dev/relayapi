@@ -1,0 +1,94 @@
+---
+title: Post Threads
+description: Create multi-post threads on Twitter/X, Threads, Bluesky, and other platforms that support reply chains.
+---
+
+## Overview
+
+Threads let you publish a sequence of connected posts as a reply chain. Each item in the thread is published as a reply to the previous one, creating a native thread on platforms that support it.
+
+Supported platforms: **Twitter/X**, **Threads**, **Bluesky**, **Mastodon**, **LinkedIn** (as comments), **Facebook** (as comments), **Telegram**, **Discord**.
+
+Non-threadable platforms (Pinterest, TikTok, YouTube, etc.) receive only the first item.
+
+## Create a Thread
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/threads \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      { "content": "1/ Big announcement today!", "delay_minutes": 0 },
+      { "content": "2/ We just launched our new API...", "delay_minutes": 0 },
+      { "content": "3/ Try it out at https://relayapi.dev", "delay_minutes": 5 }
+    ],
+    "targets": ["twitter"],
+    "scheduled_at": "now"
+  }'
+```
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `items` | array | 2-25 thread items, each with `content`, optional `media`, and `delay_minutes` |
+| `items[].content` | string | Text content for this item |
+| `items[].media` | array | Optional media attachments |
+| `items[].delay_minutes` | number | Minutes to wait after previous item (0-1440, default 0) |
+| `targets` | array | Account IDs, platform names, or workspace IDs |
+| `scheduled_at` | string | `"now"`, `"draft"`, `"auto"`, or ISO 8601 timestamp |
+| `target_options` | object | Per-platform options applied to all items |
+
+## Delayed Items
+
+Set `delay_minutes` on individual items to space them out:
+
+```json
+{
+  "items": [
+    { "content": "Breaking: new feature launched!", "delay_minutes": 0 },
+    { "content": "Here's how it works...", "delay_minutes": 30 },
+    { "content": "Try it now at...", "delay_minutes": 60 }
+  ]
+}
+```
+
+The second item publishes 30 minutes after the first, and the third 60 minutes after the second.
+
+## Get a Thread
+
+```
+GET /v1/threads/{thread_group_id}
+```
+
+Returns all items with their per-target publishing status and platform URLs.
+
+## List Threads
+
+```
+GET /v1/threads?status=published&limit=10
+```
+
+Returns thread summaries with item count and root content.
+
+## Delete a Thread
+
+```
+DELETE /v1/threads/{thread_group_id}
+```
+
+Deletes the entire thread and all its items.
+
+## Thread Status
+
+Each item tracks its own status per platform. The overall thread status is:
+- `published` — all items published successfully
+- `partial` — some items succeeded, some failed
+- `failed` — all items failed
+- `scheduled` — waiting to be published
+- `draft` — saved but not scheduled
+
+## Post Response
+
+Individual posts now include `thread_group_id` and `thread_position` fields when they're part of a thread. Use these to link posts back to their thread.

@@ -1,0 +1,7 @@
+{
+	"baseUrl": "https://api.relayapi.dev/v1",
+	"headers": {
+		"Authorization": "Bearer {{connection.apiKey}}",
+		"Content-Type": "application/json"
+	}
+}

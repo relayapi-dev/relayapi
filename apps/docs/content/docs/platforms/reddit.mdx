@@ -1,0 +1,658 @@
+---
+title: Reddit API
+description: Schedule and automate Reddit posts with RelayAPI — text posts, link posts, image posts, galleries, subreddit targeting, and flair support.
+icon: reddit
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `reddit` |
+| Auth method | OAuth 2.0 |
+| Title limit | 300 characters (required, cannot edit after posting) |
+| Body text limit | 40,000 characters |
+| Images per post | 1 (single), multiple (gallery) |
+| Videos per post | Not supported via third-party API |
+| Image formats | JPEG, PNG, GIF |
+| Image max size | 20 MB |
+| Post types | Text/Self, Link, Image, Gallery |
+| Scheduling | Yes |
+| Analytics | Limited (upvotes, comments only) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Reddit is fundamentally different from every other platform. Each **subreddit is independently moderated** with its own rules. What works in one subreddit may get you banned in another. Always check subreddit rules before posting. The post **title is permanent** and cannot be edited after posting. Many subreddits **require flair** — posts without it will be rejected. **Video uploads are not supported** for third-party API apps. New accounts are heavily restricted by karma and account age requirements.
+</Callout>
+
+## Quick Start
+
+Post to a subreddit:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+
+const post = await client.posts.create({
+  content: 'Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people\'s code',
+  targets: ['reddit'],
+  scheduled_at: 'now',
+  target_options: {
+    reddit: {
+      subreddit: 'learnprogramming'
+    }
+  }
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+
+post = client.posts.create(
+    content='Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people\'s code',
+    targets=['reddit'],
+    scheduled_at='now',
+    target_options={
+        'reddit': {
+            'subreddit': 'learnprogramming'
+        }
+    }
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people's code"),
+    Targets:     relaygo.F([]string{"reddit"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "reddit": map[string]interface{}{
+            "subreddit": "learnprogramming",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people's code")
+    .addTarget("reddit")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("reddit", JsonValue.from(Map.of(
+            "subreddit", "learnprogramming"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people'\''s code",
+    "targets": ["reddit"],
+    "scheduled_at": "now",
+    "target_options": {
+      "reddit": {
+        "subreddit": "learnprogramming"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text/Self Post
+
+The first line of `content` becomes the title, and the rest becomes the body. Reddit Markdown is supported in the body text.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people\'s code',
+  targets: ['reddit'],
+  scheduled_at: 'now',
+  target_options: {
+    reddit: {
+      subreddit: 'learnprogramming'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people\'s code',
+    targets=['reddit'],
+    scheduled_at='now',
+    target_options={
+        'reddit': {
+            'subreddit': 'learnprogramming'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people's code"),
+    Targets:     relaygo.F([]string{"reddit"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "reddit": map[string]interface{}{
+            "subreddit": "learnprogramming",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people's code")
+    .addTarget("reddit")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("reddit", JsonValue.from(Map.of(
+            "subreddit", "learnprogramming"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Tips for learning a new programming language\n\n1. Start with the official tutorial\n2. Build a small project immediately\n3. Read other people'\''s code",
+    "targets": ["reddit"],
+    "scheduled_at": "now",
+    "target_options": {
+      "reddit": {
+        "subreddit": "learnprogramming"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+You can also provide the title explicitly using `target_options.reddit.title`. If not provided, the first line of `content` is used as the title.
+</Callout>
+
+### Link Post
+
+Share a URL. The title is the first line of content, and the `url` field creates a link post instead of a text post.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Interesting article about modern API design patterns',
+  targets: ['reddit'],
+  scheduled_at: 'now',
+  target_options: {
+    reddit: {
+      subreddit: 'programming',
+      url: 'https://example.com/api-design-article'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Interesting article about modern API design patterns',
+    targets=['reddit'],
+    scheduled_at='now',
+    target_options={
+        'reddit': {
+            'subreddit': 'programming',
+            'url': 'https://example.com/api-design-article'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Interesting article about modern API design patterns"),
+    Targets:     relaygo.F([]string{"reddit"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "reddit": map[string]interface{}{
+            "subreddit": "programming",
+            "url":       "https://example.com/api-design-article",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Interesting article about modern API design patterns")
+    .addTarget("reddit")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("reddit", JsonValue.from(Map.of(
+            "subreddit", "programming",
+            "url", "https://example.com/api-design-article"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Interesting article about modern API design patterns",
+    "targets": ["reddit"],
+    "scheduled_at": "now",
+    "target_options": {
+      "reddit": {
+        "subreddit": "programming",
+        "url": "https://example.com/api-design-article"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Image Post
+
+Single image post with a title.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out this view from my hike!',
+  targets: ['reddit'],
+  media: [
+    { url: 'https://cdn.example.com/hiking-photo.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    reddit: {
+      subreddit: 'hiking'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out this view from my hike!',
+    targets=['reddit'],
+    media=[
+        {'url': 'https://cdn.example.com/hiking-photo.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'reddit': {
+            'subreddit': 'hiking'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Check out this view from my hike!"),
+    Targets:     relaygo.F([]string{"reddit"}),
+    ScheduledAt: relaygo.F("now"),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/hiking-photo.jpg"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage),
+    }}),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "reddit": map[string]interface{}{
+            "subreddit": "hiking",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out this view from my hike!")
+    .addTarget("reddit")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/hiking-photo.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("reddit", JsonValue.from(Map.of(
+            "subreddit", "hiking"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out this view from my hike!",
+    "targets": ["reddit"],
+    "media": [
+      {"url": "https://cdn.example.com/hiking-photo.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "reddit": {
+        "subreddit": "hiking"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Gallery Post (Multiple Images)
+
+Upload multiple images as a gallery. Not all subreddits support gallery posts.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'My weekend woodworking project - start to finish',
+  targets: ['reddit'],
+  media: [
+    { url: 'https://cdn.example.com/step1.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/step2.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/finished.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    reddit: {
+      subreddit: 'woodworking'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='My weekend woodworking project - start to finish',
+    targets=['reddit'],
+    media=[
+        {'url': 'https://cdn.example.com/step1.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/step2.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/finished.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'reddit': {
+            'subreddit': 'woodworking'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("My weekend woodworking project - start to finish"),
+    Targets:     relaygo.F([]string{"reddit"}),
+    ScheduledAt: relaygo.F("now"),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/step1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/step2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/finished.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "reddit": map[string]interface{}{
+            "subreddit": "woodworking",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("My weekend woodworking project - start to finish")
+    .addTarget("reddit")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/step1.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/step2.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/finished.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("reddit", JsonValue.from(Map.of(
+            "subreddit", "woodworking"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "My weekend woodworking project - start to finish",
+    "targets": ["reddit"],
+    "media": [
+      {"url": "https://cdn.example.com/step1.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/step2.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/finished.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "reddit": {
+        "subreddit": "woodworking"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Post with Flair
+
+Many subreddits require flair on every post. You can list available flairs for a subreddit via the RelayAPI accounts endpoint.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'What is your favorite programming language?',
+  targets: ['reddit'],
+  scheduled_at: 'now',
+  target_options: {
+    reddit: {
+      subreddit: 'socialmedia',
+      flair_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='What is your favorite programming language?',
+    targets=['reddit'],
+    scheduled_at='now',
+    target_options={
+        'reddit': {
+            'subreddit': 'socialmedia',
+            'flair_id': 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("What is your favorite programming language?"),
+    Targets:     relaygo.F([]string{"reddit"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "reddit": map[string]interface{}{
+            "subreddit": "socialmedia",
+            "flair_id":  "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("What is your favorite programming language?")
+    .addTarget("reddit")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("reddit", JsonValue.from(Map.of(
+            "subreddit", "socialmedia",
+            "flair_id", "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "What is your favorite programming language?",
+    "targets": ["reddit"],
+    "scheduled_at": "now",
+    "target_options": {
+      "reddit": {
+        "subreddit": "socialmedia",
+        "flair_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+To get available flairs for a subreddit, use `GET /v1/accounts/{id}/reddit-flairs?subreddit=NAME`. Many subreddits reject posts without flair.
+</Callout>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 (single), multiple (gallery) |
+| Formats | JPEG, PNG, GIF |
+| Max file size | 20 MB |
+| Recommended | 1200 x 628 px |
+| Aspect ratios | Flexible (16:9, 4:3, 1:1, 9:16 all work) |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Support | **Not supported** via third-party API |
+| Workaround | Upload to YouTube or Imgur, then create a link post |
+
+## `target_options` Fields
+
+All fields go inside `target_options.reddit` on your post request.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | string | Override content for Reddit specifically |
+| `media` | object[] | Override media for Reddit specifically |
+| `subreddit` | string | Target subreddit without the `r/` prefix. **Required.** |
+| `title` | string | Post title (max 300 chars). Falls back to first line of content. **Cannot be edited after posting.** |
+| `url` | string | URL for link posts. If provided, creates a link post instead of a text post. |
+| `flair_id` | string | Post flair ID. Required by some subreddits. |
+| `force_self` | boolean | Force a text/self post even when media or a URL is provided |
+
+## Auto-Retry Behavior
+
+RelayAPI automatically retries failed Reddit posts in certain scenarios:
+
+- **Link post in text-only subreddit** — automatically retries as a text/self post with the URL included in the body.
+- **Missing required flair** — automatically tries the first available flair for the subreddit.
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| SUBREDDIT_NOTALLOWED: only trusted members | Subreddit restricts posting to trusted members | Build karma, engage with the community, or choose a different subreddit. |
+| NO_SELFS: doesn't allow text posts | Subreddit only accepts links or images | Provide a `url` or attach an image instead. |
+| SUBMIT_VALIDATION_FLAIR_REQUIRED | Flair is required by the subreddit | Fetch available flairs and provide a `flair_id`. |
+| SUBREDDIT_NOEXIST | Typo in subreddit name or subreddit is private | Check spelling. Do not include the `r/` prefix. |
+| AI-generated content not allowed | Subreddit bans AI-generated content | Write original content or choose a different subreddit. |
+| Rate limited | Reddit rate limit hit | New accounts are limited to ~10 posts/day. Space posts further apart. |
+
+## Known Quirks
+
+- **Title is permanent** — the post title cannot be edited after posting. Double-check before submitting.
+- **Video uploads not supported** for third-party apps. Upload to YouTube/Imgur and create a link post.
+- **Each subreddit has unique, independent rules** — moderation varies wildly between communities.
+- **New accounts are heavily restricted** — karma requirements and account age gates apply.
+- **Reddit Markdown supported** in body text for formatting.
+- **Gallery posts not supported** by all subreddits — check subreddit rules.
+- **Auto-retry behavior** — link posts that fail in text-only subreddits are automatically retried as self posts.
+- **Flair auto-retry** — if flair is required but not provided, RelayAPI tries the first available flair.

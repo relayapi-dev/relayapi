@@ -1,0 +1,79 @@
+---
+import "../styles/globals.css";
+
+const isApp = Astro.url.pathname.startsWith("/app");
+---
+
+{isApp ? (
+  <html lang="en" class="dark">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+      <title>Page Not Found – Dashboard</title>
+      <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+      <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+      <link rel="preconnect" href="https://fonts.googleapis.com" />
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+      <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap" rel="stylesheet" />
+      <style>
+        :root {
+          --font-geist-sans: 'Geist', system-ui, sans-serif;
+          --font-geist-mono: 'Geist Mono', ui-monospace, monospace;
+        }
+      </style>
+    </head>
+    <body class="antialiased font-sans bg-background text-foreground">
+      <div class="flex min-h-screen items-center justify-center">
+        <div class="text-center max-w-sm px-6">
+          <p class="text-7xl font-bold tracking-tighter text-muted-foreground">404</p>
+          <h1 class="mt-4 text-xl font-semibold">Page not found</h1>
+          <p class="mt-2 text-sm text-muted-foreground">
+            The page you're looking for doesn't exist or has been moved.
+          </p>
+          <a
+            href="/app/posts"
+            class="mt-6 inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            Go to Dashboard
+          </a>
+        </div>
+      </div>
+    </body>
+  </html>
+) : (
+  <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Page Not Found – RelayAPI</title>
+      <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+      <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+      <link rel="preconnect" href="https://fonts.googleapis.com" />
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+      <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap" rel="stylesheet" />
+      <style>
+        :root {
+          --font-geist-sans: 'Geist', system-ui, sans-serif;
+          --font-geist-mono: 'Geist Mono', ui-monospace, monospace;
+        }
+      </style>
+    </head>
+    <body class="antialiased font-sans px-4 lg:px-0 bg-background text-foreground">
+      <div class="max-w-7xl mx-auto border-x border-border min-h-screen flex flex-col">
+        <div class="flex-1 flex flex-col items-center justify-center py-24 px-6 text-center">
+          <p class="text-8xl font-bold tracking-tighter text-muted-foreground">404</p>
+          <h1 class="mt-6 text-3xl md:text-4xl font-bold tracking-tight">Page not found</h1>
+          <p class="mt-4 text-lg text-muted-foreground max-w-md">
+            The page you're looking for doesn't exist or has been moved.
+          </p>
+          <a
+            href="/"
+            class="mt-8 inline-flex items-center justify-center rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            Go Home
+          </a>
+        </div>
+      </div>
+    </body>
+  </html>
+)}

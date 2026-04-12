@@ -1,0 +1,266 @@
+---
+title: CLI
+description: Schedule and manage social media posts across 17+ platforms from the terminal.
+icon: Terminal
+---
+
+Schedule and manage social media posts across 17+ platforms from the terminal. Built for developers and AI agents. Outputs JSON by default.
+
+## Setup
+
+### Install the CLI
+
+The CLI runs on [Bun](https://bun.sh). Install it globally from the monorepo:
+
+```bash
+bun install -g @relayapi/cli
+```
+
+Or run directly without installing:
+
+```bash
+bunx relay --help
+```
+
+### Authenticate
+
+**Manual API Key (Recommended)**
+
+```bash
+relay auth set-key
+```
+
+This prompts you for your API key interactively (masked input). You can also pass it directly:
+
+```bash
+relay auth set-key rlay_live_your_api_key
+```
+
+Get your API key from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**.
+
+### Verify Setup
+
+```bash
+relay auth status
+```
+
+This confirms your API key is valid and displays your plan, usage, and rate limits.
+
+## Quick Example
+
+```bash
+# Create a post and publish immediately
+relay posts create \
+  --content "Hello from the RelayAPI CLI!" \
+  --targets acc_twitter_123,acc_linkedin_456 \
+  --schedule now
+
+# List your connected accounts as a table
+relay accounts list --table
+
+# Upload media and get the URL
+relay media upload ./banner.png
+```
+
+## Commands
+
+### Authentication
+
+| Command | Description |
+|---------|-------------|
+| `relay auth set-key [key]` | Save an API key (interactive if no key provided) |
+| `relay auth status` | Show API key, plan, usage, and rate limits |
+| `relay auth logout` | Remove saved credentials |
+
+### Accounts
+
+| Command | Description |
+|---------|-------------|
+| `relay accounts list` | List connected social accounts |
+| `relay accounts get <id>` | Get account details |
+| `relay accounts health` | Check health of all accounts |
+| `relay accounts health <id>` | Check health of a single account |
+
+### Posts
+
+| Command | Description |
+|---------|-------------|
+| `relay posts create` | Create a post (interactive or via flags) |
+| `relay posts list` | List posts |
+| `relay posts get <id>` | Get post details |
+| `relay posts update <id>` | Update a draft or scheduled post |
+| `relay posts delete <id>` | Delete a draft or scheduled post |
+| `relay posts retry <id>` | Retry failed targets on a post |
+| `relay posts unpublish <id>` | Unpublish from all platforms |
+
+### Media
+
+| Command | Description |
+|---------|-------------|
+| `relay media list` | List uploaded media files |
+| `relay media get <id>` | Get media details |
+| `relay media upload <filepath>` | Upload a file |
+| `relay media delete <id>` | Delete a media file |
+
+## Usage
+
+### Creating Posts
+
+**With flags (non-interactive):**
+
+```bash
+relay posts create \
+  --content "Launching our new feature today!" \
+  --targets acc_twitter_123,acc_linkedin_456 \
+  --schedule now
+```
+
+**Interactive mode** — just run `relay posts create` without flags and the CLI will prompt you for content, targets, and scheduling:
+
+```bash
+relay posts create
+```
+
+```
+◆ Post content
+│ Launching our new feature today!
+│
+◆ Select target accounts
+│ ◻ twitter — @mycompany
+│ ◼ linkedin — My Company Page
+│ ◼ bluesky — @mycompany.bsky.social
+│
+◆ When to publish?
+│ ○ Publish now
+│ ● Save as draft
+│ ○ Schedule for later
+```
+
+**Schedule for later:**
+
+```bash
+relay posts create \
+  --content "Coming soon!" \
+  --targets twitter \
+  --schedule "2026-04-01T09:00:00Z" \
+  --timezone "America/New_York"
+```
+
+**With media:**
+
+```bash
+relay posts create \
+  --content "Check out this photo" \
+  --targets instagram \
+  --media "https://media.relayapi.dev/image.jpg" \
+  --schedule now
+```
+
+### Updating Posts
+
+Update content, targets, or schedule of a draft or scheduled post:
+
+```bash
+relay posts update post_abc123 \
+  --content "Updated content" \
+  --schedule "2026-04-02T12:00:00Z"
+```
+
+### Listing Resources
+
+All list commands support pagination:
+
+```bash
+relay posts list --limit 10
+relay posts list --cursor "next_cursor_value"
+```
+
+### Deleting Resources
+
+Delete commands prompt for confirmation by default. Skip with `--yes`:
+
+```bash
+relay posts delete post_abc123
+relay posts delete post_abc123 --yes
+```
+
+### Uploading Media
+
+Upload files directly from your local filesystem:
+
+```bash
+relay media upload ./photo.jpg
+```
+
+```json
+{
+  "filename": "photo.jpg",
+  "size": 245760,
+  "type": "image/jpeg",
+  "url": "https://media.relayapi.dev/ws_abc/photo.jpg"
+}
+```
+
+## Output Formats
+
+**JSON (default)** — all commands output JSON, making the CLI suitable for scripting and AI agents:
+
+```bash
+relay accounts list
+```
+
+```json
+{
+  "data": [
+    {
+      "id": "acc_abc123",
+      "platform": "twitter",
+      "username": "@mycompany",
+      "display_name": "My Company"
+    }
+  ],
+  "has_more": false,
+  "next_cursor": null
+}
+```
+
+**Table** — add `--table` for a human-readable format:
+
+```bash
+relay accounts list --table
+```
+
+```
+id           platform  username     display_name
+-----------  --------  ----------   ------------
+acc_abc123   twitter   @mycompany   My Company
+acc_def456   linkedin  mycompany    My Company Page
+```
+
+## Configuration
+
+The CLI stores settings in `~/.relayapi/config.json`:
+
+```json
+{
+  "api_key": "rlay_live_your_api_key",
+  "base_url": "https://api.relayapi.dev"
+}
+```
+
+You can also use environment variables, which override the config file:
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `RELAYAPI_API_KEY` | Your API key | Yes |
+| `RELAYAPI_API_URL` | Custom API endpoint | No |
+
+## Supported Platforms
+
+Instagram, TikTok, X (Twitter), LinkedIn, Facebook, Threads, YouTube, Bluesky, Pinterest, Reddit, Snapchat, Telegram, Google Business Profile, WhatsApp, Mastodon, Discord, and SMS.
+
+## Links
+
+- [SDKs](/sdks)
+- [API Reference](/api-reference)
+- [Quickstart](/quickstart)

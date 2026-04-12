@@ -1,0 +1,110 @@
+---
+title: Content Templates
+description: Create reusable post templates with variables and platform-specific overrides.
+icon: FileText
+---
+
+## Overview
+
+Content templates let you save reusable post content that can be applied when creating new posts. Unlike saving full post state, templates store just the content with optional platform overrides and variable placeholders — so they never break when accounts are reconnected.
+
+## How It Works
+
+1. **Create a template** with your post content, optional platform overrides, and tags
+2. **Apply the template** when creating posts via the dashboard or API
+3. **Variables** like `{{date}}` or `{{account_name}}` are resolved at post creation time
+
+```bash
+# Create a template
+curl -X POST https://api.relayapi.dev/v1/content-templates \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Weekly Product Update",
+    "description": "Use for Monday product announcements",
+    "content": "This week in {{product_name}}:\n\n{{highlights}}\n\nTry it now: {{url}}",
+    "platform_overrides": {
+      "twitter": "{{product_name}} update: {{highlights}} {{url}}"
+    },
+    "tags": ["weekly", "product"]
+  }'
+```
+
+## Template Variables
+
+Variables use `{{variable_name}}` syntax in your template content. Built-in variables:
+
+| Variable | Description |
+|----------|-------------|
+| `{{date}}` | Current date (ISO format) |
+| `{{account_name}}` | Display name of the social account |
+
+Custom variables can be defined in your template content and then substituted manually when applying the template, or resolved automatically when post-creation integration is enabled (coming soon).
+
+## Platform Overrides
+
+A single template can have different content per platform. When a post targets multiple platforms, the override for that platform is used instead of the base content.
+
+```json
+{
+  "content": "Excited to announce our new feature! Here's everything you need to know about what we've been building...",
+  "platform_overrides": {
+    "twitter": "New feature alert! Check out what we've built",
+    "linkedin": "I'm thrilled to share that our team has shipped a new feature. Here's a deep dive into what it does and why we built it..."
+  }
+}
+```
+
+If no override exists for a platform, the base `content` is used.
+
+## Filtering by Tags
+
+Tags help organize templates. Filter by tag when listing:
+
+```bash
+# List templates tagged "promo"
+curl "https://api.relayapi.dev/v1/content-templates?tag=promo" \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+## SDK Usage
+
+```typescript
+import Relay from "@relayapi/sdk";
+
+const client = new Relay({ apiKey: "rlay_live_..." });
+
+// Create a template
+const template = await client.contentTemplates.create({
+  name: "Product Launch",
+  content: "Check out {{product_name}}! {{description}}",
+  platform_overrides: {
+    twitter: "{{product_name}} is live! {{description}}",
+  },
+  tags: ["launch", "product"],
+});
+
+// List templates
+const { data } = await client.contentTemplates.list({ limit: 20 });
+
+// Get a specific template
+const tmpl = await client.contentTemplates.get("tmpl_abc123");
+
+// Update a template
+await client.contentTemplates.update("tmpl_abc123", {
+  name: "Updated Launch Template",
+});
+
+// Delete a template
+await client.contentTemplates.delete("tmpl_abc123");
+```
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/content-templates` | Create a template |
+| `GET` | `/v1/content-templates` | List templates (paginated) |
+| `GET` | `/v1/content-templates/:id` | Get template details |
+| `PATCH` | `/v1/content-templates/:id` | Update a template |
+| `DELETE` | `/v1/content-templates/:id` | Delete a template |

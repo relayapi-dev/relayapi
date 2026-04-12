@@ -1,0 +1,28 @@
+{
+	"label": "Update Post",
+	"description": "Update a draft or scheduled post.",
+	"url": "/posts/{{parameters.postId}}",
+	"method": "PATCH",
+	"parameters": [
+		{
+			"name": "postId",
+			"type": "text",
+			"label": "Post ID",
+			"required": true
+		},
+		{
+			"name": "content",
+			"type": "text",
+			"label": "Content"
+		},
+		{
+			"name": "scheduled_at",
+			"type": "text",
+			"label": "Schedule",
+			"help": "New schedule timestamp, \"now\", or \"draft\""
+		}
+	],
+	"response": {
+		"output": "{{body}}"
+	}
+}

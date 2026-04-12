@@ -1,0 +1,643 @@
+---
+title: Google Business API
+description: Schedule and automate Google Business Profile posts with RelayAPI — standard posts, events, offers, photos, and call-to-action buttons.
+icon: googlebusiness
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `googlebusiness` |
+| Auth method | OAuth 2.0 |
+| Text limit | 1,500 characters |
+| Images per post | 1 |
+| Videos per post | Not supported |
+| Image formats | JPEG, PNG |
+| Image max size | 5 MB |
+| Post types | Standard, Event, Offer |
+| Call to action | Yes (Learn More, Book, Order, Shop, Sign Up, Call) |
+| Scheduling | Yes |
+| Analytics | Yes (views, clicks) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Google Business Profile posts are limited to **1 photo per post** — no videos, no multi-image galleries. Event and Offer posts require a **schedule** with start and end dates. Posts do not have a direct public URL — they appear on Google Search and Maps. The API uses the **My Business API v4**, which requires the account to be verified on Google Business Profile.
+</Callout>
+
+## Quick Start
+
+Create a standard post on Google Business Profile:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const post = await client.posts.create({
+  content: 'We just launched our new spring menu! Come visit us today.',
+  targets: ['googlebusiness'],
+  scheduled_at: 'now',
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+post = client.posts.create(
+    content='We just launched our new spring menu! Come visit us today.',
+    targets=['googlebusiness'],
+    scheduled_at='now',
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("We just launched our new spring menu! Come visit us today."),
+    Targets:     relaygo.F([]string{"googlebusiness"}),
+    ScheduledAt: relaygo.F("now"),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("We just launched our new spring menu! Come visit us today.")
+    .addTarget("googlebusiness")
+    .scheduledAt("now")
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "We just launched our new spring menu! Come visit us today.",
+    "targets": ["googlebusiness"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Standard Post
+
+A simple update with text and an optional photo.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'We just launched our new spring menu!',
+  targets: ['googlebusiness'],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='We just launched our new spring menu!',
+    targets=['googlebusiness'],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("We just launched our new spring menu!"),
+    Targets:     relaygo.F([]string{"googlebusiness"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("We just launched our new spring menu!")
+    .addTarget("googlebusiness")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "We just launched our new spring menu!",
+    "targets": ["googlebusiness"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Standard Post with Photo
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out our renovated dining area!',
+  targets: ['googlebusiness'],
+  media: [
+    { url: 'https://cdn.example.com/photo.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out our renovated dining area!',
+    targets=['googlebusiness'],
+    media=[
+        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Check out our renovated dining area!"),
+    Targets:     relaygo.F([]string{"googlebusiness"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/photo.jpg"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out our renovated dining area!")
+    .addTarget("googlebusiness")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out our renovated dining area!",
+    "targets": ["googlebusiness"],
+    "media": [
+      {"url": "https://cdn.example.com/photo.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Post with Call to Action
+
+Add a button linking to your website, booking page, or online shop.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: "Book your table for Valentine's Day!",
+  targets: ['googlebusiness'],
+  scheduled_at: 'now',
+  target_options: {
+    googlebusiness: {
+      call_to_action: {
+        type: 'BOOK',
+        url: 'https://example.com/book',
+      },
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content="Book your table for Valentine's Day!",
+    targets=['googlebusiness'],
+    scheduled_at='now',
+    target_options={
+        'googlebusiness': {
+            'call_to_action': {
+                'type': 'BOOK',
+                'url': 'https://example.com/book',
+            },
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Book your table for Valentine's Day!"),
+    Targets:     relaygo.F([]string{"googlebusiness"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "googlebusiness": map[string]interface{}{
+            "call_to_action": map[string]interface{}{
+                "type": "BOOK",
+                "url":  "https://example.com/book",
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Book your table for Valentine's Day!")
+    .addTarget("googlebusiness")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("googlebusiness", JsonValue.from(Map.of(
+            "call_to_action", Map.of(
+                "type", "BOOK",
+                "url", "https://example.com/book"
+            )
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Book your table for Valentine'\''s Day!",
+    "targets": ["googlebusiness"],
+    "scheduled_at": "now",
+    "target_options": {
+      "googlebusiness": {
+        "call_to_action": {
+          "type": "BOOK",
+          "url": "https://example.com/book"
+        }
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Event Post
+
+Promote a specific event with a title and schedule. Requires `topic_type: "EVENT"` and an `event` object with a schedule.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Join us for live music every Friday night!',
+  targets: ['googlebusiness'],
+  scheduled_at: 'now',
+  target_options: {
+    googlebusiness: {
+      topic_type: 'EVENT',
+      event: {
+        title: 'Friday Night Live Music',
+        schedule: {
+          startDate: { year: 2026, month: 4, day: 3 },
+          startTime: { hours: 19, minutes: 0 },
+          endDate: { year: 2026, month: 4, day: 3 },
+          endTime: { hours: 23, minutes: 0 },
+        },
+      },
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Join us for live music every Friday night!',
+    targets=['googlebusiness'],
+    scheduled_at='now',
+    target_options={
+        'googlebusiness': {
+            'topic_type': 'EVENT',
+            'event': {
+                'title': 'Friday Night Live Music',
+                'schedule': {
+                    'startDate': {'year': 2026, 'month': 4, 'day': 3},
+                    'startTime': {'hours': 19, 'minutes': 0},
+                    'endDate': {'year': 2026, 'month': 4, 'day': 3},
+                    'endTime': {'hours': 23, 'minutes': 0},
+                },
+            },
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Join us for live music every Friday night!"),
+    Targets:     relaygo.F([]string{"googlebusiness"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "googlebusiness": map[string]interface{}{
+            "topic_type": "EVENT",
+            "event": map[string]interface{}{
+                "title": "Friday Night Live Music",
+                "schedule": map[string]interface{}{
+                    "startDate": map[string]interface{}{"year": 2026, "month": 4, "day": 3},
+                    "startTime": map[string]interface{}{"hours": 19, "minutes": 0},
+                    "endDate":   map[string]interface{}{"year": 2026, "month": 4, "day": 3},
+                    "endTime":   map[string]interface{}{"hours": 23, "minutes": 0},
+                },
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Join us for live music every Friday night!")
+    .addTarget("googlebusiness")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("googlebusiness", JsonValue.from(Map.of(
+            "topic_type", "EVENT",
+            "event", Map.of(
+                "title", "Friday Night Live Music",
+                "schedule", Map.of(
+                    "startDate", Map.of("year", 2026, "month", 4, "day", 3),
+                    "startTime", Map.of("hours", 19, "minutes", 0),
+                    "endDate", Map.of("year", 2026, "month", 4, "day", 3),
+                    "endTime", Map.of("hours", 23, "minutes", 0)
+                )
+            )
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Join us for live music every Friday night!",
+    "targets": ["googlebusiness"],
+    "scheduled_at": "now",
+    "target_options": {
+      "googlebusiness": {
+        "topic_type": "EVENT",
+        "event": {
+          "title": "Friday Night Live Music",
+          "schedule": {
+            "startDate": {"year": 2026, "month": 4, "day": 3},
+            "startTime": {"hours": 19, "minutes": 0},
+            "endDate": {"year": 2026, "month": 4, "day": 3},
+            "endTime": {"hours": 23, "minutes": 0}
+          }
+        }
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Offer Post
+
+Promote a discount or deal with optional coupon code and redemption URL.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: '20% off all drinks this weekend!',
+  targets: ['googlebusiness'],
+  scheduled_at: 'now',
+  target_options: {
+    googlebusiness: {
+      topic_type: 'OFFER',
+      event: {
+        title: 'Weekend Happy Hour',
+        schedule: {
+          startDate: { year: 2026, month: 4, day: 4 },
+          endDate: { year: 2026, month: 4, day: 5 },
+        },
+      },
+      offer: {
+        couponCode: 'HAPPY20',
+        redeemOnlineUrl: 'https://example.com/redeem',
+        termsConditions: 'Valid in-store only. Cannot be combined with other offers.',
+      },
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='20% off all drinks this weekend!',
+    targets=['googlebusiness'],
+    scheduled_at='now',
+    target_options={
+        'googlebusiness': {
+            'topic_type': 'OFFER',
+            'event': {
+                'title': 'Weekend Happy Hour',
+                'schedule': {
+                    'startDate': {'year': 2026, 'month': 4, 'day': 4},
+                    'endDate': {'year': 2026, 'month': 4, 'day': 5},
+                },
+            },
+            'offer': {
+                'couponCode': 'HAPPY20',
+                'redeemOnlineUrl': 'https://example.com/redeem',
+                'termsConditions': 'Valid in-store only. Cannot be combined with other offers.',
+            },
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("20% off all drinks this weekend!"),
+    Targets:     relaygo.F([]string{"googlebusiness"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "googlebusiness": map[string]interface{}{
+            "topic_type": "OFFER",
+            "event": map[string]interface{}{
+                "title": "Weekend Happy Hour",
+                "schedule": map[string]interface{}{
+                    "startDate": map[string]interface{}{"year": 2026, "month": 4, "day": 4},
+                    "endDate":   map[string]interface{}{"year": 2026, "month": 4, "day": 5},
+                },
+            },
+            "offer": map[string]interface{}{
+                "couponCode":       "HAPPY20",
+                "redeemOnlineUrl":  "https://example.com/redeem",
+                "termsConditions":  "Valid in-store only. Cannot be combined with other offers.",
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("20% off all drinks this weekend!")
+    .addTarget("googlebusiness")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("googlebusiness", JsonValue.from(Map.of(
+            "topic_type", "OFFER",
+            "event", Map.of(
+                "title", "Weekend Happy Hour",
+                "schedule", Map.of(
+                    "startDate", Map.of("year", 2026, "month", 4, "day", 4),
+                    "endDate", Map.of("year", 2026, "month", 4, "day", 5)
+                )
+            ),
+            "offer", Map.of(
+                "couponCode", "HAPPY20",
+                "redeemOnlineUrl", "https://example.com/redeem",
+                "termsConditions", "Valid in-store only. Cannot be combined with other offers."
+            )
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "20% off all drinks this weekend!",
+    "targets": ["googlebusiness"],
+    "scheduled_at": "now",
+    "target_options": {
+      "googlebusiness": {
+        "topic_type": "OFFER",
+        "event": {
+          "title": "Weekend Happy Hour",
+          "schedule": {
+            "startDate": {"year": 2026, "month": 4, "day": 4},
+            "endDate": {"year": 2026, "month": 4, "day": 5}
+          }
+        },
+        "offer": {
+          "couponCode": "HAPPY20",
+          "redeemOnlineUrl": "https://example.com/redeem",
+          "termsConditions": "Valid in-store only. Cannot be combined with other offers."
+        }
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 |
+| Formats | JPEG, PNG |
+| Max file size | 5 MB |
+| Recommended | 1200 x 900 px (4:3 landscape) |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Support | Not supported via localPosts API |
+
+## `target_options` Fields
+
+All fields go inside `target_options.googlebusiness` on your post request.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `content` | string | — | Override post content for Google Business specifically |
+| `media` | object[] | — | Override media for Google Business specifically |
+| `topic_type` | string | `"STANDARD"` | Post type: `"STANDARD"`, `"EVENT"`, or `"OFFER"` |
+| `call_to_action` | object | — | Button with `type` and `url`. Types: `LEARN_MORE`, `BOOK`, `ORDER`, `SHOP`, `SIGN_UP`, `CALL` |
+| `event` | object | — | Required for EVENT and OFFER. Contains `title` and `schedule` with start/end dates |
+| `offer` | object | — | For OFFER posts. Contains `couponCode`, `redeemOnlineUrl`, `termsConditions` |
+| `language_code` | string | — | Language code for the post (e.g., `"en"`) |
+| `location_id` | string | — | Override the target location (if managing multiple locations) |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Content too long | Text exceeds 1,500 characters | Shorten the content. Use `target_options.googlebusiness.content` for a shorter version. |
+| Too many media | More than 1 image was attached | Remove extras. Google Business allows only 1 image per post. |
+| Video not supported | A video was attached | Remove the video. Google Business localPosts API does not support video uploads. |
+| Event required | EVENT or OFFER type without an event schedule | Add an `event` object with a `schedule` containing start and end dates. |
+| Invalid CTA type | Unrecognized call_to_action type | Use one of: `LEARN_MORE`, `BOOK`, `ORDER`, `SHOP`, `SIGN_UP`, `CALL`. |
+
+## Known Quirks
+
+- **No video support** — the localPosts API only supports photos, not videos.
+- **1 image per post** — no multi-image galleries or carousels.
+- **No direct public URL** — posts appear on Google Search and Maps but don't have a standalone page URL.
+- **EVENT and OFFER posts require a schedule** — you must provide start and end dates.
+- **CALL action type** uses the location's phone number — no URL is needed.
+- **Account must be verified** on Google Business Profile before the API can be used.
+- **Posts may take a few minutes** to appear on Google Search and Maps after creation.

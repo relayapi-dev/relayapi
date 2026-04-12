@@ -1,0 +1,16 @@
+{
+  "node": "n8n-nodes-relayapi.relayApi",
+  "nodeVersion": "1.0",
+  "codexVersion": "1.0",
+  "categories": ["Marketing & Content"],
+  "subcategories": {
+    "Marketing & Content": ["Social Media"]
+  },
+  "resources": {
+    "primaryDocumentation": [
+      {
+        "url": "https://docs.relayapi.dev"
+      }
+    ]
+  }
+}

@@ -1,0 +1,508 @@
+---
+title: Bluesky API
+description: Schedule and automate Bluesky posts with RelayAPI — text posts, images, videos, threads, and auto-detected rich text.
+icon: bluesky
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `bluesky` |
+| Auth method | App Password (not OAuth) |
+| Character limit | 300 (hard limit) |
+| Alt text limit | 1,000 characters per image |
+| Images per post | 4 |
+| Videos per post | 1 |
+| Image formats | JPEG, PNG, WebP, GIF |
+| Image max size | 1 MB (strict) |
+| Video format | MP4 only |
+| Video max size | 50 MB |
+| Video max duration | 60 seconds |
+| Post types | Text, Image, Video, Thread |
+| Scheduling | Yes |
+| Analytics | Limited (likes, comments, shares) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Bluesky has a **300-character hard limit** — this is the #1 cause of failed posts when cross-posting from other platforms. If you are cross-posting from Twitter (280), LinkedIn (3,000), or Facebook (63,000), always use `target_options.bluesky.content` to provide a version under 300 characters. Images have a strict **1 MB size limit** — most phone photos are 3-5 MB and must be compressed before upload. Bluesky uses **App Passwords** instead of OAuth.
+</Callout>
+
+## Quick Start
+
+Post to Bluesky:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['bluesky'],
+  scheduled_at: 'now',
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['bluesky'],
+    scheduled_at='now',
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"bluesky"}),
+    ScheduledAt: relaygo.F("now"),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("bluesky")
+    .scheduledAt("now")
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["bluesky"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text Post
+
+Simple text post. Hard limit of 300 characters.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['bluesky'],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['bluesky'],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"bluesky"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("bluesky")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["bluesky"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Image Post (Up to 4)
+
+Each image must be under 1 MB. Images are auto-compressed by the platform but quality may degrade.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out these photos!',
+  targets: ['bluesky'],
+  media: [
+    { url: 'https://cdn.example.com/photo1.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo2.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out these photos!',
+    targets=['bluesky'],
+    media=[
+        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Check out these photos!"),
+    Targets: relaygo.F([]string{"bluesky"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/photo1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out these photos!")
+    .addTarget("bluesky")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo1.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo2.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out these photos!",
+    "targets": ["bluesky"],
+    "media": [
+      {"url": "https://cdn.example.com/photo1.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo2.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video Post
+
+MP4 only, max 50 MB, max 60 seconds.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'New product demo!',
+  targets: ['bluesky'],
+  media: [
+    { url: 'https://cdn.example.com/demo.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='New product demo!',
+    targets=['bluesky'],
+    media=[
+        {'url': 'https://cdn.example.com/demo.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("New product demo!"),
+    Targets: relaygo.F([]string{"bluesky"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/demo.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("New product demo!")
+    .addTarget("bluesky")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/demo.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "New product demo!",
+    "targets": ["bluesky"],
+    "media": [
+      {"url": "https://cdn.example.com/demo.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Thread
+
+Create a thread of connected posts. Each item has its own 300-character limit.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  targets: ['bluesky'],
+  scheduled_at: 'now',
+  target_options: {
+    bluesky: {
+      thread: [
+        {
+          content: 'A thread about building APIs',
+          media: [{ url: 'https://cdn.example.com/api.jpg', type: 'image' }],
+        },
+        { content: 'First, design around resources, not actions.' },
+        { content: 'Second, always version from day one.' },
+        { content: 'Finally, document everything!' },
+      ],
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    targets=['bluesky'],
+    scheduled_at='now',
+    target_options={
+        'bluesky': {
+            'thread': [
+                {
+                    'content': 'A thread about building APIs',
+                    'media': [{'url': 'https://cdn.example.com/api.jpg', 'type': 'image'}],
+                },
+                {'content': 'First, design around resources, not actions.'},
+                {'content': 'Second, always version from day one.'},
+                {'content': 'Finally, document everything!'},
+            ],
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Targets:     relaygo.F([]string{"bluesky"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "bluesky": map[string]interface{}{
+            "thread": []map[string]interface{}{
+                {"content": "A thread about building APIs",
+                    "media": []map[string]interface{}{
+                        {"url": "https://cdn.example.com/api.jpg", "type": "image"},
+                    }},
+                {"content": "First, design around resources, not actions."},
+                {"content": "Second, always version from day one."},
+                {"content": "Finally, document everything!"},
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .addTarget("bluesky")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("bluesky", JsonValue.from(Map.of(
+            "thread", List.of(
+                Map.of("content", "A thread about building APIs",
+                    "media", List.of(Map.of("url", "https://cdn.example.com/api.jpg", "type", "image"))),
+                Map.of("content", "First, design around resources, not actions."),
+                Map.of("content", "Second, always version from day one."),
+                Map.of("content", "Finally, document everything!")
+            )
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targets": ["bluesky"],
+    "scheduled_at": "now",
+    "target_options": {
+      "bluesky": {
+        "thread": [
+          {"content": "A thread about building APIs",
+           "media": [{"url": "https://cdn.example.com/api.jpg", "type": "image"}]},
+          {"content": "First, design around resources, not actions."},
+          {"content": "Second, always version from day one."},
+          {"content": "Finally, document everything!"}
+        ]
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Each thread item has its own 300-character limit. Exceeding the limit on any single item will cause that item to fail.
+</Callout>
+
+## Rich Text (Auto-Detected)
+
+Bluesky uses "facets" for rich text formatting. RelayAPI auto-detects and converts these for you:
+
+- `@handle.bsky.social` becomes a clickable profile link
+- `#hashtag` becomes a clickable hashtag search
+- URLs become clickable links with preview cards
+
+No special formatting is needed from your side. Just write natural text and RelayAPI handles the conversion.
+
+## Connection
+
+Bluesky uses App Passwords instead of OAuth. To connect:
+
+1. Go to Bluesky Settings > App Passwords
+2. Create an App Password (format: `xxxx-xxxx-xxxx-xxxx`)
+3. Connect via the RelayAPI dashboard or API with your handle and app password
+
+Custom domain handles are supported (e.g., `brand.com` instead of `brand.bsky.social`).
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 4 |
+| Formats | JPEG, PNG, WebP, GIF |
+| Max file size | 1 MB per image (strict) |
+| Max dimensions | 2000 x 2000 px |
+| Recommended | 1200 x 675 px (16:9) |
+| Alt text | Up to 1,000 chars per image |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 |
+| Format | MP4 only |
+| Max file size | 50 MB |
+| Max duration | 60 seconds |
+| Max dimensions | 1920 x 1080 px |
+| Recommended | 1280 x 720, 30fps, H.264, AAC |
+
+## `target_options` Fields
+
+All fields go inside `target_options.bluesky` on your post request.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | string | Override post content for Bluesky specifically. Use this to provide a version under 300 characters when cross-posting. |
+| `media` | object[] | Override media for Bluesky specifically |
+| `thread` | object[] | Array of `{content, media?}` for thread chains. Each item has its own 300-char limit. |
+
+<Callout type="info">
+Bluesky is one of the simplest platforms to post to. No additional platform-specific fields are required beyond content and media.
+</Callout>
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Posts cannot exceed 300 characters | Content exceeds the 300-character hard limit | Use `target_options.bluesky.content` to provide a shorter version. This is the #1 cause of Bluesky failures. |
+| Thread item N exceeds 300 characters | Individual thread item is too long | Each thread item has its own independent 300-character limit. |
+| App Password invalid | Wrong password type or expired password | Use an App Password (format `xxxx-xxxx-xxxx-xxxx`), not the main account password. |
+| Image too large | Image exceeds the 1 MB limit | Compress the image before upload. Auto-compression may degrade quality. |
+| Publishing failed | Max retries reached | Usually temporary. Wait a moment and retry manually. |
+
+## Known Quirks
+
+- **300-character hard limit** — the #1 cause of failed posts when cross-posting. Always provide a Bluesky-specific version.
+- **1 MB image limit** — strictest of any platform. Most phone photos are 3-5 MB and need compression.
+- **Images are auto-compressed** to meet the blob size limit, which may degrade quality.
+- **Link previews auto-generated** when no media is attached to the post.
+- **Custom domain handles supported** — e.g., `brand.com` instead of `brand.bsky.social`.
+- **Rich text auto-detected** — mentions, hashtags, and URLs are automatically converted to clickable elements.
+- **AT Protocol uses DIDs** (decentralized identifiers) internally for user identity.
+- **Session tokens expire** — RelayAPI handles refresh automatically.

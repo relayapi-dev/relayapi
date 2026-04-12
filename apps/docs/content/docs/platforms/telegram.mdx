@@ -1,0 +1,816 @@
+---
+title: Telegram API
+description: Schedule and automate Telegram channel and group posts with RelayAPI — text, images, videos, documents, media albums, and rich formatting.
+icon: telegram
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `telegram` |
+| Auth method | Bot Token |
+| Text limit | 4,096 characters (text messages) |
+| Caption limit | 1,024 characters (media captions) |
+| Images per album | 10 |
+| Videos per album | 10 |
+| Mixed media | Yes (images + videos in same album) |
+| Image formats | JPEG, PNG, GIF, WebP |
+| Image max size | 10 MB |
+| Video formats | MP4, MOV |
+| Video max size | 50 MB |
+| Post types | Text, Photo, Video, Document, Media Album |
+| Scheduling | Yes |
+| Analytics | No (Telegram limitation) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Telegram uses a **bot-based integration** — the bot must be added as an **administrator** in the target channel or group with posting permissions before you can publish. Posts in **channels** show the channel name and logo as the author, but posts in **groups** show the bot name (cannot be changed). Media captions are limited to **1,024 characters**, which is shorter than the 4,096-character limit for text-only messages. In media albums, only the **first item** gets the caption. No analytics are available via the Telegram Bot API.
+</Callout>
+
+## Quick Start
+
+Send a message to a Telegram channel:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['telegram'],
+  scheduled_at: 'now'
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['telegram'],
+    scheduled_at='now'
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"telegram"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("telegram")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["telegram"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text Message
+
+Plain text message up to 4,096 characters.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['telegram'],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['telegram'],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"telegram"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("telegram")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["telegram"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Text with HTML Formatting
+
+Use HTML tags for rich text formatting. HTML is the default parse mode.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: '<b>Important Update!</b>\n\nCheck out our <a href="https://example.com">new feature</a>.',
+  targets: ['telegram'],
+  scheduled_at: 'now',
+  target_options: {
+    telegram: {
+      parse_mode: 'HTML'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='<b>Important Update!</b>\n\nCheck out our <a href="https://example.com">new feature</a>.',
+    targets=['telegram'],
+    scheduled_at='now',
+    target_options={
+        'telegram': {
+            'parse_mode': 'HTML'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("<b>Important Update!</b>\n\nCheck out our <a href=\"https://example.com\">new feature</a>."),
+    Targets:     relaygo.F([]string{"telegram"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "telegram": map[string]interface{}{
+            "parse_mode": "HTML",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("<b>Important Update!</b>\n\nCheck out our <a href=\"https://example.com\">new feature</a>.")
+    .addTarget("telegram")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("telegram", JsonValue.from(Map.of(
+            "parse_mode", "HTML"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "<b>Important Update!</b>\n\nCheck out our <a href=\"https://example.com\">new feature</a>.",
+    "targets": ["telegram"],
+    "scheduled_at": "now",
+    "target_options": {
+      "telegram": {
+        "parse_mode": "HTML"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Text with Markdown Formatting
+
+Use Markdown or MarkdownV2 for formatting.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: '*Bold text* and _italic text_ with a [link](https://example.com)',
+  targets: ['telegram'],
+  scheduled_at: 'now',
+  target_options: {
+    telegram: {
+      parse_mode: 'Markdown'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='*Bold text* and _italic text_ with a [link](https://example.com)',
+    targets=['telegram'],
+    scheduled_at='now',
+    target_options={
+        'telegram': {
+            'parse_mode': 'Markdown'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("*Bold text* and _italic text_ with a [link](https://example.com)"),
+    Targets:     relaygo.F([]string{"telegram"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "telegram": map[string]interface{}{
+            "parse_mode": "Markdown",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("*Bold text* and _italic text_ with a [link](https://example.com)")
+    .addTarget("telegram")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("telegram", JsonValue.from(Map.of(
+            "parse_mode", "Markdown"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "*Bold text* and _italic text_ with a [link](https://example.com)",
+    "targets": ["telegram"],
+    "scheduled_at": "now",
+    "target_options": {
+      "telegram": {
+        "parse_mode": "Markdown"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="warn">
+MarkdownV2 requires escaping special characters: `_ * [ ] ( ) ~ > # + - = | { } . !` — if you use MarkdownV2, make sure to escape these in your content.
+</Callout>
+
+### Photo Message
+
+Single photo with a caption (max 1,024 chars).
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out this photo!',
+  targets: ['telegram'],
+  media: [
+    { url: 'https://cdn.example.com/photo.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out this photo!',
+    targets=['telegram'],
+    media=[
+        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Check out this photo!"),
+    Targets:     relaygo.F([]string{"telegram"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/photo.jpg"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out this photo!")
+    .addTarget("telegram")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out this photo!",
+    "targets": ["telegram"],
+    "media": [
+      {"url": "https://cdn.example.com/photo.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video Message
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Watch our latest video!',
+  targets: ['telegram'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Watch our latest video!',
+    targets=['telegram'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Watch our latest video!"),
+    Targets:     relaygo.F([]string{"telegram"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/video.mp4"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Watch our latest video!")
+    .addTarget("telegram")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Watch our latest video!",
+    "targets": ["telegram"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Document Message
+
+Send any file type as a document attachment.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Here is the report.',
+  targets: ['telegram'],
+  media: [
+    { url: 'https://cdn.example.com/report.pdf', type: 'document' }
+  ],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Here is the report.',
+    targets=['telegram'],
+    media=[
+        {'url': 'https://cdn.example.com/report.pdf', 'type': 'document'}
+    ],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Here is the report."),
+    Targets:     relaygo.F([]string{"telegram"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/report.pdf"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeDocument),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Here is the report.")
+    .addTarget("telegram")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/report.pdf")
+        .type(PostCreateParams.Media.Type.DOCUMENT)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Here is the report.",
+    "targets": ["telegram"],
+    "media": [
+      {"url": "https://cdn.example.com/report.pdf", "type": "document"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Media Album (Up to 10 Items)
+
+Mix images and videos in a single album. Caption appears on the first item only.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Product gallery!',
+  targets: ['telegram'],
+  media: [
+    { url: 'https://cdn.example.com/photo1.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo2.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' },
+    { url: 'https://cdn.example.com/photo3.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now'
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Product gallery!',
+    targets=['telegram'],
+    media=[
+        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
+        {'url': 'https://cdn.example.com/photo3.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now'
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Product gallery!"),
+    Targets: relaygo.F([]string{"telegram"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/photo1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+        {URL: relaygo.F("https://cdn.example.com/photo3.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Product gallery!")
+    .addTarget("telegram")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo1.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo2.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo3.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Product gallery!",
+    "targets": ["telegram"],
+    "media": [
+      {"url": "https://cdn.example.com/photo1.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo2.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"},
+      {"url": "https://cdn.example.com/photo3.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Telegram is one of the few platforms that supports mixing images and videos in the same album. However, only the first item in the album displays the caption.
+</Callout>
+
+### Silent and Protected Message
+
+Send without notification sound, and prevent forwarding or saving.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Confidential update',
+  targets: ['telegram'],
+  scheduled_at: 'now',
+  target_options: {
+    telegram: {
+      silent: true,
+      protect_content: true
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Confidential update',
+    targets=['telegram'],
+    scheduled_at='now',
+    target_options={
+        'telegram': {
+            'silent': True,
+            'protect_content': True
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Confidential update"),
+    Targets:     relaygo.F([]string{"telegram"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "telegram": map[string]interface{}{
+            "silent":          true,
+            "protect_content": true,
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Confidential update")
+    .addTarget("telegram")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("telegram", JsonValue.from(Map.of(
+            "silent", true,
+            "protect_content", true
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Confidential update",
+    "targets": ["telegram"],
+    "scheduled_at": "now",
+    "target_options": {
+      "telegram": {
+        "silent": true,
+        "protect_content": true
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Text Formatting Reference
+
+### HTML (Default)
+
+```html
+<b>bold</b>, <i>italic</i>, <u>underline</u>, <s>strikethrough</s>
+<code>inline code</code>, <pre>code block</pre>
+<a href="https://example.com">link</a>
+```
+
+### Markdown
+
+```
+*bold*, _italic_, [link](https://example.com), `inline code`
+```
+
+### MarkdownV2
+
+```
+*bold*, _italic_, __underline__, ~strikethrough~, ||spoiler||
+`inline code`
+```
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per album | 10 |
+| Formats | JPEG, PNG, GIF, WebP |
+| Max file size | 10 MB (auto-compressed) |
+| Max resolution | 10,000 x 10,000 px |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per album | 10 |
+| Formats | MP4, MOV |
+| Max file size | 50 MB (auto-compressed) |
+| Max duration | No limit |
+| Recommended codec | H.264 |
+
+### Documents
+
+| Property | Requirement |
+|----------|-------------|
+| Formats | Any file type |
+| Max file size | 50 MB |
+
+## `target_options` Fields
+
+All fields go inside `target_options.telegram` on your post request.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `content` | string | — | Override post content for Telegram specifically |
+| `media` | object[] | — | Override media for Telegram specifically |
+| `parse_mode` | string | `"HTML"` | Text formatting mode: `"HTML"`, `"Markdown"`, or `"MarkdownV2"` |
+| `disable_preview` | boolean | `false` | Disable link preview in text messages |
+| `silent` | boolean | `false` | Send without notification sound |
+| `protect_content` | boolean | `false` | Prevent forwarding and saving by recipients |
+
+## Channel vs Group
+
+| Destination | Author Display |
+|-------------|----------------|
+| Channel | Channel name and logo |
+| Group | Bot name |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Bot is not a member | Bot has not been added as an admin | Add the bot as an administrator in the channel or group with posting permissions. |
+| Message is too long | Text exceeds 4,096 chars or caption exceeds 1,024 chars | Shorten the content. Use `target_options.telegram.content` for a shorter version. |
+| Wrong file identifier | Media URL is inaccessible or uses HTTP | Use a direct HTTPS URL that is publicly accessible. |
+| Can't parse entities | Invalid HTML or Markdown syntax | Check tag closure in HTML. Escape special characters in MarkdownV2. |
+
+## Known Quirks
+
+- **Channel posts show channel name and logo** as the author (correct behavior).
+- **Group posts show the bot name** as the author — this cannot be changed.
+- **Media captions limited to 1,024 characters** — shorter than the 4,096-character text message limit.
+- **Album captions appear on the first item only** — subsequent items in a media group do not display captions.
+- **No analytics available** via the Telegram Bot API.
+- **Bot must be admin** in the channel or group before posting is possible.
+- **Private channels** require the user to forward a message from the channel to the bot for connection.
+- **Mixed media albums supported** — images and videos can be combined in a single album.
+- **Documents sent separately** — documents cannot be mixed with photos/videos in an album.

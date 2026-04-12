@@ -1,0 +1,32 @@
+---
+import DashboardLayout from "../../../../layouts/DashboardLayout.astro";
+import { ConnectCallback } from "../../../../components/dashboard/connect/connect-callback";
+
+const platform = Astro.params.platform || "";
+const code = Astro.url.searchParams.get("code") || "";
+const state = Astro.url.searchParams.get("state") || "";
+const error = Astro.url.searchParams.get("error") || "";
+// Params from server-side OAuth callback redirect
+const status = Astro.url.searchParams.get("status") || "";
+const accountId = Astro.url.searchParams.get("account_id") || "";
+const errorCode = Astro.url.searchParams.get("error_code") || "";
+const errorMessage = Astro.url.searchParams.get("error_message") || "";
+const errorDescription = Astro.url.searchParams.get("error_description") || "";
+---
+
+<DashboardLayout>
+  <div class="flex min-h-screen items-center justify-center bg-background p-4">
+    <ConnectCallback
+      client:load
+      platform={platform}
+      code={code}
+      state={state}
+      error={error}
+      serverStatus={status}
+      serverAccountId={accountId}
+      serverErrorCode={errorCode}
+      serverErrorMessage={errorMessage}
+      serverErrorDescription={errorDescription}
+    />
+  </div>
+</DashboardLayout>

@@ -1,0 +1,49 @@
+---
+title: Rate Limits
+description: Understanding API rate limits and how to handle them.
+icon: Gauge
+---
+
+## Overview
+
+RelayAPI applies rate limits per API key to ensure fair usage and platform stability.
+
+## Default Limits
+
+| Plan | Requests/minute |
+|------|----------------|
+| Free | 100 |
+| Pro | 1,000 |
+| Custom | Custom |
+
+## Rate Limit Headers
+
+Every response includes rate limit information:
+
+```
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 999
+X-RateLimit-Reset: 1709856000
+```
+
+## Handling Rate Limits
+
+When you hit a rate limit, you'll receive a `429` response:
+
+```json
+{
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Rate limit exceeded. Try again in 45 seconds.",
+    "details": {
+      "retry_after": 45
+    }
+  }
+}
+```
+
+Use the `Retry-After` header or `retry_after` field to determine when to retry.
+
+## Platform Rate Limits
+
+In addition to API rate limits, each social platform has its own rate limits. RelayAPI respects these automatically and queues posts when platform limits are reached. See individual [platform pages](/platforms) for platform-specific rate limits.

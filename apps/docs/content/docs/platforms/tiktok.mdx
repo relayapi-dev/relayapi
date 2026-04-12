@@ -1,0 +1,708 @@
+---
+title: TikTok API
+description: Schedule and automate TikTok posts with RelayAPI — videos, photo carousels, privacy levels, duet/stitch settings, and AI disclosures.
+icon: tiktok
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `tiktok` |
+| Auth method | OAuth 2.0 |
+| Character limit | 2,200 (video caption), 4,000 (photo description) |
+| Photo title limit | 90 characters (auto-truncated, hashtags stripped) |
+| Photos per post | 35 (carousel) |
+| Videos per post | 1 |
+| Photo formats | JPEG, PNG, WebP |
+| Photo max size | 20 MB |
+| Video formats | MP4, MOV, WebM |
+| Video max size | 4 GB |
+| Video duration | 3 sec - 10 min |
+| Post types | Video, Photo Carousel |
+| Scheduling | Yes |
+| Analytics | Limited (likes, comments, shares, views) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+TikTok has **no text-only posts** — media is always required. Each creator has **account-specific privacy level options** that must be fetched before posting. Content moderation is **more aggressive via API** than in the native app. All posts require consent flags, which RelayAPI sends automatically. TikTok enforces a **daily posting limit** for API posts that is separate from the native app limit and varies by account.
+</Callout>
+
+## Quick Start
+
+Post a video to TikTok:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+
+const post = await client.posts.create({
+  content: 'Check out this amazing sunset! #sunset #nature',
+  targets: ['tiktok'],
+  media: [
+    { url: 'https://cdn.example.com/sunset.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    tiktok: {
+      privacy_level: 'PUBLIC_TO_EVERYONE',
+      allow_comment: true,
+      allow_duet: true,
+      allow_stitch: true
+    }
+  }
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+
+post = client.posts.create(
+    content='Check out this amazing sunset! #sunset #nature',
+    targets=['tiktok'],
+    media=[
+        {'url': 'https://cdn.example.com/sunset.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'tiktok': {
+            'privacy_level': 'PUBLIC_TO_EVERYONE',
+            'allow_comment': True,
+            'allow_duet': True,
+            'allow_stitch': True
+        }
+    }
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Check out this amazing sunset! #sunset #nature"),
+    Targets:     relaygo.F([]string{"tiktok"}),
+    Media:       relaygo.F([]relaygo.PostNewParamsMedia{{URL: relaygo.F("https://cdn.example.com/sunset.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)}}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "tiktok": map[string]interface{}{
+            "privacy_level": "PUBLIC_TO_EVERYONE",
+            "allow_comment": true,
+            "allow_duet":    true,
+            "allow_stitch":  true,
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out this amazing sunset! #sunset #nature")
+    .addTarget("tiktok")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/sunset.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
+            "privacy_level", "PUBLIC_TO_EVERYONE",
+            "allow_comment", true,
+            "allow_duet", true,
+            "allow_stitch", true
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out this amazing sunset! #sunset #nature",
+    "targets": ["tiktok"],
+    "media": [
+      {"url": "https://cdn.example.com/sunset.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "tiktok": {
+        "privacy_level": "PUBLIC_TO_EVERYONE",
+        "allow_comment": true,
+        "allow_duet": true,
+        "allow_stitch": true
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Video Post
+
+Standard TikTok video. Vertical 9:16 is the only format that performs well. Caption limited to 2,200 characters.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out this amazing sunset! #sunset #nature',
+  targets: ['tiktok'],
+  media: [
+    { url: 'https://cdn.example.com/sunset.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    tiktok: {
+      privacy_level: 'PUBLIC_TO_EVERYONE',
+      allow_comment: true,
+      allow_duet: true,
+      allow_stitch: true
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out this amazing sunset! #sunset #nature',
+    targets=['tiktok'],
+    media=[
+        {'url': 'https://cdn.example.com/sunset.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'tiktok': {
+            'privacy_level': 'PUBLIC_TO_EVERYONE',
+            'allow_comment': True,
+            'allow_duet': True,
+            'allow_stitch': True
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Check out this amazing sunset! #sunset #nature"),
+    Targets:     relaygo.F([]string{"tiktok"}),
+    Media:       relaygo.F([]relaygo.PostNewParamsMedia{{URL: relaygo.F("https://cdn.example.com/sunset.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)}}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "tiktok": map[string]interface{}{
+            "privacy_level": "PUBLIC_TO_EVERYONE",
+            "allow_comment": true,
+            "allow_duet":    true,
+            "allow_stitch":  true,
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out this amazing sunset! #sunset #nature")
+    .addTarget("tiktok")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/sunset.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
+            "privacy_level", "PUBLIC_TO_EVERYONE",
+            "allow_comment", true,
+            "allow_duet", true,
+            "allow_stitch", true
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out this amazing sunset! #sunset #nature",
+    "targets": ["tiktok"],
+    "media": [
+      {"url": "https://cdn.example.com/sunset.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "tiktok": {
+        "privacy_level": "PUBLIC_TO_EVERYONE",
+        "allow_comment": true,
+        "allow_duet": true,
+        "allow_stitch": true
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Photo Carousel (Up to 35 Images)
+
+Photos are auto-resized to 1080x1920. The `content` field becomes the title (max 90 chars, hashtags stripped). Use the `description` field in target_options for the full caption (up to 4,000 chars).
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'My travel highlights',
+  targets: ['tiktok'],
+  media: [
+    { url: 'https://cdn.example.com/photo1.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo2.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo3.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    tiktok: {
+      privacy_level: 'PUBLIC_TO_EVERYONE',
+      allow_comment: true,
+      description: 'Full trip recap from our weekend adventure! #travel #roadtrip',
+      auto_add_music: true,
+      photo_cover_index: 0
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='My travel highlights',
+    targets=['tiktok'],
+    media=[
+        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo3.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'tiktok': {
+            'privacy_level': 'PUBLIC_TO_EVERYONE',
+            'allow_comment': True,
+            'description': 'Full trip recap from our weekend adventure! #travel #roadtrip',
+            'auto_add_music': True,
+            'photo_cover_index': 0
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("My travel highlights"),
+    Targets: relaygo.F([]string{"tiktok"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/photo1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo3.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "tiktok": map[string]interface{}{
+            "privacy_level":   "PUBLIC_TO_EVERYONE",
+            "allow_comment":   true,
+            "description":     "Full trip recap from our weekend adventure! #travel #roadtrip",
+            "auto_add_music":  true,
+            "photo_cover_index": 0,
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("My travel highlights")
+    .addTarget("tiktok")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo1.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo2.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo3.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
+            "privacy_level", "PUBLIC_TO_EVERYONE",
+            "allow_comment", true,
+            "description", "Full trip recap from our weekend adventure! #travel #roadtrip",
+            "auto_add_music", true,
+            "photo_cover_index", 0
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "My travel highlights",
+    "targets": ["tiktok"],
+    "media": [
+      {"url": "https://cdn.example.com/photo1.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo2.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo3.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "tiktok": {
+        "privacy_level": "PUBLIC_TO_EVERYONE",
+        "allow_comment": true,
+        "description": "Full trip recap from our weekend adventure! #travel #roadtrip",
+        "auto_add_music": true,
+        "photo_cover_index": 0
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Photo titles are automatically truncated to 90 characters, and hashtags and URLs are stripped from the title. Use the `description` field for your full caption with hashtags.
+</Callout>
+
+### Video with AI Disclosure
+
+If your video contains AI-generated content, disclose it using the `video_made_with_ai` flag.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'AI-generated art experiment #aiart',
+  targets: ['tiktok'],
+  media: [
+    { url: 'https://cdn.example.com/ai-art.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    tiktok: {
+      privacy_level: 'PUBLIC_TO_EVERYONE',
+      allow_comment: true,
+      allow_duet: true,
+      allow_stitch: true,
+      video_made_with_ai: true
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='AI-generated art experiment #aiart',
+    targets=['tiktok'],
+    media=[
+        {'url': 'https://cdn.example.com/ai-art.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'tiktok': {
+            'privacy_level': 'PUBLIC_TO_EVERYONE',
+            'allow_comment': True,
+            'allow_duet': True,
+            'allow_stitch': True,
+            'video_made_with_ai': True
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("AI-generated art experiment #aiart"),
+    Targets:     relaygo.F([]string{"tiktok"}),
+    Media:       relaygo.F([]relaygo.PostNewParamsMedia{{URL: relaygo.F("https://cdn.example.com/ai-art.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)}}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "tiktok": map[string]interface{}{
+            "privacy_level":      "PUBLIC_TO_EVERYONE",
+            "allow_comment":      true,
+            "allow_duet":         true,
+            "allow_stitch":       true,
+            "video_made_with_ai": true,
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("AI-generated art experiment #aiart")
+    .addTarget("tiktok")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/ai-art.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
+            "privacy_level", "PUBLIC_TO_EVERYONE",
+            "allow_comment", true,
+            "allow_duet", true,
+            "allow_stitch", true,
+            "video_made_with_ai", true
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "AI-generated art experiment #aiart",
+    "targets": ["tiktok"],
+    "media": [
+      {"url": "https://cdn.example.com/ai-art.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "tiktok": {
+        "privacy_level": "PUBLIC_TO_EVERYONE",
+        "allow_comment": true,
+        "allow_duet": true,
+        "allow_stitch": true,
+        "video_made_with_ai": true
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Draft to Creator Inbox
+
+Send a post to the creator's inbox as a draft instead of publishing directly.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Review before posting',
+  targets: ['tiktok'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    tiktok: {
+      privacy_level: 'PUBLIC_TO_EVERYONE',
+      allow_comment: true,
+      allow_duet: true,
+      allow_stitch: true,
+      draft: true
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Review before posting',
+    targets=['tiktok'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'tiktok': {
+            'privacy_level': 'PUBLIC_TO_EVERYONE',
+            'allow_comment': True,
+            'allow_duet': True,
+            'allow_stitch': True,
+            'draft': True
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Review before posting"),
+    Targets:     relaygo.F([]string{"tiktok"}),
+    Media:       relaygo.F([]relaygo.PostNewParamsMedia{{URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)}}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "tiktok": map[string]interface{}{
+            "privacy_level": "PUBLIC_TO_EVERYONE",
+            "allow_comment": true,
+            "allow_duet":    true,
+            "allow_stitch":  true,
+            "draft":         true,
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Review before posting")
+    .addTarget("tiktok")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
+            "privacy_level", "PUBLIC_TO_EVERYONE",
+            "allow_comment", true,
+            "allow_duet", true,
+            "allow_stitch", true,
+            "draft", true
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Review before posting",
+    "targets": ["tiktok"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "tiktok": {
+        "privacy_level": "PUBLIC_TO_EVERYONE",
+        "allow_comment": true,
+        "allow_duet": true,
+        "allow_stitch": true,
+        "draft": true
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Media Requirements
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 |
+| Formats | MP4, MOV, WebM |
+| Max file size | 4 GB |
+| Max duration | 10 minutes |
+| Min duration | 3 seconds |
+| Aspect ratio | 9:16 vertical (only format that performs well) |
+| Recommended | 1080 x 1920 px, H.264, 30fps |
+
+### Photos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per carousel | 35 |
+| Formats | JPEG, PNG, WebP |
+| Max file size | 20 MB per image |
+| Resolution | Auto-resized to 1080 x 1920 px |
+
+<Callout type="info">
+You cannot mix photos and videos in the same post. A post is either a single video or a photo carousel.
+</Callout>
+
+## `target_options` Fields
+
+All fields go inside `target_options.tiktok` on your post request.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | string | No | Override caption for TikTok specifically |
+| `media` | object[] | No | Override media for TikTok specifically |
+| `privacy_level` | string | Yes | Must match creator's allowed values: `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |
+| `allow_comment` | boolean | Yes | Allow comments on the post |
+| `allow_duet` | boolean | Yes (video) | Allow duets with the video |
+| `allow_stitch` | boolean | Yes (video) | Allow stitches with the video |
+| `description` | string | No | Long-form caption for photo carousels (max 4,000 chars) |
+| `video_cover_timestamp_ms` | number | No | Thumbnail frame position in milliseconds (default: 1000) |
+| `photo_cover_index` | number | No | Cover image index for carousels (0-based) |
+| `auto_add_music` | boolean | No | Let TikTok automatically add music (photos only) |
+| `video_made_with_ai` | boolean | No | AI-generated content disclosure |
+| `draft` | boolean | No | Send to Creator Inbox as draft instead of publishing |
+| `commercial_content_type` | string | No | `"none"`, `"brand_organic"`, `"brand_content"` |
+
+<Callout type="info">
+The consent flags `content_preview_confirmed` and `express_consent_given` are always sent automatically by RelayAPI. You do not need to set them.
+</Callout>
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Too many posts in 24h | Daily API posting limit reached | Wait for the limit to reset, or post via the native TikTok app. |
+| Platform API timeout | TikTok servers slow processing large videos | Check publish status after a few minutes. The video may still be processing. |
+| Privacy level not available | Requested level does not match creator's settings | Fetch creator info to get the list of allowed privacy levels for this account. |
+| Spam risk flagged | Content moderation triggered | Review content. API moderation is stricter than the native app. |
+| Duplicate content | Same content posted recently | Modify caption or swap media files. |
+| Video download failed | Media URL is inaccessible to TikTok servers | Use a direct download URL from a CDN. |
+
+## Known Quirks
+
+- **Consent flags are mandatory** — posts fail without them. RelayAPI sends these automatically.
+- **Privacy levels are per-creator** — you must fetch the available options for each account before posting.
+- **Content moderation is more aggressive via API** than in the native TikTok app.
+- **Photo titles auto-truncated to 90 characters** with hashtags and URLs stripped. Use the `description` field for longer text.
+- **Photos are auto-resized** to 1080x1920 regardless of original dimensions.
+- **Large videos uploaded in chunks** (5-64 MB per chunk) for reliability.
+- **Cannot mix photos and videos** in the same post.
+- **Cannot read existing comments** — TikTok API is write-only for comments.
+- **No DMs** are available via the TikTok API.

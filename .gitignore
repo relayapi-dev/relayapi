@@ -1,0 +1,15 @@
+node_modules
+dist
+.wrangler
+.env
+.dev.vars
+drizzle/meta
+*.tsbuildinfo
+.next
+.astro
+.source
+.vscode/settings.json
+.vscode/tasks.json
+.DS_Store
+/.playwright-mcp
+/.superpowers

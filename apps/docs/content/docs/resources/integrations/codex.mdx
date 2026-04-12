@@ -1,0 +1,152 @@
+---
+title: OpenAI Codex
+description: Install the RelayAPI plugin for OpenAI Codex to manage social media posts from the Codex CLI.
+---
+
+The RelayAPI plugin for [OpenAI Codex](https://openai.com/index/codex/) brings social media management to the Codex CLI. Use natural language to create posts, manage accounts, and schedule content.
+
+## Quick Reference
+
+| | |
+|---|---|
+| **Platform** | OpenAI Codex CLI |
+| **Version** | 1.0.0 |
+| **Auth** | `RELAYAPI_API_KEY` environment variable |
+| **Distribution** | Repository marketplace or personal install |
+
+<Callout type="info">
+Self-serve publishing to the official Codex Plugin Directory is coming soon. For now, install via repository or personal marketplace.
+</Callout>
+
+## Install
+
+### Option A: Repository Marketplace (Team)
+
+Add the plugin to your project so team members get it automatically:
+
+```bash
+mkdir -p ./plugins
+cp -R packages/integrations/codex-plugin ./plugins/relayapi
+```
+
+Create `$REPO_ROOT/.agents/plugins/marketplace.json`:
+
+```json
+{
+  "name": "relayapi-plugins",
+  "interface": {
+    "displayName": "RelayAPI Plugins"
+  },
+  "plugins": [
+    {
+      "name": "relayapi",
+      "source": {
+        "source": "local",
+        "path": "./plugins/relayapi"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
+Restart Codex to discover the plugin.
+
+### Option B: Personal Install
+
+Install for your user only:
+
+```bash
+mkdir -p ~/.codex/plugins
+cp -R packages/integrations/codex-plugin ~/.codex/plugins/relayapi
+```
+
+Create or update `~/.agents/plugins/marketplace.json`:
+
+```json
+{
+  "name": "personal-plugins",
+  "interface": {
+    "displayName": "My Plugins"
+  },
+  "plugins": [
+    {
+      "name": "relayapi",
+      "source": {
+        "source": "local",
+        "path": "~/.codex/plugins/relayapi"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
+Restart Codex.
+
+## Setup
+
+Set your API key as an environment variable:
+
+```bash
+export RELAYAPI_API_KEY="rlay_live_your_key_here"
+```
+
+Get your key from [relayapi.dev](https://relayapi.dev/signup) under **Settings > API Keys**.
+
+## Usage
+
+### Skills
+
+Invoke the RelayAPI skill in Codex:
+
+```
+$relayapi — post "Hello world!" to Twitter
+```
+
+Or use the guided post composer:
+
+```
+$social-post
+```
+
+### Example: Natural Language
+
+```
+Use RelayAPI to post to Twitter and LinkedIn
+```
+
+```
+Use RelayAPI to list my connected social media accounts
+```
+
+```
+Use RelayAPI to schedule a post for tomorrow
+```
+
+## What's Included
+
+### Skills
+
+- **RelayAPI Reference** — Full API documentation with TypeScript SDK examples and all 17 platform details
+- **Social Post Composer** — Step-by-step post creation with platform validation and confirmation
+
+## Updating
+
+1. Update skill content in `skills/*/SKILL.md`
+2. Bump `version` in `.codex-plugin/plugin.json`
+3. Re-copy to the target location
+4. Restart Codex
+
+## Links
+
+- [OpenAI Codex](https://openai.com/index/codex/)
+- [Quickstart](/quickstart)
+- [API Reference](/api-reference)

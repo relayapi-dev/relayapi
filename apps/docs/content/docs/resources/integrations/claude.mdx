@@ -1,0 +1,113 @@
+---
+title: Claude Code
+description: Install the RelayAPI plugin for Claude Code to create posts, manage accounts, and more from Claude's CLI or desktop app.
+---
+
+The RelayAPI plugin for [Claude Code](https://claude.ai/code) lets Claude create posts, manage social accounts, upload media, and check analytics — all through natural language.
+
+## Quick Reference
+
+| | |
+|---|---|
+| **Platform** | Claude Code CLI & Desktop |
+| **Version** | 1.0.0 |
+| **Auth** | API key stored in system keychain |
+| **Distribution** | Anthropic Marketplace, self-hosted, or team config |
+
+## Install
+
+### From the Anthropic Marketplace
+
+Once published, install directly from Claude Code:
+
+```bash
+/plugin install relayapi
+```
+
+Claude Code will prompt you for your API key on first use. The key is stored securely in your system keychain.
+
+### From a Git Marketplace
+
+If using a self-hosted marketplace:
+
+```bash
+/plugin marketplace add majestico/relayapi-plugins
+/plugin install relayapi@relayapi-plugins
+```
+
+### Local Testing
+
+To try the plugin from source:
+
+```bash
+claude --plugin-dir ./packages/integrations/claude-plugin
+```
+
+## Setup
+
+After installing, Claude Code prompts you for your RelayAPI API key. Enter a key starting with `rlay_live_` or `rlay_test_`.
+
+The key is stored in your system keychain via Claude Code's secure credential storage — never in plaintext.
+
+To update your key later, disable and re-enable the plugin.
+
+## Usage
+
+### Commands
+
+The plugin adds three slash commands:
+
+| Command | Description |
+|---|---|
+| `/relayapi:post` | Compose and publish a social media post |
+| `/relayapi:accounts` | List connected social accounts |
+| `/relayapi:posts` | List recent posts and their status |
+
+### Example: Create a Post
+
+```
+/relayapi:post Launching our new API today!
+```
+
+Claude walks you through selecting platforms, reviewing content, and confirming before publishing.
+
+### Example: Natural Language
+
+You can also just ask Claude directly:
+
+```
+Post "Check out our new docs" to Twitter and LinkedIn
+```
+
+```
+Show me my connected accounts
+```
+
+```
+Schedule a post for tomorrow at 9am: "Weekly update thread"
+```
+
+The plugin gives Claude access to the full RelayAPI, so it can handle multi-step workflows like uploading media, scheduling posts, and checking analytics.
+
+## What's Included
+
+### Skills
+
+- **RelayAPI Reference** — Full API knowledge including authentication, endpoints, and SDK usage
+- **Social Post Composer** — Guided post creation with platform validation and confirmation
+
+### Commands
+
+- `/relayapi:post` — Compose and publish posts
+- `/relayapi:accounts` — List connected accounts
+- `/relayapi:posts` — List recent posts and status
+
+### Agents
+
+- **Social Publisher** — Specialized agent for complex publishing workflows with platform-specific character limits and validation rules
+
+## Links
+
+- [Claude Code](https://claude.ai/code)
+- [Quickstart](/quickstart)
+- [API Reference](/api-reference)

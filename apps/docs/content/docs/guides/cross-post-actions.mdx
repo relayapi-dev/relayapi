@@ -1,0 +1,122 @@
+---
+title: Cross-Post Actions
+description: Automatically repost, comment, or quote from other accounts after publishing.
+icon: Share2
+---
+
+## Overview
+
+Cross-post actions let you schedule automatic follow-up actions from other connected accounts after a post is published. For example, you can publish an announcement from your personal account and have your company account automatically repost it 3 hours later.
+
+Actions are defined at post creation time via the `cross_post_actions` array and execute after the post is successfully published.
+
+## How It Works
+
+1. **Create a post** with one or more `cross_post_actions` attached
+2. The post publishes normally to its target accounts
+3. After publishing, each cross-post action fires at its configured delay
+4. Each action runs independently — if one fails, others still execute
+
+```bash
+# Create a post with cross-post actions
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out this announcement!",
+    "targets": ["acc_personal"],
+    "scheduled_at": "now",
+    "cross_post_actions": [
+      {
+        "action_type": "repost",
+        "target_account_id": "acc_company",
+        "delay_minutes": 180
+      },
+      {
+        "action_type": "comment",
+        "target_account_id": "acc_company",
+        "content": "Great post!",
+        "delay_minutes": 60
+      }
+    ]
+  }'
+```
+
+## Action Types
+
+| Action | Description | Requires `content` |
+|--------|-------------|-------------------|
+| **repost** | Repost/retweet/reshare the original post from the target account | No |
+| **comment** | Post a reply/comment on the original post from the target account | Yes |
+| **quote** | Quote-post the original post with additional commentary | Yes |
+
+The `target_account_id` must be a connected account on the same platform as the original post's target. For example, if the post goes to a Twitter account, the cross-post action's target must also be a Twitter account.
+
+## Delay
+
+The `delay_minutes` field controls how long after the original post is published before the action executes.
+
+| Value | Behavior |
+|-------|----------|
+| `0` | Execute immediately after publish |
+| `1` to `1440` | Delay in minutes (max 24 hours) |
+
+Staggering delays creates a natural amplification pattern — for example, a comment at 1 hour and a repost at 3 hours.
+
+## Status Tracking
+
+Each cross-post action has its own status that you can monitor:
+
+| Status | Description |
+|--------|-------------|
+| `pending` | Action is waiting to execute (post not yet published or delay not yet elapsed) |
+| `executed` | Action completed successfully |
+| `failed` | Action failed (e.g., platform error, account disconnected) |
+| `cancelled` | Action was manually cancelled before execution |
+
+## Cancellation
+
+You can cancel a pending cross-post action before it executes:
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts/post_abc123/cross-post-actions/cpa_xyz789/cancel \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+Once an action has been executed or has already failed, it cannot be cancelled.
+
+## SDK Usage
+
+```typescript
+import Relay from "@relayapi/sdk";
+
+const client = new Relay({ apiKey: "rlay_live_..." });
+
+// Create a post with cross-post actions
+const post = await client.posts.create({
+  content: "Check out this announcement!",
+  targets: ["acc_personal"],
+  scheduled_at: "now",
+  cross_post_actions: [
+    { action_type: "repost", target_account_id: "acc_company", delay_minutes: 180 },
+    { action_type: "comment", target_account_id: "acc_company", content: "Great post!", delay_minutes: 60 },
+  ],
+});
+
+// List cross-post actions for a post
+const { data } = await client.posts.crossPostActions.list("post_abc123");
+
+// Get a specific action
+const action = await client.posts.crossPostActions.get("post_abc123", "cpa_xyz789");
+
+// Cancel a pending action
+await client.posts.crossPostActions.cancel("post_abc123", "cpa_xyz789");
+```
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/v1/posts/:post_id/cross-post-actions` | List actions for a post |
+| `GET` | `/v1/posts/:post_id/cross-post-actions/:id` | Get action details |
+| `POST` | `/v1/posts/:post_id/cross-post-actions/:id/cancel` | Cancel a pending action |

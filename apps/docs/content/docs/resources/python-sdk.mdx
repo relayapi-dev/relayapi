@@ -1,0 +1,186 @@
+---
+title: Python SDK
+description: Official Python client library for RelayAPI. Post to 17+ social media platforms with a few lines of Python.
+icon: Package
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Official Python SDK for RelayAPI. Post to 17+ social media platforms, manage accounts, upload media, and track analytics.
+
+## Setup
+
+### Install
+
+```bash
+pip install relay
+```
+
+### Authenticate
+
+```python
+from relay import Relay
+
+client = Relay()  # reads RELAY_API_KEY from environment
+```
+
+Or pass the key directly:
+
+```python
+client = Relay(api_key="rlay_live_...")
+```
+
+<Callout type="info">
+Get your API key from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**.
+</Callout>
+
+## Quick Examples
+
+### Create and Publish a Post
+
+```python
+post = client.posts.create(
+    content="Hello from the Python SDK!",
+    targets=["acc_twitter_123", "acc_linkedin_456"],
+    scheduled_at="now",
+)
+print(f"Post created: {post.id} — status: {post.status}")
+```
+
+### Schedule a Post
+
+```python
+post = client.posts.create(
+    content="This will go out tomorrow morning",
+    targets=["twitter", "linkedin"],
+    scheduled_at="2025-01-15T09:00:00Z",
+    timezone="America/New_York",
+)
+```
+
+### Save as Draft
+
+```python
+post = client.posts.create(
+    content="Work in progress...",
+    targets=["instagram"],
+    scheduled_at="draft",
+)
+```
+
+### List Connected Accounts
+
+```python
+accounts = client.accounts.list()
+for acc in accounts.data:
+    print(f"{acc.platform}: {acc.display_name} ({acc.id})")
+```
+
+### Upload Media
+
+```python
+# Get a presigned upload URL
+presign = client.media.presign(
+    filename="photo.jpg",
+    content_type="image/jpeg",
+)
+
+# Upload the file directly to the URL
+import httpx
+with open("photo.jpg", "rb") as f:
+    httpx.put(presign.upload_url, content=f.read(), headers={"Content-Type": "image/jpeg"})
+
+# Use the public URL in a post
+post = client.posts.create(
+    content="Check out this photo!",
+    targets=["instagram"],
+    media=[{"url": presign.url, "type": "image"}],
+    scheduled_at="now",
+)
+```
+
+### Cross-Post with Per-Platform Content
+
+```python
+post = client.posts.create(
+    content="Default content for all platforms",
+    targets=["twitter", "linkedin", "bluesky"],
+    target_options={
+        "twitter": {"content": "Short version for Twitter"},
+        "linkedin": {"content": "Longer professional version for LinkedIn with more context"},
+    },
+    scheduled_at="now",
+)
+```
+
+### Get Post Analytics
+
+```python
+analytics = client.analytics.retrieve(post_id="post_abc123")
+for platform, metrics in analytics.items():
+    print(f"{platform}: {metrics.impressions} impressions, {metrics.likes} likes")
+```
+
+### Check Account Health
+
+```python
+health = client.accounts.health()
+for acc in health:
+    status = "healthy" if acc.healthy else "needs attention"
+    print(f"{acc.platform} ({acc.username}): {status}")
+```
+
+## Error Handling
+
+```python
+from relay import Relay, APIError, AuthenticationError, RateLimitError
+
+client = Relay()
+
+try:
+    post = client.posts.create(
+        content="Hello!",
+        targets=["twitter"],
+        scheduled_at="now",
+    )
+except AuthenticationError:
+    print("Invalid API key")
+except RateLimitError as e:
+    print(f"Rate limited — retry after {e.retry_after}s")
+except APIError as e:
+    print(f"API error {e.status_code}: {e.message}")
+```
+
+## Async Usage
+
+The SDK supports async/await with `AsyncRelay`:
+
+```python
+import asyncio
+from relay import AsyncRelay
+
+async def main():
+    client = AsyncRelay()
+
+    post = await client.posts.create(
+        content="Async post!",
+        targets=["twitter"],
+        scheduled_at="now",
+    )
+    print(f"Posted: {post.id}")
+
+asyncio.run(main())
+```
+
+## Configuration
+
+| Environment Variable | Description |
+|---|---|
+| `RELAY_API_KEY` | Your API key (required if not passed to constructor) |
+| `RELAY_BASE_URL` | Custom API base URL (default: `https://api.relayapi.dev`) |
+
+## Links
+
+- [GitHub](https://github.com/relayapi-dev/relay-python)
+- [PyPI](https://pypi.org/project/relay/)
+- [API Reference](/api-reference)

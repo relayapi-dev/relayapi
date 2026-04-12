@@ -1,0 +1,30 @@
+{
+	"name": "relayapi",
+	"private": true,
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	],
+	"scripts": {
+		"dev:api": "cd apps/api && bun run dev",
+		"dev:app": "cd apps/app && bun run dev",
+		"dev:docs": "cd apps/docs && bun run dev",
+		"dev:cli": "cd apps/cli && bun run dev",
+		"typecheck": "bun run typecheck:db && bun run typecheck:auth && bun run typecheck:api && bun run typecheck:app && bun run typecheck:docs && bun run typecheck:cli",
+		"typecheck:db": "cd packages/db && tsc --noEmit",
+		"typecheck:auth": "cd packages/auth && tsc --noEmit",
+		"typecheck:api": "cd apps/api && tsc --noEmit",
+		"typecheck:app": "cd apps/app && tsc --noEmit",
+		"typecheck:docs": "cd apps/docs && tsc --noEmit",
+		"typecheck:cli": "cd apps/cli && tsc --noEmit",
+		"db:generate": "cd packages/db && bunx drizzle-kit generate",
+		"db:studio": "cd packages/db && bunx drizzle-kit studio",
+		"db:migrate": "cd packages/db && bunx drizzle-kit migrate"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.12"
+	},
+	"patchedDependencies": {
+		"undici@7.24.4": "patches/undici@7.24.4.patch"
+	}
+}

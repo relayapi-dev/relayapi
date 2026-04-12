@@ -1,0 +1,40 @@
+{
+	"name": "relayapi",
+	"version": "1.0.0",
+	"description": "Post to 17 social media platforms via a single unified API. Manage accounts, upload media, schedule posts, and track analytics through RelayAPI.",
+	"author": {
+		"name": "RelayAPI",
+		"url": "https://relayapi.dev"
+	},
+	"homepage": "https://relayapi.dev",
+	"repository": "https://github.com/majestico/relayapi",
+	"license": "MIT",
+	"keywords": [
+		"social-media",
+		"api",
+		"posting",
+		"twitter",
+		"instagram",
+		"linkedin",
+		"scheduling"
+	],
+	"skills": "./skills/",
+	"interface": {
+		"displayName": "RelayAPI",
+		"shortDescription": "Unified social media posting API",
+		"longDescription": "Post to 17 social media platforms via a single API. Manage accounts, upload media, schedule posts, set up webhooks, and track analytics.",
+		"developerName": "RelayAPI",
+		"category": "Productivity",
+		"capabilities": [
+			"Read",
+			"Write"
+		],
+		"websiteURL": "https://relayapi.dev",
+		"defaultPrompt": [
+			"Use RelayAPI to post to Twitter and LinkedIn.",
+			"Use RelayAPI to list my connected social media accounts.",
+			"Use RelayAPI to schedule a post for tomorrow."
+		],
+		"brandColor": "#6366F1"
+	}
+}

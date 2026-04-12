@@ -1,0 +1,169 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "relayapi",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-03-13",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1,
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1,
+			"persist": true,
+			"invocation_logs": true
+		},
+		"traces": {
+			"enabled": false,
+			"persist": true,
+			"head_sampling_rate": 1
+		}
+	},
+	"ai": {
+		"binding": "AI"
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "REALTIME",
+				"class_name": "RealtimeDO"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["RealtimeDO"]
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "KV",
+			"id": "c4e14913be2b41628ef71ae12561f7e8"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "MEDIA_BUCKET",
+			"bucket_name": "relayapi-media"
+		}
+	],
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "11180e4939824902a75753084dc6a8e9"
+		}
+	],
+	"triggers": {
+		"crons": [
+			"*/1 * * * *",
+			"*/5 * * * *",
+			"*/30 * * * *",
+			"0 0 1 * *",
+			"0 9 * * *",
+			"0 9 * * 1"
+		]
+	},
+	"ratelimits": [
+		{
+			"name": "FREE_RATE_LIMITER",
+			"namespace_id": "1001",
+			"simple": {
+				"limit": 100,
+				"period": 60
+			}
+		},
+		{
+			"name": "PRO_RATE_LIMITER",
+			"namespace_id": "1002",
+			"simple": {
+				"limit": 1000,
+				"period": 60
+			}
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "PUBLISH_QUEUE",
+				"queue": "relayapi-publish"
+			},
+			{
+				"binding": "EMAIL_QUEUE",
+				"queue": "relayapi-email"
+			},
+			{
+				"binding": "REFRESH_QUEUE",
+				"queue": "relayapi-refresh"
+			},
+			{
+				"binding": "INBOX_QUEUE",
+				"queue": "relayapi-inbox"
+			},
+			{
+				"binding": "TOOLS_QUEUE",
+				"queue": "relayapi-tools"
+			},
+			{
+				"binding": "ADS_QUEUE",
+				"queue": "relayapi-ads"
+			},
+			{
+				"binding": "SYNC_QUEUE",
+				"queue": "relayapi-sync"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "relayapi-media-cleanup",
+				"max_batch_size": 10,
+				"max_retries": 3
+			},
+			{
+				"queue": "relayapi-publish",
+				"max_batch_size": 10,
+				"max_retries": 3
+			},
+			{
+				"queue": "relayapi-email",
+				"max_batch_size": 1,
+				"max_batch_timeout": 1,
+				"max_concurrency": 1,
+				"max_retries": 5,
+				"dead_letter_queue": "relayapi-email-dlq"
+			},
+			{
+				"queue": "relayapi-refresh",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 5
+			},
+			{
+				"queue": "relayapi-inbox",
+				"max_batch_size": 10,
+				"max_retries": 5,
+				"max_concurrency": 5
+			},
+			{
+				"queue": "relayapi-tools",
+				"max_batch_size": 5,
+				"max_retries": 3,
+				"max_concurrency": 3
+			},
+			{
+				"queue": "relayapi-ads",
+				"max_batch_size": 5,
+				"max_retries": 3,
+				"max_concurrency": 3
+			},
+			{
+				"queue": "relayapi-sync",
+				"max_batch_size": 5,
+				"max_retries": 3,
+				"max_concurrency": 5
+			}
+		]
+	}
+}

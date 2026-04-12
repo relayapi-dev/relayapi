@@ -1,0 +1,1 @@
+CREATE INDEX "inbox_msg_platform_message_id_idx" ON "inbox_messages" USING btree ("platform_message_id");

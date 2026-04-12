@@ -1,0 +1,21 @@
+---
+import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import { OnboardingForm } from "../../components/onboarding/onboarding-form";
+
+const u = Astro.locals.user;
+const user = u
+  ? {
+      id: u.id as string,
+      name: u.name as string,
+      email: u.email as string,
+      image: (u.image as string) || null,
+      role: (u.role as string) || null,
+    }
+  : null;
+
+// Middleware handles redirect if user already has active org
+---
+
+<DashboardLayout>
+  <OnboardingForm client:load userEmail={user?.email ?? ""} />
+</DashboardLayout>

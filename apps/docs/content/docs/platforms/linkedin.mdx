@@ -1,0 +1,692 @@
+---
+title: LinkedIn API
+description: Schedule and automate LinkedIn posts with RelayAPI — text, images, videos, document carousels, first comments, and company pages.
+icon: linkedin
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `linkedin` |
+| Auth method | OAuth 2.0 |
+| Character limit | 3,000 |
+| Images per post | 20 |
+| Videos per post | 1 |
+| Documents per post | 1 (PDF, PPT, PPTX, DOC, DOCX) |
+| Image formats | JPEG, PNG, GIF |
+| Image max size | 8 MB |
+| Video formats | MP4, MOV, AVI |
+| Video max size | 5 GB |
+| Video max duration | 10 min (personal), 30 min (company page) |
+| Post types | Text, Image, Multi-image, Video, Document/Carousel |
+| Scheduling | Yes |
+| Analytics | Yes (impressions, reach, likes, comments, shares, clicks, views) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+LinkedIn actively **suppresses posts with external links** — expect a 40-50% reach drop. Always put links in a `first_comment` instead of the main content. LinkedIn has very **strict duplicate detection** — even minor rephrasing may not be enough to avoid a 422 error. You cannot mix media types (images + videos, or images + documents) in the same post. GIFs are converted to video and count against the 1-video-per-post limit.
+</Callout>
+
+## Quick Start
+
+Post to LinkedIn:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const post = await client.posts.create({
+  content: 'I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...',
+  targets: ['linkedin'],
+  scheduled_at: 'now',
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+post = client.posts.create(
+    content='I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...',
+    targets=['linkedin'],
+    scheduled_at='now',
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code..."),
+    Targets:     relaygo.F([]string{"linkedin"}),
+    ScheduledAt: relaygo.F("now"),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...")
+    .addTarget("linkedin")
+    .scheduledAt("now")
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...",
+    "targets": ["linkedin"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text-Only Post
+
+Text posts have the highest organic reach on LinkedIn. First ~210 characters are visible before the "see more" fold, so front-load your hook.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...',
+  targets: ['linkedin'],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...',
+    targets=['linkedin'],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code..."),
+    Targets:     relaygo.F([]string{"linkedin"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...")
+    .addTarget("linkedin")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...",
+    "targets": ["linkedin"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Single Image Post
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Our new office setup!',
+  targets: ['linkedin'],
+  media: [
+    { url: 'https://cdn.example.com/office.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Our new office setup!',
+    targets=['linkedin'],
+    media=[
+        {'url': 'https://cdn.example.com/office.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Our new office setup!"),
+    Targets:     relaygo.F([]string{"linkedin"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/office.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Our new office setup!")
+    .addTarget("linkedin")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/office.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Our new office setup!",
+    "targets": ["linkedin"],
+    "media": [
+      {"url": "https://cdn.example.com/office.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Multi-Image Post (Up to 20)
+
+LinkedIn supports up to 20 images per post. Cannot include videos or documents alongside images.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Highlights from our team retreat!',
+  targets: ['linkedin'],
+  media: [
+    { url: 'https://cdn.example.com/photo1.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo2.jpg', type: 'image' },
+    { url: 'https://cdn.example.com/photo3.jpg', type: 'image' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Highlights from our team retreat!',
+    targets=['linkedin'],
+    media=[
+        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
+        {'url': 'https://cdn.example.com/photo3.jpg', 'type': 'image'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Highlights from our team retreat!"),
+    Targets: relaygo.F([]string{"linkedin"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/photo1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/photo3.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Highlights from our team retreat!")
+    .addTarget("linkedin")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo1.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo2.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo3.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Highlights from our team retreat!",
+    "targets": ["linkedin"],
+    "media": [
+      {"url": "https://cdn.example.com/photo1.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo2.jpg", "type": "image"},
+      {"url": "https://cdn.example.com/photo3.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video Post
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Watch our latest product demo',
+  targets: ['linkedin'],
+  media: [
+    { url: 'https://cdn.example.com/demo.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Watch our latest product demo',
+    targets=['linkedin'],
+    media=[
+        {'url': 'https://cdn.example.com/demo.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Watch our latest product demo"),
+    Targets: relaygo.F([]string{"linkedin"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/demo.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Watch our latest product demo")
+    .addTarget("linkedin")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/demo.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Watch our latest product demo",
+    "targets": ["linkedin"],
+    "media": [
+      {"url": "https://cdn.example.com/demo.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Document/Carousel Post (PDF)
+
+LinkedIn uniquely supports document uploads that display as swipeable carousels. Upload a PDF, PPT, PPTX, DOC, or DOCX file. Max 100 MB, up to 300 pages.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Download our 2024 Industry Report',
+  targets: ['linkedin'],
+  media: [
+    { url: 'https://cdn.example.com/report.pdf', type: 'document' },
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    linkedin: {
+      document_title: '2024 Industry Report',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Download our 2024 Industry Report',
+    targets=['linkedin'],
+    media=[
+        {'url': 'https://cdn.example.com/report.pdf', 'type': 'document'},
+    ],
+    scheduled_at='now',
+    target_options={
+        'linkedin': {
+            'document_title': '2024 Industry Report',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Download our 2024 Industry Report"),
+    Targets: relaygo.F([]string{"linkedin"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/report.pdf"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeDocument)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "linkedin": map[string]interface{}{
+            "document_title": "2024 Industry Report",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Download our 2024 Industry Report")
+    .addTarget("linkedin")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/report.pdf")
+        .type(PostCreateParams.Media.Type.DOCUMENT)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("linkedin", JsonValue.from(Map.of(
+            "document_title", "2024 Industry Report"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Download our 2024 Industry Report",
+    "targets": ["linkedin"],
+    "media": [
+      {"url": "https://cdn.example.com/report.pdf", "type": "document"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "linkedin": {
+        "document_title": "2024 Industry Report"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Document carousels are one of the highest-engagement post formats on LinkedIn. Each page of the PDF becomes a swipeable slide.
+</Callout>
+
+### Post with First Comment (Put Links Here!)
+
+LinkedIn actively suppresses posts containing external URLs — expect a 40-50% reach drop. Put links in the first comment instead.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'We just published our guide to API design patterns.\n\nLink in the first comment.',
+  targets: ['linkedin'],
+  scheduled_at: 'now',
+  target_options: {
+    linkedin: {
+      first_comment: 'Read the full guide here: https://example.com/api-guide',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='We just published our guide to API design patterns.\n\nLink in the first comment.',
+    targets=['linkedin'],
+    scheduled_at='now',
+    target_options={
+        'linkedin': {
+            'first_comment': 'Read the full guide here: https://example.com/api-guide',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("We just published our guide to API design patterns.\n\nLink in the first comment."),
+    Targets:     relaygo.F([]string{"linkedin"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "linkedin": map[string]interface{}{
+            "first_comment": "Read the full guide here: https://example.com/api-guide",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("We just published our guide to API design patterns.\n\nLink in the first comment.")
+    .addTarget("linkedin")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("linkedin", JsonValue.from(Map.of(
+            "first_comment", "Read the full guide here: https://example.com/api-guide"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "We just published our guide to API design patterns.\n\nLink in the first comment.",
+    "targets": ["linkedin"],
+    "scheduled_at": "now",
+    "target_options": {
+      "linkedin": {
+        "first_comment": "Read the full guide here: https://example.com/api-guide"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="warn">
+Putting links in the main `content` field causes a significant reach penalty on LinkedIn. Always use `first_comment` for external URLs.
+</Callout>
+
+### Company Page Post
+
+Post to a company page instead of a personal profile by targeting the company account.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Update from our organization!',
+  targets: ['acc_linkedin_company'],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Update from our organization!',
+    targets=['acc_linkedin_company'],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Update from our organization!"),
+    Targets:     relaygo.F([]string{"acc_linkedin_company"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Update from our organization!")
+    .addTarget("acc_linkedin_company")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Update from our organization!",
+    "targets": ["acc_linkedin_company"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 20 |
+| Formats | JPEG, PNG, GIF |
+| Max file size | 8 MB per image |
+| Recommended | 1200 x 627 px (1.91:1) |
+| Min dimensions | 552 x 276 px |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 |
+| Formats | MP4, MOV, AVI |
+| Max file size | 5 GB |
+| Max duration | 10 min (personal profile), 30 min (company page) |
+| Recommended | 1920 x 1080, H.264, AAC 192kbps, 30fps |
+
+### Documents
+
+| Property | Requirement |
+|----------|-------------|
+| Max per post | 1 |
+| Formats | PDF, PPT, PPTX, DOC, DOCX |
+| Max file size | 100 MB |
+| Max pages | 300 |
+
+## `target_options` Fields
+
+All fields go inside `target_options.linkedin` on your post request.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | string | Override content for LinkedIn specifically |
+| `media` | object[] | Override media for LinkedIn specifically |
+| `first_comment` | string | Auto-posted first comment. Put links here to avoid reach suppression. |
+| `document_title` | string | Title displayed on PDF/document carousel posts |
+| `disable_link_preview` | boolean | Suppress URL preview card in the post (default: false) |
+| `organization_urn` | string | Target a specific company page: `urn:li:organization:123456` |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Content is a duplicate (422) | Identical or very similar content posted recently | Modify text meaningfully. LinkedIn's duplicate detection is very strict. |
+| Preflight checks failed | Rate limiting or validation issue | Space posts further apart. |
+| Publishing failed max retries | All retry attempts failed | Temporary issue — retry manually after a few minutes. |
+| Token expired | OAuth token expired | Reconnect the account via the dashboard or Connect API. |
+| Cannot mix media types | Images + videos or images + documents in same post | Use only one media type per post. GIFs count as video. |
+
+## Known Quirks
+
+- **Link suppression** — posts with external URLs get 40-50% less reach. Always put links in `first_comment`.
+- **Very strict duplicate detection** — even minor rephrasing may not bypass the 422 duplicate error.
+- **Cannot mix media types** — images + videos or images + documents in the same post will fail.
+- **GIFs are converted to video** and count against the 1-video-per-post limit.
+- **First ~210 characters visible** before the "see more" fold. Front-load your hook.
+- **Company pages get 30-minute video limit**, personal profiles get 10 minutes.
+- **Document carousels** are the highest-engagement format but require a PDF, PPT, or DOC file.

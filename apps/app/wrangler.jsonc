@@ -1,0 +1,53 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "relayapi-app",
+	"compatibility_date": "2026-03-13",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1,
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1,
+			"persist": true,
+			"invocation_logs": true
+		},
+		"traces": {
+			"enabled": false,
+			"persist": true,
+			"head_sampling_rate": 1
+		}
+	},
+	"kv_namespaces": [
+		{
+			"binding": "KV",
+			"id": "c4e14913be2b41628ef71ae12561f7e8"
+		}
+	],
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "11180e4939824902a75753084dc6a8e9"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "AVATARS_BUCKET",
+			"bucket_name": "relayapi-avatars"
+		},
+		{
+			"binding": "PUBLIC_ASSETS",
+			"bucket_name": "relayapi-public-assets"
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "EMAIL_QUEUE",
+				"queue": "relayapi-email"
+			}
+		]
+	}
+}

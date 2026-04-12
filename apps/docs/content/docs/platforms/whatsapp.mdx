@@ -1,0 +1,778 @@
+---
+title: WhatsApp API
+description: Send WhatsApp messages with RelayAPI — text messages, images, videos, documents, templates, and link previews via the WhatsApp Business Cloud API.
+icon: whatsapp
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `whatsapp` |
+| Auth method | WhatsApp Business Cloud API Token |
+| Text limit | 4,096 characters |
+| Caption limit | 1,024 characters (media captions) |
+| Media per message | 1 |
+| Image formats | JPEG, PNG |
+| Image max size | 5 MB |
+| Video formats | MP4, 3GPP |
+| Video max size | 16 MB |
+| Message types | Text, Image, Video, Document, Audio, Template |
+| Scheduling | Yes |
+| Analytics | No (use WhatsApp Business Manager) |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+WhatsApp requires a **WhatsApp Business Account** with access to the **Cloud API** (via Meta for Developers). Messages outside the **24-hour conversation window** require pre-approved **message templates**. Every message requires a **recipient phone number** in E.164 format (without the `+` prefix). Only **1 media item per message** is supported. Media captions are limited to **1,024 characters**.
+</Callout>
+
+## Quick Start
+
+Send a text message via WhatsApp:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['whatsapp'],
+  scheduled_at: 'now',
+  target_options: {
+    whatsapp: {
+      to: '14155238886'
+    }
+  }
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['whatsapp'],
+    scheduled_at='now',
+    target_options={
+        'whatsapp': {
+            'to': '14155238886'
+        }
+    }
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"whatsapp"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "whatsapp": map[string]interface{}{
+            "to": "14155238886",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("whatsapp")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("whatsapp", JsonValue.from(Map.of(
+            "to", "14155238886"
+        )))
+        .build())
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["whatsapp"],
+    "scheduled_at": "now",
+    "target_options": {
+      "whatsapp": {
+        "to": "14155238886"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text Message
+
+Plain text message up to 4,096 characters.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['whatsapp'],
+  scheduled_at: 'now',
+  target_options: {
+    whatsapp: {
+      to: '14155238886'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['whatsapp'],
+    scheduled_at='now',
+    target_options={
+        'whatsapp': {
+            'to': '14155238886'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"whatsapp"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "whatsapp": map[string]interface{}{
+            "to": "14155238886",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("whatsapp")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("whatsapp", JsonValue.from(Map.of(
+            "to", "14155238886"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["whatsapp"],
+    "scheduled_at": "now",
+    "target_options": {
+      "whatsapp": {
+        "to": "14155238886"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Text with Link Preview
+
+Enable URL previews in text messages.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out our new feature: https://example.com/launch',
+  targets: ['whatsapp'],
+  scheduled_at: 'now',
+  target_options: {
+    whatsapp: {
+      to: '14155238886',
+      preview_url: true
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out our new feature: https://example.com/launch',
+    targets=['whatsapp'],
+    scheduled_at='now',
+    target_options={
+        'whatsapp': {
+            'to': '14155238886',
+            'preview_url': True
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Check out our new feature: https://example.com/launch"),
+    Targets:     relaygo.F([]string{"whatsapp"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "whatsapp": map[string]interface{}{
+            "to":          "14155238886",
+            "preview_url": true,
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out our new feature: https://example.com/launch")
+    .addTarget("whatsapp")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("whatsapp", JsonValue.from(Map.of(
+            "to", "14155238886",
+            "preview_url", true
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out our new feature: https://example.com/launch",
+    "targets": ["whatsapp"],
+    "scheduled_at": "now",
+    "target_options": {
+      "whatsapp": {
+        "to": "14155238886",
+        "preview_url": true
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Image Message
+
+Send a single image with an optional caption (max 1,024 chars).
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out this photo!',
+  targets: ['whatsapp'],
+  media: [
+    { url: 'https://cdn.example.com/photo.jpg', type: 'image' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    whatsapp: {
+      to: '14155238886'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out this photo!',
+    targets=['whatsapp'],
+    media=[
+        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'whatsapp': {
+            'to': '14155238886'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Check out this photo!"),
+    Targets:     relaygo.F([]string{"whatsapp"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/photo.jpg"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "whatsapp": map[string]interface{}{
+            "to": "14155238886",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out this photo!")
+    .addTarget("whatsapp")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/photo.jpg")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("whatsapp", JsonValue.from(Map.of(
+            "to", "14155238886"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out this photo!",
+    "targets": ["whatsapp"],
+    "media": [
+      {"url": "https://cdn.example.com/photo.jpg", "type": "image"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "whatsapp": {
+        "to": "14155238886"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video Message
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Watch our latest update!',
+  targets: ['whatsapp'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    whatsapp: {
+      to: '14155238886'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Watch our latest update!',
+    targets=['whatsapp'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'whatsapp': {
+            'to': '14155238886'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Watch our latest update!"),
+    Targets:     relaygo.F([]string{"whatsapp"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/video.mp4"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "whatsapp": map[string]interface{}{
+            "to": "14155238886",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Watch our latest update!")
+    .addTarget("whatsapp")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("whatsapp", JsonValue.from(Map.of(
+            "to", "14155238886"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Watch our latest update!",
+    "targets": ["whatsapp"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "whatsapp": {
+        "to": "14155238886"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Document Message
+
+Send a file as a document attachment.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Here is your invoice.',
+  targets: ['whatsapp'],
+  media: [
+    { url: 'https://cdn.example.com/invoice.pdf', type: 'document' }
+  ],
+  scheduled_at: 'now',
+  target_options: {
+    whatsapp: {
+      to: '14155238886'
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Here is your invoice.',
+    targets=['whatsapp'],
+    media=[
+        {'url': 'https://cdn.example.com/invoice.pdf', 'type': 'document'}
+    ],
+    scheduled_at='now',
+    target_options={
+        'whatsapp': {
+            'to': '14155238886'
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Here is your invoice."),
+    Targets:     relaygo.F([]string{"whatsapp"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F("https://cdn.example.com/invoice.pdf"),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeDocument),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "whatsapp": map[string]interface{}{
+            "to": "14155238886",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Here is your invoice.")
+    .addTarget("whatsapp")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/invoice.pdf")
+        .type(PostCreateParams.Media.Type.DOCUMENT)
+        .build())
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("whatsapp", JsonValue.from(Map.of(
+            "to", "14155238886"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Here is your invoice.",
+    "targets": ["whatsapp"],
+    "media": [
+      {"url": "https://cdn.example.com/invoice.pdf", "type": "document"}
+    ],
+    "scheduled_at": "now",
+    "target_options": {
+      "whatsapp": {
+        "to": "14155238886"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Template Message
+
+Use pre-approved message templates for outbound messages outside the 24-hour window.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  targets: ['whatsapp'],
+  scheduled_at: 'now',
+  target_options: {
+    whatsapp: {
+      to: '14155238886',
+      template_name: 'order_confirmation',
+      template_language: 'en_US',
+      template_components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: 'John' },
+            { type: 'text', text: '#12345' }
+          ]
+        }
+      ]
+    }
+  }
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    targets=['whatsapp'],
+    scheduled_at='now',
+    target_options={
+        'whatsapp': {
+            'to': '14155238886',
+            'template_name': 'order_confirmation',
+            'template_language': 'en_US',
+            'template_components': [
+                {
+                    'type': 'body',
+                    'parameters': [
+                        {'type': 'text', 'text': 'John'},
+                        {'type': 'text', 'text': '#12345'}
+                    ]
+                }
+            ]
+        }
+    }
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Targets:     relaygo.F([]string{"whatsapp"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "whatsapp": map[string]interface{}{
+            "to":                "14155238886",
+            "template_name":     "order_confirmation",
+            "template_language": "en_US",
+            "template_components": []map[string]interface{}{
+                {
+                    "type": "body",
+                    "parameters": []map[string]interface{}{
+                        {"type": "text", "text": "John"},
+                        {"type": "text", "text": "#12345"},
+                    },
+                },
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .addTarget("whatsapp")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("whatsapp", JsonValue.from(Map.of(
+            "to", "14155238886",
+            "template_name", "order_confirmation",
+            "template_language", "en_US",
+            "template_components", List.of(Map.of(
+                "type", "body",
+                "parameters", List.of(
+                    Map.of("type", "text", "text", "John"),
+                    Map.of("type", "text", "text", "#12345")
+                )
+            ))
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targets": ["whatsapp"],
+    "scheduled_at": "now",
+    "target_options": {
+      "whatsapp": {
+        "to": "14155238886",
+        "template_name": "order_confirmation",
+        "template_language": "en_US",
+        "template_components": [
+          {
+            "type": "body",
+            "parameters": [
+              {"type": "text", "text": "John"},
+              {"type": "text", "text": "#12345"}
+            ]
+          }
+        ]
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+Templates must be pre-approved in the WhatsApp Business Manager before use. Template messages bypass the 24-hour conversation window restriction.
+</Callout>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per message | 1 |
+| Formats | JPEG, PNG |
+| Max file size | 5 MB |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per message | 1 |
+| Formats | MP4, 3GPP |
+| Max file size | 16 MB |
+
+### Documents
+
+| Property | Requirement |
+|----------|-------------|
+| Max per message | 1 |
+| Formats | PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, and more |
+| Max file size | 100 MB |
+
+## `target_options` Fields
+
+All fields go inside `target_options.whatsapp` on your post request.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `content` | string | — | Override message content for WhatsApp specifically |
+| `media` | object[] | — | Override media for WhatsApp specifically |
+| `to` | string | — | **Required.** Recipient phone number in E.164 format without `+` (e.g., `"14155238886"`) |
+| `preview_url` | boolean | `false` | Enable link preview in text messages |
+| `template_name` | string | — | Pre-approved template name for outbound messages |
+| `template_language` | string | `"en_US"` | Template language code |
+| `template_components` | object[] | — | Template parameter components |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Missing recipient | No `to` phone number provided | Add `to` in `target_options.whatsapp` with E.164 format (without `+`). |
+| Content too long | Text exceeds 4,096 characters | Shorten the content. |
+| Empty content | No content or media provided | Add text content or at least one media item. |
+| Template not found | Template name not approved or misspelled | Verify the template exists and is approved in WhatsApp Business Manager. |
+| Outside conversation window | Sending non-template message outside 24h window | Use a template message instead. |
+
+## Known Quirks
+
+- **24-hour conversation window** — you can only send free-form messages within 24 hours of the user's last message. Outside this window, use templates.
+- **1 media item per message** — no multi-image or gallery support.
+- **Audio messages have no caption** — captions are only supported on image, video, and document messages.
+- **Media captions limited to 1,024 characters** — shorter than the 4,096-character text limit.
+- **Phone numbers use E.164 format without the `+`** — e.g., `14155238886` not `+14155238886`.
+- **Template messages require pre-approval** — submit templates in the WhatsApp Business Manager.
+- **Media must be publicly accessible via HTTPS** — private URLs will fail.

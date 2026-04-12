@@ -1,0 +1,16 @@
+{
+	"label": "Post Recycled",
+	"description": "Triggers when a post is automatically recycled (evergreen content republished).",
+	"type": "instant",
+	"webhook": "relay-webhook",
+	"parameters": [
+		{
+			"name": "events",
+			"type": "hidden",
+			"default": ["post.recycled"]
+		}
+	],
+	"response": {
+		"output": "{{body}}"
+	}
+}

@@ -1,0 +1,133 @@
+---
+title: Platforms Overview
+description: Supported social media platforms and their capabilities.
+icon: Globe
+---
+
+## Supported Platforms
+
+RelayAPI supports posting to 17 social media platforms through a single unified API. Each platform has specific features, limitations, and content requirements.
+
+## Platform Comparison
+
+| Platform | Text | Images | Video | Stories | Reels | Scheduling |
+|----------|------|--------|-------|---------|-------|------------|
+| [Twitter/X](/platforms/twitter) | ✅ | ✅ | ✅ | — | — | ✅ |
+| [Instagram](/platforms/instagram) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| [Facebook](/platforms/facebook) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| [LinkedIn](/platforms/linkedin) | ✅ | ✅ | ✅ | — | — | ✅ |
+| [TikTok](/platforms/tiktok) | ✅ | — | ✅ | — | — | ✅ |
+| [YouTube](/platforms/youtube) | ✅ | — | ✅ | ✅ | ✅ | ✅ |
+| [Pinterest](/platforms/pinterest) | ✅ | ✅ | ✅ | — | — | ✅ |
+| [Reddit](/platforms/reddit) | ✅ | ✅ | ✅ | — | — | ✅ |
+| [Bluesky](/platforms/bluesky) | ✅ | ✅ | — | — | — | ✅ |
+| [Threads](/platforms/threads) | ✅ | ✅ | ✅ | — | — | ✅ |
+| [Telegram](/platforms/telegram) | ✅ | ✅ | ✅ | — | — | ✅ |
+| [Snapchat](/platforms/snapchat) | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| [Discord](/platforms/discord) | ✅ | ✅ | ✅ | — | — | ✅ |
+| [Mastodon](/platforms/mastodon) | ✅ | ✅ | ✅ | — | — | ✅ |
+| [WhatsApp](/platforms/whatsapp) | ✅ | ✅ | ✅ | — | — | ✅ |
+| [Google Business](/platforms/googlebusiness) | ✅ | ✅ | — | — | — | ✅ |
+| [SMS](/platforms/sms) | ✅ | ✅ | ✅ | — | — | ✅ |
+
+## Getting Started
+
+1. Connect your social accounts via the [dashboard](https://relayapi.dev) or [API](/api-reference/accounts/connect-account)
+2. Create a post with target account IDs
+3. RelayAPI handles platform-specific formatting automatically
+
+## Platform Overrides
+
+Use `target_options` to customize content per platform:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out our new feature!',
+  targets: ['acc_twitter_123', 'acc_linkedin_456'],
+  scheduled_at: 'now',
+  target_options: {
+    twitter: {
+      content: 'Check out our new feature! 🚀 #tech',
+    },
+    linkedin: {
+      content: "Excited to announce our latest feature. Here's what it means for the industry...",
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out our new feature!',
+    targets=['acc_twitter_123', 'acc_linkedin_456'],
+    scheduled_at='now',
+    target_options={
+        'twitter': {
+            'content': 'Check out our new feature! 🚀 #tech',
+        },
+        'linkedin': {
+            'content': "Excited to announce our latest feature. Here's what it means for the industry...",
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Check out our new feature!"),
+    Targets:     relaygo.F([]string{"acc_twitter_123", "acc_linkedin_456"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "twitter": map[string]interface{}{
+            "content": "Check out our new feature! 🚀 #tech",
+        },
+        "linkedin": map[string]interface{}{
+            "content": "Excited to announce our latest feature. Here's what it means for the industry...",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out our new feature!")
+    .addTarget("acc_twitter_123")
+    .addTarget("acc_linkedin_456")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("twitter", JsonValue.from(Map.of(
+            "content", "Check out our new feature! 🚀 #tech"
+        )))
+        .putAdditionalProperty("linkedin", JsonValue.from(Map.of(
+            "content", "Excited to announce our latest feature. Here's what it means for the industry..."
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out our new feature!",
+    "targets": ["acc_twitter_123", "acc_linkedin_456"],
+    "scheduled_at": "now",
+    "target_options": {
+      "twitter": {
+        "content": "Check out our new feature! 🚀 #tech"
+      },
+      "linkedin": {
+        "content": "Excited to announce our latest feature. Here'\''s what it means for the industry..."
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>

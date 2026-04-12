@@ -1,0 +1,15 @@
+---
+import Layout from "../layouts/Layout.astro";
+import SEO from "../components/SEO.astro";
+import { PrivacyPage } from "../components/pages/privacy-page";
+---
+
+<Layout>
+  <SEO
+    slot="head"
+    title="Privacy Policy"
+    description="Learn how RelayAPI collects, uses, and protects your personal information."
+    keywords={["privacy policy", "data protection", "relayapi privacy"]}
+  />
+  <PrivacyPage client:load />
+</Layout>

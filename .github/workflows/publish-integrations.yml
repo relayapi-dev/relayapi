@@ -1,0 +1,70 @@
+# Publish OpenClaw skill to ClawHub when integrations change.
+# The Claude Code plugin is Git-based — users get updates automatically
+# when they run `/plugin marketplace update`.
+
+name: Publish Integrations
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/integrations/**"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: false
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: "Dry run (no actual publish)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  publish-openclaw:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install ClawHub CLI
+        run: npm install -g clawhub
+
+      - name: Authenticate with ClawHub
+        run: clawhub login --token "${{ secrets.CLAWHUB_TOKEN }}"
+
+      - name: Publish OpenClaw skill
+        working-directory: packages/integrations/openclaw
+        run: |
+          BUMP="${{ inputs.bump || 'patch' }}"
+          DRY_RUN="${{ inputs.dry_run || 'false' }}"
+
+          ARGS="--bump $BUMP --tags latest --no-input --all"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          clawhub sync $ARGS
+        env:
+          CLAWHUB_DISABLE_TELEMETRY: "1"
+
+  validate-claude-plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Validate plugin structure
+        run: claude plugin validate ./packages/integrations/claude-plugin

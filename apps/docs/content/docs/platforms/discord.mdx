@@ -1,0 +1,678 @@
+---
+title: Discord API
+description: Schedule and automate Discord messages with RelayAPI — text messages, image embeds, video links, custom usernames, avatars, and rich embeds via webhooks.
+icon: discord
+---
+
+## Quick Reference
+
+| Property | Value |
+|----------|-------|
+| Platform key | `discord` |
+| Auth method | Webhook URL |
+| Text limit | 2,000 characters |
+| Images per message | 10 (as embeds) |
+| Videos per message | Appended as links (auto-embedded by Discord) |
+| Image formats | JPEG, PNG, GIF, WebP |
+| Image max size | 25 MB |
+| Video max size | 25 MB |
+| Message types | Text, Image Embeds, Video Links, Rich Embeds |
+| Scheduling | Yes |
+| Analytics | No |
+
+<Callout type="info">
+**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+</Callout>
+
+## Before You Start
+
+<Callout type="warn">
+Discord integration uses **webhook URLs** — no OAuth needed. The webhook URL itself contains the authentication token. Create a webhook in your Discord server's channel settings (Edit Channel > Integrations > Webhooks). Images are sent as **embeds** (up to 10 per message). Videos are appended to the message content as URLs and **auto-embedded by Discord**. You can customize the **username** and **avatar** per message.
+</Callout>
+
+## Quick Start
+
+Send a message to a Discord channel:
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['discord'],
+  scheduled_at: 'now',
+});
+
+console.log(post.id); // post_abc123
+```
+</Tab>
+<Tab value="Python">
+```python
+from relay import Relay
+
+client = Relay()
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['discord'],
+    scheduled_at='now',
+)
+
+print(post.id)  # post_abc123
+```
+</Tab>
+<Tab value="Go">
+```go
+client := relaygo.NewClient()
+
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"discord"}),
+    ScheduledAt: relaygo.F("now"),
+})
+
+fmt.Println(post.ID) // post_abc123
+```
+</Tab>
+<Tab value="Java">
+```java
+RelayClient client = RelayOkHttpClient.fromEnv();
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("discord")
+    .scheduledAt("now")
+    .build());
+
+System.out.println(post.id()); // post_abc123
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["discord"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+## Content Types
+
+### Text Message
+
+Plain text message up to 2,000 characters.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Hello from RelayAPI!',
+  targets: ['discord'],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Hello from RelayAPI!',
+    targets=['discord'],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from RelayAPI!"),
+    Targets:     relaygo.F([]string{"discord"}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from RelayAPI!")
+    .addTarget("discord")
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Hello from RelayAPI!",
+    "targets": ["discord"],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Message with Custom Username and Avatar
+
+Override the webhook's default name and avatar for a specific message.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Server maintenance starting in 30 minutes.',
+  targets: ['discord'],
+  scheduled_at: 'now',
+  target_options: {
+    discord: {
+      username: 'Maintenance Bot',
+      avatar_url: 'https://cdn.example.com/bot-avatar.png',
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Server maintenance starting in 30 minutes.',
+    targets=['discord'],
+    scheduled_at='now',
+    target_options={
+        'discord': {
+            'username': 'Maintenance Bot',
+            'avatar_url': 'https://cdn.example.com/bot-avatar.png',
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Server maintenance starting in 30 minutes."),
+    Targets:     relaygo.F([]string{"discord"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "discord": map[string]interface{}{
+            "username":   "Maintenance Bot",
+            "avatar_url": "https://cdn.example.com/bot-avatar.png",
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Server maintenance starting in 30 minutes.")
+    .addTarget("discord")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("discord", JsonValue.from(Map.of(
+            "username", "Maintenance Bot",
+            "avatar_url", "https://cdn.example.com/bot-avatar.png"
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Server maintenance starting in 30 minutes.",
+    "targets": ["discord"],
+    "scheduled_at": "now",
+    "target_options": {
+      "discord": {
+        "username": "Maintenance Bot",
+        "avatar_url": "https://cdn.example.com/bot-avatar.png"
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Image Message
+
+Images are sent as embeds. Up to 10 images per message.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Check out these screenshots!',
+  targets: ['discord'],
+  media: [
+    { url: 'https://cdn.example.com/screenshot1.png', type: 'image' },
+    { url: 'https://cdn.example.com/screenshot2.png', type: 'image' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Check out these screenshots!',
+    targets=['discord'],
+    media=[
+        {'url': 'https://cdn.example.com/screenshot1.png', 'type': 'image'},
+        {'url': 'https://cdn.example.com/screenshot2.png', 'type': 'image'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Check out these screenshots!"),
+    Targets: relaygo.F([]string{"discord"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/screenshot1.png"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+        {URL: relaygo.F("https://cdn.example.com/screenshot2.png"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out these screenshots!")
+    .addTarget("discord")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/screenshot1.png")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/screenshot2.png")
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Check out these screenshots!",
+    "targets": ["discord"],
+    "media": [
+      {"url": "https://cdn.example.com/screenshot1.png", "type": "image"},
+      {"url": "https://cdn.example.com/screenshot2.png", "type": "image"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Video Message
+
+Videos are appended as URLs in the message content. Discord auto-embeds supported video links.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: 'Watch our latest update!',
+  targets: ['discord'],
+  media: [
+    { url: 'https://cdn.example.com/video.mp4', type: 'video' },
+  ],
+  scheduled_at: 'now',
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='Watch our latest update!',
+    targets=['discord'],
+    media=[
+        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
+    ],
+    scheduled_at='now',
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Watch our latest update!"),
+    Targets: relaygo.F([]string{"discord"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{
+        {URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Watch our latest update!")
+    .addTarget("discord")
+    .addMedia(PostCreateParams.Media.builder()
+        .url("https://cdn.example.com/video.mp4")
+        .type(PostCreateParams.Media.Type.VIDEO)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Watch our latest update!",
+    "targets": ["discord"],
+    "media": [
+      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
+    ],
+    "scheduled_at": "now"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Rich Embeds
+
+Send structured rich embeds with titles, descriptions, colors, images, and more.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  targets: ['discord'],
+  scheduled_at: 'now',
+  target_options: {
+    discord: {
+      embeds: [
+        {
+          title: 'New Release: v2.0',
+          description: 'We just shipped a major update with new features!',
+          url: 'https://example.com/changelog',
+          color: 5814783,
+          image: { url: 'https://cdn.example.com/banner.png' },
+          footer: { text: 'RelayAPI' },
+          timestamp: '2026-04-01T12:00:00Z',
+        },
+      ],
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    targets=['discord'],
+    scheduled_at='now',
+    target_options={
+        'discord': {
+            'embeds': [
+                {
+                    'title': 'New Release: v2.0',
+                    'description': 'We just shipped a major update with new features!',
+                    'url': 'https://example.com/changelog',
+                    'color': 5814783,
+                    'image': {'url': 'https://cdn.example.com/banner.png'},
+                    'footer': {'text': 'RelayAPI'},
+                    'timestamp': '2026-04-01T12:00:00Z',
+                },
+            ],
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Targets:     relaygo.F([]string{"discord"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "discord": map[string]interface{}{
+            "embeds": []map[string]interface{}{
+                {
+                    "title":       "New Release: v2.0",
+                    "description": "We just shipped a major update with new features!",
+                    "url":         "https://example.com/changelog",
+                    "color":       5814783,
+                    "image":       map[string]interface{}{"url": "https://cdn.example.com/banner.png"},
+                    "footer":      map[string]interface{}{"text": "RelayAPI"},
+                    "timestamp":   "2026-04-01T12:00:00Z",
+                },
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .addTarget("discord")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("discord", JsonValue.from(Map.of(
+            "embeds", List.of(Map.of(
+                "title", "New Release: v2.0",
+                "description", "We just shipped a major update with new features!",
+                "url", "https://example.com/changelog",
+                "color", 5814783,
+                "image", Map.of("url", "https://cdn.example.com/banner.png"),
+                "footer", Map.of("text", "RelayAPI"),
+                "timestamp", "2026-04-01T12:00:00Z"
+            ))
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targets": ["discord"],
+    "scheduled_at": "now",
+    "target_options": {
+      "discord": {
+        "embeds": [
+          {
+            "title": "New Release: v2.0",
+            "description": "We just shipped a major update with new features!",
+            "url": "https://example.com/changelog",
+            "color": 5814783,
+            "image": {"url": "https://cdn.example.com/banner.png"},
+            "footer": {"text": "RelayAPI"},
+            "timestamp": "2026-04-01T12:00:00Z"
+          }
+        ]
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+### Text with Rich Embeds
+
+Combine regular text content with rich embeds.
+
+<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+const post = await client.posts.create({
+  content: '📢 Announcement',
+  targets: ['discord'],
+  scheduled_at: 'now',
+  target_options: {
+    discord: {
+      embeds: [
+        {
+          title: 'Scheduled Maintenance',
+          description: 'We will be performing maintenance on April 5th from 2-4 AM UTC.',
+          color: 16776960,
+        },
+      ],
+    },
+  },
+});
+```
+</Tab>
+<Tab value="Python">
+```python
+post = client.posts.create(
+    content='📢 Announcement',
+    targets=['discord'],
+    scheduled_at='now',
+    target_options={
+        'discord': {
+            'embeds': [
+                {
+                    'title': 'Scheduled Maintenance',
+                    'description': 'We will be performing maintenance on April 5th from 2-4 AM UTC.',
+                    'color': 16776960,
+                },
+            ],
+        },
+    },
+)
+```
+</Tab>
+<Tab value="Go">
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("📢 Announcement"),
+    Targets:     relaygo.F([]string{"discord"}),
+    ScheduledAt: relaygo.F("now"),
+    TargetOptions: relaygo.F(map[string]interface{}{
+        "discord": map[string]interface{}{
+            "embeds": []map[string]interface{}{
+                {
+                    "title":       "Scheduled Maintenance",
+                    "description": "We will be performing maintenance on April 5th from 2-4 AM UTC.",
+                    "color":       16776960,
+                },
+            },
+        },
+    }),
+})
+```
+</Tab>
+<Tab value="Java">
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("📢 Announcement")
+    .addTarget("discord")
+    .scheduledAt("now")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("discord", JsonValue.from(Map.of(
+            "embeds", List.of(Map.of(
+                "title", "Scheduled Maintenance",
+                "description", "We will be performing maintenance on April 5th from 2-4 AM UTC.",
+                "color", 16776960
+            ))
+        )))
+        .build())
+    .build());
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "📢 Announcement",
+    "targets": ["discord"],
+    "scheduled_at": "now",
+    "target_options": {
+      "discord": {
+        "embeds": [
+          {
+            "title": "Scheduled Maintenance",
+            "description": "We will be performing maintenance on April 5th from 2-4 AM UTC.",
+            "color": 16776960
+          }
+        ]
+      }
+    }
+  }'
+```
+</Tab>
+</Tabs>
+
+## Media Requirements
+
+### Images
+
+| Property | Requirement |
+|----------|-------------|
+| Max per message | 10 (as embeds) |
+| Formats | JPEG, PNG, GIF, WebP |
+| Max file size | 25 MB |
+
+### Videos
+
+| Property | Requirement |
+|----------|-------------|
+| Max per message | 1 (as URL in content) |
+| Formats | MP4, WebM, MOV |
+| Max file size | 25 MB |
+| Delivery | Appended to message content as URL |
+
+## `target_options` Fields
+
+All fields go inside `target_options.discord` on your post request.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `content` | string | — | Override message content for Discord specifically |
+| `media` | object[] | — | Override media for Discord specifically |
+| `username` | string | — | Override the webhook's display name for this message |
+| `avatar_url` | string | — | Override the webhook's avatar for this message |
+| `embeds` | object[] | — | Rich embed objects (up to 10). Fields: `title`, `description`, `url`, `color`, `image`, `thumbnail`, `footer`, `timestamp` |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Content too long | Text exceeds 2,000 characters | Shorten the content. Use `target_options.discord.content` for a shorter version. |
+| Invalid webhook URL | Webhook URL is malformed or deleted | Create a new webhook in the Discord channel settings (Edit Channel > Integrations > Webhooks). |
+| Empty message | No content or embeds provided | Add text content or at least one embed. |
+| Too many embeds | More than 10 embeds | Reduce to 10 or fewer embeds per message. |
+
+## Known Quirks
+
+- **No OAuth required** — Discord webhooks are self-authenticating via the URL. Keep webhook URLs secret.
+- **Custom username and avatar per message** — each message can have a different display name and avatar.
+- **Images are embeds** — images are sent as embed objects, not direct attachments.
+- **Videos are auto-embedded** — video URLs in message content are automatically embedded by Discord if the format is supported.
+- **Embed color is an integer** — use decimal color values (e.g., `5814783` for `#58B9FF`).
+- **No direct message URL** — webhook responses don't include a jump URL to the message.
+- **Rate limits** — Discord enforces rate limits on webhooks (30 messages per 60 seconds per channel).
+- **Markdown supported** — Discord messages support a subset of Markdown: `**bold**`, `*italic*`, `~~strikethrough~~`, `` `code` ``, `> quote`.

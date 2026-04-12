@@ -1,0 +1,119 @@
+---
+title: Auto-Post Rules (RSS)
+description: Automatically create posts from RSS and Atom feeds.
+icon: Rss
+---
+
+## Overview
+
+Auto-post rules let you connect an RSS or Atom feed URL to your social accounts. The system checks the feed at a configurable interval and automatically creates scheduled posts from new items.
+
+This is a **Pro** feature and requires workspace scoping when workspaces are enabled.
+
+## How It Works
+
+1. **Create a rule** with a feed URL, target accounts, and a polling interval
+2. **Activate the rule** — it starts in `paused` status by default
+3. Every polling cycle, the system fetches the feed, finds new items since the last check, and creates posts
+4. Posts are published immediately through the same pipeline as manually scheduled posts
+
+```bash
+# Create a rule
+curl -X POST https://api.relayapi.dev/v1/auto-post-rules \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Company Blog",
+    "feed_url": "https://blog.example.com/feed.xml",
+    "polling_interval_minutes": 60,
+    "content_template": "New post: {{title}}\n\n{{description}}",
+    "append_feed_url": true,
+    "account_ids": []
+  }'
+
+# Activate it
+curl -X POST https://api.relayapi.dev/v1/auto-post-rules/apr_abc123/activate \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+## Content Templates
+
+Use template variables to control what gets posted. If no template is provided, the post content defaults to the article title.
+
+| Variable | Description |
+|----------|-------------|
+| `{{title}}` | Article title from the feed |
+| `{{url}}` | Article URL |
+| `{{description}}` | Article description/summary (truncated to 500 chars) |
+| `{{published_date}}` | Publication date in ISO 8601 format |
+
+**Example template:**
+```
+{{title}}
+
+{{description}}
+```
+
+When `append_feed_url` is `true` (default), the article URL is automatically appended to the post if it's not already included in the template output.
+
+## Polling Intervals
+
+The `polling_interval_minutes` field controls how often the feed is checked. Valid range: 15 to 1440 minutes (24 hours).
+
+| Interval | Use Case |
+|----------|----------|
+| 15 min | Breaking news feeds |
+| 60 min | Blog feeds (default) |
+| 360 min | Low-frequency newsletters |
+| 1440 min | Daily digest feeds |
+
+The system checks for due rules every 5 minutes. A rule is "due" when `last_processed_at + polling_interval_minutes <= now`.
+
+## Deduplication
+
+Each rule tracks `last_processed_url` — the URL of the most recently processed feed item. On each cycle, the system processes all items newer than this URL (up to 5 per cycle). This prevents flooding on the first sync with a busy feed while ensuring no items are silently skipped between checks.
+
+## Error Handling
+
+If a feed check fails (network error, invalid XML, etc.), the rule's `consecutive_errors` counter increments. After **5 consecutive failures**, the rule's status automatically changes to `error` and an `auto_post.error` webhook event is fired.
+
+To recover, fix the underlying issue and call the activate endpoint again — this resets the error counter and reactivates the rule.
+
+## Test Feed
+
+Before creating a rule, you can test-parse any feed URL to verify it works:
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/auto-post-rules/test-feed \
+  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"feed_url": "https://blog.example.com/feed.xml"}'
+```
+
+This returns the 5 most recent items with their title, URL, description, publication date, and image URL.
+
+## Feed URL Requirements
+
+- Only `http://` and `https://` URLs are allowed
+- Private/local URLs (localhost, 10.x.x.x, 192.168.x.x, etc.) are rejected for security
+- The feed must be publicly accessible — no authentication is supported
+
+## Webhook Events
+
+| Event | Description |
+|-------|-------------|
+| `auto_post.created` | A post was created from a feed item. Payload includes `rule_id`, `post_id`, `feed_item_url`, `feed_item_title`. |
+| `auto_post.error` | A rule was auto-paused after 5 consecutive failures. Payload includes `rule_id` and `error`. |
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/v1/auto-post-rules` | List rules (filterable by status) |
+| `POST` | `/v1/auto-post-rules` | Create a rule |
+| `GET` | `/v1/auto-post-rules/:id` | Get rule details |
+| `PATCH` | `/v1/auto-post-rules/:id` | Update a rule |
+| `DELETE` | `/v1/auto-post-rules/:id` | Delete a rule |
+| `POST` | `/v1/auto-post-rules/:id/activate` | Set status to active |
+| `POST` | `/v1/auto-post-rules/:id/pause` | Set status to paused |
+| `POST` | `/v1/auto-post-rules/test-feed` | Test-parse a feed URL |
