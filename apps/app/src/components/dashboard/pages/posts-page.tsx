@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { Suspense, lazy, useState, useEffect, useMemo, useCallback } from "react";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import {
   Plus,
@@ -13,12 +13,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
-import { NewPostDialog } from "@/components/dashboard/new-post-dialog";
 import { FilterBar } from "@/components/dashboard/filter-bar";
 import { platformIcons } from "@/lib/platform-icons";
 import { platformColors, platformLabels } from "@/lib/platform-maps";
 import { useFilterQuery, useFilter } from "@/components/dashboard/filter-context";
-import { CalendarView } from "@/components/dashboard/calendar/calendar-view";
 import type { CalendarPeriod } from "@/components/dashboard/calendar/calendar-header";
 import { SentPostList } from "@/components/dashboard/pages/posts/sent-post-list";
 import { QueuePostList } from "@/components/dashboard/pages/posts/queue-post-list";
@@ -53,6 +51,26 @@ interface Post {
 }
 
 const topTabs = ["All", "Queue", "Drafts", "Published"] as const;
+
+const NewPostDialog = lazy(() =>
+  import("@/components/dashboard/new-post-dialog").then((module) => ({
+    default: module.NewPostDialog,
+  })),
+);
+
+const CalendarView = lazy(() =>
+  import("@/components/dashboard/calendar/calendar-view").then((module) => ({
+    default: module.CalendarView,
+  })),
+);
+
+function PostsSectionFallback() {
+  return (
+    <div className="flex items-center justify-center py-20">
+      <Loader2 className="size-5 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
 
 export interface PostsPageProps {
   initialAllData?: InitialPaginatedData<any>;
@@ -388,59 +406,63 @@ export function PostsPage({
           <Plus className="size-3.5" />
           {activeTab === "drafts" ? "New Draft" : "New Post"}
         </Button>
-        <NewPostDialog
-          open={newPostOpen}
-          onOpenChange={(open) => {
-            setNewPostOpen(open);
-            if (!open) {
-              setNewPostInitialDate(undefined);
-              setEditingPostId(null);
-              setEditPostData(null);
-            }
-          }}
-          initialDate={editingPostId ? undefined : newPostInitialDate}
-          initialPublishMode={editingPostId ? undefined : (activeTab === "drafts" ? "draft" : "now")}
-          editPostId={editingPostId}
-          editPostData={editPostData}
-          onCreated={(created) => {
-            if (!created) return;
-            const platforms = Object.values(created.targets || {}).map((t: any) => (t as any).platform).filter(Boolean);
-            const postData = {
-              id: created.id,
-              content: created.content || "",
-              platforms,
-              status: (created.status || "publishing") as Post["status"],
-              scheduled_at: (created.scheduled_at && created.scheduled_at !== "now" && created.scheduled_at !== "draft") ? created.scheduled_at : null,
-              published_at: created.published_at || null,
-              created_at: created.created_at || new Date().toISOString(),
-              targets: created.targets,
-              media: created.media || null,
-            };
+        <Suspense fallback={null}>
+          {newPostOpen ? (
+            <NewPostDialog
+              open={newPostOpen}
+              onOpenChange={(open) => {
+                setNewPostOpen(open);
+                if (!open) {
+                  setNewPostInitialDate(undefined);
+                  setEditingPostId(null);
+                  setEditPostData(null);
+                }
+              }}
+              initialDate={editingPostId ? undefined : newPostInitialDate}
+              initialPublishMode={editingPostId ? undefined : (activeTab === "drafts" ? "draft" : "now")}
+              editPostId={editingPostId}
+              editPostData={editPostData}
+              onCreated={(created) => {
+                if (!created) return;
+                const platforms = Object.values(created.targets || {}).map((t: any) => (t as any).platform).filter(Boolean);
+                const postData = {
+                  id: created.id,
+                  content: created.content || "",
+                  platforms,
+                  status: (created.status || "publishing") as Post["status"],
+                  scheduled_at: (created.scheduled_at && created.scheduled_at !== "now" && created.scheduled_at !== "draft") ? created.scheduled_at : null,
+                  published_at: created.published_at || null,
+                  created_at: created.created_at || new Date().toISOString(),
+                  targets: created.targets,
+                  media: created.media || null,
+                };
 
-            if (editingPostId) {
-              // Edit: update in-place or move between lists
-              setQueuePosts((prev) => prev.filter((p) => p.id !== editingPostId));
-              setDraftPosts((prev) => prev.filter((p) => p.id !== editingPostId));
-              setAllPosts((prev) => prev.filter((p: any) => p.id !== editingPostId));
-              if (postData.status === "draft") {
-                setDraftPosts((prev) => [postData, ...prev]);
-              } else {
-                setQueuePosts((prev) => [postData, ...prev]);
-              }
-              setAllPosts((prev) => [postData, ...prev]);
-              setEditingPostId(null);
-              setEditPostData(null);
-            } else {
-              // Create: prepend to correct list
-              if (postData.status === "draft") {
-                setDraftPosts((prev) => [postData, ...prev]);
-              } else {
-                setQueuePosts((prev) => [postData, ...prev]);
-              }
-              setAllPosts((prev) => [postData, ...prev]);
-            }
-          }}
-        />
+                if (editingPostId) {
+                  // Edit: update in-place or move between lists
+                  setQueuePosts((prev) => prev.filter((p) => p.id !== editingPostId));
+                  setDraftPosts((prev) => prev.filter((p) => p.id !== editingPostId));
+                  setAllPosts((prev) => prev.filter((p: any) => p.id !== editingPostId));
+                  if (postData.status === "draft") {
+                    setDraftPosts((prev) => [postData, ...prev]);
+                  } else {
+                    setQueuePosts((prev) => [postData, ...prev]);
+                  }
+                  setAllPosts((prev) => [postData, ...prev]);
+                  setEditingPostId(null);
+                  setEditPostData(null);
+                } else {
+                  // Create: prepend to correct list
+                  if (postData.status === "draft") {
+                    setDraftPosts((prev) => [postData, ...prev]);
+                  } else {
+                    setQueuePosts((prev) => [postData, ...prev]);
+                  }
+                  setAllPosts((prev) => [postData, ...prev]);
+                }
+              }}
+            />
+          ) : null}
+        </Suspense>
       </div>
 
       {/* Top-level tabs + controls */}
@@ -579,25 +601,10 @@ export function PostsPage({
 
       {/* Calendar view (All tab) — desktop only */}
       {viewMode === "calendar" && !isMobile && activeTab === "all" && (
-        <CalendarView
-          statusFilter="All"
-          filterQuery={{ ...filterQuery, include_external: "true" }}
-          initialPeriod={calendarPeriod}
-          onOpenNewPost={(date) => {
-            setNewPostInitialDate(date);
-            setNewPostOpen(true);
-          }}
-          onEdit={(postId) => handleEdit({ id: postId } as QueuePost)}
-          onDelete={handleDelete}
-        />
-      )}
-
-      {/* Calendar view (Queue tab) — desktop only */}
-      {viewMode === "calendar" && !isMobile && activeTab === "queue" && (
-        <WorkspaceGuard>
+        <Suspense fallback={<PostsSectionFallback />}>
           <CalendarView
-            statusFilter="Scheduled"
-            filterQuery={filterQuery}
+            statusFilter="All"
+            filterQuery={{ ...filterQuery, include_external: "true" }}
             initialPeriod={calendarPeriod}
             onOpenNewPost={(date) => {
               setNewPostInitialDate(date);
@@ -606,6 +613,25 @@ export function PostsPage({
             onEdit={(postId) => handleEdit({ id: postId } as QueuePost)}
             onDelete={handleDelete}
           />
+        </Suspense>
+      )}
+
+      {/* Calendar view (Queue tab) — desktop only */}
+      {viewMode === "calendar" && !isMobile && activeTab === "queue" && (
+        <WorkspaceGuard>
+          <Suspense fallback={<PostsSectionFallback />}>
+            <CalendarView
+              statusFilter="Scheduled"
+              filterQuery={filterQuery}
+              initialPeriod={calendarPeriod}
+              onOpenNewPost={(date) => {
+                setNewPostInitialDate(date);
+                setNewPostOpen(true);
+              }}
+              onEdit={(postId) => handleEdit({ id: postId } as QueuePost)}
+              onDelete={handleDelete}
+            />
+          </Suspense>
         </WorkspaceGuard>
       )}
 

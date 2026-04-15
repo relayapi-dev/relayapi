@@ -3,11 +3,11 @@ import DashboardLayout from "../../layouts/DashboardLayout.astro";
 import { PostsRouteApp } from "../../components/dashboard/route-apps/posts-route-app";
 import {
 	getDashboardRouteContext,
-	getPostsPageInitialProps,
+	getPostsPageRouteState,
 } from "../../lib/dashboard-page";
 
 const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
-const pageProps = await getPostsPageInitialProps(Astro.locals, Astro.url);
+const pageProps = getPostsPageRouteState(Astro.url);
 ---
 
 <DashboardLayout>

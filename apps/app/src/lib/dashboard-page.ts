@@ -127,10 +127,7 @@ type PostsTab = "all" | "queue" | "drafts" | "published";
 type PostsViewMode = "list" | "calendar";
 type CalendarPeriod = "week" | "month";
 
-export async function getPostsPageInitialProps(
-	locals: App.Locals,
-	url: URL,
-): Promise<Record<string, unknown>> {
+export function getPostsPageRouteState(url: URL): Record<string, unknown> {
 	const initialTab = getSearchParamValue(
 		url,
 		"tab",
@@ -151,105 +148,12 @@ export async function getPostsPageInitialProps(
 		["week", "month"] as const,
 		"week",
 	);
-	const client = await getDashboardClient(locals);
 
-	const props: Record<string, unknown> = {
+	return {
 		initialTab: normalizedTab,
 		initialViewMode: initialViewMode as PostsViewMode,
 		initialCalendarPeriod: initialCalendarPeriod as CalendarPeriod,
 	};
-
-	if (!client) return props;
-
-	const filterQuery = getDashboardFilterQuery(url);
-
-	try {
-		switch (normalizedTab) {
-			case "queue": {
-				const [queueData, failedData] = await Promise.all([
-					client.posts.list({
-						limit: 20,
-						...filterQuery,
-						status: "scheduled",
-						include: "targets,media",
-					}),
-					client.posts.list({
-						limit: 20,
-						...filterQuery,
-						status: "failed",
-						include: "targets,media",
-					}),
-				]);
-				props.initialQueueData = createInitialPaginatedData(
-					"posts",
-					{ ...filterQuery, status: "scheduled", include: "targets,media" },
-					queueData,
-				);
-				props.initialFailedData = createInitialPaginatedData(
-					"posts",
-					{ ...filterQuery, status: "failed", include: "targets,media" },
-					failedData,
-				);
-				break;
-			}
-			case "drafts": {
-				const draftData = await client.posts.list({
-					limit: 20,
-					...filterQuery,
-					status: "draft",
-					include: "targets,media",
-				});
-				props.initialDraftsData = createInitialPaginatedData(
-					"posts",
-					{ ...filterQuery, status: "draft", include: "targets,media" },
-					draftData,
-				);
-				break;
-			}
-			case "published": {
-				const publishedData = await client.posts.list({
-					limit: 20,
-					...filterQuery,
-					status: "published",
-					include: "targets,media",
-					include_external: "true",
-				});
-				props.initialPublishedData = createInitialPaginatedData(
-					"posts",
-					{
-						...filterQuery,
-						status: "published",
-						include: "targets,media",
-						include_external: "true",
-					},
-					publishedData,
-				);
-				break;
-			}
-			default: {
-				const allData = await client.posts.list({
-					limit: 20,
-					...filterQuery,
-					include: "targets,media",
-					include_external: "true",
-				});
-				props.initialAllData = createInitialPaginatedData(
-					"posts",
-					{
-						...filterQuery,
-						include: "targets,media",
-						include_external: "true",
-					},
-					allData,
-				);
-				break;
-			}
-		}
-	} catch (error) {
-		console.error("Failed to preload posts page data:", error);
-	}
-
-	return props;
 }
 
 type ConnectionsTab =
