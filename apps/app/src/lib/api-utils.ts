@@ -11,7 +11,6 @@ const API_BASE_URL =
 export async function requireClient(
   ctx: { locals: App.Locals },
 ): Promise<Relay | Response> {
-  const t0 = Date.now();
   if (!ctx.locals.user || !ctx.locals.organization) {
     return Response.json(
       { error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
@@ -20,8 +19,6 @@ export async function requireClient(
   }
 
   const client = await getRelayClient(ctx.locals, API_BASE_URL);
-  const t1 = Date.now();
-  console.log(`[perf] requireClient: getRelayClient=${t1-t0}ms`);
   if (!client) {
     return Response.json(
       { error: { code: "NO_API_KEY", message: "No dashboard API key found. Please create one." } },

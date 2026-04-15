@@ -1,10 +1,38 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import SEO from "../components/SEO.astro";
-import App from "../components/App";
+import { Navbar } from "../components/section/navbar";
+import { HeroSection } from "../components/section/hero-section";
+import { HeroCodeBlock } from "../components/section/hero-code-block";
+import { CompanyShowcase } from "../components/section/company-showcase";
+import { TestimonialSection } from "../components/section/testimonial-section";
+import { WorkflowSection } from "../components/section/workflow-section";
+import { FeatureSection } from "../components/section/feature-section";
+import { PricingSection } from "../components/section/pricing-section";
+import { FAQSection } from "../components/section/faq-section";
+import { SelfHostSection } from "../components/section/self-host-section";
+import { Footer } from "../components/section/footer";
+import { CircuitLines } from "../components/ui/circuit-lines";
 ---
 
 <Layout>
   <SEO slot="head" />
-  <App client:load />
+  <div class="max-w-7xl mx-auto border-x border-border">
+    <Navbar client:load />
+    <main class="flex flex-col divide-y divide-border pt-16">
+      <div class="relative">
+        <CircuitLines />
+        <HeroSection />
+        <HeroCodeBlock client:idle />
+      </div>
+      <CompanyShowcase />
+      <TestimonialSection />
+      <WorkflowSection client:visible />
+      <FeatureSection client:visible />
+      <PricingSection client:visible />
+      <FAQSection client:visible />
+      <SelfHostSection />
+      <Footer />
+    </main>
+  </div>
 </Layout>

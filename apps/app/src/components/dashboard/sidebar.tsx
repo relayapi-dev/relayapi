@@ -178,22 +178,12 @@ export function Sidebar({
 	// --- Streak ---
 	const { streak } = useStreak();
 	const [isCancelling, setIsCancelling] = useState(false);
+	const [billingStatusLoaded, setBillingStatusLoaded] = useState(false);
 	const plan = usage?.plan || "free";
 	const used = usage?.api_calls?.used || 0;
 	const included = usage?.api_calls?.included || 200;
 	const pct =
 		included > 0 ? Math.min(Math.round((used / included) * 100), 100) : 0;
-
-	useEffect(() => {
-		if (plan === "pro") {
-			fetch("/api/billing/status")
-				.then((r) => (r.ok ? r.json() : null))
-				.then((data) => {
-					setIsCancelling(!!data?.subscription?.cancelAtPeriodEnd);
-				})
-				.catch(() => {});
-		}
-	}, [plan]);
 
 	// --- Collapsible nav ---
 	const [expandedItems, setExpandedItems] = useState<Set<string>>(() => {
@@ -246,7 +236,8 @@ export function Sidebar({
 			: null,
 	);
 	const [orgs, setOrgs] = useState<OrgListItem[]>([]);
-	const [orgsLoading, setOrgsLoading] = useState(true);
+	const [orgsLoading, setOrgsLoading] = useState(false);
+	const [orgsLoaded, setOrgsLoaded] = useState(false);
 	const [orgSearch, setOrgSearch] = useState("");
 	const [orgMenuOpen, setOrgMenuOpen] = useState(false);
 	const [createOrgOpen, setCreateOrgOpen] = useState(false);
@@ -272,39 +263,41 @@ export function Sidebar({
 		return () => document.removeEventListener("mousedown", handleClick);
 	}, [orgMenuOpen]);
 
-	useEffect(() => {
-		let cancelled = false;
-		async function fetchOrgs() {
-			try {
-				const { data } = await orgClient.list();
-				if (!cancelled && data) {
-					const items: OrgListItem[] = data.map((o: any) => ({
-						id: o.id,
-						name: o.name,
-						slug: o.slug,
-						logo: o.logo,
-					}));
-					setOrgs(items);
-					if (currentOrg) {
-						// Refresh currentOrg with latest data (name, logo may have changed)
-						const updated = items.find((o) => o.id === currentOrg.id);
-						if (updated) setCurrentOrg(updated);
-					} else if (items.length > 0) {
-						setCurrentOrg(items[0]!);
-						orgClient.setActive({ organizationId: items[0]!.id });
+	const loadOrganizations = useCallback(async () => {
+		setOrgsLoading(true);
+		try {
+			const { data } = await orgClient.list();
+			if (data) {
+				const items: OrgListItem[] = data.map((o: any) => ({
+					id: o.id,
+					name: o.name,
+					slug: o.slug,
+					logo: o.logo,
+				}));
+				setOrgs(items);
+				setCurrentOrg((prev) => {
+					if (prev) {
+						return items.find((o) => o.id === prev.id) ?? prev;
 					}
+					return items[0] ?? null;
+				});
+				if (!currentOrg && items[0]) {
+					void orgClient.setActive({ organizationId: items[0].id });
 				}
-			} catch (e) {
-				console.error("Failed to fetch organizations:", e);
-			} finally {
-				if (!cancelled) setOrgsLoading(false);
 			}
+		} catch (e) {
+			console.error("Failed to fetch organizations:", e);
+		} finally {
+			setOrgsLoading(false);
+			setOrgsLoaded(true);
 		}
-		fetchOrgs();
-		return () => {
-			cancelled = true;
-		};
-	}, []);
+	}, [currentOrg]);
+
+	useEffect(() => {
+		if (!currentOrg && !orgsLoaded && !orgsLoading) {
+			void loadOrganizations();
+		}
+	}, [currentOrg, orgsLoaded, orgsLoading, loadOrganizations]);
 
 	const handleSwitchOrg = async (org: OrgListItem) => {
 		setCurrentOrg(org);
@@ -337,6 +330,20 @@ export function Sidebar({
 
 	// --- User menu ---
 	const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+	useEffect(() => {
+		if (plan === "pro" && userMenuOpen && !billingStatusLoaded) {
+			fetch("/api/billing/status")
+				.then((r) => (r.ok ? r.json() : null))
+				.then((data) => {
+					setIsCancelling(!!data?.subscription?.cancelAtPeriodEnd);
+				})
+				.catch(() => {})
+				.finally(() => {
+					setBillingStatusLoaded(true);
+				});
+		}
+	}, [plan, userMenuOpen, billingStatusLoaded]);
 
 	// Click-outside handler for user menu
 	useEffect(() => {
@@ -482,7 +489,17 @@ export function Sidebar({
 						<div className="flex items-center justify-between">
 							<div ref={orgMenuRef} className="relative flex-1 min-w-0">
 								<button
-									onClick={() => setOrgMenuOpen(!orgMenuOpen)}
+									onClick={() => {
+										const nextOpen = !orgMenuOpen;
+										setOrgMenuOpen(nextOpen);
+										if (
+											nextOpen &&
+											(!orgsLoaded || orgs.length === 0) &&
+											!orgsLoading
+										) {
+											void loadOrganizations();
+										}
+									}}
 									className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent/40 transition-colors"
 								>
 									{currentOrg?.logo ? (

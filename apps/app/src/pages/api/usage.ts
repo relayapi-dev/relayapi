@@ -2,14 +2,10 @@ import type { APIRoute } from "astro";
 import { requireClient, handleSdkError } from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
-  const t0 = Date.now();
   const client = await requireClient(ctx);
-  const t1 = Date.now();
   if (client instanceof Response) return client;
   try {
     const data = await client.usage.retrieve();
-    const t2 = Date.now();
-    console.log(`[perf] /api/usage: requireClient=${t1-t0}ms sdk.usage.retrieve=${t2-t1}ms total=${t2-t0}ms`);
     return Response.json({
       plan: data.plan.name,
       api_calls: {
@@ -20,9 +16,6 @@ export const GET: APIRoute = async (ctx) => {
       period_end: data.usage.cycle_end,
     }, { headers: { "Cache-Control": "private, max-age=60" } });
   } catch (e: any) {
-    const t2 = Date.now();
-    console.log(`[perf] /api/usage: requireClient=${t1-t0}ms sdk.usage.retrieve=${t2-t1}ms (error) total=${t2-t0}ms`);
-
     const headers = e?.headers as Headers | undefined;
     const usageCount = headers?.get("x-usage-count");
     const usageLimit = headers?.get("x-usage-limit");

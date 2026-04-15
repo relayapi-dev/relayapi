@@ -21,35 +21,85 @@ const UsageContext = createContext<UsageContextValue>({
   refetch: () => {},
 });
 
+const USAGE_CACHE_KEY = "relayapi:usage:v1";
+const USAGE_CACHE_TTL_MS = 60_000;
+
+function readUsageCache(): UsageData | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(USAGE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { timestamp: number; data: UsageData };
+    if (!parsed?.timestamp || Date.now() - parsed.timestamp > USAGE_CACHE_TTL_MS) {
+      window.sessionStorage.removeItem(USAGE_CACHE_KEY);
+      return null;
+    }
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeUsageCache(data: UsageData) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(
+      USAGE_CACHE_KEY,
+      JSON.stringify({ timestamp: Date.now(), data }),
+    );
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 export function UsageProvider({ children }: { children: React.ReactNode }) {
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const fetchedRef = useRef(false);
 
-  const fetchUsage = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const fetchUsage = useCallback(async (options?: { background?: boolean }) => {
+    const background = options?.background ?? false;
+    if (!background) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const res = await fetch("/api/usage", { signal: AbortSignal.timeout(15_000) });
       if (res.ok) {
         const data = await res.json();
         setUsage(data);
+        writeUsageCache(data);
       } else {
         const err = await res.json().catch(() => null);
-        setError(err?.error?.message || `Error ${res.status}`);
+        if (!background) {
+          setError(err?.error?.message || `Error ${res.status}`);
+        }
       }
     } catch {
-      setError("Network connection lost.");
+      if (!background) {
+        setError("Network connection lost.");
+      }
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (!fetchedRef.current) {
       fetchedRef.current = true;
-      fetchUsage();
+      const cached = readUsageCache();
+      if (cached) {
+        setUsage(cached);
+        setLoading(false);
+        void fetchUsage({ background: true });
+        return;
+      }
+      void fetchUsage();
     }
   }, [fetchUsage]);
 

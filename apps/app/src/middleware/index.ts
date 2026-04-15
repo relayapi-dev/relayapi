@@ -3,11 +3,22 @@ import { env } from "cloudflare:workers";
 import { createAuth } from "@relayapi/auth";
 import { createDb, invitation } from "@relayapi/db";
 import { eq, and } from "drizzle-orm";
-import { render } from "@react-email/render";
-import { Resend } from "resend";
-import { InvitationEmail } from "../lib/emails/invitation-email";
 
 const PROTECTED_PATHS = ["/app"];
+const AUTH_PAGES = new Set(["/login", "/signup"]);
+
+function shouldResolveSession(path: string): boolean {
+	return (
+		path.startsWith("/app") ||
+		path.startsWith("/api/") ||
+		path.startsWith("/invite/") ||
+		AUTH_PAGES.has(path)
+	);
+}
+
+function shouldLoadFullOrganization(path: string): boolean {
+	return path.startsWith("/app");
+}
 
 function extractSessionToken(headers: Headers): string | null {
 	const cookies = headers.get("Cookie") || "";
@@ -22,12 +33,34 @@ interface CachedSession {
 	user: Record<string, unknown>;
 	session: Record<string, unknown>;
 	organization: Record<string, unknown> | null;
+	hasFullOrganization: boolean;
 	timestamp: number;
 }
 
 const sessionCache = new Map<string, CachedSession>();
 const CACHE_TTL = 60_000;
 const CACHE_MAX_SIZE = 500;
+
+function writeSessionCache(
+	sessionToken: string,
+	entry: Omit<CachedSession, "timestamp">,
+) {
+	if (sessionCache.size >= CACHE_MAX_SIZE) {
+		const entries = [...sessionCache.entries()].sort(
+			(a, b) => a[1].timestamp - b[1].timestamp,
+		);
+		const evictCount = Math.floor(CACHE_MAX_SIZE / 4);
+		for (let i = 0; i < evictCount; i++) {
+			const cacheEntry = entries[i];
+			if (cacheEntry) sessionCache.delete(cacheEntry[0]);
+		}
+	}
+
+	sessionCache.set(sessionToken, {
+		...entry,
+		timestamp: Date.now(),
+	});
+}
 
 export const onRequest = defineMiddleware(async (context, next) => {
 	const path = context.url.pathname;
@@ -48,6 +81,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	try {
 		// --- Per-request lazy DB + Auth (Cloudflare workerd requires fresh I/O) ---
 		const cfEnv = env as Record<string, any>;
+		const shouldResolveAuthState = shouldResolveSession(path);
+		const needsFullOrg = shouldLoadFullOrganization(path);
 
 		let _db: ReturnType<typeof createDb> | undefined;
 		let _auth: ReturnType<typeof createAuth> | undefined;
@@ -69,6 +104,13 @@ export const onRequest = defineMiddleware(async (context, next) => {
 					GOOGLE_CLIENT_ID: cfEnv.GOOGLE_CLIENT_ID,
 					GOOGLE_CLIENT_SECRET: cfEnv.GOOGLE_CLIENT_SECRET,
 					sendInvitationEmail: async (data) => {
+						const [{ render }, { Resend }, { InvitationEmail }] =
+							await Promise.all([
+								import("@react-email/render"),
+								import("resend"),
+								import("../lib/emails/invitation-email"),
+							]);
+
 						const baseUrl =
 							cfEnv.BETTER_AUTH_URL || context.url.origin;
 						const inviteUrl = `${baseUrl}/invite/${data.id}`;
@@ -153,32 +195,30 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		let session: Record<string, unknown> | null = null;
 		let org: Record<string, unknown> | null = null;
 		let cacheHit = false;
+		let refreshFullOrgFromCache = false;
 
-		if (!isAuthMutation && sessionToken) {
+		if (!isAuthMutation && sessionToken && shouldResolveAuthState) {
 			const cached = sessionCache.get(sessionToken);
 			if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
 				user = cached.user;
 				session = cached.session;
 				org = cached.organization;
 				cacheHit = true;
+				refreshFullOrgFromCache =
+					needsFullOrg &&
+					!!(session as any)?.activeOrganizationId &&
+					!cached.hasFullOrganization;
 			} else if (cached) {
 				sessionCache.delete(sessionToken);
 			}
 		}
 
-		if (!cacheHit && sessionToken) {
+		if (sessionToken && shouldResolveAuthState && (!cacheHit || refreshFullOrgFromCache)) {
 			try {
 				const auth = getAuth();
-				const result = await auth.api.getSession({
-					headers: context.request.headers,
-				});
-				if (result) {
-					user = result.user as Record<string, unknown>;
-					session = result.session as Record<string, unknown>;
-
-					// Resolve active organization
+				if (refreshFullOrgFromCache) {
 					const activeOrgId = (session as any)?.activeOrganizationId;
-					if (activeOrgId) {
+					if (activeOrgId && user && session) {
 						try {
 							const fullOrg = await (auth.api as any).getFullOrganization({
 								headers: context.request.headers,
@@ -189,26 +229,54 @@ export const onRequest = defineMiddleware(async (context, next) => {
 							}
 						} catch (e) {
 							console.error("Failed to get active organization:", e);
+							org = { id: activeOrgId };
+						}
+
+						if (!isAuthMutation) {
+							writeSessionCache(sessionToken, {
+								user,
+								session,
+								organization: org,
+								hasFullOrganization: !!org && "slug" in org,
+							});
 						}
 					}
+				} else {
+					const result = await auth.api.getSession({
+						headers: context.request.headers,
+					});
+					if (result) {
+						user = result.user as Record<string, unknown>;
+						session = result.session as Record<string, unknown>;
 
-					if (!isAuthMutation) {
-						if (sessionCache.size >= CACHE_MAX_SIZE) {
-							const entries = [...sessionCache.entries()].sort(
-								(a, b) => a[1].timestamp - b[1].timestamp,
-							);
-							const evictCount = Math.floor(CACHE_MAX_SIZE / 4);
-							for (let i = 0; i < evictCount; i++) {
-								const entry = entries[i];
-								if (entry) sessionCache.delete(entry[0]);
+						const activeOrgId = (session as any)?.activeOrganizationId;
+						if (activeOrgId) {
+							if (needsFullOrg) {
+								try {
+									const fullOrg = await (auth.api as any).getFullOrganization({
+										headers: context.request.headers,
+										query: { organizationId: activeOrgId },
+									});
+									if (fullOrg) {
+										org = fullOrg as unknown as Record<string, unknown>;
+									}
+								} catch (e) {
+									console.error("Failed to get active organization:", e);
+									org = { id: activeOrgId };
+								}
+							} else {
+								org = { id: activeOrgId };
 							}
 						}
-						sessionCache.set(sessionToken, {
-							user,
-							session,
-							organization: org,
-							timestamp: Date.now(),
-						});
+
+						if (!isAuthMutation) {
+							writeSessionCache(sessionToken, {
+								user,
+								session,
+								organization: org,
+								hasFullOrganization: !!org && "slug" in org,
+							});
+						}
 					}
 				}
 			} catch (error) {
