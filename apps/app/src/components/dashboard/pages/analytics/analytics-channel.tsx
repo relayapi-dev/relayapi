@@ -7,7 +7,7 @@ import {
   AlertCircle,
   ExternalLink,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatPercentage } from "@/lib/utils";
 import { useApi } from "@/hooks/use-api";
 import { platformLabels } from "@/lib/platform-maps";
 
@@ -750,7 +750,7 @@ function MetricCard({
               <TrendingDown className="size-3" />
             )}
             {up ? "+" : ""}
-            {change}%
+            {formatPercentage(change)}%
           </span>
         )}
       </div>

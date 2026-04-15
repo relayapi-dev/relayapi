@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import { Flame, TrendingUp, TrendingDown, AlertCircle } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatPercentage } from "@/lib/utils";
 import { useStreak } from "@/hooks/use-streak";
 import { platformLabels, platformColors, platformAvatars } from "@/lib/platform-maps";
 import { platformIcons } from "@/lib/platform-icons";
@@ -63,7 +63,7 @@ function ChangeBadge({ change }: { change: number | null }) {
     >
       {up ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
       {up ? "+" : ""}
-      {change}%
+      {formatPercentage(change)}%
     </span>
   );
 }
