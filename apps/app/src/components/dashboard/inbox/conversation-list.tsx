@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Search, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ConversationItem } from "./shared";
-import { newItemEnter, formatTimeAgo, platformColors, platformLabels } from "./shared";
+import { newItemEnter, formatTimeAgo, getConversationDisplayName, platformColors, platformLabels } from "./shared";
 import { LoadMore } from "@/components/ui/load-more";
 
 export function ConversationList({
@@ -29,6 +29,7 @@ export function ConversationList({
     if (!search.trim()) return conversations;
     const q = search.toLowerCase();
     return conversations.filter((c) =>
+      getConversationDisplayName(c).toLowerCase().includes(q) ||
       c.participant_name?.toLowerCase().includes(q) ||
       c.last_message_text?.toLowerCase().includes(q)
     );
@@ -67,6 +68,7 @@ export function ConversationList({
             <AnimatePresence initial={false}>
             {filtered.map((conv) => {
               const platform = conv.platform?.toLowerCase() || "";
+              const displayName = getConversationDisplayName(conv);
               const isSelected = selectedId === conv.id;
               const isUnread = (conv.unread_count ?? 0) > 0;
               return (
@@ -87,12 +89,12 @@ export function ConversationList({
                     {conv.participant_avatar ? (
                       <img
                         src={conv.participant_avatar}
-                        alt={conv.participant_name || "Unknown"}
+                        alt={displayName}
                         className="size-10 rounded-full border border-border object-cover"
                       />
                     ) : (
                       <div className="size-10 rounded-full border border-border bg-muted flex items-center justify-center text-sm font-medium text-muted-foreground">
-                        {(conv.participant_name || "?").charAt(0).toUpperCase()}
+                        {displayName.charAt(0).toUpperCase()}
                       </div>
                     )}
                     <div
@@ -109,7 +111,7 @@ export function ConversationList({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <span className={cn("text-sm truncate", isUnread ? "font-semibold" : "font-medium")}>
-                        {conv.participant_name || "Unknown"}
+                        {displayName}
                       </span>
                       <span className="text-[10px] text-muted-foreground whitespace-nowrap shrink-0">
                         {formatTimeAgo(conv.updated_at)}

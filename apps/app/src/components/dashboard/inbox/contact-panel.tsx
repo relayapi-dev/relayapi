@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
-import { Archive, ArchiveRestore, ExternalLink, Loader2, X, Link2, Unlink, Tag, Phone, Mail } from "lucide-react";
+import { Archive, ArchiveRestore, ExternalLink, Loader2, X, Link2, Tag, Phone, Mail } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ConversationItem } from "./shared";
-import { formatTimeAgo, platformLabels, platformColors } from "./shared";
+import { formatTimeAgo, getConversationDisplayName, getInstagramScopedId, platformLabels, platformColors } from "./shared";
 import { Button } from "@/components/ui/button";
 
 interface LinkedContact {
@@ -34,6 +34,9 @@ export function ContactPanel({
   const [linkedContact, setLinkedContact] = useState<LinkedContact | null>(null);
   const [contactLoading, setContactLoading] = useState(false);
   const platform = conversation.platform?.toLowerCase() || "";
+  const displayName = getConversationDisplayName(conversation);
+  const instagramUsername = conversation.participant_metadata?.instagramProfile?.username?.trim() || null;
+  const instagramScopedId = getInstagramScopedId(conversation);
   const isArchived = conversation.status === "archived";
 
   // Fetch linked contact if conversation has contact_id
@@ -110,15 +113,15 @@ export function ContactPanel({
           {conversation.participant_avatar ? (
             <img
               src={conversation.participant_avatar}
-              alt={conversation.participant_name || ""}
+              alt={displayName}
               className="size-16 rounded-full border-2 border-border object-cover"
             />
           ) : (
             <div className="size-16 rounded-full border-2 border-border bg-muted flex items-center justify-center text-xl font-medium text-muted-foreground">
-              {(conversation.participant_name || "?").charAt(0).toUpperCase()}
+              {displayName.charAt(0).toUpperCase()}
             </div>
           )}
-          <p className="text-sm font-medium mt-3">{conversation.participant_name || "Unknown"}</p>
+          <p className="text-sm font-medium mt-3">{displayName}</p>
           <div className="flex items-center gap-1.5 mt-1">
             <div
               className={cn(
@@ -140,6 +143,18 @@ export function ContactPanel({
             <span className="text-muted-foreground">Platform</span>
             <p className="font-medium capitalize mt-0.5">{platformLabels[platform] || platform}</p>
           </div>
+          {platform === "instagram" && instagramUsername && (
+            <div className="text-xs">
+              <span className="text-muted-foreground">Username</span>
+              <p className="font-medium mt-0.5">@{instagramUsername}</p>
+            </div>
+          )}
+          {platform === "instagram" && instagramScopedId && (
+            <div className="text-xs">
+              <span className="text-muted-foreground">Scoped ID</span>
+              <p className="font-medium mt-0.5 font-mono">{instagramScopedId}</p>
+            </div>
+          )}
           <div className="text-xs">
             <span className="text-muted-foreground">Last active</span>
             <p className="font-medium mt-0.5">{formatTimeAgo(conversation.updated_at)}</p>

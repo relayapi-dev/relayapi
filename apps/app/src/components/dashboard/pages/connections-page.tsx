@@ -126,7 +126,7 @@ export function ConnectionsPage() {
 
   // Build query params for accounts based on group filter
   const accountsQuery: Record<string, string | undefined> = {};
-  if (workspaceFilterId === "__unassigned") {
+  if (workspaceFilterId === "__ungrouped") {
     accountsQuery.ungrouped = "true";
   } else if (workspaceFilterId) {
     accountsQuery.workspace_id = workspaceFilterId;
@@ -206,7 +206,7 @@ export function ConnectionsPage() {
   const handleMoveToGroup = async () => {
     if (!moveTarget) return;
     setMoving(true);
-    const workspaceId = moveWorkspaceId === "__unassigned" ? null : moveWorkspaceId;
+    const workspaceId = moveWorkspaceId === "__ungrouped" ? null : moveWorkspaceId;
     const res = await fetch(`/api/accounts/${moveTarget.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

@@ -23,6 +23,15 @@ export interface ConversationItem {
   account_id: string;
   participant_name: string | null;
   participant_avatar?: string | null;
+  participant_metadata?: {
+    instagramProfile?: {
+      scopedId?: string | null;
+      username?: string | null;
+      followersCount?: number | null;
+      mediaCount?: number | null;
+      fetchedAt?: string | null;
+    } | null;
+  } | null;
   contact_id?: string | null;
   status: "open" | "archived" | "snoozed";
   unread_count?: number;
@@ -129,4 +138,29 @@ export function formatTimeAgo(dateStr: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+export function getConversationDisplayName(conversation: Pick<ConversationItem, "platform" | "participant_name" | "participant_metadata">): string {
+  const platform = conversation.platform?.toLowerCase();
+  const instagramUsername = conversation.participant_metadata?.instagramProfile?.username?.trim();
+  if (platform === "instagram" && instagramUsername) {
+    return instagramUsername;
+  }
+
+  const participantName = conversation.participant_name?.trim();
+  return participantName || "Unknown";
+}
+
+export function getInstagramScopedId(conversation: Pick<ConversationItem, "platform" | "participant_name" | "participant_metadata">): string | null {
+  if (conversation.platform?.toLowerCase() !== "instagram") {
+    return null;
+  }
+
+  const metadataScopedId = conversation.participant_metadata?.instagramProfile?.scopedId?.trim();
+  if (metadataScopedId) {
+    return metadataScopedId;
+  }
+
+  const participantName = conversation.participant_name?.trim();
+  return participantName && /^\d+$/.test(participantName) ? participantName : null;
 }

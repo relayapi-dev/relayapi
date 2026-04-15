@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import { motion, AnimatePresence } from "motion/react";
-import { Loader2, MessageCircle, ArrowDown, Image as ImageIcon, FileText } from "lucide-react";
+import { Loader2, MessageCircle, ArrowDown, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ConversationItem, MessageItem } from "./shared";
-import { formatTimeAgo, platformLabels } from "./shared";
-import { AuthorAvatar } from "./shared-components";
+import { formatTimeAgo, getConversationDisplayName, platformLabels } from "./shared";
 import { MessageComposer } from "./message-composer";
 
 export function ChatThread({
@@ -165,6 +164,8 @@ export function ChatThread({
     );
   }
 
+  const displayName = getConversationDisplayName(conversation);
+
   return (
     <div className="flex flex-col h-full">
       {/* Chat header */}
@@ -172,16 +173,16 @@ export function ChatThread({
         {conversation.participant_avatar ? (
           <img
             src={conversation.participant_avatar}
-            alt={conversation.participant_name || ""}
+            alt={displayName}
             className="size-8 rounded-full border border-border object-cover"
           />
         ) : (
           <div className="size-8 rounded-full border border-border bg-muted flex items-center justify-center text-xs font-medium text-muted-foreground">
-            {(conversation.participant_name || "?").charAt(0).toUpperCase()}
+            {displayName.charAt(0).toUpperCase()}
           </div>
         )}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate">{conversation.participant_name || "Unknown"}</p>
+          <p className="text-sm font-medium truncate">{displayName}</p>
           <p className="text-[11px] text-muted-foreground capitalize">
             {platformLabels[conversation.platform?.toLowerCase()] || conversation.platform}
           </p>

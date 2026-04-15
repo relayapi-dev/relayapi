@@ -5,6 +5,14 @@ import { Dialog as DialogPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
+function isPortaledComboboxTarget(target: EventTarget | null | undefined) {
+  if (!target) return false
+  if (target instanceof Element) {
+    return !!target.closest("[data-combobox-dropdown]")
+  }
+  return false
+}
+
 function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
@@ -62,20 +70,20 @@ function DialogContent({
         data-slot="dialog-content"
         onPointerDownOutside={(e) => {
           // Prevent dialog from closing when clicking on portaled combobox dropdowns
-          const target = e.target as HTMLElement;
-          if (target.closest?.("[data-combobox-dropdown]")) {
-            e.preventDefault();
-            return;
+          const originalTarget = e.detail.originalEvent.target
+          if (isPortaledComboboxTarget(originalTarget) || isPortaledComboboxTarget(e.target)) {
+            e.preventDefault()
+            return
           }
-          onPointerDownOutside?.(e);
+          onPointerDownOutside?.(e)
         }}
         onFocusOutside={(e) => {
-          const target = e.target as HTMLElement;
-          if (target.closest?.("[data-combobox-dropdown]")) {
-            e.preventDefault();
-            return;
+          const originalTarget = e.detail.originalEvent.target
+          if (isPortaledComboboxTarget(originalTarget) || isPortaledComboboxTarget(e.target)) {
+            e.preventDefault()
+            return
           }
-          onFocusOutside?.(e);
+          onFocusOutside?.(e)
         }}
         className={cn(
           "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none overflow-hidden data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",

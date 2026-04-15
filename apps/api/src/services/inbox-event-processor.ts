@@ -133,11 +133,25 @@ export async function processInboxEvent(
 			console.error("[inbox-processor] DB storage failed:", err);
 		}
 
-		// 1b. Instagram profile enrichment — fetch profile data on new DM conversations (inbound only)
+		// 1b. Instagram profile enrichment — fetch profile data for new DM conversations.
+		// Note: the returned conversation row reflects the pre-insert message count, so
+		// brand-new conversations have messageCount === 0 here, not 1.
+		const existingParticipantMetadata =
+			conversation?.participantMetadata &&
+			typeof conversation.participantMetadata === "object"
+				? (conversation.participantMetadata as Record<string, unknown>)
+				: null;
+		const existingInstagramProfile =
+			existingParticipantMetadata?.instagramProfile &&
+			typeof existingParticipantMetadata.instagramProfile === "object"
+				? (existingParticipantMetadata.instagramProfile as Record<string, unknown>)
+				: null;
+
 		if (
 			direction === "inbound" &&
 			conversation &&
-			conversation.messageCount === 1 &&
+			conversation.messageCount <= 1 &&
+			!existingInstagramProfile?.username &&
 			event.platform === "instagram" &&
 			event.type === "message" &&
 			event.author?.id
@@ -147,43 +161,48 @@ export async function processInboxEvent(
 					const token = await maybeDecrypt(sa.accessToken, env.ENCRYPTION_KEY);
 					if (!token) throw new Error("Failed to decrypt access token");
 					// Docs: https://developers.facebook.com/docs/instagram-api/reference/ig-user
-					const profileHost = token.startsWith("IGAA") ? "graph.instagram.com" : "graph.facebook.com";
-					const profileAbort = new AbortController();
-					const profileTimer = setTimeout(() => profileAbort.abort(), 5_000);
-					const profileRes = await fetch(
-						`https://${profileHost}/v25.0/${event.author.id}?fields=username,followers_count,media_count&access_token=${encodeURIComponent(token)}`,
-						{ signal: profileAbort.signal },
-					);
-					clearTimeout(profileTimer);
-					if (profileRes.ok) {
-						const profile = (await profileRes.json()) as {
-							username?: string;
-							followers_count?: number;
-							media_count?: number;
-						};
-						await db
-							.update(inboxConversations)
-							.set({
-								participantMetadata: {
-									instagramProfile: {
-										username: profile.username ?? null,
-										followersCount: profile.followers_count ?? null,
-										mediaCount: profile.media_count ?? null,
-										fetchedAt: new Date().toISOString(),
+						const profileHost = token.startsWith("IGAA") ? "graph.instagram.com" : "graph.facebook.com";
+						const profileAbort = new AbortController();
+						const profileTimer = setTimeout(() => profileAbort.abort(), 5_000);
+						const profileRes = await fetch(
+							`https://${profileHost}/v25.0/${event.author.id}?fields=username,followers_count,media_count&access_token=${encodeURIComponent(token)}`,
+							{ signal: profileAbort.signal },
+						);
+						clearTimeout(profileTimer);
+						if (profileRes.ok) {
+							const profile = (await profileRes.json()) as {
+								username?: string;
+								followers_count?: number;
+								media_count?: number;
+							};
+							await db
+								.update(inboxConversations)
+								.set({
+									participantName:
+										profile.username ?? conversation.participantName,
+									participantMetadata: {
+										...(existingParticipantMetadata ?? {}),
+										instagramProfile: {
+											...(existingInstagramProfile ?? {}),
+											scopedId: event.author.id,
+											username: profile.username ?? null,
+											followersCount: profile.followers_count ?? null,
+											mediaCount: profile.media_count ?? null,
+											fetchedAt: new Date().toISOString(),
+										},
 									},
-								},
-							})
-							.where(
-								and(
-									eq(inboxConversations.id, conversation.id),
-									eq(inboxConversations.organizationId, event.organization_id),
-								),
-							);
+								})
+								.where(
+									and(
+										eq(inboxConversations.id, conversation.id),
+										eq(inboxConversations.organizationId, event.organization_id),
+									),
+								);
+						}
 					}
+				} catch (err) {
+					console.error("[inbox-processor] IG profile enrichment failed:", err);
 				}
-			} catch (err) {
-				console.error("[inbox-processor] IG profile enrichment failed:", err);
-			}
 		}
 
 		// Steps 2–2c: Automations only apply to inbound messages
