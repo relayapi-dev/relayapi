@@ -40,7 +40,7 @@ interface Account {
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;
-  group: Workspace | null;
+  workspace: Workspace | null;
   connected_at: string;
   updated_at: string;
 }
@@ -107,7 +107,7 @@ export function ConnectionsPage({
 }: ConnectionsPageProps = {}) {
   const [activeTab, setActiveTab] = useState(initialTab);
 
-  // Use shared filter context for group/account filtering
+  // Use shared filter context for workspace/account filtering
   const { workspaceId: workspaceFilterId, setWorkspaceId: setWorkspaceFilterId } = useFilter();
 
   // Health check state
@@ -121,22 +121,23 @@ export function ConnectionsPage({
   const [moveTarget, setMoveTarget] = useState<Account | null>(null);
   const [moveWorkspaceId, setMoveWorkspaceId] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
 
-  // Groups tab state
+  // Workspaces tab state
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [newWorkspaceDescription, setNewWorkspaceDescription] = useState("");
   const [workspacesSearch, setWorkspacesSearch] = useState("");
   const [workspacesSearchKey, setWorkspacesSearchKey] = useState(0);
 
-  const switchTab = (tab: string) => {
+  const switchTab = (tab: typeof initialTab) => {
     setActiveTab(tab);
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);
     window.history.replaceState({}, "", url.toString());
   };
 
-  // Build query params for accounts based on group filter
+  // Build query params for accounts based on workspace filter
   const accountsQuery: Record<string, string | undefined> = {};
   if (workspaceFilterId === "__ungrouped") {
     accountsQuery.ungrouped = "true";
@@ -239,22 +240,33 @@ export function ConnectionsPage({
     setDisconnectTarget(null);
   };
 
-  const handleMoveToGroup = async () => {
+  const handleMoveToWorkspace = async () => {
     if (!moveTarget) return;
     setMoving(true);
+    setMoveError(null);
     const workspaceId = moveWorkspaceId === "__ungrouped" ? null : moveWorkspaceId;
-    const res = await fetch(`/api/accounts/${moveTarget.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace_id: workspaceId }),
-    });
-    if (res.ok) {
+    try {
+      const res = await fetch(`/api/accounts/${moveTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: workspaceId }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        setMoveError(err?.error?.message || err?.message || `Error ${res.status}`);
+        return;
+      }
+
       accountsRefetch();
       groupsRefetch();
+      setMoveTarget(null);
+      setMoveWorkspaceId(null);
+    } catch {
+      setMoveError("Network connection lost.");
+    } finally {
+      setMoving(false);
     }
-    setMoving(false);
-    setMoveTarget(null);
-    setMoveWorkspaceId(null);
   };
 
   const handleCreateWorkspace = async () => {
@@ -301,7 +313,7 @@ export function ConnectionsPage({
       <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <div className="flex gap-4">
           {tabs.map((tab) => {
-            const tabKey = tab.toLowerCase();
+            const tabKey = tab.toLowerCase() as typeof initialTab;
             return (
               <button
                 key={tab}
@@ -435,7 +447,13 @@ export function ConnectionsPage({
                               }
                               return null;
                             })()}
-                            <DropdownMenuItem onClick={() => { setMoveTarget(acc); setMoveWorkspaceId(acc.group?.id || null); }}>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setMoveError(null);
+                                setMoveTarget(acc);
+                                setMoveWorkspaceId(acc.workspace?.id || null);
+                              }}
+                            >
                               <ArrowRightLeft className="size-3.5 mr-2" />
                               Move to workspace
                             </DropdownMenuItem>
@@ -467,9 +485,9 @@ export function ConnectionsPage({
                           <div className="size-1.5 rounded-full bg-emerald-500" />
                           <span className="text-xs text-muted-foreground">Active</span>
                         </div>
-                        {acc.group && (
+                        {acc.workspace && (
                           <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary truncate max-w-[100px]">
-                            {acc.group.name}
+                            {acc.workspace.name}
                           </span>
                         )}
                       </div>
@@ -898,7 +916,16 @@ export function ConnectionsPage({
       </Dialog>
 
       {/* Move to workspace dialog */}
-      <Dialog open={!!moveTarget} onOpenChange={(open) => { if (!open) { setMoveTarget(null); setMoveWorkspaceId(null); } }}>
+      <Dialog
+        open={!!moveTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMoveTarget(null);
+            setMoveWorkspaceId(null);
+            setMoveError(null);
+          }
+        }}
+      >
         <DialogContent showCloseButton={false} className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-base">Move to workspace</DialogTitle>
@@ -916,6 +943,9 @@ export function ConnectionsPage({
             showUnassignedOption
             placeholder="Search workspaces..."
           />
+          {moveError && (
+            <p className="text-sm text-destructive">{moveError}</p>
+          )}
           <DialogFooter>
             <DialogClose asChild>
               <Button variant="outline" size="sm">Cancel</Button>
@@ -923,7 +953,7 @@ export function ConnectionsPage({
             <Button
               size="sm"
               disabled={moving}
-              onClick={handleMoveToGroup}
+              onClick={handleMoveToWorkspace}
             >
               {moving ? <Loader2 className="size-3.5 animate-spin" /> : "Move"}
             </Button>

@@ -143,7 +143,7 @@ export function LogsPage({
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
 
-  const switchTab = (tab: string) => {
+  const switchTab = (tab: typeof initialTab) => {
     setActiveTab(tab);
     setLevelFilter("All");
     const url = new URL(window.location.href);

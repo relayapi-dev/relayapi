@@ -9,10 +9,10 @@ export const AccountResponse = z.object({
 	display_name: z.string().nullable(),
 	avatar_url: z.string().nullable(),
 	metadata: z.record(z.string(), z.any()).nullable(),
-	group: z
+	workspace: z
 		.object({ id: z.string(), name: z.string() })
 		.nullable()
-		.describe("Account group"),
+		.describe("Account workspace"),
 	connected_at: z.string().datetime(),
 	updated_at: z.string().datetime(),
 });

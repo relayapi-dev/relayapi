@@ -340,7 +340,7 @@ export interface AccountUpdateParams {
   metadata?: { [key: string]: unknown };
 
   /**
-   * Group ID (null to ungroup)
+   * Workspace ID (null to unassign)
    */
   workspace_id?: string | null;
 }
@@ -357,7 +357,7 @@ export interface AccountListParams {
   limit?: number;
 
   /**
-   * Filter by group ID
+   * Filter by workspace ID
    */
   workspace_id?: string;
 

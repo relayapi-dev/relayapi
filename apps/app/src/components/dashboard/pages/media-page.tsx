@@ -94,7 +94,7 @@ export function MediaPage({
   const [openTool, setOpenTool] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(initialTab);
 
-  const switchTab = (tab: string) => {
+  const switchTab = (tab: typeof initialTab) => {
     setActiveTab(tab);
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);
@@ -139,7 +139,7 @@ export function MediaPage({
       <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <div className="flex gap-4 shrink-0">
           {tabs.map((tab) => {
-            const tabKey = tab.toLowerCase();
+            const tabKey = tab.toLowerCase() as typeof initialTab;
             return (
               <button
                 key={tab}

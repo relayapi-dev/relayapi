@@ -58,7 +58,7 @@ function RoutePageFallback() {
 }
 
 export function createLazyDashboardRouteApp<PageProps extends object>(
-	loadPage: () => Promise<{ default: ComponentType<PageProps> }>,
+	loadPage: () => Promise<{ default: ComponentType<any> }>,
 ) {
 	const LazyPageComponent = lazy(loadPage);
 

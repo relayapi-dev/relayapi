@@ -509,10 +509,12 @@ app.openapi(getAccount, async (c) => {
 			avatarUrl: socialAccounts.avatarUrl,
 			metadata: socialAccounts.metadata,
 			workspaceId: socialAccounts.workspaceId,
+			workspaceName: workspaces.name,
 			connectedAt: socialAccounts.connectedAt,
 			updatedAt: socialAccounts.updatedAt,
 		})
 		.from(socialAccounts)
+		.leftJoin(workspaces, eq(socialAccounts.workspaceId, workspaces.id))
 		.where(
 			and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId)),
 		)
@@ -537,6 +539,9 @@ app.openapi(getAccount, async (c) => {
 			display_name: account.displayName,
 			avatar_url: account.avatarUrl,
 			metadata: sanitizeSocialAccountMetadata(account.metadata),
+			workspace: account.workspaceId && account.workspaceName
+				? { id: account.workspaceId, name: account.workspaceName }
+				: null,
 			connected_at: account.connectedAt.toISOString(),
 			updated_at: account.updatedAt.toISOString(),
 		},
@@ -694,7 +699,7 @@ app.openapi(updateAccount, async (c) => {
 		updates.workspaceId = body.workspace_id;
 	}
 
-	// Use .returning() to avoid a second SELECT, then fetch group name only if needed
+	// Use .returning() to avoid a second SELECT, then fetch workspace name only if needed
 	const [updatedRow] = await db.update(socialAccounts).set(updates).where(eq(socialAccounts.id, id)).returning({
 		id: socialAccounts.id,
 		platform: socialAccounts.platform,
@@ -714,8 +719,8 @@ app.openapi(updateAccount, async (c) => {
 
 	let workspaceName: string | null = null;
 	if (updatedRow.workspaceId) {
-		const [group] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, updatedRow.workspaceId)).limit(1);
-		workspaceName = group?.name ?? null;
+		const [workspace] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, updatedRow.workspaceId)).limit(1);
+		workspaceName = workspace?.name ?? null;
 	}
 
 	return c.json(

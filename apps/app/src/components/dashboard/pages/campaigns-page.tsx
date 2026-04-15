@@ -221,7 +221,7 @@ export function CampaignsPage({
 } = {}) {
   const [activeTab, setActiveTab] = useState(initialTab);
 
-  const switchTab = (tab: string) => {
+  const switchTab = (tab: typeof initialTab) => {
     setActiveTab(tab);
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);

@@ -110,7 +110,7 @@ export function PostsPage({
   const [viewMode, setViewMode] = useState<"list" | "calendar">(initialViewMode);
   const [calendarPeriod, setCalendarPeriod] = useState<CalendarPeriod>(initialCalendarPeriod);
 
-  const switchTab = (tab: string) => {
+  const switchTab = (tab: NonNullable<PostsPageProps["initialTab"]>) => {
     setActiveTab(tab);
     localStorage.setItem("posts:activeTab", tab);
     const url = new URL(window.location.href);
@@ -469,7 +469,8 @@ export function PostsPage({
       <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <div className="flex gap-4 shrink-0">
           {topTabs.map((tab) => {
-            const tabKey = tab.toLowerCase();
+            const tabKey =
+              tab.toLowerCase() as NonNullable<PostsPageProps["initialTab"]>;
             return (
               <button
                 key={tab}

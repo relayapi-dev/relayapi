@@ -88,6 +88,62 @@ const fadeUp = {
   },
 };
 
+function AnalyticsPageLoadingSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-medium">Analytics</h1>
+          <a
+            href="https://docs.relayapi.dev/api-reference/analytics"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <BookOpen className="size-3.5" />
+          </a>
+        </div>
+        <div className="h-7 w-32 rounded bg-muted-foreground/10 animate-pulse" />
+      </div>
+
+      <div className="sm:hidden">
+        <div className="h-10 w-full rounded-md border border-border bg-muted-foreground/10 animate-pulse" />
+      </div>
+
+      <div className="flex gap-6">
+        <nav className="hidden sm:block w-[200px] shrink-0">
+          <div className="space-y-1">
+            <div className="h-9 w-full rounded-md bg-muted-foreground/10 animate-pulse" />
+            <div className="h-3 w-16 rounded bg-muted-foreground/10 animate-pulse mt-4 mb-2" />
+            {Array.from({ length: 4 }).map((_, index) => (
+              <div key={index} className="flex items-center gap-2 px-2.5 py-2">
+                <div className="size-5 rounded-full bg-muted-foreground/10 animate-pulse" />
+                <div className="h-3 w-24 rounded bg-muted-foreground/10 animate-pulse" />
+              </div>
+            ))}
+          </div>
+        </nav>
+
+        <div className="min-w-0 flex-1">
+          <AnalyticsHome
+            channels={[]}
+            totals={{
+              total_audience: 0,
+              total_impressions: 0,
+              total_engagement: 0,
+              audience_change: null,
+              impressions_change: null,
+              engagement_change: null,
+            }}
+            loading
+            onSelectChannel={() => {}}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -105,7 +161,7 @@ export function AnalyticsPageNew({
 }: AnalyticsPageNewProps = {}) {
   // -- Usage / pro gate -----------------------------------------------------
 
-  const { usage } = useUsage();
+  const { usage, loading: usageLoading } = useUsage();
   const isPro = usage?.plan === "pro";
 
   // -- URL-driven state: selected channel -----------------------------------
@@ -140,7 +196,7 @@ export function AnalyticsPageNew({
 
   // -- Fetch channels -------------------------------------------------------
 
-  const { data: channelsResponse, loading } = useApi<ChannelsResponse>(
+  const { data: channelsResponse, loading: channelsLoading } = useApi<ChannelsResponse>(
     isPro ? "analytics/channels" : null,
     {
       initialData: initialChannelsData?.data,
@@ -165,6 +221,10 @@ export function AnalyticsPageNew({
   );
 
   // -- Pro gate UI ----------------------------------------------------------
+
+  if (usageLoading && usage === null) {
+    return <AnalyticsPageLoadingSkeleton />;
+  }
 
   if (!isPro) {
     return (
@@ -283,7 +343,7 @@ export function AnalyticsPageNew({
             </motion.p>
 
             {/* Loading skeleton */}
-            {loading &&
+            {channelsLoading &&
               channels.length === 0 &&
               Array.from({ length: 3 }).map((_, i) => (
                 <motion.div
@@ -337,7 +397,7 @@ export function AnalyticsPageNew({
 
         {/* Content area */}
         <div className="min-w-0 flex-1">
-          {loading ? (
+          {channelsLoading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>

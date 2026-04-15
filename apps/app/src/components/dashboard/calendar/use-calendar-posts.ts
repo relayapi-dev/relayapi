@@ -42,6 +42,7 @@ interface UseCalendarPostsResult {
   loading: boolean;
   error: string | null;
   refetch: () => void;
+  silentRefetch: () => void;
   optimisticMove: (postId: string, target: string) => Promise<boolean>;
   truncated: boolean;
 }
