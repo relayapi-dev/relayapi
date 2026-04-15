@@ -1,5 +1,8 @@
-import { createDashboardRouteApp } from "../create-dashboard-route-app";
-import { InboxCommentsPage } from "../pages/inbox-comments-page";
+import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
 
 export const InboxCommentsRouteApp =
-	createDashboardRouteApp(InboxCommentsPage);
+	createLazyDashboardRouteApp(() =>
+		import("../pages/inbox-comments-page").then((module) => ({
+			default: module.InboxCommentsPage,
+		})),
+	);

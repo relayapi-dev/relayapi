@@ -1,4 +1,7 @@
-import { createDashboardRouteApp } from "../create-dashboard-route-app";
-import { ApiKeysPage } from "../pages/api-keys-page";
+import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
 
-export const ApiKeysRouteApp = createDashboardRouteApp(ApiKeysPage);
+export const ApiKeysRouteApp = createLazyDashboardRouteApp(() =>
+	import("../pages/api-keys-page").then((module) => ({
+		default: module.ApiKeysPage,
+	})),
+);

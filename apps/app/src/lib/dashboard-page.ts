@@ -1,13 +1,4 @@
-import { API_BASE_URL } from "./api-base-url";
-import { buildApiRequestKey, type ApiQuery } from "./api-request-key";
-import { getRelayClient } from "./relay";
 import type { AppOrganization, AppUser } from "@/types/dashboard";
-
-interface ListResponse<T> {
-	data?: T[];
-	has_more?: boolean;
-	next_cursor?: string | null;
-}
 
 export interface DashboardRouteContext {
 	user: AppUser | null;
@@ -53,10 +44,6 @@ function toAppOrganization(
 	};
 }
 
-function getDashboardClient(locals: App.Locals) {
-	return getRelayClient(locals, API_BASE_URL);
-}
-
 export function getDashboardRouteContext(
 	locals: App.Locals,
 	url: URL,
@@ -80,47 +67,6 @@ export function getSearchParamValue<const T extends string>(
 		return value as T;
 	}
 	return fallback;
-}
-
-export function getDashboardFilterQuery(url: URL): ApiQuery {
-	const workspaceId = url.searchParams.get("workspace");
-	const accountId = url.searchParams.get("account");
-
-	if (accountId) {
-		return { account_id: accountId };
-	}
-
-	if (workspaceId) {
-		return { workspace_id: workspaceId };
-	}
-
-	return {};
-}
-
-function createInitialPaginatedData<T>(
-	path: string,
-	query: ApiQuery,
-	response: ListResponse<T>,
-	limit: number = 20,
-): InitialPaginatedData<T> {
-	return {
-		data: Array.isArray(response?.data) ? response.data : [],
-		hasMore: !!response?.has_more,
-		nextCursor:
-			typeof response?.next_cursor === "string" ? response.next_cursor : null,
-		requestKey: buildApiRequestKey(path, { limit, ...query }) || path,
-	};
-}
-
-function createInitialApiData<T>(
-	path: string,
-	query: ApiQuery,
-	data: T,
-): InitialApiData<T> {
-	return {
-		data,
-		requestKey: buildApiRequestKey(path, query) || path,
-	};
 }
 
 type PostsTab = "all" | "queue" | "drafts" | "published";
@@ -163,73 +109,17 @@ type ConnectionsTab =
 	| "health"
 	| "logs";
 
-export async function getConnectionsPageInitialProps(
-	locals: App.Locals,
+export function getConnectionsPageRouteState(
 	url: URL,
-): Promise<Record<string, unknown>> {
-	const initialTab = getSearchParamValue(
+): Record<string, unknown> {
+	return {
+		initialTab: getSearchParamValue(
 		url,
 		"tab",
 		["accounts", "connect", "workspaces", "health", "logs"] as const,
 		"accounts",
-	) as ConnectionsTab;
-	const client = await getDashboardClient(locals);
-	const props: Record<string, unknown> = { initialTab };
-
-	if (!client || initialTab === "connect") return props;
-
-	try {
-		if (initialTab === "accounts") {
-			const workspaceId = url.searchParams.get("workspace");
-			const accountsQuery: ApiQuery = {};
-			if (workspaceId === "__ungrouped") {
-				accountsQuery.ungrouped = true;
-			} else if (workspaceId) {
-				accountsQuery.workspace_id = workspaceId;
-			}
-
-			const accountsData = await client.accounts.list({
-				limit: 20,
-				...accountsQuery,
-			});
-			props.initialAccountsData = createInitialPaginatedData(
-				"accounts",
-				accountsQuery,
-				accountsData,
-			);
-		}
-
-		if (initialTab === "health") {
-			const healthData = await client.accounts.health.list({ limit: 20 });
-			props.initialHealthData = createInitialPaginatedData(
-				"accounts/health",
-				{},
-				healthData,
-			);
-		}
-
-		if (initialTab === "logs") {
-			const logsData = await client.connections.listLogs({ limit: 20 });
-			props.initialLogsData = createInitialPaginatedData(
-				"connections/logs",
-				{},
-				logsData,
-			);
-		}
-
-		if (initialTab === "workspaces") {
-			const workspacesData = await client.workspaces.list({ limit: 20 });
-			props.initialWorkspacesData = createInitialPaginatedData(
-				"workspaces",
-				{},
-				workspacesData,
-			);
-		}
-	} catch (error) {
-		console.error("Failed to preload connections page data:", error);
-	}
-
-	return props;
+		) as ConnectionsTab,
+	};
 }
 
 type DatePreset = "7d" | "30d" | "90d" | "year";
@@ -275,36 +165,11 @@ function getAnalyticsDatePreset(url: URL): DatePreset {
 	return "30d";
 }
 
-export async function getAnalyticsPageInitialProps(
-	locals: App.Locals,
+export function getAnalyticsPageRouteState(
 	url: URL,
-): Promise<Record<string, unknown>> {
-	const initialDatePreset = getAnalyticsDatePreset(url);
-	const dateRange = getAnalyticsDateRange(initialDatePreset);
-	const client = await getDashboardClient(locals);
-
-	const props: Record<string, unknown> = {
+): Record<string, unknown> {
+	return {
 		initialSelectedChannel: url.searchParams.get("channel"),
-		initialDatePreset,
+		initialDatePreset: getAnalyticsDatePreset(url),
 	};
-
-	if (!client) return props;
-
-	try {
-		const channelsData = await (client as any).get("/v1/analytics/channels", {
-			query: {
-				from_date: dateRange.from,
-				to_date: dateRange.to,
-			},
-		});
-		props.initialChannelsData = createInitialApiData(
-			"analytics/channels",
-			{ from_date: dateRange.from, to_date: dateRange.to },
-			channelsData,
-		);
-	} catch (error) {
-		console.error("Failed to preload analytics page data:", error);
-	}
-
-	return props;
 }

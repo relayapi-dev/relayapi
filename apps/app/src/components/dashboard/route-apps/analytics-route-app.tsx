@@ -1,8 +1,9 @@
-import { createDashboardRouteApp } from "../create-dashboard-route-app";
-import {
-	AnalyticsPageNew,
-	type AnalyticsPageNewProps,
-} from "../pages/analytics/analytics-page-new";
+import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
+import type { AnalyticsPageNewProps } from "../pages/analytics/analytics-page-new";
 
 export const AnalyticsRouteApp =
-	createDashboardRouteApp<AnalyticsPageNewProps>(AnalyticsPageNew);
+	createLazyDashboardRouteApp<AnalyticsPageNewProps>(() =>
+		import("../pages/analytics/analytics-page-new").then((module) => ({
+			default: module.AnalyticsPageNew,
+		})),
+	);

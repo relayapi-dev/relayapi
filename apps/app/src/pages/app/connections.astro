@@ -2,12 +2,12 @@
 import DashboardLayout from "../../layouts/DashboardLayout.astro";
 import { ConnectionsRouteApp } from "../../components/dashboard/route-apps/connections-route-app";
 import {
-	getConnectionsPageInitialProps,
+	getConnectionsPageRouteState,
 	getDashboardRouteContext,
 } from "../../lib/dashboard-page";
 
 const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
-const pageProps = await getConnectionsPageInitialProps(Astro.locals, Astro.url);
+const pageProps = getConnectionsPageRouteState(Astro.url);
 ---
 
 <DashboardLayout>

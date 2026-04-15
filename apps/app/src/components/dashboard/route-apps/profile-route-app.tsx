@@ -1,4 +1,7 @@
-import { createDashboardRouteApp } from "../create-dashboard-route-app";
-import { ProfilePage } from "../pages/profile-page";
+import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
 
-export const ProfileRouteApp = createDashboardRouteApp(ProfilePage);
+export const ProfileRouteApp = createLazyDashboardRouteApp(() =>
+	import("../pages/profile-page").then((module) => ({
+		default: module.ProfilePage,
+	})),
+);

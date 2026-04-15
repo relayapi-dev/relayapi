@@ -1,4 +1,7 @@
-import { createDashboardRouteApp } from "../create-dashboard-route-app";
-import { WebhooksPage } from "../pages/webhooks-page";
+import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
 
-export const WebhooksRouteApp = createDashboardRouteApp(WebhooksPage);
+export const WebhooksRouteApp = createLazyDashboardRouteApp(() =>
+	import("../pages/webhooks-page").then((module) => ({
+		default: module.WebhooksPage,
+	})),
+);
