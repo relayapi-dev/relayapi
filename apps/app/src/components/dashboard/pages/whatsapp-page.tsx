@@ -63,12 +63,13 @@ const statusColors: Record<string, string> = {
   submitted: "text-blue-400 bg-blue-400/10",
 };
 
-export function WhatsAppPage() {
+export function WhatsAppPage({
+  initialTab = "broadcasts",
+}: {
+  initialTab?: "broadcasts" | "templates" | "groups" | "settings";
+} = {}) {
   const filterQuery = useFilterQuery();
-  const [activeTab, setActiveTab] = useState(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    return params.get("tab") || "broadcasts";
-  });
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   const switchTab = (tab: string) => {
     setActiveTab(tab);

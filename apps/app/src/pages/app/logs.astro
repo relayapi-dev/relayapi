@@ -1,28 +1,25 @@
 ---
-import Dashboard from "../../components/dashboard/dashboard";
 import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import { LogsRouteApp } from "../../components/dashboard/route-apps/logs-route-app";
+import {
+	getDashboardRouteContext,
+	getSearchParamValue,
+} from "../../lib/dashboard-page";
 
-const u = Astro.locals.user;
-const user = u
-	? {
-			id: u.id as string,
-			name: u.name as string,
-			email: u.email as string,
-			image: (u.image as string) || null,
-			role: (u.role as string) || null,
-		}
-	: null;
-const o = Astro.locals.organization;
-const org = o
-	? {
-			id: o.id as string,
-			name: o.name as string,
-			slug: o.slug as string,
-			logo: (o.logo as string) || null,
-		}
-	: null;
+const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
+const initialTab = getSearchParamValue(
+	Astro.url,
+	"tab",
+	["api", "posts", "connections"] as const,
+	"api",
+);
 ---
 
 <DashboardLayout>
-	<Dashboard client:load initialPage="logs" user={user} organization={org} />
+	<LogsRouteApp
+		client:load
+		currentPage="logs"
+		pageProps={{ initialTab }}
+		{...dashboard}
+	/>
 </DashboardLayout>

@@ -1,7 +1,8 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, socialAccounts, socialAccountSyncState, workspaces, postTargets } from "@relayapi/db";
+import { createDb, socialAccounts, socialAccountSyncState, workspaces } from "@relayapi/db";
 import { and, desc, eq, isNull, gt, or, ilike, inArray } from "drizzle-orm";
 import { getOwnedAccount } from "../lib/accounts";
+import { deleteConnectedAccountGraph } from "../lib/delete-account";
 import { maybeDecrypt } from "../lib/crypto";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import { dispatchWebhookEvent } from "../services/webhook-delivery";
@@ -573,10 +574,7 @@ app.openapi(deleteAccount, async (c) => {
 	if (denied) return denied;
 
 	try {
-		console.log(`[accounts] Deleting account ${id}: removing post_targets...`);
-		await db.delete(postTargets).where(eq(postTargets.socialAccountId, id));
-		console.log(`[accounts] Deleting account ${id}: removing social_accounts...`);
-		await db.delete(socialAccounts).where(eq(socialAccounts.id, id));
+		await deleteConnectedAccountGraph(db, id);
 		console.log(`[accounts] Deleted account ${id} successfully`);
 	} catch (err) {
 		console.error(`[accounts] Failed to delete account ${id}:`, err);

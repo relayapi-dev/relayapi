@@ -66,11 +66,12 @@ interface WebhookLog {
 
 const tabs = ["Endpoints", "Logs"] as const;
 
-export function WebhooksPage() {
-  const [activeTab, setActiveTab] = useState(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    return params.get("tab") || "endpoints";
-  });
+export function WebhooksPage({
+  initialTab = "endpoints",
+}: {
+  initialTab?: "endpoints" | "logs";
+} = {}) {
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   const switchTab = (tab: string) => {
     setActiveTab(tab);

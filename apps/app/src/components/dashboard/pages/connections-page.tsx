@@ -18,6 +18,7 @@ import { WorkspaceSearchCombobox } from "@/components/dashboard/workspace-search
 import { useFilter } from "@/components/dashboard/filter-context";
 import { AccountHealthDialog } from "@/components/dashboard/account-health-dialog";
 import { hasPostingCapability, hasAnalyticsCapability, getExpectedScopes } from "@/lib/platform-scopes";
+import type { InitialPaginatedData } from "@/lib/dashboard-page";
 
 const stagger = {
   hidden: {},
@@ -89,11 +90,22 @@ const eventBg: Record<string, string> = {
   error: "bg-red-400/10",
 };
 
-export function ConnectionsPage() {
-  const [activeTab, setActiveTab] = useState(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    return params.get("tab") || "accounts";
-  });
+export interface ConnectionsPageProps {
+  initialAccountsData?: InitialPaginatedData<Account>;
+  initialHealthData?: InitialPaginatedData<HealthItem>;
+  initialLogsData?: InitialPaginatedData<LogEntry>;
+  initialTab?: "accounts" | "connect" | "workspaces" | "health" | "logs";
+  initialWorkspacesData?: InitialPaginatedData<WorkspaceItem>;
+}
+
+export function ConnectionsPage({
+  initialAccountsData,
+  initialHealthData,
+  initialLogsData,
+  initialTab = "accounts",
+  initialWorkspacesData,
+}: ConnectionsPageProps = {}) {
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   // Use shared filter context for group/account filtering
   const { workspaceId: workspaceFilterId, setWorkspaceId: setWorkspaceFilterId } = useFilter();
@@ -143,7 +155,13 @@ export function ConnectionsPage() {
     setData: setAccounts,
   } = usePaginatedApi<Account>(
     activeTab === "accounts" ? "accounts" : null,
-    { query: accountsQuery },
+    {
+      initialCursor: initialAccountsData?.nextCursor,
+      initialData: initialAccountsData?.data,
+      initialHasMore: initialAccountsData?.hasMore,
+      initialRequestKey: initialAccountsData?.requestKey,
+      query: accountsQuery,
+    },
   );
 
   const {
@@ -154,6 +172,12 @@ export function ConnectionsPage() {
     loadingMore: healthLoadingMore,
   } = usePaginatedApi<HealthItem>(
     activeTab === "health" ? "accounts/health" : null,
+    {
+      initialCursor: initialHealthData?.nextCursor,
+      initialData: initialHealthData?.data,
+      initialHasMore: initialHealthData?.hasMore,
+      initialRequestKey: initialHealthData?.requestKey,
+    },
   );
 
   // Health dialog state
@@ -167,6 +191,12 @@ export function ConnectionsPage() {
     loadingMore: logsLoadingMore,
   } = usePaginatedApi<LogEntry>(
     activeTab === "logs" ? "connections/logs" : null,
+    {
+      initialCursor: initialLogsData?.nextCursor,
+      initialData: initialLogsData?.data,
+      initialHasMore: initialLogsData?.hasMore,
+      initialRequestKey: initialLogsData?.requestKey,
+    },
   );
 
   const workspacesQuery: Record<string, string | undefined> = {};
@@ -183,7 +213,13 @@ export function ConnectionsPage() {
     setData: setGroups,
   } = usePaginatedApi<WorkspaceItem>(
     activeTab === "workspaces" ? "workspaces" : null,
-    { query: workspacesQuery },
+    {
+      initialCursor: initialWorkspacesData?.nextCursor,
+      initialData: initialWorkspacesData?.data,
+      initialHasMore: initialWorkspacesData?.hasMore,
+      initialRequestKey: initialWorkspacesData?.requestKey,
+      query: workspacesQuery,
+    },
   );
 
   const createWorkspaceMutation = useMutation<WorkspaceItem>("workspaces", "POST");

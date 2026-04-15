@@ -1,3 +1,5 @@
 ---
-return Astro.redirect("/app/scheduling");
+const url = new URL(Astro.request.url);
+url.pathname = "/app/scheduling";
+return Astro.redirect(`${url.pathname}${url.search}`);
 ---

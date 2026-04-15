@@ -85,13 +85,14 @@ function formatFileSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-export function MediaPage() {
+export function MediaPage({
+  initialTab = "library",
+}: {
+  initialTab?: "library" | "tools";
+} = {}) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [openTool, setOpenTool] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    return params.get("tab") || "library";
-  });
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   const switchTab = (tab: string) => {
     setActiveTab(tab);

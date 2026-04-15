@@ -1,33 +1,15 @@
 ---
-import Dashboard from "../../components/dashboard/dashboard";
 import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import { InboxReviewsRouteApp } from "../../components/dashboard/route-apps/inbox-reviews-route-app";
+import { getDashboardRouteContext } from "../../lib/dashboard-page";
 
-const u = Astro.locals.user;
-const user = u
-	? {
-			id: u.id as string,
-			name: u.name as string,
-			email: u.email as string,
-			image: (u.image as string) || null,
-			role: (u.role as string) || null,
-		}
-	: null;
-const o = Astro.locals.organization;
-const org = o
-	? {
-			id: o.id as string,
-			name: o.name as string,
-			slug: o.slug as string,
-			logo: (o.logo as string) || null,
-		}
-	: null;
+const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
 ---
 
 <DashboardLayout>
-	<Dashboard
+	<InboxReviewsRouteApp
 		client:load
-		initialPage="inbox-reviews"
-		user={user}
-		organization={org}
+		currentPage="inbox-reviews"
+		{...dashboard}
 	/>
 </DashboardLayout>

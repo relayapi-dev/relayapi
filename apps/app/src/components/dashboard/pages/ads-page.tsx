@@ -155,12 +155,13 @@ const campaignStatuses = ["all", "active", "paused", "draft", "completed", "canc
 
 // --- Main Component ---
 
-export function AdsPage() {
+export function AdsPage({
+  initialTab = "ads",
+}: {
+  initialTab?: "ads" | "campaigns" | "audiences" | "accounts";
+} = {}) {
   const filterQuery = useFilterQuery();
-  const [activeTab, setActiveTab] = useState(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    return params.get("tab") || "ads";
-  });
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   const switchTab = (tab: string) => {
     setActiveTab(tab);

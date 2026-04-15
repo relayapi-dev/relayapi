@@ -24,6 +24,7 @@ import { SentPostList } from "@/components/dashboard/pages/posts/sent-post-list"
 import { QueuePostList } from "@/components/dashboard/pages/posts/queue-post-list";
 import { WorkspaceGuard } from "@/components/dashboard/workspace-guard";
 import { flattenPost, type QueuePost } from "@/components/dashboard/pages/posts/queue-post-card";
+import type { InitialPaginatedData } from "@/lib/dashboard-page";
 
 interface PostTarget {
   status: string;
@@ -53,10 +54,31 @@ interface Post {
 
 const topTabs = ["All", "Queue", "Drafts", "Published"] as const;
 
-export function PostsPage() {
-  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
+export interface PostsPageProps {
+  initialAllData?: InitialPaginatedData<any>;
+  initialCalendarPeriod?: CalendarPeriod;
+  initialDraftsData?: InitialPaginatedData<Post>;
+  initialFailedData?: InitialPaginatedData<Post>;
+  initialPublishedData?: InitialPaginatedData<any>;
+  initialQueueData?: InitialPaginatedData<Post>;
+  initialTab?: "all" | "queue" | "drafts" | "published";
+  initialViewMode?: "list" | "calendar";
+}
+
+export function PostsPage({
+  initialAllData,
+  initialCalendarPeriod = "week",
+  initialDraftsData,
+  initialFailedData,
+  initialPublishedData,
+  initialQueueData,
+  initialTab = "all",
+  initialViewMode = "calendar",
+}: PostsPageProps = {}) {
+  const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 767px)");
+    setIsMobile(mq.matches);
     const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
@@ -66,39 +88,9 @@ export function PostsPage() {
   const [newPostInitialDate, setNewPostInitialDate] = useState<string | undefined>();
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [editPostData, setEditPostData] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    const explicit = params.get("tab");
-    if (explicit) return explicit === "sent" ? "published" : explicit;
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("posts:activeTab");
-      if (saved) return saved;
-    }
-    return "all";
-  });
-  const [viewMode, setViewMode] = useState<"list" | "calendar">(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    const explicit = params.get("view") as "list" | "calendar" | null;
-    if (explicit) return explicit;
-    // Restore from localStorage
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("posts:viewMode") as "list" | "calendar" | null;
-      if (saved) return saved;
-      // Default to list on mobile (< 768px), calendar on desktop
-      if (window.innerWidth < 768) return "list";
-    }
-    return "calendar";
-  });
-  const [calendarPeriod, setCalendarPeriod] = useState<CalendarPeriod>(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    const explicit = params.get("period") as CalendarPeriod | null;
-    if (explicit) return explicit;
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("posts:calendarPeriod") as CalendarPeriod | null;
-      if (saved) return saved;
-    }
-    return "week";
-  });
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [viewMode, setViewMode] = useState<"list" | "calendar">(initialViewMode);
+  const [calendarPeriod, setCalendarPeriod] = useState<CalendarPeriod>(initialCalendarPeriod);
 
   const switchTab = (tab: string) => {
     setActiveTab(tab);
@@ -124,13 +116,25 @@ export function PostsPage() {
     refetch: refetchQueue,
   } = usePaginatedApi<Post>(
     activeTab === "queue" ? "posts" : null,
-    { query: queueQuery },
+    {
+      initialCursor: initialQueueData?.nextCursor,
+      initialData: initialQueueData?.data,
+      initialHasMore: initialQueueData?.hasMore,
+      initialRequestKey: initialQueueData?.requestKey,
+      query: queueQuery,
+    },
   );
 
   // Also fetch failed posts count for badge
   const { data: failedPosts, refetch: refetchFailed } = usePaginatedApi<Post>(
     activeTab === "queue" ? "posts" : null,
-    { query: { ...filterQuery, status: "failed", include: "targets,media" } },
+    {
+      initialCursor: initialFailedData?.nextCursor,
+      initialData: initialFailedData?.data,
+      initialHasMore: initialFailedData?.hasMore,
+      initialRequestKey: initialFailedData?.requestKey,
+      query: { ...filterQuery, status: "failed", include: "targets,media" },
+    },
   );
 
   // Drafts tab: draft posts
@@ -146,7 +150,13 @@ export function PostsPage() {
     refetch: refetchDrafts,
   } = usePaginatedApi<Post>(
     activeTab === "drafts" ? "posts" : null,
-    { query: draftsQuery },
+    {
+      initialCursor: initialDraftsData?.nextCursor,
+      initialData: initialDraftsData?.data,
+      initialHasMore: initialDraftsData?.hasMore,
+      initialRequestKey: initialDraftsData?.requestKey,
+      query: draftsQuery,
+    },
   );
 
   // Published tab: all published posts (internal + external) with full targets, media, and metrics
@@ -167,7 +177,13 @@ export function PostsPage() {
     refetch: refetchPublished,
   } = usePaginatedApi<any>(
     activeTab === "published" ? "posts" : null,
-    { query: publishedQuery },
+    {
+      initialCursor: initialPublishedData?.nextCursor,
+      initialData: initialPublishedData?.data,
+      initialHasMore: initialPublishedData?.hasMore,
+      initialRequestKey: initialPublishedData?.requestKey,
+      query: publishedQuery,
+    },
   );
 
   // All tab: everything except drafts
@@ -187,7 +203,13 @@ export function PostsPage() {
     refetch: refetchAll,
   } = usePaginatedApi<any>(
     activeTab === "all" ? "posts" : null,
-    { query: allQuery },
+    {
+      initialCursor: initialAllData?.nextCursor,
+      initialData: initialAllData?.data,
+      initialHasMore: initialAllData?.hasMore,
+      initialRequestKey: initialAllData?.requestKey,
+      query: allQuery,
+    },
   );
 
   const [syncing, setSyncing] = useState(false);

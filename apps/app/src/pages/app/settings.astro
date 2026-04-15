@@ -1,12 +1,16 @@
 ---
 import DashboardLayout from "../../layouts/DashboardLayout.astro";
-import Dashboard from "../../components/dashboard/dashboard";
-const u = Astro.locals.user;
-const user = u ? { id: u.id as string, name: u.name as string, email: u.email as string, image: (u.image as string) || null, role: (u.role as string) || null } : null;
-const o = Astro.locals.organization;
-const org = o ? { id: o.id as string, name: o.name as string, slug: o.slug as string, logo: (o.logo as string) || null } : null;
+import { SettingsRouteApp } from "../../components/dashboard/route-apps/settings-route-app";
+import { getDashboardRouteContext } from "../../lib/dashboard-page";
+
+const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
 ---
 
 <DashboardLayout>
-  <Dashboard client:load initialPage="settings" user={user} organization={org} />
+	<SettingsRouteApp
+		client:load
+		currentPage="settings"
+		requiresApiKey={false}
+		{...dashboard}
+	/>
 </DashboardLayout>

@@ -209,11 +209,17 @@ function formatInterval(minutes: number) {
 
 // --- Main Component ---
 
-export function CampaignsPage() {
-  const [activeTab, setActiveTab] = useState(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    return params.get("tab") || "broadcasts";
-  });
+export function CampaignsPage({
+  initialTab = "broadcasts",
+}: {
+  initialTab?:
+    | "broadcasts"
+    | "sequences"
+    | "comment-to-dm"
+    | "auto-post"
+    | "engagement-rules";
+} = {}) {
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   const switchTab = (tab: string) => {
     setActiveTab(tab);

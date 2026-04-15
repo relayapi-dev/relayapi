@@ -1,9 +1,6 @@
 import type Relay from "@relayapi/sdk";
+import { API_BASE_URL } from "./api-base-url";
 import { getRelayClient } from "./relay";
-
-const API_BASE_URL =
-  import.meta.env.API_BASE_URL ||
-  (import.meta.env.DEV ? "http://localhost:8789" : "https://api.relayapi.dev");
 
 /**
  * Get the SDK client from an Astro API context, or return an error Response.

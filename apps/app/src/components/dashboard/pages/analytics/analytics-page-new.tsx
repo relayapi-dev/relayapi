@@ -8,6 +8,7 @@ import { platformLabels, platformColors, platformAvatars } from "@/lib/platform-
 import { platformIcons } from "@/lib/platform-icons";
 import { AnalyticsHome } from "./analytics-home";
 import { AnalyticsChannel } from "./analytics-channel";
+import type { InitialApiData } from "@/lib/dashboard-page";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -91,7 +92,17 @@ const fadeUp = {
 // Component
 // ---------------------------------------------------------------------------
 
-export function AnalyticsPageNew() {
+export interface AnalyticsPageNewProps {
+  initialChannelsData?: InitialApiData<ChannelsResponse>;
+  initialDatePreset?: DatePreset;
+  initialSelectedChannel?: string | null;
+}
+
+export function AnalyticsPageNew({
+  initialChannelsData,
+  initialDatePreset = "30d",
+  initialSelectedChannel = null,
+}: AnalyticsPageNewProps = {}) {
   // -- Usage / pro gate -----------------------------------------------------
 
   const { usage } = useUsage();
@@ -99,13 +110,7 @@ export function AnalyticsPageNew() {
 
   // -- URL-driven state: selected channel -----------------------------------
 
-  const [selectedChannel, setSelectedChannel] = useState<string | null>(() => {
-    const params =
-      typeof window !== "undefined"
-        ? new URLSearchParams(window.location.search)
-        : new URLSearchParams();
-    return params.get("channel") || null;
-  });
+  const [selectedChannel, setSelectedChannel] = useState<string | null>(initialSelectedChannel);
 
   const selectChannel = (channelId: string | null) => {
     setSelectedChannel(channelId);
@@ -120,22 +125,7 @@ export function AnalyticsPageNew() {
 
   // -- URL-driven state: date range -----------------------------------------
 
-  const [datePreset, setDatePreset] = useState<DatePreset>(() => {
-    const params =
-      typeof window !== "undefined"
-        ? new URLSearchParams(window.location.search)
-        : new URLSearchParams();
-    const fromParam = params.get("from");
-    const toParam = params.get("to");
-    // Try to match existing params to a preset; fall back to 30d
-    if (fromParam && toParam) {
-      for (const p of ["7d", "30d", "90d", "year"] as DatePreset[]) {
-        const range = getDateRange(p);
-        if (range.from === fromParam && range.to === toParam) return p;
-      }
-    }
-    return "30d";
-  });
+  const [datePreset, setDatePreset] = useState<DatePreset>(initialDatePreset);
 
   const dateRange = useMemo(() => getDateRange(datePreset), [datePreset]);
 
@@ -152,7 +142,11 @@ export function AnalyticsPageNew() {
 
   const { data: channelsResponse, loading } = useApi<ChannelsResponse>(
     isPro ? "analytics/channels" : null,
-    { query: { from_date: dateRange.from, to_date: dateRange.to } },
+    {
+      initialData: initialChannelsData?.data,
+      initialRequestKey: initialChannelsData?.requestKey,
+      query: { from_date: dateRange.from, to_date: dateRange.to },
+    },
   );
 
   const channels = channelsResponse?.data ?? [];

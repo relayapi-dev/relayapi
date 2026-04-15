@@ -127,6 +127,13 @@
       "when": 1776012395378,
       "tag": "0017_soft_the_santerians",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1776254511060,
+      "tag": "0018_solid_shen",
+      "breakpoints": true
     }
   ]
 }

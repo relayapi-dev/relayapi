@@ -20,12 +20,13 @@ import { InlineReplyBox } from "@/components/dashboard/inbox/inline-reply-box";
 import { PostDetailPanel } from "@/components/dashboard/inbox/post-detail-panel";
 import { platformIcons } from "@/lib/platform-icons";
 
-export function InboxCommentsPage() {
+export function InboxCommentsPage({
+  initialViewMode = "by-post",
+}: {
+  initialViewMode?: "list" | "by-post";
+} = {}) {
   const filterQuery = useFilterQuery();
-  const [viewMode, setViewMode] = useState<"list" | "by-post">(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    return (params.get("view") as "list" | "by-post") || "by-post";
-  });
+  const [viewMode, setViewMode] = useState<"list" | "by-post">(initialViewMode);
 
   const switchView = (view: "list" | "by-post") => {
     setViewMode(view);

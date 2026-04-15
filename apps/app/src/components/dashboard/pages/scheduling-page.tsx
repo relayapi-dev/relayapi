@@ -42,11 +42,12 @@ const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const tabs = ["Queue Slots", "Preview"] as const;
 
-export function SchedulingPage() {
-  const [activeTab, setActiveTab] = useState(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    return params.get("tab") || "queue-slots";
-  });
+export function SchedulingPage({
+  initialTab = "queue-slots",
+}: {
+  initialTab?: "queue-slots" | "preview";
+} = {}) {
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   const [createOpen, setCreateOpen] = useState(false);
 

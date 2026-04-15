@@ -1,3 +1,5 @@
 ---
-return Astro.redirect("/app/team");
+const url = new URL(Astro.request.url);
+url.pathname = "/app/team";
+return Astro.redirect(`${url.pathname}${url.search}`);
 ---

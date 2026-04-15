@@ -1,33 +1,25 @@
 ---
-import Dashboard from "../../components/dashboard/dashboard";
 import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import { InboxCommentsRouteApp } from "../../components/dashboard/route-apps/inbox-comments-route-app";
+import {
+	getDashboardRouteContext,
+	getSearchParamValue,
+} from "../../lib/dashboard-page";
 
-const u = Astro.locals.user;
-const user = u
-	? {
-			id: u.id as string,
-			name: u.name as string,
-			email: u.email as string,
-			image: (u.image as string) || null,
-			role: (u.role as string) || null,
-		}
-	: null;
-const o = Astro.locals.organization;
-const org = o
-	? {
-			id: o.id as string,
-			name: o.name as string,
-			slug: o.slug as string,
-			logo: (o.logo as string) || null,
-		}
-	: null;
+const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
+const initialViewMode = getSearchParamValue(
+	Astro.url,
+	"view",
+	["list", "by-post"] as const,
+	"by-post",
+);
 ---
 
 <DashboardLayout>
-	<Dashboard
+	<InboxCommentsRouteApp
 		client:load
-		initialPage="inbox-comments"
-		user={user}
-		organization={org}
+		currentPage="inbox-comments"
+		pageProps={{ initialViewMode }}
+		{...dashboard}
 	/>
 </DashboardLayout>

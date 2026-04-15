@@ -1919,7 +1919,7 @@ export const ads = pgTable(
 			.references(() => adCampaigns.id, { onDelete: "cascade" }),
 		adAccountId: text("ad_account_id")
 			.notNull()
-			.references(() => adAccounts.id),
+			.references(() => adAccounts.id, { onDelete: "cascade" }),
 		platform: adPlatformEnum("platform").notNull(),
 		platformAdId: text("platform_ad_id"),
 		name: text("name").notNull(),
@@ -2077,7 +2077,7 @@ export const adSyncLogs = pgTable(
 			.references(() => organization.id),
 		adAccountId: text("ad_account_id")
 			.notNull()
-			.references(() => adAccounts.id),
+			.references(() => adAccounts.id, { onDelete: "cascade" }),
 		platform: adPlatformEnum("platform").notNull(),
 		syncType: text("sync_type").notNull(),
 		adsCreated: integer("ads_created").default(0),

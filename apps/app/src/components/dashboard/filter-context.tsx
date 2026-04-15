@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 
 interface FilterState {
   workspaceId: string | null;
@@ -30,16 +30,18 @@ export function useFilterQuery(): Record<string, string | undefined> {
   return query;
 }
 
-export function FilterProvider({ children }: { children: ReactNode }) {
-  const [workspaceId, setWorkspaceIdState] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return new URLSearchParams(window.location.search).get("workspace") || null;
-  });
+export function FilterProvider({
+  children,
+  initialAccountId = null,
+  initialWorkspaceId = null,
+}: {
+  children: ReactNode;
+  initialAccountId?: string | null;
+  initialWorkspaceId?: string | null;
+}) {
+  const [workspaceId, setWorkspaceIdState] = useState<string | null>(initialWorkspaceId);
 
-  const [accountId, setAccountIdState] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return new URLSearchParams(window.location.search).get("account") || null;
-  });
+  const [accountId, setAccountIdState] = useState<string | null>(initialAccountId);
 
   // Sync to URL params
   const syncUrl = useCallback((wId: string | null, aId: string | null) => {

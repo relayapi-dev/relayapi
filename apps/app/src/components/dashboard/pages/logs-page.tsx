@@ -132,12 +132,13 @@ const endpointMap: Record<string, string> = {
 
 // --- Main component ---
 
-export function LogsPage() {
+export function LogsPage({
+  initialTab = "api",
+}: {
+  initialTab?: "api" | "posts" | "connections";
+} = {}) {
   const filterQuery = useFilterQuery();
-  const [activeTab, setActiveTab] = useState(() => {
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
-    return params.get("tab") || "api";
-  });
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [levelFilter, setLevelFilter] = useState<string>("All");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
