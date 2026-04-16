@@ -809,22 +809,31 @@ app.openapi(bulkCreate, async (c) => {
 		const insertedIds = result.map((r) => r.id);
 		created += insertedIds.length;
 
-		// Insert channels for contacts that have channel info
+		// Batch channel inserts for this batch — one query instead of N.
+		// onConflictDoNothing mirrors the prior per-row try/catch on duplicates.
+		const channelValues: Array<{
+			contactId: string;
+			socialAccountId: string;
+			platform: typeof contactChannels.$inferInsert.platform;
+			identifier: string;
+		}> = [];
 		for (let j = 0; j < batch.length; j++) {
 			const item = batch[j]!;
 			const contactId = insertedIds[j];
 			if (contactId && item.account_id && item.platform && item.identifier) {
-				try {
-					await db.insert(contactChannels).values({
-						contactId,
-						socialAccountId: item.account_id,
-						platform: item.platform,
-						identifier: item.identifier,
-					});
-				} catch {
-					// Duplicate channel — skip
-				}
+				channelValues.push({
+					contactId,
+					socialAccountId: item.account_id,
+					platform: item.platform as typeof contactChannels.$inferInsert.platform,
+					identifier: item.identifier,
+				});
 			}
+		}
+		if (channelValues.length > 0) {
+			await db
+				.insert(contactChannels)
+				.values(channelValues)
+				.onConflictDoNothing();
 		}
 	}
 
@@ -935,45 +944,44 @@ app.openapi(mergeContact, async (c) => {
 	const sourceDenied = assertWorkspaceScope(c, source.workspaceId);
 	if (sourceDenied) return sourceDenied;
 
-	// Move channels from source to target (skip duplicates)
-	let channelsMoved = 0;
-	const sourceChannels = await db
-		.select()
-		.from(contactChannels)
-		.where(eq(contactChannels.contactId, sourceId));
+	// Move channels from source to target in bulk (skip duplicates).
+	// Two queries total instead of N: first delete source rows whose
+	// (socialAccountId, identifier) already exists under target (would violate
+	// the unique index), then re-parent the rest.
+	await db.execute(sql`
+		DELETE FROM contact_channels
+		WHERE contact_id = ${sourceId}
+			AND (social_account_id, identifier) IN (
+				SELECT social_account_id, identifier
+				FROM contact_channels
+				WHERE contact_id = ${targetId}
+			)
+	`);
+	const channelsMovedRows = await db
+		.update(contactChannels)
+		.set({ contactId: targetId })
+		.where(eq(contactChannels.contactId, sourceId))
+		.returning({ id: contactChannels.id });
+	const channelsMoved = channelsMovedRows.length;
 
-	for (const ch of sourceChannels) {
-		try {
-			await db
-				.update(contactChannels)
-				.set({ contactId: targetId })
-				.where(eq(contactChannels.id, ch.id));
-			channelsMoved++;
-		} catch {
-			// Duplicate unique constraint — delete the source channel instead
-			await db.delete(contactChannels).where(eq(contactChannels.id, ch.id));
-		}
-	}
-
-	// Move custom field values from source to target (skip duplicates)
-	let fieldsMoved = 0;
-	const sourceFields = await db
-		.select()
-		.from(customFieldValues)
-		.where(eq(customFieldValues.contactId, sourceId));
-
-	for (const fv of sourceFields) {
-		try {
-			await db
-				.update(customFieldValues)
-				.set({ contactId: targetId })
-				.where(eq(customFieldValues.id, fv.id));
-			fieldsMoved++;
-		} catch {
-			// Duplicate — delete the source value
-			await db.delete(customFieldValues).where(eq(customFieldValues.id, fv.id));
-		}
-	}
+	// Move custom field values from source to target in bulk (skip duplicates).
+	// Same pattern: the unique index is on (definitionId, contactId), so delete
+	// source rows whose definitionId already has a value on target, then re-parent.
+	await db.execute(sql`
+		DELETE FROM custom_field_values
+		WHERE contact_id = ${sourceId}
+			AND definition_id IN (
+				SELECT definition_id
+				FROM custom_field_values
+				WHERE contact_id = ${targetId}
+			)
+	`);
+	const fieldsMovedRows = await db
+		.update(customFieldValues)
+		.set({ contactId: targetId })
+		.where(eq(customFieldValues.contactId, sourceId))
+		.returning({ id: customFieldValues.id });
+	const fieldsMoved = fieldsMovedRows.length;
 
 	// Update broadcast recipients from source to target
 	const recipientResult = await db

@@ -8,6 +8,7 @@ import {
 	contactChannels,
 } from "@relayapi/db";
 import { and, eq, desc, inArray, sql, lte, count } from "drizzle-orm";
+import { mapConcurrently } from "../lib/concurrency";
 import { maybeDecrypt } from "../lib/crypto";
 import { sendMessage } from "../services/message-sender";
 import { ErrorResponse } from "../schemas/common";
@@ -611,22 +612,23 @@ app.openapi(addRecipients, async (c) => {
 		);
 	}
 
-	let added = 0;
-	let skipped = 0;
-
-	for (const item of toInsert) {
-		try {
-			await db.insert(broadcastRecipients).values({
+	// Bulk insert — returning the inserted rows lets us count added vs skipped
+	// without doing N round-trips. onConflictDoNothing matches the prior
+	// try/catch handling of unique constraint collisions.
+	const insertResult = await db
+		.insert(broadcastRecipients)
+		.values(
+			toInsert.map((item) => ({
 				broadcastId: id,
 				contactId: item.contactId,
 				contactIdentifier: item.contactIdentifier,
-			});
-			added++;
-		} catch {
-			// Unique constraint violation = duplicate
-			skipped++;
-		}
-	}
+			})),
+		)
+		.onConflictDoNothing()
+		.returning({ id: broadcastRecipients.id });
+
+	const added = insertResult.length;
+	const skipped = toInsert.length - added;
 
 	// Update recipient count
 	if (added > 0) {
@@ -770,40 +772,51 @@ app.openapi(sendBroadcastRoute, async (c) => {
 			),
 		);
 
-	let sent = 0;
-	let failed = 0;
+	// Fan out platform calls + per-recipient DB updates concurrently. Keep the
+	// concurrency modest to respect platform rate limits and Hyperdrive's
+	// outbound connection cap.
+	const BROADCAST_SEND_CONCURRENCY = 5;
+	const outcomes = await mapConcurrently(
+		recipients,
+		BROADCAST_SEND_CONCURRENCY,
+		async (recipient) => {
+			const result = await sendMessage({
+				platform: broadcast.platform,
+				accessToken: account.accessToken!,
+				platformAccountId: account.platformAccountId ?? "",
+				recipientId: recipient.contactIdentifier,
+				text: broadcast.messageText ?? "",
+				templateName: broadcast.templateName ?? undefined,
+				templateLanguage: broadcast.templateLanguage ?? undefined,
+				templateComponents: (recipient.variables
+					? (recipient.variables as unknown[])
+					: (broadcast.templateComponents as unknown[] | null)) ?? undefined,
+			});
 
-	for (const recipient of recipients) {
-		const result = await sendMessage({
-			platform: broadcast.platform,
-			accessToken: account.accessToken,
-			platformAccountId: account.platformAccountId ?? "",
-			recipientId: recipient.contactIdentifier,
-			text: broadcast.messageText ?? "",
-			templateName: broadcast.templateName ?? undefined,
-			templateLanguage: broadcast.templateLanguage ?? undefined,
-			templateComponents: (recipient.variables
-				? (recipient.variables as unknown[])
-				: (broadcast.templateComponents as unknown[] | null)) ?? undefined,
-		});
-
-		if (result.success) {
-			await db
-				.update(broadcastRecipients)
-				.set({
-					status: "sent",
-					messageId: result.messageId ?? null,
-					sentAt: new Date(),
-				})
-				.where(eq(broadcastRecipients.id, recipient.id));
-			sent++;
-		} else {
+			if (result.success) {
+				await db
+					.update(broadcastRecipients)
+					.set({
+						status: "sent",
+						messageId: result.messageId ?? null,
+						sentAt: new Date(),
+					})
+					.where(eq(broadcastRecipients.id, recipient.id));
+				return "sent" as const;
+			}
 			await db
 				.update(broadcastRecipients)
 				.set({ status: "failed", error: result.error ?? "Unknown error" })
 				.where(eq(broadcastRecipients.id, recipient.id));
-			failed++;
-		}
+			return "failed" as const;
+		},
+	);
+
+	let sent = 0;
+	let failed = 0;
+	for (const outcome of outcomes) {
+		if (outcome === "sent") sent++;
+		else failed++;
 	}
 
 	const finalStatus: BroadcastStatus =

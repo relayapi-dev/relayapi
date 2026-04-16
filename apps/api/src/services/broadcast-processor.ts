@@ -32,26 +32,34 @@ export async function processScheduledBroadcasts(env: Env): Promise<void> {
 
 	if (dueBroadcasts.length === 0) return;
 
-	for (const broadcast of dueBroadcasts) {
-		try {
-			await executeBroadcast(db, broadcast, env);
-		} catch (err) {
-			console.error(
-				`[broadcast-processor] Failed to process broadcast ${broadcast.id}:`,
-				err,
-			);
-			// Mark as failed so it doesn't retry forever
-			await db
-				.update(broadcasts)
-				.set({
+	// The query caps at 5 due broadcasts per tick, so running them concurrently
+	// is safe — one slow broadcast can no longer delay the others.
+	await Promise.allSettled(
+		dueBroadcasts.map(async (broadcast) => {
+			try {
+				await executeBroadcast(db, broadcast, env);
+			} catch (err) {
+				console.error(
+					`[broadcast-processor] Failed to process broadcast ${broadcast.id}:`,
+					err,
+				);
+				// Mark as failed so it doesn't retry forever
+				await db
+					.update(broadcasts)
+					.set({
+						status: "failed",
+						completedAt: new Date(),
+						updatedAt: new Date(),
+					})
+					.where(eq(broadcasts.id, broadcast.id));
+				await notifyRealtime(env, broadcast.organizationId, {
+					type: "broadcast.updated",
+					broadcast_id: broadcast.id,
 					status: "failed",
-					completedAt: new Date(),
-					updatedAt: new Date(),
-				})
-				.where(eq(broadcasts.id, broadcast.id));
-			await notifyRealtime(env, broadcast.organizationId, { type: "broadcast.updated", broadcast_id: broadcast.id, status: "failed" }).catch(() => {});
-		}
-	}
+				}).catch(() => {});
+			}
+		}),
+	);
 }
 
 async function executeBroadcast(

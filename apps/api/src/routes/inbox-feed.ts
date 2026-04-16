@@ -223,41 +223,52 @@ app.openapi(bulkRoute, async (c) => {
 	let failed = 0;
 	const errors: string[] = [];
 
+	// Label/unlabel are the only actions that need the current labels array to
+	// compute the merged result. Pre-fetch all of them in one query so the
+	// per-conversation loop doesn't do its own SELECT.
+	const needsLabels = action === "label" || action === "unlabel";
+	const existingLabelsByConvo = new Map<string, string[]>();
+	if (needsLabels && targets.length > 0) {
+		const scopeConds = [
+			inArray(inboxConversations.id, targets),
+			eq(inboxConversations.organizationId, orgId),
+		];
+		if (workspaceScope !== "all") {
+			scopeConds.push(inArray(inboxConversations.workspaceId, workspaceScope));
+		}
+		const rows = await db
+			.select({ id: inboxConversations.id, labels: inboxConversations.labels })
+			.from(inboxConversations)
+			.where(and(...scopeConds));
+		for (const r of rows) {
+			existingLabelsByConvo.set(r.id, r.labels ?? []);
+		}
+	}
+
 	for (const conversationId of targets) {
 		try {
 			let updates: Parameters<typeof updateConversation>[3];
 
 			switch (action) {
 				case "label": {
-					// Append labels — fetch current, merge, deduplicate
-					const [existing] = await db
-						.select({ labels: inboxConversations.labels })
-						.from(inboxConversations)
-						.where(and(...wsConditions(conversationId)))
-						.limit(1);
-					if (!existing) {
+					const currentLabels = existingLabelsByConvo.get(conversationId);
+					if (currentLabels === undefined) {
 						failed++;
 						errors.push(`${conversationId}: not found`);
 						continue;
 					}
-					const currentLabels = existing.labels ?? [];
 					const newLabels = params?.labels ?? [];
 					const merged = [...new Set([...currentLabels, ...newLabels])];
 					updates = { labels: merged };
 					break;
 				}
 				case "unlabel": {
-					const [existing] = await db
-						.select({ labels: inboxConversations.labels })
-						.from(inboxConversations)
-						.where(and(...wsConditions(conversationId)))
-						.limit(1);
-					if (!existing) {
+					const currentLabels = existingLabelsByConvo.get(conversationId);
+					if (currentLabels === undefined) {
 						failed++;
 						errors.push(`${conversationId}: not found`);
 						continue;
 					}
-					const currentLabels = existing.labels ?? [];
 					const removeLabels = new Set(params?.labels ?? []);
 					updates = {
 						labels: currentLabels.filter((l) => !removeLabels.has(l)),

@@ -1,3 +1,4 @@
+import { mapConcurrently } from "../lib/concurrency";
 import { incrementUsage } from "../middleware/usage-tracking";
 import { scheduleFirstMetricsRefresh } from "../services/analytics-refresh";
 import {
@@ -6,6 +7,11 @@ import {
 } from "../services/engagement-rule-processor";
 import { publishPostById } from "../services/publisher-runner";
 import type { Env } from "../types";
+
+// Each publish message fans out to multiple platform APIs; cap concurrency
+// to keep Hyperdrive happy (Workers allow ~5-6 simultaneous outbound sockets)
+// and to avoid spiking external platforms.
+const PUBLISH_CONCURRENCY = 5;
 
 interface PublishMessage {
 	type: string;
@@ -24,7 +30,7 @@ export async function consumePublishQueue(
 	batch: MessageBatch<PublishMessage>,
 	env: Env,
 ): Promise<void> {
-	for (const message of batch.messages) {
+	await mapConcurrently(batch.messages, PUBLISH_CONCURRENCY, async (message) => {
 		const body = message.body;
 
 		if (
@@ -53,7 +59,7 @@ export async function consumePublishQueue(
 		} else {
 			message.ack();
 		}
-	}
+	});
 }
 
 async function handleThreadPublish(
