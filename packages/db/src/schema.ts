@@ -147,6 +147,7 @@ export const apikey = authSchema.table(
 	(table) => [
 		index("apikey_referenceId_idx").on(table.referenceId),
 		index("apikey_organizationId_idx").on(table.organizationId),
+		index("apikey_key_idx").on(table.key),
 	],
 );
 
@@ -426,6 +427,11 @@ export const posts = pgTable(
 			table.publishedAt,
 		),
 		index("posts_workspace_idx").on(table.workspaceId),
+		index("posts_org_workspace_created_idx").on(
+			table.organizationId,
+			table.workspaceId,
+			table.createdAt,
+		),
 		index("posts_status_scheduled_idx").on(table.status, table.scheduledAt),
 		index("posts_recycled_from_idx").on(table.recycledFromId),
 		index("posts_thread_group_idx").on(table.threadGroupId, table.threadPosition),
@@ -455,7 +461,6 @@ export const postTargets = pgTable(
 			.notNull(),
 	},
 	(table) => [
-		index("post_targets_post_id_idx").on(table.postId),
 		index("post_targets_post_status_idx").on(table.postId, table.status),
 		index("post_targets_social_account_id_idx").on(table.socialAccountId),
 		index("post_targets_updated_at_idx").on(table.updatedAt),
@@ -685,10 +690,6 @@ export const apiRequestLogs = pgTable(
 			.notNull(),
 	},
 	(table) => [
-		index("api_request_logs_org_id_desc_idx").on(
-			table.organizationId,
-			table.id,
-		),
 		index("api_request_logs_org_created_idx").on(
 			table.organizationId,
 			table.createdAt,
@@ -2192,6 +2193,11 @@ export const externalPosts = pgTable(
 		index("external_posts_org_published_idx").on(
 			table.organizationId,
 			table.publishedAt,
+		),
+		// listPosts media lookup: platform_post_id IN (...) AND organization_id = X
+		index("external_posts_org_platform_post_idx").on(
+			table.organizationId,
+			table.platformPostId,
 		),
 		// Workspace filtering
 		index("external_posts_workspace_idx").on(table.workspaceId),

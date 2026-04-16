@@ -9,7 +9,7 @@ import {
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import type { Env, KVKeyData, Variables } from "../types";
 import { PRICING } from "../types";
-import { hashKey } from "../middleware/auth";
+import { hashKey, kvTtlForKey } from "../middleware/auth";
 import {
 	requireAllWorkspaceScopeMiddleware,
 	requireWriteAccessMiddleware,
@@ -227,9 +227,7 @@ app.openapi(createApiKey, async (c) => {
 		daily_tool_limit: c.get("dailyToolLimit"),
 	};
 	await c.env.KV.put(`apikey:${hashedKey}`, JSON.stringify(kvData), {
-		expirationTtl: expiresAt
-			? Math.max(Math.floor((expiresAt.getTime() - Date.now()) / 1000), 60)
-			: 86400 * 365,
+		expirationTtl: kvTtlForKey(expiresAt),
 	});
 
 	return c.json(

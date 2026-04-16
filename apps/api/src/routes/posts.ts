@@ -1601,6 +1601,7 @@ app.openapi(getPost, async (c) => {
 			platformOverrides: posts.platformOverrides,
 			timezone: posts.timezone,
 			recycledFromId: posts.recycledFromId,
+			workspaceId: posts.workspaceId,
 			createdAt: posts.createdAt,
 			updatedAt: posts.updatedAt,
 		})
@@ -1614,6 +1615,9 @@ app.openapi(getPost, async (c) => {
 			404,
 		);
 	}
+
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
 
 	const [targets, [recyclingConfig]] = await Promise.all([
 		db
@@ -1694,6 +1698,9 @@ app.openapi(updatePostRoute, async (c) => {
 			404,
 		);
 	}
+
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
 
 	if (!["draft", "scheduled", "failed"].includes(post.status)) {
 		return c.json(
@@ -1888,7 +1895,7 @@ app.openapi(deletePost, async (c) => {
 	const db = createDb(c.env.HYPERDRIVE.connectionString);
 
 	const [post] = await db
-		.select({ id: posts.id, status: posts.status })
+		.select({ id: posts.id, status: posts.status, workspaceId: posts.workspaceId })
 		.from(posts)
 		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
 		.limit(1);
@@ -1899,6 +1906,9 @@ app.openapi(deletePost, async (c) => {
 			404,
 		);
 	}
+
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied;
 
 	// Delete recycling config, targets, then post (FK constraints)
 	await db
@@ -1931,6 +1941,9 @@ app.openapi(retryPost, async (c) => {
 			404,
 		);
 	}
+
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
 
 	if (!["failed", "partial"].includes(post.status)) {
 		return c.json(

@@ -497,7 +497,7 @@ export function Sidebar({
 
 			<aside
 				className={cn(
-					"fixed top-0 z-50 h-dvh w-56 shrink-0 border-r border-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:translate-x-0",
+					"fixed top-0 left-0 z-60 h-dvh w-56 shrink-0 border-r border-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:translate-x-0",
 					isOpen ? "translate-x-0" : "-translate-x-full",
 				)}
 			>

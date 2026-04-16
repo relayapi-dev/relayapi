@@ -26,7 +26,6 @@ let pingInterval: ReturnType<typeof setInterval> | null = null;
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let attempt = 0;
 let connecting = false;
-let wsInfo: { url: string; token: string } | null = null;
 
 function broadcast(event: RealtimeEvent) {
   for (const listener of listeners) {
@@ -49,14 +48,13 @@ function scheduleReconnect() {
   if (listeners.size === 0) return;
   const delay = Math.min(1000 * 2 ** attempt, 30_000);
   attempt++;
-  // If wsInfo isn't loaded yet, retry the full flow; otherwise just reconnect the WS
-  reconnectTimeout = setTimeout(wsInfo ? connectWs : () => ensureConnection(), delay);
+  reconnectTimeout = setTimeout(() => ensureConnection(), delay);
 }
 
-function connectWs() {
-  if (listeners.size === 0 || !wsInfo) return;
+function connectWs(url: string, ticket: string) {
+  if (listeners.size === 0) return;
 
-  ws = new WebSocket(`${wsInfo.url}?token=${encodeURIComponent(wsInfo.token)}`);
+  ws = new WebSocket(`${url}?ticket=${encodeURIComponent(ticket)}`);
 
   ws.onopen = () => {
     attempt = 0;
@@ -88,16 +86,15 @@ async function ensureConnection() {
   if (ws || connecting) return;
   connecting = true;
   try {
-    if (!wsInfo) {
-      const res = await fetch("/api/ws-info");
-      if (!res.ok) {
-        // Retry after backoff — the auth session may not be ready yet
-        scheduleReconnect();
-        return;
-      }
-      wsInfo = await res.json();
+    // Tickets are single-use and expire in 60s — fetch a fresh one per connect.
+    const res = await fetch("/api/ws-info");
+    if (!res.ok) {
+      // Retry after backoff — the auth session may not be ready yet
+      scheduleReconnect();
+      return;
     }
-    if (wsInfo && listeners.size > 0) connectWs();
+    const info = (await res.json()) as { url: string; ticket: string };
+    if (listeners.size > 0) connectWs(info.url, info.ticket);
   } catch {
     // Network error — retry after backoff
     scheduleReconnect();

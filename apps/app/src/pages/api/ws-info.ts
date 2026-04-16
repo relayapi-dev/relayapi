@@ -1,13 +1,17 @@
 import type { APIRoute } from "astro";
-import { getDashboardApiKey } from "@/lib/relay";
+import { API_BASE_URL } from "@/lib/api-base-url";
+import { getRelayClient } from "@/lib/relay";
 
-const API_BASE_URL =
-  import.meta.env.API_BASE_URL ||
-  (import.meta.env.DEV ? "http://localhost:8789" : "https://api.relayapi.dev");
+interface WsTicketResponse {
+  ticket: string;
+  expires_at: string;
+  ws_url: string;
+}
 
 /**
- * Returns the WebSocket connection URL and token for the authenticated user's org.
- * The client uses this to connect directly to the API worker's WS endpoint.
+ * Returns the WebSocket connection URL and a short-lived ticket for the
+ * authenticated user's org. The client uses this to connect directly to the
+ * API worker's WS endpoint without exposing the raw API key on the URL.
  */
 export const GET: APIRoute = async (ctx) => {
   if (!ctx.locals.user || !ctx.locals.organization) {
@@ -17,20 +21,20 @@ export const GET: APIRoute = async (ctx) => {
     );
   }
 
-  const orgId = (ctx.locals.organization as any).id as string;
-  const apiKey = await getDashboardApiKey(ctx.locals.kv, orgId);
-  if (!apiKey) {
+  const client = await getRelayClient(ctx.locals, API_BASE_URL);
+  if (!client) {
     return Response.json(
       { error: { code: "NO_API_KEY", message: "No dashboard API key found" } },
       { status: 500 },
     );
   }
 
-  // Convert http(s) to ws(s) for WebSocket URL
+  const data = await client.get<WsTicketResponse>("/v1/ws-ticket");
+
   const wsUrl = API_BASE_URL.replace(/^http/, "ws") + "/v1/ws";
 
   return Response.json(
-    { url: wsUrl, token: apiKey },
-    { headers: { "Cache-Control": "private, max-age=300" } },
+    { url: wsUrl, ticket: data.ticket, expires_at: data.expires_at },
+    { headers: { "Cache-Control": "no-store" } },
   );
 };

@@ -6,6 +6,7 @@ import {
 } from "@relayapi/db";
 import { and, desc, eq, lte, inArray, isNotNull, gt } from "drizzle-orm";
 import { createStripeClient } from "./stripe";
+import { kvTtlForKey } from "../middleware/auth";
 import { PRICING } from "../types";
 import type { Env, KVKeyData } from "../types";
 
@@ -174,7 +175,7 @@ async function syncOrgKeysToKV(
 			existing.plan = plan;
 			existing.calls_included = callsIncluded;
 			await env.KV.put(`apikey:${k.key}`, JSON.stringify(existing), {
-				expirationTtl: 86400 * 365,
+				expirationTtl: kvTtlForKey(existing.expires_at),
 			});
 		}
 	}

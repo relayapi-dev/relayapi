@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import type Stripe from "stripe";
 import { sendNotificationToOrg } from "../services/notification-manager";
 import { createStripeClient } from "../services/stripe";
+import { kvTtlForKey } from "../middleware/auth";
 import type { Env, KVKeyData } from "../types";
 import { PRICING } from "../types";
 
@@ -441,7 +442,7 @@ async function syncOrgKeysToKV(
 			if (opts?.aiEnabled !== undefined) existing.ai_enabled = opts.aiEnabled;
 			if (opts?.dailyToolLimit !== undefined) existing.daily_tool_limit = opts.dailyToolLimit;
 			await env.KV.put(`apikey:${k.key}`, JSON.stringify(existing), {
-				expirationTtl: 86400 * 365,
+				expirationTtl: kvTtlForKey(existing.expires_at),
 			});
 		}
 	}

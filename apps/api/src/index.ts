@@ -2,11 +2,14 @@ import { swaggerUI } from "@hono/swagger-ui";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
 import { authMiddleware } from "./middleware/auth";
+import { bodyCacheMiddleware } from "./middleware/body-cache";
 import { proOnlyMiddleware, aiEnabledMiddleware, workspaceRequiredMiddleware } from "./middleware/feature-gate";
 import { readOnlyMiddleware, workspaceScopeMiddleware } from "./middleware/permissions";
+import { securityHeadersMiddleware } from "./middleware/security-headers";
 import { toolRateLimitMiddleware } from "./middleware/tool-rate-limit";
 import { rateLimitMiddleware } from "./middleware/rate-limit";
 import { usageTrackingMiddleware, incrementUsage } from "./middleware/usage-tracking";
+import { workspaceValidationMiddleware } from "./middleware/workspace-validation";
 import {
 	processEmailMessage,
 	handleDeadLetterMessage,
@@ -91,18 +94,12 @@ import {
 	scheduleFirstMetricsRefresh,
 } from "./services/analytics-refresh";
 import type { AnalyticsQueueMessage } from "./services/analytics-refresh";
-import { createDb, media, workspaces } from "@relayapi/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { createDb, media } from "@relayapi/db";
+import { eq } from "drizzle-orm";
 import type { Env, Variables } from "./types";
 import { assertAllWorkspaceScope } from "./lib/request-access";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
-
-function isJsonContentType(contentType: string | undefined): boolean {
-	if (!contentType) return false;
-	const mimeType = contentType.split(";")[0]!.trim().toLowerCase();
-	return mimeType === "application/json" || mimeType.endsWith("+json");
-}
 
 function isSafePublicRedirectTarget(url: string): boolean {
 	try {
@@ -135,13 +132,7 @@ app.use(
 );
 
 // Security headers
-app.use("*", async (c, next) => {
-	await next();
-	c.header("X-Content-Type-Options", "nosniff");
-	c.header("X-Frame-Options", "DENY");
-	c.header("Referrer-Policy", "strict-origin-when-cross-origin");
-	c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-});
+app.use("*", securityHeadersMiddleware);
 
 // Register security scheme
 app.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
@@ -240,65 +231,10 @@ app.use("/v1/*", readOnlyMiddleware);
 
 // Cache parsed request body once for all downstream middleware (avoids 2-3x re-parsing).
 // MUST run before workspaceScopeMiddleware which reads parsedBody for scope validation.
-app.use("/v1/*", async (c, next) => {
-	if (
-		(c.req.method === "POST" || c.req.method === "PUT" || c.req.method === "PATCH")
-		&& isJsonContentType(c.req.header("content-type"))
-	) {
-		try {
-			const body = await c.req.json();
-			c.set("parsedBody", body as Record<string, unknown>);
-		} catch {
-			c.set("parsedBody", null);
-		}
-	} else {
-		c.set("parsedBody", null);
-	}
-	await next();
-});
+app.use("/v1/*", bodyCacheMiddleware);
 
 // Validate that any referenced workspace_id belongs to the authenticated organization.
-app.use("/v1/*", async (c, next) => {
-	const workspaceIds: string[] = [];
-	const queryWorkspaceId = new URL(c.req.url).searchParams.get("workspace_id");
-	if (queryWorkspaceId) workspaceIds.push(queryWorkspaceId);
-
-	const body = c.get("parsedBody");
-	if (typeof body?.workspace_id === "string" && body.workspace_id.length > 0) {
-		workspaceIds.push(body.workspace_id);
-	}
-
-	const uniqueWorkspaceIds = [...new Set(workspaceIds)];
-	if (uniqueWorkspaceIds.length === 0) {
-		return next();
-	}
-
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
-	const rows = await db
-		.select({ id: workspaces.id })
-		.from(workspaces)
-		.where(
-			and(
-				eq(workspaces.organizationId, c.get("orgId")),
-				inArray(workspaces.id, uniqueWorkspaceIds),
-			),
-		)
-		.limit(uniqueWorkspaceIds.length);
-
-	if (rows.length !== uniqueWorkspaceIds.length) {
-		return c.json(
-			{
-				error: {
-					code: "INVALID_WORKSPACE",
-					message: "Workspace not found",
-				},
-			},
-			404,
-		);
-	}
-
-	await next();
-});
+app.use("/v1/*", workspaceValidationMiddleware);
 
 app.use("/v1/*", workspaceScopeMiddleware);
 
