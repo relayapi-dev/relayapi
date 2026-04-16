@@ -1,5 +1,6 @@
 import { defineMiddleware } from "astro:middleware";
 import { env } from "cloudflare:workers";
+import { constantTimeEqual, makeSignature } from "better-auth/crypto";
 import { createAuth } from "@relayapi/auth";
 import {
 	createDb,
@@ -27,12 +28,50 @@ function shouldLoadFullOrganization(path: string): boolean {
 	return path.startsWith("/app");
 }
 
-function extractSessionToken(headers: Headers): string | null {
-	const cookies = headers.get("Cookie") || "";
-	const match = cookies.match(
-		/(?:__Secure-)?better-auth\.session_token=([^;]+)/,
-	);
-	return match?.[1] || null;
+function parseCookies(headers: Headers): Map<string, string> {
+	const cookieHeader = headers.get("Cookie") || headers.get("cookie") || "";
+	const cookies = new Map<string, string>();
+
+	for (const cookie of cookieHeader.split(/;\s*/)) {
+		if (!cookie) continue;
+		const [name, ...valueParts] = cookie.split("=");
+		if (name && valueParts.length > 0) {
+			cookies.set(name, valueParts.join("="));
+		}
+	}
+
+	return cookies;
+}
+
+async function extractSessionToken(
+	headers: Headers,
+	secret: string | undefined,
+): Promise<string | null> {
+	if (!secret) return null;
+
+	const cookies = parseCookies(headers);
+	const signedValue =
+		cookies.get("__Secure-better-auth.session_token") ??
+		cookies.get("better-auth.session_token") ??
+		cookies.get("__Secure-better-auth-session_token") ??
+		cookies.get("better-auth-session_token");
+
+	if (!signedValue) return null;
+
+	const separatorIndex = signedValue.lastIndexOf(".");
+	if (separatorIndex <= 0 || separatorIndex === signedValue.length - 1) {
+		return null;
+	}
+
+	const token = signedValue.slice(0, separatorIndex);
+	const signature = signedValue.slice(separatorIndex + 1);
+
+	try {
+		const expectedSignature = await makeSignature(token, secret);
+		return constantTimeEqual(signature, expectedSignature) ? token : null;
+	} catch {
+		return null;
+	}
 }
 
 // In-memory session cache (60s TTL)
@@ -330,7 +369,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		}
 
 		// --- Session resolution ---
-		const sessionToken = extractSessionToken(context.request.headers);
+		const sessionToken = await extractSessionToken(
+			context.request.headers,
+			cfEnv.BETTER_AUTH_SECRET,
+		);
 
 		const isAuthMutation =
 			(context.request.method === "POST" ||

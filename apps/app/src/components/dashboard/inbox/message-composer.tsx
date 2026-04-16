@@ -16,6 +16,10 @@ export function MessageComposer({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const shortcutLabel =
+    typeof navigator !== "undefined" && navigator.platform?.includes("Mac")
+      ? "Cmd"
+      : "Ctrl";
 
   // Auto-resize textarea
   useEffect(() => {
@@ -72,7 +76,7 @@ export function MessageComposer({
         </button>
       </div>
       <p className="text-[10px] text-muted-foreground mt-1.5 px-1">
-        {navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to send
+        {shortcutLabel}+Enter to send
       </p>
     </div>
   );
