@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.22.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.21.0...sdk-v0.22.0) (2026-04-16)
+
+
+### Features
+
+* implement author resolution and serialization for comments ([bef8ab4](https://github.com/relayapi-dev/relayapi/commit/bef8ab4eca805a1f415dccf1826e80230e25c675))
+* implement media attachment on idea creation with upload support ([2bd2373](https://github.com/relayapi-dev/relayapi/commit/2bd237329a0be3598231d9e37d18944674b2a101))
+
 ## [0.21.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.20.0...sdk-v0.21.0) (2026-04-16)
 
 
