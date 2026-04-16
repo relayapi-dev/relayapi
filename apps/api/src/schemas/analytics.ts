@@ -88,6 +88,12 @@ export const AnalyticsOverview = z.object({
 export const AnalyticsResponse = z.object({
 	data: z.array(PostAnalytics),
 	overview: AnalyticsOverview.optional(),
+	truncated: z
+		.boolean()
+		.optional()
+		.describe(
+			"True when the matching target set exceeds the per-response cap. Narrow by from_date/to_date/platform to see the full set.",
+		),
 });
 
 export const DailyMetric = z.object({

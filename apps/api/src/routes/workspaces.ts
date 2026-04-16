@@ -14,6 +14,7 @@ import {
 	assertAllWorkspaceScope,
 	assertWriteAccess,
 } from "../lib/request-access";
+import { workspaceValidKvKey } from "../middleware/workspace-validation";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -301,6 +302,9 @@ app.openapi(deleteWorkspace, async (c) => {
 
 	// FK ON DELETE SET NULL handles unassigning accounts automatically
 	await db.delete(workspaces).where(eq(workspaces.id, id));
+
+	// Invalidate the positive-validation cache (bounded anyway by 5-min TTL)
+	c.executionCtx.waitUntil(c.env.KV.delete(workspaceValidKvKey(orgId, id)));
 
 	return c.body(null, 204);
 });

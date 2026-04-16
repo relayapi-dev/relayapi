@@ -6,7 +6,7 @@ import {
 	posts,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
 import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
 import {
@@ -197,9 +197,18 @@ const getYouTubeDailyViews = createRoute({
 
 // --- Helpers ---
 
+/** Default cap on targets returned to callers — sized for in-memory aggregation. */
+const DEFAULT_TARGETS_LIMIT = 1000;
+/** Hard upper bound a caller can request. */
+const MAX_TARGETS_LIMIT = 5000;
+
 /**
  * Fetches post targets for an org in a single JOIN query (no N+1).
  * Returns only the columns needed for analytics lookups.
+ *
+ * Pass `limit` to cap the returned rows; callers that need overflow detection
+ * should request `limit + 1` and check the length. Default cap is
+ * DEFAULT_TARGETS_LIMIT to bound memory on orgs with many published posts.
  */
 async function getOrgPostTargetIds(
 	db: ReturnType<typeof createDb>,
@@ -207,11 +216,14 @@ async function getOrgPostTargetIds(
 	startDate?: string,
 	endDate?: string,
 	platform?: string,
+	limit: number = DEFAULT_TARGETS_LIMIT,
 ) {
 	const conditions = [eq(posts.organizationId, orgId)];
 	if (startDate) conditions.push(gte(posts.publishedAt, new Date(startDate)));
 	if (endDate) conditions.push(lte(posts.publishedAt, new Date(endDate)));
 	if (platform) conditions.push(eq(postTargets.platform, platform as never));
+
+	const effectiveLimit = Math.min(Math.max(limit, 1), MAX_TARGETS_LIMIT);
 
 	const targets = await db
 		.select({
@@ -224,9 +236,97 @@ async function getOrgPostTargetIds(
 		.from(postTargets)
 		.innerJoin(posts, eq(postTargets.postId, posts.id))
 		.where(and(...conditions))
-		.limit(10000);
+		.orderBy(desc(posts.publishedAt))
+		.limit(effectiveLimit);
 
 	return targets;
+}
+
+/**
+ * Computes per-org analytics totals via a SQL aggregate over the DISTINCT-ON
+ * latest snapshot per target. Stays O(1) memory in the Worker regardless of
+ * how many targets the org has, so overview totals remain correct even when
+ * the `data` array is truncated by the target cap.
+ */
+async function getOrgAnalyticsOverview(
+	db: ReturnType<typeof createDb>,
+	orgId: string,
+	startDate?: string,
+	endDate?: string,
+	platform?: string,
+): Promise<{
+	total_posts: number;
+	total_impressions: number;
+	total_likes: number;
+	total_comments: number;
+	total_shares: number;
+	total_clicks: number;
+	total_views: number;
+}> {
+	const startCond = startDate ? sql`AND p.published_at >= ${new Date(startDate)}` : sql``;
+	const endCond = endDate ? sql`AND p.published_at <= ${new Date(endDate)}` : sql``;
+	const platformCond = platform ? sql`AND pt.platform = ${platform}` : sql``;
+
+	const rows = await db.execute<{
+		total_posts: string | number;
+		total_impressions: string | number | null;
+		total_likes: string | number | null;
+		total_comments: string | number | null;
+		total_shares: string | number | null;
+		total_clicks: string | number | null;
+		total_views: string | number | null;
+	}>(sql`
+		WITH latest AS (
+			SELECT DISTINCT ON (pa.post_target_id)
+				pa.post_target_id,
+				pa.impressions,
+				pa.likes,
+				pa.comments,
+				pa.shares,
+				pa.clicks,
+				pa.views
+			FROM post_analytics pa
+			JOIN post_targets pt ON pt.id = pa.post_target_id
+			JOIN posts p ON p.id = pt.post_id
+			WHERE p.organization_id = ${orgId}
+				${startCond}
+				${endCond}
+				${platformCond}
+			ORDER BY pa.post_target_id, pa.collected_at DESC
+		),
+		target_count AS (
+			SELECT COUNT(*)::bigint AS n
+			FROM post_targets pt
+			JOIN posts p ON p.id = pt.post_id
+			WHERE p.organization_id = ${orgId}
+				${startCond}
+				${endCond}
+				${platformCond}
+		)
+		SELECT
+			(SELECT n FROM target_count) AS total_posts,
+			COALESCE(SUM(impressions), 0) AS total_impressions,
+			COALESCE(SUM(likes), 0) AS total_likes,
+			COALESCE(SUM(comments), 0) AS total_comments,
+			COALESCE(SUM(shares), 0) AS total_shares,
+			COALESCE(SUM(clicks), 0) AS total_clicks,
+			COALESCE(SUM(views), 0) AS total_views
+		FROM latest
+	`);
+
+	const row = (rows as any).rows?.[0] ?? (rows as any)[0];
+	const toNum = (v: string | number | null | undefined) =>
+		v == null ? 0 : typeof v === "number" ? v : Number(v);
+
+	return {
+		total_posts: toNum(row?.total_posts),
+		total_impressions: toNum(row?.total_impressions),
+		total_likes: toNum(row?.total_likes),
+		total_comments: toNum(row?.total_comments),
+		total_shares: toNum(row?.total_shares),
+		total_clicks: toNum(row?.total_clicks),
+		total_views: toNum(row?.total_views),
+	};
 }
 
 /**
@@ -265,30 +365,30 @@ app.openapi(getAnalytics, async (c) => {
 	const query = c.req.valid("query");
 	const db = c.get("db");
 
-	const targets = await getOrgPostTargetIds(
-		db,
-		orgId,
-		query.from_date,
-		query.to_date,
-		query.platform,
-	);
+	// `data` is bounded by MAX_TARGETS_LIMIT so a single response can't explode
+	// memory / JSON for very active orgs. `overview` is computed separately via
+	// a SQL aggregate, so totals stay accurate even when `data` is truncated.
+	const [targets, overview] = await Promise.all([
+		getOrgPostTargetIds(
+			db,
+			orgId,
+			query.from_date,
+			query.to_date,
+			query.platform,
+		),
+		getOrgAnalyticsOverview(
+			db,
+			orgId,
+			query.from_date,
+			query.to_date,
+			query.platform,
+		),
+	]);
+
+	const truncated = overview.total_posts > targets.length;
 
 	if (targets.length === 0) {
-		return c.json(
-			{
-				data: [],
-				overview: {
-					total_posts: 0,
-					total_impressions: 0,
-					total_likes: 0,
-					total_comments: 0,
-					total_shares: 0,
-					total_clicks: 0,
-					total_views: 0,
-				},
-			},
-			200,
-		);
+		return c.json({ data: [], overview, truncated }, 200);
 	}
 
 	// Single batched query for latest analytics per target
@@ -298,24 +398,10 @@ app.openapi(getAnalytics, async (c) => {
 		analyticsRows.map((a) => [a.postTargetId, a]),
 	);
 
-	let totalImpressions = 0;
-	let totalLikes = 0;
-	let totalComments = 0;
-	let totalShares = 0;
-	let totalClicks = 0;
-	let totalViews = 0;
-
 	const data = [];
 	for (const target of targets) {
 		const latest = analyticsMap.get(target.id);
 		if (latest) {
-			totalImpressions += latest.impressions ?? 0;
-			totalLikes += latest.likes ?? 0;
-			totalComments += latest.comments ?? 0;
-			totalShares += latest.shares ?? 0;
-			totalClicks += latest.clicks ?? 0;
-			totalViews += latest.views ?? 0;
-
 			data.push({
 				post_id: target.postId,
 				platform: target.platform as string,
@@ -332,21 +418,7 @@ app.openapi(getAnalytics, async (c) => {
 		}
 	}
 
-	return c.json(
-		{
-			data,
-			overview: {
-				total_posts: targets.length,
-				total_impressions: totalImpressions,
-				total_likes: totalLikes,
-				total_comments: totalComments,
-				total_shares: totalShares,
-				total_clicks: totalClicks,
-				total_views: totalViews,
-			},
-		},
-		200,
-	);
+	return c.json({ data, overview, truncated }, 200);
 });
 
 app.openapi(getDailyMetrics, async (c) => {
