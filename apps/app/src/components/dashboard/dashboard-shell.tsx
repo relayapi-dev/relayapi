@@ -2,7 +2,6 @@ import { lazy, Suspense, useState, type ReactNode } from "react";
 import { Menu } from "lucide-react";
 import { StreakProvider } from "@/hooks/use-streak";
 import { UsageProvider } from "@/hooks/use-usage";
-import { authClient } from "@/lib/auth-client";
 import { prefetchDashboardPage } from "@/lib/dashboard-prefetch";
 import type { AppOrganization, AppUser } from "@/types/dashboard";
 import { FilterProvider } from "./filter-context";
@@ -70,6 +69,7 @@ export function DashboardShell({
 	};
 
 	const handleStopImpersonating = async () => {
+		const { authClient } = await import("@/lib/auth-client");
 		await authClient.admin.stopImpersonating();
 		window.location.href = "/app/admin-users";
 	};

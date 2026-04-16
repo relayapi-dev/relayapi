@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ArrowRightLeft,
 	ChevronDown,
-	FileText,
+	Film,
+	Image as ImageIcon,
 	Loader2,
 	MessageCircle,
 	Paperclip,
@@ -10,7 +11,6 @@ import {
 	Tag,
 	Trash2,
 	Upload,
-	Video,
 	X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -104,82 +104,79 @@ function pendingKind(file: File): PendingFile["kind"] {
 	return "document";
 }
 
-function PendingThumb({
-	item,
+function MediaTile({
+	url,
+	type,
 	onRemove,
 }: {
-	item: PendingFile;
+	url: string;
+	type?: "image" | "video" | "gif" | "document" | string;
 	onRemove: () => void;
 }) {
-	const preview =
-		item.kind === "image" || item.kind === "gif" ? (
-			<img
-				src={item.previewUrl}
-				alt={item.file.name}
-				className="size-16 rounded object-cover border border-border"
-			/>
-		) : (
-			<div className="size-16 rounded border border-border bg-accent/30 flex items-center justify-center">
-				{item.kind === "video" ? (
-					<Video className="size-6 text-muted-foreground" />
-				) : (
-					<FileText className="size-6 text-muted-foreground" />
-				)}
-			</div>
-		);
+	const [imgError, setImgError] = useState(false);
+	const [videoError, setVideoError] = useState(false);
+
+	const isImage =
+		type === "image" ||
+		type === "gif" ||
+		/\.(jpg|jpeg|png|webp|avif|gif|svg)(\?|$)/i.test(url);
+	const isVideo =
+		type === "video" ||
+		/\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(url);
 
 	return (
-		<div className="relative">
-			{preview}
+		<div className="group relative rounded-xl overflow-hidden border border-border bg-accent/5">
+			{isImage && !imgError ? (
+				<img
+					src={url}
+					alt=""
+					className="w-full max-h-52 object-cover"
+					onError={() => setImgError(true)}
+				/>
+			) : isImage && imgError ? (
+				<div className="w-full h-32 flex flex-col items-center justify-center gap-2 bg-accent/10">
+					<ImageIcon className="size-8 text-muted-foreground/50" />
+					<span className="text-[10px] text-muted-foreground font-mono truncate max-w-48 px-2">
+						{url.split("/").pop()?.split("?")[0] || "image"}
+					</span>
+				</div>
+			) : isVideo && !videoError ? (
+				<video
+					src={url}
+					className="w-full max-h-64 bg-black rounded-none"
+					preload="metadata"
+					controls
+					playsInline
+					onError={() => setVideoError(true)}
+				/>
+			) : isVideo && videoError ? (
+				<div className="w-full h-32 flex flex-col items-center justify-center gap-2 bg-accent/10">
+					<Film className="size-8 text-muted-foreground/50" />
+					<span className="text-[10px] text-muted-foreground">
+						Video preview unavailable
+					</span>
+				</div>
+			) : (
+				<div className="w-full h-32 flex flex-col items-center justify-center gap-2 bg-accent/10">
+					<ImageIcon className="size-8 text-muted-foreground/50" />
+					<span className="text-[10px] text-muted-foreground uppercase">
+						{type || "file"}
+					</span>
+				</div>
+			)}
+			{type && (
+				<span className="absolute bottom-2 left-2 text-[9px] rounded-md bg-black/60 px-1.5 py-0.5 text-white uppercase pointer-events-none">
+					{type}
+				</span>
+			)}
 			<button
 				type="button"
-				className="absolute -top-1.5 -right-1.5 rounded-full border border-border bg-background p-1 shadow-sm transition-colors hover:bg-accent"
 				onClick={onRemove}
+				className="absolute top-2 right-2 rounded-full bg-black/60 p-1 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
 				aria-label="Remove media"
 			>
-				<X className="size-3 text-muted-foreground" />
+				<X className="size-3.5" />
 			</button>
-		</div>
-	);
-}
-
-function MediaThumb({
-	item,
-	onRemove,
-}: {
-	item: IdeaMedia;
-	onRemove?: () => void;
-}) {
-	const preview =
-		item.type === "image" || item.type === "gif" ? (
-			<img
-				src={item.url}
-				alt={item.alt ?? "media"}
-				className="size-16 rounded object-cover border border-border"
-			/>
-		) : (
-			<div className="size-16 rounded border border-border bg-accent/30 flex items-center justify-center">
-				{item.type === "video" ? (
-					<Video className="size-6 text-muted-foreground" />
-				) : (
-					<FileText className="size-6 text-muted-foreground" />
-				)}
-			</div>
-		);
-
-	return (
-		<div className="relative">
-			{preview}
-			{onRemove && (
-				<button
-					type="button"
-					className="absolute -top-1.5 -right-1.5 rounded-full border border-border bg-background p-1 shadow-sm transition-colors hover:bg-accent"
-					onClick={onRemove}
-					aria-label="Remove media"
-				>
-					<X className="size-3" />
-				</button>
-			)}
 		</div>
 	);
 }
@@ -762,45 +759,63 @@ export function IdeaDetailDialog({
 							<p className="text-xs text-destructive">{mediaError}</p>
 						)}
 
-						{isEditMode && idea ? (
-							media.length > 0 ? (
-								<div className="flex flex-wrap gap-2">
-									{media.map((item) => (
-										<MediaThumb
-											key={item.id}
-											item={item}
-											onRemove={() => void handleDeleteMedia(item.id)}
-										/>
-									))}
-								</div>
-							) : (
+						{(() => {
+							const tiles: Array<{
+								key: string;
+								url: string;
+								type?: "image" | "video" | "gif" | "document";
+								onRemove: () => void;
+							}> =
+								isEditMode && idea
+									? media.map((item) => ({
+											key: item.id,
+											url: item.url,
+											type: item.type,
+											onRemove: () => void handleDeleteMedia(item.id),
+										}))
+									: pendingFiles.map((item) => ({
+											key: item.id,
+											url: item.previewUrl,
+											type: item.kind,
+											onRemove: () => handleRemovePendingFile(item.id),
+										}));
+
+							if (tiles.length > 0) {
+								return (
+									<div
+										className="grid gap-2"
+										style={{
+											gridTemplateColumns:
+												tiles.length === 1
+													? "max-content"
+													: "repeat(auto-fill, minmax(120px, 1fr))",
+										}}
+									>
+										{tiles.map((tile) => (
+											<MediaTile
+												key={tile.key}
+												url={tile.url}
+												type={tile.type}
+												onRemove={tile.onRemove}
+											/>
+										))}
+									</div>
+								);
+							}
+
+							return (
 								<button
 									type="button"
-									className="w-full rounded-md border border-dashed border-border px-4 py-5 text-xs text-muted-foreground transition-colors hover:bg-accent/20"
 									onClick={() => fileInputRef.current?.click()}
+									className="w-32 h-28 rounded-lg border-2 border-dashed border-border hover:border-primary/40 flex flex-col items-center justify-center gap-1.5 transition-colors cursor-pointer"
 								>
-									Click to attach media
+									<Upload className="size-5 text-muted-foreground" />
+									<span className="text-[11px] text-muted-foreground leading-tight text-center px-2">
+										Click to attach media
+									</span>
 								</button>
-							)
-						) : pendingFiles.length > 0 ? (
-							<div className="flex flex-wrap gap-2">
-								{pendingFiles.map((item) => (
-									<PendingThumb
-										key={item.id}
-										item={item}
-										onRemove={() => handleRemovePendingFile(item.id)}
-									/>
-								))}
-							</div>
-						) : (
-							<button
-								type="button"
-								className="w-full rounded-md border border-dashed border-border px-4 py-5 text-xs text-muted-foreground transition-colors hover:bg-accent/20"
-								onClick={() => fileInputRef.current?.click()}
-							>
-								Click to attach media
-							</button>
-						)}
+							);
+						})()}
 					</div>
 
 					{isEditMode && (

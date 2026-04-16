@@ -43,8 +43,11 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { organization as orgClient, signOut } from "@/lib/auth-client";
 import { scheduleIdleTask } from "@/lib/idle";
+
+async function loadAuthClient() {
+	return import("@/lib/auth-client");
+}
 import type { LucideIcon } from "lucide-react";
 import {
 	type AppOrganization,
@@ -270,6 +273,7 @@ export function Sidebar({
 	const loadOrganizations = useCallback(async () => {
 		setOrgsLoading(true);
 		try {
+			const { organization: orgClient } = await loadAuthClient();
 			const { data } = await orgClient.list();
 			if (data) {
 				const items: OrgListItem[] = data.map((o: any) => ({
@@ -307,6 +311,7 @@ export function Sidebar({
 		setCurrentOrg(org);
 		setOrgMenuOpen(false);
 		setOrgSearch("");
+		const { organization: orgClient } = await loadAuthClient();
 		await orgClient.setActive({ organizationId: org.id });
 		window.location.href = window.location.pathname;
 	};
@@ -364,6 +369,7 @@ export function Sidebar({
 		: "?";
 
 	const handleSignOut = async () => {
+		const { signOut } = await loadAuthClient();
 		await signOut();
 		window.location.href = "/login";
 	};
@@ -894,6 +900,7 @@ export function Sidebar({
 							setCreateOrgError(null);
 							setCreateOrgLoading(true);
 							try {
+								const { organization: orgClient } = await loadAuthClient();
 								const { data, error: createError } = await orgClient.create({
 									name: newOrgName.trim(),
 									slug: newOrgSlug.trim(),
