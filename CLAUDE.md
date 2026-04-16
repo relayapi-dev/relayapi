@@ -40,6 +40,12 @@ bun run --filter api export-openapi   # Export OpenAPI spec (requires dev server
 - **packages/db** — Drizzle ORM schema and client. Exports `createDb(connectionString)` and all schema tables. PostgreSQL via `postgres` driver.
 - **packages/auth** — Better Auth setup with Google OAuth and API key plugin. Uses `@relayapi/db` for storage.
 
+### API-First Principle
+
+- **The API is the main product**: `apps/api` must work autonomously without `apps/app`. Treat the dashboard as a client of the API, not as the system that defines API architecture.
+- **Do not couple the API to the dashboard**: Avoid app-specific assumptions, auth flows, response shapes, or infrastructure requirements leaking into `apps/api` unless the user explicitly asks for that tradeoff.
+- **Fix dashboard overhead in the dashboard first**: When the problem is dashboard performance or UX, prefer reducing `apps/app` middleware, bootstrap, proxy, and hydration cost before proposing changes that make the API depend on the app.
+
 ### SSH Tunnel (required for local dev)
 
 The database runs on a remote server. You **must** create an SSH tunnel before running the dev server, connecting to the database, or running migrations.

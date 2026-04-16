@@ -53,7 +53,7 @@ export function IdeasPage() {
 
 	const {
 		data: tags,
-	} = usePaginatedApi<IdeaTag>("idea-tags", {
+	} = usePaginatedApi<IdeaTag>("tags", {
 		query: filterQuery,
 		limit: 100,
 	});
