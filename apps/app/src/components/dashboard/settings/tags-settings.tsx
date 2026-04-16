@@ -46,7 +46,11 @@ export function TagsSettings() {
 		const res = await fetch("/api/tags", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ name: newName.trim(), color: newColor, ...filterQuery }),
+			body: JSON.stringify({
+				name: newName.trim(),
+				color: newColor,
+				...(filterQuery.workspace_id ? { workspace_id: filterQuery.workspace_id } : {}),
+			}),
 		});
 		if (res.ok) {
 			setNewName("");

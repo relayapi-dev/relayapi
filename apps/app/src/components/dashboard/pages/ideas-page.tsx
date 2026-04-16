@@ -100,11 +100,12 @@ export function IdeasPage() {
 	const error = groupsError || ideasError;
 
 	const handleCreateGroup = async (name: string, color: string) => {
-		const workspaceId = filterQuery.workspace_id ?? null;
+		const body: Record<string, string> = { name, color };
+		if (filterQuery.workspace_id) body.workspace_id = filterQuery.workspace_id;
 		const res = await fetch("/api/idea-groups", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ name, color, workspace_id: workspaceId }),
+			body: JSON.stringify(body),
 		});
 		if (res.ok) refetchGroups();
 	};
@@ -175,11 +176,12 @@ export function IdeasPage() {
 		group_id?: string;
 		tag_ids?: string[];
 	}) => {
-		const workspaceId = filterQuery.workspace_id ?? null;
+		const body: Record<string, unknown> = { ...data };
+		if (filterQuery.workspace_id) body.workspace_id = filterQuery.workspace_id;
 		await fetch("/api/ideas", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ ...data, workspace_id: workspaceId }),
+			body: JSON.stringify(body),
 		});
 		refetchIdeas();
 	};
