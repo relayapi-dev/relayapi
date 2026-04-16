@@ -162,9 +162,20 @@ export function getDashboardNavigationTimingSnapshot():
 	return {
 		type: navigationEntry.type,
 		redirectCount: navigationEntry.redirectCount,
+		ttfbMs: roundMs(
+			navigationEntry.responseStart - navigationEntry.requestStart,
+		),
+		requestMs: roundMs(
+			navigationEntry.responseEnd - navigationEntry.requestStart,
+		),
 		responseEndMs: roundMs(navigationEntry.responseEnd),
 		domInteractiveMs: roundMs(navigationEntry.domInteractive),
 		domContentLoadedMs: roundMs(navigationEntry.domContentLoadedEventEnd),
+		domCompleteMs: roundMs(navigationEntry.domComplete),
 		loadEventEndMs: roundMs(navigationEntry.loadEventEnd),
+		transferSize: navigationEntry.transferSize,
+		encodedBodySize: navigationEntry.encodedBodySize,
+		decodedBodySize: navigationEntry.decodedBodySize,
+		elapsedFromNavStartMs: roundMs(performance.now()),
 	};
 }
