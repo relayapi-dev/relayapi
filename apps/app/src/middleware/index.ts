@@ -9,11 +9,6 @@ import {
 } from "@relayapi/db";
 import { getCookieCache } from "better-auth/cookies";
 import { and, eq } from "drizzle-orm";
-import {
-	getDashboardPerfDurationMs,
-	isDashboardPerfEnabledServer,
-	logDashboardPerfServer,
-} from "../lib/dashboard-perf";
 
 const PROTECTED_PATHS = ["/app"];
 const AUTH_PAGES = new Set(["/login", "/signup"]);
@@ -174,36 +169,23 @@ type WaitUntil = (promise: Promise<unknown>) => void;
 const ORG_SUMMARY_CACHE_PREFIX = "org-summary:";
 const ORG_SUMMARY_TTL_S = 10 * 60;
 
-interface OrgSummaryTimings {
-	cacheReadMs: number | null;
-	dbMs: number | null;
-	cacheHit: boolean;
-}
-
 async function getOrganizationSummary(
 	db: Database,
 	kv: KVNamespace | undefined,
 	waitUntil: WaitUntil | undefined,
 	organizationId: string,
-	timings: OrgSummaryTimings,
 ): Promise<OrganizationSummary | null> {
 	const cacheKey = `${ORG_SUMMARY_CACHE_PREFIX}${organizationId}`;
 
 	if (kv) {
-		const cacheReadStart = performance.now();
 		try {
 			const cached = await kv.get(cacheKey);
-			timings.cacheReadMs = getDashboardPerfDurationMs(cacheReadStart);
-			if (cached) {
-				timings.cacheHit = true;
-				return JSON.parse(cached) as OrganizationSummary;
-			}
+			if (cached) return JSON.parse(cached) as OrganizationSummary;
 		} catch {
-			timings.cacheReadMs = getDashboardPerfDurationMs(cacheReadStart);
+			// KV read failure is non-fatal — fall through to DB.
 		}
 	}
 
-	const dbStart = performance.now();
 	const [org] = await db
 		.select({
 			id: authOrganization.id,
@@ -214,7 +196,6 @@ async function getOrganizationSummary(
 		.from(authOrganization)
 		.where(eq(authOrganization.id, organizationId))
 		.limit(1);
-	timings.dbMs = getDashboardPerfDurationMs(dbStart);
 
 	if (!org) return null;
 
@@ -270,30 +251,14 @@ async function userHasPendingInvitations(
 
 export const onRequest = defineMiddleware(async (context, next) => {
 	const path = context.url.pathname;
-	const startedAt = performance.now();
 
 	if (isStaticAssetPath(path)) {
 		return next();
 	}
 
-	const debugPerf = isDashboardPerfEnabledServer(
-		context.url,
-		context.request.headers,
-	);
-	context.locals.debugPerf = debugPerf;
-
 	const cfEnv = env as Record<string, any>;
 	let db: Database | undefined;
 	let auth: AuthInstance | undefined;
-	let sessionMs: number | null = null;
-	let orgMs: number | null = null;
-	let onboardingMs: number | null = null;
-	let downstreamMs: number | null = null;
-	const orgTimings: OrgSummaryTimings = {
-		cacheReadMs: null,
-		dbMs: null,
-		cacheHit: false,
-	};
 	const cfContext = (
 		context.locals as { cfContext?: { waitUntil?: WaitUntil } }
 	).cfContext;
@@ -302,7 +267,6 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	let user: AuthUser | null = null;
 	let session: AuthSessionRecord | null = null;
 	let organization: OrganizationSummary | null = null;
-	let outcome = "next";
 
 	const getDb = () => {
 		if (!db) {
@@ -356,53 +320,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			);
 		}
 
-		const totalMs = getDashboardPerfDurationMs(startedAt);
-		const serverTiming: string[] = [`total;dur=${totalMs}`];
-		if (sessionMs != null) serverTiming.push(`session;dur=${sessionMs}`);
-		if (orgMs != null) serverTiming.push(`org;dur=${orgMs}`);
-		if (orgTimings.cacheReadMs != null)
-			serverTiming.push(
-				`orgCacheRead;dur=${orgTimings.cacheReadMs};desc="hit=${orgTimings.cacheHit}"`,
-			);
-		if (orgTimings.dbMs != null)
-			serverTiming.push(`orgDb;dur=${orgTimings.dbMs}`);
-		if (onboardingMs != null)
-			serverTiming.push(`onboarding;dur=${onboardingMs}`);
-		if (downstreamMs != null)
-			serverTiming.push(`render;dur=${downstreamMs}`);
-		response.headers.set("Server-Timing", serverTiming.join(", "));
-
-		if (debugPerf) {
-			logDashboardPerfServer("request", {
-				path,
-				method: context.request.method,
-				status: response.status,
-				outcome,
-				requestType: path.startsWith("/api/")
-					? "api"
-					: path.startsWith("/app")
-						? "app"
-						: "other",
-				contentType: contentType || null,
-				resolvedSession: shouldResolveSession(path),
-				sessionMs,
-				orgMs,
-				orgCacheHit: orgTimings.cacheHit,
-				orgCacheReadMs: orgTimings.cacheReadMs,
-				orgDbMs: orgTimings.dbMs,
-				onboardingMs,
-				downstreamMs,
-				totalMs: getDashboardPerfDurationMs(startedAt),
-				hasUser: !!user,
-				hasOrganization: !!organization,
-			});
-		}
-
 		return response;
 	};
 
 	if (shouldResolveSession(path)) {
-		const sessionStartedAt = performance.now();
 		let sessionState: SessionState | null = null;
 
 		if (isInternalApiPath(path)) {
@@ -424,8 +345,6 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			sessionState = sessionResult.response;
 		}
 
-		sessionMs = getDashboardPerfDurationMs(sessionStartedAt);
-
 		if (sessionState) {
 			user = sessionState.user;
 			session = sessionState.session;
@@ -440,16 +359,13 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				};
 
 				if (shouldLoadOrganizationSummary(path)) {
-					const orgStartedAt = performance.now();
 					organization =
 						(await getOrganizationSummary(
 							getDb(),
 							cfEnv.KV,
 							waitUntil,
 							activeOrganizationId,
-							orgTimings,
 						)) ?? organization;
-					orgMs = getDashboardPerfDurationMs(orgStartedAt);
 				}
 			}
 		}
@@ -459,59 +375,48 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	context.locals.session = session;
 	context.locals.organization = organization;
 
-	const redirect = (location: string, reason: string) => {
-		outcome = reason;
-		return finalize(context.redirect(location));
-	};
+	const redirect = (location: string) => finalize(context.redirect(location));
+
 	const isProtectedPath = PROTECTED_PATHS.some((prefix) =>
 		path.startsWith(prefix),
 	);
 
 	if (isProtectedPath && !user) {
-		return redirect(
-			`/login?redirect=${encodeURIComponent(path)}`,
-			"redirect:unauthenticated",
-		);
+		return redirect(`/login?redirect=${encodeURIComponent(path)}`);
 	}
 
 	if (user && path.startsWith("/app/admin") && user.role !== "admin") {
-		return redirect("/app", "redirect:non-admin");
+		return redirect("/app");
 	}
 
 	if (user && shouldCheckOnboarding(path) && !session?.activeOrganizationId) {
-		const onboardingStartedAt = performance.now();
 		const db = getDb();
 		const [hasOrganizations, hasPendingInvitations] = await Promise.all([
 			userHasOrganizations(db, user.id),
 			userHasPendingInvitations(db, user.email),
 		]);
-		onboardingMs = getDashboardPerfDurationMs(onboardingStartedAt);
 
 		if (!hasOrganizations) {
 			if (hasPendingInvitations) {
-				return redirect("/app/invitations", "redirect:pending-invitations");
+				return redirect("/app/invitations");
 			}
 
-			return redirect("/app/onboarding", "redirect:onboarding");
+			return redirect("/app/onboarding");
 		}
 	}
 
 	if (user && path === "/app/onboarding" && organization) {
-		return redirect("/app", "redirect:already-onboarded");
+		return redirect("/app");
 	}
 
 	if (user && AUTH_PAGES.has(path)) {
 		const redirectParam = context.url.searchParams.get("redirect");
 		if (redirectParam?.startsWith("/invite/")) {
-			return redirect(redirectParam, "redirect:invite");
+			return redirect(redirectParam);
 		}
 
-		return redirect("/app", "redirect:auth-page");
+		return redirect("/app");
 	}
 
-	const downstreamStartedAt = performance.now();
-	const response = await next();
-	downstreamMs = getDashboardPerfDurationMs(downstreamStartedAt);
-
-	return finalize(response);
+	return finalize(await next());
 });
