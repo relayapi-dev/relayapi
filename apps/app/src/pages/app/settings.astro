@@ -1,9 +1,18 @@
 ---
 import DashboardLayout from "../../layouts/DashboardLayout.astro";
 import { SettingsRouteApp } from "../../components/dashboard/route-apps/settings-route-app";
-import { getDashboardRouteContext } from "../../lib/dashboard-page";
+import {
+	getDashboardRouteContext,
+	getSearchParamValue,
+} from "../../lib/dashboard-page";
 
 const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
+const initialTab = getSearchParamValue(
+	Astro.url,
+	"tab",
+	["general", "notifications", "short-links", "tags"] as const,
+	"general",
+);
 ---
 
 <DashboardLayout>
@@ -11,6 +20,7 @@ const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
 		client:load
 		currentPage="settings"
 		requiresApiKey={false}
+		pageProps={{ initialTab }}
 		{...dashboard}
 	/>
 </DashboardLayout>

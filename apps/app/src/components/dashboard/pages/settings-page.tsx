@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { organization as orgClient, useSession } from "@/lib/auth-client";
 import { slugify, getOrgColor } from "@/types/dashboard";
+import { TagsSettings } from "../settings/tags-settings";
 
 const stagger = {
   hidden: {},
@@ -131,9 +132,23 @@ interface Signature {
   updated_at: string;
 }
 
-export function SettingsPage() {
+export interface SettingsPageProps {
+  initialTab?: "general" | "notifications" | "short-links" | "tags";
+}
+
+const settingsTabs = ["General", "Notifications", "Short Links", "Tags"] as const;
+
+export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {}) {
   const { data: session } = useSession();
   const activeOrg = session?.session?.activeOrganizationId;
+
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const switchTab = (tab: NonNullable<SettingsPageProps["initialTab"]>) => {
+    setActiveTab(tab);
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", tab);
+    window.history.replaceState({}, "", url.toString());
+  };
 
   // Org profile
   const [orgName, setOrgName] = useState("");
@@ -537,6 +552,32 @@ export function SettingsPage() {
         <h1 className="text-lg font-medium">Settings</h1>
       </motion.div>
 
+      <motion.div variants={fadeUp}>
+        <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+          <div className="flex gap-4 shrink-0">
+            {settingsTabs.map((tab) => {
+              const tabKey = tab.toLowerCase().replace(" ", "-") as NonNullable<SettingsPageProps["initialTab"]>;
+              return (
+                <button
+                  key={tab}
+                  onClick={() => switchTab(tabKey)}
+                  className={cn(
+                    "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
+                    activeTab === tabKey
+                      ? "border-foreground text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {tab}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </motion.div>
+
+      {activeTab === "general" && (<>
+
       {/* Organization Profile */}
       <motion.div
         variants={fadeUp}
@@ -693,6 +734,10 @@ export function SettingsPage() {
         )}
       </motion.div>
 
+      </>)}
+
+      {activeTab === "notifications" && (<>
+
       {/* Notifications */}
       <motion.div
         variants={fadeUp}
@@ -784,6 +829,10 @@ export function SettingsPage() {
           </p>
         </div>
       </motion.div>
+
+      </>)}
+
+      {activeTab === "short-links" && (<>
 
       {/* Short Links */}
       <motion.div
@@ -989,6 +1038,10 @@ export function SettingsPage() {
           </p>
         </div>
       </motion.div>
+
+      </>)}
+
+      {activeTab === "general" && (<>
 
       {/* Signatures */}
       <motion.div
@@ -1272,6 +1325,10 @@ export function SettingsPage() {
           )}
         </div>
       </motion.div>
+
+      </>)}
+
+      {activeTab === "tags" && <TagsSettings />}
 
     </motion.div>
   );

@@ -134,6 +134,7 @@ export const CreatePostBody = z.object({
 	shorten_urls: z.boolean().optional().describe("Shorten URLs in post content. Only relevant when short link mode is 'ask'. Ignored when mode is 'always' or 'never'. (Pro plan only)"),
 	cross_post_actions: z.array(CrossPostActionInput).optional().describe("Cross-post actions to execute after publishing (e.g., repost from another account, comment from another account)"),
 	template_id: z.string().optional().describe("Content template ID. When provided, the template content is used as the base for the post. Explicit 'content' field takes precedence."),
+	idea_id: z.string().optional().describe("Create post from an idea. Pre-fills content from the idea. Explicit 'content' field takes precedence."),
 	template_variables: z.record(z.string(), z.string()).optional().describe("Variables to interpolate in the template (e.g., { \"promo_code\": \"SUMMER25\" }). Built-in variables: {{date}}, {{account_name}}."),
 	skip_signature: z.boolean().optional().describe("When true, the default signature is not auto-appended even if one is configured."),
 });

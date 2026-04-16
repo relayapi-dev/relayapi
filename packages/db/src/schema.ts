@@ -10,6 +10,7 @@ import {
 	pgSchema,
 	pgTable,
 	primaryKey,
+	real,
 	smallint,
 	text,
 	timestamp,
@@ -1810,6 +1811,26 @@ export const audienceTypeEnum = pgEnum("audience_type", [
 	"lookalike",
 ]);
 
+export const ideaMediaTypeEnum = pgEnum("idea_media_type", [
+	"image",
+	"video",
+	"gif",
+	"document",
+]);
+
+export const ideaActivityActionEnum = pgEnum("idea_activity_action", [
+	"created",
+	"moved",
+	"assigned",
+	"commented",
+	"converted",
+	"updated",
+	"media_added",
+	"media_removed",
+	"tagged",
+	"untagged",
+]);
+
 // ---------------------------------------------------------------------------
 // Ads tables
 // ---------------------------------------------------------------------------
@@ -2575,5 +2596,207 @@ export const orgStreaks = pgTable(
 	(table) => [
 		index("org_streaks_org_idx").on(table.organizationId),
 		index("org_streaks_last_post_idx").on(table.lastPostAt),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Content Planning — Tags, Idea Groups, Ideas, and related tables
+// ---------------------------------------------------------------------------
+
+export const tags = pgTable(
+	"tags",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("tag_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "set null",
+		}),
+		name: text("name").notNull(),
+		color: text("color").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("tags_org_idx").on(table.organizationId),
+		index("tags_workspace_idx").on(table.workspaceId),
+	],
+);
+
+export const ideaGroups = pgTable(
+	"idea_groups",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("idg_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "set null",
+		}),
+		name: text("name").notNull(),
+		position: real("position").notNull().default(0),
+		color: text("color"),
+		isDefault: boolean("is_default").notNull().default(false),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idea_groups_org_idx").on(table.organizationId),
+		index("idea_groups_workspace_idx").on(table.workspaceId),
+		index("idea_groups_workspace_position_idx").on(
+			table.workspaceId,
+			table.position,
+		),
+	],
+);
+
+export const ideas = pgTable(
+	"ideas",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("idea_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "set null",
+		}),
+		title: text("title"),
+		content: text("content"),
+		groupId: text("group_id")
+			.notNull()
+			.references(() => ideaGroups.id),
+		position: real("position").notNull().default(0),
+		assignedTo: text("assigned_to").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		convertedToPostId: text("converted_to_post_id").references(
+			() => posts.id,
+			{ onDelete: "set null" },
+		),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("ideas_org_idx").on(table.organizationId),
+		index("ideas_workspace_idx").on(table.workspaceId),
+		index("ideas_group_position_idx").on(table.groupId, table.position),
+		index("ideas_assigned_to_idx").on(table.assignedTo),
+		index("ideas_org_created_idx").on(table.organizationId, table.createdAt),
+	],
+);
+
+export const ideaMedia = pgTable(
+	"idea_media",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("idm_")),
+		ideaId: text("idea_id")
+			.notNull()
+			.references(() => ideas.id, { onDelete: "cascade" }),
+		url: text("url").notNull(),
+		type: ideaMediaTypeEnum("type").notNull(),
+		alt: text("alt"),
+		position: integer("position").notNull().default(0),
+	},
+	(table) => [index("idea_media_idea_idx").on(table.ideaId)],
+);
+
+export const ideaComments = pgTable(
+	"idea_comments",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("idc_")),
+		ideaId: text("idea_id")
+			.notNull()
+			.references(() => ideas.id, { onDelete: "cascade" }),
+		authorId: text("author_id")
+			.notNull()
+			.references(() => user.id),
+		content: text("content").notNull(),
+		parentId: text("parent_id").references(
+			(): AnyPgColumn => ideaComments.id,
+			{ onDelete: "cascade" },
+		),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idea_comments_idea_idx").on(table.ideaId),
+		index("idea_comments_parent_idx").on(table.parentId),
+	],
+);
+
+export const ideaTags = pgTable(
+	"idea_tags",
+	{
+		ideaId: text("idea_id")
+			.notNull()
+			.references(() => ideas.id, { onDelete: "cascade" }),
+		tagId: text("tag_id")
+			.notNull()
+			.references(() => tags.id, { onDelete: "cascade" }),
+	},
+	(table) => [primaryKey({ columns: [table.ideaId, table.tagId] })],
+);
+
+export const postTags = pgTable(
+	"post_tags",
+	{
+		postId: text("post_id")
+			.notNull()
+			.references(() => posts.id, { onDelete: "cascade" }),
+		tagId: text("tag_id")
+			.notNull()
+			.references(() => tags.id, { onDelete: "cascade" }),
+	},
+	(table) => [primaryKey({ columns: [table.postId, table.tagId] })],
+);
+
+export const ideaActivity = pgTable(
+	"idea_activity",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("ida_")),
+		ideaId: text("idea_id")
+			.notNull()
+			.references(() => ideas.id, { onDelete: "cascade" }),
+		actorId: text("actor_id")
+			.notNull()
+			.references(() => user.id),
+		action: ideaActivityActionEnum("action").notNull(),
+		metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("idea_activity_idea_idx").on(table.ideaId),
+		index("idea_activity_idea_created_idx").on(
+			table.ideaId,
+			table.createdAt,
+		),
 	],
 );

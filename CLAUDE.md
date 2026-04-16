@@ -87,6 +87,12 @@ Other prefixes (`chore:`, `docs:`, `refactor:`, etc.) are included in the next r
 - **Dashboard URL**: `http://localhost:4321/app` (requires `bun run dev:app`)
 - **API URL**: `http://localhost:8789` (requires `bun run dev:api`)
 
+## Dashboard App Rules (`apps/app`)
+
+- **Navigation architecture is intentional**: Do **not** replace dashboard page navigations with a persistent client router, SPA router, or a single `/app` shell that swaps route content without full document navigation, unless the user explicitly asks for that architectural change.
+- **Shell performance comes first**: Do **not** add server-rendered `initial*Data` payload bootstrapping for dashboard pages as a default optimization. Prefer improving shell responsiveness, reducing client bootstrap cost, and trimming middleware/auth overhead first.
+- **Internal app API auth should be minimal**: For internal Astro `/api/*` routes in `apps/app`, avoid full auth/session and full organization resolution when the route only needs minimal app-side context such as `user.id`, `session.activeOrganizationId`, or the dashboard API key lookup. The downstream API still enforces API-key authorization; app-side checks should stay minimal and route-specific.
+
 ## OAuth System Rules
 
 **Before making ANY change** to `apps/api/src/config/oauth.ts`, `apps/api/src/routes/connect.ts` (OAuth flow), or `apps/api/src/services/token-refresh.ts`:

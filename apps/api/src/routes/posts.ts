@@ -2,6 +2,8 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	contentTemplates,
 	createDb,
+	ideas,
+	ideaActivity,
 	crossPostActions,
 	externalPosts,
 	postRecyclingConfigs,
@@ -1073,6 +1075,28 @@ app.openapi(createPostRoute, async (c) => {
 		}
 	}
 
+	// --- Idea resolution ---
+	let ideaSource: { id: string; content: string | null } | null = null;
+	if (body.idea_id) {
+		const [idea] = await db
+			.select({ id: ideas.id, content: ideas.content })
+			.from(ideas)
+			.where(
+				and(
+					eq(ideas.id, body.idea_id),
+					eq(ideas.organizationId, orgId),
+				),
+			)
+			.limit(1);
+		if (idea) {
+			ideaSource = idea;
+			// Use idea content as fallback — explicit content takes precedence
+			if (!finalContent) {
+				finalContent = idea.content;
+			}
+		}
+	}
+
 	// --- Signature injection ---
 	if (finalContent && !body.skip_signature) {
 		try {
@@ -1340,6 +1364,24 @@ app.openapi(createPostRoute, async (c) => {
 			return c.json(err.body as never, err.status as never);
 		}
 		throw err;
+	}
+
+	// --- Update idea reference if created from an idea ---
+	if (ideaSource) {
+		c.executionCtx.waitUntil(
+			(async () => {
+				await db
+					.update(ideas)
+					.set({ convertedToPostId: post.id, updatedAt: new Date() })
+					.where(eq(ideas.id, ideaSource!.id));
+				await db.insert(ideaActivity).values({
+					ideaId: ideaSource!.id,
+					actorId: c.get("keyId"),
+					action: "converted",
+					metadata: { post_id: post.id },
+				});
+			})(),
+		);
 	}
 
 	// Build response targets

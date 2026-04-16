@@ -1,0 +1,15 @@
+---
+import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import { IdeasRouteApp } from "../../components/dashboard/route-apps/ideas-route-app";
+import { getDashboardRouteContext } from "../../lib/dashboard-page";
+
+const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
+---
+
+<DashboardLayout>
+	<IdeasRouteApp
+		client:load
+		currentPage="ideas"
+		{...dashboard}
+	/>
+</DashboardLayout>

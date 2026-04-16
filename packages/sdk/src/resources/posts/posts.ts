@@ -1148,6 +1148,11 @@ export interface PostCreateParams {
    * Cross-post actions to execute after publishing (e.g., repost from another account)
    */
   cross_post_actions?: Array<PostCreateParams.CrossPostAction>;
+
+  /**
+   * Create post from an idea. Pre-fills content from the idea.
+   */
+  idea_id?: string;
 }
 
 export namespace PostCreateParams {

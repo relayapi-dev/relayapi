@@ -169,6 +169,48 @@ import {
   ContentTemplateListResponse,
 } from './resources/content-templates';
 import {
+  Tags,
+  TagResponse,
+  TagCreateResponse,
+  TagUpdateResponse,
+  TagListResponse,
+  TagCreateParams,
+  TagUpdateParams,
+  TagListParams,
+} from './resources/tags';
+import {
+  IdeaGroups,
+  IdeaGroupResponse,
+  IdeaGroupCreateResponse,
+  IdeaGroupUpdateResponse,
+  IdeaGroupListResponse,
+  IdeaGroupCreateParams,
+  IdeaGroupUpdateParams,
+  IdeaGroupListParams,
+  IdeaGroupReorderParams,
+} from './resources/idea-groups';
+import {
+  Ideas,
+  IdeaMediaResponse,
+  IdeaResponse,
+  IdeaListResponse,
+  IdeaConvertResponse,
+  IdeaCommentResponse,
+  IdeaCommentListResponse,
+  IdeaActivityResponse,
+  IdeaActivityListResponse,
+  IdeaListParams,
+  IdeaCreateParams,
+  IdeaUpdateParams,
+  IdeaMoveParams,
+  IdeaConvertParams,
+  IdeaUploadMediaParams,
+  IdeaCommentListParams,
+  IdeaCommentCreateParams,
+  IdeaCommentUpdateParams,
+  IdeaActivityListParams,
+} from './resources/ideas';
+import {
   Signatures,
   SignatureCreateParams,
   SignatureCreateResponse,
@@ -1005,6 +1047,9 @@ export class Relay {
   shortLinks: API.ShortLinks = new API.ShortLinks(this);
   commentAutomations: API.CommentAutomations = new API.CommentAutomations(this);
   contentTemplates: API.ContentTemplates = new API.ContentTemplates(this);
+  tags: API.Tags = new API.Tags(this);
+  ideaGroups: API.IdeaGroups = new API.IdeaGroups(this);
+  ideas: API.Ideas = new API.Ideas(this);
   crossPostActions: API.CrossPostActions = new API.CrossPostActions(this);
   engagementRules: API.EngagementRules = new API.EngagementRules(this);
   posts: API.Posts = new API.Posts(this);
@@ -1036,6 +1081,9 @@ Relay.Broadcasts = Broadcasts;
 Relay.Sequences = Sequences;
 Relay.CommentAutomations = CommentAutomations;
 Relay.ContentTemplates = ContentTemplates;
+Relay.Tags = Tags;
+Relay.IdeaGroups = IdeaGroups;
+Relay.Ideas = Ideas;
 Relay.CrossPostActions = CrossPostActions;
 Relay.EngagementRules = EngagementRules;
 Relay.Posts = Posts;
@@ -1176,6 +1224,51 @@ export declare namespace Relay {
     type ContentTemplateCreateParams as ContentTemplateCreateParams,
     type ContentTemplateUpdateParams as ContentTemplateUpdateParams,
     type ContentTemplateListParams as ContentTemplateListParams,
+  };
+
+  export {
+    Tags as Tags,
+    type TagResponse as TagResponse,
+    type TagCreateResponse as TagCreateResponse,
+    type TagUpdateResponse as TagUpdateResponse,
+    type TagListResponse as TagListResponse,
+    type TagCreateParams as TagCreateParams,
+    type TagUpdateParams as TagUpdateParams,
+    type TagListParams as TagListParams,
+  };
+
+  export {
+    IdeaGroups as IdeaGroups,
+    type IdeaGroupResponse as IdeaGroupResponse,
+    type IdeaGroupCreateResponse as IdeaGroupCreateResponse,
+    type IdeaGroupUpdateResponse as IdeaGroupUpdateResponse,
+    type IdeaGroupListResponse as IdeaGroupListResponse,
+    type IdeaGroupCreateParams as IdeaGroupCreateParams,
+    type IdeaGroupUpdateParams as IdeaGroupUpdateParams,
+    type IdeaGroupListParams as IdeaGroupListParams,
+    type IdeaGroupReorderParams as IdeaGroupReorderParams,
+  };
+
+  export {
+    Ideas as Ideas,
+    type IdeaMediaResponse as IdeaMediaResponse,
+    type IdeaResponse as IdeaResponse,
+    type IdeaListResponse as IdeaListResponse,
+    type IdeaConvertResponse as IdeaConvertResponse,
+    type IdeaCommentResponse as IdeaCommentResponse,
+    type IdeaCommentListResponse as IdeaCommentListResponse,
+    type IdeaActivityResponse as IdeaActivityResponse,
+    type IdeaActivityListResponse as IdeaActivityListResponse,
+    type IdeaListParams as IdeaListParams,
+    type IdeaCreateParams as IdeaCreateParams,
+    type IdeaUpdateParams as IdeaUpdateParams,
+    type IdeaMoveParams as IdeaMoveParams,
+    type IdeaConvertParams as IdeaConvertParams,
+    type IdeaUploadMediaParams as IdeaUploadMediaParams,
+    type IdeaCommentListParams as IdeaCommentListParams,
+    type IdeaCommentCreateParams as IdeaCommentCreateParams,
+    type IdeaCommentUpdateParams as IdeaCommentUpdateParams,
+    type IdeaActivityListParams as IdeaActivityListParams,
   };
 
   export {
