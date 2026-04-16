@@ -36,7 +36,16 @@ function parseCookies(headers: Headers): Map<string, string> {
 		if (!cookie) continue;
 		const [name, ...valueParts] = cookie.split("=");
 		if (name && valueParts.length > 0) {
-			cookies.set(name, valueParts.join("="));
+			let value = valueParts.join("=");
+			if (value.startsWith('"') && value.endsWith('"')) {
+				value = value.slice(1, -1);
+			}
+			try {
+				value = decodeURIComponent(value);
+			} catch {
+				// Keep the raw value if decoding fails so malformed cookies do not throw.
+			}
+			cookies.set(name, value);
 		}
 	}
 
