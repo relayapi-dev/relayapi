@@ -13,11 +13,8 @@ import {
 } from "@relayapi/db";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import {
-	admin,
-	organization as organizationPlugin,
-} from "better-auth/plugins";
-import { ac, ownerRole, adminRole, roles } from "./permissions";
+import { admin, organization as organizationPlugin } from "better-auth/plugins";
+import { ac, adminRole, type ownerRole, roles } from "./permissions";
 
 export interface InvitationEmailData {
 	id: string;
@@ -70,8 +67,7 @@ export function createAuth(db: Database, env: AuthEnv) {
 								return {
 									data: {
 										...sessionData,
-										activeOrganizationId:
-											membership[0]!.organizationId,
+										activeOrganizationId: membership[0]!.organizationId,
 									},
 								};
 							}
@@ -125,4 +121,4 @@ export function createAuth(db: Database, env: AuthEnv) {
 
 export type Auth = ReturnType<typeof createAuth>;
 
-export { ac, roles, ownerRole, adminRole, memberRole } from "./permissions";
+export { ac, adminRole, memberRole, ownerRole, roles } from "./permissions";
