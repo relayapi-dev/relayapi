@@ -2,10 +2,10 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	contentTemplates,
 	createDb,
-	ideas,
-	ideaActivity,
 	crossPostActions,
 	externalPosts,
+	ideaActivity,
+	ideas,
 	postRecyclingConfigs,
 	posts,
 	postTargets,
@@ -17,9 +17,14 @@ import {
 } from "@relayapi/db";
 import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
+import { parseCsv } from "../lib/csv-parser";
+import { notifyRealtime } from "../lib/notify-post-update";
+import { presignRelayMediaUrls } from "../lib/r2-presign";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+} from "../lib/workspace-scope";
 import { incrementUsage } from "../middleware/usage-tracking";
-import { getProvider } from "../services/short-link-providers";
-import { shortenUrlsInContent } from "../services/short-link-service";
 import type { PublishRequest } from "../publishers";
 import { addToPlaylist } from "../publishers/youtube";
 import type { Platform } from "../schemas/common";
@@ -37,11 +42,10 @@ import {
 	PostResponse,
 	RecyclingConfigResponse,
 	RecyclingInput,
-	UpdatePostBody,
 	UpdateMetadataBody,
 	UpdateMetadataResponse,
+	UpdatePostBody,
 } from "../schemas/posts";
-import { parseCsv } from "../lib/csv-parser";
 import {
 	type PublishTargetInput,
 	publishToTargets,
@@ -50,14 +54,13 @@ import {
 	computeNextRecycleAt,
 	validateRecyclingConfig,
 } from "../services/recycling-validator";
+import { getProvider } from "../services/short-link-providers";
+import { shortenUrlsInContent } from "../services/short-link-service";
 import { resolveTargets } from "../services/target-resolver";
 import { refreshTokenIfNeeded } from "../services/token-refresh";
 import { dispatchWebhookEvent } from "../services/webhook-delivery";
-import { notifyRealtime } from "../lib/notify-post-update";
 import type { Env, Variables } from "../types";
 import { PRICING } from "../types";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
-import { presignRelayMediaUrls } from "../lib/r2-presign";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -331,7 +334,12 @@ const unpublishPost = createRoute({
 			content: {
 				"application/json": {
 					schema: z.object({
-						platforms: z.array(z.string()).optional().describe("Platforms to unpublish from. If omitted, unpublishes from all."),
+						platforms: z
+							.array(z.string())
+							.optional()
+							.describe(
+								"Platforms to unpublish from. If omitted, unpublishes from all.",
+							),
 					}),
 				},
 			},
@@ -520,14 +528,16 @@ function buildTargetResponse(
 		result[t.socialAccountId] = {
 			status: t.status,
 			platform: t.platform,
-			accounts: [{
-				id: t.socialAccountId,
-				username: t.username ?? null,
-				display_name: t.displayName ?? null,
-				avatar_url: t.avatarUrl ?? null,
-				url: t.platformUrl,
-				platform_post_id: t.platformPostId ?? null,
-			}],
+			accounts: [
+				{
+					id: t.socialAccountId,
+					username: t.username ?? null,
+					display_name: t.displayName ?? null,
+					avatar_url: t.avatarUrl ?? null,
+					url: t.platformUrl,
+					platform_post_id: t.platformPostId ?? null,
+				},
+			],
 			...(t.error
 				? { error: { code: "PUBLISH_FAILED", message: t.error } }
 				: {}),
@@ -540,10 +550,25 @@ function buildTargetResponse(
 
 app.openapi(listPosts, async (c) => {
 	const orgId = c.get("orgId");
-	const { cursor, limit, workspace_id, account_id, status, from, to, include, include_external } = c.req.valid("query");
+	const {
+		cursor,
+		limit,
+		workspace_id,
+		account_id,
+		status,
+		from,
+		to,
+		include,
+		include_external,
+	} = c.req.valid("query");
 	const db = createDb(c.env.HYPERDRIVE.connectionString);
 
-	const includeSet = new Set((include ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+	const includeSet = new Set(
+		(include ?? "")
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean),
+	);
 	const includeTargets = includeSet.has("targets");
 	const includeMedia = includeSet.has("media");
 
@@ -560,11 +585,15 @@ app.openapi(listPosts, async (c) => {
 
 	if (from) {
 		const fromDate = new Date(from);
-		conditions.push(or(gte(posts.scheduledAt, fromDate), gte(posts.publishedAt, fromDate))!);
+		conditions.push(
+			or(gte(posts.scheduledAt, fromDate), gte(posts.publishedAt, fromDate))!,
+		);
 	}
 	if (to) {
 		const toDate = new Date(to);
-		conditions.push(or(lte(posts.scheduledAt, toDate), lte(posts.publishedAt, toDate))!);
+		conditions.push(
+			or(lte(posts.scheduledAt, toDate), lte(posts.publishedAt, toDate))!,
+		);
 	}
 
 	if (account_id) {
@@ -621,7 +650,10 @@ app.openapi(listPosts, async (c) => {
 				avatarUrl: socialAccounts.avatarUrl,
 			})
 			.from(postTargets)
-			.leftJoin(socialAccounts, eq(postTargets.socialAccountId, socialAccounts.id))
+			.leftJoin(
+				socialAccounts,
+				eq(postTargets.socialAccountId, socialAccounts.id),
+			)
 			.where(inArray(postTargets.postId, postIds));
 
 		const targetsByPost = new Map<string, typeof fullTargets>();
@@ -646,7 +678,10 @@ app.openapi(listPosts, async (c) => {
 				}
 			}
 		}
-		const extMediaByPlatformPostId = new Map<string, Array<{ url: string; type?: string }>>();
+		const extMediaByPlatformPostId = new Map<
+			string,
+			Array<{ url: string; type?: string }>
+		>();
 		if (includeMedia && allPlatformPostIds.length > 0) {
 			const extRows = await db
 				.select({
@@ -656,10 +691,12 @@ app.openapi(listPosts, async (c) => {
 					thumbnailUrl: externalPosts.thumbnailUrl,
 				})
 				.from(externalPosts)
-				.where(and(
-					inArray(externalPosts.platformPostId, allPlatformPostIds),
-					eq(externalPosts.organizationId, orgId),
-				));
+				.where(
+					and(
+						inArray(externalPosts.platformPostId, allPlatformPostIds),
+						eq(externalPosts.organizationId, orgId),
+					),
+				);
 			for (const row of extRows) {
 				const media: Array<{ url: string; type?: string }> = [];
 				const urls = row.mediaUrls as string[] | null;
@@ -669,7 +706,10 @@ app.openapi(listPosts, async (c) => {
 					}
 				} else if (row.thumbnailUrl) {
 					// Fallback to thumbnail only when no full media URLs exist (e.g. video poster)
-					media.push({ url: row.thumbnailUrl, type: row.mediaType ?? undefined });
+					media.push({
+						url: row.thumbnailUrl,
+						type: row.mediaType ?? undefined,
+					});
 				}
 				if (media.length > 0) {
 					extMediaByPlatformPostId.set(row.platformPostId, media);
@@ -677,12 +717,14 @@ app.openapi(listPosts, async (c) => {
 			}
 		}
 
-		const internalItems = await Promise.all(data.map(async (p) => {
+		const internalItems = await Promise.all(
+			data.map(async (p) => {
 				const pTargets = targetsByPost.get(p.id) ?? [];
 				const overrides = p.platformOverrides as Record<string, any> | null;
-				const rawMedia = includeMedia && overrides?._media
-					? (overrides._media as Array<{ url: string; type?: string }>)
-					: null;
+				const rawMedia =
+					includeMedia && overrides?._media
+						? (overrides._media as Array<{ url: string; type?: string }>)
+						: null;
 
 				// Prefer platform CDN media from external posts for published posts
 				let mediaArr: Array<{ url: string; type?: string }> | null = null;
@@ -699,7 +741,9 @@ app.openapi(listPosts, async (c) => {
 				}
 				// Fall back to presigned R2 URLs
 				if (!mediaArr) {
-					mediaArr = includeMedia ? await presignMediaUrls(c.env, rawMedia) : rawMedia;
+					mediaArr = includeMedia
+						? await presignMediaUrls(c.env, rawMedia)
+						: rawMedia;
 				}
 
 				return {
@@ -719,11 +763,18 @@ app.openapi(listPosts, async (c) => {
 					created_at: p.createdAt.toISOString(),
 					updated_at: p.updatedAt.toISOString(),
 				};
-			}));
+			}),
+		);
 
 		// Merge external posts if requested
 		if (include_external === "true" && (!status || status === "published")) {
-			const ext = await fetchExternalPostItems(db, orgId, c, { workspace_id, account_id, from, to, limit });
+			const ext = await fetchExternalPostItems(db, orgId, c, {
+				workspace_id,
+				account_id,
+				from,
+				to,
+				limit,
+			});
 			const merged = mergeByPublishedAt(internalItems, ext, limit);
 			return c.json(
 				{
@@ -746,15 +797,16 @@ app.openapi(listPosts, async (c) => {
 	}
 
 	// Default lean response (no include=targets; still handles include=media)
-	const targets = postIds.length > 0
-		? await db
-				.select({
-					postId: postTargets.postId,
-					platform: postTargets.platform,
-				})
-				.from(postTargets)
-				.where(inArray(postTargets.postId, postIds))
-		: [];
+	const targets =
+		postIds.length > 0
+			? await db
+					.select({
+						postId: postTargets.postId,
+						platform: postTargets.platform,
+					})
+					.from(postTargets)
+					.where(inArray(postTargets.postId, postIds))
+			: [];
 
 	const platformsByPost = new Map<string, string[]>();
 	for (const t of targets) {
@@ -763,36 +815,44 @@ app.openapi(listPosts, async (c) => {
 		platformsByPost.set(t.postId, list);
 	}
 
-	const leanItems = await Promise.all(data.map(async (p) => {
-		let mediaArr: Array<{ url: string; type?: string }> | null = null;
-		if (includeMedia) {
-			const overrides = p.platformOverrides as Record<string, any> | null;
-			const rawMedia = overrides?._media
-				? (overrides._media as Array<{ url: string; type?: string }>)
-				: null;
-			mediaArr = await presignMediaUrls(c.env, rawMedia);
-		}
-		return {
-			id: p.id,
-			source: "internal" as const,
-			status: p.status,
-			content: p.content,
-			platforms: platformsByPost.get(p.id) ?? [],
-			scheduled_at: p.scheduledAt?.toISOString() ?? null,
-			published_at: p.publishedAt?.toISOString() ?? null,
-			targets: {},
-			media: mediaArr,
-			metrics: (p.metricsSnapshot as Record<string, number>) ?? {},
-			recycling: null,
-			recycled_from_id: p.recycledFromId ?? null,
-			created_at: p.createdAt.toISOString(),
-			updated_at: p.updatedAt.toISOString(),
-		};
-	}));
+	const leanItems = await Promise.all(
+		data.map(async (p) => {
+			let mediaArr: Array<{ url: string; type?: string }> | null = null;
+			if (includeMedia) {
+				const overrides = p.platformOverrides as Record<string, any> | null;
+				const rawMedia = overrides?._media
+					? (overrides._media as Array<{ url: string; type?: string }>)
+					: null;
+				mediaArr = await presignMediaUrls(c.env, rawMedia);
+			}
+			return {
+				id: p.id,
+				source: "internal" as const,
+				status: p.status,
+				content: p.content,
+				platforms: platformsByPost.get(p.id) ?? [],
+				scheduled_at: p.scheduledAt?.toISOString() ?? null,
+				published_at: p.publishedAt?.toISOString() ?? null,
+				targets: {},
+				media: mediaArr,
+				metrics: (p.metricsSnapshot as Record<string, number>) ?? {},
+				recycling: null,
+				recycled_from_id: p.recycledFromId ?? null,
+				created_at: p.createdAt.toISOString(),
+				updated_at: p.updatedAt.toISOString(),
+			};
+		}),
+	);
 
 	// Merge external posts if requested
 	if (include_external === "true" && (!status || status === "published")) {
-		const ext = await fetchExternalPostItems(db, orgId, c, { workspace_id, account_id, from, to, limit });
+		const ext = await fetchExternalPostItems(db, orgId, c, {
+			workspace_id,
+			account_id,
+			from,
+			to,
+			limit,
+		});
 		const merged = mergeByPublishedAt(leanItems, ext, limit);
 		return c.json(
 			{
@@ -862,7 +922,10 @@ async function fetchExternalPostItems(
 			accountAvatarUrl: socialAccounts.avatarUrl,
 		})
 		.from(externalPosts)
-		.leftJoin(socialAccounts, eq(externalPosts.socialAccountId, socialAccounts.id))
+		.leftJoin(
+			socialAccounts,
+			eq(externalPosts.socialAccountId, socialAccounts.id),
+		)
 		.where(and(...conditions))
 		.orderBy(desc(externalPosts.publishedAt))
 		.limit(filters.limit);
@@ -895,13 +958,18 @@ function mergeByPublishedAt(
 	let i = 0;
 	let e = 0;
 
-	while (merged.length < limit && (i < internal.length || e < external.length)) {
-		const iDate = i < internal.length
-			? new Date(internal[i].published_at ?? internal[i].created_at).getTime()
-			: -Infinity;
-		const eDate = e < external.length
-			? new Date(external[e].published_at).getTime()
-			: -Infinity;
+	while (
+		merged.length < limit &&
+		(i < internal.length || e < external.length)
+	) {
+		const iDate =
+			i < internal.length
+				? new Date(internal[i].published_at ?? internal[i].created_at).getTime()
+				: -Infinity;
+		const eDate =
+			e < external.length
+				? new Date(external[e].published_at).getTime()
+				: -Infinity;
 
 		if (iDate >= eDate) {
 			merged.push(internal[i]);
@@ -994,7 +1062,12 @@ app.openapi(createPostRoute, async (c) => {
 	const isAuto = body.scheduled_at === "auto";
 
 	// Resolve targets
-	const { resolved, failed } = await resolveTargets(db, orgId, body.targets, c.get("workspaceScope"));
+	const { resolved, failed } = await resolveTargets(
+		db,
+		orgId,
+		body.targets,
+		c.get("workspaceScope"),
+	);
 	const noResolved = resolved.length === 0;
 
 	// Determine intent
@@ -1059,13 +1132,19 @@ app.openapi(createPostRoute, async (c) => {
 			if (tmpl) {
 				let rendered = tmpl.content;
 				// Built-in variables
-				rendered = rendered.replace(/\{\{date\}\}/g, new Date().toISOString().split("T")[0] ?? "");
+				rendered = rendered.replace(
+					/\{\{date\}\}/g,
+					new Date().toISOString().split("T")[0] ?? "",
+				);
 				// Custom variables from request
 				if (body.template_variables) {
 					for (const [key, value] of Object.entries(body.template_variables)) {
 						// SECURITY: Escape regex metacharacters to prevent ReDoS via user-controlled keys
 						const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-						rendered = rendered.replace(new RegExp(`\\{\\{${escapedKey}\\}\\}`, "g"), value);
+						rendered = rendered.replace(
+							new RegExp(`\\{\\{${escapedKey}\\}\\}`, "g"),
+							value,
+						);
 					}
 				}
 				finalContent = rendered;
@@ -1081,12 +1160,7 @@ app.openapi(createPostRoute, async (c) => {
 		const [idea] = await db
 			.select({ id: ideas.id, content: ideas.content })
 			.from(ideas)
-			.where(
-				and(
-					eq(ideas.id, body.idea_id),
-					eq(ideas.organizationId, orgId),
-				),
-			)
+			.where(and(eq(ideas.id, body.idea_id), eq(ideas.organizationId, orgId)))
 			.limit(1);
 		if (idea) {
 			ideaSource = idea;
@@ -1135,19 +1209,24 @@ app.openapi(createPostRoute, async (c) => {
 
 			let shouldShorten = false;
 			if (slConfig?.mode === "always") shouldShorten = true;
-			if (slConfig?.mode === "ask" && body.shorten_urls === true) shouldShorten = true;
+			if (slConfig?.mode === "ask" && body.shorten_urls === true)
+				shouldShorten = true;
 
 			if (shouldShorten && slConfig?.provider) {
 				let provider;
 				let apiKey: string | null = null;
 
 				if (slConfig.provider === "relayapi") {
-					const { createRelayApiProvider } = await import("../services/short-link-providers/relayapi");
+					const { createRelayApiProvider } = await import(
+						"../services/short-link-providers/relayapi"
+					);
 					const baseUrl = c.env.API_BASE_URL || "https://api.relayapi.dev";
 					provider = createRelayApiProvider(c.env.KV, baseUrl);
 					apiKey = "builtin"; // not used by relayapi provider
 				} else if (slConfig.apiKey) {
-					provider = getProvider(slConfig.provider as "dub" | "short_io" | "bitly");
+					provider = getProvider(
+						slConfig.provider as "dub" | "short_io" | "bitly",
+					);
 					apiKey = await maybeDecrypt(slConfig.apiKey, c.env.ENCRYPTION_KEY);
 				}
 
@@ -1193,14 +1272,18 @@ app.openapi(createPostRoute, async (c) => {
 					scheduledAt,
 					timezone: body.timezone,
 					platformOverrides:
-						Object.keys(platformOverrides).length > 0 ? platformOverrides : null,
+						Object.keys(platformOverrides).length > 0
+							? platformOverrides
+							: null,
 				})
 				.returning();
 			const txPost = rows[0];
 			if (!txPost) {
 				throw {
 					__earlyReturn: true,
-					body: { error: { code: "INTERNAL_ERROR", message: "Failed to create post" } },
+					body: {
+						error: { code: "INTERNAL_ERROR", message: "Failed to create post" },
+					},
 					status: 400,
 				} as TxEarlyReturn;
 			}
@@ -1260,7 +1343,8 @@ app.openapi(createPostRoute, async (c) => {
 			}
 
 			// Handle recycling config if provided
-			let txRecyclingResponse: ReturnType<typeof formatRecyclingConfig> | null = null;
+			let txRecyclingResponse: ReturnType<typeof formatRecyclingConfig> | null =
+				null;
 			if (
 				body.recycling &&
 				(postStatus === "scheduled" || postStatus === "publishing")
@@ -1324,19 +1408,35 @@ app.openapi(createPostRoute, async (c) => {
 			}
 
 			// Create cross-post actions if provided (not for drafts)
-			if (body.cross_post_actions && body.cross_post_actions.length > 0 && !isDraft) {
+			if (
+				body.cross_post_actions &&
+				body.cross_post_actions.length > 0 &&
+				!isDraft
+			) {
 				// SECURITY: Validate all target_account_id values belong to this org to prevent cross-org IDOR
-				const targetIds = body.cross_post_actions.map((a) => a.target_account_id);
+				const targetIds = body.cross_post_actions.map(
+					(a) => a.target_account_id,
+				);
 				const ownedAccounts = await tx
 					.select({ id: socialAccounts.id })
 					.from(socialAccounts)
-					.where(and(inArray(socialAccounts.id, targetIds), eq(socialAccounts.organizationId, orgId)));
+					.where(
+						and(
+							inArray(socialAccounts.id, targetIds),
+							eq(socialAccounts.organizationId, orgId),
+						),
+					);
 				const ownedSet = new Set(ownedAccounts.map((a) => a.id));
 				for (const action of body.cross_post_actions) {
 					if (!ownedSet.has(action.target_account_id)) {
 						throw {
 							__earlyReturn: true,
-							body: { error: { code: "NOT_FOUND", message: `Target account ${action.target_account_id} not found` } },
+							body: {
+								error: {
+									code: "NOT_FOUND",
+									message: `Target account ${action.target_account_id} not found`,
+								},
+							},
 							status: 404,
 						} as TxEarlyReturn;
 					}
@@ -1349,7 +1449,9 @@ app.openapi(createPostRoute, async (c) => {
 					targetAccountId: action.target_account_id,
 					content: action.content ?? null,
 					delayMinutes: action.delay_minutes,
-					executeAt: new Date(publishDate.getTime() + action.delay_minutes * 60 * 1000),
+					executeAt: new Date(
+						publishDate.getTime() + action.delay_minutes * 60 * 1000,
+					),
 				}));
 				await tx.insert(crossPostActions).values(actionValues);
 			}
@@ -1420,7 +1522,13 @@ app.openapi(createPostRoute, async (c) => {
 				usage_tracked: true, // middleware already incremented usage
 			}),
 		);
-		c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "post.created", post_id: post.id, status: "publishing" }));
+		c.executionCtx.waitUntil(
+			notifyRealtime(c.env, orgId, {
+				type: "post.created",
+				post_id: post.id,
+				status: "publishing",
+			}),
+		);
 
 		const presignedMedia = await presignMediaUrls(c.env, body.media ?? null);
 		return c.json(
@@ -1451,7 +1559,13 @@ app.openapi(createPostRoute, async (c) => {
 		);
 	}
 
-	c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "post.created", post_id: post.id, status: postStatus }));
+	c.executionCtx.waitUntil(
+		notifyRealtime(c.env, orgId, {
+			type: "post.created",
+			post_id: post.id,
+			status: postStatus,
+		}),
+	);
 
 	const presignedMedia = await presignMediaUrls(c.env, body.media ?? null);
 	return c.json(
@@ -1515,7 +1629,10 @@ app.openapi(getPost, async (c) => {
 				avatarUrl: socialAccounts.avatarUrl,
 			})
 			.from(postTargets)
-			.leftJoin(socialAccounts, eq(postTargets.socialAccountId, socialAccounts.id))
+			.leftJoin(
+				socialAccounts,
+				eq(postTargets.socialAccountId, socialAccounts.id),
+			)
 			.where(eq(postTargets.postId, post.id)),
 		db
 			.select()
@@ -1530,7 +1647,9 @@ app.openapi(getPost, async (c) => {
 		: null;
 	const mediaArr = await presignMediaUrls(c.env, rawMedia);
 	const targetOpts = overrides
-		? Object.fromEntries(Object.entries(overrides).filter(([k]) => k !== "_media"))
+		? Object.fromEntries(
+				Object.entries(overrides).filter(([k]) => k !== "_media"),
+			)
 		: null;
 
 	return c.json(
@@ -1542,7 +1661,8 @@ app.openapi(getPost, async (c) => {
 			scheduled_at: post.scheduledAt?.toISOString() ?? null,
 			targets: buildTargetResponse(targets),
 			media: mediaArr,
-			target_options: (targetOpts && Object.keys(targetOpts).length > 0) ? targetOpts : null,
+			target_options:
+				targetOpts && Object.keys(targetOpts).length > 0 ? targetOpts : null,
 			timezone: post.timezone ?? null,
 			recycling: recyclingConfig
 				? formatRecyclingConfig(recyclingConfig)
@@ -1593,7 +1713,8 @@ app.openapi(updatePostRoute, async (c) => {
 	if (body.timezone !== undefined) updates.timezone = body.timezone;
 
 	// Merge platformOverrides: preserve _media when updating target_options and vice versa
-	const existingOverrides = (post.platformOverrides as Record<string, any>) ?? {};
+	const existingOverrides =
+		(post.platformOverrides as Record<string, any>) ?? {};
 	const { _media: existingMedia, ...existingOpts } = existingOverrides;
 	let newOverrides = { ...existingOverrides };
 	let overridesChanged = false;
@@ -1614,7 +1735,8 @@ app.openapi(updatePostRoute, async (c) => {
 		overridesChanged = true;
 	}
 	if (overridesChanged) {
-		updates.platformOverrides = Object.keys(newOverrides).length > 0 ? newOverrides : null;
+		updates.platformOverrides =
+			Object.keys(newOverrides).length > 0 ? newOverrides : null;
 	}
 
 	if (body.scheduled_at !== undefined) {
@@ -1639,14 +1761,20 @@ app.openapi(updatePostRoute, async (c) => {
 	// Handle targets update
 	if (body.targets !== undefined && body.targets.length > 0) {
 		const { resolved } = await resolveTargets(
-			db, orgId, body.targets, c.get("workspaceScope"),
+			db,
+			orgId,
+			body.targets,
+			c.get("workspaceScope"),
 		);
 
 		await db.delete(postTargets).where(eq(postTargets.postId, id));
 
-		const targetStatus = updated.status === "draft" ? "draft"
-			: updated.status === "publishing" ? "publishing"
-			: "scheduled";
+		const targetStatus =
+			updated.status === "draft"
+				? "draft"
+				: updated.status === "publishing"
+					? "publishing"
+					: "scheduled";
 
 		const targetValues = resolved.flatMap((target) =>
 			target.accounts.map((account) => ({
@@ -1699,7 +1827,10 @@ app.openapi(updatePostRoute, async (c) => {
 				avatarUrl: socialAccounts.avatarUrl,
 			})
 			.from(postTargets)
-			.leftJoin(socialAccounts, eq(postTargets.socialAccountId, socialAccounts.id))
+			.leftJoin(
+				socialAccounts,
+				eq(postTargets.socialAccountId, socialAccounts.id),
+			)
 			.where(eq(postTargets.postId, id)),
 		db
 			.select()
@@ -1708,7 +1839,8 @@ app.openapi(updatePostRoute, async (c) => {
 			.limit(1),
 	]);
 
-	const finalOverrides = (updated.platformOverrides as Record<string, any>) ?? {};
+	const finalOverrides =
+		(updated.platformOverrides as Record<string, any>) ?? {};
 	const responseMedia = await presignMediaUrls(
 		c.env,
 		finalOverrides._media
@@ -1719,7 +1851,13 @@ app.openapi(updatePostRoute, async (c) => {
 		Object.entries(finalOverrides).filter(([k]) => k !== "_media"),
 	);
 
-	c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "post.updated", post_id: id, status: updated.status }));
+	c.executionCtx.waitUntil(
+		notifyRealtime(c.env, orgId, {
+			type: "post.updated",
+			post_id: id,
+			status: updated.status,
+		}),
+	);
 	return c.json(
 		{
 			id: updated.id,
@@ -1730,7 +1868,8 @@ app.openapi(updatePostRoute, async (c) => {
 				updated.scheduledAt?.toISOString() ?? body.scheduled_at ?? null,
 			targets: buildTargetResponse(updatedTargets),
 			media: responseMedia,
-			target_options: Object.keys(responseOpts).length > 0 ? responseOpts : null,
+			target_options:
+				Object.keys(responseOpts).length > 0 ? responseOpts : null,
 			timezone: updated.timezone ?? null,
 			recycling: recyclingConfig
 				? formatRecyclingConfig(recyclingConfig)
@@ -1768,7 +1907,9 @@ app.openapi(deletePost, async (c) => {
 	await db.delete(postTargets).where(eq(postTargets.postId, id));
 	await db.delete(posts).where(eq(posts.id, id));
 
-	c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "post.deleted", post_id: id }));
+	c.executionCtx.waitUntil(
+		notifyRealtime(c.env, orgId, { type: "post.deleted", post_id: id }),
+	);
 	return c.body(null, 204);
 });
 
@@ -1912,7 +2053,13 @@ app.openapi(retryPost, async (c) => {
 
 	const finalPost = updatedPost ?? post;
 
-	c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "post.updated", post_id: id, status: finalPost.status }));
+	c.executionCtx.waitUntil(
+		notifyRealtime(c.env, orgId, {
+			type: "post.updated",
+			post_id: id,
+			status: finalPost.status,
+		}),
+	);
 	return c.json(
 		{
 			id: finalPost.id,
@@ -1990,7 +2137,13 @@ app.openapi(bulkCreatePosts, async (c) => {
 					excludeTimes: autoScheduledTimes,
 				});
 				if (!slot) {
-					results.push({ status: "error", error: { code: "NO_SLOT_AVAILABLE", message: "No available slot found for auto-scheduling." } });
+					results.push({
+						status: "error",
+						error: {
+							code: "NO_SLOT_AVAILABLE",
+							message: "No available slot found for auto-scheduling.",
+						},
+					});
 					failed++;
 					continue;
 				}
@@ -2170,7 +2323,9 @@ app.openapi(unpublishPost, async (c) => {
 		);
 
 	if (selectedPlatforms?.length) {
-		publishedTargets = publishedTargets.filter((t) => selectedPlatforms.includes(t.platform));
+		publishedTargets = publishedTargets.filter((t) =>
+			selectedPlatforms.includes(t.platform),
+		);
 	}
 
 	// Batch-fetch all accounts needed for deletion in one query
@@ -2193,15 +2348,16 @@ app.openapi(unpublishPost, async (c) => {
 	// Decrypt and refresh tokens before platform deletion calls
 	const accounts = await Promise.all(
 		rawAccounts.map(async (a) => {
-			const token = a.platform === "telegram"
-				? await maybeDecrypt(a.accessToken, c.env.ENCRYPTION_KEY)
-				: await refreshTokenIfNeeded(c.env, {
-						id: a.id,
-						platform: a.platform,
-						accessToken: a.accessToken,
-						refreshToken: a.refreshToken,
-						tokenExpiresAt: a.tokenExpiresAt,
-					});
+			const token =
+				a.platform === "telegram"
+					? await maybeDecrypt(a.accessToken, c.env.ENCRYPTION_KEY)
+					: await refreshTokenIfNeeded(c.env, {
+							id: a.id,
+							platform: a.platform,
+							accessToken: a.accessToken,
+							refreshToken: a.refreshToken,
+							tokenExpiresAt: a.tokenExpiresAt,
+						});
 			return { ...a, accessToken: token };
 		}),
 	);
@@ -2364,7 +2520,13 @@ app.openapi(unpublishPost, async (c) => {
 		.from(postTargets)
 		.where(eq(postTargets.postId, id));
 
-	c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "post.updated", post_id: id, status: "draft" }));
+	c.executionCtx.waitUntil(
+		notifyRealtime(c.env, orgId, {
+			type: "post.updated",
+			post_id: id,
+			status: "draft",
+		}),
+	);
 	return c.json(
 		{
 			id: post.id,
@@ -2545,7 +2707,10 @@ app.openapi(updateMetadata, async (c) => {
 
 	// Get YouTube account access token
 	const [account] = await db
-		.select({ accessToken: socialAccounts.accessToken, workspaceId: socialAccounts.workspaceId })
+		.select({
+			accessToken: socialAccounts.accessToken,
+			workspaceId: socialAccounts.workspaceId,
+		})
 		.from(socialAccounts)
 		.where(
 			and(
@@ -2571,10 +2736,7 @@ app.openapi(updateMetadata, async (c) => {
 	const denied = assertWorkspaceScope(c, account.workspaceId);
 	if (denied) return denied;
 
-	const token = await maybeDecrypt(
-		account.accessToken,
-		c.env.ENCRYPTION_KEY,
-	);
+	const token = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY);
 
 	// Fetch current video data from YouTube
 	const listRes = await fetch(
@@ -2657,7 +2819,8 @@ app.openapi(updateMetadata, async (c) => {
 			{
 				error: {
 					code: "BAD_REQUEST",
-					message: "No fields to update. Provide at least one of: title, description, tags, visibility, category_id, made_for_kids, playlist_id.",
+					message:
+						"No fields to update. Provide at least one of: title, description, tags, visibility, category_id, made_for_kids, playlist_id.",
 				},
 			},
 			400,
@@ -2702,7 +2865,10 @@ app.openapi(updateMetadata, async (c) => {
 			await addToPlaylist({ access_token: token! }, body.playlist_id, videoId);
 			updatedFields.push("playlist_id");
 		} catch (err) {
-			console.warn(`Failed to add video ${videoId} to playlist ${body.playlist_id}:`, err);
+			console.warn(
+				`Failed to add video ${videoId} to playlist ${body.playlist_id}:`,
+				err,
+			);
 		}
 	}
 
@@ -2773,8 +2939,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 			{
 				error: {
 					code: "BAD_REQUEST",
-					message:
-						"Request must be multipart/form-data with a 'file' field.",
+					message: "Request must be multipart/form-data with a 'file' field.",
 				},
 			},
 			400,
@@ -2854,8 +3019,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 			{
 				error: {
 					code: "BAD_REQUEST",
-					message:
-						"CSV must have 'targets' and 'scheduled_at' columns.",
+					message: "CSV must have 'targets' and 'scheduled_at' columns.",
 				},
 			},
 			400,
@@ -2954,8 +3118,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 						status: "error",
 						error: {
 							code: "VALIDATION_ERROR",
-							message:
-								"Invalid JSON in 'target_options' column.",
+							message: "Invalid JSON in 'target_options' column.",
 						},
 					});
 					failed++;
@@ -3047,7 +3210,14 @@ app.openapi(bulkCsvUpload, async (c) => {
 					excludeTimes: csvAutoScheduledTimes,
 				});
 				if (!slot) {
-					results.push({ row: rowNum, status: "error", error: { code: "NO_SLOT_AVAILABLE", message: "No available slot for auto-scheduling." } });
+					results.push({
+						row: rowNum,
+						status: "error",
+						error: {
+							code: "NO_SLOT_AVAILABLE",
+							message: "No available slot for auto-scheduling.",
+						},
+					});
 					failed++;
 					continue;
 				}
@@ -3065,9 +3235,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 
 			const platformOverrides: Record<string, unknown> = {
 				...(item.target_options ?? {}),
-				...(item.media && item.media.length > 0
-					? { _media: item.media }
-					: {}),
+				...(item.media && item.media.length > 0 ? { _media: item.media } : {}),
 			};
 
 			const insertedRows = await db
@@ -3106,11 +3274,10 @@ app.openapi(bulkCsvUpload, async (c) => {
 					postId: post.id,
 					socialAccountId: account.id,
 					platform: target.platform,
-					status: (isDraft
-						? "draft"
-						: isNow
-							? "publishing"
-							: "scheduled") as "draft" | "publishing" | "scheduled",
+					status: (isDraft ? "draft" : isNow ? "publishing" : "scheduled") as
+						| "draft"
+						| "publishing"
+						| "scheduled",
 				})),
 			);
 			if (targetValues.length > 0) {
@@ -3119,16 +3286,14 @@ app.openapi(bulkCsvUpload, async (c) => {
 
 			// Publish immediately if requested
 			if (isNow && resolved.length > 0) {
-				const publishTargets: PublishTargetInput[] = resolved.map(
-					(t) => ({
-						key: t.key,
-						platform: t.platform,
-						accounts: t.accounts.map((a) => ({
-							id: a.id,
-							username: a.username,
-						})),
-					}),
-				);
+				const publishTargets: PublishTargetInput[] = resolved.map((t) => ({
+					key: t.key,
+					platform: t.platform,
+					accounts: t.accounts.map((a) => ({
+						id: a.id,
+						username: a.username,
+					})),
+				}));
 
 				await publishToTargets(
 					c.env,
@@ -3136,10 +3301,8 @@ app.openapi(bulkCsvUpload, async (c) => {
 					orgId,
 					item.content ?? null,
 					(item.media ?? []) as PublishRequest["media"],
-					(item.target_options as Record<
-						string,
-						Record<string, unknown>
-					>) ?? null,
+					(item.target_options as Record<string, Record<string, unknown>>) ??
+						null,
 					publishTargets,
 				);
 			}
@@ -3157,8 +3320,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 				status: "error",
 				error: {
 					code: "UNEXPECTED_ERROR",
-					message:
-						err instanceof Error ? err.message : "Unknown error",
+					message: err instanceof Error ? err.message : "Unknown error",
 				},
 			});
 			failed++;
@@ -3293,9 +3455,7 @@ app.openapi(putRecyclingConfig, async (c) => {
 				gapFreq: body.gap_freq,
 				startDate: new Date(body.start_date),
 				expireCount: body.expire_count ?? null,
-				expireDate: body.expire_date
-					? new Date(body.expire_date)
-					: null,
+				expireDate: body.expire_date ? new Date(body.expire_date) : null,
 				contentVariations: body.content_variations ?? [],
 				nextRecycleAt: nextRecycle,
 				updatedAt: new Date(),
@@ -3314,9 +3474,7 @@ app.openapi(putRecyclingConfig, async (c) => {
 				gapFreq: body.gap_freq,
 				startDate: new Date(body.start_date),
 				expireCount: body.expire_count ?? null,
-				expireDate: body.expire_date
-					? new Date(body.expire_date)
-					: null,
+				expireDate: body.expire_date ? new Date(body.expire_date) : null,
 				contentVariations: body.content_variations ?? [],
 				nextRecycleAt: nextRecycle,
 			})
@@ -3339,9 +3497,7 @@ app.openapi(putRecyclingConfig, async (c) => {
 	return c.json(
 		{
 			data: formatRecyclingConfig(config),
-			...(validation.warnings
-				? { warnings: validation.warnings }
-				: {}),
+			...(validation.warnings ? { warnings: validation.warnings } : {}),
 		},
 		200,
 	);
@@ -3394,12 +3550,7 @@ app.openapi(listRecycledCopies, async (c) => {
 	const copies = await db
 		.select()
 		.from(posts)
-		.where(
-			and(
-				eq(posts.recycledFromId, id),
-				eq(posts.organizationId, orgId),
-			),
-		)
+		.where(and(eq(posts.recycledFromId, id), eq(posts.organizationId, orgId)))
 		.orderBy(desc(posts.createdAt))
 		.limit(limit + 1);
 
@@ -3441,9 +3592,16 @@ const getPostNotes = createRoute({
 	responses: {
 		200: {
 			description: "Notes for the post",
-			content: { "application/json": { schema: z.object({ notes: z.string().nullable() }) } },
+			content: {
+				"application/json": {
+					schema: z.object({ notes: z.string().nullable() }),
+				},
+			},
 		},
-		404: { description: "Post not found", content: { "application/json": { schema: ErrorResponse } } },
+		404: {
+			description: "Post not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -3457,15 +3615,24 @@ const updatePostNotes = createRoute({
 	request: {
 		params: IdParam,
 		body: {
-			content: { "application/json": { schema: z.object({ notes: z.string() }) } },
+			content: {
+				"application/json": { schema: z.object({ notes: z.string() }) },
+			},
 		},
 	},
 	responses: {
 		200: {
 			description: "Updated notes",
-			content: { "application/json": { schema: z.object({ notes: z.string().nullable() }) } },
+			content: {
+				"application/json": {
+					schema: z.object({ notes: z.string().nullable() }),
+				},
+			},
 		},
-		404: { description: "Post not found", content: { "application/json": { schema: ErrorResponse } } },
+		404: {
+			description: "Post not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -3489,14 +3656,19 @@ app.openapi(getPostNotes, async (c) => {
 	const [ext] = await db
 		.select({ notes: externalPosts.notes })
 		.from(externalPosts)
-		.where(and(eq(externalPosts.id, id), eq(externalPosts.organizationId, orgId)))
+		.where(
+			and(eq(externalPosts.id, id), eq(externalPosts.organizationId, orgId)),
+		)
 		.limit(1);
 
 	if (ext) {
 		return c.json({ notes: ext.notes ?? null }, 200);
 	}
 
-	return c.json({ error: { code: "NOT_FOUND", message: "Post not found" } }, 404);
+	return c.json(
+		{ error: { code: "NOT_FOUND", message: "Post not found" } },
+		404,
+	);
 });
 
 app.openapi(updatePostNotes, async (c) => {
@@ -3513,7 +3685,10 @@ app.openapi(updatePostNotes, async (c) => {
 		.limit(1);
 
 	if (post) {
-		await db.update(posts).set({ notes, updatedAt: new Date() }).where(eq(posts.id, id));
+		await db
+			.update(posts)
+			.set({ notes, updatedAt: new Date() })
+			.where(eq(posts.id, id));
 		return c.json({ notes }, 200);
 	}
 
@@ -3521,15 +3696,23 @@ app.openapi(updatePostNotes, async (c) => {
 	const [ext] = await db
 		.select({ id: externalPosts.id })
 		.from(externalPosts)
-		.where(and(eq(externalPosts.id, id), eq(externalPosts.organizationId, orgId)))
+		.where(
+			and(eq(externalPosts.id, id), eq(externalPosts.organizationId, orgId)),
+		)
 		.limit(1);
 
 	if (ext) {
-		await db.update(externalPosts).set({ notes, updatedAt: new Date() }).where(eq(externalPosts.id, id));
+		await db
+			.update(externalPosts)
+			.set({ notes, updatedAt: new Date() })
+			.where(eq(externalPosts.id, id));
 		return c.json({ notes }, 200);
 	}
 
-	return c.json({ error: { code: "NOT_FOUND", message: "Post not found" } }, 404);
+	return c.json(
+		{ error: { code: "NOT_FOUND", message: "Post not found" } },
+		404,
+	);
 });
 
 export default app;
