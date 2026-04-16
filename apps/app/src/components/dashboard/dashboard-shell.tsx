@@ -1,16 +1,21 @@
-import { useState, type ReactNode } from "react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { Menu } from "lucide-react";
 import { StreakProvider } from "@/hooks/use-streak";
 import { UsageProvider } from "@/hooks/use-usage";
 import { authClient } from "@/lib/auth-client";
 import { prefetchDashboardPage } from "@/lib/dashboard-prefetch";
 import type { AppOrganization, AppUser } from "@/types/dashboard";
-import { FeedbackWidget } from "./feedback-widget";
 import { FilterProvider } from "./filter-context";
 import { Sidebar } from "./sidebar";
-import { StreakToastContainer } from "./streak-toast";
 import { UserProvider } from "./user-context";
 import { DashboardPageGuard } from "./dashboard-page-guard";
+
+const FeedbackWidget = lazy(() =>
+	import("./feedback-widget").then((m) => ({ default: m.FeedbackWidget })),
+);
+const StreakToastContainer = lazy(() =>
+	import("./streak-toast").then((m) => ({ default: m.StreakToastContainer })),
+);
 
 const fullHeightPages = new Set(["inbox-comments", "inbox-messages", "posts"]);
 
@@ -128,8 +133,12 @@ export function DashboardShell({
 									</div>
 								</main>
 							</div>
-							<FeedbackWidget />
-							<StreakToastContainer />
+							<Suspense fallback={null}>
+								<FeedbackWidget />
+							</Suspense>
+							<Suspense fallback={null}>
+								<StreakToastContainer />
+							</Suspense>
 						</div>
 					</FilterProvider>
 				</StreakProvider>

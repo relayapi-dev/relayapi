@@ -5,6 +5,7 @@ export interface DashboardBootstrapData {
 	has_api_key: boolean;
 	usage: UsageData | null;
 	streak: StreakData | null;
+	notif_count: number;
 }
 
 let pending: Promise<DashboardBootstrapData | null> | null = null;

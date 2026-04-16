@@ -241,6 +241,15 @@ export interface IdeaCreateParams {
   tag_ids?: string[];
   assigned_to?: string;
   workspace_id?: string;
+  /**
+   * Attach media by URL on create. Upload files to POST /v1/media/upload
+   * first, then pass the returned URLs here.
+   */
+  media?: Array<{
+    url: string;
+    type?: 'image' | 'video' | 'gif' | 'document';
+    alt?: string;
+  }>;
 }
 
 export interface IdeaUpdateParams {

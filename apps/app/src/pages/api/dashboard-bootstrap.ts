@@ -1,4 +1,6 @@
 import type { APIRoute } from "astro";
+import { notifications, eq } from "@relayapi/db";
+import { and, count } from "drizzle-orm";
 import { API_BASE_URL } from "@/lib/api-base-url";
 import { clearClientCache, getRelayClient } from "@/lib/relay";
 
@@ -24,6 +26,24 @@ export const GET: APIRoute = async (ctx) => {
 
 	const rawKeyPromise = kv.get(`dashboard-key:${org.id}`);
 	const clientPromise = getRelayClient(ctx.locals, API_BASE_URL);
+
+	const notifCountPromise = (async () => {
+		try {
+			const userId = (user as { id: string }).id;
+			const [result] = await ctx.locals.db
+				.select({ count: count() })
+				.from(notifications)
+				.where(
+					and(
+						eq(notifications.userId, userId),
+						eq(notifications.read, false),
+					),
+				);
+			return result?.count ?? 0;
+		} catch {
+			return 0;
+		}
+	})();
 
 	const keyStatusPromise = (async () => {
 		const rawKey = await rawKeyPromise;
@@ -90,9 +110,10 @@ export const GET: APIRoute = async (ctx) => {
 		return { usage, streak };
 	})();
 
-	const [keyStatus, apiCalls] = await Promise.all([
+	const [keyStatus, apiCalls, notifCount] = await Promise.all([
 		keyStatusPromise,
 		apiCallsPromise,
+		notifCountPromise,
 	]);
 
 	return Response.json(
@@ -100,6 +121,7 @@ export const GET: APIRoute = async (ctx) => {
 			has_api_key: keyStatus.has_api_key,
 			usage: apiCalls.usage,
 			streak: apiCalls.streak,
+			notif_count: notifCount,
 		},
 		{ headers: { "Cache-Control": "private, max-age=30" } },
 	);

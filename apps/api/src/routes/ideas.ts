@@ -110,6 +110,21 @@ async function fetchIdeaMedia(
 		.orderBy(asc(ideaMedia.position));
 }
 
+function inferMediaTypeFromUrl(
+	url: string,
+): "image" | "video" | "gif" | "document" {
+	const path = url.split("?")[0] ?? url;
+	const ext = path.split(".").pop()?.toLowerCase() ?? "";
+	if (ext === "gif") return "gif";
+	if (["jpg", "jpeg", "png", "webp", "heic", "heif", "avif"].includes(ext)) {
+		return "image";
+	}
+	if (["mp4", "mov", "webm", "mpeg", "m4v", "qt"].includes(ext)) {
+		return "video";
+	}
+	return "document";
+}
+
 async function logActivity(
 	db: ReturnType<typeof createDb>,
 	ideaId: string,
@@ -382,8 +397,26 @@ app.openapi(createIdea, async (c) => {
 		);
 	}
 
+	// Attach inline media
+	if (body.media && body.media.length > 0) {
+		await db.insert(ideaMedia).values(
+			body.media.map((item, index) => ({
+				ideaId: row.id,
+				url: item.url,
+				type: item.type ?? inferMediaTypeFromUrl(item.url),
+				alt: item.alt ?? null,
+				position: index,
+			})),
+		);
+	}
+
 	// Log activity
 	await logActivity(db, row.id, keyId, "created");
+	if (body.media && body.media.length > 0) {
+		await logActivity(db, row.id, keyId, "media_added", {
+			count: body.media.length,
+		});
+	}
 
 	const [tagRows, mediaRows] = await Promise.all([
 		fetchIdeaTags(db, row.id),

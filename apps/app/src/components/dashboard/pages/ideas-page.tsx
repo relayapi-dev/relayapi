@@ -362,6 +362,11 @@ export function IdeasPage() {
 		title?: string;
 		content?: string;
 		group_id?: string;
+		media?: Array<{
+			url: string;
+			type?: "image" | "video" | "gif" | "document";
+			alt?: string;
+		}>;
 		tag_ids?: string[];
 	}) => {
 		const body: Record<string, unknown> = { ...data };

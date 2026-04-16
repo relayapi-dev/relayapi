@@ -60,6 +60,11 @@ interface IdeaDetailDialogProps {
 		content?: string;
 		group_id?: string;
 		tag_ids?: string[];
+		media?: Array<{
+			url: string;
+			type?: "image" | "video" | "gif" | "document";
+			alt?: string;
+		}>;
 	}) => Promise<Idea>;
 	onMove: (id: string, groupId: string) => Promise<void>;
 	onConvert: (id: string) => void;
@@ -82,6 +87,60 @@ function useAutoResize(value: string) {
 
 function sortMedia(list: IdeaMedia[]) {
 	return [...list].sort((a, b) => a.position - b.position);
+}
+
+interface PendingFile {
+	id: string;
+	file: File;
+	previewUrl: string;
+	kind: "image" | "video" | "gif" | "document";
+}
+
+function pendingKind(file: File): PendingFile["kind"] {
+	const mime = file.type.toLowerCase();
+	if (mime === "image/gif") return "gif";
+	if (mime.startsWith("image/")) return "image";
+	if (mime.startsWith("video/")) return "video";
+	return "document";
+}
+
+function PendingThumb({
+	item,
+	onRemove,
+}: {
+	item: PendingFile;
+	onRemove: () => void;
+}) {
+	const preview =
+		item.kind === "image" || item.kind === "gif" ? (
+			<img
+				src={item.previewUrl}
+				alt={item.file.name}
+				className="size-16 rounded object-cover border border-border"
+			/>
+		) : (
+			<div className="size-16 rounded border border-border bg-accent/30 flex items-center justify-center">
+				{item.kind === "video" ? (
+					<Video className="size-6 text-muted-foreground" />
+				) : (
+					<FileText className="size-6 text-muted-foreground" />
+				)}
+			</div>
+		);
+
+	return (
+		<div className="relative">
+			{preview}
+			<button
+				type="button"
+				className="absolute -top-1.5 -right-1.5 rounded-full border border-border bg-background p-1 shadow-sm transition-colors hover:bg-accent"
+				onClick={onRemove}
+				aria-label="Remove media"
+			>
+				<X className="size-3 text-muted-foreground" />
+			</button>
+		</div>
+	);
 }
 
 function MediaThumb({
@@ -215,6 +274,7 @@ export function IdeaDetailDialog({
 	const [tagPopoverOpen, setTagPopoverOpen] = useState(false);
 	const [uploadingMedia, setUploadingMedia] = useState(false);
 	const [mediaError, setMediaError] = useState<string | null>(null);
+	const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
 
 	const submitInFlightRef = useRef(false);
 	const fileInputRef = useRef<HTMLInputElement>(null);
@@ -229,12 +289,25 @@ export function IdeaDetailDialog({
 		setGroupId(idea?.group_id ?? createGroupId ?? groups[0]?.id ?? "");
 		setMedia(sortMedia(idea?.media ?? []));
 		setMediaError(null);
+		setPendingFiles((prev) => {
+			for (const p of prev) URL.revokeObjectURL(p.previewUrl);
+			return [];
+		});
 		setComments([]);
 		setNewComment("");
 		setShowActivity(false);
 		setActivity([]);
 		setActivityFetched(false);
 	}, [open, idea, createGroupId, groups]);
+
+	useEffect(() => {
+		return () => {
+			setPendingFiles((prev) => {
+				for (const p of prev) URL.revokeObjectURL(p.previewUrl);
+				return [];
+			});
+		};
+	}, []);
 
 	useEffect(() => {
 		if (!open || !isEditMode || !idea) return;
@@ -341,6 +414,38 @@ export function IdeaDetailDialog({
 		[idea, onMediaChange],
 	);
 
+	const handleBufferFiles = useCallback((files: FileList | null) => {
+		if (!files?.length) return;
+		const additions: PendingFile[] = Array.from(files).map((file) => ({
+			id: `pending-${crypto.randomUUID()}`,
+			file,
+			previewUrl: URL.createObjectURL(file),
+			kind: pendingKind(file),
+		}));
+		setPendingFiles((prev) => [...prev, ...additions]);
+		setMediaError(null);
+	}, []);
+
+	const handleRemovePendingFile = useCallback((id: string) => {
+		setPendingFiles((prev) => {
+			const target = prev.find((p) => p.id === id);
+			if (target) URL.revokeObjectURL(target.previewUrl);
+			return prev.filter((p) => p.id !== id);
+		});
+	}, []);
+
+	const handleFileInputChange = useCallback(
+		(files: FileList | null) => {
+			if (isEditMode) {
+				void handleUploadMedia(files);
+			} else {
+				handleBufferFiles(files);
+				if (fileInputRef.current) fileInputRef.current.value = "";
+			}
+		},
+		[isEditMode, handleUploadMedia, handleBufferFiles],
+	);
+
 	const handleDeleteMedia = useCallback(
 		async (mediaId: string) => {
 			if (!idea) return;
@@ -386,6 +491,7 @@ export function IdeaDetailDialog({
 
 		submitInFlightRef.current = true;
 		setSaving(true);
+		setMediaError(null);
 
 		try {
 			if (isEditMode && idea) {
@@ -395,17 +501,54 @@ export function IdeaDetailDialog({
 					tag_ids: selectedTagIds,
 				});
 			} else {
+				let uploadedMedia:
+					| Array<{
+							url: string;
+							type?: "image" | "video" | "gif" | "document";
+							alt?: string;
+					  }>
+					| undefined;
+
+				if (pendingFiles.length > 0) {
+					uploadedMedia = [];
+					for (const pending of pendingFiles) {
+						const qs = new URLSearchParams({ filename: pending.file.name });
+						const res = await fetch(`/api/media/upload?${qs.toString()}`, {
+							method: "POST",
+							headers: {
+								"Content-Type":
+									pending.file.type || "application/octet-stream",
+							},
+							body: pending.file,
+						});
+						if (!res.ok) {
+							const errorBody = await res.json().catch(() => null);
+							throw new Error(
+								errorBody?.error?.message || `Upload failed (${res.status})`,
+							);
+						}
+						const uploaded = (await res.json()) as { url: string };
+						uploadedMedia.push({ url: uploaded.url, type: pending.kind });
+					}
+				}
+
 				await onCreate({
 					title: title.trim() || undefined,
 					content: content.trim() || undefined,
 					group_id: groupId || undefined,
 					tag_ids: selectedTagIds,
+					media: uploadedMedia,
 				});
 			}
 
 			onOpenChange(false);
-		} catch {
-			// Parent mutation handlers already own the failure path.
+		} catch (error) {
+			if (!isEditMode) {
+				setMediaError(
+					error instanceof Error ? error.message : "Failed to create idea.",
+				);
+			}
+			// Edit-mode errors are handled by parent mutation handlers.
 		} finally {
 			submitInFlightRef.current = false;
 			setSaving(false);
@@ -417,6 +560,7 @@ export function IdeaDetailDialog({
 		content,
 		selectedTagIds,
 		groupId,
+		pendingFiles,
 		onSave,
 		onCreate,
 		onOpenChange,
@@ -588,38 +732,38 @@ export function IdeaDetailDialog({
 						multiple
 						className="hidden"
 						accept="image/*,video/*,.gif,.pdf"
-						onChange={(event) => void handleUploadMedia(event.target.files)}
+						onChange={(event) => handleFileInputChange(event.target.files)}
 					/>
 
-					{isEditMode && idea ? (
-						<div className="space-y-2">
-							<div className="flex items-center justify-between gap-3">
-								<p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-									<Paperclip className="size-3" />
-									Media
-								</p>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									className="h-7 text-xs gap-1"
-									onClick={() => fileInputRef.current?.click()}
-									disabled={uploadingMedia}
-								>
-									{uploadingMedia ? (
-										<Loader2 className="size-3 animate-spin" />
-									) : (
-										<Upload className="size-3" />
-									)}
-									Add media
-								</Button>
-							</div>
+					<div className="space-y-2">
+						<div className="flex items-center justify-between gap-3">
+							<p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+								<Paperclip className="size-3" />
+								Media
+							</p>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="h-7 text-xs gap-1"
+								onClick={() => fileInputRef.current?.click()}
+								disabled={uploadingMedia || saving}
+							>
+								{uploadingMedia ? (
+									<Loader2 className="size-3 animate-spin" />
+								) : (
+									<Upload className="size-3" />
+								)}
+								Add media
+							</Button>
+						</div>
 
-							{mediaError && (
-								<p className="text-xs text-destructive">{mediaError}</p>
-							)}
+						{mediaError && (
+							<p className="text-xs text-destructive">{mediaError}</p>
+						)}
 
-							{media.length > 0 ? (
+						{isEditMode && idea ? (
+							media.length > 0 ? (
 								<div className="flex flex-wrap gap-2">
 									{media.map((item) => (
 										<MediaThumb
@@ -637,13 +781,27 @@ export function IdeaDetailDialog({
 								>
 									Click to attach media
 								</button>
-							)}
-						</div>
-					) : (
-						<div className="rounded-md border border-dashed border-border px-4 py-5 text-xs text-muted-foreground">
-							Create the idea first, then reopen it to attach media.
-						</div>
-					)}
+							)
+						) : pendingFiles.length > 0 ? (
+							<div className="flex flex-wrap gap-2">
+								{pendingFiles.map((item) => (
+									<PendingThumb
+										key={item.id}
+										item={item}
+										onRemove={() => handleRemovePendingFile(item.id)}
+									/>
+								))}
+							</div>
+						) : (
+							<button
+								type="button"
+								className="w-full rounded-md border border-dashed border-border px-4 py-5 text-xs text-muted-foreground transition-colors hover:bg-accent/20"
+								onClick={() => fileInputRef.current?.click()}
+							>
+								Click to attach media
+							</button>
+						)}
+					</div>
 
 					{isEditMode && (
 						<div>

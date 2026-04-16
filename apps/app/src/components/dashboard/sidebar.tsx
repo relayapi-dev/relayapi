@@ -31,6 +31,7 @@ import {
 	Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
 import { useStreak } from "@/hooks/use-streak";
 import { useUsage } from "@/hooks/use-usage";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -316,15 +317,11 @@ export function Sidebar({
 	// --- Notifications (via WebSocket) ---
 	const [notifCount, setNotifCount] = useState(0);
 
-	// Fetch initial unread count on mount
 	useEffect(() => {
 		return scheduleIdleTask(() => {
-			fetch("/api/notifications/unread-count")
-				.then((r) => (r.ok ? r.json() : null))
-				.then((data) => {
-					if (data?.count != null) setNotifCount(data.count);
-				})
-				.catch(() => {});
+			void fetchDashboardBootstrap().then((data) => {
+				if (data?.notif_count != null) setNotifCount(data.notif_count);
+			});
 		}, 1500);
 	}, []);
 

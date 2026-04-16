@@ -36,6 +36,18 @@ export const IdeaResponse = z.object({
 
 // ── Create / Update ──────────────────────────────────────────────────────────
 
+const CreateIdeaMediaItem = z.object({
+	url: z
+		.string()
+		.url()
+		.describe("Public URL of the uploaded media file (from POST /v1/media/upload)"),
+	type: z
+		.enum(["image", "video", "gif", "document"])
+		.optional()
+		.describe("Media type. Inferred from the URL extension if omitted."),
+	alt: z.string().max(500).optional().describe("Alt text"),
+});
+
 export const CreateIdeaBody = z
 	.object({
 		title: z.string().max(500).optional().describe("Short title"),
@@ -57,6 +69,13 @@ export const CreateIdeaBody = z
 			.string()
 			.optional()
 			.describe("Workspace ID to scope this idea to"),
+		media: z
+			.array(CreateIdeaMediaItem)
+			.max(20)
+			.optional()
+			.describe(
+				"Attach media by URL on create. Upload files to POST /v1/media/upload first, then pass the returned URLs here.",
+			),
 	})
 	.describe("Create an idea");
 
