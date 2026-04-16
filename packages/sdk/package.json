@@ -1,6 +1,6 @@
 {
   "name": "@relayapi/sdk",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "The official TypeScript library for the Relay API",
   "author": "Relay <support@relayapi.dev>",
   "license": "Apache-2.0",

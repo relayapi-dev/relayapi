@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.20.0...sdk-v0.21.0) (2026-04-16)
+
+
+### Features
+
+* replace raw API calls with SDK methods for ad accounts and analytics ([ec80ab7](https://github.com/relayapi-dev/relayapi/commit/ec80ab74741307147e2be6fc0e6417bc07f120cc))
+
 ## [0.20.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.19.0...sdk-v0.20.0) (2026-04-15)
 
 
