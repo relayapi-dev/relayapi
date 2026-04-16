@@ -168,10 +168,27 @@ function createInvitationEmailSender(
 	};
 }
 
+type KVNamespace = App.Locals["kv"];
+
+const ORG_SUMMARY_CACHE_PREFIX = "org-summary:";
+const ORG_SUMMARY_TTL_S = 60;
+
 async function getOrganizationSummary(
 	db: Database,
+	kv: KVNamespace | undefined,
 	organizationId: string,
 ): Promise<OrganizationSummary | null> {
+	const cacheKey = `${ORG_SUMMARY_CACHE_PREFIX}${organizationId}`;
+
+	if (kv) {
+		try {
+			const cached = await kv.get(cacheKey);
+			if (cached) return JSON.parse(cached) as OrganizationSummary;
+		} catch {
+			// KV read failure is non-fatal — fall through to DB.
+		}
+	}
+
 	const [org] = await db
 		.select({
 			id: authOrganization.id,
@@ -185,12 +202,24 @@ async function getOrganizationSummary(
 
 	if (!org) return null;
 
-	return {
+	const summary: OrganizationSummary = {
 		id: org.id,
 		name: org.name,
 		slug: org.slug,
 		logo: org.logo,
 	};
+
+	if (kv) {
+		try {
+			await kv.put(cacheKey, JSON.stringify(summary), {
+				expirationTtl: ORG_SUMMARY_TTL_S,
+			});
+		} catch {
+			// KV write failure is non-fatal.
+		}
+	}
+
+	return summary;
 }
 
 async function userHasOrganizations(
@@ -365,8 +394,11 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				if (shouldLoadOrganizationSummary(path)) {
 					const orgStartedAt = performance.now();
 					organization =
-						(await getOrganizationSummary(getDb(), activeOrganizationId)) ??
-						organization;
+						(await getOrganizationSummary(
+							getDb(),
+							cfEnv.KV,
+							activeOrganizationId,
+						)) ?? organization;
 					orgMs = getDashboardPerfDurationMs(orgStartedAt);
 				}
 			}

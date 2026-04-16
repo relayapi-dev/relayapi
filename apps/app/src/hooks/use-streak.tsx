@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
 import { dashboardPerfFetch } from "@/lib/dashboard-perf";
 import { scheduleAfterPaint, scheduleIdleTask } from "@/lib/idle";
 
@@ -114,7 +115,15 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
       }
 
       return scheduleAfterPaint(() => {
-        void fetchStreak();
+        void fetchDashboardBootstrap().then((data) => {
+          if (data?.streak) {
+            setStreak(data.streak);
+            writeStreakCache(data.streak);
+            setLoading(false);
+          } else {
+            void fetchStreak();
+          }
+        });
       }, 250);
     }
   }, [fetchStreak]);

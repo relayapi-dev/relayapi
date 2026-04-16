@@ -1,8 +1,9 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
 import { dashboardPerfFetch } from "@/lib/dashboard-perf";
 import { scheduleAfterPaint, scheduleIdleTask } from "@/lib/idle";
 
-interface UsageData {
+export interface UsageData {
   plan: "free" | "pro";
   api_calls: { used: number; included: number };
   period_start?: string;
@@ -111,7 +112,19 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
       }
 
       return scheduleAfterPaint(() => {
-        void fetchUsage();
+        void fetchDashboardBootstrap().then((data) => {
+          if (data?.usage) {
+            setUsage(data.usage);
+            writeUsageCache(data.usage);
+            setLoading(false);
+          } else if (data) {
+            // Bootstrap succeeded but usage is null — fall back to individual fetch
+            void fetchUsage();
+          } else {
+            // Bootstrap failed entirely — fall back
+            void fetchUsage();
+          }
+        });
       });
     }
   }, [fetchUsage]);

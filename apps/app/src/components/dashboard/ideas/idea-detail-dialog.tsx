@@ -8,6 +8,7 @@ import {
 	Paperclip,
 	Send,
 	Tag,
+	Trash2,
 	Upload,
 	Video,
 	X,
@@ -62,6 +63,7 @@ interface IdeaDetailDialogProps {
 	}) => Promise<Idea>;
 	onMove: (id: string, groupId: string) => Promise<void>;
 	onConvert: (id: string) => void;
+	onDelete?: (id: string) => Promise<void>;
 	onMediaChange: (ideaId: string, media: IdeaMedia[]) => void;
 }
 
@@ -190,6 +192,7 @@ export function IdeaDetailDialog({
 	onCreate,
 	onMove,
 	onConvert,
+	onDelete,
 	onMediaChange,
 }: IdeaDetailDialogProps) {
 	const isEditMode = !createMode && !!idea;
@@ -208,6 +211,7 @@ export function IdeaDetailDialog({
 	const [activityLoading, setActivityLoading] = useState(false);
 	const [activityFetched, setActivityFetched] = useState(false);
 	const [saving, setSaving] = useState(false);
+	const [deleting, setDeleting] = useState(false);
 	const [tagPopoverOpen, setTagPopoverOpen] = useState(false);
 	const [uploadingMedia, setUploadingMedia] = useState(false);
 	const [mediaError, setMediaError] = useState<string | null>(null);
@@ -417,6 +421,21 @@ export function IdeaDetailDialog({
 		onCreate,
 		onOpenChange,
 	]);
+
+	const handleDelete = useCallback(async () => {
+		if (!isEditMode || !idea || !onDelete) return;
+		if (!window.confirm("Delete this idea? This cannot be undone.")) return;
+
+		setDeleting(true);
+		try {
+			await onDelete(idea.id);
+			onOpenChange(false);
+		} catch {
+			// Parent mutation handlers already own the failure path.
+		} finally {
+			setDeleting(false);
+		}
+	}, [isEditMode, idea, onDelete, onOpenChange]);
 
 	const topLevelComments = comments.filter((comment) => !comment.parent_id);
 	const repliesMap = comments.reduce<Record<string, IdeaComment[]>>(
@@ -733,7 +752,7 @@ export function IdeaDetailDialog({
 				</div>
 
 				<div className="flex items-center justify-between px-5 py-3 border-t border-border gap-3">
-					<div>
+					<div className="flex items-center gap-1">
 						{isEditMode && (
 							<Button
 								type="button"
@@ -749,6 +768,24 @@ export function IdeaDetailDialog({
 										showActivity && "rotate-180",
 									)}
 								/>
+							</Button>
+						)}
+						{isEditMode && idea && onDelete && (
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								className="h-7 text-xs gap-1 text-muted-foreground hover:text-destructive"
+								onClick={() => void handleDelete()}
+								disabled={deleting}
+								aria-label="Delete idea"
+							>
+								{deleting ? (
+									<Loader2 className="size-3 animate-spin" />
+								) : (
+									<Trash2 className="size-3" />
+								)}
+								Delete
 							</Button>
 						)}
 					</div>

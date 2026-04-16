@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
 import { dashboardPerfFetch } from "@/lib/dashboard-perf";
 import { scheduleAfterPaint, scheduleIdleTask } from "@/lib/idle";
 
@@ -117,7 +118,15 @@ export function useDashboardApiKeyStatus(
 		}
 
 		return scheduleAfterPaint(() => {
-			void fetchStatus();
+			void fetchDashboardBootstrap().then((data) => {
+				if (data) {
+					setHasApiKey(data.has_api_key);
+					writeCachedStatus(data.has_api_key);
+					setLoading(false);
+				} else {
+					void fetchStatus();
+				}
+			});
 		});
 	}, [cachedStatus, enabled, fetchStatus]);
 

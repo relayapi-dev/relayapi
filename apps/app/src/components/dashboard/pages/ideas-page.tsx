@@ -413,6 +413,17 @@ export function IdeasPage() {
 		// TODO: open NewPostDialog pre-filled with idea content
 	};
 
+	const handleDeleteIdea = async (ideaId: string) => {
+		const previousIdeas = ideas;
+		setIdeas((prev) => prev.filter((idea) => idea.id !== ideaId));
+
+		const res = await fetch(`/api/ideas/${ideaId}`, { method: "DELETE" });
+		if (!res.ok && res.status !== 204) {
+			setIdeas(previousIdeas);
+			throw new Error(`Failed to delete idea (${res.status})`);
+		}
+	};
+
 	const handleClickIdea = (idea: Idea) => {
 		setSelectedIdea(idea);
 		setDetailOpen(true);
@@ -568,6 +579,7 @@ export function IdeasPage() {
 				onCreate={handleCreateIdea}
 				onMove={handleMoveIdeaToGroup}
 				onConvert={handleConvertIdea}
+				onDelete={handleDeleteIdea}
 				onMediaChange={handleIdeaMediaChange}
 			/>
 
