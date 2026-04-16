@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.19.0...sdk-v0.20.0) (2026-04-15)
+
+
+### Features
+
+* rename "group" to "workspace" in account-related APIs and schemas ([86bce47](https://github.com/relayapi-dev/relayapi/commit/86bce475d6dab45e96a7c490e70b244839e7d7c6))
+
 ## [0.19.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.18.0...sdk-v0.19.0) (2026-04-12)
 
 

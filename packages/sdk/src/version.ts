@@ -1,2 +1,2 @@
 // Version is managed by release-please. Do not edit manually.
-export const VERSION = '0.19.0'; // x-release-please-version
+export const VERSION = '0.20.0'; // x-release-please-version
