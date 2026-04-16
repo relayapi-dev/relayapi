@@ -173,22 +173,36 @@ type KVNamespace = App.Locals["kv"];
 const ORG_SUMMARY_CACHE_PREFIX = "org-summary:";
 const ORG_SUMMARY_TTL_S = 60;
 
+interface OrgSummaryTimings {
+	cacheReadMs: number | null;
+	dbMs: number | null;
+	cacheWriteMs: number | null;
+	cacheHit: boolean;
+}
+
 async function getOrganizationSummary(
 	db: Database,
 	kv: KVNamespace | undefined,
 	organizationId: string,
+	timings: OrgSummaryTimings,
 ): Promise<OrganizationSummary | null> {
 	const cacheKey = `${ORG_SUMMARY_CACHE_PREFIX}${organizationId}`;
 
 	if (kv) {
+		const cacheReadStart = performance.now();
 		try {
 			const cached = await kv.get(cacheKey);
-			if (cached) return JSON.parse(cached) as OrganizationSummary;
+			timings.cacheReadMs = getDashboardPerfDurationMs(cacheReadStart);
+			if (cached) {
+				timings.cacheHit = true;
+				return JSON.parse(cached) as OrganizationSummary;
+			}
 		} catch {
-			// KV read failure is non-fatal — fall through to DB.
+			timings.cacheReadMs = getDashboardPerfDurationMs(cacheReadStart);
 		}
 	}
 
+	const dbStart = performance.now();
 	const [org] = await db
 		.select({
 			id: authOrganization.id,
@@ -199,6 +213,7 @@ async function getOrganizationSummary(
 		.from(authOrganization)
 		.where(eq(authOrganization.id, organizationId))
 		.limit(1);
+	timings.dbMs = getDashboardPerfDurationMs(dbStart);
 
 	if (!org) return null;
 
@@ -210,6 +225,7 @@ async function getOrganizationSummary(
 	};
 
 	if (kv) {
+		const cacheWriteStart = performance.now();
 		try {
 			await kv.put(cacheKey, JSON.stringify(summary), {
 				expirationTtl: ORG_SUMMARY_TTL_S,
@@ -217,6 +233,7 @@ async function getOrganizationSummary(
 		} catch {
 			// KV write failure is non-fatal.
 		}
+		timings.cacheWriteMs = getDashboardPerfDurationMs(cacheWriteStart);
 	}
 
 	return summary;
@@ -269,6 +286,12 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	let orgMs: number | null = null;
 	let onboardingMs: number | null = null;
 	let downstreamMs: number | null = null;
+	const orgTimings: OrgSummaryTimings = {
+		cacheReadMs: null,
+		dbMs: null,
+		cacheWriteMs: null,
+		cacheHit: false,
+	};
 	let authHeaders: Headers | null = null;
 	let user: AuthUser | null = null;
 	let session: AuthSessionRecord | null = null;
@@ -331,6 +354,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		const serverTiming: string[] = [`total;dur=${totalMs}`];
 		if (sessionMs != null) serverTiming.push(`session;dur=${sessionMs}`);
 		if (orgMs != null) serverTiming.push(`org;dur=${orgMs}`);
+		if (orgTimings.cacheReadMs != null)
+			serverTiming.push(
+				`orgCacheRead;dur=${orgTimings.cacheReadMs};desc="hit=${orgTimings.cacheHit}"`,
+			);
+		if (orgTimings.dbMs != null)
+			serverTiming.push(`orgDb;dur=${orgTimings.dbMs}`);
+		if (orgTimings.cacheWriteMs != null)
+			serverTiming.push(`orgCacheWrite;dur=${orgTimings.cacheWriteMs}`);
 		if (onboardingMs != null)
 			serverTiming.push(`onboarding;dur=${onboardingMs}`);
 		if (downstreamMs != null)
@@ -352,6 +383,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				resolvedSession: shouldResolveSession(path),
 				sessionMs,
 				orgMs,
+				orgCacheHit: orgTimings.cacheHit,
+				orgCacheReadMs: orgTimings.cacheReadMs,
+				orgDbMs: orgTimings.dbMs,
+				orgCacheWriteMs: orgTimings.cacheWriteMs,
 				onboardingMs,
 				downstreamMs,
 				totalMs: getDashboardPerfDurationMs(startedAt),
@@ -408,6 +443,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 							getDb(),
 							cfEnv.KV,
 							activeOrganizationId,
+							orgTimings,
 						)) ?? organization;
 					orgMs = getDashboardPerfDurationMs(orgStartedAt);
 				}
