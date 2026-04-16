@@ -1,8 +1,8 @@
+import { fileURLToPath } from "node:url";
 import cloudflare from "@astrojs/cloudflare";
 import react from "@astrojs/react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "astro/config";
-import { fileURLToPath } from "node:url";
 
 export default defineConfig({
 	site: "https://relayapi.dev",
@@ -15,7 +15,9 @@ export default defineConfig({
 		plugins: [tailwindcss()],
 		resolve: {
 			alias: {
-				"@relayapi/sdk": fileURLToPath(new URL("../../packages/sdk/src/index.ts", import.meta.url)),
+				"@relayapi/sdk": fileURLToPath(
+					new URL("../../packages/sdk/src/index.ts", import.meta.url),
+				),
 			},
 		},
 	},
