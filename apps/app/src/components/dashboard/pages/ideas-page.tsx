@@ -503,20 +503,18 @@ export function IdeasPage() {
 						</button>
 					)}
 
-					{groups.length > 0 && (
-						<Button
-							type="button"
-							size="sm"
-							className="gap-1.5 h-7 text-xs"
-							onClick={() => {
-								setCreateGroupId(null);
-								setCreateDialogOpen(true);
-							}}
-						>
-							<Plus className="size-3.5" />
-							New Idea
-						</Button>
-					)}
+					<Button
+						type="button"
+						size="sm"
+						className="gap-1.5 h-7 text-xs"
+						onClick={() => {
+							setCreateGroupId(null);
+							setCreateDialogOpen(true);
+						}}
+					>
+						<Plus className="size-3.5" />
+						New Idea
+					</Button>
 				</div>
 			</div>
 
