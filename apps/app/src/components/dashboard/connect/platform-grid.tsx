@@ -70,7 +70,7 @@ export function PlatformGrid({ onConnected }: PlatformGridProps) {
       <motion.div
         className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"
         variants={stagger}
-        initial="hidden"
+        initial={false}
         animate="visible"
       >
         {PLATFORMS.map((platform) => {
