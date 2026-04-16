@@ -141,6 +141,13 @@
       "when": 1776332662286,
       "tag": "0019_flimsy_monster_badoon",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1776369157582,
+      "tag": "0020_perfect_sentinels",
+      "breakpoints": true
     }
   ]
 }

@@ -2727,9 +2727,7 @@ export const ideaComments = pgTable(
 		ideaId: text("idea_id")
 			.notNull()
 			.references(() => ideas.id, { onDelete: "cascade" }),
-		authorId: text("author_id")
-			.notNull()
-			.references(() => user.id),
+		authorId: text("author_id").notNull(),
 		content: text("content").notNull(),
 		parentId: text("parent_id").references(
 			(): AnyPgColumn => ideaComments.id,
@@ -2783,9 +2781,7 @@ export const ideaActivity = pgTable(
 		ideaId: text("idea_id")
 			.notNull()
 			.references(() => ideas.id, { onDelete: "cascade" }),
-		actorId: text("actor_id")
-			.notNull()
-			.references(() => user.id),
+		actorId: text("actor_id").notNull(),
 		action: ideaActivityActionEnum("action").notNull(),
 		metadata: jsonb("metadata").$type<Record<string, unknown>>(),
 		createdAt: timestamp("created_at", { withTimezone: true })
