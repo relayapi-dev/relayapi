@@ -232,7 +232,7 @@ app.openapi(listIdeas, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, cursor, group_id, tag_id, assigned_to, workspace_id } =
 		c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(ideas.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, ideas.workspaceId);
@@ -358,7 +358,7 @@ const getIdea = createRoute({
 app.openapi(getIdea, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select()
@@ -415,7 +415,7 @@ app.openapi(createIdea, async (c) => {
 	const orgId = c.get("orgId");
 	const keyId = c.get("keyId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "idea");
 	if (denied) return denied;
@@ -524,7 +524,7 @@ app.openapi(updateIdea, async (c) => {
 	const keyId = c.get("keyId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -610,7 +610,7 @@ const deleteIdea = createRoute({
 app.openapi(deleteIdea, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
@@ -666,7 +666,7 @@ app.openapi(moveIdea, async (c) => {
 	const keyId = c.get("keyId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -803,7 +803,7 @@ app.openapi(convertIdea, async (c) => {
 	const keyId = c.get("keyId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -914,7 +914,7 @@ app.openapi(uploadIdeaMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const keyId = c.get("keyId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
@@ -1049,7 +1049,7 @@ app.openapi(deleteIdeaMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const keyId = c.get("keyId");
 	const { id, media_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
@@ -1122,7 +1122,7 @@ app.openapi(listComments, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { limit, cursor } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
@@ -1209,7 +1209,7 @@ app.openapi(createComment, async (c) => {
 	const keyId = c.get("keyId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
@@ -1316,7 +1316,7 @@ app.openapi(updateComment, async (c) => {
 	const keyId = c.get("keyId");
 	const { id, comment_id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
@@ -1394,7 +1394,7 @@ app.openapi(deleteComment, async (c) => {
 	const orgId = c.get("orgId");
 	const keyId = c.get("keyId");
 	const { id, comment_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
@@ -1467,7 +1467,7 @@ app.openapi(listActivity, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { limit, cursor } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })

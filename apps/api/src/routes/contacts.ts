@@ -368,7 +368,7 @@ app.openapi(listContacts, async (c) => {
 	const orgId = c.get("orgId");
 	const { workspace_id, search, tag, platform, account_id, cursor, limit } =
 		c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(contacts.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, contacts.workspaceId);
@@ -487,7 +487,7 @@ app.openapi(listContacts, async (c) => {
 app.openapi(createContact, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "contact");
 	if (denied) return denied;
 
@@ -539,7 +539,7 @@ app.openapi(createContact, async (c) => {
 app.openapi(getContact, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [contact] = await db
 		.select()
@@ -573,7 +573,7 @@ app.openapi(updateContact, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify contact exists and check workspace scope before updating
 	const [existing] = await db
@@ -625,7 +625,7 @@ app.openapi(updateContact, async (c) => {
 app.openapi(deleteContact, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: contacts.id, workspaceId: contacts.workspaceId })
@@ -655,7 +655,7 @@ app.openapi(deleteContact, async (c) => {
 app.openapi(listChannels, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify contact belongs to org
 	const [contact] = await db
@@ -690,7 +690,7 @@ app.openapi(addChannel, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify contact belongs to org
 	const [contact] = await db
@@ -735,7 +735,7 @@ app.openapi(addChannel, async (c) => {
 app.openapi(removeChannel, async (c) => {
 	const orgId = c.get("orgId");
 	const { id, channelId } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify contact belongs to org
 	const [contact] = await db
@@ -781,7 +781,7 @@ app.openapi(removeChannel, async (c) => {
 app.openapi(bulkCreate, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "contact");
 	if (denied) return denied;
 
@@ -837,7 +837,7 @@ app.openapi(bulkCreate, async (c) => {
 app.openapi(bulkOperations, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	let affected = 0;
 	const contactIds = body.contact_ids;
@@ -896,7 +896,7 @@ app.openapi(mergeContact, async (c) => {
 	const orgId = c.get("orgId");
 	const { id: targetId } = c.req.valid("param");
 	const { merge_contact_id: sourceId } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify both contacts belong to this org
 	const [target] = await db
@@ -1020,7 +1020,7 @@ app.openapi(setFieldValue, async (c) => {
 	const orgId = c.get("orgId");
 	const { id, slug } = c.req.valid("param");
 	const { value } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify contact exists in this org
 	const [contact] = await db
@@ -1120,7 +1120,7 @@ app.openapi(setFieldValue, async (c) => {
 app.openapi(clearFieldValue, async (c) => {
 	const orgId = c.get("orgId");
 	const { id, slug } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify contact belongs to this org
 	const [contact] = await db

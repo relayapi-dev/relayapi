@@ -79,6 +79,8 @@ export interface Env {
 	RESEND_API_KEY: string;
 }
 
+import type { Database } from "@relayapi/db";
+
 export interface Variables {
 	orgId: string;
 	keyId: string;
@@ -89,6 +91,8 @@ export interface Variables {
 	aiEnabled: boolean;
 	dailyToolLimit: number;
 	parsedBody: Record<string, unknown> | null;
+	/** Per-request Drizzle instance. Set by dbContextMiddleware on /v1/*. */
+	db: Database;
 }
 
 /** Shape stored in KV for each API key */

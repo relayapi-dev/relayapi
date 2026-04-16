@@ -228,7 +228,7 @@ const confirmMedia = createRoute({
 app.openapi(listMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, workspace_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [
 		eq(media.organizationId, orgId),
@@ -343,7 +343,7 @@ app.openapi(uploadMedia, async (c) => {
 
 	const url = `https://media.relayapi.dev/${storageKey}`;
 
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	try {
 		await db.insert(media).values({
 			organizationId: orgId,
@@ -421,7 +421,7 @@ app.openapi(presignMedia, async (c) => {
 	const url = `https://media.relayapi.dev/${storageKey}`;
 
 	// Create a pending DB record so the file is tracked before upload
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	await db.insert(media).values({
 		organizationId: orgId,
 		filename,
@@ -445,7 +445,7 @@ app.openapi(presignMedia, async (c) => {
 app.openapi(getMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [record] = await db
 		.select()
@@ -482,7 +482,7 @@ app.openapi(getMedia, async (c) => {
 app.openapi(deleteMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [record] = await db
 		.select({ id: media.id, storageKey: media.storageKey })
@@ -509,7 +509,7 @@ app.openapi(deleteMedia, async (c) => {
 app.openapi(confirmMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { storage_key } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// SECURITY: Validate storage key belongs to this org to prevent cross-org R2 oracle
 	if (!storage_key.startsWith(`${orgId}/`)) {

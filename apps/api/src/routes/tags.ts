@@ -53,7 +53,7 @@ const listTags = createRoute({
 app.openapi(listTags, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, cursor, workspace_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(tags.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, tags.workspaceId);
@@ -116,7 +116,7 @@ const createTag = createRoute({
 app.openapi(createTag, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "tag");
 	if (denied) return denied;
@@ -177,7 +177,7 @@ app.openapi(updateTag, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -236,7 +236,7 @@ const deleteTag = createRoute({
 app.openapi(deleteTag, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: tags.id, workspaceId: tags.workspaceId })

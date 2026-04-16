@@ -340,7 +340,7 @@ const cancelBroadcast = createRoute({
 app.openapi(createBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Validate account exists and belongs to org
 	const account = await getAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
@@ -373,7 +373,7 @@ app.openapi(createBroadcast, async (c) => {
 app.openapi(listBroadcasts, async (c) => {
 	const orgId = c.get("orgId");
 	const { workspace_id, account_id, status, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(broadcasts.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, broadcasts.workspaceId);
@@ -416,7 +416,7 @@ app.openapi(listBroadcasts, async (c) => {
 app.openapi(getBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select()
@@ -439,7 +439,7 @@ app.openapi(updateBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -488,7 +488,7 @@ app.openapi(updateBroadcast, async (c) => {
 app.openapi(deleteBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ status: broadcasts.status, workspaceId: broadcasts.workspaceId })
@@ -527,7 +527,7 @@ app.openapi(addRecipients, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [broadcast] = await db
 		.select()
@@ -647,7 +647,7 @@ app.openapi(listRecipients, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { status, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify broadcast exists and belongs to org
 	const [broadcast] = await db
@@ -706,7 +706,7 @@ app.openapi(listRecipients, async (c) => {
 app.openapi(sendBroadcastRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [broadcast] = await db
 		.select()
@@ -833,7 +833,7 @@ app.openapi(scheduleBroadcastRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { scheduled_at } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -890,7 +890,7 @@ app.openapi(scheduleBroadcastRoute, async (c) => {
 app.openapi(cancelBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()

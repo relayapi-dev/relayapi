@@ -259,7 +259,7 @@ const listEnrollments = createRoute({
 app.openapi(createSequence, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [seq] = await db
 		.insert(sequences)
@@ -323,7 +323,7 @@ app.openapi(createSequence, async (c) => {
 app.openapi(listSequences, async (c) => {
 	const orgId = c.get("orgId");
 	const { workspace_id, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(sequences.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, sequences.workspaceId);
@@ -385,7 +385,7 @@ app.openapi(listSequences, async (c) => {
 app.openapi(getSequence, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [seq] = await db
 		.select()
@@ -426,7 +426,7 @@ app.openapi(updateSequence, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const updateSet: Record<string, unknown> = { updatedAt: new Date() };
 	if (body.name !== undefined) updateSet.name = body.name;
@@ -496,7 +496,7 @@ app.openapi(updateSequence, async (c) => {
 app.openapi(deleteSequence, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: sequences.id, workspaceId: sequences.workspaceId })
@@ -519,7 +519,7 @@ app.openapi(deleteSequence, async (c) => {
 app.openapi(activateSequence, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [seq] = await db
 		.select()
@@ -562,7 +562,7 @@ app.openapi(activateSequence, async (c) => {
 app.openapi(pauseSequence, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [updated] = await db
 		.update(sequences)
@@ -586,7 +586,7 @@ app.openapi(enrollContacts, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { contact_ids } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify sequence is active
 	const [seq] = await db
@@ -681,7 +681,7 @@ app.openapi(enrollContacts, async (c) => {
 app.openapi(unenrollContact, async (c) => {
 	const orgId = c.get("orgId");
 	const { enrollment_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [enrollment] = await db
 		.update(sequenceEnrollments)
@@ -714,7 +714,7 @@ app.openapi(listEnrollments, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { limit, cursor } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [
 		eq(sequenceEnrollments.sequenceId, id),

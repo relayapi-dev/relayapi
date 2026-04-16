@@ -205,7 +205,7 @@ const listLogs = createRoute({
 app.openapi(createAutomation, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify the referenced account is in workspace scope
 	const [account] = await db
@@ -279,7 +279,7 @@ app.openapi(createAutomation, async (c) => {
 app.openapi(listAutomations, async (c) => {
 	const orgId = c.get("orgId");
 	const { workspace_id, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(commentAutomations.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, commentAutomations.workspaceId);
@@ -325,7 +325,7 @@ app.openapi(listAutomations, async (c) => {
 app.openapi(getAutomation, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [automation] = await db
 		.select()
@@ -356,7 +356,7 @@ app.openapi(updateAutomation, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Fetch first to verify existence and workspace scope
 	const [existing] = await db
@@ -413,7 +413,7 @@ app.openapi(updateAutomation, async (c) => {
 app.openapi(deleteAutomation, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Fetch first to verify existence and workspace scope
 	const [automation] = await db
@@ -454,7 +454,7 @@ app.openapi(listLogs, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { limit, cursor } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify automation exists and workspace scope
 	const [automation] = await db

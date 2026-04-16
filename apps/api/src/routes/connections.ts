@@ -81,7 +81,7 @@ const listConnectionLogs = createRoute({
 app.openapi(listConnectionLogs, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, from, to } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const baseConditions = [eq(connectionLogs.organizationId, orgId)];
 	if (from) baseConditions.push(gte(connectionLogs.createdAt, new Date(from)));

@@ -839,7 +839,7 @@ const deleteReviewReply = createRoute({
 app.openapi(listComments, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform, account_id, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const maxPostsToInspect = Math.max(limit * 3, 30);
 
 	const accounts = await getAccountsForOrg(db, orgId, { platform, accountId: account_id }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
@@ -961,7 +961,7 @@ app.openapi(listComments, async (c) => {
 app.openapi(listPostsByComments, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform, account_id, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const accounts = await getAccountsForOrg(db, orgId, { platform, accountId: account_id }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (accounts.length === 0) {
@@ -1036,7 +1036,7 @@ app.openapi(getPostComments, async (c) => {
 	const orgId = c.get("orgId");
 	const { post_id } = c.req.valid("param");
 	const { platform, account_id, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const accounts = await getAccountsForOrg(db, orgId, { platform, accountId: account_id }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (accounts.length === 0) {
@@ -1086,7 +1086,7 @@ app.openapi(replyToComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { post_id } = c.req.valid("param");
 	const { text, account_id, comment_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account?.accessToken) {
@@ -1174,7 +1174,7 @@ app.openapi(replyToComment, async (c) => {
 app.openapi(deleteComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// We need to determine which account owns this comment. The comment_id
 	// encodes the platform context (Facebook/IG IDs are numeric, YouTube IDs
@@ -1231,7 +1231,7 @@ app.openapi(deleteComment, async (c) => {
 app.openapi(hideComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Hide is Facebook/Instagram only
 	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
@@ -1284,7 +1284,7 @@ app.openapi(hideComment, async (c) => {
 app.openapi(unhideComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Unhide is Facebook/Instagram only
 	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
@@ -1337,7 +1337,7 @@ app.openapi(unhideComment, async (c) => {
 app.openapi(likeComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	for (const account of accounts) {
@@ -1376,7 +1376,7 @@ app.openapi(likeComment, async (c) => {
 app.openapi(unlikeComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	for (const account of accounts) {
@@ -1410,7 +1410,7 @@ app.openapi(privateReply, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
 	const { text, account_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account?.accessToken) {
@@ -1457,7 +1457,7 @@ app.openapi(privateReply, async (c) => {
 app.openapi(listReviews, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform, account_id, min_rating, max_rating, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Default to googlebusiness if platform is specified
 	const accounts = await getAccountsForOrg(db, orgId, { platform, accountId: account_id }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
@@ -1617,7 +1617,7 @@ app.openapi(replyToReview, async (c) => {
 	const orgId = c.get("orgId");
 	const { review_id } = c.req.valid("param");
 	const { text, account_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account?.accessToken) {
@@ -1654,7 +1654,7 @@ app.openapi(replyToReview, async (c) => {
 app.openapi(deleteReviewReply, async (c) => {
 	const orgId = c.get("orgId");
 	const { review_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Try all googlebusiness accounts
 	const accounts = await getAccountsForOrg(db, orgId, { platform: "googlebusiness" }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));

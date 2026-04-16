@@ -561,7 +561,7 @@ app.openapi(listPosts, async (c) => {
 		include,
 		include_external,
 	} = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const includeSet = new Set(
 		(include ?? "")
@@ -1012,7 +1012,7 @@ function formatLogEntry(t: {
 app.openapi(listAllPostLogs, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, from, to } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Single JOIN query with DB-level filtering and pagination
 	const conditions = [eq(posts.organizationId, orgId)];
@@ -1056,7 +1056,7 @@ app.openapi(listAllPostLogs, async (c) => {
 app.openapi(createPostRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const isDraft = body.scheduled_at === "draft";
 	const isAuto = body.scheduled_at === "auto";
@@ -1589,7 +1589,7 @@ app.openapi(createPostRoute, async (c) => {
 app.openapi(getPost, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select({
@@ -1684,7 +1684,7 @@ app.openapi(updatePostRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select()
@@ -1892,7 +1892,7 @@ app.openapi(updatePostRoute, async (c) => {
 app.openapi(deletePost, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select({ id: posts.id, status: posts.status, workspaceId: posts.workspaceId })
@@ -1927,7 +1927,7 @@ app.openapi(deletePost, async (c) => {
 app.openapi(retryPost, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select()
@@ -2098,7 +2098,7 @@ app.openapi(retryPost, async (c) => {
 app.openapi(bulkCreatePosts, async (c) => {
 	const orgId = c.get("orgId");
 	const { posts: postItems } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Pre-fetch org accounts once for all items (resolveTargets fetches them each time)
 	const wsScope = c.get("workspaceScope");
@@ -2300,7 +2300,7 @@ app.openapi(unpublishPost, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const selectedPlatforms = body?.platforms as string[] | undefined;
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select()
@@ -2590,7 +2590,7 @@ const getPostLogs = createRoute({
 app.openapi(getPostLogs, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select()
@@ -2661,7 +2661,7 @@ app.openapi(updateMetadata, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	let videoId: string;
 	let accountId: string;
@@ -3039,7 +3039,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 		);
 	}
 
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Pre-fetch org accounts once, filtered by workspace scope
 	const wsScope = c.get("workspaceScope");
@@ -3361,7 +3361,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 app.openapi(getRecyclingConfig, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select({ id: posts.id })
@@ -3403,7 +3403,7 @@ app.openapi(putRecyclingConfig, async (c) => {
 	const plan = c.get("plan") as string;
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	if (plan === "free") {
 		return c.json(
@@ -3519,7 +3519,7 @@ app.openapi(putRecyclingConfig, async (c) => {
 app.openapi(deleteRecyclingConfig, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select({ id: posts.id })
@@ -3545,7 +3545,7 @@ app.openapi(listRecycledCopies, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select({ id: posts.id })
@@ -3652,7 +3652,7 @@ const updatePostNotes = createRoute({
 app.openapi(getPostNotes, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Try internal posts first
 	const [post] = await db
@@ -3688,7 +3688,7 @@ app.openapi(updatePostNotes, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { notes } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Try internal posts first
 	const [post] = await db

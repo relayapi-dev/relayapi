@@ -323,7 +323,7 @@ const releasePhoneNumber = createRoute({
 app.openapi(listPhoneNumbers, async (c) => {
 	const orgId = c.get("orgId");
 	const { status } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(whatsappPhoneNumbers.organizationId, orgId)];
 	if (status) {
@@ -344,7 +344,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 	const orgId = c.get("orgId");
 	const plan = c.get("plan");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// 1. Require Pro plan
 	if (plan !== "pro") {
@@ -565,7 +565,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 app.openapi(getPhoneNumber, async (c) => {
 	const orgId = c.get("orgId");
 	const { phone_number_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select()
@@ -593,7 +593,7 @@ app.openapi(requestCode, async (c) => {
 	const orgId = c.get("orgId");
 	const { phone_number_id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select()
@@ -679,7 +679,7 @@ app.openapi(verifyCode, async (c) => {
 	const orgId = c.get("orgId");
 	const { phone_number_id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select()
@@ -830,7 +830,7 @@ app.openapi(verifyCode, async (c) => {
 app.openapi(releasePhoneNumber, async (c) => {
 	const orgId = c.get("orgId");
 	const { phone_number_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select()

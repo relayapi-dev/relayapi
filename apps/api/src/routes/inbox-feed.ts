@@ -143,7 +143,7 @@ const feedRoute = createRoute({
 });
 
 app.openapi(feedRoute, async (c) => {
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { type, platform, account_id, status, labels, cursor, limit } =
 		c.req.valid("query");
@@ -202,7 +202,7 @@ const bulkRoute = createRoute({
 });
 
 app.openapi(bulkRoute, async (c) => {
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const workspaceScope = c.get("workspaceScope");
 	const { action, targets, params } = c.req.valid("json");
@@ -332,7 +332,7 @@ const searchRoute = createRoute({
 });
 
 app.openapi(searchRoute, async (c) => {
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { q, platform, since, until, cursor, limit } =
 		c.req.valid("query");
@@ -390,7 +390,7 @@ const statsRoute = createRoute({
 });
 
 app.openapi(statsRoute, async (c) => {
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { platform, account_id } = c.req.valid("query");
 
@@ -434,7 +434,7 @@ const getConversationRoute = createRoute({
 });
 
 app.openapi(getConversationRoute, async (c) => {
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 
@@ -497,7 +497,7 @@ const updateConversationRoute = createRoute({
 });
 
 app.openapi(updateConversationRoute, async (c) => {
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
@@ -562,7 +562,7 @@ app.openapi(sendMessageRoute, async (c) => {
 	const { id: conversationId } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const { account_id, text, attachments, message_tag, quick_replies, template } = body;
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account?.accessToken) {
@@ -863,7 +863,7 @@ app.openapi(sendTypingRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id: conversationId } = c.req.valid("param");
 	const { account_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account?.accessToken) {
@@ -979,7 +979,7 @@ app.openapi(addReactionRoute, async (c) => {
 	const conversationId = params.id;
 	const messageId = params.message_id;
 	const { account_id, emoji } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account?.accessToken) {
@@ -1118,7 +1118,7 @@ app.openapi(removeReactionRoute, async (c) => {
 	const conversationId = params.id;
 	const messageId = params.message_id;
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account?.accessToken) {
@@ -1256,7 +1256,7 @@ app.openapi(deleteMessageRoute, async (c) => {
 	const conversationId = params.id;
 	const messageId = params.message_id;
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account?.accessToken) {

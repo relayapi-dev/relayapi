@@ -209,7 +209,7 @@ async function buildThreadResponse(
 app.openapi(createThread, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "thread");
 	if (denied) return denied;
 
@@ -327,7 +327,7 @@ app.openapi(createThread, async (c) => {
 app.openapi(getThread, async (c) => {
 	const orgId = c.get("orgId");
 	const { thread_group_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const [existing] = await db
 		.select({ workspaceId: posts.workspaceId })
 		.from(posts)
@@ -363,7 +363,7 @@ app.openapi(getThread, async (c) => {
 app.openapi(listThreads, async (c) => {
 	const orgId = c.get("orgId");
 	const { cursor, limit, workspace_id, status } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Find all thread group IDs (distinct) from root posts (position 0)
 	const conditions = [
@@ -428,7 +428,7 @@ app.openapi(listThreads, async (c) => {
 app.openapi(deleteThread, async (c) => {
 	const orgId = c.get("orgId");
 	const { thread_group_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify thread exists and belongs to org
 	const [existing] = await db

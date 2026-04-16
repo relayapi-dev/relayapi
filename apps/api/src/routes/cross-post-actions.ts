@@ -89,7 +89,7 @@ app.openapi(listByPost, async (c) => {
 	const orgId = c.get("orgId");
 	const { post_id } = c.req.valid("param");
 	const { cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify post belongs to org
 	const [post] = await db
@@ -138,7 +138,7 @@ app.openapi(listByPost, async (c) => {
 app.openapi(cancelAction, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Find the action and verify ownership through the post
 	const [action] = await db

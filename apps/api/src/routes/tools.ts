@@ -165,7 +165,7 @@ const checkHashtags = createRoute({
 app.openapi(validatePost, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const errors: Array<{ target: string; code: string; message: string }> = [];
 	const warnings: Array<{ target: string; code: string; message: string }> = [];
@@ -536,7 +536,7 @@ const resolveMention = createRoute({
 app.openapi(resolveMention, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Look up LinkedIn account for API access
 	const [account] = await db

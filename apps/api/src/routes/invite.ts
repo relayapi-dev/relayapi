@@ -115,7 +115,7 @@ const deleteInviteToken = createRoute({
 app.openapi(listInviteTokens, async (c) => {
 	const orgId = c.get("orgId");
 	const { cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(inviteTokens.organizationId, orgId)];
 
@@ -170,7 +170,7 @@ app.openapi(createInviteToken, async (c) => {
 	const orgId = c.get("orgId");
 	const keyId = c.get("keyId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Resolve creator user ID from API key
 	const [key] = await db
@@ -285,7 +285,7 @@ app.openapi(createInviteToken, async (c) => {
 app.openapi(deleteInviteToken, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [token] = await db
 		.select({ id: inviteTokens.id })

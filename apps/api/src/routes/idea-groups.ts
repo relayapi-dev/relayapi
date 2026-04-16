@@ -94,7 +94,7 @@ const listIdeaGroups = createRoute({
 app.openapi(listIdeaGroups, async (c) => {
 	const orgId = c.get("orgId");
 	const { workspace_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const scopedWorkspaceId = workspace_id ?? null;
 	await ensureDefaultGroup(db, orgId, scopedWorkspaceId);
@@ -144,7 +144,7 @@ const createIdeaGroup = createRoute({
 app.openapi(createIdeaGroup, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "idea group");
 	if (denied) return denied;
@@ -223,7 +223,7 @@ app.openapi(updateIdeaGroup, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -288,7 +288,7 @@ const deleteIdeaGroup = createRoute({
 app.openapi(deleteIdeaGroup, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -378,7 +378,7 @@ const reorderIdeaGroups = createRoute({
 app.openapi(reorderIdeaGroups, async (c) => {
 	const orgId = c.get("orgId");
 	const { groups } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Bulk update positions — only update groups that belong to this org
 	await Promise.all(

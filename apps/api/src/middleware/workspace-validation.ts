@@ -1,4 +1,4 @@
-import { createDb, workspaces } from "@relayapi/db";
+import { workspaces } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { createMiddleware } from "hono/factory";
 import type { Env, Variables } from "../types";
@@ -30,7 +30,7 @@ export const workspaceValidationMiddleware = createMiddleware<{
 		return next();
 	}
 
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const rows = await db
 		.select({ id: workspaces.id })
 		.from(workspaces)

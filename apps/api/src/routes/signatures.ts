@@ -234,7 +234,7 @@ const setDefaultRoute = createRoute({
 // IMPORTANT: /default must be registered before /{id} to avoid matching "default" as an id
 app.openapi(getDefaultSignatureRoute, async (c) => {
 	const orgId = c.get("orgId");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select()
@@ -260,7 +260,7 @@ app.openapi(getDefaultSignatureRoute, async (c) => {
 app.openapi(listSignatures, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, cursor, workspace_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(signatures.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, signatures.workspaceId);
@@ -295,7 +295,7 @@ app.openapi(listSignatures, async (c) => {
 app.openapi(createSignatureRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "signature");
 	if (denied) return denied;
@@ -357,7 +357,7 @@ app.openapi(createSignatureRoute, async (c) => {
 app.openapi(getSignatureRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select()
@@ -387,7 +387,7 @@ app.openapi(updateSignatureRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -452,7 +452,7 @@ app.openapi(updateSignatureRoute, async (c) => {
 app.openapi(deleteSignatureRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: signatures.id, workspaceId: signatures.workspaceId })
@@ -483,7 +483,7 @@ app.openapi(deleteSignatureRoute, async (c) => {
 app.openapi(setDefaultRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()

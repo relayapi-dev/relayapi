@@ -160,7 +160,7 @@ const deleteContentTemplate = createRoute({
 app.openapi(listContentTemplates, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, cursor, workspace_id, tag } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(contentTemplates.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, contentTemplates.workspaceId);
@@ -199,7 +199,7 @@ app.openapi(listContentTemplates, async (c) => {
 app.openapi(createContentTemplateRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "content template");
 	if (denied) return denied;
@@ -230,7 +230,7 @@ app.openapi(createContentTemplateRoute, async (c) => {
 app.openapi(getContentTemplate, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select()
@@ -260,7 +260,7 @@ app.openapi(updateContentTemplateRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -302,7 +302,7 @@ app.openapi(updateContentTemplateRoute, async (c) => {
 app.openapi(deleteContentTemplate, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: contentTemplates.id, workspaceId: contentTemplates.workspaceId })

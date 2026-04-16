@@ -107,7 +107,7 @@ const deleteApiKey = createRoute({
 app.openapi(listApiKeys, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const keys = await db
 		.select({
@@ -156,7 +156,7 @@ app.openapi(listApiKeys, async (c) => {
 app.openapi(createApiKey, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Validate workspace IDs belong to the organization
 	if (Array.isArray(body.workspace_scope)) {
@@ -248,7 +248,7 @@ app.openapi(createApiKey, async (c) => {
 app.openapi(deleteApiKey, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [key] = await db
 		.select({ id: apikey.id, key: apikey.key })

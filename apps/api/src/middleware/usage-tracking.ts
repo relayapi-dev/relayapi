@@ -165,15 +165,23 @@ export const usageTrackingMiddleware = createMiddleware<{
 		}
 	}
 
-	// SECURITY: Increment BEFORE checking the limit.
-	// Note: KV get+put is NOT atomic — concurrent requests (within the same
-	// isolate at await points or across edge locations) can read the same
-	// count and produce an under-count. This means the free-plan hard limit
-	// can be slightly exceeded under concurrent bursts. The DB counter
-	// (SQL apiCallsCount + units) is always correct for billing.
+	// Read the counter synchronously (needed for free-plan gate + threshold detection),
+	// then defer the KV write via waitUntil — the handler no longer blocks on it.
+	// Concurrency note: KV get+put has never been atomic here; free-plan overage under
+	// bursts was already tolerated. The DB counter in persistUsageAndLogs
+	// (SQL apiCallsCount + units) remains the source of truth for billing.
 	// TODO: migrate to Durable Objects for atomic per-org counters.
-	const newCount = await incrementUsage(c.env.KV, orgId, units);
-	const countBefore = newCount - units;
+	const now = new Date();
+	const usageMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+	const usageKvKey = `usage:${orgId}:${usageMonth}`;
+	const current = await c.env.KV.get(usageKvKey, "text");
+	const countBefore = current ? parseInt(current, 10) : 0;
+	const newCount = countBefore + units;
+	c.executionCtx.waitUntil(
+		c.env.KV.put(usageKvKey, String(newCount), {
+			expirationTtl: 35 * 24 * 60 * 60,
+		}),
+	);
 
 	// Usage warning notifications (fire-and-forget, deduplicated via KV)
 	if (callsIncluded > 0) {

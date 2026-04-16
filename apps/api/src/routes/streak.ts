@@ -36,7 +36,7 @@ const getStreak = createRoute({
 
 app.openapi(getStreak, async (c) => {
 	const orgId = c.get("orgId");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [streak] = await db
 		.select()

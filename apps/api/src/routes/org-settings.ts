@@ -63,7 +63,7 @@ const getSettings = createRoute({
 // @ts-expect-error — hono-zod-openapi strict typing
 app.openapi(getSettings, async (c) => {
 	const orgId = c.get("orgId");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [sub] = await db
 		.select({
@@ -118,7 +118,7 @@ const updateSettings = createRoute({
 app.openapi(updateSettings, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const updates: Record<string, unknown> = { updatedAt: new Date() };
 	if (body.require_workspace_id !== undefined) {

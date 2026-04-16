@@ -229,7 +229,7 @@ const statsRoute = createRoute({
 
 app.openapi(getConfigRoute, async (c) => {
 	const orgId = c.get("orgId");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [config] = await db
 		.select()
@@ -269,7 +269,7 @@ app.openapi(getConfigRoute, async (c) => {
 app.openapi(updateConfigRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Validate: if mode is not "never", provider + api_key are required
 	// (either from this request or from an existing saved config)
@@ -345,7 +345,7 @@ app.openapi(updateConfigRoute, async (c) => {
 
 app.openapi(testConfigRoute, async (c) => {
 	const orgId = c.get("orgId");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [config] = await db
 		.select()
@@ -390,7 +390,7 @@ app.openapi(testConfigRoute, async (c) => {
 app.openapi(listShortLinksRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(shortLinks.organizationId, orgId)];
 	if (cursor) {
@@ -443,7 +443,7 @@ app.openapi(listShortLinksRoute, async (c) => {
 app.openapi(listByPostRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { postId } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const rows = await db
 		.select()
@@ -474,7 +474,7 @@ app.openapi(listByPostRoute, async (c) => {
 app.openapi(shortenRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [config] = await db
 		.select()
@@ -532,7 +532,7 @@ app.openapi(shortenRoute, async (c) => {
 app.openapi(statsRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [link] = await db
 		.select()

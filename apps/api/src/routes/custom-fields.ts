@@ -143,7 +143,7 @@ const deleteField = createRoute({
 app.openapi(createField, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	if (body.type === "select" && (!body.options || body.options.length === 0)) {
 		return c.json(
@@ -204,7 +204,7 @@ app.openapi(createField, async (c) => {
 app.openapi(listFields, async (c) => {
 	const orgId = c.get("orgId");
 	const { workspace_id, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(customFieldDefinitions.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, customFieldDefinitions.workspaceId);
@@ -250,7 +250,7 @@ app.openapi(updateField, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const updateSet: Record<string, unknown> = { updatedAt: new Date() };
 	if (body.name !== undefined) updateSet.name = body.name;
@@ -280,7 +280,7 @@ app.openapi(updateField, async (c) => {
 app.openapi(deleteField, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: customFieldDefinitions.id, workspaceId: customFieldDefinitions.workspaceId })

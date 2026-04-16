@@ -139,7 +139,7 @@ const deleteWorkspace = createRoute({
 app.openapi(listWorkspaces, async (c) => {
 	const orgId = c.get("orgId");
 	const { search, limit, cursor } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(workspaces.organizationId, orgId)];
 	const workspaceScope = c.get("workspaceScope");
@@ -199,7 +199,7 @@ app.openapi(listWorkspaces, async (c) => {
 app.openapi(createWorkspace, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [workspace] = await db
 		.insert(workspaces)
@@ -235,7 +235,7 @@ app.openapi(updateWorkspace, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const updates: Record<string, unknown> = { updatedAt: new Date() };
 	if (body.name !== undefined) updates.name = body.name;
@@ -284,7 +284,7 @@ app.openapi(updateWorkspace, async (c) => {
 app.openapi(deleteWorkspace, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: workspaces.id })

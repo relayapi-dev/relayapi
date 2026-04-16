@@ -167,7 +167,7 @@ app.openapi(suggestReplyRoute, async (c) => {
 		);
 	}
 
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { conversation_id, tone, max_suggestions, context } =
 		c.req.valid("json");
@@ -231,7 +231,7 @@ app.openapi(summarizeRoute, async (c) => {
 		);
 	}
 
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { conversation_id } = c.req.valid("json");
 
@@ -277,7 +277,7 @@ const prioritiesRoute = createRoute({
 });
 
 app.openapi(prioritiesRoute, async (c) => {
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { type, platform, account_id, status, labels, cursor, limit } =
 		c.req.valid("query");

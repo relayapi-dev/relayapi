@@ -325,7 +325,7 @@ function googleError(c: any, err: { status: number; code: string; message: strin
 app.openapi(getFoodMenus, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
@@ -342,7 +342,7 @@ app.openapi(putFoodMenus, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
@@ -363,7 +363,7 @@ app.openapi(getLocationDetails, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const query = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 
@@ -380,7 +380,7 @@ app.openapi(putLocationDetails, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 
@@ -398,7 +398,7 @@ app.openapi(putLocationDetails, async (c) => {
 app.openapi(getMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
@@ -415,7 +415,7 @@ app.openapi(postMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
@@ -445,7 +445,7 @@ app.openapi(deleteMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { media_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
@@ -463,7 +463,7 @@ app.openapi(deleteMedia, async (c) => {
 app.openapi(getAttributes, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 
@@ -479,7 +479,7 @@ app.openapi(putAttributes, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 
@@ -496,7 +496,7 @@ app.openapi(putAttributes, async (c) => {
 app.openapi(getPlaceActions, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 
@@ -512,7 +512,7 @@ app.openapi(postPlaceAction, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 
@@ -532,7 +532,7 @@ app.openapi(deletePlaceAction, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { action_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!ctx) return notFound(c);
 

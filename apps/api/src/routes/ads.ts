@@ -132,7 +132,7 @@ app.openapi(listAdAccounts, async (c) => {
 			await adService.discoverAdAccounts(c.env, orgId, social_account_id);
 		}
 
-		const db = createDb(c.env.HYPERDRIVE.connectionString);
+		const db = c.get("db");
 		const conditions = [eq(adAccounts.organizationId, orgId)];
 		applyWorkspaceScope(c, conditions, adAccounts.workspaceId);
 		if (social_account_id) {
@@ -284,7 +284,7 @@ app.openapi(listCampaigns, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform, status, ad_account_id, workspace_id, cursor, limit } =
 		c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(adCampaigns.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, adCampaigns.workspaceId);
@@ -368,7 +368,7 @@ const getCampaign = createRoute({
 app.openapi(getCampaign, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [
 		eq(adCampaigns.id, id),
@@ -462,7 +462,7 @@ app.openapi(updateCampaignStatus, async (c) => {
 		}
 
 		// Name/budget updates
-		const db = createDb(c.env.HYPERDRIVE.connectionString);
+		const db = c.get("db");
 		const updateData: Record<string, unknown> = { updatedAt: new Date() };
 		if (body.name) updateData.name = body.name;
 		if (body.daily_budget_cents)
@@ -507,7 +507,7 @@ app.openapi(deleteCampaign, async (c) => {
 
 	try {
 		await adService.updateCampaignStatus(c.env, orgId, id, "paused");
-		const db = createDb(c.env.HYPERDRIVE.connectionString);
+		const db = c.get("db");
 		await db
 			.update(adCampaigns)
 			.set({ status: "cancelled", updatedAt: new Date() })
@@ -655,7 +655,7 @@ app.openapi(listAds, async (c) => {
 	const orgId = c.get("orgId");
 	const { campaign_id, platform, status, workspace_id, source, cursor, limit } =
 		c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(ads.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, ads.workspaceId);
@@ -709,7 +709,7 @@ const getAd = createRoute({
 app.openapi(getAd, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [ad] = await db
 		.select()
@@ -840,7 +840,7 @@ app.openapi(getAdAnalytics, async (c) => {
 	try {
 		// Use stored metrics first; fall back to live if breakdowns requested or stored is empty
 		if (!breakdowns) {
-			const db = createDb(c.env.HYPERDRIVE.connectionString);
+			const db = c.get("db");
 			const stored = await adAnalytics.getAdAnalytics(db, id, startDate, endDate);
 			if (stored.daily.length > 0) {
 				return c.json({ data: stored });
@@ -891,7 +891,7 @@ const searchInterests = createRoute({
 app.openapi(searchInterests, async (c) => {
 	const orgId = c.get("orgId");
 	const { q, social_account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Find the right adapter from any ad account linked to this social account
 	const adAccountRows = await db
@@ -1048,7 +1048,7 @@ const listAudiences = createRoute({
 app.openapi(listAudiences, async (c) => {
 	const orgId = c.get("orgId");
 	const { ad_account_id, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [
 		eq(adAudiences.organizationId, orgId),
@@ -1110,7 +1110,7 @@ const getAudience = createRoute({
 app.openapi(getAudience, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [audience] = await db
 		.select()

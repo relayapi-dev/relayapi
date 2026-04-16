@@ -197,7 +197,7 @@ const getRuleLogsRoute = createRoute({
 app.openapi(createRuleRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [rule] = await db
 		.insert(automationRules)
@@ -233,7 +233,7 @@ app.openapi(createRuleRoute, async (c) => {
 app.openapi(listRulesRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, cursor, workspace_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(automationRules.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, automationRules.workspaceId);
@@ -271,7 +271,7 @@ app.openapi(listRulesRoute, async (c) => {
 app.openapi(getRuleRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [rule] = await db
 		.select()
@@ -298,7 +298,7 @@ app.openapi(updateRuleRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify rule exists and belongs to the org
 	const [existing] = await db
@@ -345,7 +345,7 @@ app.openapi(updateRuleRoute, async (c) => {
 app.openapi(deleteRuleRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: automationRules.id, workspaceId: automationRules.workspaceId })
@@ -377,7 +377,7 @@ app.openapi(getRuleLogsRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { limit, cursor } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify rule exists and belongs to org
 	const [rule] = await db

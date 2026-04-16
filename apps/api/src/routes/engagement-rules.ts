@@ -230,7 +230,7 @@ const listLogs = createRoute({
 app.openapi(createRule, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify account belongs to org
 	const [account] = await db
@@ -277,7 +277,7 @@ app.openapi(createRule, async (c) => {
 app.openapi(listRules, async (c) => {
 	const orgId = c.get("orgId");
 	const { workspace_id, cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(engagementRules.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, engagementRules.workspaceId);
@@ -317,7 +317,7 @@ app.openapi(listRules, async (c) => {
 app.openapi(getRule, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [rule] = await db
 		.select()
@@ -338,7 +338,7 @@ app.openapi(updateRule, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -376,7 +376,7 @@ app.openapi(updateRule, async (c) => {
 app.openapi(deleteRule, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: engagementRules.id, workspaceId: engagementRules.workspaceId })
@@ -397,7 +397,7 @@ app.openapi(deleteRule, async (c) => {
 app.openapi(activateRule, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [rule] = await db
 		.select()
@@ -423,7 +423,7 @@ app.openapi(activateRule, async (c) => {
 app.openapi(pauseRule, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [rule] = await db
 		.select()
@@ -450,7 +450,7 @@ app.openapi(listLogs, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify rule exists and belongs to org
 	const [rule] = await db

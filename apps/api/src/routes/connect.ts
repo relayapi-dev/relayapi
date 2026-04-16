@@ -1036,7 +1036,7 @@ export async function exchangeAndSaveAccount(params: {
 app.openapi(connectBeehiiv, async (c) => {
 	const orgId = c.get("orgId");
 	const { api_key, publication_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	try {
 		// Validate credentials by fetching publication info
@@ -1072,7 +1072,7 @@ app.openapi(connectBeehiiv, async (c) => {
 app.openapi(connectConvertKit, async (c) => {
 	const orgId = c.get("orgId");
 	const { api_key, api_secret } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	try {
 		const res = await fetch(`https://api.convertkit.com/v3/account?api_secret=${api_secret}`);
@@ -1106,7 +1106,7 @@ app.openapi(connectConvertKit, async (c) => {
 app.openapi(connectMailchimp, async (c) => {
 	const orgId = c.get("orgId");
 	const { api_key } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	try {
 		const datacenter = api_key.split("-").pop() ?? "us1";
@@ -1142,7 +1142,7 @@ app.openapi(connectMailchimp, async (c) => {
 app.openapi(connectListMonk, async (c) => {
 	const orgId = c.get("orgId");
 	const { instance_url, username: user, password } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	try {
 		const cleanUrl = instance_url.replace(/\/$/, "");
@@ -1192,7 +1192,7 @@ app.openapi(connectListMonk, async (c) => {
 app.openapi(connectBluesky, async (c) => {
 	const orgId = c.get("orgId");
 	const { handle, app_password } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	try {
 		// Bluesky: Create an authenticated session using handle + app password
@@ -1378,7 +1378,7 @@ app.openapi(pollTelegram, async (c) => {
 app.openapi(connectTelegramDirect, async (c) => {
 	const orgId = c.get("orgId");
 	const { chat_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	let account;
 	try {
@@ -1487,7 +1487,7 @@ app.openapi(whatsappSdkConfig, async (c) => {
 app.openapi(whatsappEmbeddedSignup, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const appId = c.env.WHATSAPP_APP_ID;
 	const appSecret = c.env.WHATSAPP_APP_SECRET;
@@ -1695,7 +1695,7 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 app.openapi(whatsappCredentials, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const encWaCredToken = await maybeEncrypt(body.access_token, c.env.ENCRYPTION_KEY);
 	let account;
@@ -1821,7 +1821,7 @@ app.openapi(listFacebookPages, async (c) => {
 app.openapi(selectFacebookPage, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const pendingData = await c.env.KV.get<{
 		access_token: string;
@@ -2063,7 +2063,7 @@ app.openapi(listLinkedInOrgs, async (c) => {
 app.openapi(selectLinkedInOrg, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const pendingData = await c.env.KV.get<{
 		access_token: string;
@@ -2207,7 +2207,7 @@ app.openapi(listPinterestBoards, async (c) => {
 app.openapi(selectPinterestBoard, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const pendingData = await c.env.KV.get<{
 		access_token: string;
@@ -2400,7 +2400,7 @@ app.openapi(listGBPLocations, async (c) => {
 app.openapi(selectGBPLocation, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const pendingData = await c.env.KV.get<{
 		access_token: string;
@@ -2553,7 +2553,7 @@ app.openapi(listSnapchatProfiles, async (c) => {
 app.openapi(selectSnapchatProfile, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const pendingData = await c.env.KV.get<{
 		access_token: string;

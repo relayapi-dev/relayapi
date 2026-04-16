@@ -263,7 +263,7 @@ async function getLatestAnalyticsForTargets(
 app.openapi(getAnalytics, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const targets = await getOrgPostTargetIds(
 		db,
@@ -352,7 +352,7 @@ app.openapi(getAnalytics, async (c) => {
 app.openapi(getDailyMetrics, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const startDate = query.from_date
 		? new Date(query.from_date)
@@ -453,7 +453,7 @@ app.openapi(getDailyMetrics, async (c) => {
 
 app.openapi(getBestTime, async (c) => {
 	const orgId = c.get("orgId");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Single JOIN: published posts + targets
 	const rows = await db
@@ -526,7 +526,7 @@ app.openapi(getBestTime, async (c) => {
 app.openapi(getContentDecay, async (c) => {
 	const orgId = c.get("orgId");
 	const { post_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Verify post ownership
 	const [post] = await db
@@ -607,7 +607,7 @@ app.openapi(getContentDecay, async (c) => {
 app.openapi(getPostTimeline, async (c) => {
 	const orgId = c.get("orgId");
 	const { post_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [post] = await db
 		.select({ id: posts.id })
@@ -677,7 +677,7 @@ app.openapi(getPostTimeline, async (c) => {
 
 app.openapi(getPostingFrequency, async (c) => {
 	const orgId = c.get("orgId");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	// Single JOIN: published posts + targets
 	const rows = await db
@@ -799,7 +799,7 @@ app.openapi(getPostingFrequency, async (c) => {
 app.openapi(getYouTubeDailyViews, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const startDate = query.from_date
 		? new Date(query.from_date)
@@ -1039,7 +1039,7 @@ const getPlatformDaily = createRoute({
 app.openapi(getChannels, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const dateRange = getPlatformDateRange(query.from_date, query.to_date);
 
 	const conditions = [eq(socialAccounts.organizationId, orgId)];
@@ -1145,7 +1145,7 @@ app.openapi(getChannels, async (c) => {
 app.openapi(getPlatformOverview, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccountWithToken(db, query.account_id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1229,7 +1229,7 @@ app.openapi(getPlatformOverview, async (c) => {
 app.openapi(getPlatformPosts, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccountWithToken(db, query.account_id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1276,7 +1276,7 @@ app.openapi(getPlatformPosts, async (c) => {
 app.openapi(getPlatformAudience, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccountWithToken(db, query.account_id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1341,7 +1341,7 @@ app.openapi(getPlatformAudience, async (c) => {
 app.openapi(getPlatformDaily, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getAccountWithToken(db, query.account_id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {

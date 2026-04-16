@@ -210,7 +210,7 @@ const singleHealthCheck = createRoute({
 app.openapi(singleHealthCheck, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [row] = await db
 		.select({
@@ -309,7 +309,7 @@ app.openapi(singleHealthCheck, async (c) => {
 app.openapi(healthCheck, async (c) => {
 	const orgId = c.get("orgId");
 	const { cursor, limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(socialAccounts.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, socialAccounts.workspaceId);
@@ -422,7 +422,7 @@ app.openapi(healthCheck, async (c) => {
 app.openapi(listAccounts, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, cursor, workspace_id, ungrouped, search, platforms } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(socialAccounts.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, socialAccounts.workspaceId);
@@ -497,7 +497,7 @@ app.openapi(listAccounts, async (c) => {
 app.openapi(getAccount, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [account] = await db
 		.select({
@@ -552,7 +552,7 @@ app.openapi(getAccount, async (c) => {
 app.openapi(deleteAccount, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [account] = await db
 		.select({
@@ -645,7 +645,7 @@ app.openapi(updateAccount, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [account] = await db
 		.select({ id: socialAccounts.id, metadata: socialAccounts.metadata, workspaceId: socialAccounts.workspaceId })
@@ -828,7 +828,7 @@ const setFacebookPage = createRoute({
 app.openapi(getFacebookPages, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -880,7 +880,7 @@ app.openapi(setFacebookPage, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -967,7 +967,7 @@ const setLinkedInOrg = createRoute({
 app.openapi(getLinkedInOrgs, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1021,7 +1021,7 @@ app.openapi(setLinkedInOrg, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1113,7 +1113,7 @@ const setPinterestBoard = createRoute({
 app.openapi(getPinterestBoards, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1166,7 +1166,7 @@ app.openapi(setPinterestBoard, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1288,7 +1288,7 @@ const getRedditFlairs = createRoute({
 app.openapi(getRedditSubreddits, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1353,7 +1353,7 @@ app.openapi(setRedditSubreddit, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1386,7 +1386,7 @@ app.openapi(getRedditFlairs, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { subreddit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1503,7 +1503,7 @@ const setGmbLocation = createRoute({
 app.openapi(getGmbLocations, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1580,7 +1580,7 @@ app.openapi(setGmbLocation, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1671,7 +1671,7 @@ const setYoutubePlaylist = createRoute({
 app.openapi(getYoutubePlaylists, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1738,7 +1738,7 @@ app.openapi(setYoutubePlaylist, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1803,7 +1803,7 @@ const getTikTokCreatorInfo = createRoute({
 app.openapi(getTikTokCreatorInfo, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
@@ -1951,7 +1951,7 @@ const singleSync = createRoute({
 app.openapi(singleSync, async (c) => {
   const orgId = c.get("orgId");
   const { id } = c.req.valid("param");
-  const db = createDb(c.env.HYPERDRIVE.connectionString);
+  const db = c.get("db");
 
   const [account] = await db
     .select({
@@ -2076,7 +2076,7 @@ const forceSync = createRoute({
 app.openapi(forceSync, async (c) => {
 	const orgId = c.get("orgId");
 	const { workspace_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const supportedPlatforms = getSupportedSyncPlatforms();
 
@@ -2191,7 +2191,7 @@ const getNewsletterTemplates = createRoute({
 app.openapi(getNewsletterLists, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [account] = await db.select().from(socialAccounts).where(and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId))).limit(1);
 	if (!account) return c.json({ error: { code: "NOT_FOUND", message: "Account not found" } }, 404 as any);
@@ -2239,7 +2239,7 @@ app.openapi(getNewsletterLists, async (c) => {
 app.openapi(getNewsletterTemplates, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [account] = await db.select().from(socialAccounts).where(and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId))).limit(1);
 	if (!account) return c.json({ error: { code: "NOT_FOUND", message: "Account not found" } }, 404 as any);

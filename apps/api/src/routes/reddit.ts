@@ -167,7 +167,7 @@ app.openapi(searchReddit, async (c) => {
 	const { account_id, query, subreddit, sort, time, limit, cursor } =
 		c.req.valid("query");
 
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const [row] = await db
 		.select({ accessToken: socialAccounts.accessToken, workspaceId: socialAccounts.workspaceId })
 		.from(socialAccounts)
@@ -240,7 +240,7 @@ app.openapi(getSubredditFeed, async (c) => {
 	const { account_id, subreddit, sort, time, limit, cursor } =
 		c.req.valid("query");
 
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const [row2] = await db
 		.select({ accessToken: socialAccounts.accessToken, workspaceId: socialAccounts.workspaceId })
 		.from(socialAccounts)

@@ -46,7 +46,7 @@ app.openapi(getUsage, async (c) => {
 	const orgId = c.get("orgId");
 	const plan = c.get("plan");
 	const callsIncluded = c.get("callsIncluded");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const now = new Date();
 	const month = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -177,7 +177,7 @@ const listRequestLogs = createRoute({
 app.openapi(listRequestLogs, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, cursor, from, to } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const baseConditions = [eq(apiRequestLogs.organizationId, orgId)];
 	if (from) baseConditions.push(gte(apiRequestLogs.createdAt, new Date(from)));

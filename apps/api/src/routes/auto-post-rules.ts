@@ -300,7 +300,7 @@ app.openapi(createRuleRoute, async (c) => {
 		);
 	}
 
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [rule] = await db
 		.insert(autoPostRules)
@@ -334,7 +334,7 @@ app.openapi(createRuleRoute, async (c) => {
 app.openapi(listRulesRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, cursor, workspace_id, status } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(autoPostRules.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, autoPostRules.workspaceId);
@@ -382,7 +382,7 @@ app.openapi(listRulesRoute, async (c) => {
 app.openapi(getRuleRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [rule] = await db
 		.select()
@@ -409,7 +409,7 @@ app.openapi(updateRuleRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -474,7 +474,7 @@ app.openapi(updateRuleRoute, async (c) => {
 app.openapi(deleteRuleRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({
@@ -508,7 +508,7 @@ app.openapi(deleteRuleRoute, async (c) => {
 app.openapi(activateRuleRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -545,7 +545,7 @@ app.openapi(activateRuleRoute, async (c) => {
 app.openapi(pauseRuleRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()

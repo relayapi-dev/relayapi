@@ -183,7 +183,7 @@ function parseTwitterError(
 app.openapi(retweet, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id, tweet_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account) {
@@ -213,7 +213,7 @@ app.openapi(retweet, async (c) => {
 app.openapi(undoRetweet, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id, tweet_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account) {
@@ -239,7 +239,7 @@ app.openapi(undoRetweet, async (c) => {
 app.openapi(bookmark, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id, tweet_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account) {
@@ -269,7 +269,7 @@ app.openapi(bookmark, async (c) => {
 app.openapi(removeBookmark, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id, tweet_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account) {
@@ -295,7 +295,7 @@ app.openapi(removeBookmark, async (c) => {
 app.openapi(follow, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id, target_user_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account) {
@@ -332,7 +332,7 @@ app.openapi(follow, async (c) => {
 app.openapi(unfollow, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id, target_user_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account) {

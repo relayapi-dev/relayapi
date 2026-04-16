@@ -230,7 +230,7 @@ const getWebhookLogs = createRoute({
 app.openapi(listWebhooks, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, workspace_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const conditions = [eq(webhookEndpoints.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, webhookEndpoints.workspaceId);
@@ -276,7 +276,7 @@ app.openapi(listWebhooks, async (c) => {
 app.openapi(createWebhookRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const scopeDenied = assertScopedCreateWorkspace(c, body.workspace_id, "webhook");
 	if (scopeDenied) return scopeDenied;
@@ -341,7 +341,7 @@ app.openapi(updateWebhookRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -401,7 +401,7 @@ app.openapi(updateWebhookRoute, async (c) => {
 app.openapi(deleteWebhook, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select({ id: webhookEndpoints.id, workspaceId: webhookEndpoints.workspaceId })
@@ -435,7 +435,7 @@ app.openapi(deleteWebhook, async (c) => {
 app.openapi(testWebhookRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { webhook_id } = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [webhook] = await db
 		.select()
@@ -518,7 +518,7 @@ app.openapi(testWebhookRoute, async (c) => {
 app.openapi(getWebhookLogs, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 	const workspaceScope = c.get("workspaceScope");
 
 	const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);

@@ -742,7 +742,7 @@ const sendFlowMessage = createRoute({
 app.openapi(bulkSend, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -814,7 +814,7 @@ app.openapi(bulkSend, async (c) => {
 app.openapi(listBroadcasts, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const rows = await db
 		.select()
@@ -848,7 +848,7 @@ app.openapi(listBroadcasts, async (c) => {
 app.openapi(createBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [broadcast] = await db
 		.insert(whatsappBroadcasts)
@@ -895,7 +895,7 @@ app.openapi(createBroadcast, async (c) => {
 app.openapi(getBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const { broadcast_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [broadcast] = await db
 		.select()
@@ -934,7 +934,7 @@ app.openapi(getBroadcast, async (c) => {
 app.openapi(deleteBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const { broadcast_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	await db
 		.delete(whatsappBroadcasts)
@@ -952,7 +952,7 @@ app.openapi(deleteBroadcast, async (c) => {
 app.openapi(sendBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const { broadcast_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [broadcast] = await db
 		.select()
@@ -1097,7 +1097,7 @@ app.openapi(sendBroadcast, async (c) => {
 app.openapi(scheduleBroadcast, async (c) => {
 	const orgId = c.get("orgId");
 	const { broadcast_id } = c.req.valid("param");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const [existing] = await db
 		.select()
@@ -1150,7 +1150,7 @@ app.openapi(scheduleBroadcast, async (c) => {
 app.openapi(listTemplates, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1230,7 +1230,7 @@ app.openapi(listTemplates, async (c) => {
 app.openapi(createTemplate, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1303,7 +1303,7 @@ app.openapi(getTemplate, async (c) => {
 	const orgId = c.get("orgId");
 	const { template_name } = c.req.valid("param");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1390,7 +1390,7 @@ app.openapi(deleteTemplate, async (c) => {
 	const orgId = c.get("orgId");
 	const { template_name } = c.req.valid("param");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1444,7 +1444,7 @@ app.openapi(deleteTemplate, async (c) => {
 app.openapi(getBusinessProfile, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1509,7 +1509,7 @@ app.openapi(getBusinessProfile, async (c) => {
 app.openapi(updateBusinessProfile, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1615,7 +1615,7 @@ app.openapi(updateBusinessProfile, async (c) => {
 app.openapi(listPhoneNumbers, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1688,7 +1688,7 @@ app.openapi(listPhoneNumbers, async (c) => {
 app.openapi(getDisplayName, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1741,7 +1741,7 @@ app.openapi(getDisplayName, async (c) => {
 app.openapi(updateDisplayName, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1793,7 +1793,7 @@ app.openapi(updateDisplayName, async (c) => {
 app.openapi(uploadProfilePhoto, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -1985,7 +1985,7 @@ async function assertFlowOwnership(
 app.openapi(listFlows, async (c) => {
 	const orgId = c.get("orgId");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -2020,7 +2020,7 @@ app.openapi(listFlows, async (c) => {
 app.openapi(createFlow, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -2084,7 +2084,7 @@ app.openapi(getFlow, async (c) => {
 	const orgId = c.get("orgId");
 	const { flow_id } = c.req.valid("param");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -2125,7 +2125,7 @@ app.openapi(updateFlow, async (c) => {
 	const orgId = c.get("orgId");
 	const { flow_id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -2183,7 +2183,7 @@ app.openapi(deleteFlow, async (c) => {
 	const orgId = c.get("orgId");
 	const { flow_id } = c.req.valid("param");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -2226,7 +2226,7 @@ app.openapi(publishFlow, async (c) => {
 	const orgId = c.get("orgId");
 	const { flow_id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -2269,7 +2269,7 @@ app.openapi(deprecateFlow, async (c) => {
 	const orgId = c.get("orgId");
 	const { flow_id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -2312,7 +2312,7 @@ app.openapi(getFlowJson, async (c) => {
 	const orgId = c.get("orgId");
 	const { flow_id } = c.req.valid("param");
 	const { account_id } = c.req.valid("query");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -2362,7 +2362,7 @@ app.openapi(uploadFlowJson, async (c) => {
 	const orgId = c.get("orgId");
 	const { flow_id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
@@ -2423,7 +2423,7 @@ app.openapi(uploadFlowJson, async (c) => {
 app.openapi(sendFlowMessage, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const db = c.get("db");
 
 	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (!account || !account.accessToken) {
