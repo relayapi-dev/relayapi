@@ -1,16 +1,16 @@
 import { defineMiddleware } from "astro:middleware";
 import { env } from "cloudflare:workers";
-import { constantTimeEqual, makeSignature } from "better-auth/crypto";
 import { createAuth } from "@relayapi/auth";
 import {
-	createDb,
-	invitation,
-	member,
 	organization as authOrganization,
 	session as authSession,
 	user as authUser,
+	createDb,
+	invitation,
+	member,
 } from "@relayapi/db";
-import { eq, and, gt } from "drizzle-orm";
+import { constantTimeEqual, makeSignature } from "better-auth/crypto";
+import { and, eq, gt } from "drizzle-orm";
 
 const PROTECTED_PATHS = ["/app"];
 const AUTH_PAGES = new Set(["/login", "/signup"]);
@@ -309,8 +309,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 								import("../lib/emails/invitation-email"),
 							]);
 
-						const baseUrl =
-							cfEnv.BETTER_AUTH_URL || context.url.origin;
+						const baseUrl = cfEnv.BETTER_AUTH_URL || context.url.origin;
 						const inviteUrl = `${baseUrl}/invite/${data.id}`;
 
 						const html = await render(
@@ -335,9 +334,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 							| undefined;
 						if (queue) {
 							await queue.send(emailMessage);
-							console.log(
-								`[Email] Enqueued invitation email to ${data.email}`,
-							);
+							console.log(`[Email] Enqueued invitation email to ${data.email}`);
 						} else if (cfEnv.RESEND_API_KEY) {
 							const resend = new Resend(cfEnv.RESEND_API_KEY);
 							await resend.emails.send({
@@ -414,16 +411,19 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			}
 		}
 
-		if (sessionToken && shouldResolveAuthState && (!cacheHit || refreshFullOrgFromCache)) {
+		if (
+			sessionToken &&
+			shouldResolveAuthState &&
+			(!cacheHit || refreshFullOrgFromCache)
+		) {
 			try {
 				if (refreshFullOrgFromCache) {
 					const activeOrgId = (session as any)?.activeOrganizationId;
 					if (activeOrgId && user && session) {
 						try {
-							org =
-								(await getOrganizationSummary(getDb(), activeOrgId)) ?? {
-									id: activeOrgId,
-								};
+							org = (await getOrganizationSummary(getDb(), activeOrgId)) ?? {
+								id: activeOrgId,
+							};
 						} catch (e) {
 							console.error("Failed to get active organization:", e);
 							org = { id: activeOrgId };
