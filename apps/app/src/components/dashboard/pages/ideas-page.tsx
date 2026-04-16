@@ -111,12 +111,16 @@ function moveGroupIdeasToDefault(
 	);
 	if (movedIdeas.length === 0) return list;
 
+	const maxDefaultPosition = defaultIdeas.reduce(
+		(maxPosition, idea) => Math.max(maxPosition, idea.position),
+		-1,
+	);
 	const nextById = new Map<string, Idea>();
 	movedIdeas.forEach((idea, index) => {
 		nextById.set(idea.id, {
 			...idea,
 			group_id: defaultGroupId,
-			position: defaultIdeas.length + index,
+			position: maxDefaultPosition + index + 1,
 		});
 	});
 
@@ -253,7 +257,7 @@ export function IdeasPage() {
 
 	const handleDeleteGroup = async (groupId: string) => {
 		const deletedGroup = groups.find((group) => group.id === groupId);
-		const count = ideasByGroup.get(groupId)?.length ?? 0;
+		const count = ideas.filter((idea) => idea.group_id === groupId).length;
 		const confirmMsg =
 			count > 0
 				? `Delete this group and move its ${count} idea${
