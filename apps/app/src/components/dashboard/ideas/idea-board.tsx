@@ -286,17 +286,15 @@ export function IdeaBoard({
 		if (activeIdStr.startsWith(CARD_PREFIX)) {
 			const activeCardId = activeIdStr.slice(CARD_PREFIX.length);
 
-			// Find which group the card is currently in (after drag-over updates)
-			let currentGroupId: string | null = null;
-			for (const [gId, ideas] of localIdeasByGroup.entries()) {
+			// Original source group — read from parent prop (unmutated by drag-over)
+			let originalGroupId: string | null = null;
+			for (const [gId, ideas] of ideasByGroup.entries()) {
 				if (ideas.some((i) => i.id === activeCardId)) {
-					currentGroupId = gId;
+					originalGroupId = gId;
 					break;
 				}
 			}
-			if (!currentGroupId) return;
-
-			const currentIdeas = localIdeasByGroup.get(currentGroupId) ?? [];
+			if (!originalGroupId) return;
 
 			// Determine target group and position
 			let targetGroupId: string | null = null;
@@ -330,36 +328,33 @@ export function IdeaBoard({
 
 			if (!targetGroupId) return;
 
-			// If reordering within same group
-			if (targetGroupId === currentGroupId) {
-				const activeIndex = currentIdeas.findIndex(
-					(i) => i.id === activeCardId,
-				);
-				const overCardId = overIdStr.startsWith(CARD_PREFIX)
-					? overIdStr.slice(CARD_PREFIX.length)
-					: null;
-				if (overCardId) {
-					const overIndex = currentIdeas.findIndex(
-						(i) => i.id === overCardId,
-					);
-					if (activeIndex !== -1 && overIndex !== -1 && activeIndex !== overIndex) {
-						const reordered = arrayMove(currentIdeas, activeIndex, overIndex);
-						setLocalIdeasByGroup((prev) => {
-							const next = new Map(prev);
-							next.set(currentGroupId!, reordered);
-							return next;
-						});
-						const nextAfterIdeaId =
-							overIndex > 0
-								? (reordered[overIndex - 1]?.id ?? null)
-								: null;
-						onMoveIdea(activeCardId, targetGroupId, nextAfterIdeaId);
-					}
-				}
-			} else {
-				// Cross-column move was already handled optimistically in onDragOver
+			// Cross-column move — drag-over already updated local UI optimistically
+			if (targetGroupId !== originalGroupId) {
 				onMoveIdea(activeCardId, targetGroupId, afterIdeaId);
+				return;
 			}
+
+			// Same-group reorder — only meaningful when dropped on another card
+			if (!overIdStr.startsWith(CARD_PREFIX)) return;
+			const overCardId = overIdStr.slice(CARD_PREFIX.length);
+			if (overCardId === activeCardId) return;
+
+			const currentIdeas = localIdeasByGroup.get(originalGroupId) ?? [];
+			const activeIndex = currentIdeas.findIndex((i) => i.id === activeCardId);
+			const overIndex = currentIdeas.findIndex((i) => i.id === overCardId);
+			if (activeIndex === -1 || overIndex === -1 || activeIndex === overIndex) {
+				return;
+			}
+
+			const reordered = arrayMove(currentIdeas, activeIndex, overIndex);
+			setLocalIdeasByGroup((prev) => {
+				const next = new Map(prev);
+				next.set(originalGroupId!, reordered);
+				return next;
+			});
+			const nextAfterIdeaId =
+				overIndex > 0 ? (reordered[overIndex - 1]?.id ?? null) : null;
+			onMoveIdea(activeCardId, targetGroupId, nextAfterIdeaId);
 		}
 	};
 
