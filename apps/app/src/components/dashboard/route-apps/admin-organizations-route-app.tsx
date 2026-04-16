@@ -1,8 +1,6 @@
-import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
+import { createDashboardRouteApp } from "../create-dashboard-route-app";
+import { AdminOrganizationsPage } from "../pages/admin/admin-organizations-page";
 
-export const AdminOrganizationsRouteApp =
-	createLazyDashboardRouteApp(() =>
-		import("../pages/admin/admin-organizations-page").then((module) => ({
-			default: module.AdminOrganizationsPage,
-		})),
-	);
+export const AdminOrganizationsRouteApp = createDashboardRouteApp(
+	AdminOrganizationsPage,
+);

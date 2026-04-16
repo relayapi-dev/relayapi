@@ -490,7 +490,7 @@ export function TemplatesPage() {
         <motion.div
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
           variants={stagger}
-          initial="hidden"
+          initial={false}
           animate="visible"
         >
           {templates.map((t) => (

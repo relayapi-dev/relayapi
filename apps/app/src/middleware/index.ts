@@ -8,6 +8,11 @@ import {
 	member,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import {
+	getDashboardPerfDurationMs,
+	isDashboardPerfEnabledServer,
+	logDashboardPerfServer,
+} from "../lib/dashboard-perf";
 
 const PROTECTED_PATHS = ["/app"];
 const AUTH_PAGES = new Set(["/login", "/signup"]);
@@ -211,14 +216,30 @@ async function userHasPendingInvitations(
 
 export const onRequest = defineMiddleware(async (context, next) => {
 	const path = context.url.pathname;
+	const startedAt = performance.now();
 
 	if (isStaticAssetPath(path)) {
 		return next();
 	}
 
+	const debugPerf = isDashboardPerfEnabledServer(
+		context.url,
+		context.request.headers,
+	);
+	context.locals.debugPerf = debugPerf;
+
 	const cfEnv = env as Record<string, any>;
 	let db: Database | undefined;
 	let auth: AuthInstance | undefined;
+	let sessionMs: number | null = null;
+	let orgMs: number | null = null;
+	let onboardingMs: number | null = null;
+	let downstreamMs: number | null = null;
+	let authHeaders: Headers | null = null;
+	let user: AuthUser | null = null;
+	let session: AuthSessionRecord | null = null;
+	let organization: OrganizationSummary | null = null;
+	let outcome = "next";
 
 	const getDb = () => {
 		if (!db) {
@@ -261,12 +282,45 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		context.locals.kv = cfEnv.KV;
 	}
 
-	let authHeaders: Headers | null = null;
-	let user: AuthUser | null = null;
-	let session: AuthSessionRecord | null = null;
-	let organization: OrganizationSummary | null = null;
+	const finalize = (response: Response) => {
+		mergeHeaders(response.headers, authHeaders);
+
+		const contentType = response.headers.get("Content-Type") || "";
+		if (contentType.includes("text/html")) {
+			response.headers.set(
+				"Cache-Control",
+				"no-cache, no-store, must-revalidate",
+			);
+		}
+
+		if (debugPerf) {
+			logDashboardPerfServer("request", {
+				path,
+				method: context.request.method,
+				status: response.status,
+				outcome,
+				requestType: path.startsWith("/api/")
+					? "api"
+					: path.startsWith("/app")
+						? "app"
+						: "other",
+				contentType: contentType || null,
+				resolvedSession: shouldResolveSession(path),
+				sessionMs,
+				orgMs,
+				onboardingMs,
+				downstreamMs,
+				totalMs: getDashboardPerfDurationMs(startedAt),
+				hasUser: !!user,
+				hasOrganization: !!organization,
+			});
+		}
+
+		return response;
+	};
 
 	if (shouldResolveSession(path)) {
+		const sessionStartedAt = performance.now();
 		const sessionResult = (await getAuth().api.getSession({
 			headers: context.request.headers,
 			returnHeaders: true,
@@ -275,6 +329,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			response: SessionState | null;
 		};
 
+		sessionMs = getDashboardPerfDurationMs(sessionStartedAt);
 		authHeaders = sessionResult.headers ?? null;
 
 		if (sessionResult.response) {
@@ -291,9 +346,11 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				};
 
 				if (shouldLoadOrganizationSummary(path)) {
+					const orgStartedAt = performance.now();
 					organization =
 						(await getOrganizationSummary(getDb(), activeOrganizationId)) ??
 						organization;
+					orgMs = getDashboardPerfDurationMs(orgStartedAt);
 				}
 			}
 		}
@@ -303,25 +360,27 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	context.locals.session = session;
 	context.locals.organization = organization;
 
-	const respond = (response: Response) => {
-		mergeHeaders(response.headers, authHeaders);
-		return response;
+	const redirect = (location: string, reason: string) => {
+		outcome = reason;
+		return finalize(context.redirect(location));
 	};
-
-	const redirect = (location: string) => respond(context.redirect(location));
 	const isProtectedPath = PROTECTED_PATHS.some((prefix) =>
 		path.startsWith(prefix),
 	);
 
 	if (isProtectedPath && !user) {
-		return redirect(`/login?redirect=${encodeURIComponent(path)}`);
+		return redirect(
+			`/login?redirect=${encodeURIComponent(path)}`,
+			"redirect:unauthenticated",
+		);
 	}
 
 	if (user && path.startsWith("/app/admin") && user.role !== "admin") {
-		return redirect("/app");
+		return redirect("/app", "redirect:non-admin");
 	}
 
 	if (user && shouldCheckOnboarding(path) && !session?.activeOrganizationId) {
+		const onboardingStartedAt = performance.now();
 		const db = getDb();
 		const hasOrganizations = await userHasOrganizations(db, user.id);
 
@@ -330,37 +389,34 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				db,
 				user.email,
 			);
+			onboardingMs = getDashboardPerfDurationMs(onboardingStartedAt);
 
 			if (hasPendingInvitations) {
-				return redirect("/app/invitations");
+				return redirect("/app/invitations", "redirect:pending-invitations");
 			}
 
-			return redirect("/app/onboarding");
+			return redirect("/app/onboarding", "redirect:onboarding");
 		}
+
+		onboardingMs = getDashboardPerfDurationMs(onboardingStartedAt);
 	}
 
 	if (user && path === "/app/onboarding" && organization) {
-		return redirect("/app");
+		return redirect("/app", "redirect:already-onboarded");
 	}
 
 	if (user && AUTH_PAGES.has(path)) {
 		const redirectParam = context.url.searchParams.get("redirect");
 		if (redirectParam?.startsWith("/invite/")) {
-			return redirect(redirectParam);
+			return redirect(redirectParam, "redirect:invite");
 		}
 
-		return redirect("/app");
+		return redirect("/app", "redirect:auth-page");
 	}
 
-	const response = respond(await next());
-	const contentType = response.headers.get("Content-Type") || "";
+	const downstreamStartedAt = performance.now();
+	const response = await next();
+	downstreamMs = getDashboardPerfDurationMs(downstreamStartedAt);
 
-	if (contentType.includes("text/html")) {
-		response.headers.set(
-			"Cache-Control",
-			"no-cache, no-store, must-revalidate",
-		);
-	}
-
-	return response;
+	return finalize(response);
 });

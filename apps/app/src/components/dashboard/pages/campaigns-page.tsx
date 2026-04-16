@@ -379,7 +379,7 @@ export function CampaignsPage({
               <motion.div
                 className="rounded-md border border-border overflow-hidden"
                 variants={stagger}
-                initial="hidden"
+                initial={false}
                 animate="visible"
               >
                 <table className="w-full text-sm">
@@ -455,7 +455,7 @@ export function CampaignsPage({
               <motion.div
                 className="rounded-md border border-border overflow-hidden"
                 variants={stagger}
-                initial="hidden"
+                initial={false}
                 animate="visible"
               >
                 <table className="w-full text-sm">
@@ -531,7 +531,7 @@ export function CampaignsPage({
               <motion.div
                 className="rounded-md border border-border overflow-hidden"
                 variants={stagger}
-                initial="hidden"
+                initial={false}
                 animate="visible"
               >
                 <table className="w-full text-sm">
@@ -618,7 +618,7 @@ export function CampaignsPage({
               <motion.div
                 className="rounded-md border border-border overflow-hidden"
                 variants={stagger}
-                initial="hidden"
+                initial={false}
                 animate="visible"
               >
                 <table className="w-full text-sm">
@@ -696,7 +696,7 @@ export function CampaignsPage({
               <motion.div
                 className="rounded-md border border-border overflow-hidden"
                 variants={stagger}
-                initial="hidden"
+                initial={false}
                 animate="visible"
               >
                 <table className="w-full text-sm">

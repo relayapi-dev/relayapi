@@ -1,7 +1,4 @@
-import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
+import { createDashboardRouteApp } from "../create-dashboard-route-app";
+import { WhatsAppPage } from "../pages/whatsapp-page";
 
-export const WhatsAppRouteApp = createLazyDashboardRouteApp(() =>
-	import("../pages/whatsapp-page").then((module) => ({
-		default: module.WhatsAppPage,
-	})),
-);
+export const WhatsAppRouteApp = createDashboardRouteApp(WhatsAppPage);

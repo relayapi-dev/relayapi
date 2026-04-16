@@ -1,7 +1,4 @@
-import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
+import { createDashboardRouteApp } from "../create-dashboard-route-app";
+import { MediaPage } from "../pages/media-page";
 
-export const MediaRouteApp = createLazyDashboardRouteApp(() =>
-	import("../pages/media-page").then((module) => ({
-		default: module.MediaPage,
-	})),
-);
+export const MediaRouteApp = createDashboardRouteApp(MediaPage);

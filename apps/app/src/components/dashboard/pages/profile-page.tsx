@@ -338,7 +338,7 @@ export function ProfilePage() {
     <motion.div
       className="space-y-6"
       variants={stagger}
-      initial="hidden"
+      initial={false}
       animate="visible"
     >
       <motion.div variants={fadeUp}>

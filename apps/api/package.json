@@ -4,7 +4,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "wrangler dev --port 8789 --persist-to ../../.wrangler/state",
+		"dev": "dotenv -e .dev.vars -- wrangler dev --port 8789 --persist-to ../../.wrangler/state",
 		"build": "cd ../.. && bun install && cd apps/api",
 		"deploy": "wrangler deploy",
 		"test": "bun test",
@@ -26,7 +26,8 @@
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20250312.0",
-		"wrangler": "^4.72.0",
-		"typescript": "^5.8"
+		"dotenv-cli": "^11.0.0",
+		"typescript": "^5.8",
+		"wrangler": "^4.72.0"
 	}
 }

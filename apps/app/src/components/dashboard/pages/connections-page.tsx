@@ -372,7 +372,7 @@ export function ConnectionsPage({
               <motion.div
                 className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
                 variants={stagger}
-                initial="hidden"
+                initial={false}
                 animate="visible"
                 key={workspaceFilterId || "all"}
               >
@@ -600,7 +600,7 @@ export function ConnectionsPage({
               <motion.div
                 className="space-y-3"
                 variants={stagger}
-                initial="hidden"
+                initial={false}
                 animate="visible"
               >
                 {groups.map((group) => (
@@ -670,7 +670,7 @@ export function ConnectionsPage({
             <motion.div
               className="rounded-md border border-border overflow-hidden"
               variants={stagger}
-              initial="hidden"
+              initial={false}
               animate="visible"
             >
               <div className="hidden md:grid grid-cols-[1.5fr_0.8fr_0.8fr_0.7fr_1fr_0.8fr] gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
@@ -841,7 +841,7 @@ export function ConnectionsPage({
               <motion.div
                 className="divide-y divide-border"
                 variants={stagger}
-                initial="hidden"
+                initial={false}
                 animate="visible"
               >
                 {logs.map((log) => {

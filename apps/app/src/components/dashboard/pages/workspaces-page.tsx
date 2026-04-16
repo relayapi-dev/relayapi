@@ -142,7 +142,7 @@ export function WorkspacesPage() {
           <motion.div
             className="space-y-3"
             variants={stagger}
-            initial="hidden"
+            initial={false}
             animate="visible"
           >
             {groups.map((group) => (

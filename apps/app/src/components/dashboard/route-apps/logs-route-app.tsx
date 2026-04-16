@@ -1,7 +1,4 @@
-import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
+import { createDashboardRouteApp } from "../create-dashboard-route-app";
+import { LogsPage } from "../pages/logs-page";
 
-export const LogsRouteApp = createLazyDashboardRouteApp(() =>
-	import("../pages/logs-page").then((module) => ({
-		default: module.LogsPage,
-	})),
-);
+export const LogsRouteApp = createDashboardRouteApp(LogsPage);

@@ -7,6 +7,7 @@ import {
 	type SetStateAction,
 } from "react";
 import { buildApiRequestKey, type ApiQuery } from "@/lib/api-request-key";
+import { dashboardPerfFetch } from "@/lib/dashboard-perf";
 
 function applyQuery(url: URL, query?: ApiQuery) {
 	if (!query) return;
@@ -61,9 +62,17 @@ export function useApi<T = unknown>(
 			const url = new URL(`/api/${path}`, window.location.origin);
 			applyQuery(url, options?.query);
 
-			const res = await fetch(url.toString(), {
-				signal: AbortSignal.timeout(15_000),
-			});
+			const res = await dashboardPerfFetch(
+				url.toString(),
+				{
+					signal: AbortSignal.timeout(15_000),
+				},
+				{
+					hook: "useApi",
+					path,
+					requestKey,
+				},
+			);
 			if (id !== fetchId.current) return;
 
 			if (!res.ok) {
@@ -123,11 +132,19 @@ export function useMutation<T = unknown>(
 			setError(null);
 
 			try {
-				const res = await fetch(`/api/${path}`, {
-					method,
-					headers: { "Content-Type": "application/json" },
-					body: body ? JSON.stringify(body) : undefined,
-				});
+				const res = await dashboardPerfFetch(
+					`/api/${path}`,
+					{
+						method,
+						headers: { "Content-Type": "application/json" },
+						body: body ? JSON.stringify(body) : undefined,
+					},
+					{
+						hook: "useMutation",
+						path,
+						method,
+					},
+				);
 
 				if (res.status === 204) {
 					return null;
@@ -193,9 +210,19 @@ export function usePagedApi<T = unknown>(
 				if (cursor) url.searchParams.set("cursor", cursor);
 				applyQuery(url, options?.query);
 
-				const res = await fetch(url.toString(), {
-					signal: AbortSignal.timeout(15_000),
-				});
+				const res = await dashboardPerfFetch(
+					url.toString(),
+					{
+						signal: AbortSignal.timeout(15_000),
+					},
+					{
+						hook: "usePagedApi",
+						path,
+						requestKey,
+						pageIndex,
+						cursor,
+					},
+				);
 				if (id !== fetchId.current) return;
 
 				if (!res.ok) {
@@ -307,9 +334,19 @@ export function usePaginatedApi<T = unknown>(
 				if (cursor) url.searchParams.set("cursor", cursor);
 				applyQuery(url, options?.query);
 
-				const res = await fetch(url.toString(), {
-					signal: AbortSignal.timeout(15_000),
-				});
+				const res = await dashboardPerfFetch(
+					url.toString(),
+					{
+						signal: AbortSignal.timeout(15_000),
+					},
+					{
+						hook: "usePaginatedApi",
+						path,
+						requestKey,
+						cursor,
+						append,
+					},
+				);
 				if (!append && id !== fetchId.current) return;
 
 				if (!res.ok) {

@@ -107,7 +107,7 @@ export function NotificationsPage() {
     <motion.div
       className="space-y-6"
       variants={stagger}
-      initial="hidden"
+      initial={false}
       animate="visible"
     >
       <motion.div variants={fadeUp} className="flex items-center justify-between">

@@ -136,7 +136,7 @@ export function SchedulingPage({
             <motion.div
               className="space-y-4"
               variants={stagger}
-              initial="hidden"
+              initial={false}
               animate="visible"
             >
               <motion.div variants={fadeUp} className="grid gap-3 sm:grid-cols-2">
@@ -236,7 +236,7 @@ export function SchedulingPage({
             <motion.div
               className="rounded-md border border-border overflow-hidden"
               variants={stagger}
-              initial="hidden"
+              initial={false}
               animate="visible"
             >
               <div className="px-4 py-3 border-b border-border">

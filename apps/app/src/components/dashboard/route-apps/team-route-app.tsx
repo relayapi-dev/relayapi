@@ -1,7 +1,4 @@
-import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
+import { createDashboardRouteApp } from "../create-dashboard-route-app";
+import { TeamPage } from "../pages/team-page";
 
-export const TeamRouteApp = createLazyDashboardRouteApp(() =>
-	import("../pages/team-page").then((module) => ({
-		default: module.TeamPage,
-	})),
-);
+export const TeamRouteApp = createDashboardRouteApp(TeamPage);

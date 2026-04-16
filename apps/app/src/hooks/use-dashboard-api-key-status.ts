@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { dashboardPerfFetch } from "@/lib/dashboard-perf";
 import { scheduleAfterPaint, scheduleIdleTask } from "@/lib/idle";
 
 interface DashboardApiKeyStatusResponse {
@@ -77,9 +78,16 @@ export function useDashboardApiKeyStatus(
 		}
 
 		try {
-			const res = await fetch("/api/dashboard-key-status", {
-				signal: AbortSignal.timeout(10_000),
-			});
+			const res = await dashboardPerfFetch(
+				"/api/dashboard-key-status",
+				{
+					signal: AbortSignal.timeout(10_000),
+				},
+				{
+					hook: "useDashboardApiKeyStatus",
+					background,
+				},
+			);
 			if (!res.ok) return;
 
 			const data =

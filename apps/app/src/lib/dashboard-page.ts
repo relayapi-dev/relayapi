@@ -104,16 +104,20 @@ export function getPostsPageRouteState(url: URL): Record<string, unknown> {
 	};
 }
 
-type ConnectionsTab =
+export type ConnectionsTab =
 	| "accounts"
 	| "connect"
 	| "workspaces"
 	| "health"
 	| "logs";
 
+export interface ConnectionsPageRouteState {
+	initialTab: ConnectionsTab;
+}
+
 export function getConnectionsPageRouteState(
 	url: URL,
-): Record<string, unknown> {
+): ConnectionsPageRouteState {
 	return {
 		initialTab: getSearchParamValue(
 		url,

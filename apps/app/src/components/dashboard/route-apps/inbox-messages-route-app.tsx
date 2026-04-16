@@ -1,8 +1,4 @@
-import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
+import { createDashboardRouteApp } from "../create-dashboard-route-app";
+import { InboxMessagesPage } from "../pages/inbox-messages-page";
 
-export const InboxMessagesRouteApp =
-	createLazyDashboardRouteApp(() =>
-		import("../pages/inbox-messages-page").then((module) => ({
-			default: module.InboxMessagesPage,
-		})),
-	);
+export const InboxMessagesRouteApp = createDashboardRouteApp(InboxMessagesPage);

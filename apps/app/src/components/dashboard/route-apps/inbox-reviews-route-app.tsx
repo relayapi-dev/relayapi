@@ -1,8 +1,4 @@
-import { createLazyDashboardRouteApp } from "../create-dashboard-route-app";
+import { createDashboardRouteApp } from "../create-dashboard-route-app";
+import { InboxReviewsPage } from "../pages/inbox-reviews-page";
 
-export const InboxReviewsRouteApp =
-	createLazyDashboardRouteApp(() =>
-		import("../pages/inbox-reviews-page").then((module) => ({
-			default: module.InboxReviewsPage,
-		})),
-	);
+export const InboxReviewsRouteApp = createDashboardRouteApp(InboxReviewsPage);

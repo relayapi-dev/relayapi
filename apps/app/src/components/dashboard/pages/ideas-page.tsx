@@ -517,7 +517,7 @@ export function IdeasPage() {
 			) : groups.length === 0 ? (
 				<motion.div
 					variants={stagger}
-					initial="hidden"
+					initial={false}
 					animate="visible"
 					className="flex flex-col items-center justify-center py-20"
 				>

@@ -81,7 +81,7 @@ export function QueuesPage() {
       <motion.div
         className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
         variants={stagger}
-        initial="hidden"
+        initial={false}
         animate="visible"
       >
         {statConfig.map((stat) => {
@@ -113,7 +113,7 @@ export function QueuesPage() {
         <motion.div
           className="rounded-md border border-border overflow-hidden"
           variants={stagger}
-          initial="hidden"
+          initial={false}
           animate="visible"
         >
           <div className="px-4 py-3 border-b border-border">

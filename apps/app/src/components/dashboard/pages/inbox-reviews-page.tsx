@@ -117,7 +117,7 @@ export function InboxReviewsPage() {
           <motion.div
             className="space-y-3"
             variants={stagger}
-            initial="hidden"
+            initial={false}
             animate="visible"
           >
             {reviews.map((review) => (

@@ -100,7 +100,7 @@ export function ContactsPage() {
           <motion.div
             className="rounded-md border border-border overflow-hidden"
             variants={stagger}
-            initial="hidden"
+            initial={false}
             animate="visible"
           >
             {/* Table header */}
