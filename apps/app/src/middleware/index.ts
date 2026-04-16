@@ -169,20 +169,21 @@ function createInvitationEmailSender(
 }
 
 type KVNamespace = App.Locals["kv"];
+type WaitUntil = (promise: Promise<unknown>) => void;
 
 const ORG_SUMMARY_CACHE_PREFIX = "org-summary:";
-const ORG_SUMMARY_TTL_S = 60;
+const ORG_SUMMARY_TTL_S = 10 * 60;
 
 interface OrgSummaryTimings {
 	cacheReadMs: number | null;
 	dbMs: number | null;
-	cacheWriteMs: number | null;
 	cacheHit: boolean;
 }
 
 async function getOrganizationSummary(
 	db: Database,
 	kv: KVNamespace | undefined,
+	waitUntil: WaitUntil | undefined,
 	organizationId: string,
 	timings: OrgSummaryTimings,
 ): Promise<OrganizationSummary | null> {
@@ -225,15 +226,17 @@ async function getOrganizationSummary(
 	};
 
 	if (kv) {
-		const cacheWriteStart = performance.now();
-		try {
-			await kv.put(cacheKey, JSON.stringify(summary), {
+		const writePromise = kv
+			.put(cacheKey, JSON.stringify(summary), {
 				expirationTtl: ORG_SUMMARY_TTL_S,
+			})
+			.catch(() => {
+				// KV write failure is non-fatal.
 			});
-		} catch {
-			// KV write failure is non-fatal.
+
+		if (waitUntil) {
+			waitUntil(writePromise);
 		}
-		timings.cacheWriteMs = getDashboardPerfDurationMs(cacheWriteStart);
 	}
 
 	return summary;
@@ -289,9 +292,11 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	const orgTimings: OrgSummaryTimings = {
 		cacheReadMs: null,
 		dbMs: null,
-		cacheWriteMs: null,
 		cacheHit: false,
 	};
+	const runtime = (context.locals as { runtime?: { ctx?: { waitUntil?: WaitUntil } } })
+		.runtime;
+	const waitUntil = runtime?.ctx?.waitUntil?.bind(runtime.ctx);
 	let authHeaders: Headers | null = null;
 	let user: AuthUser | null = null;
 	let session: AuthSessionRecord | null = null;
@@ -360,8 +365,6 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			);
 		if (orgTimings.dbMs != null)
 			serverTiming.push(`orgDb;dur=${orgTimings.dbMs}`);
-		if (orgTimings.cacheWriteMs != null)
-			serverTiming.push(`orgCacheWrite;dur=${orgTimings.cacheWriteMs}`);
 		if (onboardingMs != null)
 			serverTiming.push(`onboarding;dur=${onboardingMs}`);
 		if (downstreamMs != null)
@@ -386,7 +389,6 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				orgCacheHit: orgTimings.cacheHit,
 				orgCacheReadMs: orgTimings.cacheReadMs,
 				orgDbMs: orgTimings.dbMs,
-				orgCacheWriteMs: orgTimings.cacheWriteMs,
 				onboardingMs,
 				downstreamMs,
 				totalMs: getDashboardPerfDurationMs(startedAt),
@@ -442,6 +444,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 						(await getOrganizationSummary(
 							getDb(),
 							cfEnv.KV,
+							waitUntil,
 							activeOrganizationId,
 							orgTimings,
 						)) ?? organization;
