@@ -1,4 +1,3 @@
-import { dashboardPerfFetch } from "@/lib/dashboard-perf";
 import type { StreakData } from "@/hooks/use-streak";
 import type { UsageData } from "@/hooks/use-usage";
 
@@ -15,11 +14,9 @@ export function fetchDashboardBootstrap(): Promise<DashboardBootstrapData | null
 
 	const request = (async () => {
 		try {
-			const res = await dashboardPerfFetch(
-				"/api/dashboard-bootstrap",
-				{ signal: AbortSignal.timeout(15_000) },
-				{ hook: "dashboardBootstrap" },
-			);
+			const res = await fetch("/api/dashboard-bootstrap", {
+				signal: AbortSignal.timeout(15_000),
+			});
 			if (!res.ok) return null;
 			return (await res.json()) as DashboardBootstrapData;
 		} catch {

@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
-import { dashboardPerfFetch } from "@/lib/dashboard-perf";
 import { scheduleAfterPaint, scheduleIdleTask } from "@/lib/idle";
 
 export interface StreakData {
@@ -73,14 +72,9 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
       setError(null);
     }
     try {
-      const res = await dashboardPerfFetch(
-        "/api/streak",
-        { signal: AbortSignal.timeout(15_000) },
-        {
-          hook: "useStreak",
-          background,
-        },
-      );
+      const res = await fetch("/api/streak", {
+        signal: AbortSignal.timeout(15_000),
+      });
       if (res.ok) {
         const data = await res.json();
         setStreak(data);

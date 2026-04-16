@@ -4,7 +4,6 @@
  */
 
 import Relay from "@relayapi/sdk";
-import { getDashboardPerfDurationMs, logDashboardPerfServer } from "./dashboard-perf";
 
 // Cache SDK clients per org ID (survives across requests in the same worker/process)
 const clientCache = new Map<string, { client: Relay; expiresAt: number }>();
@@ -45,53 +44,18 @@ export async function getRelayClient(
 
   const orgId = (org as any).id as string;
   const now = Date.now();
-  const debugPerf = locals.debugPerf === true;
 
-  // Check cache first
   const cached = clientCache.get(orgId);
-  if (cached && cached.expiresAt > now) {
-    if (debugPerf) {
-      logDashboardPerfServer("relay-client", {
-        orgId,
-        cache: "hit",
-      });
-    }
-    return cached.client;
-  }
+  if (cached && cached.expiresAt > now) return cached.client;
 
   const kv = locals.kv;
   if (!kv) return null;
 
-  const kvStartedAt = performance.now();
   const apiKey = await getDashboardApiKey(kv, orgId);
-  const kvMs = getDashboardPerfDurationMs(kvStartedAt);
-  if (!apiKey) {
-    if (debugPerf) {
-      logDashboardPerfServer("relay-client", {
-        orgId,
-        cache: "miss",
-        kvMs,
-        apiKeyFound: false,
-      });
-    }
-    return null;
-  }
+  if (!apiKey) return null;
 
   const client = createRelayClient(apiKey, apiBaseURL);
-
-  // Cache for 1 minute
   clientCache.set(orgId, { client, expiresAt: now + CACHE_TTL_MS });
-
-  if (debugPerf) {
-    logDashboardPerfServer("relay-client", {
-      orgId,
-      cache: "miss",
-      kvMs,
-      apiKeyFound: true,
-      baseURL: apiBaseURL || "http://localhost:8789",
-    });
-  }
-
   return client;
 }
 

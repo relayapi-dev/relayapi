@@ -12,7 +12,6 @@ declare namespace App {
     user: Record<string, unknown> | null;
     session: Record<string, unknown> | null;
     organization: Record<string, unknown> | null;
-    debugPerf?: boolean;
     kv: {
       get: (key: string) => Promise<string | null>;
       put: (key: string, value: string, options?: { expirationTtl?: number }) => Promise<void>;

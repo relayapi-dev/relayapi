@@ -1,14 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Menu } from "lucide-react";
 import { StreakProvider } from "@/hooks/use-streak";
 import { UsageProvider } from "@/hooks/use-usage";
 import { authClient } from "@/lib/auth-client";
-import {
-	getDashboardNavigationTimingSnapshot,
-	logDashboardPerfClient,
-} from "@/lib/dashboard-perf";
 import { prefetchDashboardPage } from "@/lib/dashboard-prefetch";
-import { scheduleAfterPaint } from "@/lib/idle";
 import type { AppOrganization, AppUser } from "@/types/dashboard";
 import { FeedbackWidget } from "./feedback-widget";
 import { FilterProvider } from "./filter-context";
@@ -42,17 +37,6 @@ export function DashboardShell({
 }) {
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
-	useEffect(() => {
-		logDashboardPerfClient("shell:mounted", {
-			currentPage,
-			navigation: getDashboardNavigationTimingSnapshot(),
-		});
-
-		return scheduleAfterPaint(() => {
-			logDashboardPerfClient("shell:after-paint", { currentPage });
-		});
-	}, [currentPage]);
-
 	const buildPageUrl = (page: string) => {
 		const prevParams = new URLSearchParams(window.location.search);
 		const nextParams = new URLSearchParams();
@@ -72,16 +56,11 @@ export function DashboardShell({
 		const nextPath = `/app/${page}`;
 		if (currentPath === nextPath) return;
 
-		logDashboardPerfClient("shell:navigate", {
-			from: currentPath,
-			to: nextPath,
-		});
 		window.location.assign(buildPageUrl(page));
 	};
 
 	const prefetchPage = (page: string) => {
 		if (window.location.pathname.replace(/\/$/, "") === `/app/${page}`) return;
-		logDashboardPerfClient("shell:prefetch", { page });
 		prefetchDashboardPage(page, buildPageUrl(page));
 	};
 
