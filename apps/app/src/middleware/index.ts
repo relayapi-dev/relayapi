@@ -7,6 +7,7 @@ import {
 	invitation,
 	member,
 } from "@relayapi/db";
+import { getCookieCache } from "better-auth/cookies";
 import { and, eq } from "drizzle-orm";
 import {
 	getDashboardPerfDurationMs,
@@ -65,6 +66,10 @@ function shouldResolveSession(path: string): boolean {
 		AUTH_PAGES.has(path) ||
 		(path.startsWith("/api/") && !path.startsWith("/api/auth/"))
 	);
+}
+
+function isInternalApiPath(path: string): boolean {
+	return path.startsWith("/api/") && !path.startsWith("/api/auth/");
 }
 
 function shouldLoadOrganizationSummary(path: string): boolean {
@@ -321,20 +326,32 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
 	if (shouldResolveSession(path)) {
 		const sessionStartedAt = performance.now();
-		const sessionResult = (await getAuth().api.getSession({
-			headers: context.request.headers,
-			returnHeaders: true,
-		})) as {
-			headers?: Headers | null;
-			response: SessionState | null;
-		};
+		let sessionState: SessionState | null = null;
+
+		if (isInternalApiPath(path)) {
+			const cached = (await getCookieCache(context.request, {
+				secret: cfEnv.BETTER_AUTH_SECRET,
+			})) as SessionState | null;
+			if (cached) sessionState = cached;
+		}
+
+		if (!sessionState) {
+			const sessionResult = (await getAuth().api.getSession({
+				headers: context.request.headers,
+				returnHeaders: true,
+			})) as {
+				headers?: Headers | null;
+				response: SessionState | null;
+			};
+			authHeaders = sessionResult.headers ?? null;
+			sessionState = sessionResult.response;
+		}
 
 		sessionMs = getDashboardPerfDurationMs(sessionStartedAt);
-		authHeaders = sessionResult.headers ?? null;
 
-		if (sessionResult.response) {
-			user = sessionResult.response.user;
-			session = sessionResult.response.session;
+		if (sessionState) {
+			user = sessionState.user;
+			session = sessionState.session;
 
 			const activeOrganizationId = session.activeOrganizationId ?? null;
 			if (activeOrganizationId) {
