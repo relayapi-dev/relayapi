@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import { Lightbulb, Loader2, Plus, Tags, X } from "lucide-react";
 import {
@@ -28,6 +28,76 @@ const fadeUp = {
 	},
 };
 
+function sortIdeasByPosition(list: Idea[]) {
+	return [...list].sort((a, b) => a.position - b.position);
+}
+
+function moveIdeaLocally(
+	list: Idea[],
+	ideaId: string,
+	targetGroupId: string,
+	afterIdeaId?: string | null,
+) {
+	const currentIdea = list.find((idea) => idea.id === ideaId);
+	if (!currentIdea) return list;
+
+	const sourceGroupId = currentIdea.group_id;
+	const remainingIdeas = list.filter((idea) => idea.id !== ideaId);
+	const sourceIdeas = sortIdeasByPosition(
+		remainingIdeas.filter((idea) => idea.group_id === sourceGroupId),
+	);
+	const targetIdeas = sortIdeasByPosition(
+		remainingIdeas.filter((idea) => idea.group_id === targetGroupId),
+	);
+
+	let insertIndex = targetIdeas.length;
+	if (afterIdeaId === null) {
+		insertIndex = 0;
+	} else if (afterIdeaId) {
+		const targetIndex = targetIdeas.findIndex((idea) => idea.id === afterIdeaId);
+		insertIndex = targetIndex === -1 ? targetIdeas.length : targetIndex + 1;
+	}
+
+	const movedIdea: Idea = { ...currentIdea, group_id: targetGroupId };
+	const nextTargetIdeas = [...targetIdeas];
+	nextTargetIdeas.splice(insertIndex, 0, movedIdea);
+
+	const nextById = new Map<string, Idea>();
+	const reindex = (ideasToIndex: Idea[], groupId: string) => {
+		ideasToIndex.forEach((idea, index) => {
+			nextById.set(idea.id, {
+				...idea,
+				group_id: groupId,
+				position: index,
+			});
+		});
+	};
+
+	if (sourceGroupId === targetGroupId) {
+		reindex(nextTargetIdeas, targetGroupId);
+	} else {
+		reindex(sourceIdeas, sourceGroupId);
+		reindex(nextTargetIdeas, targetGroupId);
+	}
+
+	return list.map((idea) => nextById.get(idea.id) ?? idea);
+}
+
+function applyGroupPositions(
+	list: IdeaGroup[],
+	reordered: { id: string; position: number }[],
+) {
+	const nextPositions = new Map(
+		reordered.map((group) => [group.id, group.position]),
+	);
+
+	return list.map((group) =>
+		nextPositions.has(group.id)
+			? { ...group, position: nextPositions.get(group.id)! }
+			: group,
+	);
+}
+
 export function IdeasPage() {
 	const filterQuery = useFilterQuery();
 
@@ -36,6 +106,7 @@ export function IdeasPage() {
 		loading: groupsLoading,
 		error: groupsError,
 		refetch: refetchGroups,
+		setData: setGroups,
 	} = usePaginatedApi<IdeaGroup>("idea-groups", {
 		query: filterQuery,
 		limit: 100,
@@ -46,28 +117,42 @@ export function IdeasPage() {
 		loading: ideasLoading,
 		error: ideasError,
 		refetch: refetchIdeas,
+		setData: setIdeas,
 	} = usePaginatedApi<Idea>("ideas", {
 		query: filterQuery,
 		limit: 100,
 	});
 
-	const {
-		data: tags,
-	} = usePaginatedApi<IdeaTag>("tags", {
+	const { data: tags } = usePaginatedApi<IdeaTag>("tags", {
 		query: filterQuery,
 		limit: 100,
 	});
 
-	// Dialog state
 	const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
 	const [detailOpen, setDetailOpen] = useState(false);
 	const [createDialogOpen, setCreateDialogOpen] = useState(false);
 	const [createGroupId, setCreateGroupId] = useState<string | null>(null);
 
-	// Filters
 	const [filterTagId, setFilterTagId] = useState<string | null>(null);
 	const [filterAssignedTo, setFilterAssignedTo] = useState<string | null>(null);
 	const hasFilters = filterTagId !== null || filterAssignedTo !== null;
+
+	useEffect(() => {
+		if (!selectedIdea) return;
+
+		const nextSelectedIdea =
+			ideas.find((idea) => idea.id === selectedIdea.id) ?? null;
+
+		if (!nextSelectedIdea) {
+			setSelectedIdea(null);
+			setDetailOpen(false);
+			return;
+		}
+
+		if (nextSelectedIdea !== selectedIdea) {
+			setSelectedIdea(nextSelectedIdea);
+		}
+	}, [ideas, selectedIdea]);
 
 	const refetchAll = () => {
 		refetchGroups();
@@ -76,38 +161,55 @@ export function IdeasPage() {
 
 	const ideasByGroup = useMemo(() => {
 		const map = new Map<string, Idea[]>();
+
 		for (const group of groups) {
 			map.set(group.id, []);
 		}
+
 		const filtered = ideas.filter((idea) => {
-			if (filterTagId && !idea.tags.some((t) => t.id === filterTagId)) return false;
-			if (filterAssignedTo && idea.assigned_to !== filterAssignedTo) return false;
+			if (filterTagId && !idea.tags.some((tag) => tag.id === filterTagId)) {
+				return false;
+			}
+			if (filterAssignedTo && idea.assigned_to !== filterAssignedTo) {
+				return false;
+			}
 			return true;
 		});
-		const sorted = [...filtered].sort((a, b) => a.position - b.position);
-		for (const idea of sorted) {
-			const existing = map.get(idea.group_id);
-			if (existing) {
-				existing.push(idea);
+
+		for (const idea of sortIdeasByPosition(filtered)) {
+			const groupIdeas = map.get(idea.group_id);
+			if (groupIdeas) {
+				groupIdeas.push(idea);
 			} else {
 				map.set(idea.group_id, [idea]);
 			}
 		}
+
 		return map;
 	}, [groups, ideas, filterTagId, filterAssignedTo]);
 
+	const sortedGroups = useMemo(
+		() => [...groups].sort((a, b) => a.position - b.position),
+		[groups],
+	);
+
 	const loading = groupsLoading || ideasLoading;
+	const loadingInitial = loading && groups.length === 0;
 	const error = groupsError || ideasError;
 
 	const handleCreateGroup = async (name: string, color: string) => {
 		const body: Record<string, string> = { name, color };
 		if (filterQuery.workspace_id) body.workspace_id = filterQuery.workspace_id;
+
 		const res = await fetch("/api/idea-groups", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(body),
 		});
-		if (res.ok) refetchGroups();
+		if (!res.ok) return;
+
+		const createdGroup = (await res.json()) as IdeaGroup;
+		setGroups((prev) => [...prev, createdGroup]);
 	};
 
 	const handleRenameGroup = async (groupId: string, name: string) => {
@@ -116,58 +218,118 @@ export function IdeasPage() {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ name }),
 		});
-		if (res.ok) refetchGroups();
+		if (!res.ok) return;
+
+		const updatedGroup = (await res.json()) as IdeaGroup;
+		setGroups((prev) =>
+			prev.map((group) => (group.id === groupId ? updatedGroup : group)),
+		);
 	};
 
 	const handleDeleteGroup = async (groupId: string) => {
+		const deletedGroup = groups.find((group) => group.id === groupId);
 		const count = ideasByGroup.get(groupId)?.length ?? 0;
 		const confirmMsg =
 			count > 0
-				? `Delete this group and its ${count} idea${count !== 1 ? "s" : ""}?`
+				? `Delete this group and move its ${count} idea${
+						count !== 1 ? "s" : ""
+					} to Unassigned?`
 				: "Delete this group?";
 		if (!window.confirm(confirmMsg)) return;
+
 		const res = await fetch(`/api/idea-groups/${groupId}`, {
 			method: "DELETE",
 		});
-		if (res.ok || res.status === 204) refetchAll();
+		if (!res.ok && res.status !== 204) return;
+
+		setGroups((prev) => prev.filter((group) => group.id !== groupId));
+
+		const defaultGroup = groups.find(
+			(group) =>
+				group.is_default &&
+				group.workspace_id === deletedGroup?.workspace_id &&
+				group.id !== groupId,
+		);
+		if (!defaultGroup) {
+			refetchAll();
+			return;
+		}
+
+		setIdeas((prev) =>
+			prev.map((idea) =>
+				idea.group_id === groupId
+					? { ...idea, group_id: defaultGroup.id }
+					: idea,
+			),
+		);
 	};
 
 	const handleReorderGroups = async (
 		reordered: { id: string; position: number }[],
 	) => {
-		await fetch("/api/idea-groups/reorder", {
+		const previousGroups = groups;
+		setGroups((prev) => applyGroupPositions(prev, reordered));
+
+		const res = await fetch("/api/idea-groups/reorder", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ groups: reordered }),
 		});
-		// Optimistic update already applied in board; refetch to confirm
+		if (res.ok) return;
+
+		setGroups(previousGroups);
 		refetchGroups();
 	};
 
 	const handleMoveIdea = async (
 		ideaId: string,
 		groupId: string,
-		afterIdeaId: string | null,
+		afterIdeaId?: string | null,
 	) => {
-		await fetch(`/api/ideas/${ideaId}/move`, {
+		const previousIdeas = ideas;
+		setIdeas((prev) => moveIdeaLocally(prev, ideaId, groupId, afterIdeaId));
+
+		const body: Record<string, unknown> = { group_id: groupId };
+		if (afterIdeaId === null) {
+			body.position = 0;
+		} else if (afterIdeaId) {
+			body.after_idea_id = afterIdeaId;
+		}
+
+		const res = await fetch(`/api/ideas/${ideaId}/move`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ group_id: groupId, after_idea_id: afterIdeaId }),
+			body: JSON.stringify(body),
 		});
-		refetchIdeas();
+		if (!res.ok) {
+			setIdeas(previousIdeas);
+			refetchIdeas();
+			return;
+		}
+
+		const updatedIdea = (await res.json()) as Idea;
+		setIdeas((prev) =>
+			prev.map((idea) => (idea.id === ideaId ? updatedIdea : idea)),
+		);
 	};
 
-	// Idea dialog handlers
 	const handleSaveIdea = async (
 		id: string,
 		data: { title?: string | null; content?: string | null; tag_ids?: string[] },
 	) => {
-		await fetch(`/api/ideas/${id}`, {
+		const res = await fetch(`/api/ideas/${id}`, {
 			method: "PATCH",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(data),
 		});
-		refetchIdeas();
+		if (!res.ok) {
+			throw new Error(`Failed to save idea (${res.status})`);
+		}
+
+		const updatedIdea = (await res.json()) as Idea;
+		setIdeas((prev) =>
+			prev.map((idea) => (idea.id === id ? updatedIdea : idea)),
+		);
 	};
 
 	const handleCreateIdea = async (data: {
@@ -178,21 +340,46 @@ export function IdeasPage() {
 	}) => {
 		const body: Record<string, unknown> = { ...data };
 		if (filterQuery.workspace_id) body.workspace_id = filterQuery.workspace_id;
-		await fetch("/api/ideas", {
+
+		const res = await fetch("/api/ideas", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(body),
 		});
-		refetchIdeas();
+		if (!res.ok) {
+			throw new Error(`Failed to create idea (${res.status})`);
+		}
+
+		const createdIdea = (await res.json()) as Idea;
+		setIdeas((prev) => [...prev, createdIdea]);
+		return createdIdea;
 	};
 
 	const handleMoveIdeaToGroup = async (ideaId: string, groupId: string) => {
-		await fetch(`/api/ideas/${ideaId}/move`, {
+		const previousIdeas = ideas;
+		setIdeas((prev) => moveIdeaLocally(prev, ideaId, groupId));
+
+		const res = await fetch(`/api/ideas/${ideaId}/move`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ group_id: groupId }),
 		});
-		refetchIdeas();
+		if (!res.ok) {
+			setIdeas(previousIdeas);
+			refetchIdeas();
+			throw new Error(`Failed to move idea (${res.status})`);
+		}
+
+		const updatedIdea = (await res.json()) as Idea;
+		setIdeas((prev) =>
+			prev.map((idea) => (idea.id === ideaId ? updatedIdea : idea)),
+		);
+	};
+
+	const handleIdeaMediaChange = (ideaId: string, media: Idea["media"]) => {
+		setIdeas((prev) =>
+			prev.map((idea) => (idea.id === ideaId ? { ...idea, media } : idea)),
+		);
 	};
 
 	const handleConvertIdea = (ideaId: string) => {
@@ -210,50 +397,73 @@ export function IdeasPage() {
 		setCreateDialogOpen(true);
 	};
 
-	const sortedGroups = [...groups].sort((a, b) => a.position - b.position);
-
 	return (
 		<div className="space-y-6">
 			<div className="flex items-center justify-between">
 				<h1 className="text-lg font-medium">Ideas</h1>
 				<div className="flex items-center gap-2">
 					<FilterBar />
-					{/* Tag filter */}
+
 					{tags.length > 0 && (
 						<Popover>
 							<PopoverTrigger asChild>
-								<Button variant="outline" size="sm" className={cn("h-7 text-xs gap-1", filterTagId && "border-primary")}>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									className={cn(
+										"h-7 text-xs gap-1",
+										filterTagId && "border-primary",
+									)}
+								>
 									<Tags className="size-3" />
-									{filterTagId ? tags.find((t) => t.id === filterTagId)?.name ?? "Tag" : "Tag"}
+									{filterTagId
+										? tags.find((tag) => tag.id === filterTagId)?.name ?? "Tag"
+										: "Tag"}
 								</Button>
 							</PopoverTrigger>
 							<PopoverContent className="w-44 p-1.5" align="end">
 								{tags.map((tag) => (
 									<button
 										key={tag.id}
+										type="button"
 										className={cn(
 											"flex items-center gap-2 w-full rounded px-2 py-1.5 text-xs hover:bg-accent transition-colors",
 											filterTagId === tag.id && "bg-accent",
 										)}
-										onClick={() => setFilterTagId(filterTagId === tag.id ? null : tag.id)}
+										onClick={() =>
+											setFilterTagId(
+												filterTagId === tag.id ? null : tag.id,
+											)
+										}
 									>
-										<span className="size-2 rounded-full shrink-0" style={{ backgroundColor: tag.color }} />
+										<span
+											className="size-2 rounded-full shrink-0"
+											style={{ backgroundColor: tag.color }}
+										/>
 										{tag.name}
 									</button>
 								))}
 							</PopoverContent>
 						</Popover>
 					)}
+
 					{hasFilters && (
 						<button
+							type="button"
 							className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-							onClick={() => { setFilterTagId(null); setFilterAssignedTo(null); }}
+							onClick={() => {
+								setFilterTagId(null);
+								setFilterAssignedTo(null);
+							}}
 						>
 							<X className="size-3.5" />
 						</button>
 					)}
+
 					{groups.length > 0 && (
 						<Button
+							type="button"
 							size="sm"
 							className="gap-1.5 h-7 text-xs"
 							onClick={() => {
@@ -274,7 +484,7 @@ export function IdeasPage() {
 				</div>
 			)}
 
-			{loading ? (
+			{loadingInitial ? (
 				<div className="flex items-center justify-center py-20">
 					<Loader2 className="size-5 animate-spin text-muted-foreground" />
 				</div>
@@ -296,6 +506,7 @@ export function IdeasPage() {
 							before turning them into posts.
 						</p>
 						<Button
+							type="button"
 							size="sm"
 							className="gap-1.5 h-7 text-xs"
 							onClick={() => handleCreateGroup("Ideas", "#6366f1")}
@@ -321,7 +532,6 @@ export function IdeasPage() {
 				</div>
 			)}
 
-			{/* Edit dialog */}
 			<IdeaDetailDialog
 				open={detailOpen}
 				onOpenChange={setDetailOpen}
@@ -332,13 +542,9 @@ export function IdeasPage() {
 				onCreate={handleCreateIdea}
 				onMove={handleMoveIdeaToGroup}
 				onConvert={handleConvertIdea}
-				onRefetch={() => {
-					refetchIdeas();
-					refetchGroups();
-				}}
+				onMediaChange={handleIdeaMediaChange}
 			/>
 
-			{/* Create dialog */}
 			<IdeaDetailDialog
 				open={createDialogOpen}
 				onOpenChange={setCreateDialogOpen}
@@ -350,10 +556,7 @@ export function IdeasPage() {
 				onCreate={handleCreateIdea}
 				onMove={handleMoveIdeaToGroup}
 				onConvert={handleConvertIdea}
-				onRefetch={() => {
-					refetchIdeas();
-					refetchGroups();
-				}}
+				onMediaChange={handleIdeaMediaChange}
 			/>
 		</div>
 	);

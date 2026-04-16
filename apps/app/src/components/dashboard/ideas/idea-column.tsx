@@ -77,6 +77,7 @@ export function IdeaColumn({
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
 						<button
+							type="button"
 							className="rounded p-0.5 hover:bg-accent transition-colors"
 							onClick={(e) => e.stopPropagation()}
 						>
@@ -109,6 +110,7 @@ export function IdeaColumn({
 			<div className="p-2 space-y-2 flex-1 overflow-y-auto min-h-[100px]">
 				{children}
 				<button
+					type="button"
 					className="w-full rounded-md border border-dashed border-border p-2 text-xs text-muted-foreground hover:bg-accent/20 transition-colors"
 					onClick={onNewIdea}
 				>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
 	DndContext,
 	DragOverlay,
@@ -29,7 +29,7 @@ interface IdeaBoardProps {
 	onMoveIdea: (
 		ideaId: string,
 		groupId: string,
-		afterIdeaId: string | null,
+		afterIdeaId?: string | null,
 	) => void;
 	onReorderGroups: (groups: { id: string; position: number }[]) => void;
 	onRenameGroup: (groupId: string, name: string) => void;
@@ -160,13 +160,13 @@ export function IdeaBoard({
 	const [localIdeasByGroup, setLocalIdeasByGroup] =
 		useState<Map<string, Idea[]>>(ideasByGroup);
 
-	// Keep local state in sync when props change
-	if (groups !== localGroups) {
+	useEffect(() => {
 		setLocalGroups(groups);
-	}
-	if (ideasByGroup !== localIdeasByGroup) {
+	}, [groups]);
+
+	useEffect(() => {
 		setLocalIdeasByGroup(ideasByGroup);
-	}
+	}, [ideasByGroup]);
 
 	const sensors = useSensors(
 		useSensor(PointerSensor, {
@@ -300,12 +300,12 @@ export function IdeaBoard({
 
 			// Determine target group and position
 			let targetGroupId: string | null = null;
-			let afterIdeaId: string | null = null;
+			let afterIdeaId: string | null | undefined;
 
 			if (overIdStr.startsWith(COLUMN_PREFIX)) {
 				targetGroupId = overIdStr.slice(COLUMN_PREFIX.length);
-				// Dropped on column header — place at end
-				afterIdeaId = null;
+				// Dropped on column — place at end
+				afterIdeaId = undefined;
 			} else if (overIdStr.startsWith(CARD_PREFIX)) {
 				const overCardId = overIdStr.slice(CARD_PREFIX.length);
 				for (const [gId, ideas] of localIdeasByGroup.entries()) {
@@ -349,11 +349,11 @@ export function IdeaBoard({
 							next.set(currentGroupId!, reordered);
 							return next;
 						});
-						const beforeIdea =
+						const nextAfterIdeaId =
 							overIndex > 0
 								? (reordered[overIndex - 1]?.id ?? null)
 								: null;
-						onMoveIdea(activeCardId, targetGroupId, beforeIdea);
+						onMoveIdea(activeCardId, targetGroupId, nextAfterIdeaId);
 					}
 				}
 			} else {

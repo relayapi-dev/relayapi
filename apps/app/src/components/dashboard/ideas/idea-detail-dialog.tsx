@@ -1,9 +1,4 @@
-import {
-	useCallback,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ArrowRightLeft,
 	ChevronDown,
@@ -13,7 +8,9 @@ import {
 	Paperclip,
 	Send,
 	Tag,
+	Upload,
 	Video,
+	X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -38,28 +35,21 @@ import {
 import { cn } from "@/lib/utils";
 import type { Idea, IdeaComment, IdeaGroup, IdeaMedia, IdeaTag } from "./types";
 
-// ── Types ──
-
 interface ActivityEntry {
 	id: string;
 	actor_id: string | null;
 	action: string;
-	diff: Record<string, unknown> | null;
 	created_at: string;
 }
 
 interface IdeaDetailDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	// Edit mode
 	idea?: Idea | null;
-	// Create mode
 	createMode?: boolean;
 	createGroupId?: string | null;
-	// Data
 	groups: IdeaGroup[];
 	allTags: IdeaTag[];
-	// Callbacks
 	onSave: (
 		id: string,
 		data: { title?: string | null; content?: string | null; tag_ids?: string[] },
@@ -69,46 +59,69 @@ interface IdeaDetailDialogProps {
 		content?: string;
 		group_id?: string;
 		tag_ids?: string[];
-	}) => Promise<void>;
+	}) => Promise<Idea>;
 	onMove: (id: string, groupId: string) => Promise<void>;
 	onConvert: (id: string) => void;
-	onRefetch: () => void;
+	onMediaChange: (ideaId: string, media: IdeaMedia[]) => void;
 }
-
-// ── Helper: auto-resize textarea ──
 
 function useAutoResize(value: string) {
 	const ref = useRef<HTMLTextAreaElement>(null);
+
 	useEffect(() => {
 		const el = ref.current;
 		if (!el) return;
 		el.style.height = "auto";
 		el.style.height = `${el.scrollHeight}px`;
 	}, [value]);
+
 	return ref;
 }
 
-// ── Media thumbnail ──
+function sortMedia(list: IdeaMedia[]) {
+	return [...list].sort((a, b) => a.position - b.position);
+}
 
-function MediaThumb({ item }: { item: IdeaMedia }) {
-	if (item.type === "image" || item.type === "gif") {
-		return (
+function MediaThumb({
+	item,
+	onRemove,
+}: {
+	item: IdeaMedia;
+	onRemove?: () => void;
+}) {
+	const preview =
+		item.type === "image" || item.type === "gif" ? (
 			<img
 				src={item.url}
 				alt={item.alt ?? "media"}
 				className="size-16 rounded object-cover border border-border"
 			/>
+		) : (
+			<div className="size-16 rounded border border-border bg-accent/30 flex items-center justify-center">
+				{item.type === "video" ? (
+					<Video className="size-6 text-muted-foreground" />
+				) : (
+					<FileText className="size-6 text-muted-foreground" />
+				)}
+			</div>
 		);
-	}
-	const Icon = item.type === "video" ? Video : FileText;
+
 	return (
-		<div className="size-16 rounded border border-border bg-accent/30 flex items-center justify-center">
-			<Icon className="size-6 text-muted-foreground" />
+		<div className="relative">
+			{preview}
+			{onRemove && (
+				<button
+					type="button"
+					className="absolute -top-1.5 -right-1.5 rounded-full border border-border bg-background p-1 shadow-sm transition-colors hover:bg-accent"
+					onClick={onRemove}
+					aria-label="Remove media"
+				>
+					<X className="size-3" />
+				</button>
+			)}
 		</div>
 	);
 }
-
-// ── Comment thread ──
 
 function CommentItem({
 	comment,
@@ -139,15 +152,15 @@ function CommentItem({
 			</div>
 			{replies.length > 0 && (
 				<div className="ml-6 space-y-2">
-					{replies.map((r) => (
-						<div key={r.id} className="flex gap-2">
+					{replies.map((reply) => (
+						<div key={reply.id} className="flex gap-2">
 							<div className="size-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-medium shrink-0 mt-0.5">
-								{r.author_id.slice(0, 2).toUpperCase()}
+								{reply.author_id.slice(0, 2).toUpperCase()}
 							</div>
 							<div className="flex-1">
 								<p className="text-xs text-muted-foreground mb-0.5">
-									<time dateTime={r.created_at}>
-										{new Date(r.created_at).toLocaleDateString(undefined, {
+									<time dateTime={reply.created_at}>
+										{new Date(reply.created_at).toLocaleDateString(undefined, {
 											month: "short",
 											day: "numeric",
 											hour: "2-digit",
@@ -155,7 +168,7 @@ function CommentItem({
 										})}
 									</time>
 								</p>
-								<p className="text-sm">{r.content}</p>
+								<p className="text-sm">{reply.content}</p>
 							</div>
 						</div>
 					))}
@@ -164,8 +177,6 @@ function CommentItem({
 		</div>
 	);
 }
-
-// ── Main component ──
 
 export function IdeaDetailDialog({
 	open,
@@ -179,73 +190,69 @@ export function IdeaDetailDialog({
 	onCreate,
 	onMove,
 	onConvert,
-	onRefetch,
+	onMediaChange,
 }: IdeaDetailDialogProps) {
 	const isEditMode = !createMode && !!idea;
 
-	// Form state
 	const [title, setTitle] = useState("");
 	const [content, setContent] = useState("");
 	const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
-	const [groupId, setGroupId] = useState<string>("");
-
-	// Comments state
+	const [groupId, setGroupId] = useState("");
+	const [media, setMedia] = useState<IdeaMedia[]>([]);
 	const [comments, setComments] = useState<IdeaComment[]>([]);
 	const [commentsLoading, setCommentsLoading] = useState(false);
 	const [newComment, setNewComment] = useState("");
 	const [submittingComment, setSubmittingComment] = useState(false);
-
-	// Activity state
 	const [showActivity, setShowActivity] = useState(false);
 	const [activity, setActivity] = useState<ActivityEntry[]>([]);
 	const [activityLoading, setActivityLoading] = useState(false);
 	const [activityFetched, setActivityFetched] = useState(false);
-
-	// Save state
 	const [saving, setSaving] = useState(false);
-
-	// Tag popover
 	const [tagPopoverOpen, setTagPopoverOpen] = useState(false);
+	const [uploadingMedia, setUploadingMedia] = useState(false);
+	const [mediaError, setMediaError] = useState<string | null>(null);
 
-	// Auto-resize ref
+	const submitInFlightRef = useRef(false);
+	const fileInputRef = useRef<HTMLInputElement>(null);
 	const contentRef = useAutoResize(content);
 
-	// Sync state when idea changes
 	useEffect(() => {
-		if (open) {
-			setTitle(idea?.title ?? "");
-			setContent(idea?.content ?? "");
-			setSelectedTagIds(idea?.tags?.map((t) => t.id) ?? []);
-			setGroupId(idea?.group_id ?? createGroupId ?? groups[0]?.id ?? "");
-			setComments([]);
-			setNewComment("");
-			setShowActivity(false);
-			setActivity([]);
-			setActivityFetched(false);
-		}
+		if (!open) return;
+
+		setTitle(idea?.title ?? "");
+		setContent(idea?.content ?? "");
+		setSelectedTagIds(idea?.tags.map((tag) => tag.id) ?? []);
+		setGroupId(idea?.group_id ?? createGroupId ?? groups[0]?.id ?? "");
+		setMedia(sortMedia(idea?.media ?? []));
+		setMediaError(null);
+		setComments([]);
+		setNewComment("");
+		setShowActivity(false);
+		setActivity([]);
+		setActivityFetched(false);
 	}, [open, idea, createGroupId, groups]);
 
-	// Fetch comments when dialog opens (edit mode only)
 	useEffect(() => {
 		if (!open || !isEditMode || !idea) return;
+
 		setCommentsLoading(true);
 		fetch(`/api/ideas/${idea.id}/comments?limit=50`)
-			.then((r) => (r.ok ? r.json() : { data: [] }))
-			.then((res) => setComments(res.data ?? []))
+			.then((response) => (response.ok ? response.json() : { data: [] }))
+			.then((response) => setComments(response.data ?? []))
 			.catch(() => {})
 			.finally(() => setCommentsLoading(false));
 	}, [open, isEditMode, idea?.id]);
 
-	// Fetch activity on first toggle
 	const handleToggleActivity = useCallback(() => {
 		const next = !showActivity;
 		setShowActivity(next);
+
 		if (next && !activityFetched && idea) {
 			setActivityLoading(true);
 			fetch(`/api/ideas/${idea.id}/activity?limit=20`)
-				.then((r) => (r.ok ? r.json() : { data: [] }))
-				.then((res) => {
-					setActivity(res.data ?? []);
+				.then((response) => (response.ok ? response.json() : { data: [] }))
+				.then((response) => {
+					setActivity(response.data ?? []);
 					setActivityFetched(true);
 				})
 				.catch(() => setActivityFetched(true))
@@ -253,9 +260,9 @@ export function IdeaDetailDialog({
 		}
 	}, [showActivity, activityFetched, idea?.id]);
 
-	// Submit comment
 	const handleSubmitComment = useCallback(async () => {
 		if (!newComment.trim() || !idea) return;
+
 		setSubmittingComment(true);
 		try {
 			const res = await fetch(`/api/ideas/${idea.id}/comments`, {
@@ -269,27 +276,113 @@ export function IdeaDetailDialog({
 				setNewComment("");
 			}
 		} catch {
-			// silently ignore
+			// Ignore inline comment errors for now.
 		} finally {
 			setSubmittingComment(false);
 		}
 	}, [newComment, idea?.id]);
 
-	// Handle group change
+	const syncMedia = useCallback(
+		(nextMedia: IdeaMedia[]) => {
+			const sorted = sortMedia(nextMedia);
+			setMedia(sorted);
+			if (idea) {
+				onMediaChange(idea.id, sorted);
+			}
+		},
+		[idea, onMediaChange],
+	);
+
+	const handleUploadMedia = useCallback(
+		async (files: FileList | null) => {
+			if (!idea || !files?.length) return;
+
+			setUploadingMedia(true);
+			setMediaError(null);
+
+			try {
+				for (const file of Array.from(files)) {
+					const formData = new FormData();
+					formData.set("file", file);
+
+					const res = await fetch(`/api/ideas/${idea.id}/media`, {
+						method: "POST",
+						body: formData,
+					});
+					if (!res.ok) {
+						const errorBody = await res.json().catch(() => null);
+						throw new Error(
+							errorBody?.error?.message || `Upload failed (${res.status})`,
+						);
+					}
+
+					const uploadedMedia = (await res.json()) as IdeaMedia;
+					setMedia((prev) => {
+						const next = sortMedia([...prev, uploadedMedia]);
+						onMediaChange(idea.id, next);
+						return next;
+					});
+				}
+			} catch (error) {
+				setMediaError(
+					error instanceof Error ? error.message : "Failed to upload media.",
+				);
+			} finally {
+				setUploadingMedia(false);
+				if (fileInputRef.current) {
+					fileInputRef.current.value = "";
+				}
+			}
+		},
+		[idea, onMediaChange],
+	);
+
+	const handleDeleteMedia = useCallback(
+		async (mediaId: string) => {
+			if (!idea) return;
+
+			const previousMedia = media;
+			const nextMedia = previousMedia.filter((item) => item.id !== mediaId);
+			syncMedia(nextMedia);
+			setMediaError(null);
+
+			const res = await fetch(`/api/ideas/${idea.id}/media/${mediaId}`, {
+				method: "DELETE",
+			});
+			if (res.ok || res.status === 204) return;
+
+			syncMedia(previousMedia);
+			const errorBody = await res.json().catch(() => null);
+			setMediaError(
+				errorBody?.error?.message || `Failed to delete media (${res.status})`,
+			);
+		},
+		[idea, media, syncMedia],
+	);
+
 	const handleGroupChange = useCallback(
 		async (newGroupId: string) => {
 			setGroupId(newGroupId);
-			if (isEditMode && idea && newGroupId !== idea.group_id) {
+
+			if (!isEditMode || !idea || newGroupId === idea.group_id) {
+				return;
+			}
+
+			try {
 				await onMove(idea.id, newGroupId);
-				onRefetch();
+			} catch {
+				setGroupId(idea.group_id);
 			}
 		},
-		[isEditMode, idea, onMove, onRefetch],
+		[isEditMode, idea, onMove],
 	);
 
-	// Handle save / create
 	const handleSubmit = useCallback(async () => {
+		if (submitInFlightRef.current) return;
+
+		submitInFlightRef.current = true;
 		setSaving(true);
+
 		try {
 			if (isEditMode && idea) {
 				await onSave(idea.id, {
@@ -297,8 +390,6 @@ export function IdeaDetailDialog({
 					content: content.trim() || null,
 					tag_ids: selectedTagIds,
 				});
-				onRefetch();
-				onOpenChange(false);
 			} else {
 				await onCreate({
 					title: title.trim() || undefined,
@@ -306,12 +397,13 @@ export function IdeaDetailDialog({
 					group_id: groupId || undefined,
 					tag_ids: selectedTagIds,
 				});
-				onRefetch();
-				onOpenChange(false);
 			}
+
+			onOpenChange(false);
 		} catch {
-			// silently ignore — parent should handle errors
+			// Parent mutation handlers already own the failure path.
 		} finally {
+			submitInFlightRef.current = false;
 			setSaving(false);
 		}
 	}, [
@@ -323,16 +415,14 @@ export function IdeaDetailDialog({
 		groupId,
 		onSave,
 		onCreate,
-		onRefetch,
 		onOpenChange,
 	]);
 
-	// Build threaded comment list
-	const topLevelComments = comments.filter((c) => !c.parent_id);
+	const topLevelComments = comments.filter((comment) => !comment.parent_id);
 	const repliesMap = comments.reduce<Record<string, IdeaComment[]>>(
-		(acc, c) => {
-			if (c.parent_id) {
-				acc[c.parent_id] = [...(acc[c.parent_id] ?? []), c];
+		(acc, comment) => {
+			if (comment.parent_id) {
+				acc[comment.parent_id] = [...(acc[comment.parent_id] ?? []), comment];
 			}
 			return acc;
 		},
@@ -347,30 +437,28 @@ export function IdeaDetailDialog({
 				showCloseButton={false}
 				className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0"
 			>
-				{/* Header */}
 				<DialogHeader className="flex-row items-center justify-between px-5 py-3 border-b border-border gap-3 space-y-0">
 					<DialogTitle className="text-sm font-medium shrink-0">
 						{dialogTitle}
 					</DialogTitle>
 
 					<div className="flex items-center gap-2 ml-auto">
-						{/* Group select */}
 						{groups.length > 0 && (
 							<Select value={groupId} onValueChange={handleGroupChange}>
 								<SelectTrigger size="sm" className="h-7 text-xs gap-1 pr-2">
 									<SelectValue placeholder="Group" />
 								</SelectTrigger>
 								<SelectContent align="end">
-									{groups.map((g) => (
-										<SelectItem key={g.id} value={g.id}>
+									{groups.map((group) => (
+										<SelectItem key={group.id} value={group.id}>
 											<span className="flex items-center gap-1.5">
-												{g.color && (
+												{group.color && (
 													<span
 														className="size-2 rounded-full shrink-0"
-														style={{ backgroundColor: g.color }}
+														style={{ backgroundColor: group.color }}
 													/>
 												)}
-												{g.name}
+												{group.name}
 											</span>
 										</SelectItem>
 									))}
@@ -378,10 +466,10 @@ export function IdeaDetailDialog({
 							</Select>
 						)}
 
-						{/* Tags popover */}
 						<Popover open={tagPopoverOpen} onOpenChange={setTagPopoverOpen}>
 							<PopoverTrigger asChild>
 								<Button
+									type="button"
 									variant="outline"
 									size="sm"
 									className="h-7 text-xs gap-1 px-2"
@@ -412,9 +500,9 @@ export function IdeaDetailDialog({
 												>
 													<Checkbox
 														checked={checked}
-														onCheckedChange={(v) => {
+														onCheckedChange={(value) => {
 															setSelectedTagIds((prev) =>
-																v
+																value
 																	? [...prev, tag.id]
 																	: prev.filter((id) => id !== tag.id),
 															);
@@ -433,7 +521,6 @@ export function IdeaDetailDialog({
 							</PopoverContent>
 						</Popover>
 
-						{/* Close button */}
 						<button
 							type="button"
 							onClick={() => onOpenChange(false)}
@@ -458,46 +545,87 @@ export function IdeaDetailDialog({
 					</div>
 				</DialogHeader>
 
-				{/* Scrollable content */}
 				<div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 min-h-0">
-					{/* Title */}
 					<input
 						type="text"
 						value={title}
-						onChange={(e) => setTitle(e.target.value)}
+						onChange={(event) => setTitle(event.target.value)}
 						placeholder="Add a title..."
 						className="w-full bg-transparent text-base font-medium placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0"
 					/>
 
-					{/* Content */}
 					<textarea
 						ref={contentRef}
 						value={content}
-						onChange={(e) => setContent(e.target.value)}
+						onChange={(event) => setContent(event.target.value)}
 						placeholder="Write your idea..."
 						rows={3}
 						className="w-full bg-transparent text-sm placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0 resize-none overflow-hidden"
 					/>
 
-					{/* Media (edit mode only) */}
-					{isEditMode && idea && idea.media.length > 0 && (
-						<div>
-							<p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-								<Paperclip className="size-3" />
-								Media
-							</p>
-							<div className="flex flex-wrap gap-2">
-								{idea.media
-									.slice()
-									.sort((a, b) => a.position - b.position)
-									.map((m) => (
-										<MediaThumb key={m.id} item={m} />
-									))}
+					<input
+						ref={fileInputRef}
+						type="file"
+						multiple
+						className="hidden"
+						accept="image/*,video/*,.gif,.pdf"
+						onChange={(event) => void handleUploadMedia(event.target.files)}
+					/>
+
+					{isEditMode && idea ? (
+						<div className="space-y-2">
+							<div className="flex items-center justify-between gap-3">
+								<p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+									<Paperclip className="size-3" />
+									Media
+								</p>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									className="h-7 text-xs gap-1"
+									onClick={() => fileInputRef.current?.click()}
+									disabled={uploadingMedia}
+								>
+									{uploadingMedia ? (
+										<Loader2 className="size-3 animate-spin" />
+									) : (
+										<Upload className="size-3" />
+									)}
+									Add media
+								</Button>
 							</div>
+
+							{mediaError && (
+								<p className="text-xs text-destructive">{mediaError}</p>
+							)}
+
+							{media.length > 0 ? (
+								<div className="flex flex-wrap gap-2">
+									{media.map((item) => (
+										<MediaThumb
+											key={item.id}
+											item={item}
+											onRemove={() => void handleDeleteMedia(item.id)}
+										/>
+									))}
+								</div>
+							) : (
+								<button
+									type="button"
+									className="w-full rounded-md border border-dashed border-border px-4 py-5 text-xs text-muted-foreground transition-colors hover:bg-accent/20"
+									onClick={() => fileInputRef.current?.click()}
+								>
+									Click to attach media
+								</button>
+							)}
+						</div>
+					) : (
+						<div className="rounded-md border border-dashed border-border px-4 py-5 text-xs text-muted-foreground">
+							Create the idea first, then reopen it to attach media.
 						</div>
 					)}
 
-					{/* Comments (edit mode only) */}
 					{isEditMode && (
 						<div>
 							<p className="text-xs font-medium text-muted-foreground mb-3 flex items-center gap-1">
@@ -515,25 +643,24 @@ export function IdeaDetailDialog({
 								</p>
 							) : (
 								<div className="space-y-4 mb-3">
-									{topLevelComments.map((c) => (
+									{topLevelComments.map((comment) => (
 										<CommentItem
-											key={c.id}
-											comment={c}
-											replies={repliesMap[c.id] ?? []}
+											key={comment.id}
+											comment={comment}
+											replies={repliesMap[comment.id] ?? []}
 										/>
 									))}
 								</div>
 							)}
 
-							{/* Comment input */}
 							<div className="flex items-center gap-2 border border-border rounded-md px-3 py-2 mt-2">
 								<input
 									type="text"
 									value={newComment}
-									onChange={(e) => setNewComment(e.target.value)}
-									onKeyDown={(e) => {
-										if (e.key === "Enter" && !e.shiftKey) {
-											e.preventDefault();
+									onChange={(event) => setNewComment(event.target.value)}
+									onKeyDown={(event) => {
+										if (event.key === "Enter" && !event.shiftKey) {
+											event.preventDefault();
 											void handleSubmitComment();
 										}
 									}}
@@ -561,7 +688,6 @@ export function IdeaDetailDialog({
 						</div>
 					)}
 
-					{/* Activity section (edit mode, toggle) */}
 					{isEditMode && showActivity && (
 						<div>
 							<p className="text-xs font-medium text-muted-foreground mb-3">
@@ -606,12 +732,11 @@ export function IdeaDetailDialog({
 					)}
 				</div>
 
-				{/* Footer */}
 				<div className="flex items-center justify-between px-5 py-3 border-t border-border gap-3">
-					{/* Left: Activity toggle (edit mode only) */}
 					<div>
 						{isEditMode && (
 							<Button
+								type="button"
 								variant="ghost"
 								size="sm"
 								className="h-7 text-xs gap-1"
@@ -628,11 +753,10 @@ export function IdeaDetailDialog({
 						)}
 					</div>
 
-					{/* Right: Actions */}
 					<div className="flex items-center gap-2">
-						{/* Convert to Post (edit mode only) */}
 						{isEditMode && idea && (
 							<Button
+								type="button"
 								variant="outline"
 								size="sm"
 								className="h-7 text-xs gap-1"
@@ -649,11 +773,11 @@ export function IdeaDetailDialog({
 							</Button>
 						)}
 
-						{/* Save / Create */}
 						<Button
+							type="button"
 							size="sm"
 							className="h-7 text-xs"
-							onClick={handleSubmit}
+							onClick={() => void handleSubmit()}
 							disabled={saving}
 						>
 							{saving ? (

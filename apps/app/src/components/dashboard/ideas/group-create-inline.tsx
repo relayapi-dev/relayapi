@@ -34,6 +34,7 @@ export function GroupCreateInline({ onSubmit }: GroupCreateInlineProps) {
 		return (
 			<div className="shrink-0 w-72">
 				<button
+					type="button"
 					className="w-full rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground hover:bg-accent/20 transition-colors h-[52px] flex items-center justify-center gap-1.5"
 					onClick={() => setActive(true)}
 				>
@@ -61,6 +62,7 @@ export function GroupCreateInline({ onSubmit }: GroupCreateInlineProps) {
 				{PRESET_COLORS.map((c) => (
 					<button
 						key={c}
+						type="button"
 						className={`size-5 rounded-full border-2 transition-colors ${color === c ? "border-foreground" : "border-transparent"}`}
 						style={{ backgroundColor: c }}
 						onClick={() => setColor(c)}
@@ -69,6 +71,7 @@ export function GroupCreateInline({ onSubmit }: GroupCreateInlineProps) {
 			</div>
 			<div className="flex gap-2">
 				<Button
+					type="button"
 					size="sm"
 					className="h-7 text-xs flex-1"
 					onClick={handleSubmit}
@@ -76,6 +79,7 @@ export function GroupCreateInline({ onSubmit }: GroupCreateInlineProps) {
 					Create
 				</Button>
 				<Button
+					type="button"
 					size="sm"
 					variant="ghost"
 					className="h-7 text-xs"
