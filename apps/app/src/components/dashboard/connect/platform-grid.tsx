@@ -17,11 +17,11 @@ import { OnDemandDialog } from "./on-demand-dialog";
 
 const stagger = {
   hidden: {},
-  visible: { transition: { staggerChildren: 0.04 } },
+  visible: { transition: { staggerChildren: 0.02 } },
 };
 const fadeUp = {
   hidden: { opacity: 0, y: 6 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.15, ease: [0.32, 0.72, 0, 1] as const } },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.1, ease: [0.32, 0.72, 0, 1] as const } },
 };
 
 const PLATFORMS = [
@@ -70,7 +70,7 @@ export function PlatformGrid({ onConnected }: PlatformGridProps) {
       <motion.div
         className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"
         variants={stagger}
-        initial={false}
+        initial="hidden"
         animate="visible"
       >
         {PLATFORMS.map((platform) => {
