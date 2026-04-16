@@ -3,6 +3,24 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 
+@font-face {
+	font-family: "Geist Fallback";
+	src: local("Arial");
+	size-adjust: 100%;
+	ascent-override: 89%;
+	descent-override: 22%;
+	line-gap-override: 0%;
+}
+
+@font-face {
+	font-family: "Geist Mono Fallback";
+	src: local("Menlo"), local("Courier New");
+	size-adjust: 90%;
+	ascent-override: 80%;
+	descent-override: 20%;
+	line-gap-override: 0%;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
