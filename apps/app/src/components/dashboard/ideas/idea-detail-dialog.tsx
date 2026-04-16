@@ -181,6 +181,36 @@ function MediaTile({
 	);
 }
 
+function commentInitials(comment: IdeaComment): string {
+	const name = comment.author?.name?.trim();
+	if (name) {
+		const parts = name.split(/\s+/).filter(Boolean);
+		if (parts.length >= 2) {
+			return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+		}
+		return name.slice(0, 2).toUpperCase();
+	}
+	const fallback = comment.author?.id ?? comment.author_id;
+	return fallback.slice(-2).toUpperCase();
+}
+
+function CommentAvatar({ comment }: { comment: IdeaComment }) {
+	if (comment.author?.image) {
+		return (
+			<img
+				src={comment.author.image}
+				alt={comment.author.name ?? ""}
+				className="size-6 rounded-full object-cover shrink-0 mt-0.5"
+			/>
+		);
+	}
+	return (
+		<div className="size-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-medium shrink-0 mt-0.5">
+			{commentInitials(comment)}
+		</div>
+	);
+}
+
 function CommentItem({
 	comment,
 	replies,
@@ -191,11 +221,14 @@ function CommentItem({
 	return (
 		<div className="space-y-2">
 			<div className="flex gap-2">
-				<div className="size-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-medium shrink-0 mt-0.5">
-					{comment.author_id.slice(0, 2).toUpperCase()}
-				</div>
+				<CommentAvatar comment={comment} />
 				<div className="flex-1">
 					<p className="text-xs text-muted-foreground mb-0.5">
+						{comment.author?.name && (
+							<span className="text-foreground font-medium mr-1.5">
+								{comment.author.name}
+							</span>
+						)}
 						<time dateTime={comment.created_at}>
 							{new Date(comment.created_at).toLocaleDateString(undefined, {
 								month: "short",
@@ -212,11 +245,14 @@ function CommentItem({
 				<div className="ml-6 space-y-2">
 					{replies.map((reply) => (
 						<div key={reply.id} className="flex gap-2">
-							<div className="size-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-medium shrink-0 mt-0.5">
-								{reply.author_id.slice(0, 2).toUpperCase()}
-							</div>
+							<CommentAvatar comment={reply} />
 							<div className="flex-1">
 								<p className="text-xs text-muted-foreground mb-0.5">
+									{reply.author?.name && (
+										<span className="text-foreground font-medium mr-1.5">
+											{reply.author.name}
+										</span>
+									)}
 									<time dateTime={reply.created_at}>
 										{new Date(reply.created_at).toLocaleDateString(undefined, {
 											month: "short",
@@ -295,7 +331,7 @@ export function IdeaDetailDialog({
 		setShowActivity(false);
 		setActivity([]);
 		setActivityFetched(false);
-	}, [open, idea, createGroupId, groups]);
+	}, [open, idea?.id, createGroupId]);
 
 	useEffect(() => {
 		return () => {

@@ -9,6 +9,8 @@ import {
 	ideaActivity,
 	tags,
 	posts,
+	apikey,
+	user,
 } from "@relayapi/db";
 import { and, asc, desc, eq, inArray, lt, max, sql } from "drizzle-orm";
 import { ErrorResponse, IdParam } from "../schemas/common";
@@ -108,6 +110,70 @@ async function fetchIdeaMedia(
 		.from(ideaMedia)
 		.where(eq(ideaMedia.ideaId, ideaId))
 		.orderBy(asc(ideaMedia.position));
+}
+
+interface ActorInfo {
+	id: string;
+	name: string | null;
+	image: string | null;
+}
+
+async function resolveActors(
+	db: ReturnType<typeof createDb>,
+	actorIds: string[],
+): Promise<Map<string, ActorInfo>> {
+	const unique = [...new Set(actorIds.filter(Boolean))];
+	if (unique.length === 0) return new Map();
+
+	const keyRows = await db
+		.select({ id: apikey.id, referenceId: apikey.referenceId })
+		.from(apikey)
+		.where(inArray(apikey.id, unique));
+
+	const keyToUserId = new Map<string, string>();
+	for (const row of keyRows) {
+		if (row.referenceId) keyToUserId.set(row.id, row.referenceId);
+	}
+
+	const userIdTargets = new Set<string>();
+	for (const actorId of unique) {
+		userIdTargets.add(keyToUserId.get(actorId) ?? actorId);
+	}
+
+	const userRows =
+		userIdTargets.size === 0
+			? []
+			: await db
+					.select({ id: user.id, name: user.name, image: user.image })
+					.from(user)
+					.where(inArray(user.id, [...userIdTargets]));
+
+	const userById = new Map(userRows.map((u) => [u.id, u]));
+
+	const result = new Map<string, ActorInfo>();
+	for (const actorId of unique) {
+		const userId = keyToUserId.get(actorId) ?? actorId;
+		const u = userById.get(userId);
+		if (u) {
+			result.set(actorId, { id: u.id, name: u.name, image: u.image });
+		}
+	}
+	return result;
+}
+
+function serializeComment(
+	row: typeof ideaComments.$inferSelect,
+	author: ActorInfo | null,
+) {
+	return {
+		id: row.id,
+		author_id: row.authorId,
+		author,
+		content: row.content,
+		parent_id: row.parentId ?? null,
+		created_at: row.createdAt.toISOString(),
+		updated_at: row.updatedAt.toISOString(),
+	};
 }
 
 function inferMediaTypeFromUrl(
@@ -1089,16 +1155,14 @@ app.openapi(listComments, async (c) => {
 	const hasMore = rows.length > limit;
 	const data = rows.slice(0, limit);
 
+	const actors = await resolveActors(
+		db,
+		data.map((row) => row.authorId),
+	);
+
 	return c.json(
 		{
-			data: data.map((row) => ({
-				id: row.id,
-				author_id: row.authorId,
-				content: row.content,
-				parent_id: row.parentId ?? null,
-				created_at: row.createdAt.toISOString(),
-				updated_at: row.updatedAt.toISOString(),
-			})),
+			data: data.map((row) => serializeComment(row, actors.get(row.authorId) ?? null)),
 			next_cursor: hasMore
 				? (data.at(-1)?.createdAt.toISOString() ?? null)
 				: null,
@@ -1209,17 +1273,9 @@ app.openapi(createComment, async (c) => {
 
 	await logActivity(db, id, keyId, "commented", { comment_id: row.id });
 
-	return c.json(
-		{
-			id: row.id,
-			author_id: row.authorId,
-			content: row.content,
-			parent_id: row.parentId ?? null,
-			created_at: row.createdAt.toISOString(),
-			updated_at: row.updatedAt.toISOString(),
-		},
-		201,
-	);
+	const actors = await resolveActors(db, [row.authorId]);
+
+	return c.json(serializeComment(row, actors.get(row.authorId) ?? null), 201);
 });
 
 // ── Update comment ────────────────────────────────────────────────────────────
@@ -1306,17 +1362,8 @@ app.openapi(updateComment, async (c) => {
 		.returning();
 
 	const row = updated ?? comment;
-	return c.json(
-		{
-			id: row.id,
-			author_id: row.authorId,
-			content: row.content,
-			parent_id: row.parentId ?? null,
-			created_at: row.createdAt.toISOString(),
-			updated_at: row.updatedAt.toISOString(),
-		},
-		200,
-	);
+	const actors = await resolveActors(db, [row.authorId]);
+	return c.json(serializeComment(row, actors.get(row.authorId) ?? null), 200);
 });
 
 // ── Delete comment ────────────────────────────────────────────────────────────

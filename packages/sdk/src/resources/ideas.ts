@@ -186,7 +186,20 @@ export interface IdeaConvertResponse {
 
 export interface IdeaCommentResponse {
   id: string;
+  /**
+   * Actor ID who authored the comment. May be an API key ID (prefix 'key_')
+   * or a user ID.
+   */
   author_id: string;
+  /**
+   * Resolved user info for the author. Null if the actor cannot be mapped
+   * to a user.
+   */
+  author: {
+    id: string;
+    name: string | null;
+    image: string | null;
+  } | null;
   content: string;
   parent_id: string | null;
   created_at: string;

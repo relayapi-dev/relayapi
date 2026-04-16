@@ -186,7 +186,21 @@ export const IdeaActivityListResponse = paginatedResponse(IdeaActivityResponse);
 
 export const IdeaCommentResponse = z.object({
 	id: z.string().describe("Comment ID"),
-	author_id: z.string().describe("Author user ID"),
+	author_id: z
+		.string()
+		.describe(
+			"Actor ID who authored the comment. May be an API key ID (prefix 'key_') or a user ID.",
+		),
+	author: z
+		.object({
+			id: z.string().describe("User ID"),
+			name: z.string().nullable().describe("Display name"),
+			image: z.string().nullable().describe("Avatar URL"),
+		})
+		.nullable()
+		.describe(
+			"Resolved user info for the author. Null if the actor cannot be mapped to a user.",
+		),
 	content: z.string().describe("Comment body"),
 	parent_id: z.string().nullable().describe("Parent comment ID (for replies)"),
 	created_at: z.string().datetime().describe("Creation timestamp"),

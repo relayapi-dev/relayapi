@@ -43,6 +43,11 @@ export interface IdeaGroup {
 export interface IdeaComment {
 	id: string;
 	author_id: string;
+	author: {
+		id: string;
+		name: string | null;
+		image: string | null;
+	} | null;
 	content: string;
 	parent_id: string | null;
 	created_at: string;
