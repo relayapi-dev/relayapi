@@ -70,8 +70,8 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-	{ label: "Ideas", icon: Sparkles, href: "ideas" },
 	{ label: "Connections", icon: Link2, href: "connections" },
+	{ label: "Ideas", icon: Sparkles, href: "ideas" },
 	{
 		label: "Posts",
 		icon: PenSquare,

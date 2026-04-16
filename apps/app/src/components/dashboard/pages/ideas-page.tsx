@@ -554,7 +554,7 @@ export function IdeasPage() {
 					</motion.div>
 				</motion.div>
 			) : (
-				<div className="overflow-x-auto -mx-4 px-4 pb-2">
+				<div className="overflow-x-auto -mx-4 px-4 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
 					<IdeaBoard
 						groups={sortedGroups}
 						ideasByGroup={ideasByGroup}
