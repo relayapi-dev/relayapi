@@ -382,23 +382,19 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	if (user && shouldCheckOnboarding(path) && !session?.activeOrganizationId) {
 		const onboardingStartedAt = performance.now();
 		const db = getDb();
-		const hasOrganizations = await userHasOrganizations(db, user.id);
+		const [hasOrganizations, hasPendingInvitations] = await Promise.all([
+			userHasOrganizations(db, user.id),
+			userHasPendingInvitations(db, user.email),
+		]);
+		onboardingMs = getDashboardPerfDurationMs(onboardingStartedAt);
 
 		if (!hasOrganizations) {
-			const hasPendingInvitations = await userHasPendingInvitations(
-				db,
-				user.email,
-			);
-			onboardingMs = getDashboardPerfDurationMs(onboardingStartedAt);
-
 			if (hasPendingInvitations) {
 				return redirect("/app/invitations", "redirect:pending-invitations");
 			}
 
 			return redirect("/app/onboarding", "redirect:onboarding");
 		}
-
-		onboardingMs = getDashboardPerfDurationMs(onboardingStartedAt);
 	}
 
 	if (user && path === "/app/onboarding" && organization) {

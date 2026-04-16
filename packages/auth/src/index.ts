@@ -52,6 +52,12 @@ export function createAuth(db: Database, env: AuthEnv) {
 		emailAndPassword: {
 			enabled: true,
 		},
+		session: {
+			cookieCache: {
+				enabled: true,
+				maxAge: 5 * 60,
+			},
+		},
 		databaseHooks: {
 			session: {
 				create: {
