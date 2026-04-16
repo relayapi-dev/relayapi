@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { scheduleAfterPaint } from "@/lib/idle";
 
 export interface RealtimeEvent {
   type: string; // e.g. "post.updated", "inbox.comment.received", "notification.created"
@@ -133,15 +134,38 @@ function unsubscribe(listener: Listener) {
  * Subscribe to real-time dashboard events via WebSocket.
  * Multiple components can call this hook — they all share one WebSocket connection.
  */
-export function useRealtimeUpdates(onEvent: (event: RealtimeEvent) => void): void {
+export function useRealtimeUpdates(
+  onEvent: (event: RealtimeEvent) => void,
+  options?: { defer?: boolean | number },
+): void {
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
 
   useEffect(() => {
     const listener: Listener = (event) => onEventRef.current(event);
-    subscribe(listener);
-    return () => unsubscribe(listener);
-  }, []);
+    let subscribed = false;
+
+    const subscribeNow = () => {
+      if (subscribed) return;
+      subscribed = true;
+      subscribe(listener);
+    };
+
+    const deferMs =
+      typeof options?.defer === "number" ? options.defer : options?.defer ? 2500 : 0;
+
+    const cancelDeferredSubscribe =
+      deferMs > 0
+        ? scheduleAfterPaint(subscribeNow, deferMs)
+        : (subscribeNow(), () => {});
+
+    return () => {
+      cancelDeferredSubscribe();
+      if (subscribed) {
+        unsubscribe(listener);
+      }
+    };
+  }, [options?.defer]);
 }
 
 /** @deprecated Use useRealtimeUpdates instead */

@@ -3,6 +3,7 @@ import type { AppOrganization, AppUser } from "@/types/dashboard";
 export interface DashboardRouteContext {
 	user: AppUser | null;
 	organization: AppOrganization | null;
+	isImpersonating: boolean;
 	initialWorkspaceId: string | null;
 	initialAccountId: string | null;
 }
@@ -51,6 +52,7 @@ export function getDashboardRouteContext(
 	return {
 		user: toAppUser(locals.user),
 		organization: toAppOrganization(locals.organization),
+		isImpersonating: !!locals.session?.impersonatedBy,
 		initialWorkspaceId: url.searchParams.get("workspace"),
 		initialAccountId: url.searchParams.get("account"),
 	};

@@ -98,6 +98,31 @@ function applyGroupPositions(
 	);
 }
 
+function moveGroupIdeasToDefault(
+	list: Idea[],
+	deletedGroupId: string,
+	defaultGroupId: string,
+) {
+	const defaultIdeas = sortIdeasByPosition(
+		list.filter((idea) => idea.group_id === defaultGroupId),
+	);
+	const movedIdeas = sortIdeasByPosition(
+		list.filter((idea) => idea.group_id === deletedGroupId),
+	);
+	if (movedIdeas.length === 0) return list;
+
+	const nextById = new Map<string, Idea>();
+	movedIdeas.forEach((idea, index) => {
+		nextById.set(idea.id, {
+			...idea,
+			group_id: defaultGroupId,
+			position: defaultIdeas.length + index,
+		});
+	});
+
+	return list.map((idea) => nextById.get(idea.id) ?? idea);
+}
+
 export function IdeasPage() {
 	const filterQuery = useFilterQuery();
 
@@ -255,13 +280,7 @@ export function IdeasPage() {
 			return;
 		}
 
-		setIdeas((prev) =>
-			prev.map((idea) =>
-				idea.group_id === groupId
-					? { ...idea, group_id: defaultGroup.id }
-					: idea,
-			),
-		);
+		setIdeas((prev) => moveGroupIdeasToDefault(prev, groupId, defaultGroup.id));
 	};
 
 	const handleReorderGroups = async (
@@ -291,7 +310,10 @@ export function IdeasPage() {
 
 		const body: Record<string, unknown> = { group_id: groupId };
 		if (afterIdeaId === null) {
-			body.position = 0;
+			const firstTargetIdea = sortIdeasByPosition(
+				ideas.filter((idea) => idea.group_id === groupId && idea.id !== ideaId),
+			)[0];
+			body.position = firstTargetIdea ? firstTargetIdea.position - 1 : 0;
 		} else if (afterIdeaId) {
 			body.after_idea_id = afterIdeaId;
 		}

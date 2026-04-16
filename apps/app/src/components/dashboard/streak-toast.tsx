@@ -51,6 +51,7 @@ export function StreakToastContainer() {
       },
       [addToast],
     ),
+    { defer: 4000 },
   );
 
   return (

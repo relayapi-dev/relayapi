@@ -1,8 +1,15 @@
 import { defineMiddleware } from "astro:middleware";
 import { env } from "cloudflare:workers";
 import { createAuth } from "@relayapi/auth";
-import { createDb, invitation } from "@relayapi/db";
-import { eq, and } from "drizzle-orm";
+import {
+	createDb,
+	invitation,
+	member,
+	organization as authOrganization,
+	session as authSession,
+	user as authUser,
+} from "@relayapi/db";
+import { eq, and, gt } from "drizzle-orm";
 
 const PROTECTED_PATHS = ["/app"];
 const AUTH_PAGES = new Set(["/login", "/signup"]);
@@ -60,6 +67,149 @@ function writeSessionCache(
 		...entry,
 		timestamp: Date.now(),
 	});
+}
+
+async function getOrganizationSummary(
+	db: ReturnType<typeof createDb>,
+	organizationId: string,
+): Promise<Record<string, unknown> | null> {
+	const [org] = await db
+		.select({
+			id: authOrganization.id,
+			name: authOrganization.name,
+			slug: authOrganization.slug,
+			logo: authOrganization.logo,
+		})
+		.from(authOrganization)
+		.where(eq(authOrganization.id, organizationId))
+		.limit(1);
+
+	if (!org) return null;
+
+	return {
+		id: org.id,
+		name: org.name,
+		slug: org.slug,
+		logo: org.logo,
+	};
+}
+
+async function getSessionState(
+	db: ReturnType<typeof createDb>,
+	sessionToken: string,
+	needsFullOrg: boolean,
+): Promise<Omit<CachedSession, "timestamp"> | null> {
+	const [row] = needsFullOrg
+		? await db
+				.select({
+					sessionId: authSession.id,
+					sessionUserId: authSession.userId,
+					activeOrganizationId: authSession.activeOrganizationId,
+					impersonatedBy: authSession.impersonatedBy,
+					expiresAt: authSession.expiresAt,
+					userId: authUser.id,
+					userName: authUser.name,
+					userEmail: authUser.email,
+					userImage: authUser.image,
+					userRole: authUser.role,
+					orgId: authOrganization.id,
+					orgName: authOrganization.name,
+					orgSlug: authOrganization.slug,
+					orgLogo: authOrganization.logo,
+				})
+				.from(authSession)
+				.innerJoin(authUser, eq(authSession.userId, authUser.id))
+				.leftJoin(
+					authOrganization,
+					eq(authSession.activeOrganizationId, authOrganization.id),
+				)
+				.where(
+					and(
+						eq(authSession.token, sessionToken),
+						gt(authSession.expiresAt, new Date()),
+					),
+				)
+				.limit(1)
+		: await db
+				.select({
+					sessionId: authSession.id,
+					sessionUserId: authSession.userId,
+					activeOrganizationId: authSession.activeOrganizationId,
+					impersonatedBy: authSession.impersonatedBy,
+					expiresAt: authSession.expiresAt,
+					userId: authUser.id,
+					userName: authUser.name,
+					userEmail: authUser.email,
+					userImage: authUser.image,
+					userRole: authUser.role,
+				})
+				.from(authSession)
+				.innerJoin(authUser, eq(authSession.userId, authUser.id))
+				.where(
+					and(
+						eq(authSession.token, sessionToken),
+						gt(authSession.expiresAt, new Date()),
+					),
+				)
+				.limit(1);
+
+	if (!row) return null;
+
+	const user: Record<string, unknown> = {
+		id: row.userId,
+		name: row.userName,
+		email: row.userEmail,
+		image: row.userImage,
+		role: row.userRole,
+	};
+
+	const session: Record<string, unknown> = {
+		id: row.sessionId,
+		userId: row.sessionUserId,
+		activeOrganizationId: row.activeOrganizationId,
+		impersonatedBy: row.impersonatedBy,
+		expiresAt: row.expiresAt.toISOString(),
+	};
+
+	let organization: Record<string, unknown> | null = null;
+	if (row.activeOrganizationId) {
+		const fullOrgRow = row as typeof row & {
+			orgId?: string | null;
+			orgName?: string | null;
+			orgSlug?: string | null;
+			orgLogo?: string | null;
+		};
+		if (fullOrgRow.orgSlug) {
+			organization = {
+				id: fullOrgRow.orgId ?? row.activeOrganizationId,
+				name: fullOrgRow.orgName,
+				slug: fullOrgRow.orgSlug,
+				logo: fullOrgRow.orgLogo,
+			};
+		} else {
+			organization = { id: row.activeOrganizationId };
+		}
+	}
+
+	return {
+		user,
+		session,
+		organization,
+		hasFullOrganization: !!organization && "slug" in organization,
+	};
+}
+
+async function userHasOrganizations(
+	db: ReturnType<typeof createDb>,
+	userId: string,
+): Promise<boolean> {
+	const rows = await db
+		.select({ id: member.id })
+		.from(member)
+		.where(eq(member.userId, userId))
+		.limit(1);
+
+	return rows.length > 0;
 }
 
 export const onRequest = defineMiddleware(async (context, next) => {
@@ -215,18 +365,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
 		if (sessionToken && shouldResolveAuthState && (!cacheHit || refreshFullOrgFromCache)) {
 			try {
-				const auth = getAuth();
 				if (refreshFullOrgFromCache) {
 					const activeOrgId = (session as any)?.activeOrganizationId;
 					if (activeOrgId && user && session) {
 						try {
-							const fullOrg = await (auth.api as any).getFullOrganization({
-								headers: context.request.headers,
-								query: { organizationId: activeOrgId },
-							});
-							if (fullOrg) {
-								org = fullOrg as unknown as Record<string, unknown>;
-							}
+							org =
+								(await getOrganizationSummary(getDb(), activeOrgId)) ?? {
+									id: activeOrgId,
+								};
 						} catch (e) {
 							console.error("Failed to get active organization:", e);
 							org = { id: activeOrgId };
@@ -242,39 +388,22 @@ export const onRequest = defineMiddleware(async (context, next) => {
 						}
 					}
 				} else {
-					const result = await auth.api.getSession({
-						headers: context.request.headers,
-					});
-					if (result) {
-						user = result.user as Record<string, unknown>;
-						session = result.session as Record<string, unknown>;
-
-						const activeOrgId = (session as any)?.activeOrganizationId;
-						if (activeOrgId) {
-							if (needsFullOrg) {
-								try {
-									const fullOrg = await (auth.api as any).getFullOrganization({
-										headers: context.request.headers,
-										query: { organizationId: activeOrgId },
-									});
-									if (fullOrg) {
-										org = fullOrg as unknown as Record<string, unknown>;
-									}
-								} catch (e) {
-									console.error("Failed to get active organization:", e);
-									org = { id: activeOrgId };
-								}
-							} else {
-								org = { id: activeOrgId };
-							}
-						}
+					const sessionState = await getSessionState(
+						getDb(),
+						sessionToken,
+						needsFullOrg,
+					);
+					if (sessionState) {
+						user = sessionState.user;
+						session = sessionState.session;
+						org = sessionState.organization;
 
 						if (!isAuthMutation) {
 							writeSessionCache(sessionToken, {
 								user,
 								session,
 								organization: org,
-								hasFullOrganization: !!org && "slug" in org,
+								hasFullOrganization: sessionState.hasFullOrganization,
 							});
 						}
 					}
@@ -314,11 +443,11 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			if (!activeOrgId && !org) {
 				// Check if user has any organizations
 				try {
-					const auth = getAuth();
-					const orgs = await (auth.api as any).listOrganizations({
-						headers: context.request.headers,
-					});
-					if (!orgs || orgs.length === 0) {
+					const hasOrganizations = await userHasOrganizations(
+						getDb(),
+						(user as any).id as string,
+					);
+					if (!hasOrganizations) {
 						// Check if user has pending invitations
 						try {
 							const db = getDb();

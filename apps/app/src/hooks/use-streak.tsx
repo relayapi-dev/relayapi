@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import { useRealtimeUpdates } from "./use-post-updates";
+import { scheduleAfterPaint, scheduleIdleTask } from "@/lib/idle";
 
 export interface StreakData {
   active: boolean;
@@ -25,53 +25,91 @@ const StreakContext = createContext<StreakContextValue>({
   refetch: () => {},
 });
 
+const STREAK_CACHE_KEY = "relayapi:streak:v1";
+const STREAK_CACHE_TTL_MS = 60_000;
+
+function readStreakCache(): StreakData | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(STREAK_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { timestamp: number; data: StreakData };
+    if (!parsed?.timestamp || Date.now() - parsed.timestamp > STREAK_CACHE_TTL_MS) {
+      window.sessionStorage.removeItem(STREAK_CACHE_KEY);
+      return null;
+    }
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeStreakCache(data: StreakData) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(
+      STREAK_CACHE_KEY,
+      JSON.stringify({ timestamp: Date.now(), data }),
+    );
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 export function StreakProvider({ children }: { children: React.ReactNode }) {
   const [streak, setStreak] = useState<StreakData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const fetchedRef = useRef(false);
 
-  const fetchStreak = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const fetchStreak = useCallback(async (options?: { background?: boolean }) => {
+    const background = options?.background ?? false;
+    if (!background) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const res = await fetch("/api/streak", { signal: AbortSignal.timeout(15_000) });
       if (res.ok) {
         const data = await res.json();
         setStreak(data);
+        writeStreakCache(data);
       } else {
         const err = await res.json().catch(() => null);
-        setError(err?.error?.message || `Error ${res.status}`);
+        if (!background) {
+          setError(err?.error?.message || `Error ${res.status}`);
+        }
       }
     } catch {
-      setError("Network connection lost.");
+      if (!background) {
+        setError("Network connection lost.");
+      }
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (!fetchedRef.current) {
       fetchedRef.current = true;
-      fetchStreak();
+      const cached = readStreakCache();
+      if (cached) {
+        setStreak(cached);
+        setLoading(false);
+        return scheduleIdleTask(() => {
+          void fetchStreak({ background: true });
+        }, 2000);
+      }
+
+      return scheduleAfterPaint(() => {
+        void fetchStreak();
+      }, 250);
     }
   }, [fetchStreak]);
-
-  // Listen for real-time streak events and refetch
-  useRealtimeUpdates(
-    useCallback(
-      (event) => {
-        if (
-          event.type === "streak.updated" ||
-          event.type === "streak.milestone" ||
-          event.type === "streak.broken"
-        ) {
-          fetchStreak();
-        }
-      },
-      [fetchStreak],
-    ),
-  );
 
   return (
     <StreakContext.Provider value={{ streak, loading, error, refetch: fetchStreak }}>

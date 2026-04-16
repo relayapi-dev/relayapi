@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { Key, Loader2, ShieldAlert, WifiOff } from "lucide-react";
+import { Key, Loader2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useUsage } from "@/hooks/use-usage";
+import { useDashboardApiKeyStatus } from "@/hooks/use-dashboard-api-key-status";
 import { useUser } from "./user-context";
 
 function BootstrapKeyBanner() {
@@ -61,28 +61,6 @@ function BootstrapKeyBanner() {
 	);
 }
 
-function ApiUnreachableBanner() {
-	const { refetch } = useUsage();
-
-	return (
-		<div className="flex items-center justify-center py-20">
-			<div className="max-w-sm text-center">
-				<div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-destructive/10">
-					<WifiOff className="size-6 text-destructive" />
-				</div>
-				<h2 className="text-lg font-medium">API server unreachable</h2>
-				<p className="mt-2 text-sm text-muted-foreground">
-					Cannot connect to the API server. Make sure it is running and try
-					again.
-				</p>
-				<Button variant="outline" className="mt-4" onClick={refetch}>
-					Retry
-				</Button>
-			</div>
-		</div>
-	);
-}
-
 function AccessDenied() {
 	return (
 		<div className="flex items-center justify-center py-20">
@@ -109,7 +87,7 @@ export function DashboardPageGuard({
 	requiresApiKey?: boolean;
 }) {
 	const user = useUser();
-	const { loading, error } = useUsage();
+	const { hasApiKey, loading } = useDashboardApiKeyStatus(requiresApiKey);
 
 	if (adminOnly && user?.role !== "admin") {
 		return <AccessDenied />;
@@ -119,22 +97,8 @@ export function DashboardPageGuard({
 		return <>{children}</>;
 	}
 
-	if (!loading && error) {
-		if (
-			error.includes("No dashboard API key") ||
-			error.includes("NO_API_KEY") ||
-			error.includes("Invalid API key")
-		) {
-			return <BootstrapKeyBanner />;
-		}
-
-		if (
-			error.includes("API server") ||
-			error.includes("NETWORK_ERROR") ||
-			error.includes("Network connection")
-		) {
-			return <ApiUnreachableBanner />;
-		}
+	if (!loading && hasApiKey === false) {
+		return <BootstrapKeyBanner />;
 	}
 
 	return <>{children}</>;

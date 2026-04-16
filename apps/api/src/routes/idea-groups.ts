@@ -320,10 +320,29 @@ app.openapi(deleteIdeaGroup, async (c) => {
 
 	// Move all ideas in this group to the default group
 	const defaultGroupId = await ensureDefaultGroup(db, orgId, existing.workspaceId);
-	await db
-		.update(ideas)
-		.set({ groupId: defaultGroupId, updatedAt: new Date() })
-		.where(eq(ideas.groupId, id));
+	const [positionResult] = await db
+		.select({ maxPos: max(ideas.position) })
+		.from(ideas)
+		.where(eq(ideas.groupId, defaultGroupId));
+
+	const ideasToMove = await db
+		.select({ id: ideas.id })
+		.from(ideas)
+		.where(eq(ideas.groupId, id))
+		.orderBy(asc(ideas.position));
+
+	await Promise.all(
+		ideasToMove.map((idea, index) =>
+			db
+				.update(ideas)
+				.set({
+					groupId: defaultGroupId,
+					position: (positionResult?.maxPos ?? -1) + index + 1,
+					updatedAt: new Date(),
+				})
+				.where(eq(ideas.id, idea.id)),
+		),
+	);
 
 	await db.delete(ideaGroups).where(eq(ideaGroups.id, id));
 

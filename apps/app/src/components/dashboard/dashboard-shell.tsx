@@ -2,7 +2,8 @@ import { useState, type ReactNode } from "react";
 import { Menu } from "lucide-react";
 import { StreakProvider } from "@/hooks/use-streak";
 import { UsageProvider } from "@/hooks/use-usage";
-import { authClient, useSession } from "@/lib/auth-client";
+import { authClient } from "@/lib/auth-client";
+import { prefetchDashboardPage } from "@/lib/dashboard-prefetch";
 import type { AppOrganization, AppUser } from "@/types/dashboard";
 import { FeedbackWidget } from "./feedback-widget";
 import { FilterProvider } from "./filter-context";
@@ -18,6 +19,7 @@ export function DashboardShell({
 	children,
 	currentPage,
 	initialAccountId = null,
+	isImpersonating = false,
 	initialWorkspaceId = null,
 	organization,
 	requiresApiKey = true,
@@ -28,13 +30,24 @@ export function DashboardShell({
 	currentPage: string;
 	initialAccountId?: string | null;
 	initialWorkspaceId?: string | null;
+	isImpersonating?: boolean;
 	organization?: AppOrganization | null;
 	requiresApiKey?: boolean;
 	user?: AppUser | null;
 }) {
 	const [sidebarOpen, setSidebarOpen] = useState(false);
-	const { data: session } = useSession();
-	const isImpersonating = !!(session?.session as any)?.impersonatedBy;
+
+	const buildPageUrl = (page: string) => {
+		const prevParams = new URLSearchParams(window.location.search);
+		const nextParams = new URLSearchParams();
+		for (const key of ["workspace", "account"]) {
+			const value = prevParams.get(key);
+			if (value) nextParams.set(key, value);
+		}
+
+		const nextPath = `/app/${page}`;
+		return `${nextPath}${nextParams.toString() ? `?${nextParams}` : ""}`;
+	};
 
 	const navigate = (page: string) => {
 		setSidebarOpen(false);
@@ -43,15 +56,12 @@ export function DashboardShell({
 		const nextPath = `/app/${page}`;
 		if (currentPath === nextPath) return;
 
-		const prevParams = new URLSearchParams(window.location.search);
-		const nextParams = new URLSearchParams();
-		for (const key of ["workspace", "account"]) {
-			const value = prevParams.get(key);
-			if (value) nextParams.set(key, value);
-		}
+		window.location.assign(buildPageUrl(page));
+	};
 
-		const nextUrl = `${nextPath}${nextParams.toString() ? `?${nextParams}` : ""}`;
-		window.location.assign(nextUrl);
+	const prefetchPage = (page: string) => {
+		if (window.location.pathname.replace(/\/$/, "") === `/app/${page}`) return;
+		prefetchDashboardPage(page, buildPageUrl(page));
 	};
 
 	const handleStopImpersonating = async () => {
@@ -71,9 +81,10 @@ export function DashboardShell({
 							{isImpersonating && (
 								<div className="flex items-center justify-center gap-3 bg-amber-500 px-4 py-1.5 text-xs font-medium text-black">
 									<span>
-										Impersonating {session?.user?.name || session?.user?.email}
+										Impersonating {user?.name || user?.email}
 									</span>
 									<button
+										type="button"
 										onClick={handleStopImpersonating}
 										className="rounded bg-black/20 px-2 py-0.5 text-[11px] font-medium transition-colors hover:bg-black/30"
 									>
@@ -93,6 +104,7 @@ export function DashboardShell({
 								<Sidebar
 									currentPage={currentPage}
 									onNavigate={navigate}
+									onPrefetch={prefetchPage}
 									isOpen={sidebarOpen}
 									onClose={() => setSidebarOpen(false)}
 									user={user}

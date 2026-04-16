@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import { AnimatePresence, motion } from "motion/react";
 import {
 	PenSquare,
@@ -44,6 +43,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { organization as orgClient, signOut } from "@/lib/auth-client";
+import { scheduleIdleTask } from "@/lib/idle";
 import type { LucideIcon } from "lucide-react";
 import {
 	type AppOrganization,
@@ -153,6 +153,7 @@ const upwardDropdownVariants = {
 interface SidebarProps {
 	currentPage: string;
 	onNavigate: (page: string) => void;
+	onPrefetch?: (page: string) => void;
 	isOpen: boolean;
 	onClose: () => void;
 	user?: AppUser | null;
@@ -169,6 +170,7 @@ interface OrgListItem {
 export function Sidebar({
 	currentPage,
 	onNavigate,
+	onPrefetch,
 	isOpen,
 	onClose,
 	user,
@@ -316,18 +318,15 @@ export function Sidebar({
 
 	// Fetch initial unread count on mount
 	useEffect(() => {
-		fetch("/api/notifications/unread-count")
-			.then((r) => r.ok ? r.json() : null)
-			.then((data) => { if (data?.count != null) setNotifCount(data.count); })
-			.catch(() => {});
+		return scheduleIdleTask(() => {
+			fetch("/api/notifications/unread-count")
+				.then((r) => (r.ok ? r.json() : null))
+				.then((data) => {
+					if (data?.count != null) setNotifCount(data.count);
+				})
+				.catch(() => {});
+		}, 1500);
 	}, []);
-
-	// Increment badge instantly when a new notification arrives via WebSocket
-	useRealtimeUpdates(useCallback((event) => {
-		if (event.type === "notification.created") {
-			setNotifCount((c) => c + 1);
-		}
-	}, []));
 
 	// --- User menu ---
 	const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -372,6 +371,15 @@ export function Sidebar({
 		window.location.href = "/login";
 	};
 
+	const prefetchItem = (item: NavItem) => {
+		if (!onPrefetch) return;
+		if (item.children?.[0]) {
+			onPrefetch(item.children[0].href);
+			return;
+		}
+		onPrefetch(item.href);
+	};
+
 	// --- Render helpers ---
 
 	const renderFlatItem = (item: NavItem) => {
@@ -380,6 +388,8 @@ export function Sidebar({
 			<button
 				key={item.href}
 				onClick={() => onNavigate(item.href)}
+				onMouseEnter={() => onPrefetch?.(item.href)}
+				onFocus={() => onPrefetch?.(item.href)}
 				className={cn(
 					"flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] transition-colors",
 					isActive
@@ -401,6 +411,8 @@ export function Sidebar({
 			<div key={item.label}>
 				<button
 					onClick={() => toggleExpand(item)}
+					onMouseEnter={() => prefetchItem(item)}
+					onFocus={() => prefetchItem(item)}
 					className={cn(
 						"flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] transition-colors",
 						hasActiveChild
@@ -440,6 +452,8 @@ export function Sidebar({
 										<button
 											key={child.href}
 											onClick={() => onNavigate(child.href)}
+											onMouseEnter={() => onPrefetch?.(child.href)}
+											onFocus={() => onPrefetch?.(child.href)}
 											className={cn(
 												"flex w-full items-center gap-2 rounded-md px-2 py-1 text-[12.5px] transition-colors",
 												isActive

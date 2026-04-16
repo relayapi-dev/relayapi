@@ -7,6 +7,7 @@ export interface DashboardRouteAppProps<PageProps extends object> {
 	adminOnly?: boolean;
 	currentPage: string;
 	initialAccountId?: string | null;
+	isImpersonating?: boolean;
 	initialWorkspaceId?: string | null;
 	organization?: AppOrganization | null;
 	pageProps?: PageProps;
@@ -21,6 +22,7 @@ export function createDashboardRouteApp<PageProps extends object>(
 		adminOnly = false,
 		currentPage,
 		initialAccountId = null,
+		isImpersonating = false,
 		initialWorkspaceId = null,
 		organization = null,
 		pageProps,
@@ -32,6 +34,7 @@ export function createDashboardRouteApp<PageProps extends object>(
 				currentPage={currentPage}
 				user={user}
 				organization={organization}
+				isImpersonating={isImpersonating}
 				requiresApiKey={requiresApiKey}
 				adminOnly={adminOnly}
 				initialWorkspaceId={initialWorkspaceId}
@@ -66,6 +69,7 @@ export function createLazyDashboardRouteApp<PageProps extends object>(
 		adminOnly = false,
 		currentPage,
 		initialAccountId = null,
+		isImpersonating = false,
 		initialWorkspaceId = null,
 		organization = null,
 		pageProps,
@@ -77,6 +81,7 @@ export function createLazyDashboardRouteApp<PageProps extends object>(
 				currentPage={currentPage}
 				user={user}
 				organization={organization}
+				isImpersonating={isImpersonating}
 				requiresApiKey={requiresApiKey}
 				adminOnly={adminOnly}
 				initialWorkspaceId={initialWorkspaceId}

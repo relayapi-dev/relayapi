@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import { scheduleAfterPaint, scheduleIdleTask } from "@/lib/idle";
 
 interface UsageData {
   plan: "free" | "pro";
@@ -96,10 +97,14 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
       if (cached) {
         setUsage(cached);
         setLoading(false);
-        void fetchUsage({ background: true });
-        return;
+        return scheduleIdleTask(() => {
+          void fetchUsage({ background: true });
+        }, 1500);
       }
-      void fetchUsage();
+
+      return scheduleAfterPaint(() => {
+        void fetchUsage();
+      });
     }
   }, [fetchUsage]);
 
