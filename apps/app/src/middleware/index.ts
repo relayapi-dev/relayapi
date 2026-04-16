@@ -294,9 +294,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		dbMs: null,
 		cacheHit: false,
 	};
-	const runtime = (context.locals as { runtime?: { ctx?: { waitUntil?: WaitUntil } } })
-		.runtime;
-	const waitUntil = runtime?.ctx?.waitUntil?.bind(runtime.ctx);
+	const cfContext = (
+		context.locals as { cfContext?: { waitUntil?: WaitUntil } }
+	).cfContext;
+	const waitUntil = cfContext?.waitUntil?.bind(cfContext);
 	let authHeaders: Headers | null = null;
 	let user: AuthUser | null = null;
 	let session: AuthSessionRecord | null = null;
