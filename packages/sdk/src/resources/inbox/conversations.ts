@@ -35,6 +35,19 @@ export class Conversations extends APIResource {
   }
 
   /**
+   * Mark one or more conversations as read
+   */
+  markRead(
+    body: ConversationMarkReadParams,
+    options?: RequestOptions,
+  ): APIPromise<ConversationMarkReadResponse> {
+    return this._client.post('/v1/inbox/bulk', {
+      body: { action: 'mark_read', targets: body.targets },
+      ...options,
+    });
+  }
+
+  /**
    * Send a message in a conversation
    */
   sendMessage(
@@ -371,6 +384,14 @@ export interface MessageActionResponse {
   message_id?: string;
 }
 
+export interface ConversationMarkReadResponse {
+  errors: string[];
+
+  failed: number;
+
+  processed: number;
+}
+
 export interface ConversationListParams {
   /**
    * Filter by account ID
@@ -440,6 +461,10 @@ export interface ConversationUpdateParams {
    * Conversation priority
    */
   priority?: 'low' | 'normal' | 'high' | 'urgent';
+}
+
+export interface ConversationMarkReadParams {
+  targets: string[];
 }
 
 export interface MessageSendParams {
@@ -628,10 +653,12 @@ export declare namespace Conversations {
     type ConversationGetResponse as ConversationGetResponse,
     type ConversationListResponse as ConversationListResponse,
     type ConversationUpdateResponse as ConversationUpdateResponse,
+    type ConversationMarkReadResponse as ConversationMarkReadResponse,
     type MessageSendResponse as MessageSendResponse,
     type MessageActionResponse as MessageActionResponse,
     type ConversationListParams as ConversationListParams,
     type ConversationUpdateParams as ConversationUpdateParams,
+    type ConversationMarkReadParams as ConversationMarkReadParams,
     type MessageSendParams as MessageSendParams,
     type MessageSendTypingParams as MessageSendTypingParams,
     type MessageAddReactionParams as MessageAddReactionParams,

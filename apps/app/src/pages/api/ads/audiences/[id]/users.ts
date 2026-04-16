@@ -6,7 +6,7 @@ export const POST: APIRoute = async (ctx) => {
   if (client instanceof Response) return client;
   try {
     const body = await ctx.request.json();
-    const data = await (client as any).post(`/v1/ads/audiences/${ctx.params.id}/users`, { body });
+    const data = await client.ads.addAudienceUsers(ctx.params.id!, body);
     return Response.json(data);
   } catch (e) {
     return handleSdkError(e);

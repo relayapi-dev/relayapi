@@ -240,7 +240,14 @@ import {
   RedditSearchResponse,
 } from './resources/reddit';
 import { Streaks, StreakRetrieveResponse } from './resources/streaks';
-import { Usage, UsageRetrieveResponse } from './resources/usage';
+import {
+  OrgSettings,
+  OrgSettingsData,
+  OrgSettingsRetrieveResponse,
+  OrgSettingsUpdateParams,
+  OrgSettingsUpdateResponse,
+} from './resources/org-settings';
+import { Usage, UsageListLogsParams, UsageListLogsResponse, UsageRetrieveResponse } from './resources/usage';
 import {
   WebhookCreateParams,
   WebhookCreateResponse,
@@ -258,6 +265,8 @@ import {
   AccountListParams,
   AccountListResponse,
   AccountRetrieveResponse,
+  AccountSyncAllParams,
+  AccountSyncAllResponse,
   AccountUpdateParams,
   AccountUpdateResponse,
   Accounts,
@@ -268,12 +277,22 @@ import {
   AnalyticsGetBestTimeResponse,
   AnalyticsGetContentDecayParams,
   AnalyticsGetContentDecayResponse,
+  AnalyticsGetPlatformAudienceParams,
+  AnalyticsGetPlatformAudienceResponse,
+  AnalyticsGetPlatformDailyParams,
+  AnalyticsGetPlatformDailyResponse,
+  AnalyticsGetPlatformOverviewParams,
+  AnalyticsGetPlatformOverviewResponse,
   AnalyticsGetPostTimelineParams,
   AnalyticsGetPostTimelineResponse,
   AnalyticsGetPostingFrequencyParams,
   AnalyticsGetPostingFrequencyResponse,
+  AnalyticsListChannelsParams,
+  AnalyticsListChannelsResponse,
   AnalyticsListDailyMetricsParams,
   AnalyticsListDailyMetricsResponse,
+  AnalyticsListPlatformPostsParams,
+  AnalyticsListPlatformPostsResponse,
   AnalyticsRetrieveParams,
   AnalyticsRetrieveResponse,
 } from './resources/analytics/analytics';
@@ -1060,6 +1079,7 @@ export class Relay {
   inviteTokens: API.InviteTokens = new API.InviteTokens(this);
   streaks: API.Streaks = new API.Streaks(this);
   usage: API.Usage = new API.Usage(this);
+  orgSettings: API.OrgSettings = new API.OrgSettings(this);
   workspaces: API.Workspaces = new API.Workspaces(this);
   connect: API.Connect = new API.Connect(this);
   connections: API.Connections = new API.Connections(this);
@@ -1291,8 +1311,10 @@ export declare namespace Relay {
     type AccountRetrieveResponse as AccountRetrieveResponse,
     type AccountUpdateResponse as AccountUpdateResponse,
     type AccountListResponse as AccountListResponse,
+    type AccountSyncAllResponse as AccountSyncAllResponse,
     type AccountUpdateParams as AccountUpdateParams,
     type AccountListParams as AccountListParams,
+    type AccountSyncAllParams as AccountSyncAllParams,
   };
 
   export {
@@ -1338,7 +1360,20 @@ export declare namespace Relay {
 
   export { Streaks as Streaks, type StreakRetrieveResponse as StreakRetrieveResponse };
 
-  export { Usage as Usage, type UsageRetrieveResponse as UsageRetrieveResponse };
+  export {
+    Usage as Usage,
+    type UsageRetrieveResponse as UsageRetrieveResponse,
+    type UsageListLogsResponse as UsageListLogsResponse,
+    type UsageListLogsParams as UsageListLogsParams,
+  };
+
+  export {
+    OrgSettings as OrgSettings,
+    type OrgSettingsData as OrgSettingsData,
+    type OrgSettingsRetrieveResponse as OrgSettingsRetrieveResponse,
+    type OrgSettingsUpdateResponse as OrgSettingsUpdateResponse,
+    type OrgSettingsUpdateParams as OrgSettingsUpdateParams,
+  };
 
   export {
     Workspaces as Workspaces,
@@ -1375,12 +1410,22 @@ export declare namespace Relay {
     type AnalyticsGetPostTimelineResponse as AnalyticsGetPostTimelineResponse,
     type AnalyticsGetPostingFrequencyResponse as AnalyticsGetPostingFrequencyResponse,
     type AnalyticsListDailyMetricsResponse as AnalyticsListDailyMetricsResponse,
+    type AnalyticsListChannelsResponse as AnalyticsListChannelsResponse,
+    type AnalyticsGetPlatformOverviewResponse as AnalyticsGetPlatformOverviewResponse,
+    type AnalyticsListPlatformPostsResponse as AnalyticsListPlatformPostsResponse,
+    type AnalyticsGetPlatformAudienceResponse as AnalyticsGetPlatformAudienceResponse,
+    type AnalyticsGetPlatformDailyResponse as AnalyticsGetPlatformDailyResponse,
     type AnalyticsRetrieveParams as AnalyticsRetrieveParams,
     type AnalyticsGetBestTimeParams as AnalyticsGetBestTimeParams,
     type AnalyticsGetContentDecayParams as AnalyticsGetContentDecayParams,
     type AnalyticsGetPostTimelineParams as AnalyticsGetPostTimelineParams,
     type AnalyticsGetPostingFrequencyParams as AnalyticsGetPostingFrequencyParams,
     type AnalyticsListDailyMetricsParams as AnalyticsListDailyMetricsParams,
+    type AnalyticsListChannelsParams as AnalyticsListChannelsParams,
+    type AnalyticsGetPlatformOverviewParams as AnalyticsGetPlatformOverviewParams,
+    type AnalyticsListPlatformPostsParams as AnalyticsListPlatformPostsParams,
+    type AnalyticsGetPlatformAudienceParams as AnalyticsGetPlatformAudienceParams,
+    type AnalyticsGetPlatformDailyParams as AnalyticsGetPlatformDailyParams,
   };
 
   export { Tools as Tools };

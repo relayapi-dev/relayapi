@@ -65,9 +65,19 @@ export interface ConnectionListLogsParams {
   cursor?: string;
 
   /**
+   * Start date (ISO 8601)
+   */
+  from?: string;
+
+  /**
    * Number of items per page
    */
   limit?: number;
+
+  /**
+   * End date (ISO 8601)
+   */
+  to?: string;
 }
 
 export declare namespace Connections {

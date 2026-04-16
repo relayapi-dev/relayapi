@@ -11,6 +11,16 @@ export class Usage extends APIResource {
   retrieve(options?: RequestOptions): APIPromise<UsageRetrieveResponse> {
     return this._client.get('/v1/usage', options);
   }
+
+  /**
+   * Returns per-request API logs for the organization, ordered by most recent first.
+   */
+  listLogs(
+    query: UsageListLogsParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<UsageListLogsResponse> {
+    return this._client.get('/v1/usage/logs', { query, ...options });
+  }
 }
 
 export interface UsageRetrieveResponse {
@@ -119,6 +129,48 @@ export namespace UsageRetrieveResponse {
   }
 }
 
+export interface UsageListLogsResponse {
+  data: Array<UsageListLogsResponse.Data>;
+
+  has_more: boolean;
+
+  next_cursor: string | null;
+
+  total: number;
+}
+
+export namespace UsageListLogsResponse {
+  export interface Data {
+    billable: boolean;
+
+    created_at: string;
+
+    id: string;
+
+    method: string;
+
+    path: string;
+
+    response_time_ms: number;
+
+    status_code: number;
+  }
+}
+
+export interface UsageListLogsParams {
+  cursor?: string;
+
+  from?: string;
+
+  limit?: number;
+
+  to?: string;
+}
+
 export declare namespace Usage {
-  export { type UsageRetrieveResponse as UsageRetrieveResponse };
+  export {
+    type UsageRetrieveResponse as UsageRetrieveResponse,
+    type UsageListLogsResponse as UsageListLogsResponse,
+    type UsageListLogsParams as UsageListLogsParams,
+  };
 }

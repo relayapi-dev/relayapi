@@ -5,7 +5,7 @@ export const GET: APIRoute = async (ctx) => {
   const client = await requireClient(ctx);
   if (client instanceof Response) return client;
   try {
-    const data = await client.get("/v1/org-settings");
+    const data = await client.orgSettings.retrieve();
     return Response.json(data);
   } catch (e) {
     return handleSdkError(e);
@@ -17,7 +17,7 @@ export const PATCH: APIRoute = async (ctx) => {
   if (client instanceof Response) return client;
   try {
     const body = await ctx.request.json();
-    const data = await client.patch("/v1/org-settings", { body });
+    const data = await client.orgSettings.update(body);
     return Response.json(data);
   } catch (e) {
     return handleSdkError(e);

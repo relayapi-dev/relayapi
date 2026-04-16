@@ -160,6 +160,16 @@ export class Accounts extends APIResource {
   }
 
   /**
+   * Force sync all connected accounts
+   */
+  syncAll(
+    query: AccountSyncAllParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<AccountSyncAllResponse> {
+    return this._client.post('/v1/accounts/sync', { query, ...options });
+  }
+
+  /**
    * Disconnect a social account
    */
   delete(id: string, options?: RequestOptions): APIPromise<void> {
@@ -334,6 +344,10 @@ export interface AccountSyncResponse {
   success: boolean;
 }
 
+export interface AccountSyncAllResponse {
+  enqueued_count: number;
+}
+
 export interface AccountUpdateParams {
   display_name?: string;
 
@@ -367,6 +381,13 @@ export interface AccountListParams {
   ungrouped?: boolean;
 }
 
+export interface AccountSyncAllParams {
+  /**
+   * Filter sync to a specific workspace
+   */
+  workspace_id?: string;
+}
+
 Accounts.Health = Health;
 Accounts.RedditFlairs = RedditFlairs;
 Accounts.FacebookPages = FacebookPages;
@@ -387,8 +408,10 @@ export declare namespace Accounts {
     type AccountUpdateResponse as AccountUpdateResponse,
     type AccountListResponse as AccountListResponse,
     type AccountSyncResponse as AccountSyncResponse,
+    type AccountSyncAllResponse as AccountSyncAllResponse,
     type AccountUpdateParams as AccountUpdateParams,
     type AccountListParams as AccountListParams,
+    type AccountSyncAllParams as AccountSyncAllParams,
   };
 
   export {

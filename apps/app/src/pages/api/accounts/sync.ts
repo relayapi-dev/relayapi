@@ -9,7 +9,7 @@ export const POST: APIRoute = async (ctx) => {
     const workspaceId = url.searchParams.get("workspace_id") ?? undefined;
     const query: Record<string, string> = {};
     if (workspaceId) query.workspace_id = workspaceId;
-    const data = await (client as any).post("/v1/accounts/sync", { query });
+    const data = await client.accounts.syncAll(query);
     return Response.json(data);
   } catch (e) {
     return handleSdkError(e);

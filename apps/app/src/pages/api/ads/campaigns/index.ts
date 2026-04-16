@@ -6,15 +6,13 @@ export const GET: APIRoute = async (ctx) => {
   if (client instanceof Response) return client;
   try {
     const url = new URL(ctx.request.url);
-    const data = await (client as any).get("/v1/ads/campaigns", {
-      query: {
-        platform: url.searchParams.get("platform") || undefined,
-        status: url.searchParams.get("status") || undefined,
-        ad_account_id: url.searchParams.get("ad_account_id") || undefined,
-        workspace_id: url.searchParams.get("workspace_id") || undefined,
-        cursor: url.searchParams.get("cursor") || undefined,
-        limit: Number(url.searchParams.get("limit")) || 20,
-      },
+    const data = await client.ads.listCampaigns({
+      platform: url.searchParams.get("platform") || undefined,
+      status: url.searchParams.get("status") || undefined,
+      ad_account_id: url.searchParams.get("ad_account_id") || undefined,
+      workspace_id: url.searchParams.get("workspace_id") || undefined,
+      cursor: url.searchParams.get("cursor") || undefined,
+      limit: Number(url.searchParams.get("limit")) || 20,
     });
     return Response.json(data);
   } catch (e) {
@@ -27,7 +25,7 @@ export const POST: APIRoute = async (ctx) => {
   if (client instanceof Response) return client;
   try {
     const body = await ctx.request.json();
-    const data = await (client as any).post("/v1/ads/campaigns", { body });
+    const data = await client.ads.createCampaign(body);
     return Response.json(data, { status: 201 });
   } catch (e) {
     return handleSdkError(e);

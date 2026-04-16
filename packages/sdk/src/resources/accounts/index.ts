@@ -6,8 +6,10 @@ export {
   type AccountUpdateResponse,
   type AccountListResponse,
   type AccountSyncResponse,
+  type AccountSyncAllResponse,
   type AccountUpdateParams,
   type AccountListParams,
+  type AccountSyncAllParams,
   type NewsletterListsResponse,
   type NewsletterTemplatesResponse,
 } from './accounts';

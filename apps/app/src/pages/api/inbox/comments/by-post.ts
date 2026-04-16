@@ -12,7 +12,7 @@ export const GET: APIRoute = async (ctx) => {
     };
     if (url.searchParams.get("account_id")) params.account_id = url.searchParams.get("account_id");
     if (url.searchParams.get("platform")) params.platform = url.searchParams.get("platform");
-    const data = await client.get("/v1/inbox/comments/by-post", { query: params });
+    const data = await client.inbox.comments.listByPost(params);
     return Response.json(data);
   } catch (e) {
     return handleSdkError(e);

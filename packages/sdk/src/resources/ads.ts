@@ -155,6 +155,8 @@ export interface AdAccountResponse {
 
 export interface AdAccountListResponse {
   data: AdAccountResponse[];
+  next_cursor: string | null;
+  has_more: boolean;
 }
 
 export interface AdCampaignResponse {
@@ -298,6 +300,9 @@ export interface AdSyncResponse {
 // ---------------------------------------------------------------------------
 
 export interface AdListAccountsParams {
+  cursor?: string;
+  limit?: number;
+  q?: string;
   social_account_id?: string;
   workspace_id?: string;
 }
@@ -391,8 +396,8 @@ export interface AdGetAnalyticsParams {
 }
 
 export interface AdSearchInterestsParams {
-  q: string;
-  social_account_id: string;
+  q?: string;
+  social_account_id?: string;
 }
 
 export interface AdCreateAudienceParams {
@@ -410,7 +415,7 @@ export interface AdCreateAudienceParams {
 }
 
 export interface AdListAudiencesParams {
-  ad_account_id: string;
+  ad_account_id?: string;
   cursor?: string;
   limit?: number;
 }

@@ -16,8 +16,7 @@ export const GET: APIRoute = async (ctx) => {
     const to = url.searchParams.get("to");
     if (to) query.to = to;
 
-    // SDK doesn't have listLogs yet (auto-generated), use raw client GET
-    const data = await (client as any).get("/v1/usage/logs", { query });
+    const data = await client.usage.listLogs(query);
     return Response.json(data);
   } catch (e) {
     return handleSdkError(e);

@@ -35,6 +35,16 @@ export class Comments extends APIResource {
   }
 
   /**
+   * List posts with comment counts
+   */
+  listByPost(
+    query: CommentListByPostParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<CommentListByPostResponse> {
+    return this._client.get('/v1/inbox/comments/by-post', { query, ...options });
+  }
+
+  /**
    * Delete a comment
    */
   delete(commentID: string, options?: RequestOptions): APIPromise<CommentDeleteResponse> {
@@ -289,6 +299,53 @@ export namespace CommentListResponse {
   }
 }
 
+export interface CommentListByPostResponse {
+  data: Array<CommentListByPostResponse.Data>;
+
+  has_more?: boolean;
+
+  next_cursor?: string | null;
+}
+
+export namespace CommentListByPostResponse {
+  export interface Data {
+    account_avatar_url?: string | null;
+
+    account_id: string;
+
+    comments_count: number;
+
+    created_at: string;
+
+    id: string;
+
+    platform:
+      | 'twitter'
+      | 'instagram'
+      | 'facebook'
+      | 'linkedin'
+      | 'tiktok'
+      | 'youtube'
+      | 'pinterest'
+      | 'reddit'
+      | 'bluesky'
+      | 'threads'
+      | 'telegram'
+      | 'snapchat'
+      | 'googlebusiness'
+      | 'whatsapp'
+      | 'mastodon'
+      | 'discord'
+      | 'sms';
+
+    platform_url: string | null;
+
+    text: string | null;
+
+    thumbnail_url: string | null;
+  }
+}
+
 export interface CommentDeleteResponse {
   /**
    * Whether the action succeeded
@@ -403,6 +460,8 @@ export interface CommentListParams {
     | 'sms';
 }
 
+export interface CommentListByPostParams extends CommentListParams {}
+
 export interface CommentPrivateReplyParams {
   /**
    * Account ID to reply from
@@ -439,11 +498,13 @@ export declare namespace Comments {
   export {
     type CommentRetrieveResponse as CommentRetrieveResponse,
     type CommentListResponse as CommentListResponse,
+    type CommentListByPostResponse as CommentListByPostResponse,
     type CommentDeleteResponse as CommentDeleteResponse,
     type CommentPrivateReplyResponse as CommentPrivateReplyResponse,
     type CommentReplyResponse as CommentReplyResponse,
     type CommentRetrieveParams as CommentRetrieveParams,
     type CommentListParams as CommentListParams,
+    type CommentListByPostParams as CommentListByPostParams,
     type CommentPrivateReplyParams as CommentPrivateReplyParams,
     type CommentReplyParams as CommentReplyParams,
   };

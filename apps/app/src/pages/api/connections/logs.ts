@@ -16,7 +16,7 @@ export const GET: APIRoute = async (ctx) => {
     const to = url.searchParams.get("to");
     if (to) query.to = to;
 
-    const data = await (client as any).get("/v1/connections/logs", { query });
+    const data = await client.connections.listLogs(query);
     return Response.json(data);
   } catch (e) {
     return handleSdkError(e);

@@ -68,8 +68,10 @@ export {
   type AccountUpdateResponse,
   type AccountListResponse,
   type AccountSyncResponse,
+  type AccountSyncAllResponse,
   type AccountUpdateParams,
   type AccountListParams,
+  type AccountSyncAllParams,
 } from './accounts/accounts';
 export {
   Analytics,
@@ -79,12 +81,22 @@ export {
   type AnalyticsGetPostTimelineResponse,
   type AnalyticsGetPostingFrequencyResponse,
   type AnalyticsListDailyMetricsResponse,
+  type AnalyticsListChannelsResponse,
+  type AnalyticsGetPlatformOverviewResponse,
+  type AnalyticsListPlatformPostsResponse,
+  type AnalyticsGetPlatformAudienceResponse,
+  type AnalyticsGetPlatformDailyResponse,
   type AnalyticsRetrieveParams,
   type AnalyticsGetBestTimeParams,
   type AnalyticsGetContentDecayParams,
   type AnalyticsGetPostTimelineParams,
   type AnalyticsGetPostingFrequencyParams,
   type AnalyticsListDailyMetricsParams,
+  type AnalyticsListChannelsParams,
+  type AnalyticsGetPlatformOverviewParams,
+  type AnalyticsListPlatformPostsParams,
+  type AnalyticsGetPlatformAudienceParams,
+  type AnalyticsGetPlatformDailyParams,
 } from './analytics/analytics';
 export {
   Connect,
@@ -120,6 +132,13 @@ export {
   type ContactSetFieldParams,
 } from './contacts';
 export { Connections, type ConnectionListLogsResponse, type ConnectionListLogsParams } from './connections';
+export {
+  OrgSettings,
+  type OrgSettingsData,
+  type OrgSettingsRetrieveResponse,
+  type OrgSettingsUpdateResponse,
+  type OrgSettingsUpdateParams,
+} from './org-settings';
 export {
   ContentTemplates,
   type ContentTemplateCreateResponse,
@@ -183,7 +202,12 @@ export {
 export { Tools } from './tools/tools';
 export { Twitter } from './twitter/twitter';
 export { Streaks, type StreakRetrieveResponse } from './streaks';
-export { Usage, type UsageRetrieveResponse } from './usage';
+export {
+  Usage,
+  type UsageRetrieveResponse,
+  type UsageListLogsResponse,
+  type UsageListLogsParams,
+} from './usage';
 export {
   Broadcasts,
   type BroadcastResponse,

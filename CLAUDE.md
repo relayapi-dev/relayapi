@@ -96,6 +96,7 @@ Other prefixes (`chore:`, `docs:`, `refactor:`, etc.) are included in the next r
 ## Dashboard App Rules (`apps/app`)
 
 - **Navigation architecture is intentional**: Do **not** replace dashboard page navigations with a persistent client router, SPA router, or a single `/app` shell that swaps route content without full document navigation, unless the user explicitly asks for that architectural change.
+- **Always use the SDK for app-to-API calls**: In `apps/app`, any call to `apps/api` must go through `@relayapi/sdk`, not raw `/v1/*` calls, ad hoc `fetch` requests to the API, or custom HTTP clients. If the SDK lacks the needed endpoint, extend the SDK first, then use it from `apps/app`.
 - **Shell performance comes first**: Do **not** add server-rendered `initial*Data` payload bootstrapping for dashboard pages as a default optimization. Prefer improving shell responsiveness, reducing client bootstrap cost, and trimming middleware/auth overhead first.
 - **Internal app API auth should be minimal**: For internal Astro `/api/*` routes in `apps/app`, avoid full auth/session and full organization resolution when the route only needs minimal app-side context such as `user.id`, `session.activeOrganizationId`, or the dashboard API key lookup. The downstream API still enforces API-key authorization; app-side checks should stay minimal and route-specific.
 

@@ -6,11 +6,9 @@ export const GET: APIRoute = async (ctx) => {
   if (client instanceof Response) return client;
   try {
     const url = new URL(ctx.request.url);
-    const data = await (client as any).get("/v1/analytics/channels", {
-      query: {
-        from_date: url.searchParams.get("from_date") || undefined,
-        to_date: url.searchParams.get("to_date") || undefined,
-      },
+    const data = await client.analytics.listChannels({
+      from_date: url.searchParams.get("from_date") || undefined,
+      to_date: url.searchParams.get("to_date") || undefined,
     });
     return Response.json(data, { headers: { "Cache-Control": "private, max-age=0" } });
   } catch (e) {

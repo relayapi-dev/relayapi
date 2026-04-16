@@ -6,11 +6,9 @@ export const GET: APIRoute = async (ctx) => {
   if (client instanceof Response) return client;
   try {
     const url = new URL(ctx.request.url);
-    const data = await (client as any).get("/v1/ads/interests", {
-      query: {
-        q: url.searchParams.get("q") || undefined,
-        social_account_id: url.searchParams.get("social_account_id") || undefined,
-      },
+    const data = await client.ads.searchInterests({
+      q: url.searchParams.get("q") || undefined,
+      social_account_id: url.searchParams.get("social_account_id") || undefined,
     });
     return Response.json(data);
   } catch (e) {
