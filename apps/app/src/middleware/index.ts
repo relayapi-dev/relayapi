@@ -327,6 +327,16 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			);
 		}
 
+		const totalMs = getDashboardPerfDurationMs(startedAt);
+		const serverTiming: string[] = [`total;dur=${totalMs}`];
+		if (sessionMs != null) serverTiming.push(`session;dur=${sessionMs}`);
+		if (orgMs != null) serverTiming.push(`org;dur=${orgMs}`);
+		if (onboardingMs != null)
+			serverTiming.push(`onboarding;dur=${onboardingMs}`);
+		if (downstreamMs != null)
+			serverTiming.push(`render;dur=${downstreamMs}`);
+		response.headers.set("Server-Timing", serverTiming.join(", "));
+
 		if (debugPerf) {
 			logDashboardPerfServer("request", {
 				path,
