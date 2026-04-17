@@ -4,17 +4,17 @@
   "pages": [
     "connecting-accounts",
     "media-uploads",
-    "short-links",
     "content-templates",
     "signatures",
+    "short-links",
+    "threads",
+    "cross-post-actions",
+    "smart-scheduling",
     "auto-post-rules",
     "engagement-rules",
-    "cross-post-actions",
-    "threads",
-    "smart-scheduling",
     "posting-streaks",
-    "error-handling",
     "rate-limits",
+    "error-handling",
     "self-hosting"
   ]
 }

@@ -129,6 +129,7 @@ function PricingSlider({
                     border-radius: 50%;
                     background: transparent;
                     border: none;
+                    box-shadow: none;
                     cursor: pointer;
                     margin-top: -9px;
                 }
@@ -144,6 +145,7 @@ function PricingSlider({
                     border-radius: 50%;
                     background: transparent;
                     border: none;
+                    box-shadow: none;
                     cursor: pointer;
                 }
             ` }} />

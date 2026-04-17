@@ -2,19 +2,23 @@
   "title": "Docs",
   "root": true,
   "pages": [
-    "resources/mcp",
+    "---Getting Started---",
     "quickstart",
+    "---SDKs & Tools---",
     "sdks",
     "resources/python-sdk",
     "resources/cli",
+    "resources/mcp",
     "resources/integrations",
+    "---Guides---",
     "guides",
-    "pricing",
-    "changelog",
     "---Platforms---",
     "...platforms",
     "---API Reference---",
     "...api-reference",
-    "...resources"
+    "...resources",
+    "---More---",
+    "pricing",
+    "changelog"
   ]
 }
