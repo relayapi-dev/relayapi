@@ -9,6 +9,8 @@ import { createDb } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import type { Env } from "../../types";
 import { getNodeHandler } from "./nodes";
+import { sendInputPrompt } from "./nodes/user-input";
+import { validateInput } from "./nodes/user-input-validation";
 import type {
 	AutomationSnapshot,
 	NodeExecutionContext,
@@ -272,13 +274,19 @@ export async function advanceEnrollment(
 }
 
 /**
- * Called when inbound message arrives for a contact with a pending input-wait.
- * Advances the enrollment out of the user_input node via the "captured" edge.
+ * Called when inbound message / file arrives for a contact parked at a
+ * user_input_* node. Validates the input against the node's subtype + config:
+ *
+ *   - valid        → save to `save_to_field`, clear markers, resume via `captured`
+ *   - invalid + attempts remaining → increment `_pending_input_attempts`,
+ *     re-send `retry_prompt` (if configured), keep parked as `waiting`
+ *   - invalid + attempts exhausted → clear markers, resume via `no_match`
  */
 export async function resumeFromInput(
 	env: Env,
 	enrollmentId: string,
 	inputValue: unknown,
+	fileMeta?: { mime_type?: string; size_bytes?: number },
 ): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const enrollment = await db.query.automationEnrollments.findFirst({
@@ -288,19 +296,117 @@ export async function resumeFromInput(
 
 	const state = (enrollment.state as Record<string, unknown>) ?? {};
 	const fieldKey = state._pending_input_field as string | undefined;
-	if (fieldKey) {
-		state[fieldKey] = inputValue;
+	const nodeType = state._pending_input_node_type as string | undefined;
+	const attemptsSoFar =
+		(state._pending_input_attempts as number | undefined) ?? 0;
+
+	// Load the snapshot so we can look up the node's config for validation
+	// and re-send the retry_prompt on invalid attempts.
+	const snapshot = await loadSnapshot(
+		db,
+		enrollment.automationId,
+		enrollment.automationVersion,
+	);
+	const nodeId = enrollment.currentNodeId;
+	const node = snapshot?.nodes.find((n) => n.id === nodeId);
+
+	// If we can't locate the node (snapshot drift) or the type isn't a
+	// user_input_* (upgrade path), fall back to the old behavior: save + resume.
+	if (!node || !nodeType || !nodeType.startsWith("user_input_")) {
+		if (fieldKey) state[fieldKey] = inputValue;
+		delete state._pending_input_field;
+		delete state._pending_input_node_key;
+		delete state._pending_input_node_type;
+		delete state._pending_input_timeout_at;
+		delete state._pending_input_channel;
+		delete state._pending_input_conversation_id;
+		delete state._pending_input_attempts;
+		await db
+			.update(automationEnrollments)
+			.set({ status: "active", state, updatedAt: new Date() })
+			.where(eq(automationEnrollments.id, enrollmentId));
+		await advanceEnrollment(env, enrollmentId, { resumeLabel: "captured" });
+		return;
 	}
+
+	const verdict = validateInput(
+		nodeType,
+		node.config,
+		inputValue,
+		attemptsSoFar,
+		fileMeta,
+	);
+
+	if (verdict.kind === "ok") {
+		if (fieldKey) state[fieldKey] = verdict.value;
+		delete state._pending_input_field;
+		delete state._pending_input_node_key;
+		delete state._pending_input_node_type;
+		delete state._pending_input_timeout_at;
+		delete state._pending_input_channel;
+		delete state._pending_input_conversation_id;
+		delete state._pending_input_attempts;
+		await db
+			.update(automationEnrollments)
+			.set({ status: "active", state, updatedAt: new Date() })
+			.where(eq(automationEnrollments.id, enrollmentId));
+		await advanceEnrollment(env, enrollmentId, { resumeLabel: "captured" });
+		return;
+	}
+
+	if (verdict.kind === "retry") {
+		// Bump attempts and (optionally) re-send the retry prompt. Keep the
+		// enrollment parked in `waiting` with markers intact so the next
+		// inbound message comes back through here.
+		state._pending_input_attempts = attemptsSoFar + 1;
+		state._last_input_validation_reason = verdict.reason;
+
+		const retryPrompt = node.config.retry_prompt as string | undefined;
+		if (retryPrompt) {
+			await sendInputPrompt(
+				{
+					env,
+					db,
+					snapshot: snapshot as AutomationSnapshot,
+					enrollment: {
+						id: enrollment.id,
+						organization_id: enrollment.organizationId,
+						automation_id: enrollment.automationId,
+						automation_version: enrollment.automationVersion,
+						contact_id: enrollment.contactId,
+						conversation_id: enrollment.conversationId,
+						current_node_id: enrollment.currentNodeId,
+						state,
+					},
+				},
+				retryPrompt,
+			);
+		}
+
+		await db
+			.update(automationEnrollments)
+			.set({ state, updatedAt: new Date() })
+			.where(eq(automationEnrollments.id, enrollmentId));
+		// Stay in waiting status — no advance.
+		return;
+	}
+
+	// verdict.kind === "fail" — attempts exhausted. Clear markers and fall
+	// through to the `no_match` branch.
+	state._last_input_validation_reason = verdict.reason;
 	delete state._pending_input_field;
 	delete state._pending_input_node_key;
+	delete state._pending_input_node_type;
 	delete state._pending_input_timeout_at;
+	delete state._pending_input_channel;
+	delete state._pending_input_conversation_id;
+	delete state._pending_input_attempts;
 
 	await db
 		.update(automationEnrollments)
 		.set({ status: "active", state, updatedAt: new Date() })
 		.where(eq(automationEnrollments.id, enrollmentId));
-
-	await advanceEnrollment(env, enrollmentId, { resumeLabel: "captured" });
+	await advanceEnrollment(env, enrollmentId, { resumeLabel: "no_match" });
 }
 
 async function loadSnapshot(

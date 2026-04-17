@@ -120,6 +120,33 @@ export const AUTOMATION_TRIGGER_TYPES = [
 export type AutomationTriggerType = (typeof AUTOMATION_TRIGGER_TYPES)[number];
 export const AutomationTriggerTypeEnum = z.enum(AUTOMATION_TRIGGER_TYPES);
 
+/**
+ * Runtime-stubbed node types. These appear in the DB pgEnum for forward
+ * compatibility but are intentionally NOT included in:
+ *   - `AutomationNodeSpec` (the create-time discriminated union), so the API
+ *     rejects them before they reach a published graph.
+ *   - the `GET /v1/automations/schema` catalog, so the dashboard palette /
+ *     MCP tools / AI agents don't offer them.
+ * When a type becomes runtime-ready, remove it here and re-add its Zod member
+ * to `AutomationNodeSpec`, and remove the stub in
+ * `services/automations/nodes/index.ts`.
+ */
+export const STUBBED_NODE_TYPES: ReadonlySet<string> = new Set([
+	"ai_step",
+	"ai_agent",
+	"ai_intent_router",
+	"split_test",
+	"subflow_call",
+	"subscription_add",
+	"subscription_remove",
+	"segment_add",
+	"segment_remove",
+	"notify_admin",
+	"conversation_assign",
+	"conversation_status",
+	"webhook_out",
+]);
+
 export const AUTOMATION_NODE_TYPES = [
 	"trigger",
 	// Universal content

@@ -6,6 +6,27 @@
 
 ---
 
+## Audit 6 Response (2026-04-17)
+
+Both issues fixed:
+
+1. `user_input_file` now receives real file metadata. `NormalizedInboxEvent` carries an `attachment` field (`{id, url, filename, mime_type, size_bytes}`), WhatsApp / Telegram / Twilio MMS normalizers populate it, and `dispatchAutomationMatch` forwards the attachment + `{mime_type, size_bytes}` to `resumeFromInput()` instead of only passing `event.text`. WhatsApp webhooks don't include file size, so the size cap is skipped for WhatsApp uploads (validator returns `ok` on mime match) — documented as a known limit.
+2. Phase 4b section rewritten: code cleanup is ✅ done; only the DB migration (`db:generate && db:migrate` to drop legacy tables) is outstanding. No more contradiction with the status summary.
+
+`bun run typecheck` clean. `bun test apps/api/src/__tests__/automations.test.ts` passes 58/58 (was 56; +2 for the attachment-forwarding path).
+
+## Audit 5 Response (2026-04-17)
+
+All five issues in `docs/AUTOMATION_REWRITE_AUDIT_5.md` fixed:
+
+1. `user_input_*` now validates by subtype (email, phone, number, date, choice, file), honors `retry_prompt` / `max_attempts`, and resumes via `no_match` when attempts are exhausted. `runner.resumeFromInput()` owns the validation branching; prompt-send is extracted into a reusable `sendInputPrompt()` helper.
+2. Stubbed node types (`ai_*`, `split_test`, `subflow_call`, `subscription_*`, `segment_*`, `notify_admin`, `conversation_*`, `webhook_out`) are rejected at create time (`AutomationNodeSpec` union dropped them) and omitted from the `/schema` catalog via a new `STUBBED_NODE_TYPES` set. Docs updated to list them under "Not yet supported."
+3. Autosave / save concurrency fixed: `editVersion` is mirrored into a ref so async save callbacks read the live value, manual save no longer calls `refetchAutomation()` (which was stomping unsaved edits via the `fetched` effect), the `fetched` effect skips while `dirty` is true, and the autosave hook re-arms when a save is already in flight.
+4. Step-cap requeue path now wraps the queue send in try/catch and schedules a recovery tick via `automationScheduledTicks` if the send fails, so long loops can't get stranded on a transient queue error.
+5. This doc synced — `/simulate` endpoint marked implemented; stale "Phase 3b simulate NOT implemented" removed.
+
+`bun run typecheck` clean. `bun test apps/api/src/__tests__/automations.test.ts` passes 56/56 (was 36; added 20 for validation + retry + stubbed-rejection coverage).
+
 ## Audit Response (2026-04-17)
 
 All seven issues in `docs/AUTOMATION_REWRITE_AUDIT.md` were verified against the code and fixed.
@@ -121,18 +142,18 @@ bun run db:migrate
 
 ## Phase 4b — Legacy cleanup (new, from audit)
 
-**Status**: ☐ Not started
+**Status**: ⚠️ Code deleted — DB migration pending user action.
 
-Audit correctly noted that the legacy routes are still live. Collected here so the deletion can happen in one coordinated pass once the new stack is verified against the migrated DB.
+**Done**:
+- ✅ Routes removed: `sequences.ts`, `comment-automations.ts`, `engagement-rules.ts`, `automation.ts` (un-mounted from `index.ts`).
+- ✅ Schemas removed: `sequences.ts`, `comment-automations.ts`, `engagement-rules.ts`.
+- ✅ Services removed: `sequence-processor.ts`, `comment-automation-processor.ts`, `engagement-rule-processor.ts`, `automation-engine.ts`, `automation-executor.ts`, `automation-evaluator.ts`. `processSequenceSteps` removed from `scheduled/index.ts`.
+- ✅ SDK resources removed: `sequences.ts`, `comment-automations.ts`, `engagement-rules.ts` (and their imports in `client.ts` + `resources/index.ts`).
+- ✅ Dashboard components removed: `campaigns/sequences-*`, `comment-automation-*`, `engagement-rule-*`. Campaigns page now shows only Broadcasts + Auto-Post.
+- ✅ Astro proxies removed: `api/sequences/`, `api/comment-automations/`, `api/engagement-rules/`.
 
-**Deletes**:
-- Routes: `apps/api/src/routes/sequences.ts`, `comment-automations.ts`, `engagement-rules.ts`, `automation.ts`. Un-mount in `index.ts`.
-- Schemas: `apps/api/src/schemas/sequences.ts`, `comment-automations.ts`, `engagement-rules.ts`.
-- Services: `apps/api/src/services/sequence-processor.ts`, `comment-automation-processor.ts`, `engagement-rule-processor.ts`, `automation-engine.ts`, `automation-executor.ts`, `automation-evaluator.ts`. Remove the `processSequenceSteps` call in `scheduled/index.ts`.
-- SDK resources: `packages/sdk/src/resources/sequences.ts`, `comment-automations.ts`, `engagement-rules.ts`. Remove imports from `client.ts` and `resources/index.ts`.
-- Dashboard components: `apps/app/src/components/dashboard/campaigns/sequences-*`, `comment-automation-*`, `engagement-rule-*`. Remove campaign tabs, leave only Broadcasts + Auto-Post.
-- Astro proxies: `apps/app/src/pages/api/sequences/`, `api/comment-automations/`, `api/engagement-rules/`.
-- Finally drop the legacy tables via Drizzle migration: `sequences`, `sequence_steps`, `sequence_enrollments`, `comment_automations`, `comment_automation_logs`, `engagement_rules`, `engagement_rule_logs`, `automation_rules`, `automation_logs`.
+**Pending (user action — SSH tunnel required)**:
+- `bun run db:generate && bun run db:migrate` to drop the legacy tables: `sequences`, `sequence_steps`, `sequence_enrollments`, `comment_automations`, `comment_automation_logs`, `engagement_rules`, `engagement_rule_logs`, `automation_rules`, `automation_logs`.
 
 **Gate**: `bun run typecheck` passes; legacy URLs return 404; dashboard Campaigns page shows only Broadcasts + Auto-Post.
 

@@ -63,15 +63,22 @@ max_attempts        1–5, default 2
 timeout_minutes     optional — exit via `timeout` edge if no reply
 ```
 
-Types:
+Types and their validation rules:
 
-- `user_input_text` — with optional `min_length` / `max_length`
-- `user_input_email`
-- `user_input_phone` — with optional `country_code_hint` (ISO-2)
-- `user_input_number` — with optional `min` / `max`
-- `user_input_date` — with `format` (default `YYYY-MM-DD`)
-- `user_input_choice` — with `choices: [{label, value}]` (1–12)
-- `user_input_file` — with `accepted_mime_types`, `max_size_mb`
+- `user_input_text` — rejects empty; enforces `min_length` / `max_length` when set
+- `user_input_email` — RFC-5322-lite (`x@y.z`); normalizes to lowercase
+- `user_input_phone` — strips separators; accepts 7–15 digits (E.164-friendly)
+- `user_input_number` — parses with commas stripped; enforces `min` / `max`
+- `user_input_date` — matches `format` (supports `YYYY`, `MM`, `DD`; default `YYYY-MM-DD`); rejects unreal dates like `2026-13-40`; stores as ISO
+- `user_input_choice` — matches input against `choices[].value` first, then `choices[].label` (case-insensitive); stores the canonical `value`
+- `user_input_file` — enforces `accepted_mime_types` (exact or `image/*` wildcards) and `max_size_mb` (default 16). The captured value is a structured attachment `{id?, url?, filename?, mime_type?, size_bytes?}`. Note: WhatsApp webhooks do not include file size, so the `max_size_mb` check is effectively skipped for WhatsApp uploads — enforce size downstream if needed.
+
+### Retry loop
+
+When the input fails validation:
+
+1. If the enrollment has attempts remaining (`max_attempts` defaults to 2), the runner bumps an internal attempt counter, re-sends `retry_prompt` if configured, and keeps the enrollment parked as `waiting` — the next inbound message re-validates.
+2. If attempts are exhausted, the runner clears the pending-input markers and resumes the graph via the `no_match` edge. The last failure reason lands in state as `_last_input_validation_reason` for downstream nodes to reference.
 
 Output labels: `captured`, `no_match`, `timeout`.
 
@@ -118,10 +125,6 @@ Split traffic across N weighted branches.
 
 Output labels: one per `branches[].label`.
 
-### `split_test`
-
-Same as randomizer but with an optional `goal_field` for conversion tracking.
-
 ### `goto`
 
 Jump to another node by key. Useful for loops or re-asking.
@@ -134,58 +137,6 @@ Jump to another node by key. Useful for loops or re-asking.
 
 Terminate the enrollment early. Adds a reason to the run log.
 
-### `subflow_call`
-
-Invoke another automation as a subflow. Optionally `pass_state: true` to share captured fields with the subflow.
-
-## AI
-
-### `ai_step`
-
-One-shot LLM call. Configure model, system prompt, temperature, max tokens. Optionally capture the result to a state field.
-
-```json
-{
-  "key": "draft_reply",
-  "type": "ai_step",
-  "model": "claude-haiku-4-5",
-  "system_prompt": "Summarize the customer's message in 1 sentence",
-  "save_to_field": "_ai_summary"
-}
-```
-
-### `ai_agent`
-
-Multi-turn agent with knowledge base + persona + handoff-to-human.
-
-```json
-{
-  "key": "support_agent",
-  "type": "ai_agent",
-  "agent_id": "ai_ag_support",
-  "max_turns": 5,
-  "handoff_labels": ["complete", "handoff"]
-}
-```
-
-Output labels: `complete`, `handoff`.
-
-### `ai_intent_router`
-
-Route by detected intent. Each intent gets its own output edge.
-
-```json
-{
-  "key": "triage",
-  "type": "ai_intent_router",
-  "intents": [
-    { "label": "pricing", "description": "Customer asks about pricing or plans" },
-    { "label": "bug", "description": "Customer reports a bug or issue" },
-    { "label": "other", "description": "Everything else" }
-  ]
-}
-```
-
 ## Contact Actions
 
 Mutations on the contact record. Output label: `next`.
@@ -196,34 +147,8 @@ Mutations on the contact record. Output label: `next`.
 | `tag_remove` | Remove a tag |
 | `field_set` | Set a custom field value (`field` = slug, `value` = any JSON) |
 | `field_clear` | Clear a custom field |
-| `subscription_add` | Subscribe contact to a list (per-channel) |
-| `subscription_remove` | Unsubscribe |
-| `segment_add` | Add to a static segment |
-| `segment_remove` | Remove from a static segment |
 
 ## Ops
-
-### `notify_admin`
-
-Ping a user, team, or webhook when the contact hits this node.
-
-```json
-{
-  "key": "page_oncall",
-  "type": "notify_admin",
-  "channel": "in_app",
-  "title": "VIP customer needs review",
-  "body": "Contact {{contact.email}} reached the escalation node"
-}
-```
-
-### `conversation_assign`
-
-Route an open conversation to a specific user or team.
-
-### `conversation_status`
-
-Flip conversation state to `open | pending | resolved | closed`.
 
 ### `http_request`
 
@@ -242,9 +167,22 @@ Call an external HTTP endpoint. Optionally extract a value from the response wit
 }
 ```
 
-### `webhook_out`
+## Not yet supported
 
-Fire a RelayAPI webhook endpoint with a custom event name + payload.
+These node types are declared in the database schema for forward compatibility but are **not** currently executable — the API rejects them at create time and the `GET /v1/automations/schema` catalog omits them. Track the [rewrite plan](https://github.com/majestico/relayapi/blob/main/docs/AUTOMATION_REWRITE.md) for status.
+
+| Type | Category | Blocked on |
+| --- | --- | --- |
+| `ai_step` | AI | LLM infra |
+| `ai_agent` | AI | LLM infra + knowledge base |
+| `ai_intent_router` | AI | LLM infra |
+| `split_test` | Logic | A/B engine + goal tracking |
+| `subflow_call` | Logic | Sub-enrollment semantics |
+| `subscription_add` / `subscription_remove` | Contact Actions | Subscription list writes |
+| `segment_add` / `segment_remove` | Contact Actions | Segment membership writes |
+| `notify_admin` | Ops | Internal notifications service |
+| `conversation_assign` / `conversation_status` | Ops | Inbox conversation writes |
+| `webhook_out` | Ops | Webhook-out service |
 
 ## Platform Sends
 

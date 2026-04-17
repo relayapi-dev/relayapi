@@ -9,6 +9,7 @@ import {
 import { isWorkspaceScopeDenied } from "../lib/workspace-scope";
 import { applyQuietHours } from "../services/automations/nodes/smart-delay";
 import { messageMediaHandler } from "../services/automations/nodes/message-media";
+import { validateInput } from "../services/automations/nodes/user-input-validation";
 
 // ---------------------------------------------------------------------------
 // simulateAutomation — static graph traversal
@@ -540,5 +541,217 @@ describe("messageMediaHandler", () => {
 			},
 		});
 		expect(result.kind).toBe("fail");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// user_input validation + retry loop (Audit 5 #1)
+// ---------------------------------------------------------------------------
+
+describe("validateInput — email", () => {
+	it("accepts and lowercases a valid email", () => {
+		const v = validateInput("user_input_email", {}, "Alice@Example.com", 0);
+		expect(v.kind).toBe("ok");
+		if (v.kind === "ok") expect(v.value).toBe("alice@example.com");
+	});
+
+	it("retries on invalid email when attempts remain", () => {
+		const v = validateInput(
+			"user_input_email",
+			{ max_attempts: 3 },
+			"not-an-email",
+			0,
+		);
+		expect(v.kind).toBe("retry");
+	});
+
+	it("fails when attempts are exhausted", () => {
+		const v = validateInput(
+			"user_input_email",
+			{ max_attempts: 2 },
+			"still-not-email",
+			1,
+		);
+		expect(v.kind).toBe("fail");
+	});
+});
+
+describe("validateInput — number", () => {
+	it("parses numbers with commas and enforces min/max", () => {
+		expect(validateInput("user_input_number", { min: 0, max: 100 }, "42", 0).kind).toBe("ok");
+		// 1,000 parses to 1000 which is > max=100. With default max_attempts=2 and
+		// attemptsSoFar=0, verdict is "retry" (user gets one more try). Passing
+		// attemptsSoFar=1 exhausts attempts.
+		expect(
+			validateInput("user_input_number", { min: 0, max: 100 }, "1,000", 1).kind,
+		).toBe("fail");
+		expect(validateInput("user_input_number", {}, "abc", 1).kind).toBe("fail");
+	});
+});
+
+describe("validateInput — choice", () => {
+	const choices = [
+		{ label: "Yes", value: "yes" },
+		{ label: "No", value: "no" },
+	];
+
+	it("matches canonical value", () => {
+		const v = validateInput("user_input_choice", { choices }, "yes", 0);
+		expect(v.kind).toBe("ok");
+		if (v.kind === "ok") expect(v.value).toBe("yes");
+	});
+
+	it("matches label case-insensitively and returns the canonical value", () => {
+		const v = validateInput("user_input_choice", { choices }, "YES", 0);
+		expect(v.kind).toBe("ok");
+		if (v.kind === "ok") expect(v.value).toBe("yes");
+	});
+
+	it("retries/fails on unknown input", () => {
+		const v = validateInput(
+			"user_input_choice",
+			{ choices, max_attempts: 1 },
+			"maybe",
+			0,
+		);
+		expect(v.kind).toBe("fail");
+	});
+});
+
+describe("validateInput — date", () => {
+	it("accepts YYYY-MM-DD and returns ISO", () => {
+		const v = validateInput("user_input_date", {}, "2026-04-17", 0);
+		expect(v.kind).toBe("ok");
+		if (v.kind === "ok") expect(v.value).toBe("2026-04-17");
+	});
+
+	it("rejects impossible dates", () => {
+		expect(validateInput("user_input_date", {}, "2026-13-40", 0).kind).toBe(
+			"retry",
+		);
+	});
+
+	it("respects custom format", () => {
+		const v = validateInput(
+			"user_input_date",
+			{ format: "DD/MM/YYYY" },
+			"17/04/2026",
+			0,
+		);
+		expect(v.kind).toBe("ok");
+	});
+});
+
+describe("validateInput — file", () => {
+	it("accepts a file matching a wildcard mime type", () => {
+		const v = validateInput(
+			"user_input_file",
+			{ accepted_mime_types: ["image/*"], max_size_mb: 5 },
+			{ url: "https://example.com/a.png" },
+			0,
+			{ mime_type: "image/png", size_bytes: 1024 * 100 },
+		);
+		expect(v.kind).toBe("ok");
+	});
+
+	it("accepts a WhatsApp-style attachment (id + mime_type, no size)", () => {
+		// WhatsApp webhooks don't include size_bytes — the validator must still
+		// accept the upload and skip the size cap. This is the shape that the
+		// inbox-event-processor now forwards to resumeFromInput().
+		const v = validateInput(
+			"user_input_file",
+			{ accepted_mime_types: ["application/pdf"], max_size_mb: 16 },
+			{ id: "wa_media_123", mime_type: "application/pdf", filename: "invoice.pdf" },
+			0,
+			{ mime_type: "application/pdf" },
+		);
+		expect(v.kind).toBe("ok");
+	});
+
+	it("still rejects text when the node expects a file", () => {
+		const v = validateInput(
+			"user_input_file",
+			{ accepted_mime_types: ["image/*"] },
+			"hi there",
+			1,
+		);
+		expect(v.kind).toBe("fail");
+	});
+
+	it("rejects a file exceeding size cap", () => {
+		const v = validateInput(
+			"user_input_file",
+			{ accepted_mime_types: ["image/*"], max_size_mb: 1 },
+			{ url: "https://example.com/big.png" },
+			1,
+			{ mime_type: "image/png", size_bytes: 5 * 1024 * 1024 },
+		);
+		expect(v.kind).toBe("fail");
+	});
+
+	it("rejects a disallowed mime type", () => {
+		const v = validateInput(
+			"user_input_file",
+			{ accepted_mime_types: ["image/*"], max_size_mb: 5 },
+			{ url: "https://example.com/a.mp3" },
+			1,
+			{ mime_type: "audio/mpeg", size_bytes: 1024 },
+		);
+		expect(v.kind).toBe("fail");
+	});
+});
+
+describe("validateInput — phone", () => {
+	it("accepts E.164", () => {
+		expect(validateInput("user_input_phone", {}, "+14155551234", 0).kind).toBe(
+			"ok",
+		);
+	});
+	it("accepts with separators", () => {
+		expect(
+			validateInput("user_input_phone", {}, "(415) 555-1234", 0).kind,
+		).toBe("ok");
+	});
+	it("rejects too-short numbers", () => {
+		expect(validateInput("user_input_phone", {}, "12345", 1).kind).toBe("fail");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Stubbed node types rejected by AutomationNodeSpec (Audit 5 #2)
+// ---------------------------------------------------------------------------
+
+describe("AutomationCreateSpec — stubbed node types are rejected", () => {
+	const mkBody = (type: string) => ({
+		name: "t",
+		channel: "instagram" as const,
+		trigger: { type: "instagram_comment" },
+		nodes: [
+			{ type, key: "stub" },
+			{ type: "end", key: "e" },
+		],
+		edges: [{ from: "trigger", to: "stub" }],
+	});
+
+	it("rejects ai_step", () => {
+		expect(AutomationCreateSpec.safeParse(mkBody("ai_step")).success).toBe(false);
+	});
+
+	it("rejects split_test", () => {
+		expect(AutomationCreateSpec.safeParse(mkBody("split_test")).success).toBe(
+			false,
+		);
+	});
+
+	it("rejects webhook_out", () => {
+		expect(AutomationCreateSpec.safeParse(mkBody("webhook_out")).success).toBe(
+			false,
+		);
+	});
+
+	it("rejects notify_admin", () => {
+		expect(AutomationCreateSpec.safeParse(mkBody("notify_admin")).success).toBe(
+			false,
+		);
 	});
 });

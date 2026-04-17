@@ -33,6 +33,23 @@ interface NormalizedInboxEvent {
 	/** Conversation partner (customer) — defaults to author for inbound, set explicitly for outbound echoes */
 	participant?: { name: string; id: string };
 	text?: string;
+	/**
+	 * Structured file payload for inbound media messages (WhatsApp image/video/
+	 * document/audio, Telegram photo/document, Twilio MMS, etc.). Used by the
+	 * automation bridge to satisfy `user_input_file` waits — the validator reads
+	 * mime_type/size_bytes to enforce `accepted_mime_types` / `max_size_mb`, and
+	 * the value that lands in `state.<save_to_field>` is this attachment object.
+	 * `id` is a platform-native media reference (e.g. WhatsApp media id,
+	 * Telegram file_id). `url` is populated when the platform returns a direct
+	 * download URL (e.g. Twilio MMS `MediaUrlN`).
+	 */
+	attachment?: {
+		id?: string;
+		url?: string;
+		filename?: string;
+		mime_type?: string;
+		size_bytes?: number;
+	};
 	parent_id?: string;
 	post_id?: string;
 	conversation_id?: string;
@@ -342,7 +359,19 @@ async function dispatchAutomationMatch(
 				conversation_id: event.conversation_id ?? null,
 			});
 			if (pending) {
-				await resumeFromInput(env, pending, event.text ?? "");
+				// If the inbound event carries a structured attachment (image,
+				// document, audio), pass it as the captured value along with the
+				// {mime_type, size_bytes} meta so `user_input_file` can enforce
+				// its accepted_mime_types / max_size_mb. Text-only inputs still
+				// go through as a plain string.
+				if (event.attachment) {
+					await resumeFromInput(env, pending, event.attachment, {
+						mime_type: event.attachment.mime_type,
+						size_bytes: event.attachment.size_bytes,
+					});
+				} else {
+					await resumeFromInput(env, pending, event.text ?? "");
+				}
 				return;
 			}
 		}
@@ -683,6 +712,45 @@ function extractWhatsAppMessageText(msg: WhatsAppMessage): string | undefined {
 	}
 }
 
+/**
+ * Structured media payload for inbound WhatsApp messages. WhatsApp webhooks
+ * deliver a media `id` (fetch via `GET /{id}`) + `mime_type`; size is not
+ * surfaced by the webhook, so the `user_input_file` size cap is a no-op for
+ * WhatsApp uploads unless a downstream handler fetches the media and checks.
+ */
+function extractWhatsAppAttachment(
+	msg: WhatsAppMessage,
+): NormalizedInboxEvent["attachment"] | undefined {
+	switch (msg.type) {
+		case "image":
+			return msg.image
+				? { id: msg.image.id, mime_type: msg.image.mime_type }
+				: undefined;
+		case "video":
+			return msg.video
+				? { id: msg.video.id, mime_type: msg.video.mime_type }
+				: undefined;
+		case "document":
+			return msg.document
+				? {
+						id: msg.document.id,
+						filename: msg.document.filename,
+						mime_type: msg.document.mime_type,
+					}
+				: undefined;
+		case "audio":
+			return msg.audio
+				? { id: msg.audio.id, mime_type: msg.audio.mime_type }
+				: undefined;
+		case "sticker":
+			return msg.sticker
+				? { id: msg.sticker.id, mime_type: msg.sticker.mime_type }
+				: undefined;
+		default:
+			return undefined;
+	}
+}
+
 function normalizeWhatsAppEvent(
 	message: InboxQueueMessage,
 ): NormalizedInboxEvent[] {
@@ -705,6 +773,7 @@ function normalizeWhatsAppEvent(
 				id: msg.from,
 			},
 			text: extractWhatsAppMessageText(msg),
+			attachment: extractWhatsAppAttachment(msg),
 			conversation_id: msg.from,
 			created_at: new Date(Number(msg.timestamp) * 1000).toISOString(),
 			raw: message.payload,
@@ -770,7 +839,64 @@ interface TelegramUpdatePayload {
 		chat: { id: number; type: string };
 		date: number;
 		text?: string;
+		caption?: string;
+		photo?: Array<{ file_id: string; file_size?: number; width: number; height: number }>;
+		document?: {
+			file_id: string;
+			file_name?: string;
+			mime_type?: string;
+			file_size?: number;
+		};
+		audio?: { file_id: string; mime_type?: string; file_size?: number };
+		voice?: { file_id: string; mime_type?: string; file_size?: number };
+		video?: { file_id: string; mime_type?: string; file_size?: number };
 	};
+}
+
+function extractTelegramAttachment(
+	tgMsg: NonNullable<TelegramUpdatePayload["message"]>,
+): NormalizedInboxEvent["attachment"] | undefined {
+	// Telegram photos come as a sized array; take the largest variant.
+	if (tgMsg.photo?.length) {
+		const largest = tgMsg.photo[tgMsg.photo.length - 1];
+		if (largest) {
+			return {
+				id: largest.file_id,
+				mime_type: "image/jpeg",
+				size_bytes: largest.file_size,
+			};
+		}
+	}
+	if (tgMsg.document) {
+		return {
+			id: tgMsg.document.file_id,
+			filename: tgMsg.document.file_name,
+			mime_type: tgMsg.document.mime_type,
+			size_bytes: tgMsg.document.file_size,
+		};
+	}
+	if (tgMsg.video) {
+		return {
+			id: tgMsg.video.file_id,
+			mime_type: tgMsg.video.mime_type,
+			size_bytes: tgMsg.video.file_size,
+		};
+	}
+	if (tgMsg.audio) {
+		return {
+			id: tgMsg.audio.file_id,
+			mime_type: tgMsg.audio.mime_type,
+			size_bytes: tgMsg.audio.file_size,
+		};
+	}
+	if (tgMsg.voice) {
+		return {
+			id: tgMsg.voice.file_id,
+			mime_type: tgMsg.voice.mime_type ?? "audio/ogg",
+			size_bytes: tgMsg.voice.file_size,
+		};
+	}
+	return undefined;
 }
 
 function normalizeTelegramEvent(
@@ -796,7 +922,8 @@ function normalizeTelegramEvent(
 				name: authorName,
 				id: String(tgMsg.from.id),
 			},
-			text: tgMsg.text,
+			text: tgMsg.text ?? tgMsg.caption,
+			attachment: extractTelegramAttachment(tgMsg),
 			conversation_id: String(tgMsg.chat.id),
 			created_at: new Date(tgMsg.date * 1000).toISOString(),
 			raw: message.payload,
@@ -813,6 +940,22 @@ interface TwilioSmsPayload {
 	MessageSid: string;
 	NumMedia?: string;
 	[key: string]: string | undefined;
+}
+
+function extractTwilioMmsAttachment(
+	payload: TwilioSmsPayload,
+): NormalizedInboxEvent["attachment"] | undefined {
+	const count = Number(payload.NumMedia ?? 0);
+	if (!count) return undefined;
+	// Twilio MMS uses MediaUrl0/MediaContentType0 for the first attachment. We
+	// surface only the first — automations wanting all attachments should use
+	// platform-specific nodes.
+	const url = payload.MediaUrl0;
+	if (!url) return undefined;
+	return {
+		url,
+		mime_type: payload.MediaContentType0,
+	};
 }
 
 function normalizeSmsEvent(
@@ -834,6 +977,7 @@ function normalizeSmsEvent(
 				id: payload.From,
 			},
 			text: payload.Body,
+			attachment: extractTwilioMmsAttachment(payload),
 			conversation_id: payload.From,
 			created_at: new Date().toISOString(),
 			raw: message.payload,

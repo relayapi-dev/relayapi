@@ -19,6 +19,7 @@ import {
 	AUTOMATION_CHANNELS,
 	AUTOMATION_NODE_TYPES,
 	AUTOMATION_TRIGGER_TYPES,
+	STUBBED_NODE_TYPES,
 	AutomationCreateSpec,
 	AutomationEnrollmentResponse,
 	AutomationListResponse,
