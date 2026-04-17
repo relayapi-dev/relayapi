@@ -79,14 +79,26 @@ export function AutomationPage() {
             <BookOpen className="size-3.5" />
           </a>
         </div>
-        <Button
-          size="sm"
-          className="gap-1.5 h-7 text-xs"
-          onClick={() => setTemplateDialogOpen(true)}
-        >
-          <Plus className="size-3.5" />
-          Create Automation
-        </Button>
+        <div className="flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 h-7 text-xs"
+            onClick={() => {
+              window.location.href = "/app/automation/new";
+            }}
+          >
+            From scratch
+          </Button>
+          <Button
+            size="sm"
+            className="gap-1.5 h-7 text-xs"
+            onClick={() => setTemplateDialogOpen(true)}
+          >
+            <Plus className="size-3.5" />
+            From template
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -106,6 +118,26 @@ export function AutomationPage() {
           <p className="text-xs text-muted-foreground mt-1">
             Start from a template or build a flow from scratch
           </p>
+          <div className="flex items-center justify-center gap-2 mt-4">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 h-7 text-xs"
+              onClick={() => {
+                window.location.href = "/app/automation/new";
+              }}
+            >
+              From scratch
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1.5 h-7 text-xs"
+              onClick={() => setTemplateDialogOpen(true)}
+            >
+              <Plus className="size-3.5" />
+              From template
+            </Button>
+          </div>
         </div>
       ) : (
         <>

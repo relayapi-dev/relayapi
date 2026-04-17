@@ -22,7 +22,7 @@ Nodes are grouped by category below. `output_labels` tells you which edge labels
 
 ## Content
 
-Send a message on whatever channel the automation is configured for. `message_text` and `message_media` route through the universal `message-sender` service and work across Instagram, Facebook, WhatsApp, Telegram, Discord, Twitter, SMS, Reddit.
+Send a message on whatever channel the automation is configured for. `message_text` routes through the universal `message-sender` service and currently supports **Instagram, Facebook (Messenger), WhatsApp, Telegram, Twitter (X), and Reddit**. For other platforms (Discord, SMS, Bluesky, Threads, LinkedIn, Mastodon, YouTube, etc.), use the platform-specific send nodes listed under Platform Sends. `message_media` is platform-specific and is not yet backed by the universal sender — use the `*_send_media` node for your channel.
 
 ### `message_text`
 
@@ -275,4 +275,4 @@ These nodes are scaffolded now but implemented per-platform during Phase 8 of th
 - **Listmonk**: `listmonk_add_subscriber`, `listmonk_send_campaign`.
 - **Pinterest**: `pinterest_create_pin`.
 
-Until a given platform's send nodes are implemented, the node registry returns an error "not yet implemented (Phase 8 — per-platform rollout)". Prefer the universal `message_text` / `message_media` nodes for simple cross-channel DMs — they work today on any DM-capable channel.
+The universal `message_text` node only works on channels supported by the universal sender (**Instagram, Facebook Messenger, WhatsApp, Telegram, X/Twitter, Reddit**). For every other channel — Discord, SMS, Bluesky, Threads, LinkedIn, Mastodon, YouTube, GBP, and the newsletter destinations — use the corresponding `*_send_*` platform-specific node. Platform-specific types that aren't listed in this page or in the Phase 8 roster return a "not yet implemented" error at runtime.

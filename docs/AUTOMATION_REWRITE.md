@@ -165,7 +165,7 @@ Audit correctly noted that the legacy routes are still live. Collected here so t
 
 ## Phase 6 — Dashboard UI (plan)
 
-**Status**: ☐ Not started — spec ready to execute in a dedicated session
+**Status**: ✅ Core canvas + panels shipped (2026-04-17). List route, detail/editor route, create route, flow builder (React Flow + dagre auto-layout), node palette, property panel, simulator panel, run history panel, validation all present under `apps/app/src/components/dashboard/automation/`. Remaining: screenshot-driven docs walkthrough (Phase 5 follow-up) and UX polish passes.
 
 **Goal**: Non-technical users build + edit + monitor automations visually. Rest of the plan is a concrete file list + dependency graph a developer can execute against.
 

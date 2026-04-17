@@ -25,6 +25,8 @@ const CATEGORY_LABEL: Record<string, string> = {
 	flow: "Flow control",
 };
 
+export const PALETTE_DRAG_MIME = "application/x-relayapi-node-type";
+
 interface Props {
 	schema: AutomationSchema;
 	channel: string;
@@ -75,9 +77,15 @@ export function NodePalette({ schema, channel, onAddNode, disabled }: Props) {
 										<button
 											type="button"
 											disabled={disabled}
+											draggable={!disabled}
+											onDragStart={(e) => {
+												e.dataTransfer.setData(PALETTE_DRAG_MIME, def.type);
+												e.dataTransfer.effectAllowed = "copy";
+											}}
 											onClick={() => onAddNode(def)}
+											title={def.description ?? def.type}
 											className={cn(
-												"w-full px-3 py-1.5 text-left text-xs hover:bg-accent/30 transition-colors flex items-center gap-1.5 group",
+												"w-full px-3 py-1.5 text-left text-xs hover:bg-accent/30 transition-colors flex items-center gap-1.5 group cursor-grab active:cursor-grabbing",
 												disabled && "opacity-50 cursor-not-allowed",
 											)}
 										>

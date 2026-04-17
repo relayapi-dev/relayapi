@@ -9,6 +9,10 @@ import {
 	Save,
 	Upload,
 	Archive,
+	Undo2,
+	Redo2,
+	History,
+	FlaskConical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useApi, useMutation } from "@/hooks/use-api";
@@ -16,6 +20,14 @@ import { cn } from "@/lib/utils";
 import { FlowBuilder } from "@/components/dashboard/automation/flow-builder/flow-builder";
 import { NodePalette } from "@/components/dashboard/automation/flow-builder/node-palette";
 import { PropertyPanel } from "@/components/dashboard/automation/flow-builder/property-panel";
+import { SimulatorPanel } from "@/components/dashboard/automation/flow-builder/simulator-panel";
+import { RunHistoryPanel } from "@/components/dashboard/automation/flow-builder/run-history-panel";
+import {
+	useHistory,
+	useHistoryKeyboardShortcuts,
+	type GraphSnapshot,
+} from "@/components/dashboard/automation/flow-builder/use-history";
+import { useAutosave } from "@/components/dashboard/automation/flow-builder/use-autosave";
 import {
 	validateGraph,
 	type ValidationIssue,
@@ -60,16 +72,33 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const [draft, setDraft] = useState<AutomationDetail | null>(null);
 	const [dirty, setDirty] = useState(false);
 	const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null);
+	const [rightPanel, setRightPanel] = useState<
+		"property" | "simulator" | "history" | null
+	>(null);
+	const [highlightKeys, setHighlightKeys] = useState<Set<string>>(
+		() => new Set(),
+	);
 	const [banner, setBanner] = useState<{
 		type: "error" | "success";
 		message: string;
 	} | null>(null);
+
+	const restoreSnapshot = useCallback((snap: GraphSnapshot) => {
+		setDraft((prev) => (prev ? { ...prev, nodes: snap.nodes, edges: snap.edges } : prev));
+		setDirty(true);
+	}, []);
+
+	const history = useHistory(restoreSnapshot);
+	useHistoryKeyboardShortcuts(history.undo, history.redo);
 
 	useEffect(() => {
 		if (!fetched) return;
 		setDraft(fetched);
 		setDirty(false);
 		setSelectedNodeKey(null);
+		setHighlightKeys(new Set());
+		history.reset({ nodes: fetched.nodes, edges: fetched.edges });
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [fetched]);
 
 	const patchAutomation = useMutation<AutomationDetail>(automationPath, "PATCH");
@@ -114,8 +143,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 		(nodes: AutomationNodeSpec[], edges: AutomationEdgeSpec[]) => {
 			setDraft((prev) => (prev ? { ...prev, nodes, edges } : prev));
 			setDirty(true);
+			history.push({ nodes, edges });
 		},
-		[],
+		[history],
 	);
 
 	const addNode = useCallback(
@@ -134,14 +164,40 @@ export function AutomationDetailPage({ automationId }: Props) {
 					canvas_x: 0,
 					canvas_y: maxY + 140,
 				};
-				return {
+				const next = {
 					...prev,
 					nodes: [...prev.nodes, newNode],
 				};
+				history.push({ nodes: next.nodes, edges: next.edges });
+				return next;
 			});
 			setDirty(true);
 		},
-		[],
+		[history],
+	);
+
+	const addNodeAtPosition = useCallback(
+		(nodeType: string, position: { x: number; y: number }) => {
+			setDraft((prev) => {
+				if (!prev) return prev;
+				const existing = new Set(prev.nodes.map((n) => n.key));
+				const key = generateUniqueKey(nodeType, existing);
+				const newNode: AutomationNodeSpec = {
+					type: nodeType,
+					key,
+					canvas_x: Math.round(position.x),
+					canvas_y: Math.round(position.y),
+				};
+				const next = {
+					...prev,
+					nodes: [...prev.nodes, newNode],
+				};
+				history.push({ nodes: next.nodes, edges: next.edges });
+				return next;
+			});
+			setDirty(true);
+		},
+		[history],
 	);
 
 	const updateSelectedNode = useCallback(
@@ -159,29 +215,29 @@ export function AutomationDetailPage({ automationId }: Props) {
 						to: e.to === selectedNodeKey ? (patch.key as string) : e.to,
 					}));
 				}
+				history.push({ nodes, edges });
 				return { ...prev, nodes, edges };
 			});
 			if (patch.key) setSelectedNodeKey(patch.key as string);
 			setDirty(true);
 		},
-		[selectedNodeKey],
+		[selectedNodeKey, history],
 	);
 
 	const deleteSelectedNode = useCallback(() => {
 		if (!selectedNodeKey) return;
 		setDraft((prev) => {
 			if (!prev) return prev;
-			return {
-				...prev,
-				nodes: prev.nodes.filter((n) => n.key !== selectedNodeKey),
-				edges: prev.edges.filter(
-					(e) => e.from !== selectedNodeKey && e.to !== selectedNodeKey,
-				),
-			};
+			const nodes = prev.nodes.filter((n) => n.key !== selectedNodeKey);
+			const edges = prev.edges.filter(
+				(e) => e.from !== selectedNodeKey && e.to !== selectedNodeKey,
+			);
+			history.push({ nodes, edges });
+			return { ...prev, nodes, edges };
 		});
 		setSelectedNodeKey(null);
 		setDirty(true);
-	}, [selectedNodeKey]);
+	}, [selectedNodeKey, history]);
 
 	const saveDraft = useCallback(async () => {
 		if (!draft) return;
@@ -200,6 +256,25 @@ export function AutomationDetailPage({ automationId }: Props) {
 			setBanner({ type: "error", message: patchAutomation.error });
 		}
 	}, [draft, patchAutomation, refetchAutomation]);
+
+	const silentSave = useCallback(async () => {
+		if (!draft) return;
+		const result = await patchAutomation.mutate({
+			nodes: draft.nodes,
+			edges: draft.edges,
+			name: draft.name,
+			description: draft.description,
+		});
+		if (result) {
+			setDirty(false);
+		}
+	}, [draft, patchAutomation]);
+
+	useAutosave({
+		dirty,
+		onSave: silentSave,
+		enabled: !!draft && draft.status !== "archived",
+	});
 
 	const publishAndActivate = useCallback(async () => {
 		if (!draft) return;
@@ -334,6 +409,56 @@ export function AutomationDetailPage({ automationId }: Props) {
 							<Button
 								variant="ghost"
 								size="sm"
+								onClick={() => history.undo()}
+								disabled={!history.canUndo}
+								title="Undo (⌘Z)"
+								className="h-7 w-7 p-0"
+							>
+								<Undo2 className="size-3.5" />
+							</Button>
+							<Button
+								variant="ghost"
+								size="sm"
+								onClick={() => history.redo()}
+								disabled={!history.canRedo}
+								title="Redo (⌘⇧Z)"
+								className="h-7 w-7 p-0"
+							>
+								<Redo2 className="size-3.5" />
+							</Button>
+							<div className="w-px h-4 bg-border mx-0.5" />
+							<Button
+								variant="ghost"
+								size="sm"
+								onClick={() =>
+									setRightPanel(rightPanel === "simulator" ? null : "simulator")
+								}
+								title="Simulator"
+								className={cn(
+									"h-7 w-7 p-0",
+									rightPanel === "simulator" && "bg-accent/40",
+								)}
+							>
+								<FlaskConical className="size-3.5" />
+							</Button>
+							<Button
+								variant="ghost"
+								size="sm"
+								onClick={() =>
+									setRightPanel(rightPanel === "history" ? null : "history")
+								}
+								title="Run history"
+								className={cn(
+									"h-7 w-7 p-0",
+									rightPanel === "history" && "bg-accent/40",
+								)}
+							>
+								<History className="size-3.5" />
+							</Button>
+							<div className="w-px h-4 bg-border mx-0.5" />
+							<Button
+								variant="ghost"
+								size="sm"
 								onClick={saveDraft}
 								disabled={!dirty || patchAutomation.loading}
 								className="h-7 text-xs gap-1.5"
@@ -440,20 +565,49 @@ export function AutomationDetailPage({ automationId }: Props) {
 						automation={draft}
 						schema={schema}
 						errorKeys={errorKeys}
+						highlightKeys={highlightKeys}
 						selectedNodeKey={selectedNodeKey}
-						onSelectNode={setSelectedNodeKey}
+						onSelectNode={(key) => {
+							setSelectedNodeKey(key);
+							if (key) setRightPanel("property");
+						}}
 						onGraphChange={handleGraphChange}
+						onDropNodeType={addNodeAtPosition}
 						readOnly={isArchived}
 					/>
 				</div>
-				<PropertyPanel
-					node={selectedNode}
-					nodeDef={selectedNodeDef}
-					onChange={updateSelectedNode}
-					onDelete={deleteSelectedNode}
-					onClose={() => setSelectedNodeKey(null)}
-					existingKeys={existingKeys}
-				/>
+				{rightPanel === "simulator" ? (
+					<SimulatorPanel
+						automation={draft}
+						schema={schema}
+						onClose={() => setRightPanel(null)}
+						onHighlightPath={(keys) => setHighlightKeys(new Set(keys))}
+					/>
+				) : rightPanel === "history" ? (
+					<RunHistoryPanel
+						automationId={draft.id}
+						onClose={() => setRightPanel(null)}
+						onHighlightPath={(keys) => setHighlightKeys(new Set(keys))}
+					/>
+				) : selectedNode ? (
+					<PropertyPanel
+						node={selectedNode}
+						nodeDef={selectedNodeDef}
+						onChange={updateSelectedNode}
+						onDelete={deleteSelectedNode}
+						onClose={() => {
+							setSelectedNodeKey(null);
+							setRightPanel(null);
+						}}
+						existingKeys={existingKeys}
+					/>
+				) : (
+					<div className="w-80 border-l border-border bg-card/30 flex items-center justify-center p-6">
+						<p className="text-xs text-muted-foreground text-center">
+							Select a node to edit, or open the Simulator / Run history panel.
+						</p>
+					</div>
+				)}
 			</div>
 		</div>
 	);

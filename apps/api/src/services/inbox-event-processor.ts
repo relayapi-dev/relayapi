@@ -328,10 +328,18 @@ async function dispatchAutomationMatch(
 		}
 
 		// Resume a waiting user_input flow before firing new triggers.
-		if (contactId) {
+		//
+		// Only inbound MESSAGES should satisfy a user_input wait — a comment
+		// on a post must never be captured as input to a DM flow. The waiting
+		// enrollment's recorded channel / conversation also has to match, so
+		// a message on platform B doesn't resume a flow paused on platform A
+		// for the same contact.
+		if (contactId && event.type === "message") {
 			const pending = await findWaitingEnrollment(env, {
 				organization_id: event.organization_id,
 				contact_id: contactId,
+				channel: event.platform,
+				conversation_id: event.conversation_id ?? null,
 			});
 			if (pending) {
 				await resumeFromInput(env, pending, event.text ?? "");

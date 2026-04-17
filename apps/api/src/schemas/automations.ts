@@ -1238,6 +1238,16 @@ export const LinkedinReplyToCommentNode = z.object({
 	...baseNode,
 	type: z.literal("linkedin_reply_to_comment"),
 	text: mergeTagString,
+	/**
+	 * URN of the comment being replied to. Required (may be fed from trigger
+	 * payload as `state.comment_urn`). Used both as the URL segment and as
+	 * `parentComment` in the request body.
+	 */
+	comment_urn: z.string().optional(),
+	/**
+	 * URN of the original share/ugcPost the comment lives under. LinkedIn
+	 * requires this as `object` so the reply threads correctly.
+	 */
 	share_urn: z.string().optional(),
 });
 
@@ -1760,11 +1770,26 @@ export const WelcomeDmTemplateInput = z.object({
 	welcome_message: z.string(),
 });
 
+/**
+ * Channels where the universal `message_text` send path works today. Anything
+ * else would silently fail at runtime because `message-sender.ts` doesn't know
+ * how to DM on that platform. The keyword-reply template binds its reply to
+ * `message_text`, so we gate the input channel to this list.
+ */
+export const KeywordReplyChannelEnum = z.enum([
+	"instagram",
+	"facebook",
+	"whatsapp",
+	"telegram",
+	"twitter",
+	"reddit",
+]);
+
 export const KeywordReplyTemplateInput = z.object({
 	name: z.string().min(1).max(200),
 	workspace_id: z.string().optional(),
 	account_id: z.string(),
-	channel: AutomationChannelEnum,
+	channel: KeywordReplyChannelEnum,
 	keywords: z.array(z.string()).min(1),
 	match_mode: z.enum(["contains", "exact"]).default("contains"),
 	reply_message: z.string(),

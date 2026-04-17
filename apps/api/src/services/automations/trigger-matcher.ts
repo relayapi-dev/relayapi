@@ -153,6 +153,27 @@ export async function matchAndEnroll(
 			.returning({ id: automationEnrollments.id });
 
 		if (created) {
+			// Send to the queue FIRST — if enqueue fails we roll back the
+			// enrollment row and don't touch the counter. Otherwise a transient
+			// queue error would orphan the row in `active` with no worker to
+			// advance it, while the counter wrongly reported an enrollment.
+			try {
+				await env.AUTOMATION_QUEUE.send({
+					type: "advance",
+					enrollment_id: created.id,
+				});
+			} catch (err) {
+				console.error(
+					"[trigger-matcher] AUTOMATION_QUEUE.send failed; rolling back enrollment",
+					created.id,
+					err,
+				);
+				await db
+					.delete(automationEnrollments)
+					.where(eq(automationEnrollments.id, created.id));
+				continue;
+			}
+
 			await db
 				.update(automations)
 				.set({
@@ -161,10 +182,6 @@ export async function matchAndEnroll(
 				})
 				.where(eq(automations.id, auto.id));
 
-			await env.AUTOMATION_QUEUE.send({
-				type: "advance",
-				enrollment_id: created.id,
-			});
 			enrolledIds.push(created.id);
 		}
 	}
@@ -211,22 +228,60 @@ function matchTriggerConfig(
  * For platforms with pending-input enrollments: check if an inbound message
  * should resume a waiting flow instead of spawning a new enrollment.
  * Returns the enrollment id to resume, or null if none.
+ *
+ * Scoping rules:
+ *  - must be `status=waiting` with `_pending_input_field` (not a timer wait)
+ *  - must match the inbound channel if the waiting node recorded one
+ *  - must match the conversation_id if the waiting node recorded one, so a
+ *    DM from a different channel of the same contact doesn't short-circuit
+ *    a paused DM flow
+ *  - most recently enrolled wait wins, so stale waits can't hijack new ones
  */
 export async function findWaitingEnrollment(
 	env: Env,
-	input: { organization_id: string; contact_id: string },
+	input: {
+		organization_id: string;
+		contact_id: string;
+		channel?: string;
+		conversation_id?: string | null;
+	},
 ): Promise<string | null> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const row = await db.query.automationEnrollments.findFirst({
-		where: and(
-			eq(automationEnrollments.organizationId, input.organization_id),
-			eq(automationEnrollments.contactId, input.contact_id),
-			eq(automationEnrollments.status, "waiting"),
-		),
-	});
-	if (!row) return null;
-	// Only resume if waiting on user input (not on a timer)
-	const state = (row.state as Record<string, unknown>) ?? {};
-	if (!state._pending_input_field) return null;
-	return row.id;
+	const rows = await db
+		.select()
+		.from(automationEnrollments)
+		.where(
+			and(
+				eq(automationEnrollments.organizationId, input.organization_id),
+				eq(automationEnrollments.contactId, input.contact_id),
+				eq(automationEnrollments.status, "waiting"),
+			),
+		)
+		.orderBy(desc(automationEnrollments.enrolledAt));
+
+	for (const row of rows) {
+		const state = (row.state as Record<string, unknown>) ?? {};
+		if (!state._pending_input_field) continue;
+
+		const waitingChannel = state._pending_input_channel as string | undefined;
+		if (waitingChannel && input.channel && waitingChannel !== input.channel) {
+			continue;
+		}
+
+		const waitingConvo = state._pending_input_conversation_id as
+			| string
+			| null
+			| undefined;
+		if (
+			waitingConvo !== undefined &&
+			waitingConvo !== null &&
+			input.conversation_id &&
+			waitingConvo !== input.conversation_id
+		) {
+			continue;
+		}
+
+		return row.id;
+	}
+	return null;
 }

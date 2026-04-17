@@ -281,15 +281,25 @@ export const whatsappSendContactsHandler: NodeHandler = async (ctx) => {
 	return waCall(setup, { type: "contacts", contacts: list });
 };
 
+// The inbox-event-processor stores the inbound platform_event_id as
+// `state.message_id` on the enrollment; that's the one to react to / mark
+// read. We also accept `last_inbound_message_id` for backward compat with
+// earlier drafts of these handlers.
+function inboundMessageId(ctx: Parameters<NodeHandler>[0]): string | undefined {
+	return (
+		(ctx.node.config.message_id as string | undefined) ??
+		(ctx.enrollment.state.message_id as string | undefined) ??
+		(ctx.enrollment.state.last_inbound_message_id as string | undefined)
+	);
+}
+
 export const whatsappReactHandler: NodeHandler = async (ctx) => {
 	const emoji = (ctx.node.config.emoji as string | undefined) ?? "";
-	const messageId =
-		(ctx.node.config.message_id as string | undefined) ??
-		(ctx.enrollment.state.last_inbound_message_id as string | undefined);
+	const messageId = inboundMessageId(ctx);
 	if (!messageId)
 		return {
 			kind: "fail",
-			error: "whatsapp_react needs 'message_id' (on node config or in state.last_inbound_message_id)",
+			error: "whatsapp_react needs 'message_id' (node config or trigger payload)",
 		};
 	const setup = await loadCtx(ctx);
 	if (isFailResult(setup)) return setup;
@@ -300,13 +310,11 @@ export const whatsappReactHandler: NodeHandler = async (ctx) => {
 };
 
 export const whatsappMarkReadHandler: NodeHandler = async (ctx) => {
-	const messageId =
-		(ctx.node.config.message_id as string | undefined) ??
-		(ctx.enrollment.state.last_inbound_message_id as string | undefined);
+	const messageId = inboundMessageId(ctx);
 	if (!messageId)
 		return {
 			kind: "fail",
-			error: "whatsapp_mark_read needs 'message_id' (on node config or in state.last_inbound_message_id)",
+			error: "whatsapp_mark_read needs 'message_id' (node config or trigger payload)",
 		};
 	const setup = await loadCtx(ctx);
 	if (isFailResult(setup)) return setup;

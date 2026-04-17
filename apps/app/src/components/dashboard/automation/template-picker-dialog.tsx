@@ -271,14 +271,17 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
                     ? ["instagram", "facebook", "whatsapp"]
                     : selected === "giveaway"
                       ? ["instagram", "facebook"]
-                      : [
+                      : // keyword-reply — only channels supported by the
+                        // universal message_text sender (message-sender.ts).
+                        // Discord/SMS/Bluesky/Threads/etc. are excluded
+                        // because they would silently fail at runtime.
+                        [
                           "instagram",
                           "facebook",
                           "whatsapp",
                           "telegram",
-                          "discord",
-                          "sms",
                           "twitter",
+                          "reddit",
                         ]
                 }
               />

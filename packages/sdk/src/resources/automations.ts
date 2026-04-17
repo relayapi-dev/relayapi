@@ -508,11 +508,24 @@ export interface WelcomeDmTemplateParams {
   welcome_message: string;
 }
 
+/**
+ * Channels supported by the universal `message_text` send path. The
+ * keyword-reply template is gated to this list because other channels would
+ * silently fail at runtime.
+ */
+export type KeywordReplyChannel =
+  | 'instagram'
+  | 'facebook'
+  | 'whatsapp'
+  | 'telegram'
+  | 'twitter'
+  | 'reddit';
+
 export interface KeywordReplyTemplateParams {
   name: string;
   workspace_id?: string;
   account_id: string;
-  channel: AutomationChannel;
+  channel: KeywordReplyChannel;
   keywords: string[];
   match_mode?: 'contains' | 'exact';
   reply_message: string;

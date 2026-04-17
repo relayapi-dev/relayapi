@@ -78,6 +78,10 @@ export async function advanceEnrollment(
 					updatedAt: new Date(),
 				})
 				.where(eq(automationEnrollments.id, enrollment.id));
+			await db
+				.update(automations)
+				.set({ totalCompleted: sqlIncrement(1) as never })
+				.where(eq(automations.id, enrollment.automationId));
 			return;
 		}
 		currentNodeKey = nextKey;
@@ -166,6 +170,10 @@ export async function advanceEnrollment(
 					updatedAt: new Date(),
 				})
 				.where(eq(automationEnrollments.id, enrollment.id));
+			await db
+				.update(automations)
+				.set({ totalExited: sqlIncrementExited(1) as never })
+				.where(eq(automations.id, enrollment.automationId));
 			return;
 		}
 
@@ -208,7 +216,9 @@ export async function advanceEnrollment(
 				: resolveNextNodeKey(snapshot, currentNodeKey, label ?? "next");
 
 		if (!nextKey) {
-			// Graph terminates implicitly (no outgoing edge).
+			// Graph terminates implicitly (no outgoing edge). This counts as a
+			// successful completion — increment totalCompleted just like an
+			// explicit `complete` result.
 			await db
 				.update(automationEnrollments)
 				.set({
@@ -219,6 +229,10 @@ export async function advanceEnrollment(
 					updatedAt: new Date(),
 				})
 				.where(eq(automationEnrollments.id, enrollment.id));
+			await db
+				.update(automations)
+				.set({ totalCompleted: sqlIncrement(1) as never })
+				.where(eq(automations.id, enrollment.automationId));
 			return;
 		}
 
@@ -345,9 +359,12 @@ function outcomeFromResult(result: NodeExecutionResult): string {
 	}
 }
 
-// Helper to increment a counter in an update. Drizzle doesn't have a clean `+1` helper,
-// so we use a raw SQL template for the rare counter update path.
+// Helpers to increment a counter in an update. Drizzle doesn't have a clean
+// `+1` helper, so we use raw SQL templates for the counter update paths.
 import { sql as drizzleSql } from "drizzle-orm";
 function sqlIncrement(amount: number) {
 	return drizzleSql`total_completed + ${amount}`;
+}
+function sqlIncrementExited(amount: number) {
+	return drizzleSql`total_exited + ${amount}`;
 }

@@ -69,25 +69,45 @@ function liHeaders(token: string): Record<string, string> {
 	};
 }
 
+/**
+ * Replies to an existing LinkedIn comment. LinkedIn treats a reply as a nested
+ * comment whose `parentComment` points at the parent and whose `object` points
+ * at the original share:
+ *
+ *   POST /rest/socialActions/{commentUrn}/comments
+ *   body: { actor, object, parentComment, message }
+ *
+ * A top-level comment on a share would be the older
+ *   POST /rest/socialActions/{shareUrn}/comments
+ * with only { actor, message } — that's NOT what this node does. Use the
+ * comment-level URL + both parent references so LinkedIn threads the reply
+ * correctly. See https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/network-update-social-actions
+ */
 export const linkedinReplyToCommentHandler: NodeHandler = async (ctx) => {
 	const text = ctx.node.config.text as string | undefined;
+	const commentUrn =
+		(ctx.node.config.comment_urn as string | undefined) ??
+		(ctx.enrollment.state.comment_urn as string | undefined);
 	const shareUrn =
 		(ctx.node.config.share_urn as string | undefined) ??
 		(ctx.enrollment.state.share_urn as string | undefined);
-	if (!text || !shareUrn)
+	if (!text || !commentUrn || !shareUrn)
 		return {
 			kind: "fail",
-			error: "linkedin_reply_to_comment needs text + share_urn",
+			error:
+				"linkedin_reply_to_comment needs text + comment_urn (parent) + share_urn (original post)",
 		};
 	const setup = await loadCtx(ctx);
 	if (isFailResult(setup)) return setup;
 	const res = await fetchWithTimeout(
-		`${LI_BASE}/socialActions/${encodeURIComponent(shareUrn)}/comments`,
+		`${LI_BASE}/socialActions/${encodeURIComponent(commentUrn)}/comments`,
 		{
 			method: "POST",
 			headers: liHeaders(setup.accessToken),
 			body: JSON.stringify({
 				actor: setup.memberUrn,
+				object: shareUrn,
+				parentComment: commentUrn,
 				message: { text: applyMergeTags(text, { state: setup.state }) },
 			}),
 			timeout: 10_000,

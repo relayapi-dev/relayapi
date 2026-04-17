@@ -4,6 +4,7 @@ import type { AutomationSnapshot } from "../services/automations/types";
 import {
 	AutomationCreateSpec,
 	AutomationSimulateRequest,
+	KeywordReplyTemplateInput,
 } from "../schemas/automations";
 import { isWorkspaceScopeDenied } from "../lib/workspace-scope";
 
@@ -359,5 +360,84 @@ describe("AutomationSimulateRequest — version handling", () => {
 	it("treats omitted version as undefined (so the route builds a live snapshot)", () => {
 		const parsed = AutomationSimulateRequest.parse({});
 		expect(parsed.version).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Audit 3: user_input prompt required + LinkedIn reply shape
+// ---------------------------------------------------------------------------
+
+describe("AutomationCreateSpec — Audit 3 gates", () => {
+	it("user_input_text rejects missing prompt", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "instagram",
+			trigger: { type: "instagram_dm" },
+			nodes: [
+				{
+					type: "user_input_text",
+					key: "ask",
+					save_to_field: "email",
+				},
+			],
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("user_input_text accepts a prompt + save_to_field", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "instagram",
+			trigger: { type: "instagram_dm" },
+			nodes: [
+				{
+					type: "user_input_text",
+					key: "ask",
+					prompt: "What's your email?",
+					save_to_field: "email",
+				},
+			],
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("linkedin_reply_to_comment accepts comment_urn + share_urn", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "linkedin",
+			trigger: { type: "linkedin_comment" },
+			nodes: [
+				{
+					type: "linkedin_reply_to_comment",
+					key: "reply",
+					text: "Thanks!",
+					comment_urn: "urn:li:comment:(urn:li:activity:123,456)",
+					share_urn: "urn:li:activity:123",
+				},
+			],
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("KeywordReplyTemplateInput rejects unsupported channel (sms)", () => {
+		const result = KeywordReplyTemplateInput.safeParse({
+			name: "t",
+			account_id: "acc_1",
+			channel: "sms",
+			keywords: ["HELP"],
+			reply_message: "hi",
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("KeywordReplyTemplateInput accepts supported channel (whatsapp)", () => {
+		const result = KeywordReplyTemplateInput.safeParse({
+			name: "t",
+			account_id: "acc_1",
+			channel: "whatsapp",
+			keywords: ["HELP"],
+			reply_message: "hi",
+		});
+		expect(result.success).toBe(true);
 	});
 });

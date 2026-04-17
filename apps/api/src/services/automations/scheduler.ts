@@ -7,6 +7,10 @@ import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Env } from "../../types";
 
 const BATCH_SIZE = 200;
+// A tick that's been claimed (`processing`) but never confirmed `done` or
+// flipped back to `pending` for this long is almost certainly the victim of a
+// worker dying mid-send. Reclaim on the next sweep.
+const STALE_PROCESSING_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Cron-triggered sweep: find enrollments whose delay has elapsed and re-enqueue them.
@@ -16,6 +20,24 @@ const BATCH_SIZE = 200;
 export async function processAutomationSchedule(env: Env): Promise<number> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const now = new Date();
+
+	// Reclaim ticks stuck in `processing` past the stale threshold. A tick
+	// can end up here if the worker died after claiming but before marking
+	// the tick `done` or rolling it back to `pending`. Without this sweep,
+	// those ticks would sit forever and their enrollments would never advance.
+	const staleCutoff = new Date(Date.now() - STALE_PROCESSING_MS);
+	await db
+		.update(automationScheduledTicks)
+		.set({
+			status: "pending",
+			attempts: sql`${automationScheduledTicks.attempts} + 1`,
+		})
+		.where(
+			and(
+				eq(automationScheduledTicks.status, "processing"),
+				lte(automationScheduledTicks.runAt, staleCutoff),
+			),
+		);
 
 	// Select a batch of due tick IDs first, then claim only those.
 	const dueRows = await db

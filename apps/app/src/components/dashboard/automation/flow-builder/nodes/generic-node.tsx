@@ -23,6 +23,8 @@ interface GenericNodeData {
 	category: string;
 	summary?: string;
 	hasError?: boolean;
+	highlighted?: boolean;
+	dimmed?: boolean;
 	[key: string]: unknown;
 }
 
@@ -76,9 +78,12 @@ function GenericNodeImpl({ data, selected }: NodeProps) {
 
 	return (
 		<div
-			className={`rounded-md border bg-card/90 px-3 py-2 text-xs min-w-[220px] transition-colors ${color} ${
+			className={`rounded-md border bg-card/90 px-3 py-2 text-xs min-w-[220px] transition-all ${color} ${
 				selected ? "ring-2 ring-ring ring-offset-1 ring-offset-background" : ""
-			}`}
+			} ${d.hasError ? "border-destructive/70 ring-1 ring-destructive/40" : ""} ${
+				d.highlighted ? "ring-2 ring-sky-400 shadow-lg shadow-sky-500/20" : ""
+			} ${d.dimmed ? "opacity-40" : ""}`}
+			title={d.hasError ? "This node has validation errors — check the banner above" : undefined}
 		>
 			<Handle
 				type="target"

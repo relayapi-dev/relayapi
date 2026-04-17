@@ -44,6 +44,7 @@ interface BuiltSpec {
 	}>;
 	edges: Array<{ from: string; to: string; label?: string }>;
 	status?: "draft" | "active";
+	allow_reentry?: boolean;
 }
 
 import type { z } from "@hono/zod-openapi";
@@ -63,12 +64,13 @@ async function materialize(
 			organizationId: orgId,
 			workspaceId: spec.workspace_id,
 			name: spec.name,
-			status: spec.status ?? "active",
+			status: spec.status ?? "draft",
 			channel: spec.channel as never,
 			triggerType: spec.trigger.type as never,
 			triggerConfig: spec.trigger.config,
 			triggerFilters: spec.trigger.filters,
 			socialAccountId: spec.trigger.account_id,
+			allowReentry: spec.allow_reentry ?? false,
 			createdBy,
 		})
 		.returning();
@@ -236,6 +238,8 @@ app.openapi(
 			});
 			edges.push({ from: "send_dm", to: "public_reply" });
 		}
+		// once_per_user: true (the default) → allow_reentry=false on the
+		// automation header, which the trigger-matcher already enforces.
 		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
 			name: body.name,
 			channel: "instagram",
@@ -252,7 +256,8 @@ app.openapi(
 			},
 			nodes,
 			edges,
-			status: "active",
+			status: "draft",
+			allow_reentry: !body.once_per_user,
 		});
 		return c.json(result, 201);
 	},
@@ -311,7 +316,7 @@ app.openapi(
 				},
 			],
 			edges: [{ from: "trigger", to: "welcome" }],
-			status: "active",
+			status: "draft",
 		});
 		return c.json(result, 201);
 	},
@@ -371,7 +376,7 @@ app.openapi(
 				},
 			],
 			edges: [{ from: "trigger", to: "reply" }],
-			status: "active",
+			status: "draft",
 		});
 		return c.json(result, 201);
 	},
@@ -423,7 +428,7 @@ app.openapi(
 				},
 			],
 			edges: [{ from: "trigger", to: "welcome" }],
-			status: "active",
+			status: "draft",
 		});
 		return c.json(result, 201);
 	},
@@ -475,7 +480,7 @@ app.openapi(
 				},
 			],
 			edges: [{ from: "trigger", to: "reply" }],
-			status: "active",
+			status: "draft",
 		});
 		return c.json(result, 201);
 	},
@@ -541,7 +546,7 @@ app.openapi(
 				{ from: "trigger", to: "tag_entry" },
 				{ from: "tag_entry", to: "confirm_dm" },
 			],
-			status: "active",
+			status: "draft",
 		});
 		return c.json(result, 201);
 	},
