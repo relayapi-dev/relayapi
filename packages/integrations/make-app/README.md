@@ -1,6 +1,6 @@
 # RelayAPI Make.com App
 
-Official Make.com (formerly Integromat) app for RelayAPI — post to 17+ social media platforms.
+Official Make.com (formerly Integromat) app for RelayAPI — post to 21 platforms.
 
 ## Modules
 

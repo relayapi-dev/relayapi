@@ -1,5 +1,6 @@
 import type { Env } from "../types";
 import { consumeAdsQueue } from "./ads";
+import { consumeAutomationQueue } from "./automation";
 import { consumeEmailQueue } from "./email";
 import { consumeInboxQueue } from "./inbox";
 import { consumeMediaCleanupQueue } from "./media-cleanup";
@@ -27,6 +28,8 @@ export async function handleQueueBatch(
 			return consumeAdsQueue(batch as MessageBatch<any>, env);
 		case "relayapi-sync":
 			return consumeSyncQueue(batch as MessageBatch<any>, env);
+		case "relayapi-automation":
+			return consumeAutomationQueue(batch as MessageBatch<any>, env);
 		default:
 			// Default is the publish queue (PUBLISH_QUEUE binding)
 			return consumePublishQueue(batch as MessageBatch<any>, env);

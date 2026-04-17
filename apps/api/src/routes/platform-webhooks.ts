@@ -514,7 +514,9 @@ app.post("/youtube", async (c) => {
 
 	// Verify HMAC signature if a hub secret is configured
 	// PubSubHubbub sends X-Hub-Signature: sha1=<hex> when subscribed with a hub.secret
-	if (c.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN) {
+	// Ref: https://www.w3.org/TR/websub/#x-hub-signature
+	const youtubeHubSecret = c.env.YOUTUBE_HUB_SECRET;
+	if (youtubeHubSecret) {
 		if (!signature) {
 			console.warn("[platform-webhooks] YouTube: missing X-Hub-Signature header");
 			return c.text("Missing signature", 403);
@@ -524,7 +526,7 @@ app.post("/youtube", async (c) => {
 		const encoder = new TextEncoder();
 		const key = await crypto.subtle.importKey(
 			"raw",
-			encoder.encode(c.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN),
+			encoder.encode(youtubeHubSecret),
 			{ name: "HMAC", hash: algo },
 			false,
 			["sign"],

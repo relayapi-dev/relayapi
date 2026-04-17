@@ -9,6 +9,7 @@ export interface Env {
 	TOOLS_QUEUE: Queue;
 	ADS_QUEUE: Queue;
 	SYNC_QUEUE: Queue;
+	AUTOMATION_QUEUE: Queue;
 	AI?: Ai; // Optional — Cloudflare Workers AI binding
 	REALTIME: DurableObjectNamespace;
 	FREE_RATE_LIMITER: RateLimit;
@@ -60,6 +61,7 @@ export interface Env {
 
 	// Inbound platform webhook verification
 	FACEBOOK_WEBHOOK_VERIFY_TOKEN?: string;
+	YOUTUBE_HUB_SECRET?: string;
 
 	// Base URL for OAuth callbacks (e.g. "https://api.relayapi.dev")
 	API_BASE_URL?: string;

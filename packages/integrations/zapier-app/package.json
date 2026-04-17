@@ -1,7 +1,7 @@
 {
   "name": "zapier-relayapi",
   "version": "0.1.0",
-  "description": "RelayAPI integration for Zapier — post to 17+ social media platforms",
+  "description": "RelayAPI integration for Zapier — post to 21 platforms",
   "main": "index.js",
   "scripts": {
     "build": "tsc",

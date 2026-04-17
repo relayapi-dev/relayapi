@@ -27,9 +27,9 @@ const client = new Relay({ apiKey: process.env['CLAUDE_PLUGIN_OPTION_RELAYAPI_AP
 
 Base URL: `https://api.relayapi.dev`
 
-## Supported Platforms (17)
+## Supported Platforms (21)
 
-`twitter`, `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube`, `pinterest`, `reddit`, `bluesky`, `threads`, `telegram`, `snapchat`, `googlebusiness`, `whatsapp`, `mastodon`, `discord`, `sms`
+`twitter`, `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube`, `pinterest`, `reddit`, `bluesky`, `threads`, `telegram`, `snapchat`, `googlebusiness`, `whatsapp`, `mastodon`, `discord`, `sms`, `beehiiv`, `convertkit`, `mailchimp`, `listmonk`
 
 ---
 
@@ -89,8 +89,8 @@ Targets tell RelayAPI where to publish. You can mix all three in the same reques
 **Error codes for failed targets:**
 - `NO_ACCOUNT` — no accounts for the platform
 - `ACCOUNT_NOT_FOUND` — `acc_*` ID doesn't exist
-- `WORKSPACE_NOT_FOUND` — `grp_*` ID doesn't exist
-- `EMPTY_WORKSPACE` — group has no accounts assigned
+- `WORKSPACE_NOT_FOUND` — `ws_*` ID doesn't exist
+- `EMPTY_WORKSPACE` — workspace has no accounts assigned
 - `INVALID_TARGET` — not a valid platform, account ID, or workspace ID
 
 ### Per-Platform Customization
@@ -195,12 +195,10 @@ await client.posts.retry("post_abc123");
 
 ### Unpublish
 
-Deletes from platforms, marks as cancelled:
+Deletes the post from every platform it was sent to and marks it as cancelled:
 
 ```typescript
-await client.posts.unpublish("post_abc123", {
-  platforms: ["twitter"], // omit to unpublish from all
-});
+await client.posts.unpublish("post_abc123");
 ```
 
 ### Bulk Create
@@ -221,7 +219,11 @@ const result = await client.posts.bulkCreate({
 ### Publishing Logs
 
 ```typescript
-const logs = await client.posts.listLogs({ limit: 50 });
+// Global logs across all posts
+const logs = await client.posts.logs.list({ limit: 50 });
+
+// Logs for a specific post
+const postLogs = await client.posts.logs.retrieve("post_abc123");
 ```
 
 ---
@@ -258,10 +260,12 @@ await client.accounts.delete("acc_abc123"); // disconnect
 ### Account Health
 
 ```typescript
-const health = await client.accounts.health();
+// All accounts
+const health = await client.accounts.health.list();
 // Per account: { id, platform, username, healthy, token_expires_at, error? }
 
-const single = await client.accounts.healthCheck("acc_abc123");
+// Single account
+const single = await client.accounts.health.retrieve("acc_abc123");
 ```
 
 ### Workspaces
@@ -298,22 +302,25 @@ Some platforms require selecting a specific page, org, board, or location:
 
 ```typescript
 // Facebook Pages
-const pages = await client.accounts.facebookPages("acc_abc123");
-await client.accounts.setFacebookPage("acc_abc123", { page_id: "123" });
+const pages = await client.accounts.facebookPages.retrieve("acc_abc123");
+await client.accounts.facebookPages.setDefault("acc_abc123", { page_id: "123" });
 
 // LinkedIn Organizations
-const orgs = await client.accounts.linkedinOrganizations("acc_abc123");
-await client.accounts.setLinkedinOrganization("acc_abc123", { organization_id: "456" });
+const orgs = await client.accounts.linkedinOrganizations.retrieve("acc_abc123");
+await client.accounts.linkedinOrganizations.switchType("acc_abc123", { organization_id: "456" });
 
 // Pinterest Boards
-const boards = await client.accounts.pinterestBoards("acc_abc123");
+const boards = await client.accounts.pinterestBoards.retrieve("acc_abc123");
+await client.accounts.pinterestBoards.setDefault("acc_abc123", { board_id: "456" });
 
 // Reddit Subreddits & Flairs
-const subs = await client.accounts.redditSubreddits("acc_abc123");
-const flairs = await client.accounts.redditFlairs("acc_abc123");
+const subs = await client.accounts.redditSubreddits.retrieve("acc_abc123");
+await client.accounts.redditSubreddits.setDefault("acc_abc123", { subreddit: "programming" });
+const flairs = await client.accounts.redditFlairs.retrieve("acc_abc123", { subreddit: "programming" });
 
 // Google Business Locations
-const locations = await client.accounts.gmbLocations("acc_abc123");
+const locations = await client.accounts.gmbLocations.retrieve("acc_abc123");
+await client.accounts.gmbLocations.setDefault("acc_abc123", { location_id: "456" });
 ```
 
 ---
@@ -326,11 +333,11 @@ Two-step process:
 
 ```typescript
 // Step 1: Get authorization URL
-const { auth_url } = await client.connect.start("twitter");
+const { auth_url } = await client.connect.startOAuthFlow("twitter");
 // Redirect user to auth_url
 
 // Step 2: After user authorizes, exchange the code
-const { account } = await client.connect.complete("twitter", {
+const { account } = await client.connect.completeOAuthCallback("twitter", {
   code: "auth_code_from_callback",
 });
 ```
@@ -339,21 +346,27 @@ Supported: twitter, instagram, facebook, linkedin, tiktok, youtube, pinterest, r
 
 **For platforms with sub-resources** (Facebook, LinkedIn, Pinterest, Google Business, Snapchat), a selection step follows:
 ```typescript
-const pages = await client.connect.facebookPages();
-await client.connect.selectFacebookPage({ page_id: "123" });
+const pages = await client.connect.facebook.pages.list();
+await client.connect.facebook.pages.select({ page_id: "123" });
+
+// Same pattern exists for:
+//   client.connect.linkedin.organizations.list / select
+//   client.connect.pinterest.boards.list / select
+//   client.connect.googlebusiness.locations.list / select
+//   client.connect.snapchat.profiles.list / select
 ```
 
 **Headless OAuth** (server-side):
 ```typescript
-const { auth_url } = await client.connect.start("twitter", { headless: true });
-// After callback:
-const data = await client.connect.pendingData();
+const { auth_url } = await client.connect.startOAuthFlow("twitter", { headless: true });
+// After the callback fires, fetch the pending connection data with the temp token from the callback:
+const data = await client.connect.fetchPendingData({ token: "temp_token_from_callback" });
 ```
 
 ### Bluesky (app password)
 
 ```typescript
-const { account } = await client.connect.bluesky({
+const { account } = await client.connect.createBlueskyConnection({
   handle: "user.bsky.social",
   app_password: "xxxx-xxxx-xxxx-xxxx",
 });
@@ -363,21 +376,21 @@ const { account } = await client.connect.bluesky({
 
 ```typescript
 // Initiate
-const { code, bot_username, expires_in } = await client.connect.telegram();
+const { code, bot_username, expires_in } = await client.connect.telegram.initiateConnection();
 // Tell user to message @relayapi_bot with: /start <code>
 
 // Poll status
-const status = await client.connect.telegramStatus(code);
+const status = await client.connect.telegram.pollConnectionStatus({ code });
 // status: "pending" | "connected" | "expired"
 
 // Or connect directly with chat ID
-const { account } = await client.connect.telegramDirect({ chat_id: "-100123456789" });
+const { account } = await client.connect.telegram.connectDirectly({ chat_id: "-100123456789" });
 ```
 
 ### Connection Logs
 
 ```typescript
-const logs = await client.connections.logs();
+const logs = await client.connections.listLogs();
 // Events: connected, disconnected, token_refreshed, error
 ```
 
@@ -388,7 +401,7 @@ const logs = await client.connections.logs();
 ### Post Analytics
 
 ```typescript
-const analytics = await client.analytics.get({
+const analytics = await client.analytics.retrieve({
   account_id: "acc_abc123",
   from_date: "2026-01-01",
   to_date: "2026-03-31",
@@ -399,7 +412,7 @@ const analytics = await client.analytics.get({
 ### Daily Metrics
 
 ```typescript
-const daily = await client.analytics.dailyMetrics({
+const daily = await client.analytics.listDailyMetrics({
   platform: "twitter",
   from_date: "2026-03-01",
 });
@@ -409,14 +422,14 @@ const daily = await client.analytics.dailyMetrics({
 ### Best Posting Time
 
 ```typescript
-const bestTimes = await client.analytics.bestTime({ platform: "twitter" });
+const bestTimes = await client.analytics.getBestTime({ platform: "twitter" });
 // Array of: { day_of_week (0=Sun), hour_utc (0-23), avg_engagement, post_count }
 ```
 
 ### Content Decay
 
 ```typescript
-const decay = await client.analytics.contentDecay({
+const decay = await client.analytics.getContentDecay({
   post_id: "post_abc123",
   days: 30,
 });
@@ -426,21 +439,21 @@ const decay = await client.analytics.contentDecay({
 ### Post Timeline
 
 ```typescript
-const timeline = await client.analytics.postTimeline({ post_id: "post_abc123" });
+const timeline = await client.analytics.getPostTimeline({ post_id: "post_abc123" });
 // Daily: impressions, likes, comments, shares, clicks, views
 ```
 
 ### Posting Frequency
 
 ```typescript
-const freq = await client.analytics.postingFrequency({ platform: "twitter" });
+const freq = await client.analytics.getPostingFrequency({ platform: "twitter" });
 // freq.optimal_frequency, freq.data: posts_per_week vs avg_engagement
 ```
 
 ### YouTube Daily Views
 
 ```typescript
-const yt = await client.analytics.youtubeDailyViews({ account_id: "acc_abc123" });
+const yt = await client.analytics.youtube.getDailyViews({ account_id: "acc_abc123" });
 // Daily: views, watch_time_minutes, subscribers_gained
 ```
 
@@ -450,19 +463,19 @@ Real-time data fetched directly from each platform's API:
 
 ```typescript
 // All channels overview (followers, impressions, engagement rate)
-const channels = await client.analytics.channels();
+const channels = await client.analytics.listChannels();
 
 // Single account overview
-const overview = await client.analytics.platformOverview({ account_id: "acc_abc123" });
+const overview = await client.analytics.getPlatformOverview({ account_id: "acc_abc123" });
 
 // Post-level metrics from the platform itself
-const posts = await client.analytics.platformPosts({ account_id: "acc_abc123" });
+const posts = await client.analytics.listPlatformPosts({ account_id: "acc_abc123" });
 
 // Audience demographics
-const audience = await client.analytics.platformAudience({ account_id: "acc_abc123" });
+const audience = await client.analytics.getPlatformAudience({ account_id: "acc_abc123" });
 
 // Daily time series from platform
-const daily = await client.analytics.platformDaily({ account_id: "acc_abc123" });
+const daily = await client.analytics.getPlatformDaily({ account_id: "acc_abc123" });
 ```
 
 Supported for: Twitter, Instagram, Facebook, LinkedIn, TikTok, YouTube, Pinterest, Threads, Google Business.
@@ -475,63 +488,91 @@ Supported for: Twitter, Instagram, Facebook, LinkedIn, TikTok, YouTube, Pinteres
 
 ```typescript
 // List comments across platforms
-const comments = await client.inbox.comments();
+const comments = await client.inbox.comments.list();
 
 // Posts with comment counts
-const posts = await client.inbox.commentsByPost();
+const posts = await client.inbox.comments.listByPost();
 
 // Comments for a specific post
-const postComments = await client.inbox.commentsForPost("post_abc123");
+const postComments = await client.inbox.comments.retrieve("post_abc123");
 
-// Reply
-await client.inbox.replyToComment("post_abc123", {
-  comment_id: "comment_123",
+// Reply (account_id REQUIRED — the account to reply from)
+await client.inbox.comments.reply("post_abc123", {
+  account_id: "acc_abc",
   text: "Thanks for your feedback!",
+  comment_id: "comment_123", // optional — parent comment for threaded replies
 });
 
-// Delete, hide/unhide, like/unlike
-await client.inbox.deleteComment("comment_123");
-await client.inbox.hideComment("comment_123");
-await client.inbox.unhideComment("comment_123");
-await client.inbox.likeComment("comment_123");
-await client.inbox.unlikeComment("comment_123");
+// Delete
+await client.inbox.comments.delete("comment_123");
 
-// Private reply (DM to commenter)
-await client.inbox.privateReply("comment_123", { text: "Let's discuss privately" });
+// Hide / unhide
+await client.inbox.comments.hide.create("comment_123");
+await client.inbox.comments.hide.delete("comment_123");
+
+// Like / unlike
+await client.inbox.comments.like.create("comment_123");
+await client.inbox.comments.like.delete("comment_123");
+
+// Private reply (DM to commenter) — account_id REQUIRED
+await client.inbox.comments.privateReply("comment_123", {
+  account_id: "acc_abc",
+  text: "Let's discuss privately",
+});
 ```
 
 Supported for: Facebook, Instagram, YouTube.
 
-### Messages
+### Conversations (DMs)
 
 ```typescript
-// List conversations (workspace_id optional — scope to a workspace)
-const convos = await client.inbox.messages({ workspace_id: "ws_abc" });
+// List conversations (filter by platform/account_id/status/labels/type)
+const convos = await client.inbox.conversations.list({ platform: "instagram" });
 
-// Messages in a conversation
-const msgs = await client.inbox.conversation("convo_123");
+// Get a conversation with its messages
+const convo = await client.inbox.conversations.get("convo_123");
 
-// Send message
-await client.inbox.sendMessage("convo_123", { text: "Hello!" });
+// Send a message (account_id REQUIRED — the account to send from)
+await client.inbox.conversations.sendMessage("convo_123", {
+  account_id: "acc_abc",
+  text: "Hello!",
+});
 
-// Edit message
-await client.inbox.editMessage("convo_123", "msg_456", { text: "Updated" });
+// Archive / change status / set labels / priority
+await client.inbox.conversations.update("convo_123", { status: "archived" });
 
-// Archive conversation
-await client.inbox.archiveConversation("convo_123");
+// Delete a message
+await client.inbox.conversations.deleteMessage("msg_456", {
+  conversation_id: "convo_123",
+  account_id: "acc_abc",
+});
+
+// Reactions, typing indicators, mark read
+await client.inbox.conversations.addReaction("msg_456", {
+  conversation_id: "convo_123",
+  account_id: "acc_abc",
+  emoji: "👍",
+});
+await client.inbox.conversations.sendTyping("convo_123", { account_id: "acc_abc" });
+await client.inbox.conversations.markRead({ targets: ["convo_123"] });
 ```
+
+Note: editing a previously-sent message is not supported by the API.
 
 ### Reviews
 
 ```typescript
 // List reviews (Google Business, etc.)
-const reviews = await client.inbox.reviews();
+const reviews = await client.inbox.reviews.list();
 
-// Reply to a review
-await client.inbox.replyToReview("review_123", { text: "Thank you!" });
+// Reply to a review (account_id REQUIRED)
+await client.inbox.reviews.reply.create("review_123", {
+  account_id: "acc_abc",
+  text: "Thank you!",
+});
 
 // Delete reply
-await client.inbox.deleteReviewReply("review_123");
+await client.inbox.reviews.reply.delete("review_123");
 ```
 
 ---
@@ -568,8 +609,8 @@ const webhook = await client.webhooks.create({
 const webhooks = await client.webhooks.list({ workspace_id: "ws_abc" }); // workspace_id optional
 await client.webhooks.update("wh_abc", { events: ["post.published"], enabled: false });
 await client.webhooks.delete("wh_abc");
-await client.webhooks.test({ webhook_id: "wh_abc" });
-const logs = await client.webhooks.listLogs({ webhook_id: "wh_abc" });
+await client.webhooks.sendTest({ webhook_id: "wh_abc" });
+const logs = await client.webhooks.listLogs({ limit: 50 });
 ```
 
 Payloads signed with HMAC-SHA256 via `X-Relay-Signature` header.
@@ -578,11 +619,11 @@ Payloads signed with HMAC-SHA256 via `X-Relay-Signature` header.
 
 ## Queue & Scheduling
 
-Recurring publishing slots:
+Recurring publishing slots live under `client.queue.slots.*`:
 
 ```typescript
 // Create a queue schedule
-await client.queue.createSlots({
+await client.queue.slots.create({
   name: "Weekday Mornings",
   slots: [
     { day_of_week: 1, time: "09:00" }, // Monday
@@ -594,17 +635,20 @@ await client.queue.createSlots({
 
 // day_of_week: 0=Sunday, 1=Monday, ..., 6=Saturday
 
-const schedules = await client.queue.listSlots();
-await client.queue.updateSlots({ name: "Updated", slots: [...] });
-await client.queue.deleteSlots();
+const schedules = await client.queue.slots.list();
+await client.queue.slots.update({ name: "Updated", slots: [/* ... */] });
+await client.queue.slots.delete();
 
 // Next available slot
-const next = await client.queue.nextSlot();
+const next = await client.queue.getNextSlot();
 // next.next_slot_at: ISO datetime
 
 // Preview upcoming slots
 const preview = await client.queue.preview({ count: 10 });
 // preview.slots: array of ISO datetimes
+
+// Smart slot finder (respects already-scheduled posts)
+const slot = await client.queue.findSlot();
 ```
 
 ---
@@ -613,16 +657,16 @@ const preview = await client.queue.preview({ count: 10 });
 
 ```typescript
 // Retweet / undo
-await client.twitter.retweet({ tweet_id: "123", account_id: "acc_abc" });
-await client.twitter.undoRetweet({ tweet_id: "123", account_id: "acc_abc" });
+await client.twitter.retweet.create({ tweet_id: "123", account_id: "acc_abc" });
+await client.twitter.retweet.undo({ tweet_id: "123", account_id: "acc_abc" });
 
 // Bookmark / remove
-await client.twitter.bookmark({ tweet_id: "123", account_id: "acc_abc" });
-await client.twitter.removeBookmark({ tweet_id: "123", account_id: "acc_abc" });
+await client.twitter.bookmark.create({ tweet_id: "123", account_id: "acc_abc" });
+await client.twitter.bookmark.remove({ tweet_id: "123", account_id: "acc_abc" });
 
 // Follow / unfollow
-await client.twitter.follow({ target_user_id: "789", account_id: "acc_abc" });
-await client.twitter.unfollow({ target_user_id: "789", account_id: "acc_abc" });
+await client.twitter.follow.create({ target_user_id: "789", account_id: "acc_abc" });
+await client.twitter.follow.unfollow({ target_user_id: "789", account_id: "acc_abc" });
 ```
 
 ---
@@ -638,7 +682,7 @@ const results = await client.reddit.search({
 });
 
 // Subreddit feed
-const feed = await client.reddit.feed({
+const feed = await client.reddit.getFeed({
   subreddit: "programming",
   sort: "hot", // hot, new, top, rising
 });
@@ -650,7 +694,7 @@ const feed = await client.reddit.feed({
 
 ```typescript
 // Dry-run post validation
-const result = await client.tools.validatePost({
+const result = await client.tools.validate.validatePost({
   content: "My post",
   targets: ["twitter", "instagram"],
   scheduled_at: "now",
@@ -658,19 +702,19 @@ const result = await client.tools.validatePost({
 // { valid, errors: [{ target, code, message }], warnings: [...] }
 
 // Character count per platform
-const lengths = await client.tools.validateLength({ content: "My post text" });
+const lengths = await client.tools.validate.checkPostLength({ content: "My post text" });
 // { platforms: { twitter: { count, limit, within_limit }, ... } }
 
 // Media validation
-const media = await client.tools.validateMedia({ url: "https://example.com/video.mp4" });
+const media = await client.tools.validate.validateMedia({ url: "https://example.com/video.mp4" });
 // { accessible, content_type, size, platform_limits: { twitter: { within_limit, max_size } } }
 
 // Subreddit check
-const sub = await client.tools.validateSubreddit({ name: "gaming" });
+const sub = await client.tools.validate.retrieveSubreddit({ name: "gaming" });
 // { exists, name, title, subscribers, nsfw, post_types }
 
 // Instagram hashtag safety
-const tags = await client.tools.checkHashtags({ hashtags: ["photography", "instagood"] });
+const tags = await client.tools.instagram.checkHashtagSafety({ hashtags: ["photography", "instagood"] });
 // Per hashtag: "safe", "restricted", or "banned"
 ```
 
@@ -689,10 +733,10 @@ await client.media.delete("med_abc123");
 ## Usage & Billing
 
 ```typescript
-const usage = await client.usage.get();
+const usage = await client.usage.retrieve();
 // { plan, calls_used, calls_included, current_period_start, current_period_end }
 
-const logs = await client.usage.logs();
+const logs = await client.usage.listLogs();
 // Per-request API call history
 ```
 
@@ -712,9 +756,14 @@ const logs = await client.usage.logs();
 | Reddit | 40,000 |
 | Bluesky | 300 |
 | Threads | 500 |
-| Mastodon | 500 |
-| Google Business | 1,500 |
+| Telegram | 4,096 |
 | Snapchat | 250 |
+| Google Business | 1,500 |
+| WhatsApp | 4,096 |
+| Mastodon | 500 |
+| Discord | 2,000 |
+| SMS | 1,600 (auto-segmented) |
+| Beehiiv / ConvertKit / Mailchimp / Listmonk | 100,000 (email HTML) |
 
 ---
 
@@ -735,12 +784,13 @@ Common codes: `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `VALIDATION_ERROR`, `RAT
 
 - Always check post status after creation — `"now"` publishes async, post can be `partial` or `failed`.
 - Use `target_options` to customize content per platform — different limits and conventions.
-- Use workspace IDs (`grp_*`) when the user refers to a collection of accounts by name.
+- Use workspace IDs (`ws_*`) when the user refers to a collection of accounts by name.
 - Use validation tools before publishing to catch issues early.
 - Upload media via presigned URLs for reliability.
 - Set up webhooks for real-time notifications instead of polling.
 - When the user says "post to X", first check `accounts.list()` or `workspaces.list()` to resolve "X".
-- For stats, use `analytics.platformOverview()` for live data, `analytics.get()` for historical.
+- For stats, use `analytics.getPlatformOverview()` for live data, `analytics.retrieve()` for historical.
+- Inbox reply/send methods REQUIRE an `account_id` — look it up from `accounts.list()` first.
 
 ## References
 

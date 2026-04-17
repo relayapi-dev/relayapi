@@ -470,11 +470,16 @@ app.openapi(purchasePhoneNumber, async (c) => {
 
 	if (orgSub?.stripeSubscriptionId && c.env.STRIPE_WA_PHONE_PRICE_ID) {
 		const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
-		const item = await stripe.subscriptionItems.create({
-			subscription: orgSub.stripeSubscriptionId,
-			price: c.env.STRIPE_WA_PHONE_PRICE_ID,
-			quantity: 1,
-		});
+		const item = await stripe.subscriptionItems.create(
+			{
+				subscription: orgSub.stripeSubscriptionId,
+				price: c.env.STRIPE_WA_PHONE_PRICE_ID,
+				quantity: 1,
+			},
+			// Deterministic key so Cloudflare Workers retries (or client double-posts)
+			// never create duplicate Stripe subscription items for the same phone number.
+			{ idempotencyKey: `wa-phone-sub-item:${phoneNumberId}` },
+		);
 		await db
 			.update(whatsappPhoneNumbers)
 			.set({ stripeSubscriptionItemId: item.id, updatedAt: new Date() })
@@ -482,18 +487,21 @@ app.openapi(purchasePhoneNumber, async (c) => {
 	} else if (orgSub?.stripeCustomerId && c.env.STRIPE_WA_PHONE_PRICE_ID) {
 		// No active subscription — create a checkout session
 		const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
-		const session = await stripe.checkout.sessions.create({
-			customer: orgSub.stripeCustomerId,
-			mode: "subscription",
-			line_items: [{ price: c.env.STRIPE_WA_PHONE_PRICE_ID, quantity: 1 }],
-			metadata: {
-				type: "wa_phone_number",
-				phoneNumberId,
-				organizationId: orgId,
+		const session = await stripe.checkout.sessions.create(
+			{
+				customer: orgSub.stripeCustomerId,
+				mode: "subscription",
+				line_items: [{ price: c.env.STRIPE_WA_PHONE_PRICE_ID, quantity: 1 }],
+				metadata: {
+					type: "wa_phone_number",
+					phoneNumberId,
+					organizationId: orgId,
+				},
+				success_url: `${c.env.API_BASE_URL ?? "https://api.relayapi.dev"}/v1/whatsapp/phone-numbers/${phoneNumberId}`,
+				cancel_url: `${c.env.API_BASE_URL ?? "https://api.relayapi.dev"}/v1/whatsapp/phone-numbers/${phoneNumberId}`,
 			},
-			success_url: `${c.env.API_BASE_URL ?? "https://api.relayapi.dev"}/v1/whatsapp/phone-numbers/${phoneNumberId}`,
-			cancel_url: `${c.env.API_BASE_URL ?? "https://api.relayapi.dev"}/v1/whatsapp/phone-numbers/${phoneNumberId}`,
-		});
+			{ idempotencyKey: `wa-phone-checkout:${phoneNumberId}` },
+		);
 		checkoutUrl = session.url;
 	}
 

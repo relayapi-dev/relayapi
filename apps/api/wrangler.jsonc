@@ -113,6 +113,10 @@
 			{
 				"binding": "SYNC_QUEUE",
 				"queue": "relayapi-sync"
+			},
+			{
+				"binding": "AUTOMATION_QUEUE",
+				"queue": "relayapi-automation"
 			}
 		],
 		"consumers": [
@@ -163,6 +167,13 @@
 				"max_batch_size": 5,
 				"max_retries": 3,
 				"max_concurrency": 5
+			},
+			{
+				"queue": "relayapi-automation",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 5,
+				"dead_letter_queue": "relayapi-automation-dlq"
 			}
 		]
 	}

@@ -36,7 +36,7 @@ export class RelayApi implements INodeType {
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["resource"] + ": " + $parameter["operation"]}}',
-		description: 'Post to 17+ social media platforms',
+		description: 'Post to 21 platforms',
 		defaults: {
 			name: 'RelayAPI',
 		},

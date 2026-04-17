@@ -1,0 +1,79 @@
+import { contacts, contactChannels, socialAccounts } from "@relayapi/db";
+import { eq, and } from "drizzle-orm";
+import { decryptToken } from "../../../lib/crypto";
+import { sendMessage } from "../../message-sender";
+import { applyMergeTags } from "../merge-tags";
+import type { NodeHandler } from "../types";
+
+/**
+ * Sends a plain text DM on whatever channel the automation is configured for.
+ * Resolves recipient identifier via contactChannels, access token via socialAccounts.
+ */
+export const messageTextHandler: NodeHandler = async (ctx) => {
+	const textTemplate = ctx.node.config.text as string | undefined;
+	if (!textTemplate) {
+		return { kind: "fail", error: "message_text missing 'text'" };
+	}
+
+	const channel = ctx.snapshot.channel;
+	const accountId = ctx.snapshot.trigger.account_id;
+	if (!accountId) {
+		return { kind: "fail", error: "automation has no social account bound" };
+	}
+
+	if (!ctx.enrollment.contact_id) {
+		return { kind: "fail", error: "enrollment has no contact_id" };
+	}
+
+	const contact = await ctx.db.query.contacts.findFirst({
+		where: eq(contacts.id, ctx.enrollment.contact_id),
+	});
+	if (!contact) return { kind: "fail", error: "contact not found" };
+
+	const chan = await ctx.db.query.contactChannels.findFirst({
+		where: and(
+			eq(contactChannels.contactId, ctx.enrollment.contact_id),
+			eq(contactChannels.platform, channel),
+		),
+	});
+	if (!chan) {
+		return {
+			kind: "fail",
+			error: `contact has no ${channel} channel identifier`,
+		};
+	}
+
+	const account = await ctx.db.query.socialAccounts.findFirst({
+		where: eq(socialAccounts.id, accountId),
+	});
+	if (!account?.accessToken) {
+		return { kind: "fail", error: "social account not found or has no token" };
+	}
+
+	const accessToken = await decryptToken(
+		account.accessToken,
+		ctx.env.ENCRYPTION_KEY,
+	);
+
+	const text = applyMergeTags(textTemplate, {
+		contact: contact as unknown as Record<string, unknown>,
+		state: ctx.enrollment.state,
+	});
+
+	const result = await sendMessage({
+		platform: channel,
+		accessToken,
+		platformAccountId: account.platformAccountId,
+		recipientId: chan.identifier,
+		text,
+	});
+
+	if (!result.success) {
+		return { kind: "fail", error: result.error ?? "send failed" };
+	}
+
+	return {
+		kind: "next",
+		state_patch: { last_message_id: result.messageId },
+	};
+};

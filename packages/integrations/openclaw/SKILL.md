@@ -46,9 +46,9 @@ Authorization: Bearer $RELAYAPI_API_KEY
 
 Base URL: `https://api.relayapi.dev`
 
-## Supported Platforms (17)
+## Supported Platforms (21)
 
-`twitter`, `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube`, `pinterest`, `reddit`, `bluesky`, `threads`, `telegram`, `snapchat`, `googlebusiness`, `whatsapp`, `mastodon`, `discord`, `sms`
+`twitter`, `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube`, `pinterest`, `reddit`, `bluesky`, `threads`, `telegram`, `snapchat`, `googlebusiness`, `whatsapp`, `mastodon`, `discord`, `sms`, `beehiiv`, `convertkit`, `mailchimp`, `listmonk`
 
 ---
 
@@ -381,7 +381,7 @@ curl -X POST https://api.relayapi.dev/v1/workspaces \
   -d '{ "name": "Marketing Team", "description": "All brand accounts" }'
 
 # Update group
-curl -X PUT https://api.relayapi.dev/v1/workspaces/{workspace_id} \
+curl -X PATCH https://api.relayapi.dev/v1/workspaces/{workspace_id} \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{ "name": "Rebranded Team" }'
@@ -473,8 +473,8 @@ curl -X POST https://api.relayapi.dev/v1/connect/facebook/pages \
 ```bash
 curl "https://api.relayapi.dev/v1/connect/twitter?headless=true" \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
-# Returns auth_url — after callback, retrieve data via:
-curl https://api.relayapi.dev/v1/connect/pending-data \
+# Returns auth_url — after callback, retrieve data via (token comes from the callback):
+curl "https://api.relayapi.dev/v1/connect/pending-data?token=TEMP_TOKEN" \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 ```
 
@@ -629,11 +629,11 @@ curl https://api.relayapi.dev/v1/inbox/comments/by-post \
 curl https://api.relayapi.dev/v1/inbox/comments/{post_id} \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
-# Reply to a comment
+# Reply to a comment (account_id is REQUIRED — the account replying)
 curl -X POST https://api.relayapi.dev/v1/inbox/comments/{post_id}/reply \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{ "comment_id": "comment_123", "text": "Thanks for your feedback!" }'
+  -d '{ "account_id": "acc_abc", "comment_id": "comment_123", "text": "Thanks for your feedback!" }'
 
 # Delete a comment
 curl -X DELETE https://api.relayapi.dev/v1/inbox/comments/{comment_id} \
@@ -651,38 +651,41 @@ curl -X POST https://api.relayapi.dev/v1/inbox/comments/{comment_id}/like \
 curl -X DELETE https://api.relayapi.dev/v1/inbox/comments/{comment_id}/like \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
-# Send private reply (DM to commenter)
+# Send private reply (DM to commenter) — account_id is REQUIRED
 curl -X POST https://api.relayapi.dev/v1/inbox/comments/{comment_id}/private-reply \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
-  -d '{ "text": "Hey, can we discuss this privately?" }'
+  -H "Content-Type: application/json" \
+  -d '{ "account_id": "acc_abc", "text": "Hey, can we discuss this privately?" }'
 ```
 
 Supported for: Facebook, Instagram, YouTube.
 
-### Messages
+### Conversations (DMs)
 
 ```bash
 # List conversations (add ?workspace_id=ws_abc to scope to a workspace)
-curl https://api.relayapi.dev/v1/inbox/messages \
+curl https://api.relayapi.dev/v1/inbox/conversations \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
-# Get messages in a conversation
-curl https://api.relayapi.dev/v1/inbox/messages/{conversation_id} \
+# Get a single conversation (includes its messages)
+curl https://api.relayapi.dev/v1/inbox/conversations/{conversation_id} \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
-# Send a message
-curl -X POST https://api.relayapi.dev/v1/inbox/messages/{conversation_id} \
+# Send a message (account_id is REQUIRED — the account sending)
+curl -X POST https://api.relayapi.dev/v1/inbox/conversations/{conversation_id}/messages \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
-  -d '{ "text": "Hello!" }'
+  -H "Content-Type: application/json" \
+  -d '{ "account_id": "acc_abc", "text": "Hello!" }'
 
-# Edit a message
-curl -X PATCH https://api.relayapi.dev/v1/inbox/messages/{conversation_id}/{message_id} \
-  -H "Authorization: Bearer $RELAYAPI_API_KEY" \
-  -d '{ "text": "Updated message" }'
-
-# Archive a conversation
-curl -X PUT https://api.relayapi.dev/v1/inbox/messages/{conversation_id}/archive \
+# Delete a message (editing a sent message is not supported by the API)
+curl -X DELETE https://api.relayapi.dev/v1/inbox/conversations/{conversation_id}/messages/{message_id} \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
+
+# Archive a conversation (set status via PATCH)
+curl -X PATCH https://api.relayapi.dev/v1/inbox/conversations/{conversation_id} \
+  -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "status": "archived" }'
 ```
 
 ### Reviews
@@ -692,10 +695,11 @@ curl -X PUT https://api.relayapi.dev/v1/inbox/messages/{conversation_id}/archive
 curl https://api.relayapi.dev/v1/inbox/reviews \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
-# Reply to a review
+# Reply to a review (account_id is REQUIRED)
 curl -X POST https://api.relayapi.dev/v1/inbox/reviews/{review_id}/reply \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
-  -d '{ "text": "Thank you for your review!" }'
+  -H "Content-Type: application/json" \
+  -d '{ "account_id": "acc_abc", "text": "Thank you for your review!" }'
 
 # Delete a review reply
 curl -X DELETE https://api.relayapi.dev/v1/inbox/reviews/{review_id}/reply \
@@ -742,8 +746,9 @@ curl https://api.relayapi.dev/v1/webhooks \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
 # Update a webhook
-curl -X PUT https://api.relayapi.dev/v1/webhooks/{webhook_id} \
+curl -X PATCH https://api.relayapi.dev/v1/webhooks/{webhook_id} \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+  -H "Content-Type: application/json" \
   -d '{ "events": ["post.published"], "enabled": false }'
 
 # Delete a webhook
@@ -755,8 +760,8 @@ curl -X POST https://api.relayapi.dev/v1/webhooks/test \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
   -d '{ "webhook_id": "wh_abc123" }'
 
-# View delivery logs
-curl https://api.relayapi.dev/v1/webhooks/{webhook_id}/logs \
+# View delivery logs (global across all webhooks — no per-webhook filter)
+curl https://api.relayapi.dev/v1/webhooks/logs \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 ```
 

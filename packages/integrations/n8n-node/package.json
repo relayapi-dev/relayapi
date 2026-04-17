@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-relayapi",
   "version": "0.1.0",
-  "description": "n8n community node for RelayAPI — post to 17+ social media platforms",
+  "description": "n8n community node for RelayAPI — post to 21 platforms",
   "keywords": ["n8n-community-node-package"],
   "license": "MIT",
   "main": "index.js",

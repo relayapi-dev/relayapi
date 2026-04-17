@@ -1,6 +1,10 @@
 import { syncAllExternalAds } from "../services/ad-sync";
 import { enqueueAnalyticsRefresh } from "../services/analytics-refresh";
 import { processAutoPostRules } from "../services/auto-post-processor";
+import {
+	processAutomationInputTimeouts,
+	processAutomationSchedule,
+} from "../services/automations/scheduler";
 import { processScheduledBroadcasts } from "../services/broadcast-processor";
 import { processCrossPostActions } from "../services/cross-post-processor";
 import { processDunning } from "../services/dunning";
@@ -22,12 +26,14 @@ export async function handleScheduled(
 	env: Env,
 	ctx: ExecutionContext,
 ): Promise<void> {
-	// Every minute: process scheduled posts + sequence steps + cross-post actions
+	// Every minute: process scheduled posts + sequence steps + cross-post actions + automation schedule
 	ctx.waitUntil(processScheduledPosts(env));
 	ctx.waitUntil(processRecyclingPosts(env));
 	ctx.waitUntil(processSequenceSteps(env));
 	ctx.waitUntil(processScheduledBroadcasts(env));
 	ctx.waitUntil(processCrossPostActions(env));
+	ctx.waitUntil(processAutomationSchedule(env));
+	ctx.waitUntil(processAutomationInputTimeouts(env));
 
 	// 1st of month at midnight: report metered usage to Stripe + downgrade expired subs
 	if (event.cron === "0 0 1 * *") {
