@@ -16,16 +16,6 @@ RelayAPI applies rate limits per API key to ensure fair usage and platform stabi
 | Pro | 1,000 |
 | Custom | Custom |
 
-## Rate Limit Headers
-
-Every response includes rate limit information:
-
-```
-X-RateLimit-Limit: 1000
-X-RateLimit-Remaining: 999
-X-RateLimit-Reset: 1709856000
-```
-
 ## Handling Rate Limits
 
 When you hit a rate limit, you'll receive a `429` response:
@@ -34,15 +24,12 @@ When you hit a rate limit, you'll receive a `429` response:
 {
   "error": {
     "code": "RATE_LIMITED",
-    "message": "Rate limit exceeded. Try again in 45 seconds.",
-    "details": {
-      "retry_after": 45
-    }
+    "message": "Rate limit exceeded. Please try again shortly."
   }
 }
 ```
 
-Use the `Retry-After` header or `retry_after` field to determine when to retry.
+Back off and retry with exponential delay (e.g. 1s, 2s, 4s, capped at your plan's per-minute budget). Rate limit counters reset on a per-minute sliding window.
 
 ## Platform Rate Limits
 

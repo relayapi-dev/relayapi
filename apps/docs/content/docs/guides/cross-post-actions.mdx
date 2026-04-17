@@ -79,7 +79,7 @@ Each cross-post action has its own status that you can monitor:
 You can cancel a pending cross-post action before it executes:
 
 ```bash
-curl -X POST https://api.relayapi.dev/v1/posts/post_abc123/cross-post-actions/cpa_xyz789/cancel \
+curl -X DELETE https://api.relayapi.dev/v1/cross-post-actions/cpa_xyz789 \
   -H "Authorization: Bearer rlay_live_your_api_key"
 ```
 
@@ -119,4 +119,4 @@ await client.posts.crossPostActions.cancel("post_abc123", "cpa_xyz789");
 |--------|----------|-------------|
 | `GET` | `/v1/posts/:post_id/cross-post-actions` | List actions for a post |
 | `GET` | `/v1/posts/:post_id/cross-post-actions/:id` | Get action details |
-| `POST` | `/v1/posts/:post_id/cross-post-actions/:id/cancel` | Cancel a pending action |
+| `DELETE` | `/v1/cross-post-actions/:id` | Cancel a pending action |

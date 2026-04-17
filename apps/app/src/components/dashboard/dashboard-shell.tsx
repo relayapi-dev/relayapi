@@ -60,7 +60,11 @@ export function DashboardShell({
 		const nextPath = `/app/${page}`;
 		if (currentPath === nextPath) return;
 
-		window.location.assign(buildPageUrl(page));
+		const absoluteUrl = new URL(
+			buildPageUrl(page),
+			window.location.origin,
+		).toString();
+		window.location.href = absoluteUrl;
 	};
 
 	const prefetchPage = (page: string) => {
@@ -98,18 +102,11 @@ export function DashboardShell({
 								</div>
 							)}
 							<div className="flex flex-1 overflow-hidden">
-								{!sidebarOpen && (
-									<button
-										className="fixed top-3 left-6 z-40 rounded-md border border-border bg-background/80 p-1.5 shadow-sm backdrop-blur hover:bg-accent/50 md:hidden"
-										onClick={() => setSidebarOpen(true)}
-									>
-										<Menu className="size-4" />
-									</button>
-								)}
 								<Sidebar
 									currentPage={currentPage}
 									onNavigate={navigate}
 									onPrefetch={prefetchPage}
+									buildHref={buildPageUrl}
 									isOpen={sidebarOpen}
 									onClose={() => setSidebarOpen(false)}
 									user={user}
@@ -120,7 +117,23 @@ export function DashboardShell({
 									style={{ scrollbarGutter: "stable" }}
 								>
 									<div
-										className={`mx-auto max-w-7xl px-5 pt-16 sm:px-8 md:px-10 md:pt-8 ${
+										className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-background/85 px-4 backdrop-blur md:hidden"
+										style={{
+											paddingTop: "max(0.5rem, env(safe-area-inset-top))",
+											paddingBottom: "0.5rem",
+										}}
+									>
+										<button
+											type="button"
+											aria-label="Open menu"
+											className="-ml-1 rounded-md p-1.5 hover:bg-accent/50"
+											onClick={() => setSidebarOpen(true)}
+										>
+											<Menu className="size-4" />
+										</button>
+									</div>
+									<div
+										className={`mx-auto max-w-7xl px-5 pt-4 sm:px-8 md:px-10 md:pt-8 ${
 											fullHeightPages.has(currentPage) ? "pb-0" : "pb-16"
 										}`}
 									>

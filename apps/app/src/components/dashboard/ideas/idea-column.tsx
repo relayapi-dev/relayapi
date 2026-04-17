@@ -43,7 +43,7 @@ export function IdeaColumn({
 	};
 
 	return (
-		<div className="shrink-0 w-72 rounded-md border border-border bg-accent/10 flex flex-col max-h-[calc(100vh-180px)]">
+		<div className="shrink-0 w-72 rounded-md border border-border bg-accent/10 flex flex-col min-h-[calc(100vh-180px)]">
 			<div
 				className="px-3 py-2 border-b border-border flex items-center gap-2 shrink-0 cursor-grab active:cursor-grabbing"
 				{...(dragHandleProps as React.HTMLAttributes<HTMLDivElement>)}
@@ -107,7 +107,7 @@ export function IdeaColumn({
 				</DropdownMenu>
 			</div>
 
-			<div className="p-2 space-y-2 flex-1 overflow-y-auto min-h-[100px]">
+			<div className="p-2 space-y-2 flex-1 min-h-[100px]">
 				{children}
 				<button
 					type="button"

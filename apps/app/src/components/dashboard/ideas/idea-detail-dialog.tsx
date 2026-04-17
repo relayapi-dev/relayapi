@@ -26,13 +26,6 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { Idea, IdeaComment, IdeaGroup, IdeaMedia, IdeaTag } from "./types";
 
@@ -298,13 +291,16 @@ export function IdeaDetailDialog({
 	const [commentsLoading, setCommentsLoading] = useState(false);
 	const [newComment, setNewComment] = useState("");
 	const [submittingComment, setSubmittingComment] = useState(false);
-	const [showActivity, setShowActivity] = useState(false);
 	const [activity, setActivity] = useState<ActivityEntry[]>([]);
 	const [activityLoading, setActivityLoading] = useState(false);
 	const [activityFetched, setActivityFetched] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [deleting, setDeleting] = useState(false);
 	const [tagPopoverOpen, setTagPopoverOpen] = useState(false);
+	const [groupPopoverOpen, setGroupPopoverOpen] = useState(false);
+	const [sidePanel, setSidePanel] = useState<null | "comments" | "activity">(
+		null,
+	);
 	const [uploadingMedia, setUploadingMedia] = useState(false);
 	const [mediaError, setMediaError] = useState<string | null>(null);
 	const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
@@ -328,9 +324,9 @@ export function IdeaDetailDialog({
 		});
 		setComments([]);
 		setNewComment("");
-		setShowActivity(false);
 		setActivity([]);
 		setActivityFetched(false);
+		setSidePanel(null);
 	}, [open, idea?.id, createGroupId]);
 
 	useEffect(() => {
@@ -353,22 +349,29 @@ export function IdeaDetailDialog({
 			.finally(() => setCommentsLoading(false));
 	}, [open, isEditMode, idea?.id]);
 
-	const handleToggleActivity = useCallback(() => {
-		const next = !showActivity;
-		setShowActivity(next);
+	const fetchActivity = useCallback(() => {
+		if (!idea || activityFetched) return;
+		setActivityLoading(true);
+		fetch(`/api/ideas/${idea.id}/activity?limit=20`)
+			.then((response) => (response.ok ? response.json() : { data: [] }))
+			.then((response) => {
+				setActivity(response.data ?? []);
+				setActivityFetched(true);
+			})
+			.catch(() => setActivityFetched(true))
+			.finally(() => setActivityLoading(false));
+	}, [activityFetched, idea?.id]);
 
-		if (next && !activityFetched && idea) {
-			setActivityLoading(true);
-			fetch(`/api/ideas/${idea.id}/activity?limit=20`)
-				.then((response) => (response.ok ? response.json() : { data: [] }))
-				.then((response) => {
-					setActivity(response.data ?? []);
-					setActivityFetched(true);
-				})
-				.catch(() => setActivityFetched(true))
-				.finally(() => setActivityLoading(false));
-		}
-	}, [showActivity, activityFetched, idea?.id]);
+	const handleTogglePanel = useCallback(
+		(panel: "comments" | "activity") => {
+			setSidePanel((current) => {
+				const next = current === panel ? null : panel;
+				if (next === "activity") fetchActivity();
+				return next;
+			});
+		},
+		[fetchActivity],
+	);
 
 	const handleSubmitComment = useCallback(async () => {
 		if (!newComment.trim() || !idea) return;
@@ -631,36 +634,72 @@ export function IdeaDetailDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
 				showCloseButton={false}
-				className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0"
+				className={cn(
+					"max-h-[90vh] p-0 gap-0 transition-[max-width] duration-200 ease-out",
+					sidePanel ? "max-w-4xl" : "max-w-2xl",
+				)}
 			>
+			<div className="flex max-h-[90vh]">
+			<div className="flex-1 flex flex-col min-w-0">
 				<DialogHeader className="flex-row items-center justify-between px-5 py-3 border-b border-border gap-3 space-y-0">
 					<DialogTitle className="text-sm font-medium shrink-0">
 						{dialogTitle}
 					</DialogTitle>
 
 					<div className="flex items-center gap-2 ml-auto">
-						{groups.length > 0 && (
-							<Select value={groupId} onValueChange={handleGroupChange}>
-								<SelectTrigger size="sm" className="h-7 text-xs gap-1 pr-2">
-									<SelectValue placeholder="Group" />
-								</SelectTrigger>
-								<SelectContent align="end">
-									{groups.map((group) => (
-										<SelectItem key={group.id} value={group.id}>
-											<span className="flex items-center gap-1.5">
-												{group.color && (
-													<span
-														className="size-2 rounded-full shrink-0"
-														style={{ backgroundColor: group.color }}
-													/>
-												)}
-												{group.name}
-											</span>
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						)}
+						{groups.length > 0 && (() => {
+							const selectedGroup = groups.find((g) => g.id === groupId);
+							return (
+								<Popover open={groupPopoverOpen} onOpenChange={setGroupPopoverOpen}>
+									<PopoverTrigger asChild>
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											className="h-7 text-xs gap-1 px-2"
+										>
+											{selectedGroup?.color && (
+												<span
+													className="size-2 rounded-full shrink-0"
+													style={{ backgroundColor: selectedGroup.color }}
+												/>
+											)}
+											{selectedGroup?.name ?? "Group"}
+											<ChevronDown className="size-3 opacity-50" />
+										</Button>
+									</PopoverTrigger>
+									<PopoverContent align="end" className="w-52 p-2">
+										<div className="space-y-1">
+											{groups.map((group) => {
+												const checked = groupId === group.id;
+												return (
+													<button
+														key={group.id}
+														type="button"
+														onClick={() => {
+															handleGroupChange(group.id);
+															setGroupPopoverOpen(false);
+														}}
+														className={cn(
+															"flex items-center gap-2 w-full rounded px-1.5 py-1 text-sm hover:bg-accent/40 transition-colors",
+															checked && "bg-accent/40",
+														)}
+													>
+														{group.color && (
+															<span
+																className="size-2 rounded-full shrink-0"
+																style={{ backgroundColor: group.color }}
+															/>
+														)}
+														<span className="flex-1 text-left truncate">{group.name}</span>
+													</button>
+												);
+											})}
+										</div>
+									</PopoverContent>
+								</Popover>
+							);
+						})()}
 
 						<Popover open={tagPopoverOpen} onOpenChange={setTagPopoverOpen}>
 							<PopoverTrigger asChild>
@@ -769,27 +808,13 @@ export function IdeaDetailDialog({
 					/>
 
 					<div className="space-y-2">
-						<div className="flex items-center justify-between gap-3">
-							<p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-								<Paperclip className="size-3" />
-								Media
-							</p>
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								className="h-7 text-xs gap-1"
-								onClick={() => fileInputRef.current?.click()}
-								disabled={uploadingMedia || saving}
-							>
-								{uploadingMedia ? (
-									<Loader2 className="size-3 animate-spin" />
-								) : (
-									<Upload className="size-3" />
-								)}
-								Add media
-							</Button>
-						</div>
+						<p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+							<Paperclip className="size-3" />
+							Media
+							{uploadingMedia && (
+								<Loader2 className="size-3 animate-spin ml-1" />
+							)}
+						</p>
 
 						{mediaError && (
 							<p className="text-xs text-destructive">{mediaError}</p>
@@ -854,130 +879,39 @@ export function IdeaDetailDialog({
 						})()}
 					</div>
 
-					{isEditMode && (
-						<div>
-							<p className="text-xs font-medium text-muted-foreground mb-3 flex items-center gap-1">
-								<MessageCircle className="size-3" />
-								Comments
-							</p>
-
-							{commentsLoading ? (
-								<div className="flex items-center justify-center py-4">
-									<Loader2 className="size-4 animate-spin text-muted-foreground" />
-								</div>
-							) : topLevelComments.length === 0 ? (
-								<p className="text-xs text-muted-foreground py-2">
-									No comments yet.
-								</p>
-							) : (
-								<div className="space-y-4 mb-3">
-									{topLevelComments.map((comment) => (
-										<CommentItem
-											key={comment.id}
-											comment={comment}
-											replies={repliesMap[comment.id] ?? []}
-										/>
-									))}
-								</div>
-							)}
-
-							<div className="flex items-center gap-2 border border-border rounded-md px-3 py-2 mt-2">
-								<input
-									type="text"
-									value={newComment}
-									onChange={(event) => setNewComment(event.target.value)}
-									onKeyDown={(event) => {
-										if (event.key === "Enter" && !event.shiftKey) {
-											event.preventDefault();
-											void handleSubmitComment();
-										}
-									}}
-									placeholder="Add a comment..."
-									className="flex-1 bg-transparent text-sm placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0"
-								/>
-								<button
-									type="button"
-									onClick={() => void handleSubmitComment()}
-									disabled={!newComment.trim() || submittingComment}
-									className={cn(
-										"text-muted-foreground transition-colors",
-										newComment.trim() && !submittingComment
-											? "hover:text-foreground"
-											: "opacity-40 cursor-not-allowed",
-									)}
-								>
-									{submittingComment ? (
-										<Loader2 className="size-4 animate-spin" />
-									) : (
-										<Send className="size-4" />
-									)}
-								</button>
-							</div>
-						</div>
-					)}
-
-					{isEditMode && showActivity && (
-						<div>
-							<p className="text-xs font-medium text-muted-foreground mb-3">
-								Activity
-							</p>
-							{activityLoading ? (
-								<div className="flex items-center justify-center py-4">
-									<Loader2 className="size-4 animate-spin text-muted-foreground" />
-								</div>
-							) : activity.length === 0 ? (
-								<p className="text-xs text-muted-foreground py-2">
-									No activity yet.
-								</p>
-							) : (
-								<div className="space-y-2">
-									{activity.map((entry) => (
-										<div key={entry.id} className="flex items-start gap-2 text-xs">
-											<div className="size-5 rounded-full bg-muted flex items-center justify-center text-[9px] font-medium text-muted-foreground shrink-0 mt-0.5">
-												{entry.actor_id
-													? entry.actor_id.slice(0, 2).toUpperCase()
-													: "–"}
-											</div>
-											<div className="flex-1">
-												<span className="text-foreground">{entry.action}</span>
-												<span className="ml-2 text-muted-foreground">
-													{new Date(entry.created_at).toLocaleDateString(
-														undefined,
-														{
-															month: "short",
-															day: "numeric",
-															hour: "2-digit",
-															minute: "2-digit",
-														},
-													)}
-												</span>
-											</div>
-										</div>
-									))}
-								</div>
-							)}
-						</div>
-					)}
 				</div>
 
 				<div className="flex items-center justify-between px-5 py-3 border-t border-border gap-3">
 					<div className="flex items-center gap-1">
 						{isEditMode && (
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								className="h-7 text-xs gap-1"
-								onClick={handleToggleActivity}
-							>
-								Activity
-								<ChevronDown
-									className={cn(
-										"size-3 opacity-50 transition-transform",
-										showActivity && "rotate-180",
+							<>
+								<Button
+									type="button"
+									variant={sidePanel === "comments" ? "secondary" : "ghost"}
+									size="sm"
+									className="h-7 text-xs gap-1"
+									onClick={() => handleTogglePanel("comments")}
+									aria-pressed={sidePanel === "comments"}
+								>
+									<MessageCircle className="size-3" />
+									Comments
+									{comments.length > 0 && (
+										<span className="ml-0.5 rounded-full bg-muted text-muted-foreground px-1 text-[10px] leading-4">
+											{comments.length}
+										</span>
 									)}
-								/>
-							</Button>
+								</Button>
+								<Button
+									type="button"
+									variant={sidePanel === "activity" ? "secondary" : "ghost"}
+									size="sm"
+									className="h-7 text-xs gap-1"
+									onClick={() => handleTogglePanel("activity")}
+									aria-pressed={sidePanel === "activity"}
+								>
+									Activity
+								</Button>
+							</>
 						)}
 						{isEditMode && idea && onDelete && (
 							<Button
@@ -1033,6 +967,135 @@ export function IdeaDetailDialog({
 						</Button>
 					</div>
 				</div>
+			</div>
+
+			{isEditMode && sidePanel && (
+				<div className="w-80 shrink-0 border-l border-border flex flex-col bg-background">
+					<div className="flex items-center justify-between px-4 py-3 border-b border-border">
+						<p className="text-sm font-medium flex items-center gap-1.5">
+							{sidePanel === "comments" ? (
+								<>
+									<MessageCircle className="size-3.5" />
+									Comments
+								</>
+							) : (
+								"Activity"
+							)}
+						</p>
+						<button
+							type="button"
+							onClick={() => setSidePanel(null)}
+							className="rounded-xs opacity-70 hover:opacity-100 transition-opacity p-0.5"
+							aria-label="Close panel"
+						>
+							<X className="size-4" />
+						</button>
+					</div>
+
+					{sidePanel === "comments" ? (
+						<>
+							<div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+								{commentsLoading ? (
+									<div className="flex items-center justify-center py-4">
+										<Loader2 className="size-4 animate-spin text-muted-foreground" />
+									</div>
+								) : topLevelComments.length === 0 ? (
+									<p className="text-xs text-muted-foreground py-2">
+										No comments yet.
+									</p>
+								) : (
+									<div className="space-y-4">
+										{topLevelComments.map((comment) => (
+											<CommentItem
+												key={comment.id}
+												comment={comment}
+												replies={repliesMap[comment.id] ?? []}
+											/>
+										))}
+									</div>
+								)}
+							</div>
+
+							<div className="shrink-0 border-t border-border px-4 py-3">
+								<div className="flex items-center gap-2 border border-border rounded-md px-3 py-2">
+									<input
+										type="text"
+										value={newComment}
+										onChange={(event) => setNewComment(event.target.value)}
+										onKeyDown={(event) => {
+											if (event.key === "Enter" && !event.shiftKey) {
+												event.preventDefault();
+												void handleSubmitComment();
+											}
+										}}
+										placeholder="Add a comment..."
+										className="flex-1 bg-transparent text-sm placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0 min-w-0"
+									/>
+									<button
+										type="button"
+										onClick={() => void handleSubmitComment()}
+										disabled={!newComment.trim() || submittingComment}
+										className={cn(
+											"text-muted-foreground transition-colors shrink-0",
+											newComment.trim() && !submittingComment
+												? "hover:text-foreground"
+												: "opacity-40 cursor-not-allowed",
+										)}
+									>
+										{submittingComment ? (
+											<Loader2 className="size-4 animate-spin" />
+										) : (
+											<Send className="size-4" />
+										)}
+									</button>
+								</div>
+							</div>
+						</>
+					) : (
+						<div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+							{activityLoading ? (
+								<div className="flex items-center justify-center py-4">
+									<Loader2 className="size-4 animate-spin text-muted-foreground" />
+								</div>
+							) : activity.length === 0 ? (
+								<p className="text-xs text-muted-foreground py-2">
+									No activity yet.
+								</p>
+							) : (
+								<div className="space-y-2">
+									{activity.map((entry) => (
+										<div
+											key={entry.id}
+											className="flex items-start gap-2 text-xs"
+										>
+											<div className="size-5 rounded-full bg-muted flex items-center justify-center text-[9px] font-medium text-muted-foreground shrink-0 mt-0.5">
+												{entry.actor_id
+													? entry.actor_id.slice(0, 2).toUpperCase()
+													: "–"}
+											</div>
+											<div className="flex-1">
+												<span className="text-foreground">{entry.action}</span>
+												<span className="ml-2 text-muted-foreground">
+													{new Date(entry.created_at).toLocaleDateString(
+														undefined,
+														{
+															month: "short",
+															day: "numeric",
+															hour: "2-digit",
+															minute: "2-digit",
+														},
+													)}
+												</span>
+											</div>
+										</div>
+									))}
+								</div>
+							)}
+						</div>
+					)}
+				</div>
+			)}
+			</div>
 			</DialogContent>
 		</Dialog>
 	);

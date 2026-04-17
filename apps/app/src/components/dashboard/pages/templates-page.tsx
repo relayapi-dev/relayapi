@@ -433,12 +433,7 @@ export function TemplatesPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-medium">Content Templates</h1>
-          <p className="text-xs text-foreground/50 mt-0.5">
-            Reusable post templates with variables and platform overrides
-          </p>
-        </div>
+        <h1 className="text-lg font-medium">Templates</h1>
         <Button
           size="sm"
           className="gap-1.5 h-7 text-xs"
@@ -490,7 +485,7 @@ export function TemplatesPage() {
         <motion.div
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
           variants={stagger}
-          initial={false}
+          initial="hidden"
           animate="visible"
         >
           {templates.map((t) => (

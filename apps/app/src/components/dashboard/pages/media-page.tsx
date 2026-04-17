@@ -193,7 +193,7 @@ export function MediaPage({
             <motion.div
               className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
               variants={stagger}
-              initial={false}
+              initial="hidden"
               animate="visible"
             >
               {media.map((file) => (
@@ -254,7 +254,7 @@ export function MediaPage({
         <motion.div
           className="grid gap-3 sm:grid-cols-2"
           variants={stagger}
-          initial={false}
+          initial="hidden"
           animate="visible"
         >
           {tools.map((tool) => {

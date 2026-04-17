@@ -255,7 +255,7 @@ export function SentPostList({
             <motion.div
               className="flex flex-col gap-4"
               variants={stagger}
-              initial={false}
+              initial="hidden"
               animate="visible"
             >
               {cards.map((card) => {

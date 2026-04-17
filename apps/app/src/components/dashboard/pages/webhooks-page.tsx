@@ -276,7 +276,7 @@ export function WebhooksPage({
               <motion.div
                 className="space-y-3"
                 variants={stagger}
-                initial={false}
+                initial="hidden"
                 animate="visible"
               >
                 {webhooks.map((webhook) => (
@@ -382,7 +382,7 @@ export function WebhooksPage({
             <motion.div
               className="rounded-md border border-border overflow-hidden"
               variants={stagger}
-              initial={false}
+              initial="hidden"
               animate="visible"
             >
               <div className="hidden md:grid grid-cols-[1.5fr_1fr_0.8fr_0.8fr_1fr] gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">

@@ -319,7 +319,7 @@ export function AnalyticsChannel({
           <motion.div
             className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
             variants={stagger}
-            initial={false}
+            initial="hidden"
             animate="visible"
           >
             <MetricCard
@@ -436,7 +436,7 @@ export function AnalyticsChannel({
               <motion.div
                 className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
                 variants={stagger}
-                initial={false}
+                initial="hidden"
                 animate="visible"
               >
                 <MetricCard

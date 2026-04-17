@@ -158,6 +158,7 @@ interface SidebarProps {
 	currentPage: string;
 	onNavigate: (page: string) => void;
 	onPrefetch?: (page: string) => void;
+	buildHref?: (page: string) => string;
 	isOpen: boolean;
 	onClose: () => void;
 	user?: AppUser | null;
@@ -175,11 +176,13 @@ export function Sidebar({
 	currentPage,
 	onNavigate,
 	onPrefetch,
+	buildHref,
 	isOpen,
 	onClose,
 	user,
 	organization,
 }: SidebarProps) {
+	const hrefFor = (page: string) => buildHref?.(page) ?? `/app/${page}`;
 	// --- Usage ---
 	const { usage, loading: usageLoading } = useUsage();
 	// --- Streak ---
@@ -216,19 +219,16 @@ export function Sidebar({
 	}, [currentPage]);
 
 	const toggleExpand = (item: NavItem) => {
+		const wasExpanded = expandedItems.has(item.label);
 		setExpandedItems((prev) => {
 			const next = new Set(prev);
-			if (next.has(item.label)) {
-				next.delete(item.label);
-			} else {
-				next.add(item.label);
-				// Navigate to first child
-				if (item.children?.[0]) {
-					onNavigate(item.children[0].href);
-				}
-			}
+			if (next.has(item.label)) next.delete(item.label);
+			else next.add(item.label);
 			return next;
 		});
+		if (!wasExpanded && item.children?.[0]) {
+			onNavigate(item.children[0].href);
+		}
 	};
 
 	// --- Org switcher ---
@@ -388,9 +388,10 @@ export function Sidebar({
 	const renderFlatItem = (item: NavItem) => {
 		const isActive = currentPage === item.href;
 		return (
-			<button
+			<a
 				key={item.href}
-				onClick={() => onNavigate(item.href)}
+				href={hrefFor(item.href)}
+				onClick={() => onClose()}
 				onMouseEnter={() => onPrefetch?.(item.href)}
 				onFocus={() => onPrefetch?.(item.href)}
 				className={cn(
@@ -402,7 +403,7 @@ export function Sidebar({
 			>
 				<item.icon className="size-4 shrink-0" />
 				<span className="flex-1 text-left">{item.label}</span>
-			</button>
+			</a>
 		);
 	};
 
@@ -452,9 +453,10 @@ export function Sidebar({
 								{item.children.map((child) => {
 									const isActive = currentPage === child.href;
 									return (
-										<button
+										<a
 											key={child.href}
-											onClick={() => onNavigate(child.href)}
+											href={hrefFor(child.href)}
+											onClick={() => onClose()}
 											onMouseEnter={() => onPrefetch?.(child.href)}
 											onFocus={() => onPrefetch?.(child.href)}
 											className={cn(
@@ -470,7 +472,7 @@ export function Sidebar({
 													{child.badge}
 												</span>
 											)}
-										</button>
+										</a>
 									);
 								})}
 							</div>
@@ -836,7 +838,14 @@ export function Sidebar({
 											</button>
 											<button
 												onClick={() => {
-													onNavigate("settings");
+													const prevParams = new URLSearchParams(window.location.search);
+													const nextParams = new URLSearchParams();
+													for (const key of ["workspace", "account"]) {
+														const value = prevParams.get(key);
+														if (value) nextParams.set(key, value);
+													}
+													nextParams.set("tab", "notifications");
+													window.location.assign(`/app/settings?${nextParams}`);
 													setUserMenuOpen(false);
 												}}
 												className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"

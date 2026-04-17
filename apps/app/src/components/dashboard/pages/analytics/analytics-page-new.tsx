@@ -312,7 +312,7 @@ export function AnalyticsPageNew({
         <nav className="hidden sm:block w-[200px] shrink-0">
           <motion.div
             className="space-y-1"
-            initial={false}
+            initial="hidden"
             animate="visible"
             variants={{
               hidden: {},

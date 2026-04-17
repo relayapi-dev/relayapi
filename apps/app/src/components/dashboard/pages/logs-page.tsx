@@ -273,7 +273,7 @@ export function LogsPage({
             <motion.div
               className="divide-y divide-border"
               variants={stagger}
-              initial={false}
+              initial="hidden"
               animate="visible"
               key={`${activeTab}-${levelFilter}`}
             >

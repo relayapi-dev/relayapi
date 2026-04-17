@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { Lightbulb, Loader2, Plus, Tags, X } from "lucide-react";
 import {
@@ -13,6 +13,7 @@ import { FilterBar } from "@/components/dashboard/filter-bar";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
 import { IdeaBoard } from "@/components/dashboard/ideas/idea-board";
 import { IdeaDetailDialog } from "@/components/dashboard/ideas/idea-detail-dialog";
+import { NewPostDialog } from "@/components/dashboard/new-post-dialog";
 import type { Idea, IdeaGroup, IdeaTag } from "@/components/dashboard/ideas/types";
 
 const stagger = {
@@ -130,6 +131,18 @@ function moveGroupIdeasToDefault(
 export function IdeasPage() {
 	const filterQuery = useFilterQuery();
 
+	const scrollRef = useRef<HTMLDivElement>(null);
+	const [showLeftFade, setShowLeftFade] = useState(false);
+	const [showRightFade, setShowRightFade] = useState(false);
+
+	const updateScrollFades = useCallback(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		const maxScroll = el.scrollWidth - el.clientWidth;
+		setShowLeftFade(el.scrollLeft > 4);
+		setShowRightFade(maxScroll > 4 && el.scrollLeft < maxScroll - 4);
+	}, []);
+
 	const {
 		data: groups,
 		loading: groupsLoading,
@@ -161,6 +174,12 @@ export function IdeasPage() {
 	const [detailOpen, setDetailOpen] = useState(false);
 	const [createDialogOpen, setCreateDialogOpen] = useState(false);
 	const [createGroupId, setCreateGroupId] = useState<string | null>(null);
+	const [convertDialogOpen, setConvertDialogOpen] = useState(false);
+	const [convertIdea, setConvertIdea] = useState<{
+		id: string;
+		content: string | null;
+		media: Array<{ url: string; type?: string }>;
+	} | null>(null);
 
 	const [filterTagId, setFilterTagId] = useState<string | null>(null);
 	const [filterAssignedTo, setFilterAssignedTo] = useState<string | null>(null);
@@ -221,6 +240,19 @@ export function IdeasPage() {
 		() => [...groups].sort((a, b) => a.position - b.position),
 		[groups],
 	);
+
+	useEffect(() => {
+		updateScrollFades();
+		const el = scrollRef.current;
+		if (!el) return;
+		const observer = new ResizeObserver(updateScrollFades);
+		observer.observe(el);
+		window.addEventListener("resize", updateScrollFades);
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("resize", updateScrollFades);
+		};
+	}, [updateScrollFades, sortedGroups.length]);
 
 	const loading = groupsLoading || ideasLoading;
 	const loadingInitial = loading && groups.length === 0;
@@ -414,8 +446,23 @@ export function IdeasPage() {
 	};
 
 	const handleConvertIdea = (ideaId: string) => {
-		console.log("Convert idea to post:", ideaId);
-		// TODO: open NewPostDialog pre-filled with idea content
+		const idea = ideas.find((i) => i.id === ideaId);
+		if (!idea) return;
+		setConvertIdea({
+			id: idea.id,
+			content: idea.content,
+			media: idea.media.map((m) => ({
+				url: m.url,
+				...(m.type ? { type: m.type } : {}),
+			})),
+		});
+		setDetailOpen(false);
+		setConvertDialogOpen(true);
+	};
+
+	const handlePostCreatedFromIdea = () => {
+		setConvertIdea(null);
+		refetchIdeas();
 	};
 
 	const handleDeleteIdea = async (ideaId: string) => {
@@ -531,7 +578,7 @@ export function IdeasPage() {
 			) : groups.length === 0 ? (
 				<motion.div
 					variants={stagger}
-					initial={false}
+					initial="hidden"
 					animate="visible"
 					className="flex flex-col items-center justify-center py-20"
 				>
@@ -557,17 +604,37 @@ export function IdeasPage() {
 					</motion.div>
 				</motion.div>
 			) : (
-				<div className="overflow-x-auto -mx-4 px-4 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-					<IdeaBoard
-						groups={sortedGroups}
-						ideasByGroup={ideasByGroup}
-						onMoveIdea={handleMoveIdea}
-						onReorderGroups={handleReorderGroups}
-						onRenameGroup={handleRenameGroup}
-						onDeleteGroup={handleDeleteGroup}
-						onCreateGroup={handleCreateGroup}
-						onClickIdea={handleClickIdea}
-						onNewIdea={handleNewIdea}
+				<div className="relative -mx-4">
+					<div
+						ref={scrollRef}
+						onScroll={updateScrollFades}
+						className="overflow-x-auto px-4 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+					>
+						<IdeaBoard
+							groups={sortedGroups}
+							ideasByGroup={ideasByGroup}
+							onMoveIdea={handleMoveIdea}
+							onReorderGroups={handleReorderGroups}
+							onRenameGroup={handleRenameGroup}
+							onDeleteGroup={handleDeleteGroup}
+							onCreateGroup={handleCreateGroup}
+							onClickIdea={handleClickIdea}
+							onNewIdea={handleNewIdea}
+						/>
+					</div>
+					<div
+						aria-hidden
+						className={cn(
+							"pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-background to-transparent transition-opacity",
+							showLeftFade ? "opacity-100" : "opacity-0",
+						)}
+					/>
+					<div
+						aria-hidden
+						className={cn(
+							"pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-background to-transparent transition-opacity",
+							showRightFade ? "opacity-100" : "opacity-0",
+						)}
 					/>
 				</div>
 			)}
@@ -598,6 +665,16 @@ export function IdeasPage() {
 				onMove={handleMoveIdeaToGroup}
 				onConvert={handleConvertIdea}
 				onMediaChange={handleIdeaMediaChange}
+			/>
+
+			<NewPostDialog
+				open={convertDialogOpen}
+				onOpenChange={(next) => {
+					setConvertDialogOpen(next);
+					if (!next) setConvertIdea(null);
+				}}
+				onCreated={handlePostCreatedFromIdea}
+				convertFromIdea={convertIdea}
 			/>
 		</div>
 	);

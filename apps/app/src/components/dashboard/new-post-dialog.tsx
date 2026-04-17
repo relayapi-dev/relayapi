@@ -63,6 +63,12 @@ export interface EditPostData {
 	target_options: Record<string, Record<string, any>> | null;
 }
 
+interface ConvertFromIdea {
+	id: string;
+	content: string | null;
+	media: Array<{ url: string; type?: string }>;
+}
+
 interface NewPostDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -71,6 +77,7 @@ interface NewPostDialogProps {
 	initialPublishMode?: PublishMode;
 	editPostId?: string | null;
 	editPostData?: EditPostData | null;
+	convertFromIdea?: ConvertFromIdea | null;
 }
 
 type PublishMode = "now" | "draft" | "schedule";
@@ -98,6 +105,7 @@ export function NewPostDialog({
 	initialPublishMode,
 	editPostId,
 	editPostData,
+	convertFromIdea,
 }: NewPostDialogProps) {
 	// Selection
 	const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
@@ -277,6 +285,18 @@ export function NewPostDialog({
 			if (editPostData.timezone) {
 				setTimezone(editPostData.timezone);
 			}
+		} else if (open && convertFromIdea) {
+			// Convert-from-idea mode: pre-fill content + media, user picks channels
+			setSharedContent(convertFromIdea.content ?? "");
+			if (convertFromIdea.media.length > 0) {
+				setSharedMedia(
+					convertFromIdea.media.map((m) => ({
+						url: m.url,
+						...(m.type ? { type: m.type } : {}),
+					})),
+				);
+			}
+			setPublishMode("draft");
 		} else if (open) {
 			// Create mode
 			if (initialDate) {
@@ -296,7 +316,7 @@ export function NewPostDialog({
 				setPublishMode("now");
 			}
 		}
-	}, [open, initialDate, initialPublishMode, editPostData]);
+	}, [open, initialDate, initialPublishMode, editPostData, convertFromIdea]);
 
 	// Data fetching — server-side search, paginated
 	const searchQuery = useMemo(() => {
@@ -740,13 +760,31 @@ export function NewPostDialog({
 
 		try {
 			const isEditMode = !!editPostId;
-			const url = isEditMode ? `/api/posts/${editPostId}` : "/api/posts";
-			const method = isEditMode ? "PATCH" : "POST";
+			const isConvertMode = !!convertFromIdea && !isEditMode;
+
+			let url: string;
+			let method: string;
+			let requestBody: Record<string, unknown>;
+
+			if (isConvertMode) {
+				url = `/api/ideas/${convertFromIdea.id}/convert`;
+				method = "POST";
+				requestBody = {
+					targets: resolvedAccounts.map((a) => ({ account_id: a.id })),
+					scheduled_at: body.scheduled_at,
+					...(body.content ? { content: body.content } : {}),
+					...(body.timezone ? { timezone: body.timezone } : {}),
+				};
+			} else {
+				url = isEditMode ? `/api/posts/${editPostId}` : "/api/posts";
+				method = isEditMode ? "PATCH" : "POST";
+				requestBody = body;
+			}
 
 			const res = await fetch(url, {
 				method,
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(body),
+				body: JSON.stringify(requestBody),
 			});
 
 			if (!res.ok) {
@@ -805,7 +843,11 @@ export function NewPostDialog({
 			<DialogContent className="max-w-2xl p-0 gap-0 max-h-[90vh] flex flex-col">
 				<DialogHeader className="px-5 pt-5 pb-3 shrink-0">
 					<DialogTitle className="text-base font-medium">
-						{editPostId ? "Edit Post" : "Create Post"}
+						{editPostId
+							? "Edit Post"
+							: convertFromIdea
+								? "Convert Idea to Post"
+								: "Create Post"}
 					</DialogTitle>
 				</DialogHeader>
 

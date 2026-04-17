@@ -446,7 +446,7 @@ export function AdsPage({
             </div>
           ) : (
             <>
-              <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial={false} animate="visible">
+              <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial="hidden" animate="visible">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
@@ -551,7 +551,7 @@ export function AdsPage({
             </div>
           ) : (
             <>
-              <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial={false} animate="visible">
+              <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial="hidden" animate="visible">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
@@ -639,7 +639,7 @@ export function AdsPage({
             </div>
           ) : (
             <>
-              <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial={false} animate="visible">
+              <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial="hidden" animate="visible">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
@@ -730,7 +730,7 @@ export function AdsPage({
             </div>
           ) : (
             <>
-            <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial={false} animate="visible">
+            <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial="hidden" animate="visible">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">

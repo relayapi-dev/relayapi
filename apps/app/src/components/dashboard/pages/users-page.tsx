@@ -168,7 +168,7 @@ export function UsersPage() {
       <motion.div
         className="rounded-md border border-border overflow-hidden"
         variants={stagger}
-        initial={false}
+        initial="hidden"
         animate="visible"
       >
         <div className="hidden md:grid grid-cols-[2fr_1fr_1fr_auto] gap-4 px-4 py-3 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
