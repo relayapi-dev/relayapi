@@ -11,7 +11,9 @@ export async function consumeAutomationQueue(
 			const body = msg.body;
 			switch (body.type) {
 				case "advance":
-					await advanceEnrollment(env, body.enrollment_id);
+					await advanceEnrollment(env, body.enrollment_id, {
+						resumeLabel: body.resume_label,
+					});
 					break;
 				case "resume_from_input":
 					await resumeFromInput(env, body.enrollment_id, body.input_value);

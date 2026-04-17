@@ -1,0 +1,109 @@
+---
+title: Automations
+description: Build flow-based automations that trigger on platform events and orchestrate multi-step conversations.
+icon: Workflow
+---
+
+## Overview
+
+Automations are RelayAPI's flow-based engine for triggering actions off inbound events — comments, DMs, keywords, scheduled times, tag changes — and orchestrating multi-step graphs that can branch, delay, capture user input, call external APIs, and hand off to AI agents.
+
+They replace the earlier `sequences`, `comment-automations`, and `engagement-rules` primitives with a unified graph model.
+
+## Anatomy
+
+An automation has three parts:
+
+1. **Trigger** — the event that enrolls a contact into the graph. Examples: an Instagram comment matching a keyword, a new WhatsApp message, a scheduled time, a tag applied.
+2. **Nodes** — the building blocks the graph executes. Messages, conditions, delays, AI agents, HTTP requests, tag updates.
+3. **Edges** — directed connections between nodes, labelled so branching nodes can pick the right path (`yes`/`no`, `captured`/`no_match`, `branch_1`, etc.).
+
+When a trigger fires, an **enrollment** is created — a row that tracks a specific contact's position in the graph. The runner advances the enrollment one node at a time, records per-node execution in `automation_run_logs`, and parks on `smart_delay` / `user_input` nodes until the next scheduled tick or inbound message.
+
+## Lifecycle
+
+```
+draft → (publish) → active → (pause) → paused
+                          → (archive) → archived
+```
+
+- **draft** — graph is editable; never enrols contacts.
+- **active** — accepts enrollments. The first time an automation goes active, the current graph is snapshotted as version 1.
+- **paused** — no new enrollments; in-flight enrollments continue on their snapshot version.
+- **archived** — read-only; enrollments stopped.
+
+Every publish creates an immutable snapshot in `automation_versions`. Enrollments execute against the snapshot they started on, so editing a live automation never breaks in-flight runs.
+
+## Quickstart
+
+The shortest path to a working automation is a template — one POST, no graph construction:
+
+```bash
+# Reply to Instagram comments matching a keyword with a DM
+curl -X POST https://api.relayapi.dev/v1/automations/templates/comment-to-dm \
+  -H "Authorization: Bearer rlay_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Link-in-bio giveaway",
+    "account_id": "acc_abc123",
+    "keywords": ["link", "giveaway"],
+    "dm_message": "Here you go, {{first_name}}! 👉 https://example.com/signup"
+  }'
+```
+
+The template expands server-side into the full node graph and publishes it active immediately.
+
+See [Templates](./templates) for the complete list.
+
+## Full Spec
+
+For custom graphs, POST the full spec in a single request. Nodes are referenced by human-chosen `key` strings so edges never need a round-trip to learn generated IDs.
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/automations \
+  -H "Authorization: Bearer rlay_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Welcome + ask email",
+    "channel": "instagram",
+    "status": "active",
+    "trigger": {
+      "type": "instagram_dm",
+      "account_id": "acc_abc123"
+    },
+    "nodes": [
+      { "key": "welcome", "type": "message_text",
+        "text": "Hey {{first_name}}! Want my free guide?" },
+      { "key": "ask_email", "type": "user_input_email",
+        "prompt": "Drop your email and I'\''ll send it over.",
+        "save_to_field": "email" },
+      { "key": "tag_lead", "type": "tag_add", "tag": "newsletter_lead" },
+      { "key": "send_link", "type": "message_text",
+        "text": "Thanks! Here it is: https://example.com/guide" }
+    ],
+    "edges": [
+      { "from": "trigger", "to": "welcome" },
+      { "from": "welcome", "to": "ask_email" },
+      { "from": "ask_email", "to": "tag_lead", "label": "captured" },
+      { "from": "ask_email", "to": "welcome", "label": "no_match" },
+      { "from": "tag_lead", "to": "send_link" }
+    ]
+  }'
+```
+
+## Merge Tags
+
+Message bodies support `{{...}}` substitution:
+
+- `{{first_name}}`, `{{last_name}}`, `{{full_name}}`, `{{email}}`, `{{phone}}` — shortcuts for contact fields.
+- `{{contact.<field>}}` — any contact column.
+- `{{state.<field>}}` — values captured earlier in the same enrollment (e.g. user_input results, HTTP response extracts).
+
+## Related
+
+- [Triggers](./triggers) — every trigger type, grouped by platform tier.
+- [Nodes](./nodes) — every node type, with fields and output labels.
+- [Templates](./templates) — quick-create shortcuts for common flows.
+- [Edges and labels](./edges-and-labels) — how branching works.
+- [Enrollments and runs](./enrollments-and-runs) — monitoring + debugging.
+- [AI-friendly API](./ai-friendly-api) — the self-describing `GET /v1/automations/schema` endpoint for MCP and LLM agents.

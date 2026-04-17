@@ -3,9 +3,23 @@ import type { Env } from "../../types";
 
 /** Queue message dispatched to AUTOMATION_QUEUE. */
 export type AutomationQueueMessage =
-	| { type: "advance"; enrollment_id: string }
+	| {
+			type: "advance";
+			enrollment_id: string;
+			/**
+			 * When set, the runner skips executing the enrollment's current node and
+			 * follows the outgoing edge with this label instead. Used to resume from
+			 * wait / wait_for_input nodes without re-executing them.
+			 */
+			resume_label?: string;
+	  }
 	| { type: "resume_from_input"; enrollment_id: string; input_value: unknown }
-	| { type: "enroll"; automation_id: string; contact_id: string | null; trigger_payload: Record<string, unknown> };
+	| {
+			type: "enroll";
+			automation_id: string;
+			contact_id: string | null;
+			trigger_payload: Record<string, unknown>;
+	  };
 
 /** Shape of a published automation version snapshot. */
 export interface AutomationSnapshot {

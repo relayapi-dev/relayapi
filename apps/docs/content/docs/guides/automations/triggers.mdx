@@ -1,0 +1,249 @@
+---
+title: Triggers
+description: The complete catalog of automation trigger types, grouped by platform tier.
+icon: Zap
+---
+
+## Trigger Model
+
+Every automation has exactly one `trigger`. When an event arrives that matches the trigger type + its config + its filters, the trigger matcher creates an enrollment and queues the graph to run.
+
+A trigger spec has four parts:
+
+```json
+{
+  "type": "instagram_comment",
+  "account_id": "acc_abc123",
+  "config": { "keywords": ["info", "link"], "match_mode": "contains", "post_id": null },
+  "filters": { "tags_none": ["blocked"], "segment_id": "seg_vip" }
+}
+```
+
+- **type** — one of the values listed below.
+- **account_id** — scopes the trigger to a specific social account (optional for virtual triggers like `scheduled_time`).
+- **config** — trigger-type-specific matching (keyword list, post scope, cron, threshold, ref URL slug).
+- **filters** — contact-side gates: tag includes/excludes, segment membership, custom-field predicates.
+
+## Tier 1 — Full Conversational (DM + comment + reply)
+
+These platforms support both inbound DMs and public engagement events.
+
+### Instagram
+
+| Type | Fires on |
+| --- | --- |
+| `instagram_dm` | Direct message received |
+| `instagram_comment` | Comment on a post or reel |
+| `instagram_story_reply` | User replies to one of your stories |
+| `instagram_story_mention` | User mentions your account in a story |
+| `instagram_mention` | User @-mentions your account in a post/comment |
+| `instagram_reaction` | Message reaction (emoji) added/removed |
+| `instagram_live_comment` | Comment during a Live broadcast |
+| `instagram_postback` | Ice-breaker / structured button postback |
+| `instagram_referral` | User arrives via an IG Ref URL |
+
+Note: Instagram does not expose a follower webhook through the public Graph API v25, so Follow-to-DM flows must be enrolled manually.
+
+### Facebook Messenger + Page
+
+| Type | Fires on |
+| --- | --- |
+| `facebook_dm` | Messenger DM received |
+| `facebook_comment` | Comment on a Page post |
+| `facebook_mention` | Page @-mentioned |
+| `facebook_postback` | Get Started / persistent menu button |
+| `facebook_reaction` | Message reaction added/removed |
+| `facebook_optin` | Send-to-Messenger widget / Ref URL opt-in |
+| `facebook_feed_post` | New post on the Page feed (automation source for cross-posts) |
+
+### WhatsApp
+
+| Type | Fires on |
+| --- | --- |
+| `whatsapp_message` | Any inbound message |
+| `whatsapp_keyword` | Inbound message text matching a keyword |
+| `whatsapp_button_click` | User taps a button from a reply-button message |
+| `whatsapp_list_reply` | User picks from a list message |
+| `whatsapp_flow_submit` | User completes a WhatsApp Flow form (arrives as `interactive.type='nfm_reply'`) |
+| `whatsapp_reaction` | Emoji reaction to a message |
+| `whatsapp_status_update` | Delivery / read / failed receipt |
+
+### Telegram
+
+| Type | Fires on |
+| --- | --- |
+| `telegram_message` | Any private chat message |
+| `telegram_command` | Bot command (`/start`, `/help`, etc.) |
+| `telegram_channel_post` | Post in a channel the bot admins |
+| `telegram_callback_query` | Inline-keyboard button press |
+| `telegram_reaction` | Message reaction added |
+| `telegram_member_joined` | New member joined a group/channel |
+| `telegram_chat_join_request` | Join request awaiting approval |
+| `telegram_business_message` | Business-account message via connected account |
+| `telegram_inline_query` | Inline query typed in another chat |
+
+### Discord
+
+| Type | Fires on |
+| --- | --- |
+| `discord_message` | Channel message |
+| `discord_dm` | Direct message |
+| `discord_reaction` | Reaction added |
+| `discord_member_joined` | `GUILD_MEMBER_ADD` |
+| `discord_thread_created` | `THREAD_CREATE` |
+| `discord_interaction` | Slash command / button / select menu interaction |
+
+Discord requires the `MESSAGE_CONTENT` privileged intent (verified at 100+ servers).
+
+### SMS
+
+| Type | Fires on |
+| --- | --- |
+| `sms_received` | Inbound SMS/MMS via Twilio or Telnyx |
+
+### X (Twitter)
+
+| Type | Fires on |
+| --- | --- |
+| `twitter_dm` | Direct message received |
+| `twitter_mention` | @-mention |
+| `twitter_reply` | Reply to one of your tweets |
+| `twitter_follow` | New follower |
+| `twitter_like` | Like on one of your tweets |
+| `twitter_retweet` | Retweet |
+| `twitter_quote` | Quote tweet |
+
+Requires Account Activity API access (Pay-per-Use or Enterprise tier).
+
+### Bluesky
+
+| Type | Fires on |
+| --- | --- |
+| `bluesky_dm` | Direct message received (poll-only via `chat.bsky.convo.getLog`) |
+| `bluesky_reply` | Reply to your post |
+| `bluesky_mention` | @-mention |
+| `bluesky_follow` | New follower |
+| `bluesky_like` | Like on your post |
+
+Public events stream via Jetstream. DMs are proxied through the central chat service and polled.
+
+## Tier 2 — Engagement Only (no DM)
+
+### Threads
+
+| Type | Fires on |
+| --- | --- |
+| `threads_reply` | Reply to your thread |
+| `threads_mention` | @-mention |
+| `threads_publish` | Your own post is published (for cross-automations) |
+
+Threads has no DM API as of Graph API v25.
+
+### YouTube
+
+| Type | Fires on |
+| --- | --- |
+| `youtube_comment` | New comment (polling) |
+| `youtube_live_chat` | Message during a live broadcast |
+| `youtube_new_video` | New video uploaded on the channel (PubSubHubbub push) |
+
+### LinkedIn
+
+| Type | Fires on |
+| --- | --- |
+| `linkedin_comment` | Comment on a company post (polling) |
+| `linkedin_mention` | Company @-mention |
+| `linkedin_reaction` | Reaction on a post |
+
+LinkedIn has no third-party messaging API. `r_member_social` is currently closed to new apps.
+
+### Mastodon
+
+| Type | Fires on |
+| --- | --- |
+| `mastodon_mention` | @-mention in a status |
+| `mastodon_reply` | Reply to your status |
+| `mastodon_boost` | Status boosted |
+| `mastodon_follow` | New follower |
+| `mastodon_favourite` | Status favourited |
+
+Events stream via `/api/v1/streaming/user`. Rate limits vary per instance.
+
+### Reddit
+
+| Type | Fires on |
+| --- | --- |
+| `reddit_comment` | Comment in a watched subreddit |
+| `reddit_mention` | Inbox mention |
+| `reddit_new_post` | New post in a subreddit |
+| `reddit_modmail` | New modmail conversation |
+| `reddit_dm` | Direct message (Reddit "compose") |
+
+Reddit has no webhooks — everything is polled. Commercial use requires explicit Reddit approval under the Responsible Builder Policy.
+
+### Google Business Profile
+
+| Type | Fires on |
+| --- | --- |
+| `googlebusiness_new_review` | New review on the location |
+| `googlebusiness_updated_review` | Review edited |
+| `googlebusiness_new_customer_media` | Customer uploaded a photo |
+| `googlebusiness_duplicate_location` | Google flagged the location as duplicate |
+| `googlebusiness_voice_of_merchant_updated` | Verification status change |
+| `googlebusiness_google_update` | Generic Google-side profile update |
+
+Q&A triggers (`NEW_QUESTION`, `UPDATED_QUESTION`, `NEW_ANSWER`, `UPDATED_ANSWER`) are deprecated because the Q&A API was discontinued on 2025-11-03.
+
+GBP API requires contact-form approval + a third-party automation policy review.
+
+## Tier 3 — Destinations (subscriber triggers)
+
+These platforms are primarily outbound; only subscriber-created events are surfaced as triggers.
+
+| Type | Fires on |
+| --- | --- |
+| `beehiiv_subscription_created` | New Beehiiv subscription |
+| `beehiiv_subscription_confirmed` | Double opt-in confirmed |
+| `beehiiv_subscription_deleted` | Unsubscribed |
+| `kit_subscriber_activate` | Kit (ConvertKit) subscriber activated |
+| `kit_form_subscribe` | Subscribed via a specific form |
+| `kit_tag_add` | Tag applied to a subscriber |
+| `mailchimp_subscribe` | Mailchimp audience subscribe |
+| `mailchimp_unsubscribe` | Mailchimp audience unsubscribe |
+
+## Cross-Platform
+
+Triggers that are not tied to a single platform:
+
+| Type | Fires on |
+| --- | --- |
+| `scheduled_time` | Cron schedule — daily digests, weekly check-ins |
+| `engagement_threshold` | A post hits N likes / N comments / N shares (see `engagement_rules` config) |
+| `tag_applied` | Contact has a tag added |
+| `tag_removed` | Contact has a tag removed |
+| `field_changed` | Contact custom field changes value |
+| `external_api` | External system posts to `POST /v1/automations/:id/enroll` |
+| `manual` | Only enrolled manually — used for internal flows + template scaffolding |
+| `segment_entered` | Contact becomes a member of a segment |
+| `segment_left` | Contact leaves a segment |
+
+## Filters
+
+All triggers support the same filter schema:
+
+```json
+{
+  "tags_any": ["vip", "trial"],
+  "tags_all": ["newsletter_opted_in"],
+  "tags_none": ["blocked", "unsubscribed"],
+  "segment_id": "seg_enterprise",
+  "predicates": {
+    "all": [
+      { "field": "fields.country", "op": "eq", "value": "IT" },
+      { "field": "fields.lifetime_value", "op": "gte", "value": 100 }
+    ]
+  }
+}
+```
+
+Filter predicates resolve against contact columns, custom fields (`fields.<slug>`), tags, and enrollment state captured earlier in a run.

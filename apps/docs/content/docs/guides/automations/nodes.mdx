@@ -1,0 +1,278 @@
+---
+title: Nodes
+description: Every node type an automation can contain — content, input capture, logic, AI, actions, ops, platform sends.
+icon: Box
+---
+
+## Node Model
+
+A node is a single step in the graph. It has a `type` discriminator, a human-chosen `key` used by edges, and type-specific fields at the top level (no `config: {...}` wrapper — flat for AI-friendliness).
+
+```json
+{
+  "key": "ask_email",
+  "type": "user_input_email",
+  "prompt": "What's your email, {{first_name}}?",
+  "save_to_field": "email",
+  "max_attempts": 2
+}
+```
+
+Nodes are grouped by category below. `output_labels` tells you which edge labels you can attach to outgoing edges.
+
+## Content
+
+Send a message on whatever channel the automation is configured for. `message_text` and `message_media` route through the universal `message-sender` service and work across Instagram, Facebook, WhatsApp, Telegram, Discord, Twitter, SMS, Reddit.
+
+### `message_text`
+
+Send a plain text DM. Supports `{{...}}` merge tags.
+
+```json
+{ "key": "reply", "type": "message_text", "text": "Hey {{first_name}}, thanks for reaching out!" }
+```
+
+Output labels: `next`.
+
+### `message_media`
+
+Send an image, video, or audio. One of `media_id` (reference to R2 via `/v1/media`) or `url`.
+
+```json
+{
+  "key": "send_guide",
+  "type": "message_media",
+  "media_id": "med_xyz789",
+  "media_type": "image",
+  "caption": "Here's your guide, {{first_name}}"
+}
+```
+
+### `message_file`
+
+Send a document / file. Same shape as `message_media` with a `filename`.
+
+## Input Capture
+
+Ask the contact for a value and save it to a custom field. The enrollment parks until the contact replies; the reply becomes `state.<save_to_field>` for downstream nodes to use.
+
+All input nodes share:
+
+```
+prompt              string (merge tags ok)
+save_to_field       custom field slug
+retry_prompt        optional — sent on invalid input
+max_attempts        1–5, default 2
+timeout_minutes     optional — exit via `timeout` edge if no reply
+```
+
+Types:
+
+- `user_input_text` — with optional `min_length` / `max_length`
+- `user_input_email`
+- `user_input_phone` — with optional `country_code_hint` (ISO-2)
+- `user_input_number` — with optional `min` / `max`
+- `user_input_date` — with `format` (default `YYYY-MM-DD`)
+- `user_input_choice` — with `choices: [{label, value}]` (1–12)
+- `user_input_file` — with `accepted_mime_types`, `max_size_mb`
+
+Output labels: `captured`, `no_match`, `timeout`.
+
+## Logic
+
+### `condition`
+
+Branch based on filter predicates evaluated against contact + state.
+
+```json
+{
+  "key": "is_vip",
+  "type": "condition",
+  "if": { "any": [{ "field": "tags", "op": "contains", "value": "vip" }] }
+}
+```
+
+Output labels: `yes`, `no`.
+
+### `smart_delay`
+
+Pause the enrollment for `duration_minutes`. Optional `quiet_hours` to avoid sending during off-hours.
+
+```json
+{ "key": "wait_a_day", "type": "smart_delay", "duration_minutes": 1440 }
+```
+
+Output labels: `next`.
+
+### `randomizer`
+
+Split traffic across N weighted branches.
+
+```json
+{
+  "key": "ab",
+  "type": "randomizer",
+  "branches": [
+    { "label": "variant_a", "weight": 1 },
+    { "label": "variant_b", "weight": 1 }
+  ]
+}
+```
+
+Output labels: one per `branches[].label`.
+
+### `split_test`
+
+Same as randomizer but with an optional `goal_field` for conversion tracking.
+
+### `goto`
+
+Jump to another node by key. Useful for loops or re-asking.
+
+```json
+{ "key": "retry", "type": "goto", "target_node_key": "ask_email" }
+```
+
+### `end`
+
+Terminate the enrollment early. Adds a reason to the run log.
+
+### `subflow_call`
+
+Invoke another automation as a subflow. Optionally `pass_state: true` to share captured fields with the subflow.
+
+## AI
+
+### `ai_step`
+
+One-shot LLM call. Configure model, system prompt, temperature, max tokens. Optionally capture the result to a state field.
+
+```json
+{
+  "key": "draft_reply",
+  "type": "ai_step",
+  "model": "claude-haiku-4-5",
+  "system_prompt": "Summarize the customer's message in 1 sentence",
+  "save_to_field": "_ai_summary"
+}
+```
+
+### `ai_agent`
+
+Multi-turn agent with knowledge base + persona + handoff-to-human.
+
+```json
+{
+  "key": "support_agent",
+  "type": "ai_agent",
+  "agent_id": "ai_ag_support",
+  "max_turns": 5,
+  "handoff_labels": ["complete", "handoff"]
+}
+```
+
+Output labels: `complete`, `handoff`.
+
+### `ai_intent_router`
+
+Route by detected intent. Each intent gets its own output edge.
+
+```json
+{
+  "key": "triage",
+  "type": "ai_intent_router",
+  "intents": [
+    { "label": "pricing", "description": "Customer asks about pricing or plans" },
+    { "label": "bug", "description": "Customer reports a bug or issue" },
+    { "label": "other", "description": "Everything else" }
+  ]
+}
+```
+
+## Contact Actions
+
+Mutations on the contact record. Output label: `next`.
+
+| Type | Effect |
+| --- | --- |
+| `tag_add` | Add a tag to the contact |
+| `tag_remove` | Remove a tag |
+| `field_set` | Set a custom field value (`field` = slug, `value` = any JSON) |
+| `field_clear` | Clear a custom field |
+| `subscription_add` | Subscribe contact to a list (per-channel) |
+| `subscription_remove` | Unsubscribe |
+| `segment_add` | Add to a static segment |
+| `segment_remove` | Remove from a static segment |
+
+## Ops
+
+### `notify_admin`
+
+Ping a user, team, or webhook when the contact hits this node.
+
+```json
+{
+  "key": "page_oncall",
+  "type": "notify_admin",
+  "channel": "in_app",
+  "title": "VIP customer needs review",
+  "body": "Contact {{contact.email}} reached the escalation node"
+}
+```
+
+### `conversation_assign`
+
+Route an open conversation to a specific user or team.
+
+### `conversation_status`
+
+Flip conversation state to `open | pending | resolved | closed`.
+
+### `http_request`
+
+Call an external HTTP endpoint. Optionally extract a value from the response with a JSON path and save it to state.
+
+```json
+{
+  "key": "enrich",
+  "type": "http_request",
+  "method": "POST",
+  "url": "https://crm.example.com/api/enrich",
+  "headers": { "X-API-Key": "abc" },
+  "body": { "email": "{{contact.email}}" },
+  "save_response_to_field": "crm_tier",
+  "json_path": "$.customer.tier"
+}
+```
+
+### `webhook_out`
+
+Fire a RelayAPI webhook endpoint with a custom event name + payload.
+
+## Platform Sends
+
+Channel-specific send nodes for when you need capabilities the universal `message_text` node doesn't cover — buttons, templates, quick replies, typing indicators, reply-to-comment, media-specific payloads, etc.
+
+These nodes are scaffolded now but implemented per-platform during Phase 8 of the rollout:
+
+- **Instagram**: `instagram_send_text`, `instagram_send_media`, `instagram_send_buttons`, `instagram_send_quick_replies`, `instagram_send_generic_template`, `instagram_typing`, `instagram_mark_seen`, `instagram_reply_to_comment`, `instagram_hide_comment`.
+- **Facebook**: `facebook_send_text`, `facebook_send_media`, `facebook_send_template`, `facebook_send_quick_replies`, `facebook_send_button_template`, `facebook_reply_to_comment`, `facebook_private_reply`, `facebook_hide_comment`, `facebook_sender_action`.
+- **WhatsApp**: `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_template`, `whatsapp_send_interactive`, `whatsapp_send_flow`, `whatsapp_send_location`, `whatsapp_send_contacts`, `whatsapp_react`, `whatsapp_mark_read`.
+- **Telegram**: `telegram_send_text`, `telegram_send_media`, `telegram_send_media_group`, `telegram_send_poll`, `telegram_send_location`, `telegram_send_keyboard`, `telegram_edit_message`, `telegram_pin_message`, `telegram_react`, `telegram_set_chat_action`.
+- **Discord**: `discord_send_message`, `discord_send_embed`, `discord_send_components`, `discord_send_attachment`, `discord_react`, `discord_edit_message`, `discord_start_thread`.
+- **SMS**: `sms_send`, `sms_send_mms`.
+- **Twitter**: `twitter_send_dm`, `twitter_send_dm_media`, `twitter_reply_to_tweet`, `twitter_like_tweet`, `twitter_retweet`.
+- **Bluesky**: `bluesky_reply`, `bluesky_like`, `bluesky_repost`, `bluesky_send_dm`.
+- **Threads**: `threads_reply_to_post`, `threads_hide_reply`.
+- **YouTube**: `youtube_reply_to_comment`, `youtube_send_live_chat`, `youtube_moderate_comment`.
+- **LinkedIn**: `linkedin_reply_to_comment`, `linkedin_react_to_post`.
+- **Mastodon**: `mastodon_reply`, `mastodon_favourite`, `mastodon_boost`, `mastodon_send_dm`.
+- **Reddit**: `reddit_reply_to_comment`, `reddit_send_pm`, `reddit_reply_modmail`, `reddit_submit_post`.
+- **Google Business**: `googlebusiness_reply_to_review`, `googlebusiness_post_update`.
+- **Beehiiv**: `beehiiv_add_subscriber`, `beehiiv_publish_post`, `beehiiv_enroll_automation`.
+- **Kit**: `kit_add_subscriber`, `kit_add_tag`, `kit_send_broadcast`.
+- **Mailchimp**: `mailchimp_add_member`, `mailchimp_add_tag`, `mailchimp_send_campaign`.
+- **Listmonk**: `listmonk_add_subscriber`, `listmonk_send_campaign`.
+- **Pinterest**: `pinterest_create_pin`.
+
+Until a given platform's send nodes are implemented, the node registry returns an error "not yet implemented (Phase 8 — per-platform rollout)". Prefer the universal `message_text` / `message_media` nodes for simple cross-channel DMs — they work today on any DM-capable channel.

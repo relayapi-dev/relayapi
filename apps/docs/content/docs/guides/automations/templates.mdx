@@ -1,0 +1,133 @@
+---
+title: Templates
+description: Quick-create endpoints for common automation patterns — no graph construction required.
+icon: Sparkles
+---
+
+## Why Templates
+
+A full automation spec has a graph of nodes + edges. For the 80% of common patterns — comment-to-DM, welcome flows, keyword replies, giveaways — the graph is mostly boilerplate. Templates expose those patterns as single-call endpoints: pass a handful of fields, get back a published automation.
+
+All templates are under `/v1/automations/templates/:template_id` and return the full `AutomationWithGraphResponse`, so the caller can immediately inspect the generated graph or edit it via the normal CRUD endpoints.
+
+## Available Templates
+
+### `POST /v1/automations/templates/comment-to-dm`
+
+Reply to Instagram comments matching a keyword with a DM. Optionally post a public reply on the comment itself.
+
+```bash
+curl -X POST /v1/automations/templates/comment-to-dm \
+  -H "Authorization: Bearer rlay_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Link-in-bio comment keyword",
+    "account_id": "acc_abc123",
+    "post_id": null,
+    "keywords": ["link", "info"],
+    "match_mode": "contains",
+    "dm_message": "Here you go, {{first_name}}! https://example.com",
+    "public_reply": "Check your DMs!"
+  }'
+```
+
+**Fields**
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string | Display name for the automation |
+| `account_id` | string | IG account to attach the trigger to |
+| `post_id` | string \| null | Specific post, or null for all posts on the account |
+| `keywords` | string[] | 1–50 keywords to match |
+| `match_mode` | `contains` \| `exact` | Default `contains` |
+| `dm_message` | string | DM sent to the commenter (merge tags ok) |
+| `public_reply` | string? | Optional reply posted publicly on the comment |
+| `once_per_user` | boolean | Default true |
+
+### `POST /v1/automations/templates/welcome-dm`
+
+Send a welcome message when a contact starts a conversation on the selected channel.
+
+```bash
+curl -X POST /v1/automations/templates/welcome-dm \
+  -d '{
+    "name": "New conversation welcome",
+    "account_id": "acc_abc123",
+    "channel": "whatsapp",
+    "welcome_message": "Hi {{first_name}}! Thanks for reaching out."
+  }'
+```
+
+Channels: `instagram`, `facebook`, `whatsapp`.
+
+### `POST /v1/automations/templates/keyword-reply`
+
+Reply to inbound DMs matching a keyword. Works across any DM-capable channel.
+
+```bash
+curl -X POST /v1/automations/templates/keyword-reply \
+  -d '{
+    "name": "Help keyword",
+    "account_id": "acc_abc123",
+    "channel": "telegram",
+    "keywords": ["help", "support"],
+    "reply_message": "Drop your email and our team will reach out."
+  }'
+```
+
+Channels: any `AutomationChannel`. Trigger type varies by channel (`instagram_dm`, `whatsapp_keyword`, `telegram_message`, etc.).
+
+### `POST /v1/automations/templates/follow-to-dm`
+
+DM new Instagram followers.
+
+```bash
+curl -X POST /v1/automations/templates/follow-to-dm \
+  -d '{
+    "name": "Follow welcome",
+    "account_id": "acc_abc123",
+    "welcome_message": "Thanks for following, {{first_name}}!"
+  }'
+```
+
+**Important**: Instagram does not expose a public follower webhook via Graph API v25. This template is scaffolded with a `manual` trigger — the automation runs correctly when contacts are enrolled via `POST /v1/automations/:id/enroll`, but there is no automatic IG-side firing until/unless Meta ships a follower webhook.
+
+### `POST /v1/automations/templates/story-reply`
+
+Respond with a DM when a user replies to one of your Instagram stories.
+
+```bash
+curl -X POST /v1/automations/templates/story-reply \
+  -d '{
+    "name": "Story reply auto-response",
+    "account_id": "acc_abc123",
+    "dm_message": "Thanks for the reply! Here's my discount code: WELCOME10"
+  }'
+```
+
+### `POST /v1/automations/templates/giveaway`
+
+Entry-keyword giveaway: tag entrants and send a confirmation DM.
+
+```bash
+curl -X POST /v1/automations/templates/giveaway \
+  -d '{
+    "name": "March giveaway",
+    "account_id": "acc_abc123",
+    "channel": "instagram",
+    "post_id": "17895...",
+    "entry_keywords": ["entry", "count me in"],
+    "entry_tag": "march_giveaway_entry",
+    "confirmation_dm": "You are in! We draw a winner Monday."
+  }'
+```
+
+Channels: `instagram`, `facebook`.
+
+## Editing a Template's Output
+
+Templates return the generated automation's full graph. If you want to tweak it, call the regular PATCH / graph-replace endpoints — the automation is no different from one built manually.
+
+## Adding a Template
+
+Templates are thin server-side expanders of the full spec. Adding a new one is ~30 lines in `apps/api/src/routes/automation-templates.ts` — a new `createRoute` and a call to the shared `materialize()` helper with the BuiltSpec for your pattern.

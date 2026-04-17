@@ -6,7 +6,7 @@ import {
 	customFieldValues,
 } from "@relayapi/db";
 import { createDb } from "@relayapi/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Env } from "../../types";
 import { matchesTriggerFilters } from "./filter-eval";
 
@@ -102,18 +102,43 @@ export async function matchAndEnroll(
 		}
 
 		// Re-entry guard
-		if (!auto.allowReentry && input.contact_id) {
-			const existing = await db.query.automationEnrollments.findFirst({
-				where: and(
-					eq(automationEnrollments.automationId, auto.id),
-					eq(automationEnrollments.contactId, input.contact_id),
-				),
-			});
-			if (existing) continue;
+		if (input.contact_id) {
+			if (!auto.allowReentry) {
+				const existing = await db.query.automationEnrollments.findFirst({
+					where: and(
+						eq(automationEnrollments.automationId, auto.id),
+						eq(automationEnrollments.contactId, input.contact_id),
+					),
+				});
+				if (existing) continue;
+			} else if (auto.reentryCooldownMin && auto.reentryCooldownMin > 0) {
+				// Cooldown enforcement: reject if this contact was enrolled in the
+				// same automation within the last N minutes.
+				const cooldownStart = new Date(
+					Date.now() - auto.reentryCooldownMin * 60 * 1000,
+				);
+				const recent = await db
+					.select({ id: automationEnrollments.id })
+					.from(automationEnrollments)
+					.where(
+						and(
+							eq(automationEnrollments.automationId, auto.id),
+							eq(automationEnrollments.contactId, input.contact_id),
+							gte(automationEnrollments.enrolledAt, cooldownStart),
+						),
+					)
+					.orderBy(desc(automationEnrollments.enrolledAt))
+					.limit(1);
+				if (recent.length > 0) continue;
+			}
 		}
 
+		// Skip automations that have never been published — the runner cannot
+		// load a snapshot for them.
+		if (auto.publishedVersion === null) continue;
+
 		// Create enrollment
-		const version = auto.publishedVersion ?? auto.version;
+		const version = auto.publishedVersion;
 		const [created] = await db
 			.insert(automationEnrollments)
 			.values({

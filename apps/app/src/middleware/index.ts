@@ -326,7 +326,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	if (shouldResolveSession(path)) {
 		let sessionState: SessionState | null = null;
 
-		if (isInternalApiPath(path)) {
+		if (isInternalApiPath(path) && cfEnv.BETTER_AUTH_SECRET) {
 			const cached = (await getCookieCache(context.request, {
 				secret: cfEnv.BETTER_AUTH_SECRET,
 			})) as SessionState | null;

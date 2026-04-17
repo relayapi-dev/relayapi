@@ -12,6 +12,7 @@
     "smart-scheduling",
     "auto-post-rules",
     "engagement-rules",
+    "automations",
     "posting-streaks",
     "rate-limits",
     "error-handling",

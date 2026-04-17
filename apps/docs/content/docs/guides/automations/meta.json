@@ -1,0 +1,13 @@
+{
+  "title": "Automations",
+  "icon": "Workflow",
+  "pages": [
+    "index",
+    "triggers",
+    "nodes",
+    "templates",
+    "edges-and-labels",
+    "enrollments-and-runs",
+    "ai-friendly-api"
+  ]
+}

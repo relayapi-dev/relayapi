@@ -3,27 +3,43 @@ import {
 	automationScheduledTicks,
 } from "@relayapi/db";
 import { createDb } from "@relayapi/db";
-import { and, asc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Env } from "../../types";
 
 const BATCH_SIZE = 200;
 
 /**
  * Cron-triggered sweep: find enrollments whose delay has elapsed and re-enqueue them.
- * Uses FOR UPDATE SKIP LOCKED so multiple cron instances are safe.
+ * Claims only BATCH_SIZE rows per run so rows in excess of the batch stay `pending`
+ * and are picked up by the next tick rather than stranded in `processing`.
  */
 export async function processAutomationSchedule(env: Env): Promise<number> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const now = new Date();
 
-	// Claim due ticks
+	// Select a batch of due tick IDs first, then claim only those.
+	const dueRows = await db
+		.select({ id: automationScheduledTicks.id })
+		.from(automationScheduledTicks)
+		.where(
+			and(
+				eq(automationScheduledTicks.status, "pending"),
+				lte(automationScheduledTicks.runAt, now),
+			),
+		)
+		.orderBy(asc(automationScheduledTicks.runAt))
+		.limit(BATCH_SIZE);
+
+	if (dueRows.length === 0) return 0;
+
+	const dueIds = dueRows.map((r) => r.id);
 	const claimed = await db
 		.update(automationScheduledTicks)
 		.set({ status: "processing" })
 		.where(
 			and(
+				inArray(automationScheduledTicks.id, dueIds),
 				eq(automationScheduledTicks.status, "pending"),
-				lte(automationScheduledTicks.runAt, now),
 			),
 		)
 		.returning({
@@ -32,51 +48,27 @@ export async function processAutomationSchedule(env: Env): Promise<number> {
 		});
 
 	let enqueued = 0;
-	for (const tick of claimed.slice(0, BATCH_SIZE)) {
+	for (const tick of claimed) {
 		try {
 			await env.AUTOMATION_QUEUE.send({
 				type: "advance",
 				enrollment_id: tick.enrollmentId,
+				resume_label: "next",
 			});
 			await db
 				.update(automationScheduledTicks)
 				.set({ status: "done" })
 				.where(eq(automationScheduledTicks.id, tick.id));
 			enqueued++;
-		} catch (e) {
+		} catch {
 			await db
 				.update(automationScheduledTicks)
 				.set({
-					status: "failed",
+					status: "pending",
 					attempts: sql`${automationScheduledTicks.attempts} + 1`,
 				})
 				.where(eq(automationScheduledTicks.id, tick.id));
 		}
-	}
-
-	// Secondary sweep: enrollments that have nextRunAt in the past but no pending tick
-	// (defensive; shouldn't happen if smart-delay inserts are consistent)
-	const waiting = await db
-		.select({
-			id: automationEnrollments.id,
-			nextRunAt: automationEnrollments.nextRunAt,
-		})
-		.from(automationEnrollments)
-		.where(
-			and(
-				eq(automationEnrollments.status, "waiting"),
-				lte(automationEnrollments.nextRunAt, now),
-			),
-		)
-		.orderBy(asc(automationEnrollments.nextRunAt))
-		.limit(BATCH_SIZE);
-
-	for (const w of waiting) {
-		await env.AUTOMATION_QUEUE.send({
-			type: "advance",
-			enrollment_id: w.id,
-		});
-		enqueued++;
 	}
 
 	return enqueued;
@@ -86,24 +78,39 @@ export async function processAutomationSchedule(env: Env): Promise<number> {
  * Timeout sweep: enrollments that have been waiting on user input past their
  * `_pending_input_timeout_at` mark should be advanced with a 'timeout' branch.
  */
-export async function processAutomationInputTimeouts(env: Env): Promise<number> {
+export async function processAutomationInputTimeouts(
+	env: Env,
+): Promise<number> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const now = new Date().toISOString();
 
-	// Read a batch of waiting-for-input enrollments with timeout set
-	const rows = await db.execute(sql`
+	const rows = (await db.execute(sql`
 		SELECT id FROM automation_enrollments
 		WHERE status = 'waiting'
 		  AND state ? '_pending_input_timeout_at'
 		  AND (state ->> '_pending_input_timeout_at') <= ${now}
+		ORDER BY (state ->> '_pending_input_timeout_at') ASC
 		LIMIT ${BATCH_SIZE}
-	`);
+	`)) as unknown as Array<{ id: string }>;
 
 	let count = 0;
-	for (const row of rows as unknown as Array<{ id: string }>) {
+	for (const row of rows) {
+		// Clear the pending marker so the row isn't re-claimed next tick.
+		await db
+			.update(automationEnrollments)
+			.set({
+				state: sql`(${automationEnrollments.state}::jsonb
+					- '_pending_input_field'
+					- '_pending_input_node_key'
+					- '_pending_input_timeout_at')`,
+				status: "active",
+				updatedAt: new Date(),
+			})
+			.where(eq(automationEnrollments.id, row.id));
 		await env.AUTOMATION_QUEUE.send({
 			type: "advance",
 			enrollment_id: row.id,
+			resume_label: "timeout",
 		});
 		count++;
 	}

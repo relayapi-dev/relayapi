@@ -1,0 +1,100 @@
+---
+title: AI-Friendly API
+description: How the automation API is shaped for AI agents and MCP servers.
+icon: Bot
+---
+
+## Design Principles
+
+The API was designed so an AI agent — either through a direct Claude API call or through an MCP server — can construct a working automation in a single call, without guessing enum values and without needing to round-trip generated IDs.
+
+Three principles:
+
+1. **One call creates the full automation.** Trigger + nodes + edges ship in one POST body. No "create the flow, then loop over the nodes".
+2. **Human-chosen string keys instead of generated IDs.** The AI picks `"welcome"`, `"ask_email"`, `"send_guide"`. Edges reference those keys. No ID dance.
+3. **Discriminated union nodes with flat fields.** Each node variant declares its own fields at the top level (not wrapped in `config: {}`), so the generated JSON schema is legible and the AI produces matching output more reliably.
+
+## Schema Introspection
+
+`GET /v1/automations/schema` returns the self-describing catalog:
+
+```json
+{
+  "triggers": [
+    {
+      "type": "instagram_comment",
+      "description": "Fires when a user comments on an Instagram post or reel",
+      "channel": "instagram",
+      "tier": 1,
+      "transport": "webhook",
+      "config_schema": { /* JSON Schema for config.* */ },
+      "output_labels": ["next"]
+    }
+  ],
+  "nodes": [
+    {
+      "type": "user_input_email",
+      "description": "Ask for email and save to a contact field",
+      "category": "input",
+      "fields_schema": { /* JSON Schema */ },
+      "output_labels": ["captured", "no_match", "timeout"]
+    }
+  ],
+  "templates": [
+    {
+      "id": "comment-to-dm",
+      "name": "Comment to DM",
+      "description": "Reply to an Instagram comment + send a DM to the commenter",
+      "input_schema": { /* JSON Schema for the template input */ }
+    }
+  ],
+  "merge_tags": ["first_name", "last_name", "email", "phone", "contact.*", "state.*"]
+}
+```
+
+An MCP client can call this once at session start, cache the result, and use it to construct valid automations without trial-and-error.
+
+## Validation Errors with Suggestions
+
+When validation fails, the response includes a Levenshtein-distance suggestion:
+
+```json
+{
+  "error": {
+    "code": "unknown_node_reference",
+    "message": "Edge 2 references unknown node 'tag_lad'",
+    "details": { "path": "edges[2].to", "suggestion": "tag_lead" }
+  }
+}
+```
+
+`unknown_node_reference`, `duplicate_node_key`, and similar schema errors all return actionable `suggestion` hints when a near-match is available.
+
+## Template Shortcuts
+
+For common patterns, call a `POST /v1/automations/templates/:template_id` endpoint instead of constructing the graph. The server expands a handful of fields into a full spec. See [Templates](./templates) for the catalog.
+
+## MCP Server
+
+An MCP server that wraps this API is tracked as Phase 7 of the automation rollout. It exposes tools:
+
+- `automations.list`
+- `automations.get`
+- `automations.create`
+- `automations.create_from_template`
+- `automations.update`
+- `automations.publish`
+- `automations.pause` / `resume` / `archive`
+- `automations.list_enrollments`
+- `automations.list_runs`
+- `automations.schema`
+
+Until the MCP package ships, any AI agent with access to an `rlay_live_...` API key can drive the REST endpoints directly — the shape is already AI-friendly.
+
+## Tips for Prompting
+
+When asking an AI to build an automation:
+
+- Give it the trigger type and merge tags you care about, not the full node list. Let it fetch `/schema` if it needs the catalog.
+- For one-shot flows, steer it to a template (`comment-to-dm`, `keyword-reply`, etc.) rather than a full graph.
+- Validate locally before publishing: call the endpoint with `status: "draft"` first, inspect the graph, then PATCH to `active` when satisfied.

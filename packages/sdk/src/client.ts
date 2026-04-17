@@ -104,6 +104,36 @@ import {
   SequenceListEnrollmentsParams,
 } from './resources/sequences';
 import {
+  Automations,
+  AutomationTemplates,
+  AutomationResponse,
+  AutomationNodeResponse,
+  AutomationEdgeResponse,
+  AutomationWithGraphResponse,
+  AutomationListResponse,
+  AutomationEnrollmentResponse,
+  AutomationEnrollmentListResponse,
+  AutomationRunLogResponse,
+  AutomationRunListResponse,
+  AutomationSchemaResponse,
+  AutomationCreateParams,
+  AutomationUpdateParams,
+  AutomationListParams,
+  AutomationListEnrollmentsParams,
+  AutomationTriggerSpec,
+  AutomationNodeSpec,
+  AutomationEdgeSpec,
+  AutomationChannel,
+  AutomationStatus,
+  AutomationEnrollmentStatus,
+  CommentToDmTemplateParams,
+  WelcomeDmTemplateParams,
+  KeywordReplyTemplateParams,
+  FollowToDmTemplateParams,
+  StoryReplyTemplateParams,
+  GiveawayTemplateParams,
+} from './resources/automations';
+import {
   APIKeyCreateParams,
   APIKeyCreateResponse,
   APIKeyListParams,
@@ -1064,6 +1094,7 @@ export class Relay {
   autoPostRules: API.AutoPostRules = new API.AutoPostRules(this);
   broadcasts: API.Broadcasts = new API.Broadcasts(this);
   sequences: API.Sequences = new API.Sequences(this);
+  automations: API.Automations = new API.Automations(this);
   shortLinks: API.ShortLinks = new API.ShortLinks(this);
   commentAutomations: API.CommentAutomations = new API.CommentAutomations(this);
   contentTemplates: API.ContentTemplates = new API.ContentTemplates(this);
@@ -1101,6 +1132,7 @@ Relay.Ads = Ads;
 Relay.AutoPostRules = AutoPostRules;
 Relay.Broadcasts = Broadcasts;
 Relay.Sequences = Sequences;
+Relay.Automations = Automations;
 Relay.CommentAutomations = CommentAutomations;
 Relay.ContentTemplates = ContentTemplates;
 Relay.Tags = Tags;
@@ -1205,6 +1237,37 @@ export declare namespace Relay {
     type SequenceUpdateParams as SequenceUpdateParams,
     type SequenceEnrollParams as SequenceEnrollParams,
     type SequenceListEnrollmentsParams as SequenceListEnrollmentsParams,
+  };
+
+  export {
+    Automations as Automations,
+    AutomationTemplates as AutomationTemplates,
+    type AutomationResponse as AutomationResponse,
+    type AutomationNodeResponse as AutomationNodeResponse,
+    type AutomationEdgeResponse as AutomationEdgeResponse,
+    type AutomationWithGraphResponse as AutomationWithGraphResponse,
+    type AutomationListResponse as AutomationListResponse,
+    type AutomationEnrollmentResponse as AutomationEnrollmentResponse,
+    type AutomationEnrollmentListResponse as AutomationEnrollmentListResponse,
+    type AutomationRunLogResponse as AutomationRunLogResponse,
+    type AutomationRunListResponse as AutomationRunListResponse,
+    type AutomationSchemaResponse as AutomationSchemaResponse,
+    type AutomationCreateParams as AutomationCreateParams,
+    type AutomationUpdateParams as AutomationUpdateParams,
+    type AutomationListParams as AutomationListParams,
+    type AutomationListEnrollmentsParams as AutomationListEnrollmentsParams,
+    type AutomationTriggerSpec as AutomationTriggerSpec,
+    type AutomationNodeSpec as AutomationNodeSpec,
+    type AutomationEdgeSpec as AutomationEdgeSpec,
+    type AutomationChannel as AutomationChannel,
+    type AutomationStatus as AutomationStatus,
+    type AutomationEnrollmentStatus as AutomationEnrollmentStatus,
+    type CommentToDmTemplateParams as CommentToDmTemplateParams,
+    type WelcomeDmTemplateParams as WelcomeDmTemplateParams,
+    type KeywordReplyTemplateParams as KeywordReplyTemplateParams,
+    type FollowToDmTemplateParams as FollowToDmTemplateParams,
+    type StoryReplyTemplateParams as StoryReplyTemplateParams,
+    type GiveawayTemplateParams as GiveawayTemplateParams,
   };
 
   export {

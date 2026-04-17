@@ -20,10 +20,16 @@ const MAX_STEPS_PER_TICK = 25; // hard cap on synchronous chain length before re
 /**
  * Runs an enrollment forward until it completes, waits, or hits the step cap.
  * Called from the AUTOMATION_QUEUE consumer.
+ *
+ * @param opts.resumeLabel — when set, the runner treats the enrollment's
+ *   current node as already-executed (it was a wait/wait_for_input node) and
+ *   follows the outgoing edge with this label. This prevents smart_delay and
+ *   user_input nodes from re-executing themselves on resume.
  */
 export async function advanceEnrollment(
 	env: Env,
 	enrollmentId: string,
+	opts?: { resumeLabel?: string },
 ): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
@@ -53,6 +59,30 @@ export async function advanceEnrollment(
 		? nodeKeyById(snapshot, enrollment.currentNodeId)
 		: snapshot.entry_node_key;
 	let state: Record<string, unknown> = (enrollment.state as Record<string, unknown>) ?? {};
+	let resumeLabel = opts?.resumeLabel;
+
+	// Resume path: advance past the waiting node without re-executing it.
+	if (resumeLabel) {
+		const nextKey = resolveNextNodeKey(
+			snapshot,
+			currentNodeKey,
+			resumeLabel,
+		);
+		if (!nextKey) {
+			await db
+				.update(automationEnrollments)
+				.set({
+					status: "completed",
+					completedAt: new Date(),
+					state,
+					updatedAt: new Date(),
+				})
+				.where(eq(automationEnrollments.id, enrollment.id));
+			return;
+		}
+		currentNodeKey = nextKey;
+		resumeLabel = undefined;
+	}
 
 	for (let step = 0; step < MAX_STEPS_PER_TICK; step++) {
 		const node = snapshot.nodes.find((n) => n.key === currentNodeKey);
@@ -209,6 +239,7 @@ export async function advanceEnrollment(
 
 /**
  * Called when inbound message arrives for a contact with a pending input-wait.
+ * Advances the enrollment out of the user_input node via the "captured" edge.
  */
 export async function resumeFromInput(
 	env: Env,
@@ -235,7 +266,7 @@ export async function resumeFromInput(
 		.set({ status: "active", state, updatedAt: new Date() })
 		.where(eq(automationEnrollments.id, enrollmentId));
 
-	await advanceEnrollment(env, enrollmentId);
+	await advanceEnrollment(env, enrollmentId, { resumeLabel: "captured" });
 }
 
 async function loadSnapshot(

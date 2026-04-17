@@ -1,0 +1,76 @@
+---
+title: Edges and Labels
+description: How branching works — labeled edges, condition resolution, and the default fallback.
+icon: GitBranch
+---
+
+## Edge Model
+
+An edge connects two nodes and carries a `label` the runner uses to pick the right path out of a branching node.
+
+```json
+{ "from": "ask_email", "to": "tag_lead", "label": "captured", "order": 0 }
+```
+
+Source nodes can be referenced by any key in the automation, plus the virtual `"trigger"` key for the entry point.
+
+## Label Conventions
+
+Each node type declares which outgoing labels the runner may produce. The canonical mapping:
+
+| Node type | Labels the runner produces |
+| --- | --- |
+| `trigger` | `next` |
+| Content (`message_*`) | `next` |
+| Action / Ops / HTTP | `next` |
+| `smart_delay` | `next` |
+| `goto` | — (direct jump by key) |
+| `end` | — (terminal) |
+| `condition` | `yes`, `no` |
+| `randomizer` | one per `branches[].label` |
+| `split_test` | one per `variants[].label` |
+| `user_input_*` | `captured`, `no_match`, `timeout` |
+| `ai_agent` | `complete`, `handoff` |
+| `ai_intent_router` | one per `intents[].label` |
+
+## Resolution Rules
+
+When a handler returns `{kind: "next", label: "captured"}`:
+
+1. The runner looks for edges from the current node with `label = "captured"`, ordered by `order` ascending.
+2. If found, the first match's `to` node becomes the next node.
+3. If no exact-label match exists, the runner falls back to `label = "next"` on the same node.
+4. If still nothing, the enrollment completes (graph terminated).
+
+This fallback lets you wire a happy path with just `next` edges and add specific labels (`no_match`, `timeout`) only where you want custom handling.
+
+## Waiting Nodes and Resume
+
+`smart_delay` and `user_input_*` nodes return `wait` / `wait_for_input`. The runner parks the enrollment with `currentNodeId` pointing at the waiting node. When the delay elapses (or user input arrives), the runner is called back with an explicit `resumeLabel`:
+
+- `smart_delay` → resumed with `next`.
+- `user_input_*` captured → resumed with `captured`.
+- `user_input_*` timeout → resumed with `timeout`.
+
+The runner treats the waiting node as already-executed and resolves the outgoing edge matching that label. This is what prevents delays and input nodes from re-running forever.
+
+## Loops and Cycles
+
+`goto` nodes let you loop back. Example: re-ask an email on `no_match`:
+
+```json
+"nodes": [
+  { "key": "ask_email", "type": "user_input_email", "save_to_field": "email" },
+  { "key": "retry", "type": "goto", "target_node_key": "ask_email" }
+],
+"edges": [
+  { "from": "ask_email", "to": "save", "label": "captured" },
+  { "from": "ask_email", "to": "retry", "label": "no_match" }
+]
+```
+
+The runner enforces `MAX_STEPS_PER_TICK` (25) before re-enqueueing, so tight cycles don't burn through a single tick.
+
+## Order Field
+
+When two edges share a source + label (e.g. multiple `next` edges off a notify_admin node — useful for fan-out), `order` picks the first one ascending. Future versions may add explicit fan-out semantics; for now the first edge wins.

@@ -203,10 +203,15 @@ app.openapi(
 	}),
 	async (c) => {
 		const body = c.req.valid("json");
+		// NOTE: The DM send uses the universal `message_text` node which already
+		// resolves the channel + recipient at runtime. The optional public comment
+		// reply uses `instagram_reply_to_comment`, which is currently a Phase 8
+		// stub — the DM part will work end-to-end, the public reply will fail
+		// with "not yet implemented" until Phase 8.
 		const nodes: BuiltSpec["nodes"] = [
 			{
 				key: "send_dm",
-				type: "instagram_send_text",
+				type: "message_text",
 				config: { text: body.dm_message },
 			},
 		];
@@ -274,11 +279,8 @@ app.openapi(
 			facebook: "facebook_dm",
 			whatsapp: "whatsapp_message",
 		};
-		const sendNodeByChannel: Record<string, string> = {
-			instagram: "instagram_send_text",
-			facebook: "facebook_send_text",
-			whatsapp: "whatsapp_send_text",
-		};
+		// Welcome send goes through the universal message_text node which works
+		// for any DM-capable channel via the message-sender service.
 		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
 			name: body.name,
 			channel: body.channel,
@@ -292,7 +294,7 @@ app.openapi(
 			nodes: [
 				{
 					key: "welcome",
-					type: sendNodeByChannel[body.channel]!,
+					type: "message_text",
 					config: { text: body.welcome_message },
 				},
 			],
@@ -339,14 +341,6 @@ app.openapi(
 			twitter: "twitter_dm",
 			sms: "sms_received",
 		};
-		const sendMap: Record<string, string> = {
-			instagram: "instagram_send_text",
-			facebook: "facebook_send_text",
-			whatsapp: "whatsapp_send_text",
-			telegram: "telegram_send_text",
-			twitter: "twitter_send_dm",
-			sms: "sms_send",
-		};
 		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
 			name: body.name,
 			channel: body.channel,
@@ -360,7 +354,7 @@ app.openapi(
 			nodes: [
 				{
 					key: "reply",
-					type: sendMap[body.channel] ?? "message_text",
+					type: "message_text",
 					config: { text: body.reply_message },
 				},
 			],
@@ -412,7 +406,7 @@ app.openapi(
 			nodes: [
 				{
 					key: "welcome",
-					type: "instagram_send_text",
+					type: "message_text",
 					config: { text: body.welcome_message },
 				},
 			],
@@ -464,7 +458,7 @@ app.openapi(
 			nodes: [
 				{
 					key: "reply",
-					type: "instagram_send_text",
+					type: "message_text",
 					config: { text: body.dm_message },
 				},
 			],
@@ -505,10 +499,6 @@ app.openapi(
 		const body = c.req.valid("json");
 		const triggerType =
 			body.channel === "facebook" ? "facebook_comment" : "instagram_comment";
-		const sendType =
-			body.channel === "facebook"
-				? "facebook_send_text"
-				: "instagram_send_text";
 		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
 			name: body.name,
 			channel: body.channel,
@@ -531,7 +521,7 @@ app.openapi(
 				},
 				{
 					key: "confirm_dm",
-					type: sendType,
+					type: "message_text",
 					config: { text: body.confirmation_dm },
 				},
 			],

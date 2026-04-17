@@ -410,6 +410,12 @@ app.openapi(updateAutomation, async (c) => {
 	}
 	updates.updatedAt = new Date();
 
+	// If activating (draft/paused → active) and no snapshot has been published,
+	// publish the current graph so the runner has something to load from.
+	if (updates.status === "active" && row.publishedVersion === null) {
+		await publishVersion(db, id);
+	}
+
 	const [updated] = await db
 		.update(automations)
 		.set(updates)
@@ -463,6 +469,11 @@ for (const [name, action, status] of [
 		if (!row)
 			return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
 		// Workspace-level enforcement intentionally deferred — org-level auth handled by middleware.
+
+		// Ensure a published snapshot exists before the runner can enrol anyone.
+		if (status === "active" && row.publishedVersion === null) {
+			await publishVersion(db, id);
+		}
 
 		const [updated] = await db
 			.update(automations)
@@ -694,11 +705,24 @@ app.openapi(listEnrollments, async (c) => {
 	];
 	if (status) conditions.push(eq(automationEnrollments.status, status));
 
+	if (cursor) {
+		const cursorRow = await db
+			.select({ enrolledAt: automationEnrollments.enrolledAt })
+			.from(automationEnrollments)
+			.where(eq(automationEnrollments.id, cursor))
+			.limit(1);
+		if (cursorRow[0]) {
+			conditions.push(
+				sql`(${automationEnrollments.enrolledAt}, ${automationEnrollments.id}) < (${cursorRow[0].enrolledAt}, ${cursor})`,
+			);
+		}
+	}
+
 	const rows = await db
 		.select()
 		.from(automationEnrollments)
 		.where(and(...conditions))
-		.orderBy(desc(automationEnrollments.enrolledAt))
+		.orderBy(desc(automationEnrollments.enrolledAt), desc(automationEnrollments.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -719,7 +743,11 @@ app.openapi(listEnrollments, async (c) => {
 	}));
 
 	return c.json(
-		{ data, next_cursor: hasMore ? data[data.length - 1]?.id ?? null : null, has_more: hasMore },
+		{
+			data,
+			next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
+			has_more: hasMore,
+		},
 		200,
 	);
 });
@@ -743,12 +771,34 @@ const getRuns = createRoute({
 				},
 			},
 		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
 app.openapi(getRuns, async (c) => {
-	const { enrollmentId } = c.req.valid("param");
+	const { id: automationId, enrollmentId } = c.req.valid("param");
 	const db = c.get("db");
+	const orgId = c.get("orgId");
+
+	// Verify the enrollment exists, belongs to the caller's org, and to the
+	// automation in the URL path. Without this, log data could leak across orgs.
+	const enrollment = await db.query.automationEnrollments.findFirst({
+		where: and(
+			eq(automationEnrollments.id, enrollmentId),
+			eq(automationEnrollments.automationId, automationId),
+			eq(automationEnrollments.organizationId, orgId),
+		),
+	});
+	if (!enrollment) {
+		return c.json(
+			{ error: { code: "not_found", message: "Enrollment not found" } },
+			404,
+		);
+	}
+
 	const logs = await db
 		.select()
 		.from(automationRunLogs)
