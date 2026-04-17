@@ -33,7 +33,7 @@ export const apis: ApiData[] = [
 		),
 		heroTitle: "Posting API for Developers",
 		heroDescription:
-			"One REST API to publish content across 17 social platforms. Post text, images, videos, and more with a single endpoint.",
+			"One REST API to publish content across 21 platforms. Post text, images, videos, and more with a single endpoint.",
 		features: [
 			{
 				title: "Multi-Platform Posting",
@@ -166,7 +166,7 @@ print(post["id"], post["status"])`,
 			{
 				question: "Which social platforms are supported?",
 				answer:
-					"RelayAPI currently supports 17 platforms: Instagram, Facebook, LinkedIn, TikTok, YouTube, Bluesky, Mastodon, Threads, Pinterest, Reddit, Discord, Telegram, WhatsApp Business, Google Business Profile, Snapchat, X/Twitter, and SMS. New platforms are added regularly.",
+					"RelayAPI currently supports 21 platforms across social, messaging, and newsletter categories: Instagram, Facebook, LinkedIn, TikTok, YouTube, Bluesky, Mastodon, Threads, Pinterest, Reddit, Discord, Telegram, WhatsApp Business, Google Business Profile, Snapchat, X/Twitter, SMS, Beehiiv, ConvertKit, Mailchimp, and Listmonk. New platforms are added regularly.",
 			},
 			{
 				question: "How far in advance can I schedule posts?",
@@ -261,7 +261,7 @@ print(post["id"], post["status"])`,
 			{
 				title: "One Upload Endpoint, Every Format",
 				description:
-					"Building a media pipeline that handles format conversion, resizing for 17 platforms, and CDN delivery is a massive undertaking. RelayAPI gives you all of it through a single upload endpoint.",
+					"Building a media pipeline that handles format conversion, resizing for 21 platforms, and CDN delivery is a massive undertaking. RelayAPI gives you all of it through a single upload endpoint.",
 			},
 			{
 				title: "Enterprise-Grade Reliability",
@@ -382,7 +382,7 @@ print(media["variants"])  # platform-specific versions`,
 			{
 				title: "Cross-Platform Metrics",
 				description:
-					"Aggregate likes, shares, comments, impressions, and reach across all 17 platforms into a single normalized data model. Compare apples to apples regardless of the source.",
+					"Aggregate likes, shares, comments, impressions, and reach across all 21 platforms into a single normalized data model. Compare apples to apples regardless of the source.",
 			},
 			{
 				title: "Engagement Tracking",
@@ -595,7 +595,7 @@ print(f"Top platform: {overview['top_platform']['name']}")`,
 			{
 				title: "One Webhook, Every Platform",
 				description:
-					"Building a reliable polling system across 17 platforms is fragile and expensive. RelayAPI pushes events to you the moment they happen, replacing thousands of polling requests with a single webhook endpoint.",
+					"Building a reliable polling system across 21 platforms is fragile and expensive. RelayAPI pushes events to you the moment they happen, replacing thousands of polling requests with a single webhook endpoint.",
 			},
 			{
 				title: "Enterprise-Grade Reliability",

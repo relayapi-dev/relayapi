@@ -1,6 +1,6 @@
 ---
 name: relayapi
-description: Use RelayAPI to post to 17 social media platforms, manage accounts, groups, media, scheduling, analytics, inbox, and webhooks via a single unified API. Activate when the user mentions social media posting, cross-posting, scheduling posts, managing social accounts, analytics, inbox, comments, or webhooks.
+description: Use RelayAPI to post to 21 platforms, manage accounts, groups, media, scheduling, analytics, inbox, and webhooks via a single unified API. Activate when the user mentions social media posting, cross-posting, scheduling posts, managing social accounts, analytics, inbox, comments, or webhooks.
 ---
 
 # RelayAPI – Unified Social Media API

@@ -1,7 +1,7 @@
 {
 	"name": "relayapi",
 	"version": "1.0.0",
-	"description": "Post to 17 social media platforms via a single unified API. Manage accounts, upload media, schedule posts, and track analytics through RelayAPI.",
+	"description": "Post to 21 platforms via a single unified API. Manage accounts, upload media, schedule posts, and track analytics through RelayAPI.",
 	"author": {
 		"name": "RelayAPI",
 		"url": "https://relayapi.dev"
@@ -22,7 +22,7 @@
 	"interface": {
 		"displayName": "RelayAPI",
 		"shortDescription": "Unified social media posting API",
-		"longDescription": "Post to 17 social media platforms via a single API. Manage accounts, upload media, schedule posts, set up webhooks, and track analytics.",
+		"longDescription": "Post to 21 platforms via a single API. Manage accounts, upload media, schedule posts, set up webhooks, and track analytics.",
 		"developerName": "RelayAPI",
 		"category": "Productivity",
 		"capabilities": [

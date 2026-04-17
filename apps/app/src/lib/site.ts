@@ -2,7 +2,7 @@ export const siteConfig = {
 	name: "RelayAPI",
 	url: "https://relayapi.dev",
 	description:
-		"Unified social media API — post to 17 platforms with a single call.",
+		"Unified social media API — post to 21 platforms with a single call.",
 	ogImage: "https://relayapi.dev/og.png",
 	twitterHandle: "@giuliozanchetta",
 	links: {

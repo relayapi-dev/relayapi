@@ -42,6 +42,9 @@ export function DashboardShell({
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
 	const buildPageUrl = (page: string) => {
+		const nextPath = `/app/${page}`;
+		if (typeof window === "undefined") return nextPath;
+
 		const prevParams = new URLSearchParams(window.location.search);
 		const nextParams = new URLSearchParams();
 		for (const key of ["workspace", "account"]) {
@@ -49,7 +52,6 @@ export function DashboardShell({
 			if (value) nextParams.set(key, value);
 		}
 
-		const nextPath = `/app/${page}`;
 		return `${nextPath}${nextParams.toString() ? `?${nextParams}` : ""}`;
 	};
 

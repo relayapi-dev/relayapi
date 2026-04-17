@@ -339,7 +339,7 @@ export function generateLLMIndex(
 	const lines: string[] = [];
 	lines.push("# RelayAPI Documentation\n");
 	lines.push(
-		"> Unified social media API for posting to 17 platforms via a single API.\n",
+		"> Unified social media API for posting to 21 platforms via a single API.\n",
 	);
 	lines.push("- Documentation: https://docs.relayapi.dev");
 	lines.push(

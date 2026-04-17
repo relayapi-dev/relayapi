@@ -61,9 +61,18 @@ app.post("/", async (c) => {
 		return c.json({ error: "Invalid signature" }, 400);
 	}
 
-	// Acknowledge immediately, process async
+	// Idempotency — Stripe retries failed webhooks for 3 days. Skip events
+	// we've already seen. The mark is written after handler completion below.
+	const dedupKey = `stripe-evt:${event.id}`;
+	const alreadySeen = await c.env.KV.get(dedupKey);
+	if (alreadySeen) return c.json({ received: true, duplicate: true });
+
 	const ctx = c.executionCtx;
-	ctx.waitUntil(handleEvent(event, c.env));
+	ctx.waitUntil(
+		handleEvent(event, c.env).then(() =>
+			c.env.KV.put(dedupKey, "1", { expirationTtl: 60 * 60 * 24 * 7 }),
+		),
+	);
 
 	return c.json({ received: true });
 });

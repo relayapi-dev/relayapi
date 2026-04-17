@@ -41,7 +41,7 @@ const planTiers = [
     price: "$0/mo",
     features: [
       "200 API calls/month (hard limit)",
-      "All 17 platforms",
+      "All 21 platforms",
       "Unlimited profiles",
       "Media uploads",
       "Webhooks",
@@ -54,7 +54,7 @@ const planTiers = [
     features: [
       "10,000 API calls included",
       "$1 per 1,000 extra calls",
-      "All 17 platforms",
+      "All 21 platforms",
       "Unlimited profiles",
       "Comments API",
       "Analytics API",

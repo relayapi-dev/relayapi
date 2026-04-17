@@ -1,6 +1,49 @@
+import { member } from "@relayapi/db";
+import { and, eq } from "drizzle-orm";
 import type Relay from "@relayapi/sdk";
 import { API_BASE_URL } from "./api-base-url";
 import { getRelayClient } from "./relay";
+
+const BILLING_ADMIN_ROLES = new Set(["owner", "admin"]);
+
+/**
+ * Return a 401/403 Response if the current user isn't an owner/admin of the
+ * active organization. Returns null when authorized. Use at the top of any
+ * billing / subscription mutation route.
+ */
+export async function requireBillingAdmin(
+  ctx: { locals: App.Locals },
+): Promise<Response | null> {
+  const user = ctx.locals.user as { id: string } | null | undefined;
+  const org = ctx.locals.organization as { id: string } | null | undefined;
+  if (!user || !org) {
+    return Response.json(
+      { error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+      { status: 401 },
+    );
+  }
+
+  const db = ctx.locals.db;
+  const [row] = await db
+    .select({ role: member.role })
+    .from(member)
+    .where(and(eq(member.userId, user.id), eq(member.organizationId, org.id)))
+    .limit(1);
+
+  if (!row || !BILLING_ADMIN_ROLES.has(row.role ?? "")) {
+    return Response.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Only organization admins can manage billing.",
+        },
+      },
+      { status: 403 },
+    );
+  }
+
+  return null;
+}
 
 /**
  * Get the SDK client from an Astro API context, or return an error Response.

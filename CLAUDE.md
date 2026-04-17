@@ -110,8 +110,9 @@ Other prefixes (`chore:`, `docs:`, `refactor:`, etc.) are included in the next r
    - The doc page URL where the information was found
    - The specific section/heading name
    - The exact endpoint URLs, HTTP methods, and field names as shown in the docs
-4. **Check the Graph API version** at `https://developers.facebook.com/docs/graph-api/changelog/versions/` for any Facebook/Instagram/Threads changes. All `graph.facebook.com` and `graph.instagram.com` URLs must use a supported version.
-5. **Verify every platform config** — not just the one being changed — whenever touching the OAuth system. API versions expire and docs change.
+4. **API versions live in `apps/api/src/config/api-versions.ts`** — the single source of truth for Meta Graph, Threads, Twitter, YouTube, Pinterest, TikTok, and LinkedIn version pins. All runtime code imports `API_VERSIONS` / `GRAPH_BASE` from this file. To bump a version, edit this file and let imports propagate; do not add new inline `v25.0` / `v1.0` strings elsewhere.
+5. **Check the Graph API version** at `https://developers.facebook.com/docs/graph-api/changelog/versions/` before bumping `meta_graph` in `api-versions.ts`. All `graph.facebook.com` / `graph.instagram.com` URLs must route through `GRAPH_BASE.*`.
+6. **Verify every platform config** — not just the one being changed — whenever touching the OAuth system. API versions expire and docs change.
 
 ## Tool Rules
 

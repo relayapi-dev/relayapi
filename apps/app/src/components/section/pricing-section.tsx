@@ -63,7 +63,7 @@ function formatPrice(price: number): string {
 }
 
 const FREE_FEATURES: { text: string; included: boolean }[] = [
-    { text: "All 17 platforms", included: true },
+    { text: "All 21 platforms", included: true },
     { text: "Unlimited profiles", included: true },
     { text: "Media uploads", included: true },
     { text: "Webhook notifications", included: true },
@@ -74,7 +74,7 @@ const FREE_FEATURES: { text: string; included: boolean }[] = [
 
 function getProFeatures(isCustom: boolean) {
     return [
-        { text: "All 17 platforms", included: true },
+        { text: "All 21 platforms", included: true },
         { text: "Unlimited profiles", included: true },
         { text: "Media uploads & scheduling", included: true },
         { text: "Webhook notifications", included: true },

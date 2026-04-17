@@ -1,6 +1,6 @@
 ---
 name: relayapi
-description: Post to 17 social media platforms via a single unified API. Manage accounts, groups, media, scheduling, analytics, inbox, and webhooks through RelayAPI. Activate when the user mentions social media posting, cross-posting, scheduling posts, managing social accounts, analytics, inbox, comments, or webhooks.
+description: Post to 21 platforms via a single unified API. Manage accounts, groups, media, scheduling, analytics, inbox, and webhooks through RelayAPI. Activate when the user mentions social media posting, cross-posting, scheduling posts, managing social accounts, analytics, inbox, comments, or webhooks.
 version: 1.0.0
 metadata:
   openclaw:
@@ -16,7 +16,7 @@ metadata:
 
 # RelayAPI – Unified Social Media API
 
-You have access to RelayAPI, a unified API for managing 17 social media platforms. Use the `RELAYAPI_API_KEY` environment variable for authentication.
+You have access to RelayAPI, a unified API for managing 21 platforms. Use the `RELAYAPI_API_KEY` environment variable for authentication.
 
 ## Authentication
 

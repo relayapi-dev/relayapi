@@ -2,18 +2,14 @@ import type { APIRoute } from "astro";
 import { env } from "cloudflare:workers";
 import Stripe from "stripe";
 import { organizationSubscriptions, eq } from "@relayapi/db";
+import { requireBillingAdmin } from "@/lib/api-utils";
 
 export const POST: APIRoute = async (context) => {
   try {
-    const user = context.locals.user;
-    const org = context.locals.organization;
-    if (!user || !org) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    const forbidden = await requireBillingAdmin(context);
+    if (forbidden) return forbidden;
 
+    const org = context.locals.organization!;
     const db = context.locals.db;
     const orgId = (org as any).id as string;
 
