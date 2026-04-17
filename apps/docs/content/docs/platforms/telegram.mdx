@@ -814,3 +814,42 @@ All fields go inside `target_options.telegram` on your post request.
 - **Private channels** require the user to forward a message from the channel to the bot for connection.
 - **Mixed media albums supported** — images and videos can be combined in a single album.
 - **Documents sent separately** — documents cannot be mixed with photos/videos in an album.
+
+## Automations
+
+Telegram is a Tier 1 automation platform. Bots use the token as a single credential — no OAuth refresh needed.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `telegram_message` | Any inbound message |
+| `telegram_command` | `/start`, `/help`, or custom command |
+| `telegram_channel_post` | New post in a channel the bot belongs to |
+| `telegram_callback_query` | Inline keyboard button tap |
+| `telegram_reaction` | Emoji reaction |
+| `telegram_member_joined` | New chat member |
+| `telegram_chat_join_request` | Join-request flow |
+| `telegram_business_message` | Telegram Business message |
+| `telegram_inline_query` | User invokes inline bot |
+
+### Send nodes
+
+Endpoint shape: `POST https://api.telegram.org/bot{token}/{method}`.
+
+| Node | Method | Required fields |
+| --- | --- | --- |
+| `telegram_send_text` | `sendMessage` | `text`, optional `parse_mode` / `disable_web_page_preview` |
+| `telegram_send_media` | `sendPhoto/Video/Audio/Document` (auto) | `url`, `media_type` |
+| `telegram_send_media_group` | `sendMediaGroup` | `media[]` (2–10 items) |
+| `telegram_send_poll` | `sendPoll` | `question`, `options[]` (2–10) |
+| `telegram_send_location` | `sendLocation` | `latitude`, `longitude` |
+| `telegram_send_keyboard` | `sendMessage` + inline_keyboard | `text`, `buttons[][]` (rows × buttons) |
+| `telegram_edit_message` | `editMessageText` | `text`, `message_id` |
+| `telegram_pin_message` | `pinChatMessage` | `message_id` |
+| `telegram_react` | `setMessageReaction` | `emoji`, `message_id` |
+| `telegram_set_chat_action` | `sendChatAction` | `action` (default `typing`) |
+
+### Rate limits
+
+- 30 msg/sec globally, **1 msg/sec per chat**. Burst over the per-chat limit returns 429 Retry-After.

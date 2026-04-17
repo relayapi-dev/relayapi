@@ -656,3 +656,30 @@ RelayAPI automatically retries failed Reddit posts in certain scenarios:
 - **Gallery posts not supported** by all subreddits — check subreddit rules.
 - **Auto-retry behavior** — link posts that fail in text-only subreddits are automatically retried as self posts.
 - **Flair auto-retry** — if flair is required but not provided, RelayAPI tries the first available flair.
+
+## Automations
+
+<Callout type="warn">
+Commercial use of Reddit's API requires explicit written approval via the [Responsible Builder Policy](https://support.reddithelp.com/hc/en-us/articles/42728983564564-Responsible-Builder-Policy). OAuth clients are rate-limited to ~100 QPM. Polling-based (no webhooks).
+</Callout>
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `reddit_comment` | Comment on your post / reply to your comment |
+| `reddit_mention` | u/username mention |
+| `reddit_new_post` | New post in a watched subreddit |
+| `reddit_modmail` | Modmail conversation |
+| `reddit_dm` | Direct private message |
+
+### Send nodes
+
+Base: `https://oauth.reddit.com`. All endpoints expect form-encoded bodies + a custom User-Agent.
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `reddit_reply_to_comment` | `POST /api/comment` | `text`, `thing_id` (fullname, e.g. `t1_xyz`) |
+| `reddit_send_pm` | `POST /api/compose` | `to`, `text`, optional `subject` |
+| `reddit_reply_modmail` | `POST /api/mod/conversations/{id}` | `body`, `conversation_id` |
+| `reddit_submit_post` | `POST /api/submit` | `subreddit`, `title`, either `text` (self) or `url` (link) |

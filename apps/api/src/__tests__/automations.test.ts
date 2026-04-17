@@ -195,3 +195,120 @@ describe("AutomationCreateSpec — Instagram send nodes", () => {
 		expect(result.success).toBe(false);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// AutomationCreateSpec — tightened platform nodes (sample coverage)
+// ---------------------------------------------------------------------------
+
+describe("AutomationCreateSpec — tightened platform nodes", () => {
+	it("rejects whatsapp_send_interactive without buttons or list", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "whatsapp",
+			trigger: { type: "whatsapp_message" },
+			nodes: [
+				{ type: "whatsapp_send_interactive", key: "send", text: "Hi" },
+			],
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("accepts whatsapp_send_interactive with reply buttons", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "whatsapp",
+			trigger: { type: "whatsapp_message" },
+			nodes: [
+				{
+					type: "whatsapp_send_interactive",
+					key: "send",
+					text: "Pick one",
+					buttons: [
+						{ id: "a", title: "A" },
+						{ id: "b", title: "B" },
+					],
+				},
+			],
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("rejects reddit_submit_post without text or url", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "reddit",
+			trigger: { type: "reddit_new_post" },
+			nodes: [
+				{ type: "reddit_submit_post", key: "post", subreddit: "test", title: "hi" },
+			],
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("accepts telegram_send_keyboard with nested button rows", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "telegram",
+			trigger: { type: "telegram_message" },
+			nodes: [
+				{
+					type: "telegram_send_keyboard",
+					key: "send",
+					text: "Choose",
+					buttons: [
+						[{ text: "A", callback_data: "a" }],
+						[{ text: "B", callback_data: "b" }],
+					],
+				},
+			],
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("rejects beehiiv_add_subscriber with an invalid email", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "beehiiv",
+			trigger: { type: "beehiiv_subscription_created" },
+			nodes: [
+				{ type: "beehiiv_add_subscriber", key: "add", email: "not-an-email" },
+			],
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("rejects telegram_send_poll with fewer than 2 options", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "telegram",
+			trigger: { type: "telegram_message" },
+			nodes: [
+				{
+					type: "telegram_send_poll",
+					key: "poll",
+					question: "Q?",
+					options: ["only one"],
+				},
+			],
+		});
+		expect(result.success).toBe(false);
+	});
+
+	it("accepts a valid pinterest_create_pin", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "t",
+			channel: "pinterest",
+			trigger: { type: "manual" },
+			nodes: [
+				{
+					type: "pinterest_create_pin",
+					key: "pin",
+					board_id: "board_123",
+					image_url: "https://cdn.example.com/pin.jpg",
+					title: "Spring launch",
+				},
+			],
+		});
+		expect(result.success).toBe(true);
+	});
+});

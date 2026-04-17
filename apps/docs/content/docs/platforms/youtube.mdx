@@ -775,3 +775,29 @@ All fields go inside `target_options.youtube` on your post request.
 - **Unverified channels** are limited to 15-minute video uploads.
 - **Daily upload quotas** vary by channel and are enforced by YouTube.
 - **Scheduled videos upload immediately as private** — the URL exists right away but is not publicly visible.
+
+## Automations
+
+YouTube automation uses Data API v3. PubSubHubbub drives new-video events; comments + live chat are polling-based.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `youtube_comment` | New comment on a video |
+| `youtube_live_chat` | Live chat message during a broadcast |
+| `youtube_new_video` | New video published (PubSub) |
+
+### Send nodes
+
+Base: `https://www.googleapis.com/youtube/v3`.
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `youtube_reply_to_comment` | `POST /comments?part=snippet` | `text`, `parent_id` |
+| `youtube_send_live_chat` | `POST /liveChat/messages?part=snippet` | `text`, `live_chat_id` |
+| `youtube_moderate_comment` | `POST /comments/setModerationStatus` | `comment_id`, `moderation_status` ∈ heldForReview\|published\|rejected |
+
+### Rate limits
+
+- 10,000 quota units/day. Comment inserts ≈ 50 units, live chat messages ≈ 5 units. Budget accordingly.

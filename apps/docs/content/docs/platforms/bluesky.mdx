@@ -506,3 +506,32 @@ Bluesky is one of the simplest platforms to post to. No additional platform-spec
 - **Rich text auto-detected** — mentions, hashtags, and URLs are automatically converted to clickable elements.
 - **AT Protocol uses DIDs** (decentralized identifiers) internally for user identity.
 - **Session tokens expire** — RelayAPI handles refresh automatically.
+
+## Automations
+
+Bluesky automation uses the AT Protocol for public actions (repo.createRecord) and the Chat API for DMs.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `bluesky_dm` | Chat-API DM |
+| `bluesky_reply` | Reply to your post |
+| `bluesky_mention` | @-mention |
+| `bluesky_follow` | New follower |
+| `bluesky_like` | Someone likes your post |
+
+### Send nodes
+
+Post-side: `POST https://bsky.social/xrpc/com.atproto.repo.createRecord` with `app.bsky.feed.{post|like|repost}`. DMs: `POST https://api.bsky.chat/xrpc/chat.bsky.convo.sendMessage` (after resolving the convo id via `getConvoForMembers`).
+
+| Node | Required fields |
+| --- | --- |
+| `bluesky_reply` | `text`, `parent_uri`, `parent_cid` |
+| `bluesky_like` | `subject_uri`, `subject_cid` |
+| `bluesky_repost` | `subject_uri`, `subject_cid` |
+| `bluesky_send_dm` | `text` (contact's DID resolved from channels) |
+
+<Callout type="info">
+Bluesky needs both `uri` **and** `cid` for any reply/like/repost — the cid prevents action on replaced content. Triggers store both in the enrollment state so downstream nodes can reference `state.post_uri` / `state.post_cid`.
+</Callout>

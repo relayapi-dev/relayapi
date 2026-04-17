@@ -555,3 +555,13 @@ All fields go inside `target_options.pinterest` on your post request.
 - **No carousels or multi-image pins** — only 1 image or 1 video per pin.
 - **Animated GIFs are supported** and auto-play in the Pinterest feed.
 - **2:3 aspect ratio (1000 x 1500 px)** gets the best feed placement and engagement.
+
+## Automations
+
+Pinterest is destination-only in the automations engine — no inbound triggers today.
+
+### Send nodes
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `pinterest_create_pin` | `POST https://api.pinterest.com/v5/pins` | `board_id`, `image_url`, `title`, optional `description` / `link` |

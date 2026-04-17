@@ -71,3 +71,16 @@ List your ListMonk lists and templates:
 GET /v1/accounts/{id}/lists      # Returns ListMonk subscriber lists
 GET /v1/accounts/{id}/templates  # Returns ListMonk email templates
 ```
+
+## Automations
+
+Listmonk is self-hosted — the instance URL + API user live on `socialAccounts.metadata` as `instance_url` / `api_user`. Auth is Basic (user + API token).
+
+### Send nodes (destination-only)
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `listmonk_add_subscriber` | `POST {instance_url}/api/subscribers` | `email`, optional `list_ids[]` / `name` / `attribs` |
+| `listmonk_send_campaign` | `PUT {instance_url}/api/campaigns/{id}/status` body `{status: "running"}` | `campaign_id` |
+
+No inbound Listmonk triggers — use it as a downstream destination from other-platform triggers.

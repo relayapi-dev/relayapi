@@ -565,3 +565,22 @@ All fields go inside `target_options.sms` on your post request.
 - **Multi-recipient sends individually** — each phone number receives a separate message (not a group text).
 - **Media URLs must be publicly accessible** — Twilio fetches media from the provided URLs.
 - **Partial failures are possible** — when sending to multiple recipients, some may succeed while others fail.
+
+## Automations
+
+SMS automation is provider-abstracted — Twilio and Telnyx both supported. Provider is stored on the account metadata as `provider` (defaults to `twilio`).
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `sms_received` | Inbound SMS (any provider) |
+
+### Send nodes
+
+| Node | Twilio endpoint | Telnyx endpoint | Required fields |
+| --- | --- | --- | --- |
+| `sms_send` | `POST /2010-04-01/Accounts/{sid}/Messages.json` | `POST /v2/messages` | `text` |
+| `sms_send_mms` | same (+ `MediaUrl`) | same (+ `media_urls[]`) | `media_url`, optional `text` |
+
+Auth is Basic (Twilio: `sid:auth_token`) or Bearer (Telnyx: API key), chosen from the account's provider field.

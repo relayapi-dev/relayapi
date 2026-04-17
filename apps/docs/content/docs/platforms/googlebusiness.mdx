@@ -641,3 +641,27 @@ All fields go inside `target_options.googlebusiness` on your post request.
 - **CALL action type** uses the location's phone number — no URL is needed.
 - **Account must be verified** on Google Business Profile before the API can be used.
 - **Posts may take a few minutes** to appear on Google Search and Maps after creation.
+
+## Automations
+
+<Callout type="warn">
+Google Business Profile API requires contact-form approval. Policies forbid agencies/end-clients from sharing one API project — each end-client needs their own GBP project. The Q&A notification types (`NEW_QUESTION`, etc.) were **deprecated on 2025-11-03** with the Q&A API discontinuation.
+</Callout>
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `googlebusiness_new_review` | New customer review |
+| `googlebusiness_updated_review` | Review content/rating edited |
+| `googlebusiness_new_customer_media` | Customer uploads a photo/video |
+| `googlebusiness_duplicate_location` | Duplicate-location alert |
+| `googlebusiness_voice_of_merchant_updated` | VoM score change |
+| `googlebusiness_google_update` | Google-sourced edit to your listing |
+
+### Send nodes
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `googlebusiness_reply_to_review` | `PUT mybusiness.googleapis.com/v4/{review.name}/reply` | `comment`, `review_name` |
+| `googlebusiness_post_update` | `POST mybusiness.googleapis.com/v4/{location}/localPosts` | `summary`, optional `media_url` / `call_to_action` / `topic_type` |

@@ -60,3 +60,23 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 | `preview_text` | string | No | Description/preview text. |
 | `content_html` | string | No | Full HTML body. If omitted, plain text is auto-wrapped. |
 | `send_at` | string | No | ISO 8601 timestamp to schedule delivery. If omitted, sends immediately. |
+
+## Automations
+
+Kit (formerly ConvertKit) uses the v4 API under `https://api.kit.com/v4`. Triggers fire on subscribe lifecycle and tag events.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `kit_subscriber_activate` | Subscriber becomes active |
+| `kit_form_subscribe` | Form submission |
+| `kit_tag_add` | Tag applied to a subscriber |
+
+### Send nodes
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `kit_add_subscriber` | `POST /subscribers` | `email`, optional `first_name` |
+| `kit_add_tag` | `POST /tags/{tag_id}/subscribers` | `tag_id`, `email` |
+| `kit_send_broadcast` | `POST /broadcasts/{id}/send` | `broadcast_id` |

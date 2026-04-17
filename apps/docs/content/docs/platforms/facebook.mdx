@@ -795,3 +795,39 @@ All fields go inside `target_options.facebook` on your post request.
 - **Tokens expire frequently** — subscribe to the `account.disconnected` webhook to detect token expirations.
 - **GIFs should use `type: "video"`** — they auto-play and loop when sent as video type.
 - **First ~480 characters visible** before the "See more" fold on feed posts.
+
+## Automations
+
+Facebook Messenger is a Tier 1 automation platform — full inbound conversational event coverage and 9 outbound send node types.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `facebook_dm` | Inbound Messenger DM |
+| `facebook_comment` | New comment on a Page post |
+| `facebook_mention` | Page @-mentioned |
+| `facebook_postback` | Get Started / persistent menu button |
+| `facebook_reaction` | Message reaction added/removed |
+| `facebook_optin` | Send-to-Messenger widget / Ref URL opt-in |
+| `facebook_feed_post` | New post on the Page feed |
+
+### Send nodes
+
+All messaging nodes hit `POST {GRAPH_BASE.facebook}/{page-id}/messages`. Comment operations use the Graph API comment endpoints.
+
+| Node | Required fields |
+| --- | --- |
+| `facebook_send_text` | `text` |
+| `facebook_send_media` | `url`, `media_type` ∈ image\|video\|audio\|file |
+| `facebook_send_template` | `payload` (raw Messenger template object) |
+| `facebook_send_quick_replies` | `text`, `quick_replies[]` (≤13) |
+| `facebook_send_button_template` | `text`, `buttons[]` (≤3) |
+| `facebook_reply_to_comment` | `message` (+ optional `comment_id`) |
+| `facebook_private_reply` | `text` (+ optional `comment_id`) |
+| `facebook_hide_comment` | `comment_id` (or falls back to trigger payload) |
+| `facebook_sender_action` | `action` ∈ typing_on\|typing_off\|mark_seen |
+
+<Callout type="warn">
+The `HUMAN_AGENT` message tag is for human-handled surfaces only, not an automation escape hatch. Automated DMs must land inside the 24-hour customer-service window.
+</Callout>

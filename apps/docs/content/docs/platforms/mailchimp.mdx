@@ -71,3 +71,28 @@ List audiences and templates:
 GET /v1/accounts/{id}/lists      # Returns Mailchimp audiences
 GET /v1/accounts/{id}/templates  # Returns Mailchimp templates
 ```
+
+## Automations
+
+Mailchimp uses data-center-scoped URLs (`{dc}.api.mailchimp.com/3.0`). The data center is auto-detected from the API key suffix (`-us14`) or from `metadata.dc`.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `mailchimp_subscribe` | New subscribe event (webhook) |
+| `mailchimp_unsubscribe` | Unsubscribe event |
+
+<Callout type="info">
+Mailchimp webhooks are **form-encoded** (not JSON). The inbox normalizer needs a form-parser branch when wiring this platform's webhook route.
+</Callout>
+
+### Send nodes
+
+Subscriber operations require the MD5 hash of the lowercased email as the identifier.
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `mailchimp_add_member` | `PUT /lists/{list}/members/{hash}` (upsert) | `email`, optional `double_optin` / `merge_fields` |
+| `mailchimp_add_tag` | `POST /lists/{list}/members/{hash}/tags` | `email`, `tag` |
+| `mailchimp_send_campaign` | `POST /campaigns/{id}/actions/send` | `campaign_id` |

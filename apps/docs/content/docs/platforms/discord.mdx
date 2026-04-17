@@ -676,3 +676,32 @@ All fields go inside `target_options.discord` on your post request.
 - **No direct message URL** — webhook responses don't include a jump URL to the message.
 - **Rate limits** — Discord enforces rate limits on webhooks (30 messages per 60 seconds per channel).
 - **Markdown supported** — Discord messages support a subset of Markdown: `**bold**`, `*italic*`, `~~strikethrough~~`, `` `code` ``, `> quote`.
+
+## Automations
+
+Discord automation uses the bot token as a single credential. All send actions target a **channel**, not a user — for DMs, pre-create the DM channel with the bot and store the channel_id as the contact's Discord identifier.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `discord_message` | Guild channel message |
+| `discord_dm` | DM to the bot |
+| `discord_reaction` | Emoji reaction added |
+| `discord_member_joined` | New member joins a guild |
+| `discord_thread_created` | Thread opened in a channel |
+| `discord_interaction` | Slash command / button / select interaction |
+
+### Send nodes
+
+Endpoint: `POST https://discord.com/api/v10/channels/{channel-id}/messages` (+ variants).
+
+| Node | Required fields |
+| --- | --- |
+| `discord_send_message` | `content`, optional `channel_id` (else from state/contact) |
+| `discord_send_embed` | `embeds[]` (≤10) |
+| `discord_send_components` | `components[]`, optional `content` |
+| `discord_send_attachment` | `url`, optional `content` (URL is embedded in content for unfurl) |
+| `discord_react` | `emoji`, `message_id` |
+| `discord_edit_message` | `content`, `message_id` |
+| `discord_start_thread` | `name` (≤100), optional `auto_archive_duration`, `message_id` |

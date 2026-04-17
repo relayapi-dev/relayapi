@@ -864,3 +864,31 @@ A tweet with a 200-character URL still only uses 23 of your 280-character budget
 - **Thread replies must be posted sequentially** since each reply needs the parent tweet ID.
 - **Emojis count as 2 characters** — a tweet with 140 emojis uses all 280 characters.
 - **Polls cannot have media or threads** — polls are mutually exclusive with media attachments and thread items.
+
+## Automations
+
+X (Twitter) is a Tier 1 automation platform with tier-gated webhooks (Pay-per-Use: 3 DM conversation subs + 1 webhook).
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `twitter_dm` | Inbound DM |
+| `twitter_mention` | @-mention |
+| `twitter_reply` | Reply to your tweet |
+| `twitter_follow` | New follower |
+| `twitter_like` | Someone likes your tweet |
+| `twitter_retweet` | Someone retweets |
+| `twitter_quote` | Someone quotes your tweet |
+
+### Send nodes
+
+Base: `https://api.x.com/2`.
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `twitter_send_dm` | `POST /dm_conversations/with/{user}/messages` | `text` |
+| `twitter_send_dm_media` | `POST /dm_conversations/with/{user}/messages` | `media_id` (upload first via media endpoint), optional `text` |
+| `twitter_reply_to_tweet` | `POST /tweets` with `reply.in_reply_to_tweet_id` | `text`, `tweet_id` |
+| `twitter_like_tweet` | `POST /users/{id}/likes` | `tweet_id` |
+| `twitter_retweet` | `POST /users/{id}/retweets` | `tweet_id` |

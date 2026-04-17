@@ -72,3 +72,25 @@ GET /v1/accounts/{id}/lists
 ```
 
 Returns the publication as a single list entry.
+
+## Automations
+
+Beehiiv is a Tier 3 newsletter platform — triggers fire on subscription lifecycle events, and destination nodes upsert subscribers / publish posts.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `beehiiv_subscription_created` | New subscription (any status) |
+| `beehiiv_subscription_confirmed` | Double-opt-in confirmed |
+| `beehiiv_subscription_deleted` | Subscriber removed |
+
+### Send nodes
+
+Base: `https://api.beehiiv.com/v2`. API key auth (Bearer).
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `beehiiv_add_subscriber` | `POST /publications/{id}/subscriptions` | `email`, optional `utm_*` / `reactivate_existing` |
+| `beehiiv_publish_post` | `PATCH /publications/{id}/posts/{post_id}` (status=confirmed) | `post_id` (pre-created draft) |
+| `beehiiv_enroll_automation` | `POST /publications/{id}/automations/{auto_id}/journeys` | `email`, `automation_id` |

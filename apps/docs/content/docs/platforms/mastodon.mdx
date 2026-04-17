@@ -718,3 +718,26 @@ All fields go inside `target_options.mastodon` on your post request.
 - **Federated delivery** — posts are distributed to other Fediverse instances, which may take a moment.
 - **Content warnings** are a strong community norm on Mastodon — consider using `spoiler_text` for sensitive topics.
 - **Direct messages are statuses** — `"direct"` visibility creates a DM visible only to mentioned users.
+
+## Automations
+
+Mastodon automation uses per-instance URLs (stored on `socialAccounts.metadata.instance_url`). DMs are just statuses with `visibility: direct` addressed to `@user`.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `mastodon_mention` | @-mention (also used for direct DMs) |
+| `mastodon_reply` | Reply to your status |
+| `mastodon_boost` | Someone boosts your status |
+| `mastodon_follow` | New follower |
+| `mastodon_favourite` | Someone favourites your status |
+
+### Send nodes
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `mastodon_reply` | `POST /api/v1/statuses` | `text`, `in_reply_to_id`, optional `visibility` (default `public`) |
+| `mastodon_favourite` | `POST /api/v1/statuses/{id}/favourite` | `status_id` |
+| `mastodon_boost` | `POST /api/v1/statuses/{id}/reblog` | `status_id` |
+| `mastodon_send_dm` | `POST /api/v1/statuses` with `visibility: direct` | `text` |

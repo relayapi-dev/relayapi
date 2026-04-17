@@ -556,3 +556,22 @@ All fields go inside `target_options.threads` on your post request.
 - **No DMs** available via the Threads API.
 - **250 API-published posts per 24-hour window** — this limit applies to all content types.
 - **Posts cannot be edited** after publishing.
+
+## Automations
+
+Threads automation uses its own Graph base (`graph.threads.net/v1.0`). Replies use the 2-step container → publish flow like public Threads posts.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `threads_reply` | Reply to your thread |
+| `threads_mention` | @-mention |
+| `threads_publish` | Your thread publishes (useful for chained automations) |
+
+### Send nodes
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `threads_reply_to_post` | 2-step: `POST /{user}/threads` then `POST /{user}/threads_publish` | `text`, `reply_to_id` |
+| `threads_hide_reply` | `POST /{reply-id}/manage_reply` body `{ hide: true }` | `reply_id` |

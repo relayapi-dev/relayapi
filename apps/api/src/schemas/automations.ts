@@ -693,22 +693,12 @@ export const WebhookOutNode = z.object({
 
 // -- Platform-specific sends --
 //
-// Some nodes below have been tightened into proper Zod objects (Instagram as
-// the reference implementation). Others still use the loose `PlatformSendNode`
-// wrapper while the per-platform Zod schemas catch up. Tightening a platform
-// is mechanical — copy the Instagram block and adapt the fields to the node
-// handler's expectations in apps/api/src/services/automations/nodes/platforms/.
+// Every platform node type below is a proper Zod object that mirrors the
+// handler expectations in apps/api/src/services/automations/nodes/platforms/.
+// Breaking changes to a handler should include an update here so create-time
+// validation stays aligned with runtime behaviour.
 
-const PlatformSendNode = <T extends AutomationNodeType>(type: T) =>
-	z.object({
-		...baseNode,
-		type: z.literal(type as string),
-		config: z
-			.record(z.string(), z.any())
-			.describe(`Platform-specific payload for ${type}`),
-	});
-
-// -- Instagram (reference tightened set) --
+// -- Instagram --
 
 const ButtonSpec = z.discriminatedUnion("type", [
 	z.object({
@@ -798,6 +788,679 @@ export const InstagramHideCommentNode = z.object({
 	comment_id: z.string().optional(),
 });
 
+// -- Facebook Messenger --
+
+export const FacebookSendTextNode = z.object({
+	...baseNode,
+	type: z.literal("facebook_send_text"),
+	text: mergeTagString,
+});
+
+export const FacebookSendMediaNode = z.object({
+	...baseNode,
+	type: z.literal("facebook_send_media"),
+	url: z.string().url(),
+	media_type: z.enum(["image", "video", "audio", "file"]).default("image"),
+});
+
+export const FacebookSendTemplateNode = z.object({
+	...baseNode,
+	type: z.literal("facebook_send_template"),
+	payload: z.record(z.string(), z.any()),
+});
+
+export const FacebookSendQuickRepliesNode = z.object({
+	...baseNode,
+	type: z.literal("facebook_send_quick_replies"),
+	text: mergeTagString,
+	quick_replies: z.array(QuickReplySpec).min(1).max(13),
+});
+
+export const FacebookSendButtonTemplateNode = z.object({
+	...baseNode,
+	type: z.literal("facebook_send_button_template"),
+	text: mergeTagString,
+	buttons: z.array(ButtonSpec).min(1).max(3),
+});
+
+export const FacebookReplyToCommentNode = z.object({
+	...baseNode,
+	type: z.literal("facebook_reply_to_comment"),
+	message: mergeTagString,
+	comment_id: z.string().optional(),
+});
+
+export const FacebookPrivateReplyNode = z.object({
+	...baseNode,
+	type: z.literal("facebook_private_reply"),
+	text: mergeTagString,
+	comment_id: z.string().optional(),
+});
+
+export const FacebookHideCommentNode = z.object({
+	...baseNode,
+	type: z.literal("facebook_hide_comment"),
+	comment_id: z.string().optional(),
+});
+
+export const FacebookSenderActionNode = z.object({
+	...baseNode,
+	type: z.literal("facebook_sender_action"),
+	action: z.enum(["typing_on", "typing_off", "mark_seen"]).default("typing_on"),
+});
+
+// -- WhatsApp Cloud API --
+
+const WhatsAppButtonSpec = z.object({
+	id: z.string(),
+	title: z.string(),
+});
+
+const WhatsAppListSpec = z.object({
+	button: z.string(),
+	sections: z
+		.array(
+			z.object({
+				title: z.string().optional(),
+				rows: z
+					.array(
+						z.object({
+							id: z.string(),
+							title: z.string(),
+							description: z.string().optional(),
+						}),
+					)
+					.min(1),
+			}),
+		)
+		.min(1),
+});
+
+export const WhatsAppSendTextNode = z.object({
+	...baseNode,
+	type: z.literal("whatsapp_send_text"),
+	text: mergeTagString,
+	preview_url: z.boolean().default(false),
+});
+
+export const WhatsAppSendMediaNode = z.object({
+	...baseNode,
+	type: z.literal("whatsapp_send_media"),
+	url: z.string().url(),
+	caption: mergeTagString.optional(),
+	media_type: z
+		.enum(["image", "video", "audio", "document", "sticker"])
+		.default("image"),
+});
+
+export const WhatsAppSendTemplateNode = z.object({
+	...baseNode,
+	type: z.literal("whatsapp_send_template"),
+	template_name: z.string(),
+	language: z.string().default("en_US"),
+	components: z.array(z.any()).optional(),
+});
+
+export const WhatsAppSendInteractiveNode = z
+	.object({
+		...baseNode,
+		type: z.literal("whatsapp_send_interactive"),
+		text: mergeTagString,
+		buttons: z.array(WhatsAppButtonSpec).max(3).optional(),
+		list: WhatsAppListSpec.optional(),
+	})
+	.refine((v) => v.buttons?.length || v.list, {
+		message: "whatsapp_send_interactive needs either 'buttons' or 'list'",
+	});
+
+export const WhatsAppSendFlowNode = z.object({
+	...baseNode,
+	type: z.literal("whatsapp_send_flow"),
+	flow_id: z.string(),
+	flow_token: z.string(),
+	cta: z.string().default("Open"),
+	text: mergeTagString,
+	flow_action: z.string().optional(),
+});
+
+export const WhatsAppSendLocationNode = z.object({
+	...baseNode,
+	type: z.literal("whatsapp_send_location"),
+	latitude: z.number(),
+	longitude: z.number(),
+	name: z.string().optional(),
+	address: z.string().optional(),
+});
+
+export const WhatsAppSendContactsNode = z.object({
+	...baseNode,
+	type: z.literal("whatsapp_send_contacts"),
+	contacts: z.array(z.any()).min(1),
+});
+
+export const WhatsAppReactNode = z.object({
+	...baseNode,
+	type: z.literal("whatsapp_react"),
+	emoji: z.string(),
+	message_id: z.string().optional(),
+});
+
+export const WhatsAppMarkReadNode = z.object({
+	...baseNode,
+	type: z.literal("whatsapp_mark_read"),
+	message_id: z.string().optional(),
+});
+
+// -- Telegram --
+
+const TelegramKeyboardButton = z.object({
+	text: z.string(),
+	callback_data: z.string().optional(),
+	url: z.string().url().optional(),
+});
+
+export const TelegramSendTextNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_send_text"),
+	text: mergeTagString,
+	parse_mode: z.enum(["MarkdownV2", "Markdown", "HTML"]).optional(),
+	disable_web_page_preview: z.boolean().optional(),
+});
+
+export const TelegramSendMediaNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_send_media"),
+	url: z.string().url(),
+	caption: mergeTagString.optional(),
+	media_type: z
+		.enum(["image", "video", "audio", "document"])
+		.default("image"),
+});
+
+export const TelegramSendMediaGroupNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_send_media_group"),
+	media: z
+		.array(
+			z.object({
+				type: z.enum(["photo", "video", "audio", "document"]),
+				url: z.string().url(),
+				caption: mergeTagString.optional(),
+			}),
+		)
+		.min(2)
+		.max(10),
+});
+
+export const TelegramSendPollNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_send_poll"),
+	question: z.string(),
+	options: z.array(z.string()).min(2).max(10),
+	is_anonymous: z.boolean().default(true),
+	allows_multiple_answers: z.boolean().default(false),
+});
+
+export const TelegramSendLocationNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_send_location"),
+	latitude: z.number(),
+	longitude: z.number(),
+});
+
+export const TelegramSendKeyboardNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_send_keyboard"),
+	text: mergeTagString,
+	buttons: z.array(z.array(TelegramKeyboardButton).min(1)).min(1),
+});
+
+export const TelegramEditMessageNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_edit_message"),
+	text: mergeTagString,
+	message_id: z.string().optional(),
+});
+
+export const TelegramPinMessageNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_pin_message"),
+	message_id: z.string().optional(),
+	disable_notification: z.boolean().default(true),
+});
+
+export const TelegramReactNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_react"),
+	emoji: z.string(),
+	message_id: z.string().optional(),
+});
+
+export const TelegramSetChatActionNode = z.object({
+	...baseNode,
+	type: z.literal("telegram_set_chat_action"),
+	action: z
+		.enum([
+			"typing",
+			"upload_photo",
+			"record_video",
+			"upload_video",
+			"record_voice",
+			"upload_voice",
+			"upload_document",
+			"choose_sticker",
+			"find_location",
+			"record_video_note",
+			"upload_video_note",
+		])
+		.default("typing"),
+});
+
+// -- Discord --
+
+export const DiscordSendMessageNode = z.object({
+	...baseNode,
+	type: z.literal("discord_send_message"),
+	content: mergeTagString,
+	channel_id: z.string().optional(),
+});
+
+export const DiscordSendEmbedNode = z.object({
+	...baseNode,
+	type: z.literal("discord_send_embed"),
+	embeds: z.array(z.any()).min(1).max(10),
+	channel_id: z.string().optional(),
+});
+
+export const DiscordSendComponentsNode = z.object({
+	...baseNode,
+	type: z.literal("discord_send_components"),
+	content: mergeTagString.optional(),
+	components: z.array(z.any()).min(1),
+	channel_id: z.string().optional(),
+});
+
+export const DiscordSendAttachmentNode = z.object({
+	...baseNode,
+	type: z.literal("discord_send_attachment"),
+	url: z.string().url(),
+	content: mergeTagString.optional(),
+	channel_id: z.string().optional(),
+});
+
+export const DiscordReactNode = z.object({
+	...baseNode,
+	type: z.literal("discord_react"),
+	emoji: z.string(),
+	message_id: z.string().optional(),
+	channel_id: z.string().optional(),
+});
+
+export const DiscordEditMessageNode = z.object({
+	...baseNode,
+	type: z.literal("discord_edit_message"),
+	content: mergeTagString,
+	message_id: z.string().optional(),
+	channel_id: z.string().optional(),
+});
+
+export const DiscordStartThreadNode = z.object({
+	...baseNode,
+	type: z.literal("discord_start_thread"),
+	name: z.string().min(1).max(100),
+	auto_archive_duration: z.number().int().default(60),
+	message_id: z.string().optional(),
+	channel_id: z.string().optional(),
+});
+
+// -- SMS (Twilio / Telnyx provider-abstracted) --
+
+export const SmsSendNode = z.object({
+	...baseNode,
+	type: z.literal("sms_send"),
+	text: mergeTagString,
+});
+
+export const SmsSendMmsNode = z.object({
+	...baseNode,
+	type: z.literal("sms_send_mms"),
+	text: mergeTagString.optional(),
+	media_url: z.string().url(),
+});
+
+// -- X / Twitter --
+
+export const TwitterSendDmNode = z.object({
+	...baseNode,
+	type: z.literal("twitter_send_dm"),
+	text: mergeTagString,
+});
+
+export const TwitterSendDmMediaNode = z.object({
+	...baseNode,
+	type: z.literal("twitter_send_dm_media"),
+	text: mergeTagString.optional(),
+	media_id: z.string(),
+});
+
+export const TwitterReplyToTweetNode = z.object({
+	...baseNode,
+	type: z.literal("twitter_reply_to_tweet"),
+	text: mergeTagString,
+	tweet_id: z.string().optional(),
+});
+
+export const TwitterLikeTweetNode = z.object({
+	...baseNode,
+	type: z.literal("twitter_like_tweet"),
+	tweet_id: z.string().optional(),
+});
+
+export const TwitterRetweetNode = z.object({
+	...baseNode,
+	type: z.literal("twitter_retweet"),
+	tweet_id: z.string().optional(),
+});
+
+// -- Bluesky (AT Protocol) --
+
+export const BlueskyReplyNode = z.object({
+	...baseNode,
+	type: z.literal("bluesky_reply"),
+	text: mergeTagString,
+	parent_uri: z.string().optional(),
+	parent_cid: z.string().optional(),
+});
+
+export const BlueskyLikeNode = z.object({
+	...baseNode,
+	type: z.literal("bluesky_like"),
+	subject_uri: z.string().optional(),
+	subject_cid: z.string().optional(),
+});
+
+export const BlueskyRepostNode = z.object({
+	...baseNode,
+	type: z.literal("bluesky_repost"),
+	subject_uri: z.string().optional(),
+	subject_cid: z.string().optional(),
+});
+
+export const BlueskySendDmNode = z.object({
+	...baseNode,
+	type: z.literal("bluesky_send_dm"),
+	text: mergeTagString,
+});
+
+// -- Threads --
+
+export const ThreadsReplyToPostNode = z.object({
+	...baseNode,
+	type: z.literal("threads_reply_to_post"),
+	text: mergeTagString,
+	reply_to_id: z.string().optional(),
+});
+
+export const ThreadsHideReplyNode = z.object({
+	...baseNode,
+	type: z.literal("threads_hide_reply"),
+	reply_id: z.string().optional(),
+});
+
+// -- YouTube --
+
+export const YoutubeReplyToCommentNode = z.object({
+	...baseNode,
+	type: z.literal("youtube_reply_to_comment"),
+	text: mergeTagString,
+	parent_id: z.string().optional(),
+});
+
+export const YoutubeSendLiveChatNode = z.object({
+	...baseNode,
+	type: z.literal("youtube_send_live_chat"),
+	text: mergeTagString,
+	live_chat_id: z.string().optional(),
+});
+
+export const YoutubeModerateCommentNode = z.object({
+	...baseNode,
+	type: z.literal("youtube_moderate_comment"),
+	comment_id: z.string().optional(),
+	moderation_status: z
+		.enum(["heldForReview", "published", "rejected"])
+		.default("heldForReview"),
+});
+
+// -- LinkedIn --
+
+export const LinkedinReplyToCommentNode = z.object({
+	...baseNode,
+	type: z.literal("linkedin_reply_to_comment"),
+	text: mergeTagString,
+	share_urn: z.string().optional(),
+});
+
+export const LinkedinReactToPostNode = z.object({
+	...baseNode,
+	type: z.literal("linkedin_react_to_post"),
+	reaction: z
+		.enum([
+			"LIKE",
+			"PRAISE",
+			"MAYBE",
+			"EMPATHY",
+			"INTEREST",
+			"APPRECIATION",
+			"ENTERTAINMENT",
+		])
+		.default("LIKE"),
+	share_urn: z.string().optional(),
+});
+
+// -- Mastodon --
+
+export const MastodonReplyNode = z.object({
+	...baseNode,
+	type: z.literal("mastodon_reply"),
+	text: mergeTagString,
+	in_reply_to_id: z.string().optional(),
+	visibility: z
+		.enum(["public", "unlisted", "private", "direct"])
+		.default("public"),
+});
+
+export const MastodonFavouriteNode = z.object({
+	...baseNode,
+	type: z.literal("mastodon_favourite"),
+	status_id: z.string().optional(),
+});
+
+export const MastodonBoostNode = z.object({
+	...baseNode,
+	type: z.literal("mastodon_boost"),
+	status_id: z.string().optional(),
+});
+
+export const MastodonSendDmNode = z.object({
+	...baseNode,
+	type: z.literal("mastodon_send_dm"),
+	text: mergeTagString,
+});
+
+// -- Reddit --
+
+export const RedditReplyToCommentNode = z.object({
+	...baseNode,
+	type: z.literal("reddit_reply_to_comment"),
+	text: mergeTagString,
+	thing_id: z
+		.string()
+		.optional()
+		.describe("Reddit fullname prefix (e.g. t1_... for comments, t3_... for posts)"),
+});
+
+export const RedditSendPmNode = z.object({
+	...baseNode,
+	type: z.literal("reddit_send_pm"),
+	to: z.string(),
+	subject: z.string().default("Hi"),
+	text: mergeTagString,
+});
+
+export const RedditReplyModmailNode = z.object({
+	...baseNode,
+	type: z.literal("reddit_reply_modmail"),
+	body: mergeTagString,
+	conversation_id: z.string().optional(),
+	is_author_hidden: z.boolean().default(false),
+	is_internal: z.boolean().default(false),
+});
+
+export const RedditSubmitPostNode = z
+	.object({
+		...baseNode,
+		type: z.literal("reddit_submit_post"),
+		subreddit: z.string(),
+		title: z.string().max(300),
+		text: mergeTagString.optional(),
+		url: z.string().url().optional(),
+	})
+	.refine((v) => v.text || v.url, {
+		message: "reddit_submit_post needs either text (self post) or url (link post)",
+	});
+
+// -- Google Business Profile --
+
+export const GoogleBusinessReplyToReviewNode = z.object({
+	...baseNode,
+	type: z.literal("googlebusiness_reply_to_review"),
+	comment: mergeTagString,
+	review_name: z.string().optional(),
+});
+
+export const GoogleBusinessPostUpdateNode = z.object({
+	...baseNode,
+	type: z.literal("googlebusiness_post_update"),
+	summary: mergeTagString,
+	language_code: z.string().default("en"),
+	topic_type: z.enum(["STANDARD", "EVENT", "OFFER", "ALERT"]).default("STANDARD"),
+	media_url: z.string().url().optional(),
+	call_to_action: z
+		.object({
+			actionType: z.enum([
+				"BOOK",
+				"ORDER",
+				"SHOP",
+				"LEARN_MORE",
+				"SIGN_UP",
+				"CALL",
+			]),
+			url: z.string().url().optional(),
+		})
+		.optional(),
+});
+
+// -- Beehiiv --
+
+export const BeehiivAddSubscriberNode = z.object({
+	...baseNode,
+	type: z.literal("beehiiv_add_subscriber"),
+	email: z.string().email(),
+	reactivate_existing: z.boolean().default(true),
+	send_welcome_email: z.boolean().default(false),
+	utm_source: z.string().default("automation"),
+	utm_campaign: z.string().optional(),
+	referring_site: z.string().optional(),
+});
+
+export const BeehiivPublishPostNode = z.object({
+	...baseNode,
+	type: z.literal("beehiiv_publish_post"),
+	post_id: z.string(),
+});
+
+export const BeehiivEnrollAutomationNode = z.object({
+	...baseNode,
+	type: z.literal("beehiiv_enroll_automation"),
+	email: z.string().email(),
+	automation_id: z.string(),
+});
+
+// -- Kit (ConvertKit v4) --
+
+export const KitAddSubscriberNode = z.object({
+	...baseNode,
+	type: z.literal("kit_add_subscriber"),
+	email: z.string().email(),
+	first_name: z.string().optional(),
+});
+
+export const KitAddTagNode = z.object({
+	...baseNode,
+	type: z.literal("kit_add_tag"),
+	tag_id: z.string(),
+	email: z.string().email(),
+});
+
+export const KitSendBroadcastNode = z.object({
+	...baseNode,
+	type: z.literal("kit_send_broadcast"),
+	broadcast_id: z.string(),
+});
+
+// -- Mailchimp --
+
+export const MailchimpAddMemberNode = z.object({
+	...baseNode,
+	type: z.literal("mailchimp_add_member"),
+	email: z.string().email(),
+	double_optin: z.boolean().default(false),
+	merge_fields: z.record(z.string(), z.any()).optional(),
+});
+
+export const MailchimpAddTagNode = z.object({
+	...baseNode,
+	type: z.literal("mailchimp_add_tag"),
+	email: z.string().email(),
+	tag: z.string(),
+});
+
+export const MailchimpSendCampaignNode = z.object({
+	...baseNode,
+	type: z.literal("mailchimp_send_campaign"),
+	campaign_id: z.string(),
+});
+
+// -- Listmonk (self-hosted) --
+
+export const ListmonkAddSubscriberNode = z.object({
+	...baseNode,
+	type: z.literal("listmonk_add_subscriber"),
+	email: z.string().email(),
+	name: z.string().optional(),
+	list_ids: z.array(z.number().int()).optional(),
+	attribs: z.record(z.string(), z.any()).optional(),
+});
+
+export const ListmonkSendCampaignNode = z.object({
+	...baseNode,
+	type: z.literal("listmonk_send_campaign"),
+	campaign_id: z.union([z.string(), z.number().int()]),
+});
+
+// -- Pinterest --
+
+export const PinterestCreatePinNode = z.object({
+	...baseNode,
+	type: z.literal("pinterest_create_pin"),
+	board_id: z.string(),
+	image_url: z.string().url(),
+	title: mergeTagString,
+	description: mergeTagString.optional(),
+	link: z.string().url().optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Discriminated union of all node types
 // ---------------------------------------------------------------------------
@@ -837,7 +1500,7 @@ export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	ConversationStatusNode,
 	HttpRequestNode,
 	WebhookOutNode,
-	// Instagram — tightened (reference impl; see InstagramSendTextNode etc. above).
+	// Instagram (9)
 	InstagramSendTextNode,
 	InstagramSendMediaNode,
 	InstagramSendButtonsNode,
@@ -847,81 +1510,99 @@ export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	InstagramMarkSeenNode,
 	InstagramReplyToCommentNode,
 	InstagramHideCommentNode,
-	PlatformSendNode("facebook_send_text"),
-	PlatformSendNode("facebook_send_media"),
-	PlatformSendNode("facebook_send_template"),
-	PlatformSendNode("facebook_send_quick_replies"),
-	PlatformSendNode("facebook_send_button_template"),
-	PlatformSendNode("facebook_reply_to_comment"),
-	PlatformSendNode("facebook_private_reply"),
-	PlatformSendNode("facebook_hide_comment"),
-	PlatformSendNode("facebook_sender_action"),
-	PlatformSendNode("whatsapp_send_text"),
-	PlatformSendNode("whatsapp_send_media"),
-	PlatformSendNode("whatsapp_send_template"),
-	PlatformSendNode("whatsapp_send_interactive"),
-	PlatformSendNode("whatsapp_send_flow"),
-	PlatformSendNode("whatsapp_send_location"),
-	PlatformSendNode("whatsapp_send_contacts"),
-	PlatformSendNode("whatsapp_react"),
-	PlatformSendNode("whatsapp_mark_read"),
-	PlatformSendNode("telegram_send_text"),
-	PlatformSendNode("telegram_send_media"),
-	PlatformSendNode("telegram_send_media_group"),
-	PlatformSendNode("telegram_send_poll"),
-	PlatformSendNode("telegram_send_location"),
-	PlatformSendNode("telegram_send_keyboard"),
-	PlatformSendNode("telegram_edit_message"),
-	PlatformSendNode("telegram_pin_message"),
-	PlatformSendNode("telegram_react"),
-	PlatformSendNode("telegram_set_chat_action"),
-	PlatformSendNode("discord_send_message"),
-	PlatformSendNode("discord_send_embed"),
-	PlatformSendNode("discord_send_components"),
-	PlatformSendNode("discord_send_attachment"),
-	PlatformSendNode("discord_react"),
-	PlatformSendNode("discord_edit_message"),
-	PlatformSendNode("discord_start_thread"),
-	PlatformSendNode("sms_send"),
-	PlatformSendNode("sms_send_mms"),
-	PlatformSendNode("twitter_send_dm"),
-	PlatformSendNode("twitter_send_dm_media"),
-	PlatformSendNode("twitter_reply_to_tweet"),
-	PlatformSendNode("twitter_like_tweet"),
-	PlatformSendNode("twitter_retweet"),
-	PlatformSendNode("bluesky_reply"),
-	PlatformSendNode("bluesky_like"),
-	PlatformSendNode("bluesky_repost"),
-	PlatformSendNode("bluesky_send_dm"),
-	PlatformSendNode("threads_reply_to_post"),
-	PlatformSendNode("threads_hide_reply"),
-	PlatformSendNode("youtube_reply_to_comment"),
-	PlatformSendNode("youtube_send_live_chat"),
-	PlatformSendNode("youtube_moderate_comment"),
-	PlatformSendNode("linkedin_reply_to_comment"),
-	PlatformSendNode("linkedin_react_to_post"),
-	PlatformSendNode("mastodon_reply"),
-	PlatformSendNode("mastodon_favourite"),
-	PlatformSendNode("mastodon_boost"),
-	PlatformSendNode("mastodon_send_dm"),
-	PlatformSendNode("reddit_reply_to_comment"),
-	PlatformSendNode("reddit_send_pm"),
-	PlatformSendNode("reddit_reply_modmail"),
-	PlatformSendNode("reddit_submit_post"),
-	PlatformSendNode("googlebusiness_reply_to_review"),
-	PlatformSendNode("googlebusiness_post_update"),
-	PlatformSendNode("beehiiv_add_subscriber"),
-	PlatformSendNode("beehiiv_publish_post"),
-	PlatformSendNode("beehiiv_enroll_automation"),
-	PlatformSendNode("kit_add_subscriber"),
-	PlatformSendNode("kit_add_tag"),
-	PlatformSendNode("kit_send_broadcast"),
-	PlatformSendNode("mailchimp_add_member"),
-	PlatformSendNode("mailchimp_add_tag"),
-	PlatformSendNode("mailchimp_send_campaign"),
-	PlatformSendNode("listmonk_add_subscriber"),
-	PlatformSendNode("listmonk_send_campaign"),
-	PlatformSendNode("pinterest_create_pin"),
+	// Facebook (9)
+	FacebookSendTextNode,
+	FacebookSendMediaNode,
+	FacebookSendTemplateNode,
+	FacebookSendQuickRepliesNode,
+	FacebookSendButtonTemplateNode,
+	FacebookReplyToCommentNode,
+	FacebookPrivateReplyNode,
+	FacebookHideCommentNode,
+	FacebookSenderActionNode,
+	// WhatsApp (9)
+	WhatsAppSendTextNode,
+	WhatsAppSendMediaNode,
+	WhatsAppSendTemplateNode,
+	WhatsAppSendInteractiveNode,
+	WhatsAppSendFlowNode,
+	WhatsAppSendLocationNode,
+	WhatsAppSendContactsNode,
+	WhatsAppReactNode,
+	WhatsAppMarkReadNode,
+	// Telegram (10)
+	TelegramSendTextNode,
+	TelegramSendMediaNode,
+	TelegramSendMediaGroupNode,
+	TelegramSendPollNode,
+	TelegramSendLocationNode,
+	TelegramSendKeyboardNode,
+	TelegramEditMessageNode,
+	TelegramPinMessageNode,
+	TelegramReactNode,
+	TelegramSetChatActionNode,
+	// Discord (7)
+	DiscordSendMessageNode,
+	DiscordSendEmbedNode,
+	DiscordSendComponentsNode,
+	DiscordSendAttachmentNode,
+	DiscordReactNode,
+	DiscordEditMessageNode,
+	DiscordStartThreadNode,
+	// SMS (2)
+	SmsSendNode,
+	SmsSendMmsNode,
+	// X / Twitter (5)
+	TwitterSendDmNode,
+	TwitterSendDmMediaNode,
+	TwitterReplyToTweetNode,
+	TwitterLikeTweetNode,
+	TwitterRetweetNode,
+	// Bluesky (4)
+	BlueskyReplyNode,
+	BlueskyLikeNode,
+	BlueskyRepostNode,
+	BlueskySendDmNode,
+	// Threads (2)
+	ThreadsReplyToPostNode,
+	ThreadsHideReplyNode,
+	// YouTube (3)
+	YoutubeReplyToCommentNode,
+	YoutubeSendLiveChatNode,
+	YoutubeModerateCommentNode,
+	// LinkedIn (2)
+	LinkedinReplyToCommentNode,
+	LinkedinReactToPostNode,
+	// Mastodon (4)
+	MastodonReplyNode,
+	MastodonFavouriteNode,
+	MastodonBoostNode,
+	MastodonSendDmNode,
+	// Reddit (4)
+	RedditReplyToCommentNode,
+	RedditSendPmNode,
+	RedditReplyModmailNode,
+	RedditSubmitPostNode,
+	// Google Business Profile (2)
+	GoogleBusinessReplyToReviewNode,
+	GoogleBusinessPostUpdateNode,
+	// Beehiiv (3)
+	BeehiivAddSubscriberNode,
+	BeehiivPublishPostNode,
+	BeehiivEnrollAutomationNode,
+	// Kit (3)
+	KitAddSubscriberNode,
+	KitAddTagNode,
+	KitSendBroadcastNode,
+	// Mailchimp (3)
+	MailchimpAddMemberNode,
+	MailchimpAddTagNode,
+	MailchimpSendCampaignNode,
+	// Listmonk (2)
+	ListmonkAddSubscriberNode,
+	ListmonkSendCampaignNode,
+	// Pinterest (1)
+	PinterestCreatePinNode,
 ]);
 
 export type AutomationNodeSpec = z.infer<typeof AutomationNodeSpec>;

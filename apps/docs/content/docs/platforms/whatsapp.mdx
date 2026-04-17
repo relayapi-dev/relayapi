@@ -776,3 +776,39 @@ All fields go inside `target_options.whatsapp` on your post request.
 - **Phone numbers use E.164 format without the `+`** — e.g., `14155238886` not `+14155238886`.
 - **Template messages require pre-approval** — submit templates in the WhatsApp Business Manager.
 - **Media must be publicly accessible via HTTPS** — private URLs will fail.
+
+## Automations
+
+WhatsApp is a Tier 1 automation platform. Template messages are required for any send outside the 24-hour customer-service window.
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `whatsapp_message` | Inbound message (text / media / sticker / reaction etc.) |
+| `whatsapp_keyword` | Message matching a keyword config |
+| `whatsapp_button_click` | Reply from an interactive button |
+| `whatsapp_list_reply` | Reply from an interactive list |
+| `whatsapp_flow_submit` | User completed a Flow |
+| `whatsapp_reaction` | Message reaction |
+| `whatsapp_status_update` | Delivery / read status change |
+
+### Send nodes
+
+All nodes hit `POST {GRAPH_BASE.facebook}/{phone-number-id}/messages` with `messaging_product: "whatsapp"`.
+
+| Node | Required fields |
+| --- | --- |
+| `whatsapp_send_text` | `text`, optional `preview_url` |
+| `whatsapp_send_media` | `url`, `media_type` ∈ image\|video\|audio\|document\|sticker, optional `caption` |
+| `whatsapp_send_template` | `template_name`, `language` (default `en_US`), optional `components` |
+| `whatsapp_send_interactive` | `text` + either `buttons[]` (≤3 reply buttons) or `list` (sectioned rows) |
+| `whatsapp_send_flow` | `flow_id`, `flow_token`, `text`, optional `cta` / `flow_action` |
+| `whatsapp_send_location` | `latitude`, `longitude`, optional `name` / `address` |
+| `whatsapp_send_contacts` | `contacts[]` (array of WA contact objects) |
+| `whatsapp_react` | `emoji`, optional `message_id` (defaults to inbound message from state) |
+| `whatsapp_mark_read` | optional `message_id` |
+
+<Callout type="warn">
+Outside the 24-hour window, only **pre-approved template messages** can be sent. Use `whatsapp_send_template`; free-form `whatsapp_send_text` will be rejected by Meta.
+</Callout>

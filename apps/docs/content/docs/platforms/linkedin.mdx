@@ -690,3 +690,28 @@ All fields go inside `target_options.linkedin` on your post request.
 - **First ~210 characters visible** before the "see more" fold. Front-load your hook.
 - **Company pages get 30-minute video limit**, personal profiles get 10 minutes.
 - **Document carousels** are the highest-engagement format but require a PDF, PPT, or DOC file.
+
+## Automations
+
+LinkedIn automation uses the Versioned REST API (`YYYYMM` format) — version pinned in `api-versions.ts`.
+
+<Callout type="warn">
+The `r_member_social` scope is **currently closed to new apps** per Microsoft docs. Only approved Community Management API apps can use the triggers and send nodes below.
+</Callout>
+
+### Triggers
+
+| Type | Fires on |
+| --- | --- |
+| `linkedin_comment` | Comment on your share |
+| `linkedin_mention` | @-mention |
+| `linkedin_reaction` | Reaction added to your share |
+
+### Send nodes
+
+Base: `https://api.linkedin.com/rest` with `LinkedIn-Version` + `X-Restli-Protocol-Version: 2.0.0` headers.
+
+| Node | Endpoint | Required fields |
+| --- | --- | --- |
+| `linkedin_reply_to_comment` | `POST /socialActions/{urn}/comments` | `text`, `share_urn` |
+| `linkedin_react_to_post` | `POST /reactions?actor={memberUrn}` | `reaction` (default `LIKE`), `share_urn` |
