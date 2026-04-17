@@ -71,6 +71,11 @@ export function AutomationDetailPage({ automationId }: Props) {
 
 	const [draft, setDraft] = useState<AutomationDetail | null>(null);
 	const [dirty, setDirty] = useState(false);
+	// Monotonic counter that bumps on every local edit. Used by useAutosave
+	// to re-arm its debounce timer from the latest edit, and by silentSave
+	// to detect whether the draft changed while a save was in flight.
+	const [editVersion, setEditVersion] = useState(0);
+	const bumpEdit = useCallback(() => setEditVersion((v) => v + 1), []);
 	const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null);
 	const [rightPanel, setRightPanel] = useState<
 		"property" | "simulator" | "history" | null
@@ -83,10 +88,14 @@ export function AutomationDetailPage({ automationId }: Props) {
 		message: string;
 	} | null>(null);
 
-	const restoreSnapshot = useCallback((snap: GraphSnapshot) => {
-		setDraft((prev) => (prev ? { ...prev, nodes: snap.nodes, edges: snap.edges } : prev));
-		setDirty(true);
-	}, []);
+	const restoreSnapshot = useCallback(
+		(snap: GraphSnapshot) => {
+			setDraft((prev) => (prev ? { ...prev, nodes: snap.nodes, edges: snap.edges } : prev));
+			setDirty(true);
+			bumpEdit();
+		},
+		[bumpEdit],
+	);
 
 	const history = useHistory(restoreSnapshot);
 	useHistoryKeyboardShortcuts(history.undo, history.redo);
@@ -143,9 +152,10 @@ export function AutomationDetailPage({ automationId }: Props) {
 		(nodes: AutomationNodeSpec[], edges: AutomationEdgeSpec[]) => {
 			setDraft((prev) => (prev ? { ...prev, nodes, edges } : prev));
 			setDirty(true);
+			bumpEdit();
 			history.push({ nodes, edges });
 		},
-		[history],
+		[history, bumpEdit],
 	);
 
 	const addNode = useCallback(
@@ -172,8 +182,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 				return next;
 			});
 			setDirty(true);
+			bumpEdit();
 		},
-		[history],
+		[history, bumpEdit],
 	);
 
 	const addNodeAtPosition = useCallback(
@@ -196,8 +207,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 				return next;
 			});
 			setDirty(true);
+			bumpEdit();
 		},
-		[history],
+		[history, bumpEdit],
 	);
 
 	const updateSelectedNode = useCallback(
@@ -220,8 +232,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 			});
 			if (patch.key) setSelectedNodeKey(patch.key as string);
 			setDirty(true);
+			bumpEdit();
 		},
-		[selectedNodeKey, history],
+		[selectedNodeKey, history, bumpEdit],
 	);
 
 	const deleteSelectedNode = useCallback(() => {
@@ -237,11 +250,13 @@ export function AutomationDetailPage({ automationId }: Props) {
 		});
 		setSelectedNodeKey(null);
 		setDirty(true);
-	}, [selectedNodeKey, history]);
+		bumpEdit();
+	}, [selectedNodeKey, history, bumpEdit]);
 
 	const saveDraft = useCallback(async () => {
 		if (!draft) return;
 		setBanner(null);
+		const versionAtStart = editVersion;
 		const result = await patchAutomation.mutate({
 			nodes: draft.nodes,
 			edges: draft.edges,
@@ -249,16 +264,19 @@ export function AutomationDetailPage({ automationId }: Props) {
 			description: draft.description,
 		});
 		if (result) {
-			setDirty(false);
+			// Only clear the dirty flag if the user hasn't edited since we captured
+			// the snapshot. Otherwise newer edits would be silently marked saved.
+			setDirty((d) => (editVersion === versionAtStart ? false : d));
 			setBanner({ type: "success", message: "Draft saved" });
 			refetchAutomation();
 		} else if (patchAutomation.error) {
 			setBanner({ type: "error", message: patchAutomation.error });
 		}
-	}, [draft, patchAutomation, refetchAutomation]);
+	}, [draft, editVersion, patchAutomation, refetchAutomation]);
 
 	const silentSave = useCallback(async () => {
 		if (!draft) return;
+		const versionAtStart = editVersion;
 		const result = await patchAutomation.mutate({
 			nodes: draft.nodes,
 			edges: draft.edges,
@@ -266,20 +284,47 @@ export function AutomationDetailPage({ automationId }: Props) {
 			description: draft.description,
 		});
 		if (result) {
-			setDirty(false);
+			setDirty((d) => (editVersion === versionAtStart ? false : d));
 		}
-	}, [draft, patchAutomation]);
+	}, [draft, editVersion, patchAutomation]);
 
 	useAutosave({
+		version: editVersion,
 		dirty,
 		onSave: silentSave,
 		enabled: !!draft && draft.status !== "archived",
 	});
 
+	// Warn before unloading / navigating away with unsaved changes.
+	useEffect(() => {
+		if (!dirty) return;
+		const onBeforeUnload = (e: BeforeUnloadEvent) => {
+			e.preventDefault();
+			e.returnValue = "";
+		};
+		window.addEventListener("beforeunload", onBeforeUnload);
+		return () => window.removeEventListener("beforeunload", onBeforeUnload);
+	}, [dirty]);
+
 	const publishAndActivate = useCallback(async () => {
 		if (!draft) return;
+		// Re-run validation fresh right before publishing. The `canPublish`
+		// gate is based on React-rendered state; this ensures we never send
+		// a publish request for an invalid graph even if the render is stale.
+		const freshIssues = schema
+			? validateGraph(draft.nodes, draft.edges, schema.nodes)
+			: [];
+		const blocking = freshIssues.filter((i) => i.severity === "error");
+		if (blocking.length > 0) {
+			setBanner({
+				type: "error",
+				message: `Fix ${blocking.length} validation error${blocking.length === 1 ? "" : "s"} before publishing`,
+			});
+			return;
+		}
 		setBanner(null);
 		if (dirty) {
+			const versionAtStart = editVersion;
 			const saved = await patchAutomation.mutate({
 				nodes: draft.nodes,
 				edges: draft.edges,
@@ -291,7 +336,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 				});
 				return;
 			}
-			setDirty(false);
+			setDirty((d) => (editVersion === versionAtStart ? false : d));
 		}
 		const published = await publishAutomation.mutate();
 		if (published) {
@@ -300,7 +345,15 @@ export function AutomationDetailPage({ automationId }: Props) {
 		} else if (publishAutomation.error) {
 			setBanner({ type: "error", message: publishAutomation.error });
 		}
-	}, [draft, dirty, patchAutomation, publishAutomation, refetchAutomation]);
+	}, [
+		draft,
+		dirty,
+		editVersion,
+		schema,
+		patchAutomation,
+		publishAutomation,
+		refetchAutomation,
+	]);
 
 	const togglePause = useCallback(async () => {
 		if (!draft) return;
@@ -389,6 +442,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 							onChange={(e) => {
 								setDraft({ ...draft, name: e.target.value });
 								setDirty(true);
+								bumpEdit();
 							}}
 							className="text-sm font-medium bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-1 -ml-1 truncate max-w-[340px]"
 						/>

@@ -7,9 +7,9 @@ import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Env } from "../../types";
 
 const BATCH_SIZE = 200;
-// A tick that's been claimed (`processing`) but never confirmed `done` or
-// flipped back to `pending` for this long is almost certainly the victim of a
-// worker dying mid-send. Reclaim on the next sweep.
+// A tick whose `claimedAt` is older than this has been held in `processing`
+// too long and is almost certainly the victim of a worker dying mid-send.
+// Reclaim on the next sweep.
 const STALE_PROCESSING_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
@@ -21,21 +21,25 @@ export async function processAutomationSchedule(env: Env): Promise<number> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const now = new Date();
 
-	// Reclaim ticks stuck in `processing` past the stale threshold. A tick
-	// can end up here if the worker died after claiming but before marking
-	// the tick `done` or rolling it back to `pending`. Without this sweep,
-	// those ticks would sit forever and their enrollments would never advance.
+	// Reclaim ticks stuck in `processing` past the stale threshold. We filter on
+	// `claimedAt` (the moment we flipped the row into `processing`), NOT on
+	// `runAt` which is the scheduled execution time. A long-delay tick may have
+	// a `runAt` far in the past but a fresh `claimedAt` — using `runAt` would
+	// re-queue it while the original worker is still running it, causing
+	// duplicate advances for the same enrollment. Rows missing `claimedAt`
+	// (pre-migration data) are also rescued so they don't sit forever.
 	const staleCutoff = new Date(Date.now() - STALE_PROCESSING_MS);
 	await db
 		.update(automationScheduledTicks)
 		.set({
 			status: "pending",
+			claimedAt: null,
 			attempts: sql`${automationScheduledTicks.attempts} + 1`,
 		})
 		.where(
 			and(
 				eq(automationScheduledTicks.status, "processing"),
-				lte(automationScheduledTicks.runAt, staleCutoff),
+				sql`(${automationScheduledTicks.claimedAt} IS NULL OR ${automationScheduledTicks.claimedAt} <= ${staleCutoff})`,
 			),
 		);
 
@@ -57,7 +61,7 @@ export async function processAutomationSchedule(env: Env): Promise<number> {
 	const dueIds = dueRows.map((r) => r.id);
 	const claimed = await db
 		.update(automationScheduledTicks)
-		.set({ status: "processing" })
+		.set({ status: "processing", claimedAt: new Date() })
 		.where(
 			and(
 				inArray(automationScheduledTicks.id, dueIds),
@@ -87,6 +91,7 @@ export async function processAutomationSchedule(env: Env): Promise<number> {
 				.update(automationScheduledTicks)
 				.set({
 					status: "pending",
+					claimedAt: null,
 					attempts: sql`${automationScheduledTicks.attempts} + 1`,
 				})
 				.where(eq(automationScheduledTicks.id, tick.id));

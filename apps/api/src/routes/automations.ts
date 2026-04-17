@@ -990,12 +990,27 @@ app.openapi(getRuns, async (c) => {
 		.from(automationRunLogs)
 		.where(eq(automationRunLogs.enrollmentId, enrollmentId))
 		.orderBy(asc(automationRunLogs.executedAt));
+
+	// Resolve node_id → node_key using the enrollment's frozen snapshot so the
+	// dashboard can highlight the executed path on the current canvas.
+	const versionRow = await db.query.automationVersions.findFirst({
+		where: and(
+			eq(automationVersions.automationId, automationId),
+			eq(automationVersions.version, enrollment.automationVersion),
+		),
+	});
+	const snap = versionRow?.snapshot as AutomationSnapshot | undefined;
+	const idToKey = new Map<string, string>(
+		snap?.nodes.map((n) => [n.id, n.key]) ?? [],
+	);
+
 	return c.json(
 		{
 			data: logs.map((l) => ({
 				id: l.id,
 				enrollment_id: l.enrollmentId,
 				node_id: l.nodeId,
+				node_key: l.nodeId ? idToKey.get(l.nodeId) ?? null : null,
 				node_type: l.nodeType,
 				executed_at: l.executedAt.toISOString(),
 				outcome: l.outcome,

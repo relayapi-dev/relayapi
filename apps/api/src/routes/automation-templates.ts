@@ -217,11 +217,9 @@ app.openapi(
 	}),
 	async (c) => {
 		const body = c.req.valid("json");
-		// NOTE: The DM send uses the universal `message_text` node which already
-		// resolves the channel + recipient at runtime. The optional public comment
-		// reply uses `instagram_reply_to_comment`, which is currently a Phase 8
-		// stub — the DM part will work end-to-end, the public reply will fail
-		// with "not yet implemented" until Phase 8.
+		// The DM send uses the universal `message_text` node which resolves
+		// channel + recipient at runtime. The optional public comment reply
+		// uses `instagram_reply_to_comment`.
 		const nodes: BuiltSpec["nodes"] = [
 			{
 				key: "send_dm",

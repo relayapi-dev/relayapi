@@ -36,7 +36,7 @@ The audit flagged that some external blocker notes in this document were too loo
 
 - **Legacy routes still mounted**. `/v1/inbox/rules`, `/v1/comment-automations`, `/v1/sequences`, `/v1/engagement-rules` are still live. Deletion is now scoped into **Phase 4b** below so it happens as one coordinated cut.
 - **Migration still pending** — user action. Unchanged.
-- **`/v1/automations/:id/simulate`** is not implemented in the code (not just "handler deferred"). Moved to the Phase 6/7 backlog as a concrete TODO.
+- **`/v1/automations/:id/simulate`** was flagged as missing earlier but is now implemented — it calls `services/automations/simulator.ts` and returns `{ path, terminated }`. Dashboard Simulator panel consumes it.
 - The pgvector blocker note has been rewritten above.
 
 ---

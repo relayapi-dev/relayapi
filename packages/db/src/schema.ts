@@ -2979,6 +2979,11 @@ export const automationScheduledTicks = pgTable(
 		runAt: timestamp("run_at", { withTimezone: true }).notNull(),
 		attempts: integer("attempts").notNull().default(0),
 		status: text("status").notNull().default("pending"), // pending | processing | done | failed
+		// Set every time the row is transitioned into `processing`. The scheduler's
+		// stale-tick sweep uses this (not `runAt`) to detect claims that have been
+		// held too long — a long-delay tick has an old `runAt` but was only just
+		// claimed, so filtering on `runAt` would falsely re-queue it.
+		claimedAt: timestamp("claimed_at", { withTimezone: true }),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),

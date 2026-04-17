@@ -422,6 +422,7 @@ export interface AutomationRunLogResponse {
   id: string;
   enrollment_id: string;
   node_id: string | null;
+  node_key: string | null;
   node_type: string | null;
   executed_at: string;
   outcome: string;

@@ -7,6 +7,8 @@ import {
 	KeywordReplyTemplateInput,
 } from "../schemas/automations";
 import { isWorkspaceScopeDenied } from "../lib/workspace-scope";
+import { applyQuietHours } from "../services/automations/nodes/smart-delay";
+import { messageMediaHandler } from "../services/automations/nodes/message-media";
 
 // ---------------------------------------------------------------------------
 // simulateAutomation — static graph traversal
@@ -439,5 +441,104 @@ describe("AutomationCreateSpec — Audit 3 gates", () => {
 			reply_message: "hi",
 		});
 		expect(result.success).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// smart_delay — quiet_hours window (Audit 4 #6)
+// ---------------------------------------------------------------------------
+
+describe("applyQuietHours", () => {
+	it("pushes a delay falling inside a daytime window to the end of the window", () => {
+		// 2026-04-17 10:00 UTC — inside a 09:00-12:00 UTC quiet window.
+		const inside = new Date("2026-04-17T10:00:00Z");
+		const out = applyQuietHours(inside, {
+			start: "09:00",
+			end: "12:00",
+			timezone: "UTC",
+		});
+		expect(out.toISOString()).toBe("2026-04-17T12:00:00.000Z");
+	});
+
+	it("leaves delays outside the window untouched", () => {
+		const outside = new Date("2026-04-17T15:00:00Z");
+		const out = applyQuietHours(outside, {
+			start: "22:00",
+			end: "07:00",
+			timezone: "UTC",
+		});
+		expect(out.toISOString()).toBe(outside.toISOString());
+	});
+
+	it("handles windows that cross midnight — evening tail pushes to next morning", () => {
+		// 23:30 UTC is inside a 22:00-07:00 quiet window that crosses midnight.
+		const evening = new Date("2026-04-17T23:30:00Z");
+		const out = applyQuietHours(evening, {
+			start: "22:00",
+			end: "07:00",
+			timezone: "UTC",
+		});
+		expect(out.toISOString()).toBe("2026-04-18T07:00:00.000Z");
+	});
+
+	it("handles midnight-crossing windows — morning tail pushes to today's end", () => {
+		const morning = new Date("2026-04-17T02:00:00Z");
+		const out = applyQuietHours(morning, {
+			start: "22:00",
+			end: "07:00",
+			timezone: "UTC",
+		});
+		expect(out.toISOString()).toBe("2026-04-17T07:00:00.000Z");
+	});
+
+	it("ignores malformed windows without stranding the enrollment", () => {
+		const d = new Date("2026-04-17T10:00:00Z");
+		const out = applyQuietHours(d, {
+			start: "nope",
+			end: "also nope",
+			timezone: "UTC",
+		});
+		expect(out.toISOString()).toBe(d.toISOString());
+	});
+});
+
+// ---------------------------------------------------------------------------
+// message_media handler (Audit 4 #8) — must fail loudly, not silently skip
+// ---------------------------------------------------------------------------
+
+describe("messageMediaHandler", () => {
+	it("fails with a descriptive error for message_media", async () => {
+		const result = await messageMediaHandler({
+			env: {} as never,
+			db: {} as never,
+			enrollment: {} as never,
+			snapshot: {} as never,
+			node: {
+				id: "n1",
+				key: "send_img",
+				type: "message_media",
+				config: { url: "https://example.com/a.jpg", media_type: "image" },
+			},
+		});
+		expect(result.kind).toBe("fail");
+		if (result.kind === "fail") {
+			expect(result.error).toContain("platform-specific");
+		}
+	});
+
+	it("fails for message_file too", async () => {
+		const result = await messageMediaHandler({
+			env: {} as never,
+			db: {} as never,
+			enrollment: {} as never,
+			snapshot: {} as never,
+			node: {
+				id: "n1",
+				key: "send_doc",
+				type: "message_file",
+				config: { url: "https://example.com/a.pdf", filename: "a.pdf" },
+			},
+		});
+		expect(result.kind).toBe("fail");
 	});
 });

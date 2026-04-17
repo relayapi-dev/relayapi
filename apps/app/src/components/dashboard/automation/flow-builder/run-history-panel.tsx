@@ -27,6 +27,7 @@ interface EnrollmentListResponse {
 interface RunLogRow {
 	id: string;
 	node_id: string | null;
+	node_key: string | null;
 	node_type: string | null;
 	executed_at: string;
 	outcome: string;
@@ -34,6 +35,12 @@ interface RunLogRow {
 	duration_ms: number | null;
 	error: string | null;
 }
+
+// Runner outcomes (from runner.ts): ok | complete | exit | wait |
+// wait_for_input | goto | failed. Anything in `FAIL_OUTCOMES` renders red,
+// `SUCCESS_OUTCOMES` render green, everything else is neutral.
+const SUCCESS_OUTCOMES = new Set(["ok", "complete"]);
+const FAIL_OUTCOMES = new Set(["failed", "fail", "error"]);
 
 interface RunListResponse {
 	data: RunLogRow[];
@@ -56,17 +63,18 @@ function formatDate(s: string) {
 	});
 }
 
+// Enrollment statuses emitted by the API: active | waiting | completed |
+// exited | failed.
 function statusColor(status: string) {
 	switch (status) {
 		case "completed":
 			return "text-emerald-400 bg-emerald-400/10";
-		case "running":
+		case "active":
 		case "waiting":
 			return "text-sky-400 bg-sky-400/10";
 		case "failed":
-		case "error":
 			return "text-destructive bg-destructive/10";
-		case "cancelled":
+		case "exited":
 			return "text-neutral-400 bg-neutral-400/10";
 		default:
 			return "text-muted-foreground bg-muted";
@@ -130,8 +138,10 @@ export function RunHistoryPanel({
 			.then((data) => {
 				if (cancelled) return;
 				setRuns(data.data ?? []);
+				// Highlight via node_key since the canvas is keyed by node.key,
+				// not the database node_id.
 				const path = (data.data ?? [])
-					.map((r) => r.node_id)
+					.map((r) => r.node_key)
 					.filter((k): k is string => typeof k === "string");
 				onHighlightPath(path);
 			})
@@ -225,23 +235,23 @@ export function RunHistoryPanel({
 										key={r.id}
 										className={cn(
 											"rounded-md border px-2 py-1.5 text-[11px]",
-											r.outcome === "success"
+											SUCCESS_OUTCOMES.has(r.outcome)
 												? "border-emerald-500/30 bg-emerald-500/5"
-												: r.outcome === "fail" || r.outcome === "error"
+												: FAIL_OUTCOMES.has(r.outcome)
 													? "border-destructive/30 bg-destructive/5"
 													: "border-border bg-card",
 										)}
 									>
 										<div className="flex items-center gap-1.5">
-											{r.outcome === "success" ? (
+											{SUCCESS_OUTCOMES.has(r.outcome) ? (
 												<CheckCircle2 className="size-3 text-emerald-400" />
-											) : r.outcome === "fail" || r.outcome === "error" ? (
+											) : FAIL_OUTCOMES.has(r.outcome) ? (
 												<XCircle className="size-3 text-destructive" />
 											) : (
 												<CircleDot className="size-3 text-muted-foreground" />
 											)}
 											<span className="font-medium truncate">
-												{r.node_id ?? "(system)"}
+												{r.node_key ?? r.node_id ?? "(system)"}
 											</span>
 											{r.branch_label && (
 												<span className="ml-auto rounded-full bg-muted px-1.5 py-0 text-[9px] font-medium text-muted-foreground">

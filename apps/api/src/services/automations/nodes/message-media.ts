@@ -1,12 +1,18 @@
 import type { NodeHandler } from "../types";
 
 /**
- * Media send — deferred to Phase 8 where per-platform media upload/send paths differ.
- * For now, log the intent and advance so authors can see their graph execute end-to-end.
+ * Universal media/file send is not supported because every platform's media
+ * contract diverges (upload first vs. URL reference, allowed mime types, size
+ * caps, attachment semantics). Authors should use a platform-specific send
+ * node — e.g. `instagram_send_media`, `whatsapp_send_media`, `telegram_send_media`,
+ * `discord_send_attachment` — which resolves the channel upload path correctly.
+ *
+ * We fail loudly here instead of advancing silently so an author can't ship a
+ * graph that looks successful in run logs while nothing was actually sent.
  */
-export const messageMediaHandler: NodeHandler = async () => ({
-	kind: "next",
-	state_patch: {
-		_warning: "message_media is a stub until Phase 8 (per-platform media sends).",
-	},
+export const messageMediaHandler: NodeHandler = async (ctx) => ({
+	kind: "fail",
+	error:
+		`'${ctx.node.type}' is not supported — use a platform-specific media node ` +
+		`(instagram_send_media, whatsapp_send_media, telegram_send_media, discord_send_attachment, etc.).`,
 });

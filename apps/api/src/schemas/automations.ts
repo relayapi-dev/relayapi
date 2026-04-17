@@ -1717,6 +1717,7 @@ export const AutomationRunLogResponse = z.object({
 	id: z.string(),
 	enrollment_id: z.string(),
 	node_id: z.string().nullable(),
+	node_key: z.string().nullable(),
 	node_type: AutomationNodeTypeEnum.nullable(),
 	executed_at: z.string().datetime(),
 	outcome: z.string(),

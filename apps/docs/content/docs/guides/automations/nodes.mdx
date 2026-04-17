@@ -22,7 +22,7 @@ Nodes are grouped by category below. `output_labels` tells you which edge labels
 
 ## Content
 
-Send a message on whatever channel the automation is configured for. `message_text` routes through the universal `message-sender` service and currently supports **Instagram, Facebook (Messenger), WhatsApp, Telegram, Twitter (X), and Reddit**. For other platforms (Discord, SMS, Bluesky, Threads, LinkedIn, Mastodon, YouTube, etc.), use the platform-specific send nodes listed under Platform Sends. `message_media` is platform-specific and is not yet backed by the universal sender — use the `*_send_media` node for your channel.
+Send a message on whatever channel the automation is configured for. `message_text` routes through the universal `message-sender` service and currently supports **Instagram, Facebook (Messenger), WhatsApp, Telegram, Twitter (X), and Reddit**. For other platforms (Discord, SMS, Bluesky, Threads, LinkedIn, Mastodon, YouTube, etc.), use the platform-specific send nodes listed under Platform Sends. `message_media` and `message_file` are *not* backed by the universal sender — authors must use the `*_send_media` / `*_send_attachment` node for their channel (the universal handler fails with a clear error).
 
 ### `message_text`
 
@@ -34,23 +34,20 @@ Send a plain text DM. Supports `{{...}}` merge tags.
 
 Output labels: `next`.
 
-### `message_media`
+### `message_media` / `message_file` (not supported — use platform-specific nodes)
 
-Send an image, video, or audio. One of `media_id` (reference to R2 via `/v1/media`) or `url`.
+The universal handlers fail at runtime with an explicit error. Every platform's media pipeline is different (upload-then-reference vs. URL reference, mime/size caps, attachment semantics), so you must pick the platform-specific send node for your channel:
 
-```json
-{
-  "key": "send_guide",
-  "type": "message_media",
-  "media_id": "med_xyz789",
-  "media_type": "image",
-  "caption": "Here's your guide, {{first_name}}"
-}
-```
+| Channel | Node |
+| --- | --- |
+| Instagram | `instagram_send_media` |
+| Facebook | `facebook_send_media` |
+| WhatsApp | `whatsapp_send_media` |
+| Telegram | `telegram_send_media`, `telegram_send_media_group` |
+| Discord | `discord_send_attachment` |
+| Twitter (X) | `twitter_send_dm_media` |
 
-### `message_file`
-
-Send a document / file. Same shape as `message_media` with a `filename`.
+See the per-platform guides under **Platforms** for field shapes.
 
 ## Input Capture
 

@@ -51,6 +51,61 @@ function nodeSummary(spec: AutomationNodeSpec): string | undefined {
 	return undefined;
 }
 
+/**
+ * Catalog of valid output labels for the given node. Combines the schema's
+ * static `output_labels` with any dynamic labels defined on the node itself
+ * (randomizer branches, split_test variants, ai_intent_router intents).
+ */
+function availableLabelsFor(
+	sourceNode: AutomationNodeSpec | undefined,
+	def: SchemaNodeDef | undefined,
+): string[] {
+	const base = def?.output_labels ?? ["next"];
+	if (!sourceNode) return base;
+	const extras: string[] = [];
+	if (sourceNode.type === "randomizer" && Array.isArray(sourceNode.branches)) {
+		for (const b of sourceNode.branches as Array<{ label?: string }>) {
+			if (typeof b?.label === "string") extras.push(b.label);
+		}
+	}
+	if (sourceNode.type === "split_test" && Array.isArray(sourceNode.variants)) {
+		for (const v of sourceNode.variants as Array<{ label?: string }>) {
+			if (typeof v?.label === "string") extras.push(v.label);
+		}
+	}
+	if (
+		sourceNode.type === "ai_intent_router" &&
+		Array.isArray(sourceNode.intents)
+	) {
+		for (const it of sourceNode.intents as Array<{ label?: string }>) {
+			if (typeof it?.label === "string") extras.push(it.label);
+		}
+	}
+	return Array.from(new Set([...base, ...extras]));
+}
+
+/**
+ * Pick the default label for a new edge from `sourceKey`. We use the first
+ * available label that isn't already used by another outgoing edge from that
+ * node, so repeatedly connecting from a condition creates `yes`, then `no`,
+ * then whatever's next in the schema's output list.
+ */
+function pickDefaultLabel(
+	sourceKey: string,
+	sourceNode: AutomationNodeSpec | undefined,
+	def: SchemaNodeDef | undefined,
+	existingEdges: AutomationEdgeSpec[],
+): string {
+	const available = availableLabelsFor(sourceNode, def);
+	const used = new Set(
+		existingEdges.filter((e) => e.from === sourceKey).map((e) => e.label),
+	);
+	for (const lbl of available) {
+		if (!used.has(lbl)) return lbl;
+	}
+	return available[0] ?? "next";
+}
+
 function toReactFlowNodes(
 	automation: AutomationDetail,
 	schemaNodesByType: Map<string, SchemaNodeDef>,
@@ -95,14 +150,33 @@ function toReactFlowNodes(
 	return [triggerNode, ...rest];
 }
 
-function toReactFlowEdges(edges: AutomationEdgeSpec[]): Edge[] {
-	return edges.map((e, i) => ({
-		id: `${e.from}->${e.to}-${i}`,
-		source: e.from,
-		target: e.to,
-		type: "labeled",
-		data: { label: e.label },
-	}));
+interface EdgeBuildDeps {
+	nodesByKey: Map<string, AutomationNodeSpec>;
+	schemaByType: Map<string, SchemaNodeDef>;
+	onChangeLabel: (edgeId: string, label: string) => void;
+	readOnly: boolean;
+}
+
+function toReactFlowEdges(
+	edges: AutomationEdgeSpec[],
+	deps: EdgeBuildDeps,
+): Edge[] {
+	return edges.map((e, i) => {
+		const src = deps.nodesByKey.get(e.from);
+		const def = src ? deps.schemaByType.get(src.type) : undefined;
+		return {
+			id: `${e.from}->${e.to}-${i}`,
+			source: e.from,
+			target: e.to,
+			type: "labeled",
+			data: {
+				label: e.label,
+				availableLabels: availableLabelsFor(src, def),
+				onChangeLabel: deps.onChangeLabel,
+				readOnly: deps.readOnly,
+			},
+		};
+	});
 }
 
 interface FlowBuilderProps {
@@ -138,9 +212,30 @@ function FlowBuilderInner({
 		[schema],
 	);
 
+	const nodesByKey = useMemo(
+		() => new Map(automation.nodes.map((n) => [n.key, n])),
+		[automation.nodes],
+	);
+
 	const effectiveHighlight = useMemo(
 		() => highlightKeys ?? new Set<string>(),
 		[highlightKeys],
+	);
+
+	// Ref holds the "change edge label" handler so the edge components can
+	// call it after commit without triggering re-renders on every render.
+	const onChangeLabelRef = useRef<(edgeId: string, label: string) => void>(
+		() => undefined,
+	);
+	const edgeBuildDeps = useMemo(
+		() => ({
+			nodesByKey,
+			schemaByType: schemaNodesByType,
+			onChangeLabel: (edgeId: string, label: string) =>
+				onChangeLabelRef.current(edgeId, label),
+			readOnly,
+		}),
+		[nodesByKey, schemaNodesByType, readOnly],
 	);
 
 	const initialNodes = useMemo(() => {
@@ -151,15 +246,15 @@ function FlowBuilderInner({
 			effectiveHighlight,
 		);
 		if (needsAutoLayout(rf)) {
-			const rfEdges = toReactFlowEdges(automation.edges);
+			const rfEdges = toReactFlowEdges(automation.edges, edgeBuildDeps);
 			return autoLayout(rf, rfEdges);
 		}
 		return rf;
-	}, [automation, schemaNodesByType, errorKeys, effectiveHighlight]);
+	}, [automation, schemaNodesByType, errorKeys, effectiveHighlight, edgeBuildDeps]);
 
 	const initialEdges = useMemo(
-		() => toReactFlowEdges(automation.edges),
-		[automation.edges],
+		() => toReactFlowEdges(automation.edges, edgeBuildDeps),
+		[automation.edges, edgeBuildDeps],
 	);
 
 	const [nodes, setNodes] = useState<Node[]>(initialNodes);
@@ -272,10 +367,45 @@ function FlowBuilderInner({
 	const onConnect = useCallback(
 		(connection: Connection) => {
 			if (!connection.source || !connection.target) return;
+			const sourceKey = connection.source;
+			const srcNode = nodesByKey.get(sourceKey);
+			const def = srcNode ? schemaNodesByType.get(srcNode.type) : undefined;
+			const label = pickDefaultLabel(
+				sourceKey,
+				srcNode,
+				def,
+				automation.edges,
+			);
 			setEdges((prev) => {
 				const next = addEdge(
-					{ ...connection, type: "labeled", data: { label: "next" } },
+					{
+						...connection,
+						type: "labeled",
+						data: {
+							label,
+							availableLabels: availableLabelsFor(srcNode, def),
+							onChangeLabel: (edgeId: string, lbl: string) =>
+								onChangeLabelRef.current(edgeId, lbl),
+							readOnly,
+						},
+					},
 					prev,
+				);
+				setNodes((curr) => {
+					emitGraph(curr, next);
+					return curr;
+				});
+				return next;
+			});
+		},
+		[emitGraph, nodesByKey, schemaNodesByType, automation.edges, readOnly],
+	);
+
+	const onEdgeLabelChange = useCallback(
+		(edgeId: string, label: string) => {
+			setEdges((prev) => {
+				const next = prev.map((e) =>
+					e.id === edgeId ? { ...e, data: { ...(e.data ?? {}), label } } : e,
 				);
 				setNodes((curr) => {
 					emitGraph(curr, next);
@@ -286,6 +416,10 @@ function FlowBuilderInner({
 		},
 		[emitGraph],
 	);
+
+	useEffect(() => {
+		onChangeLabelRef.current = onEdgeLabelChange;
+	}, [onEdgeLabelChange]);
 
 	const onDragOver = useCallback((e: React.DragEvent) => {
 		if (Array.from(e.dataTransfer.types).includes(PALETTE_DRAG_MIME)) {
