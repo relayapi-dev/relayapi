@@ -34,6 +34,7 @@ export function PostSearchCombobox({
   const [search, setSearch] = useState("");
   const [posts, setPosts] = useState<PostOption[]>([]);
   const [loading, setLoading] = useState(false);
+  const [brokenThumbs, setBrokenThumbs] = useState<Set<string>>(new Set());
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -276,10 +277,18 @@ export function PostSearchCombobox({
                       : "opacity-0",
                   )}
                 />
-                {post.thumbnailUrl ? (
+                {post.thumbnailUrl && !brokenThumbs.has(post.platformPostId) ? (
                   <img
                     src={post.thumbnailUrl}
                     alt=""
+                    referrerPolicy="no-referrer"
+                    onError={() =>
+                      setBrokenThumbs((prev) => {
+                        const next = new Set(prev);
+                        next.add(post.platformPostId);
+                        return next;
+                      })
+                    }
                     className="size-8 rounded object-cover shrink-0"
                   />
                 ) : (

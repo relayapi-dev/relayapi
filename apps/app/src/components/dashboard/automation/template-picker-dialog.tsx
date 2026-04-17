@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
 import { PostSearchCombobox } from "@/components/dashboard/post-search-combobox";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface Props {
   open: boolean;
@@ -253,7 +254,8 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
             ))}
           </div>
         ) : (
-          <div className="space-y-3 py-2 max-h-[calc(100dvh-16rem)] overflow-y-auto pr-1 -mr-1">
+          <ScrollArea className="max-h-[calc(100dvh-16rem)]">
+            <div className="space-y-3 py-2 pr-4">
             <TextField
               label="Name"
               value={form.name}
@@ -390,7 +392,8 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
                 {error}
               </div>
             )}
-          </div>
+            </div>
+          </ScrollArea>
         )}
 
         <DialogFooter>

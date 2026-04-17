@@ -317,6 +317,105 @@ app.openapi(listAutomations, async (c) => {
 	return c.json({ data: items, next_cursor: nextCursor, has_more: hasMore }, 200);
 });
 
+// --- Schema introspection (for MCP / AI agents) ---
+//
+// Registered BEFORE the `/{id}` routes so Hono matches the literal path
+// before the parameterised one — otherwise `schema` is treated as an
+// automation id and the lookup returns 404.
+
+const getSchema = createRoute({
+	operationId: "getAutomationSchema",
+	method: "get",
+	path: "/schema",
+	tags: ["Automations"],
+	summary: "Get the full catalog of triggers, nodes, and templates",
+	security: [{ Bearer: [] }],
+	responses: {
+		200: {
+			description: "Catalog",
+			content: { "application/json": { schema: AutomationSchemaResponse } },
+		},
+	},
+});
+
+app.openapi(getSchema, async (c) => {
+	return c.json(
+		{
+			triggers: AUTOMATION_TRIGGER_TYPES.map((t) => ({
+				type: t,
+				description: describeTrigger(t),
+				channel: channelForTrigger(t),
+				tier: tierForTrigger(t),
+				transport: transportForTrigger(t),
+				config_schema: {},
+				output_labels: ["next"],
+			})),
+			// Runtime-supported node types only. Types whose handlers are
+			// still stubbed (AI, split_test, subflow, subscription_*, segment_*,
+			// notify_admin, conversation_*, webhook_out) are filtered out so
+			// the dashboard palette / MCP tools / docs agents don't offer nodes
+			// that fail at execution time.
+			nodes: AUTOMATION_NODE_TYPES.filter(
+				(t) => !STUBBED_NODE_TYPES.has(t),
+			).map((t) => ({
+				type: t,
+				description: describeNode(t),
+				category: categoryForNode(t),
+				fields_schema: {},
+				output_labels: outputLabelsForNode(t),
+			})),
+			templates: [
+				{
+					id: "comment-to-dm",
+					name: "Comment to DM",
+					description: "Reply to an Instagram comment + send a DM to the commenter",
+					input_schema: {},
+				},
+				{
+					id: "welcome-dm",
+					name: "Welcome DM",
+					description: "Send a welcome DM when a contact starts a conversation",
+					input_schema: {},
+				},
+				{
+					id: "keyword-reply",
+					name: "Keyword Reply",
+					description: "Reply to DMs matching a keyword",
+					input_schema: {},
+				},
+				{
+					id: "story-reply",
+					name: "Story Reply",
+					description: "Respond when a user replies to an Instagram story",
+					input_schema: {},
+				},
+				{
+					id: "follow-to-dm",
+					name: "Follow to DM",
+					description: "DM new followers on Instagram",
+					input_schema: {},
+				},
+				{
+					id: "giveaway",
+					name: "Giveaway",
+					description: "Run a giveaway that enters users who comment a keyword",
+					input_schema: {},
+				},
+			],
+			merge_tags: [
+				"first_name",
+				"last_name",
+				"full_name",
+				"email",
+				"phone",
+				"contact.*",
+				"state.*",
+			],
+		},
+		200,
+	);
+});
+
 // --- Get (with graph) ---
 
 const getAutomation = createRoute({
@@ -597,101 +696,6 @@ app.openapi(deleteAutomation, async (c) => {
 
 	await db.delete(automations).where(eq(automations.id, id));
 	return c.body(null, 204);
-});
-
-// --- Schema introspection (for MCP / AI agents) ---
-
-const getSchema = createRoute({
-	operationId: "getAutomationSchema",
-	method: "get",
-	path: "/schema",
-	tags: ["Automations"],
-	summary: "Get the full catalog of triggers, nodes, and templates",
-	security: [{ Bearer: [] }],
-	responses: {
-		200: {
-			description: "Catalog",
-			content: { "application/json": { schema: AutomationSchemaResponse } },
-		},
-	},
-});
-
-app.openapi(getSchema, async (c) => {
-	return c.json(
-		{
-			triggers: AUTOMATION_TRIGGER_TYPES.map((t) => ({
-				type: t,
-				description: describeTrigger(t),
-				channel: channelForTrigger(t),
-				tier: tierForTrigger(t),
-				transport: transportForTrigger(t),
-				config_schema: {},
-				output_labels: ["next"],
-			})),
-			// Runtime-supported node types only. Types whose handlers are
-			// still stubbed (AI, split_test, subflow, subscription_*, segment_*,
-			// notify_admin, conversation_*, webhook_out) are filtered out so
-			// the dashboard palette / MCP tools / docs agents don't offer nodes
-			// that fail at execution time.
-			nodes: AUTOMATION_NODE_TYPES.filter(
-				(t) => !STUBBED_NODE_TYPES.has(t),
-			).map((t) => ({
-				type: t,
-				description: describeNode(t),
-				category: categoryForNode(t),
-				fields_schema: {},
-				output_labels: outputLabelsForNode(t),
-			})),
-			templates: [
-				{
-					id: "comment-to-dm",
-					name: "Comment to DM",
-					description: "Reply to an Instagram comment + send a DM to the commenter",
-					input_schema: {},
-				},
-				{
-					id: "welcome-dm",
-					name: "Welcome DM",
-					description: "Send a welcome DM when a contact starts a conversation",
-					input_schema: {},
-				},
-				{
-					id: "keyword-reply",
-					name: "Keyword Reply",
-					description: "Reply to DMs matching a keyword",
-					input_schema: {},
-				},
-				{
-					id: "story-reply",
-					name: "Story Reply",
-					description: "Respond when a user replies to an Instagram story",
-					input_schema: {},
-				},
-				{
-					id: "follow-to-dm",
-					name: "Follow to DM",
-					description: "DM new followers on Instagram",
-					input_schema: {},
-				},
-				{
-					id: "giveaway",
-					name: "Giveaway",
-					description: "Run a giveaway that enters users who comment a keyword",
-					input_schema: {},
-				},
-			],
-			merge_tags: [
-				"first_name",
-				"last_name",
-				"full_name",
-				"email",
-				"phone",
-				"contact.*",
-				"state.*",
-			],
-		},
-		200,
-	);
 });
 
 // --- Simulate (dry-run graph traversal for the dashboard Playground) ---
