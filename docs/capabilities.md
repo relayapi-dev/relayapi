@@ -46,7 +46,7 @@
 
 - Core publishing: `/v1/posts`, `/v1/media`, `/v1/accounts`, `/v1/connect`, `/v1/connections`
 - Org and access control: `/v1/workspaces`, `/v1/api-keys`, `/v1/usage`, `/v1/org-settings`, `/v1/invite/tokens`
-- Inbox and automation: `/v1/inbox`, `/v1/inbox/rules`, `/v1/comment-automations`, `/v1/contacts`, `/v1/custom-fields`, `/v1/broadcasts`, `/v1/sequences`, `/v1/auto-post-rules`, `/v1/engagement-rules`, `/v1/signatures`, `/v1/streak`
+- Inbox and automation: `/v1/inbox`, `/v1/contacts`, `/v1/custom-fields`, `/v1/broadcasts`, `/v1/automations`, `/v1/automations/templates`, `/v1/segments`, `/v1/ai-knowledge`, `/v1/ref-urls`, `/v1/auto-post-rules`, `/v1/signatures`, `/v1/streak`
 - Analytics and platform utilities: `/v1/analytics`, `/v1/tools`, `/v1/queue`, `/v1/threads`, `/v1/twitter`, `/v1/reddit`, `/v1/short-links`
 - Ads and growth: `/v1/ads`
 - WhatsApp-specific flows: `/v1/whatsapp`, `/v1/whatsapp/phone-numbers`
