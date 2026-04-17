@@ -43,7 +43,7 @@ export const PLANS: Record<"free" | "pro", PlanTier> = {
 		},
 		displayFeatures: [
 			"200 API calls/month",
-			"All 17 platforms",
+			"All 21 platforms",
 			"Unlimited profiles",
 			"Media uploads",
 			"Webhook notifications",
@@ -65,7 +65,7 @@ export const PLANS: Record<"free" | "pro", PlanTier> = {
 		displayFeatures: [
 			"10,000 API calls included",
 			"$1 per 1,000 extra calls",
-			"All 17 platforms",
+			"All 21 platforms",
 			"Unlimited profiles",
 			"Comments API included",
 			"Analytics API included",

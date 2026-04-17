@@ -392,7 +392,7 @@ function FooterCta() {
                     Ready to Start Building?
                 </h2>
                 <p className="text-white/80 text-lg font-medium max-w-lg">
-                    Get your API key and start publishing across 17 platforms in
+                    Get your API key and start publishing across 21 platforms in
                     minutes.
                 </p>
                 <Button

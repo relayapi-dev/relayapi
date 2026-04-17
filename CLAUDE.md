@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-RelayAPI is a unified social media API for posting to 17 platforms via a single API. TypeScript monorepo deployed on Cloudflare Workers.
+RelayAPI is a unified social media API for posting to 21 platforms via a single API. TypeScript monorepo deployed on Cloudflare Workers.
 
 ## Commands
 
@@ -15,7 +15,7 @@ RelayAPI is a unified social media API for posting to 17 platforms via a single 
 bun install
 
 # Development
-bun run dev:api       # API server on localhost:8787
+bun run dev:api       # API server on localhost:8789
 bun run dev:app       # Astro dashboard
 bun run dev:docs      # Next.js docs site
 

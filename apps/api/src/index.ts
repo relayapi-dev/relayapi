@@ -223,7 +223,7 @@ app.doc("/openapi.json", {
 		title: "RelayAPI",
 		version: "1.0.0",
 		description:
-			"Unified social media API — post to 17 platforms via a single API",
+			"Unified social media API — post to 21 platforms via a single API",
 	},
 	servers: [{ url: "https://api.relayapi.dev" }],
 });
