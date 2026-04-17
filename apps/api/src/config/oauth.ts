@@ -17,6 +17,11 @@
 
 import type { Platform } from "../schemas/common";
 import type { Env } from "../types";
+import { API_VERSIONS } from "./api-versions";
+
+const FB_V = API_VERSIONS.meta_graph;
+const IG_V = API_VERSIONS.meta_graph;
+const THREADS_V = API_VERSIONS.threads_graph;
 
 export interface OAuthConfig {
 	authUrl: string;
@@ -77,9 +82,9 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// pages_messaging: page conversations in Messenger (requires App Review)
 	// All three require App Review + Advanced Access for production use.
 	facebook: {
-		authUrl: "https://www.facebook.com/v25.0/dialog/oauth",
-		tokenUrl: "https://graph.facebook.com/v25.0/oauth/access_token",
-		profileUrl: "https://graph.facebook.com/v25.0/me?fields=id,name,picture",
+		authUrl: `https://www.facebook.com/${FB_V}/dialog/oauth`,
+		tokenUrl: `https://graph.facebook.com/${FB_V}/oauth/access_token`,
+		profileUrl: `https://graph.facebook.com/${FB_V}/me?fields=id,name,picture`,
 		scopes: [
 			"pages_manage_posts",
 			"pages_read_engagement",
@@ -104,9 +109,9 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// Ads: Instagram ads are managed via the same Marketing API as Facebook.
 	// ads_management + ads_read cover Instagram ad operations when the IG account is linked in Business Manager.
 	instagram: {
-		authUrl: "https://www.facebook.com/v25.0/dialog/oauth",
-		tokenUrl: "https://graph.facebook.com/v25.0/oauth/access_token",
-		profileUrl: "https://graph.facebook.com/v25.0/me?fields=id,name",
+		authUrl: `https://www.facebook.com/${FB_V}/dialog/oauth`,
+		tokenUrl: `https://graph.facebook.com/${FB_V}/oauth/access_token`,
+		profileUrl: `https://graph.facebook.com/${FB_V}/me?fields=id,name`,
 		scopes: [
 			"instagram_basic",
 			"instagram_content_publish",
@@ -224,8 +229,7 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	threads: {
 		authUrl: "https://threads.net/oauth/authorize",
 		tokenUrl: "https://graph.threads.net/oauth/access_token",
-		profileUrl:
-			"https://graph.threads.net/v1.0/me?fields=id,username,name,threads_profile_picture_url",
+		profileUrl: `https://graph.threads.net/${THREADS_V}/me?fields=id,username,name,threads_profile_picture_url`,
 		scopes: [
 			"threads_basic",
 			"threads_content_publish",
@@ -308,8 +312,7 @@ export const INSTAGRAM_DIRECT_CONFIG: OAuthConfig = {
 	tokenUrl: "https://api.instagram.com/oauth/access_token",
 	// Version prefix required — see comment block above.
 	// id (app-scoped IGUID) is needed for webhook entry.id matching
-	profileUrl:
-		"https://graph.instagram.com/v25.0/me?fields=id,user_id,username,name,profile_picture_url",
+	profileUrl: `https://graph.instagram.com/${IG_V}/me?fields=id,user_id,username,name,profile_picture_url`,
 	scopes: [
 		"instagram_business_basic",
 		"instagram_business_content_publish",
