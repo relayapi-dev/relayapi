@@ -31,6 +31,7 @@ interface TemplateMeta {
   name: string;
   description: string;
   icon: typeof MessageSquare;
+  supportedPlatforms: string[];
 }
 
 const TEMPLATES: TemplateMeta[] = [
@@ -39,43 +40,56 @@ const TEMPLATES: TemplateMeta[] = [
     name: "Comment to DM",
     description: "Reply to Instagram comments with a DM to the commenter",
     icon: MessageSquare,
+    supportedPlatforms: ["instagram"],
   },
   {
     id: "welcome-dm",
     name: "Welcome DM",
     description: "Greet a contact the first time they message you",
     icon: Send,
+    supportedPlatforms: ["instagram", "facebook", "whatsapp"],
   },
   {
     id: "keyword-reply",
     name: "Keyword Reply",
     description: "Auto-reply when an inbound DM matches a keyword",
     icon: Reply,
+    supportedPlatforms: [
+      "instagram",
+      "facebook",
+      "whatsapp",
+      "telegram",
+      "twitter",
+      "reddit",
+    ],
   },
   {
     id: "follow-to-dm",
     name: "Follow to DM",
     description: "DM new followers (manual enrollment for IG)",
     icon: UserPlus,
+    supportedPlatforms: ["instagram"],
   },
   {
     id: "story-reply",
     name: "Story Reply",
     description: "Respond when someone replies to an Instagram story",
     icon: MessageCircle,
+    supportedPlatforms: ["instagram"],
   },
   {
     id: "giveaway",
     name: "Giveaway",
     description: "Tag and DM users who enter a giveaway via comment",
     icon: Gift,
+    supportedPlatforms: ["instagram", "facebook"],
   },
 ];
 
 type FormState = {
   name: string;
   account_id: string;
-  channel?: string;
+  account_platform?: string;
   post_id?: string;
   keywords?: string;
   match_mode?: "contains" | "exact";
@@ -102,6 +116,9 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
   const [form, setForm] = useState<FormState>(initialForm);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const selectedTemplate = selected ? TEMPLATES.find((t) => t.id === selected) : null;
+  const supportedPlatforms = selectedTemplate?.supportedPlatforms ?? [];
 
   useEffect(() => {
     if (!open) {
@@ -131,13 +148,13 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
       case "welcome-dm":
         return {
           ...base,
-          channel: form.channel ?? "instagram",
+          channel: form.account_platform ?? "instagram",
           welcome_message: form.welcome_message ?? "",
         };
       case "keyword-reply":
         return {
           ...base,
-          channel: form.channel ?? "instagram",
+          channel: form.account_platform ?? "instagram",
           keywords: (form.keywords ?? "").split(",").map((s) => s.trim()).filter(Boolean),
           match_mode: form.match_mode ?? "contains",
           reply_message: form.reply_message ?? "",
@@ -149,7 +166,7 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
       case "giveaway":
         return {
           ...base,
-          channel: form.channel ?? "instagram",
+          channel: form.account_platform ?? "instagram",
           ...(form.post_id?.trim() ? { post_id: form.post_id.trim() } : {}),
           entry_keywords: (form.entry_keywords ?? "").split(",").map((s) => s.trim()).filter(Boolean),
           entry_tag: form.entry_tag ?? "giveaway_entry",
@@ -199,18 +216,21 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
           <DialogTitle className="flex items-center gap-2">
             {selected && (
               <button
-                onClick={() => setSelected(null)}
+                onClick={() => {
+                  setSelected(null);
+                  setForm((f) => ({ ...f, account_id: "", account_platform: undefined }));
+                }}
                 className="text-muted-foreground hover:text-foreground transition-colors"
                 aria-label="Back"
               >
                 <ArrowLeft className="size-4" />
               </button>
             )}
-            {selected ? TEMPLATES.find((t) => t.id === selected)!.name : "Create Automation"}
+            {selectedTemplate ? selectedTemplate.name : "Create Automation"}
           </DialogTitle>
           <DialogDescription>
-            {selected
-              ? TEMPLATES.find((t) => t.id === selected)!.description
+            {selectedTemplate
+              ? selectedTemplate.description
               : "Start from a template. The Flow Builder (coming next) will let you edit the generated graph."}
           </DialogDescription>
         </DialogHeader>
@@ -244,7 +264,20 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
               <div className="mt-1">
                 <AccountSearchCombobox
                   value={form.account_id || null}
-                  onSelect={(id) => setForm((f) => ({ ...f, account_id: id || "" }))}
+                  onSelect={(id) =>
+                    setForm((f) => ({
+                      ...f,
+                      account_id: id || "",
+                      ...(id ? {} : { account_platform: undefined }),
+                    }))
+                  }
+                  onSelectAccount={(acc) =>
+                    setForm((f) => ({
+                      ...f,
+                      account_platform: acc?.platform?.toLowerCase(),
+                    }))
+                  }
+                  platforms={supportedPlatforms}
                   showAllOption={false}
                   placeholder="Select an account"
                   variant="input"
@@ -258,32 +291,6 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
                 value={form.post_id ?? ""}
                 onChange={(v) => setForm((f) => ({ ...f, post_id: v }))}
                 placeholder="Leave blank to match all posts"
-              />
-            )}
-
-            {(selected === "welcome-dm" || selected === "keyword-reply" || selected === "giveaway") && (
-              <SelectField
-                label="Channel"
-                value={form.channel ?? "instagram"}
-                onChange={(v) => setForm((f) => ({ ...f, channel: v }))}
-                options={
-                  selected === "welcome-dm"
-                    ? ["instagram", "facebook", "whatsapp"]
-                    : selected === "giveaway"
-                      ? ["instagram", "facebook"]
-                      : // keyword-reply — only channels supported by the
-                        // universal message_text sender (message-sender.ts).
-                        // Discord/SMS/Bluesky/Threads/etc. are excluded
-                        // because they would silently fail at runtime.
-                        [
-                          "instagram",
-                          "facebook",
-                          "whatsapp",
-                          "telegram",
-                          "twitter",
-                          "reddit",
-                        ]
-                }
               />
             )}
 
