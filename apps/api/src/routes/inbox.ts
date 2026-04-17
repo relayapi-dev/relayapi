@@ -1176,35 +1176,40 @@ app.openapi(deleteComment, async (c) => {
 	const { comment_id } = c.req.valid("param");
 	const db = c.get("db");
 
-	// We need to determine which account owns this comment. The comment_id
-	// encodes the platform context (Facebook/IG IDs are numeric, YouTube IDs
-	// are alphanumeric). We try all org accounts until one succeeds.
+	// Comment_id doesn't tell us which account owns the comment — we fan out a
+	// platform delete to every candidate account and take the first success.
+	// Parallel > serial: for N accounts at ~400ms each, serial is 400N ms,
+	// parallel caps at ~400ms + the success account's latency.
 	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	for (const account of accounts) {
-		if (!account.accessToken) continue;
+	const candidates = accounts.filter(
+		(a) =>
+			a.accessToken &&
+			(a.platform === "facebook" || a.platform === "instagram" || a.platform === "youtube"),
+	);
 
-		try {
+	const results = await Promise.allSettled(
+		candidates.map(async (account) => {
 			switch (account.platform) {
 				case "facebook": {
 					// Facebook Graph API: Delete a comment
 					// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#deleting
 					const res = await fetch(
-						`https://graph.facebook.com/v25.0/${comment_id}?access_token=${encodeURIComponent(account.accessToken)}`,
+						`https://graph.facebook.com/v25.0/${comment_id}?access_token=${encodeURIComponent(account.accessToken!)}`,
 						{ method: "DELETE" },
 					);
-					if (res.ok) { await invalidateInboxCache(c.env.KV, db, orgId, c.env); return c.json({ success: true }, 200); }
-					break;
+					if (!res.ok) throw new Error(`fb ${res.status}`);
+					return;
 				}
 				case "instagram": {
 					// Instagram Graph API: DELETE a comment
 					// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#deleting
 					// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
-					const igRes = await fetch(
-						`https://${igGraphHost(account.accessToken)}/v25.0/${comment_id}?access_token=${encodeURIComponent(account.accessToken)}`,
+					const res = await fetch(
+						`https://${igGraphHost(account.accessToken!)}/v25.0/${comment_id}?access_token=${encodeURIComponent(account.accessToken!)}`,
 						{ method: "DELETE" },
 					);
-					if (igRes.ok) { await invalidateInboxCache(c.env.KV, db, orgId, c.env); return c.json({ success: true }, 200); }
-					break;
+					if (!res.ok) throw new Error(`ig ${res.status}`);
+					return;
 				}
 				case "youtube": {
 					// YouTube Data API: Delete a comment
@@ -1213,18 +1218,20 @@ app.openapi(deleteComment, async (c) => {
 						`https://www.googleapis.com/youtube/v3/comments?id=${encodeURIComponent(comment_id)}`,
 						{
 							method: "DELETE",
-							headers: { Authorization: `Bearer ${account.accessToken}` },
+							headers: { Authorization: `Bearer ${account.accessToken!}` },
 						},
 					);
-					if (res.ok) { await invalidateInboxCache(c.env.KV, db, orgId, c.env); return c.json({ success: true }, 200); }
-					break;
+					if (!res.ok) throw new Error(`yt ${res.status}`);
+					return;
 				}
 			}
-		} catch {
-			// try next account
-		}
-	}
+		}),
+	);
 
+	if (results.some((r) => r.status === "fulfilled")) {
+		await invalidateInboxCache(c.env.KV, db, orgId, c.env);
+		return c.json({ success: true }, 200);
+	}
 	return c.json({ success: false }, 200);
 });
 
@@ -1233,20 +1240,21 @@ app.openapi(hideComment, async (c) => {
 	const { comment_id } = c.req.valid("param");
 	const db = c.get("db");
 
-	// Hide is Facebook/Instagram only
+	// Hide is Facebook/Instagram only. Parallelize across candidates; first
+	// success wins. See deleteComment for the rationale.
 	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	for (const account of accounts) {
-		if (!account.accessToken) continue;
-		if (account.platform !== "facebook" && account.platform !== "instagram") continue;
+	const candidates = accounts.filter(
+		(a) => a.accessToken && (a.platform === "facebook" || a.platform === "instagram"),
+	);
 
-		try {
+	const results = await Promise.allSettled(
+		candidates.map(async (account) => {
 			if (account.platform === "instagram") {
 				// Instagram Graph API: Hide a comment (set hide to true)
 				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#updating
-				// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
-				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (which is the Facebook param)
+				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (the Facebook param)
 				const res = await fetch(
-					`https://${igGraphHost(account.accessToken)}/v25.0/${comment_id}`,
+					`https://${igGraphHost(account.accessToken!)}/v25.0/${comment_id}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -1256,28 +1264,30 @@ app.openapi(hideComment, async (c) => {
 						}),
 					},
 				);
-				if (res.ok) { await invalidateInboxCache(c.env.KV, db, orgId, c.env); return c.json({ success: true }, 200); }
-			} else {
-				// Facebook Graph API: Hide a comment (set is_hidden to true)
-				// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#updating
-				const res = await fetch(
-					`https://graph.facebook.com/v25.0/${comment_id}`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							is_hidden: true,
-							access_token: account.accessToken,
-						}),
-					},
-				);
-				if (res.ok) { await invalidateInboxCache(c.env.KV, db, orgId, c.env); return c.json({ success: true }, 200); }
+				if (!res.ok) throw new Error(`ig ${res.status}`);
+				return;
 			}
-		} catch {
-			// try next account
-		}
-	}
+			// Facebook Graph API: Hide a comment (set is_hidden to true)
+			// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#updating
+			const res = await fetch(
+				`https://graph.facebook.com/v25.0/${comment_id}`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						is_hidden: true,
+						access_token: account.accessToken,
+					}),
+				},
+			);
+			if (!res.ok) throw new Error(`fb ${res.status}`);
+		}),
+	);
 
+	if (results.some((r) => r.status === "fulfilled")) {
+		await invalidateInboxCache(c.env.KV, db, orgId, c.env);
+		return c.json({ success: true }, 200);
+	}
 	return c.json({ success: false }, 200);
 });
 
@@ -1286,20 +1296,20 @@ app.openapi(unhideComment, async (c) => {
 	const { comment_id } = c.req.valid("param");
 	const db = c.get("db");
 
-	// Unhide is Facebook/Instagram only
+	// Unhide is Facebook/Instagram only. Parallelized; first success wins.
 	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	for (const account of accounts) {
-		if (!account.accessToken) continue;
-		if (account.platform !== "facebook" && account.platform !== "instagram") continue;
+	const candidates = accounts.filter(
+		(a) => a.accessToken && (a.platform === "facebook" || a.platform === "instagram"),
+	);
 
-		try {
+	const results = await Promise.allSettled(
+		candidates.map(async (account) => {
 			if (account.platform === "instagram") {
 				// Instagram Graph API: Unhide a comment (set hide to false)
 				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#updating
-				// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
-				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (which is the Facebook param)
+				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (the Facebook param)
 				const res = await fetch(
-					`https://${igGraphHost(account.accessToken)}/v25.0/${comment_id}`,
+					`https://${igGraphHost(account.accessToken!)}/v25.0/${comment_id}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -1309,28 +1319,30 @@ app.openapi(unhideComment, async (c) => {
 						}),
 					},
 				);
-				if (res.ok) { await invalidateInboxCache(c.env.KV, db, orgId, c.env); return c.json({ success: true }, 200); }
-			} else {
-				// Facebook Graph API: Unhide a comment (set is_hidden to false)
-				// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#updating
-				const res = await fetch(
-					`https://graph.facebook.com/v25.0/${comment_id}`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							is_hidden: false,
-							access_token: account.accessToken,
-						}),
-					},
-				);
-				if (res.ok) { await invalidateInboxCache(c.env.KV, db, orgId, c.env); return c.json({ success: true }, 200); }
+				if (!res.ok) throw new Error(`ig ${res.status}`);
+				return;
 			}
-		} catch {
-			// try next account
-		}
-	}
+			// Facebook Graph API: Unhide a comment (set is_hidden to false)
+			// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#updating
+			const res = await fetch(
+				`https://graph.facebook.com/v25.0/${comment_id}`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						is_hidden: false,
+						access_token: account.accessToken,
+					}),
+				},
+			);
+			if (!res.ok) throw new Error(`fb ${res.status}`);
+		}),
+	);
 
+	if (results.some((r) => r.status === "fulfilled")) {
+		await invalidateInboxCache(c.env.KV, db, orgId, c.env);
+		return c.json({ success: true }, 200);
+	}
 	return c.json({ success: false }, 200);
 });
 
@@ -1339,37 +1351,33 @@ app.openapi(likeComment, async (c) => {
 	const { comment_id } = c.req.valid("param");
 	const db = c.get("db");
 
+	// Only Facebook supports liking comments. Parallelize across FB accounts.
+	// NOTE: Instagram Graph API does NOT support liking comments.
+	// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/
 	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	for (const account of accounts) {
-		if (!account.accessToken) continue;
+	const candidates = accounts.filter((a) => a.accessToken && a.platform === "facebook");
 
-		try {
-			switch (account.platform) {
-				case "facebook": {
-					// Facebook Graph API: Like a comment
-					// Docs: https://developers.facebook.com/docs/graph-api/reference/object/likes/#creating
-					const res = await fetch(
-						`https://graph.facebook.com/v25.0/${comment_id}/likes`,
-						{
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({
-								access_token: account.accessToken,
-							}),
-						},
-					);
-					if (res.ok) return c.json({ success: true }, 200);
-					break;
-				}
-				// NOTE: Instagram Graph API does NOT support liking comments.
-				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/
-				// The like_count field is read-only; there is no POST /<IG_COMMENT_ID>/likes endpoint.
-			}
-		} catch {
-			// try next account
-		}
+	const results = await Promise.allSettled(
+		candidates.map(async (account) => {
+			// Facebook Graph API: Like a comment
+			// Docs: https://developers.facebook.com/docs/graph-api/reference/object/likes/#creating
+			const res = await fetch(
+				`https://graph.facebook.com/v25.0/${comment_id}/likes`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						access_token: account.accessToken,
+					}),
+				},
+			);
+			if (!res.ok) throw new Error(`fb ${res.status}`);
+		}),
+	);
+
+	if (results.some((r) => r.status === "fulfilled")) {
+		return c.json({ success: true }, 200);
 	}
-
 	return c.json({ success: false }, 200);
 });
 
@@ -1378,31 +1386,27 @@ app.openapi(unlikeComment, async (c) => {
 	const { comment_id } = c.req.valid("param");
 	const db = c.get("db");
 
+	// Only Facebook supports unliking comments. Parallelize across FB accounts.
+	// NOTE: Instagram Graph API does NOT support unliking comments.
+	// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/
 	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	for (const account of accounts) {
-		if (!account.accessToken) continue;
+	const candidates = accounts.filter((a) => a.accessToken && a.platform === "facebook");
 
-		try {
-			switch (account.platform) {
-				case "facebook": {
-					// Facebook Graph API: Unlike a comment (remove like)
-					// Docs: https://developers.facebook.com/docs/graph-api/reference/object/likes/#deleting
-					const res = await fetch(
-						`https://graph.facebook.com/v25.0/${comment_id}/likes?access_token=${encodeURIComponent(account.accessToken)}`,
-						{ method: "DELETE" },
-					);
-					if (res.ok) return c.json({ success: true }, 200);
-					break;
-				}
-				// NOTE: Instagram Graph API does NOT support unliking comments.
-				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/
-				// The like_count field is read-only; there is no DELETE /<IG_COMMENT_ID>/likes endpoint.
-			}
-		} catch {
-			// try next account
-		}
+	const results = await Promise.allSettled(
+		candidates.map(async (account) => {
+			// Facebook Graph API: Unlike a comment (remove like)
+			// Docs: https://developers.facebook.com/docs/graph-api/reference/object/likes/#deleting
+			const res = await fetch(
+				`https://graph.facebook.com/v25.0/${comment_id}/likes?access_token=${encodeURIComponent(account.accessToken!)}`,
+				{ method: "DELETE" },
+			);
+			if (!res.ok) throw new Error(`fb ${res.status}`);
+		}),
+	);
+
+	if (results.some((r) => r.status === "fulfilled")) {
+		return c.json({ success: true }, 200);
 	}
-
 	return c.json({ success: false }, 200);
 });
 

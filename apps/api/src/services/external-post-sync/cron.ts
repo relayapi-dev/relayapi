@@ -16,6 +16,11 @@ const MAX_ACCOUNTS_PER_RUN = 500;
 const METRICS_REFRESH_HOURS = 6;
 const METRICS_POST_AGE_DAYS = 7;
 const METRICS_BATCH_SIZE = 50;
+// Cursor loop: keep pulling pages until we run out or hit this cap per tick.
+// 2500 = 5 pages × 500; any single org rarely has that much stale, but orgs
+// that do will catch up across ticks instead of stalling at 500 forever.
+const METRICS_PAGE_SIZE = 500;
+const METRICS_MAX_POSTS_PER_RUN = 2500;
 
 // ---------------------------------------------------------------------------
 // Enqueue accounts due for sync + metrics refresh
@@ -97,47 +102,55 @@ async function enqueueMetricsRefresh(
 		now.getTime() - METRICS_POST_AGE_DAYS * 86400_000,
 	);
 
-	// Find external posts needing metric refresh:
-	// - Published within last 7 days
-	// - Metrics not updated in last 6 hours
-	const stalePosts = await db
-		.select({
-			id: externalPosts.id,
-			socialAccountId: externalPosts.socialAccountId,
-			organizationId: externalPosts.organizationId,
-			platform: externalPosts.platform,
-		})
-		.from(externalPosts)
-		.where(
-			and(
-				gt(externalPosts.publishedAt, ageThreshold),
-				or(
-					isNull(externalPosts.metricsUpdatedAt),
-					lt(externalPosts.metricsUpdatedAt, staleThreshold),
-				),
-			),
-		)
-		.limit(500);
-
-	if (stalePosts.length === 0) return;
-
-	// Group by social account for batching
+	// Cursor-paginated scan so backlogs larger than one page still drain.
+	// Uses `id` as a stable keyset cursor; `externalPosts_metrics_updated_idx`
+	// handles the staleness filter and we order by id to paginate deterministically.
+	let cursorId: string | null = null;
+	let totalStale = 0;
 	const byAccount = new Map<
 		string,
 		{ organizationId: string; platform: string; postIds: string[] }
 	>();
 
-	for (const post of stalePosts) {
-		const key = post.socialAccountId;
-		if (!byAccount.has(key)) {
-			byAccount.set(key, {
+	while (totalStale < METRICS_MAX_POSTS_PER_RUN) {
+		const conditions = [
+			gt(externalPosts.publishedAt, ageThreshold),
+			or(
+				isNull(externalPosts.metricsUpdatedAt),
+				lt(externalPosts.metricsUpdatedAt, staleThreshold),
+			),
+		];
+		if (cursorId) conditions.push(gt(externalPosts.id, cursorId));
+
+		const page = await db
+			.select({
+				id: externalPosts.id,
+				socialAccountId: externalPosts.socialAccountId,
+				organizationId: externalPosts.organizationId,
+				platform: externalPosts.platform,
+			})
+			.from(externalPosts)
+			.where(and(...conditions))
+			.orderBy(externalPosts.id)
+			.limit(METRICS_PAGE_SIZE);
+
+		if (page.length === 0) break;
+
+		for (const post of page) {
+			const data = byAccount.get(post.socialAccountId) ?? {
 				organizationId: post.organizationId,
 				platform: post.platform,
 				postIds: [],
-			});
+			};
+			data.postIds.push(post.id);
+			byAccount.set(post.socialAccountId, data);
 		}
-		byAccount.get(key)!.postIds.push(post.id);
+		totalStale += page.length;
+		cursorId = page[page.length - 1]!.id;
+		if (page.length < METRICS_PAGE_SIZE) break;
 	}
+
+	if (totalStale === 0) return;
 
 	// Enqueue metrics refresh messages (batches of 50 post IDs each)
 	const messages: { body: RefreshMetricsMessage }[] = [];
@@ -162,6 +175,6 @@ async function enqueueMetricsRefresh(
 	}
 
 	console.log(
-		`[Sync Cron] Enqueued ${messages.length} metrics refresh batches for ${stalePosts.length} posts`,
+		`[Sync Cron] Enqueued ${messages.length} metrics refresh batches for ${totalStale} posts`,
 	);
 }
