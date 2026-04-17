@@ -1,7 +1,11 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { refUrls } from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { applyWorkspaceScope } from "../lib/workspace-scope";
+import {
+	applyWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+} from "../lib/workspace-scope";
 import { ErrorResponse, PaginationParams } from "../schemas/common";
 import {
 	RefUrlCreateSpec,
@@ -160,6 +164,10 @@ const getRefUrl = createRoute({
 			description: "Ref URL",
 			content: { "application/json": { schema: RefUrlResponse } },
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -176,7 +184,9 @@ app.openapi(getRefUrl, async (c) => {
 	});
 	if (!row)
 		return c.json({ error: { code: "not_found", message: "Ref URL not found" } }, 404);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 	return c.json(serialize(row), 200);
 });
 
@@ -195,6 +205,10 @@ const updateRefUrl = createRoute({
 		200: {
 			description: "Updated",
 			content: { "application/json": { schema: RefUrlResponse } },
+		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
 			description: "Not found",
@@ -218,7 +232,9 @@ app.openapi(updateRefUrl, async (c) => {
 	});
 	if (!row)
 		return c.json({ error: { code: "not_found", message: "Ref URL not found" } }, 404);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	if (body.slug && body.slug !== row.slug) {
 		const conflict = await db.query.refUrls.findFirst({
@@ -261,6 +277,10 @@ const deleteRefUrl = createRoute({
 	request: { params: IdParams },
 	responses: {
 		204: { description: "Deleted" },
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -277,7 +297,9 @@ app.openapi(deleteRefUrl, async (c) => {
 	});
 	if (!row)
 		return c.json({ error: { code: "not_found", message: "Ref URL not found" } }, 404);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	await db.delete(refUrls).where(eq(refUrls.id, id));
 	return c.body(null, 204);

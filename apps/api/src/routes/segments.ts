@@ -1,7 +1,11 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { segments } from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { applyWorkspaceScope } from "../lib/workspace-scope";
+import {
+	applyWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+} from "../lib/workspace-scope";
 import {
 	SegmentCreateSpec,
 	SegmentListResponse,
@@ -147,6 +151,10 @@ const getSegment = createRoute({
 			description: "Segment",
 			content: { "application/json": { schema: SegmentResponse } },
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -163,7 +171,9 @@ app.openapi(getSegment, async (c) => {
 	});
 	if (!row)
 		return c.json({ error: { code: "not_found", message: "Segment not found" } }, 404);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 	return c.json(serialize(row), 200);
 });
 
@@ -183,6 +193,10 @@ const updateSegment = createRoute({
 			description: "Updated",
 			content: { "application/json": { schema: SegmentResponse } },
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -201,7 +215,9 @@ app.openapi(updateSegment, async (c) => {
 	});
 	if (!row)
 		return c.json({ error: { code: "not_found", message: "Segment not found" } }, 404);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	const updates: Partial<typeof segments.$inferInsert> = {
 		updatedAt: new Date(),
@@ -229,6 +245,10 @@ const deleteSegment = createRoute({
 	request: { params: IdParams },
 	responses: {
 		204: { description: "Deleted" },
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -246,7 +266,9 @@ app.openapi(deleteSegment, async (c) => {
 	});
 	if (!row)
 		return c.json({ error: { code: "not_found", message: "Segment not found" } }, 404);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	await db.delete(segments).where(eq(segments.id, id));
 	return c.body(null, 204);

@@ -179,8 +179,12 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
         setError(body?.error?.message ?? `Error ${res.status}`);
         return;
       }
+      const created = (await res.json().catch(() => null)) as { id?: string } | null;
       onCreated();
       onOpenChange(false);
+      if (created?.id) {
+        window.location.href = `/app/automation/${created.id}`;
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
     } finally {

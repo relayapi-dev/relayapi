@@ -5,6 +5,7 @@ import {
 	AutomationCreateSpec,
 	AutomationSimulateRequest,
 } from "../schemas/automations";
+import { isWorkspaceScopeDenied } from "../lib/workspace-scope";
 
 // ---------------------------------------------------------------------------
 // simulateAutomation — static graph traversal
@@ -310,5 +311,53 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 			],
 		});
 		expect(result.success).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Audit 2: workspace-scope gating on single-resource routes
+// ---------------------------------------------------------------------------
+
+describe("isWorkspaceScopeDenied", () => {
+	// Mock just the `get("workspaceScope")` surface.
+	function mockCtx(scope: "all" | string[]) {
+		return {
+			get: (key: string) => (key === "workspaceScope" ? scope : undefined),
+		} as unknown as Parameters<typeof isWorkspaceScopeDenied>[0];
+	}
+
+	it("allows access when scope === 'all'", () => {
+		expect(isWorkspaceScopeDenied(mockCtx("all"), "ws_123")).toBe(false);
+		expect(isWorkspaceScopeDenied(mockCtx("all"), null)).toBe(false);
+	});
+
+	it("denies scoped keys accessing resources outside their scope", () => {
+		expect(isWorkspaceScopeDenied(mockCtx(["ws_a"]), "ws_b")).toBe(true);
+	});
+
+	it("allows scoped keys on resources inside their scope", () => {
+		expect(isWorkspaceScopeDenied(mockCtx(["ws_a", "ws_b"]), "ws_b")).toBe(false);
+	});
+
+	it("denies scoped keys on org-level resources (null workspaceId)", () => {
+		// A null workspaceId is an org-wide resource. A scoped key should not
+		// be able to reach it — only 'all' keys can.
+		expect(isWorkspaceScopeDenied(mockCtx(["ws_a"]), null)).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Audit 2: simulate explicit-version validation
+// ---------------------------------------------------------------------------
+
+describe("AutomationSimulateRequest — version handling", () => {
+	it("accepts a numeric version", () => {
+		const parsed = AutomationSimulateRequest.parse({ version: 3 });
+		expect(parsed.version).toBe(3);
+	});
+
+	it("treats omitted version as undefined (so the route builds a live snapshot)", () => {
+		const parsed = AutomationSimulateRequest.parse({});
+		expect(parsed.version).toBeUndefined();
 	});
 });

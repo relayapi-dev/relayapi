@@ -10,7 +10,11 @@ import {
 } from "@relayapi/db";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { automationError, suggest } from "../lib/automation-errors";
-import { applyWorkspaceScope } from "../lib/workspace-scope";
+import {
+	applyWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+} from "../lib/workspace-scope";
 import {
 	AUTOMATION_CHANNELS,
 	AUTOMATION_NODE_TYPES,
@@ -327,6 +331,10 @@ const getAutomation = createRoute({
 			description: "Automation",
 			content: { "application/json": { schema: AutomationWithGraphResponse } },
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -345,8 +353,9 @@ app.openapi(getAutomation, async (c) => {
 	if (!row) {
 		return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
 	}
-
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	return c.json(await loadGraphResponse(db, id), 200);
 });
@@ -392,7 +401,9 @@ app.openapi(updateAutomation, async (c) => {
 	if (!row) {
 		return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
 	}
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	const updates: Partial<typeof automations.$inferInsert> = {};
 	if (body.name !== undefined) updates.name = body.name;
@@ -414,17 +425,22 @@ app.openapi(updateAutomation, async (c) => {
 	}
 	updates.updatedAt = new Date();
 
-	// If activating (draft/paused → active) and no snapshot has been published,
-	// publish the current graph so the runner has something to load from.
-	if (updates.status === "active" && row.publishedVersion === null) {
-		await publishVersion(db, id);
-	}
-
+	// Persist the metadata update FIRST, then publish — otherwise a PATCH that
+	// activates + changes trigger/channel/etc. in the same request would
+	// publish the stale pre-PATCH row.
 	const [updated] = await db
 		.update(automations)
 		.set(updates)
 		.where(eq(automations.id, id))
 		.returning();
+
+	if (updates.status === "active" && row.publishedVersion === null) {
+		await publishVersion(db, id);
+		const refreshed = await db.query.automations.findFirst({
+			where: eq(automations.id, id),
+		});
+		if (refreshed) return c.json(serializeAutomation(refreshed), 200);
+	}
 
 	return c.json(serializeAutomation(updated!), 200);
 });
@@ -472,7 +488,9 @@ for (const [name, action, status] of [
 		});
 		if (!row)
 			return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
-		// Workspace-level enforcement intentionally deferred — org-level auth handled by middleware.
+		if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+			return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+		}
 
 		// Ensure a published snapshot exists before the runner can enrol anyone.
 		if (status === "active" && row.publishedVersion === null) {
@@ -525,7 +543,9 @@ app.openapi(publishAutomation, async (c) => {
 	});
 	if (!row)
 		return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	await publishVersion(db, id);
 
@@ -570,7 +590,9 @@ app.openapi(deleteAutomation, async (c) => {
 	});
 	if (!row)
 		return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	await db.delete(automations).where(eq(automations.id, id));
 	return c.body(null, 204);
@@ -684,6 +706,10 @@ const simulateRoute = createRoute({
 			description: "Simulation result",
 			content: { "application/json": { schema: AutomationSimulateResponse } },
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -706,9 +732,13 @@ app.openapi(simulateRoute, async (c) => {
 			404,
 		);
 	}
+	if (isWorkspaceScopeDenied(c, auto.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
-	// Prefer an explicit version, then the draft (current), then the published snapshot.
-	const targetVersion = body.version ?? auto.version;
+	// Prefer an explicit version (error if missing), else build the live draft.
+	const requestedVersion = body.version;
+	const targetVersion = requestedVersion ?? auto.version;
 
 	let snapshot: AutomationSnapshot | null = null;
 
@@ -720,6 +750,19 @@ app.openapi(simulateRoute, async (c) => {
 	});
 	if (versionRow) {
 		snapshot = versionRow.snapshot as AutomationSnapshot;
+	} else if (requestedVersion !== undefined) {
+		// Caller asked for a specific version that doesn't exist — don't
+		// silently substitute the live draft; that would mislead debugging of
+		// historical snapshots.
+		return c.json(
+			{
+				error: {
+					code: "version_not_found",
+					message: `Version ${requestedVersion} not found for this automation`,
+				},
+			},
+			404,
+		);
 	} else {
 		// Build an on-the-fly snapshot from the current draft graph so callers can
 		// simulate unpublished changes.
@@ -799,6 +842,14 @@ const listEnrollments = createRoute({
 				},
 			},
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -807,6 +858,20 @@ app.openapi(listEnrollments, async (c) => {
 	const { status, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
 	const orgId = c.get("orgId");
+
+	// Verify the automation exists + caller's workspace scope covers it.
+	const auto = await db.query.automations.findFirst({
+		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
+	});
+	if (!auto) {
+		return c.json(
+			{ error: { code: "not_found", message: "Automation not found" } },
+			404,
+		);
+	}
+	if (isWorkspaceScopeDenied(c, auto.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	const conditions = [
 		eq(automationEnrollments.automationId, id),
@@ -880,6 +945,10 @@ const getRuns = createRoute({
 				},
 			},
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -906,6 +975,14 @@ app.openapi(getRuns, async (c) => {
 			{ error: { code: "not_found", message: "Enrollment not found" } },
 			404,
 		);
+	}
+
+	// Enforce workspace scope via the parent automation's workspace.
+	const auto = await db.query.automations.findFirst({
+		where: eq(automations.id, automationId),
+	});
+	if (auto && isWorkspaceScopeDenied(c, auto.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
 	const logs = await db

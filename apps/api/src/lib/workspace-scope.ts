@@ -43,3 +43,29 @@ export function assertWorkspaceScope(
 	}
 	return undefined;
 }
+
+/**
+ * Boolean form for OpenAPI handlers — returns true when the API key does NOT
+ * have access. The handler is responsible for returning the typed 403 body
+ * itself (so the OpenAPI-typed response union stays correct):
+ *
+ *   if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+ *     return c.json({ error: { code: "WORKSPACE_ACCESS_DENIED", message: "..." } }, 403);
+ *   }
+ */
+export function isWorkspaceScopeDenied(
+	c: Context<{ Bindings: Env; Variables: Variables }>,
+	workspaceId: string | null,
+): boolean {
+	const scope = c.get("workspaceScope");
+	if (scope === "all") return false;
+	if (!workspaceId || !scope.includes(workspaceId)) return true;
+	return false;
+}
+
+export const WORKSPACE_ACCESS_DENIED_BODY = {
+	error: {
+		code: "WORKSPACE_ACCESS_DENIED",
+		message: "This API key does not have access to this workspace",
+	},
+} as const;

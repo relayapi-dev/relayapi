@@ -127,6 +127,18 @@ async function materialize(
 	});
 	if (!updated) throw new Error("automation disappeared");
 
+	// Read the stored nodes + edges back so the response reflects the real IDs
+	// + order assigned by the database — not fabricated placeholders.
+	const storedNodes = await db
+		.select()
+		.from(automationNodes)
+		.where(eq(automationNodes.automationId, auto.id));
+	const storedEdges = await db
+		.select()
+		.from(automationEdges)
+		.where(eq(automationEdges.automationId, auto.id));
+	const idToKey = new Map(storedNodes.map((n) => [n.id, n.key]));
+
 	return {
 		id: updated.id,
 		organization_id: updated.organizationId,
@@ -151,7 +163,7 @@ async function materialize(
 		total_exited: updated.totalExited,
 		created_at: updated.createdAt.toISOString(),
 		updated_at: updated.updatedAt.toISOString(),
-		nodes: [triggerNode!, ...nodeRows].map((n) => ({
+		nodes: storedNodes.map((n) => ({
 			id: n.id,
 			key: n.key,
 			type: n.type as MaterializedAutomation["nodes"][number]["type"],
@@ -160,13 +172,13 @@ async function materialize(
 			canvas_y: n.canvasY,
 			notes: n.notes,
 		})),
-		edges: spec.edges.map((e) => ({
-			id: "",
-			from_node_key: e.from,
-			to_node_key: e.to,
-			label: e.label ?? "next",
-			order: 0,
-			condition_expr: null,
+		edges: storedEdges.map((e) => ({
+			id: e.id,
+			from_node_key: idToKey.get(e.fromNodeId) ?? "",
+			to_node_key: idToKey.get(e.toNodeId) ?? "",
+			label: e.label,
+			order: e.order,
+			condition_expr: e.conditionExpr ?? null,
 		})),
 	};
 }

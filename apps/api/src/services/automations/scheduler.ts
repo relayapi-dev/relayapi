@@ -95,7 +95,19 @@ export async function processAutomationInputTimeouts(
 
 	let count = 0;
 	for (const row of rows) {
-		// Clear the pending marker so the row isn't re-claimed next tick.
+		// Load the current row so we can restore on queue-send failure. Without
+		// this, a transient queue failure would strand the enrollment in
+		// `active` with the `_pending_input_*` markers already cleared, so no
+		// future sweep could reclaim it.
+		const current = await db.query.automationEnrollments.findFirst({
+			where: eq(automationEnrollments.id, row.id),
+		});
+		if (!current) continue;
+		const originalState = current.state;
+
+		// Claim the row by clearing the markers + flipping to active. This
+		// prevents a concurrent sweep tick from re-claiming while the queue
+		// send is in flight.
 		await db
 			.update(automationEnrollments)
 			.set({
@@ -107,12 +119,26 @@ export async function processAutomationInputTimeouts(
 				updatedAt: new Date(),
 			})
 			.where(eq(automationEnrollments.id, row.id));
-		await env.AUTOMATION_QUEUE.send({
-			type: "advance",
-			enrollment_id: row.id,
-			resume_label: "timeout",
-		});
-		count++;
+
+		try {
+			await env.AUTOMATION_QUEUE.send({
+				type: "advance",
+				enrollment_id: row.id,
+				resume_label: "timeout",
+			});
+			count++;
+		} catch (err) {
+			console.error("[scheduler] timeout enqueue failed for", row.id, err);
+			// Restore waiting state + original markers so the next sweep retries.
+			await db
+				.update(automationEnrollments)
+				.set({
+					state: originalState,
+					status: "waiting",
+					updatedAt: new Date(),
+				})
+				.where(eq(automationEnrollments.id, row.id));
+		}
 	}
 	return count;
 }

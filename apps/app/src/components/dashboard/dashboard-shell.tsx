@@ -16,7 +16,7 @@ const StreakToastContainer = lazy(() =>
 	import("./streak-toast").then((m) => ({ default: m.StreakToastContainer })),
 );
 
-const fullHeightPages = new Set(["inbox-comments", "inbox-messages", "posts"]);
+const fullHeightPages = new Set(["inbox-comments", "inbox-messages", "posts", "automation"]);
 
 export function DashboardShell({
 	adminOnly = false,

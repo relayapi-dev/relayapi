@@ -132,8 +132,11 @@ export function AutomationPage() {
                   <motion.tr
                     key={a.id}
                     variants={fadeUp}
+                    onClick={() => {
+                      window.location.href = `/app/automation/${a.id}`;
+                    }}
                     className={cn(
-                      "hover:bg-accent/30 transition-colors",
+                      "cursor-pointer hover:bg-accent/30 transition-colors",
                       i !== automations.length - 1 && "border-b border-border",
                     )}
                   >

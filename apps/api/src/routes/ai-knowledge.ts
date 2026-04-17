@@ -2,7 +2,11 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { aiKnowledgeBases, aiKnowledgeDocuments } from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { Context } from "hono";
-import { applyWorkspaceScope } from "../lib/workspace-scope";
+import {
+	applyWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+} from "../lib/workspace-scope";
 import {
 	KnowledgeBaseCreateSpec,
 	KnowledgeBaseListResponse,
@@ -168,6 +172,10 @@ const getKb = createRoute({
 			description: "Knowledge base",
 			content: { "application/json": { schema: KnowledgeBaseResponse } },
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -187,7 +195,9 @@ app.openapi(getKb, async (c) => {
 			{ error: { code: "not_found", message: "Knowledge base not found" } },
 			404,
 		);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 	return c.json(serializeKb(row), 200);
 });
 
@@ -208,6 +218,10 @@ const updateKb = createRoute({
 		200: {
 			description: "Updated",
 			content: { "application/json": { schema: KnowledgeBaseResponse } },
+		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
 			description: "Not found",
@@ -230,7 +244,9 @@ app.openapi(updateKb, async (c) => {
 			{ error: { code: "not_found", message: "Knowledge base not found" } },
 			404,
 		);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	const updates: Partial<typeof aiKnowledgeBases.$inferInsert> = {
 		updatedAt: new Date(),
@@ -260,6 +276,10 @@ const deleteKb = createRoute({
 	request: { params: IdParams },
 	responses: {
 		204: { description: "Deleted" },
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -280,7 +300,9 @@ app.openapi(deleteKb, async (c) => {
 			{ error: { code: "not_found", message: "Knowledge base not found" } },
 			404,
 		);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	await db.delete(aiKnowledgeBases).where(eq(aiKnowledgeBases.id, id));
 	return c.body(null, 204);
@@ -322,6 +344,10 @@ const createDoc = createRoute({
 			description: "Created",
 			content: { "application/json": { schema: KnowledgeDocumentResponse } },
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Knowledge base not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -340,7 +366,9 @@ app.openapi(createDoc, async (c) => {
 			{ error: { code: "not_found", message: "Knowledge base not found" } },
 			404,
 		);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, kb.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	const [row] = await db
 		.insert(aiKnowledgeDocuments)
@@ -371,6 +399,10 @@ const listDocs = createRoute({
 				"application/json": { schema: KnowledgeDocumentListResponse },
 			},
 		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Knowledge base not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -389,7 +421,9 @@ app.openapi(listDocs, async (c) => {
 			{ error: { code: "not_found", message: "Knowledge base not found" } },
 			404,
 		);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, kb.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	const conditions = [eq(aiKnowledgeDocuments.kbId, id)];
 	if (cursor) {
@@ -434,6 +468,10 @@ const deleteDoc = createRoute({
 	request: { params: KbDocParams },
 	responses: {
 		204: { description: "Deleted" },
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -451,7 +489,9 @@ app.openapi(deleteDoc, async (c) => {
 			{ error: { code: "not_found", message: "Knowledge base not found" } },
 			404,
 		);
-	// Workspace-level enforcement deferred to middleware.
+	if (isWorkspaceScopeDenied(c, kb.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	const doc = await db.query.aiKnowledgeDocuments.findFirst({
 		where: and(
