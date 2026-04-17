@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.23.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.22.0...sdk-v0.23.0) (2026-04-17)
+
+
+### Features
+
+* enhance automation queue processing with advanced enrollment features and improved messaging consistency ([be2e94f](https://github.com/relayapi-dev/relayapi/commit/be2e94fe20c7aae6519b0f4ed62ecd46530e22ce))
+* enhance automation testing with new input validation scenarios ([e0613cb](https://github.com/relayapi-dev/relayapi/commit/e0613cbcaaec65963849f2fd437dfc87a8be74b0))
+* introduce applyQuietHours and messageMediaHandler for improved automation handling ([9f7ba02](https://github.com/relayapi-dev/relayapi/commit/9f7ba025d68cfba03fa879de5d77aa6213f7e87f))
+* introduce centralized API versions management for third-party integrations ([5eccd41](https://github.com/relayapi-dev/relayapi/commit/5eccd416a5d4909fc89738005696624c0a55779a))
+
 ## [0.22.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.21.0...sdk-v0.22.0) (2026-04-16)
 
 
