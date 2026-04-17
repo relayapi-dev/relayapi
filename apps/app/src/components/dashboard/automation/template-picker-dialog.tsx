@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
+import { PostSearchCombobox } from "@/components/dashboard/post-search-combobox";
 
 interface Props {
   open: boolean;
@@ -252,7 +253,7 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
             ))}
           </div>
         ) : (
-          <div className="space-y-3 py-2">
+          <div className="space-y-3 py-2 max-h-[calc(100dvh-16rem)] overflow-y-auto pr-1 -mr-1">
             <TextField
               label="Name"
               value={form.name}
@@ -286,12 +287,18 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
             </div>
 
             {(selected === "comment-to-dm" || selected === "giveaway") && (
-              <TextField
-                label="Post ID (optional)"
-                value={form.post_id ?? ""}
-                onChange={(v) => setForm((f) => ({ ...f, post_id: v }))}
-                placeholder="Leave blank to match all posts"
-              />
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Post (optional)</label>
+                <div className="mt-1">
+                  <PostSearchCombobox
+                    value={form.post_id || null}
+                    onSelect={(id) => setForm((f) => ({ ...f, post_id: id ?? "" }))}
+                    accountId={form.account_id || null}
+                    placeholder={form.account_id ? "All posts on this account" : "Select an account first"}
+                    variant="input"
+                  />
+                </div>
+              </div>
             )}
 
             {(selected === "comment-to-dm" || selected === "keyword-reply") && (
