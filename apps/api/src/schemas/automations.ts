@@ -691,7 +691,13 @@ export const WebhookOutNode = z.object({
 	payload: z.any().optional(),
 });
 
-// -- Platform-specific sends: keep config loose in Phase 1; tighten per-platform in Phase 8 --
+// -- Platform-specific sends --
+//
+// Some nodes below have been tightened into proper Zod objects (Instagram as
+// the reference implementation). Others still use the loose `PlatformSendNode`
+// wrapper while the per-platform Zod schemas catch up. Tightening a platform
+// is mechanical — copy the Instagram block and adapt the fields to the node
+// handler's expectations in apps/api/src/services/automations/nodes/platforms/.
 
 const PlatformSendNode = <T extends AutomationNodeType>(type: T) =>
 	z.object({
@@ -701,6 +707,96 @@ const PlatformSendNode = <T extends AutomationNodeType>(type: T) =>
 			.record(z.string(), z.any())
 			.describe(`Platform-specific payload for ${type}`),
 	});
+
+// -- Instagram (reference tightened set) --
+
+const ButtonSpec = z.discriminatedUnion("type", [
+	z.object({
+		type: z.literal("postback"),
+		title: z.string(),
+		payload: z.string().optional(),
+	}),
+	z.object({
+		type: z.literal("web_url"),
+		title: z.string(),
+		url: z.string().url(),
+	}),
+]);
+
+const QuickReplySpec = z.object({
+	title: z.string(),
+	payload: z.string().optional(),
+});
+
+export const InstagramSendTextNode = z.object({
+	...baseNode,
+	type: z.literal("instagram_send_text"),
+	text: mergeTagString,
+});
+
+export const InstagramSendMediaNode = z.object({
+	...baseNode,
+	type: z.literal("instagram_send_media"),
+	url: z.string().url(),
+	media_type: z.enum(["image", "video", "audio"]).default("image"),
+});
+
+export const InstagramSendButtonsNode = z.object({
+	...baseNode,
+	type: z.literal("instagram_send_buttons"),
+	text: mergeTagString,
+	buttons: z.array(ButtonSpec).min(1).max(3),
+});
+
+export const InstagramSendQuickRepliesNode = z.object({
+	...baseNode,
+	type: z.literal("instagram_send_quick_replies"),
+	text: mergeTagString,
+	quick_replies: z.array(QuickReplySpec).min(1).max(13),
+});
+
+export const InstagramSendGenericTemplateNode = z.object({
+	...baseNode,
+	type: z.literal("instagram_send_generic_template"),
+	elements: z
+		.array(
+			z.object({
+				title: z.string(),
+				subtitle: z.string().optional(),
+				image_url: z.string().url().optional(),
+				buttons: z.array(ButtonSpec).optional(),
+			}),
+		)
+		.min(1)
+		.max(10),
+});
+
+export const InstagramTypingNode = z.object({
+	...baseNode,
+	type: z.literal("instagram_typing"),
+	off: z.boolean().default(false),
+});
+
+export const InstagramMarkSeenNode = z.object({
+	...baseNode,
+	type: z.literal("instagram_mark_seen"),
+});
+
+export const InstagramReplyToCommentNode = z.object({
+	...baseNode,
+	type: z.literal("instagram_reply_to_comment"),
+	text: mergeTagString,
+	comment_id: z
+		.string()
+		.optional()
+		.describe("Defaults to enrollment state.comment_id from the trigger payload"),
+});
+
+export const InstagramHideCommentNode = z.object({
+	...baseNode,
+	type: z.literal("instagram_hide_comment"),
+	comment_id: z.string().optional(),
+});
 
 // ---------------------------------------------------------------------------
 // Discriminated union of all node types
@@ -741,16 +837,16 @@ export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	ConversationStatusNode,
 	HttpRequestNode,
 	WebhookOutNode,
-	// Platform-specific nodes — loose config in Phase 1, tighten per-platform in Phase 8
-	PlatformSendNode("instagram_send_text"),
-	PlatformSendNode("instagram_send_media"),
-	PlatformSendNode("instagram_send_buttons"),
-	PlatformSendNode("instagram_send_quick_replies"),
-	PlatformSendNode("instagram_send_generic_template"),
-	PlatformSendNode("instagram_typing"),
-	PlatformSendNode("instagram_mark_seen"),
-	PlatformSendNode("instagram_reply_to_comment"),
-	PlatformSendNode("instagram_hide_comment"),
+	// Instagram — tightened (reference impl; see InstagramSendTextNode etc. above).
+	InstagramSendTextNode,
+	InstagramSendMediaNode,
+	InstagramSendButtonsNode,
+	InstagramSendQuickRepliesNode,
+	InstagramSendGenericTemplateNode,
+	InstagramTypingNode,
+	InstagramMarkSeenNode,
+	InstagramReplyToCommentNode,
+	InstagramHideCommentNode,
 	PlatformSendNode("facebook_send_text"),
 	PlatformSendNode("facebook_send_media"),
 	PlatformSendNode("facebook_send_template"),
@@ -1022,6 +1118,52 @@ export const GiveawayTemplateInput = z.object({
 // Schema introspection response (GET /v1/automations/schema)
 // Self-describing catalog for MCP / AI agents
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Simulate — static graph traversal for the dashboard Playground / agents.
+// No handlers execute; no side effects.
+// ---------------------------------------------------------------------------
+
+export const AutomationSimulateRequest = z.object({
+	version: z
+		.number()
+		.int()
+		.optional()
+		.describe(
+			"Version to simulate. Defaults to the current draft (falls back to published).",
+		),
+	branch_choices: z
+		.record(z.string(), z.string())
+		.optional()
+		.describe("Map of node_key → branch label to force on branching nodes"),
+	max_steps: z.number().int().min(1).max(200).default(50),
+});
+
+export const AutomationSimulateResponse = z.object({
+	automation_id: z.string(),
+	version: z.number().int(),
+	path: z.array(
+		z.object({
+			node_id: z.string(),
+			node_key: z.string(),
+			node_type: z.string(),
+			branch_label: z.string().nullable(),
+			note: z.string().nullable(),
+		}),
+	),
+	terminated: z.object({
+		kind: z.enum([
+			"complete",
+			"exit",
+			"step_cap",
+			"dead_end",
+			"cycle",
+			"unknown_node",
+		]),
+		reason: z.string().optional(),
+		node_key: z.string().optional(),
+	}),
+});
 
 export const AutomationSchemaResponse = z.object({
 	triggers: z.array(

@@ -1,0 +1,16 @@
+---
+import DashboardLayout from "../../layouts/DashboardLayout.astro";
+import { AutomationRouteApp } from "../../components/dashboard/route-apps/automation-route-app";
+import { getDashboardRouteContext } from "../../lib/dashboard-page";
+
+const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
+---
+
+<DashboardLayout>
+	<AutomationRouteApp
+		client:load
+		currentPage="automation"
+		pageProps={{}}
+		{...dashboard}
+	/>
+</DashboardLayout>

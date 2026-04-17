@@ -169,6 +169,13 @@
       "when": 1776435705847,
       "tag": "0023_marvelous_tomorrow_man",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1776441159739,
+      "tag": "0024_fixed_scorpion",
+      "breakpoints": true
     }
   ]
 }

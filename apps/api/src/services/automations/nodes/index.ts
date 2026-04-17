@@ -2,28 +2,152 @@
  * Node handler registry.
  *
  * Universal handlers implemented in Phase 2.
- * Platform-specific handlers are stubbed — filled in Phase 8 per-platform.
+ * Platform-specific handlers live in ./platforms/*.ts (one file per platform).
+ *
+ * Still stubbed (Phase 8 follow-ups or awaiting external approvals):
+ *   - ai_step / ai_agent / ai_intent_router (needs AI infra)
+ *   - split_test, subflow_call (logic extras)
+ *   - subscription_add / segment_add / notify_admin / conversation_assign /
+ *     conversation_status / webhook_out (ops)
  */
 
 import type { NodeHandler } from "../types";
+import { conditionHandler } from "./condition";
 import { endHandler } from "./end";
+import { fieldClearHandler, fieldSetHandler } from "./field-actions";
 import { gotoHandler } from "./goto";
 import { httpRequestHandler } from "./http-request";
 import { messageMediaHandler } from "./message-media";
 import { messageTextHandler } from "./message-text";
-import { conditionHandler } from "./condition";
-import { smartDelayHandler } from "./smart-delay";
 import { randomizerHandler } from "./randomizer";
+import { smartDelayHandler } from "./smart-delay";
 import { tagAddHandler, tagRemoveHandler } from "./tag-actions";
-import { fieldSetHandler, fieldClearHandler } from "./field-actions";
-import { userInputHandler } from "./user-input";
 import { triggerHandler } from "./trigger";
+import { userInputHandler } from "./user-input";
+
+import {
+	beehiivAddSubscriberHandler,
+	beehiivEnrollAutomationHandler,
+	beehiivPublishPostHandler,
+} from "./platforms/beehiiv";
+import {
+	blueskyLikeHandler,
+	blueskyReplyHandler,
+	blueskyRepostHandler,
+	blueskySendDmHandler,
+} from "./platforms/bluesky";
+import {
+	discordEditMessageHandler,
+	discordReactHandler,
+	discordSendAttachmentHandler,
+	discordSendComponentsHandler,
+	discordSendEmbedHandler,
+	discordSendMessageHandler,
+	discordStartThreadHandler,
+} from "./platforms/discord";
+import {
+	facebookHideCommentHandler,
+	facebookPrivateReplyHandler,
+	facebookReplyToCommentHandler,
+	facebookSendButtonTemplateHandler,
+	facebookSendMediaHandler,
+	facebookSendQuickRepliesHandler,
+	facebookSendTemplateHandler,
+	facebookSendTextHandler,
+	facebookSenderActionHandler,
+} from "./platforms/facebook";
+import {
+	googlebusinessPostUpdateHandler,
+	googlebusinessReplyToReviewHandler,
+} from "./platforms/googlebusiness";
+import {
+	instagramHideCommentHandler,
+	instagramMarkSeenHandler,
+	instagramReplyToCommentHandler,
+	instagramSendButtonsHandler,
+	instagramSendGenericTemplateHandler,
+	instagramSendMediaHandler,
+	instagramSendQuickRepliesHandler,
+	instagramSendTextHandler,
+	instagramTypingHandler,
+} from "./platforms/instagram";
+import {
+	kitAddSubscriberHandler,
+	kitAddTagHandler,
+	kitSendBroadcastHandler,
+} from "./platforms/kit";
+import {
+	linkedinReactToPostHandler,
+	linkedinReplyToCommentHandler,
+} from "./platforms/linkedin";
+import {
+	listmonkAddSubscriberHandler,
+	listmonkSendCampaignHandler,
+} from "./platforms/listmonk";
+import {
+	mailchimpAddMemberHandler,
+	mailchimpAddTagHandler,
+	mailchimpSendCampaignHandler,
+} from "./platforms/mailchimp";
+import {
+	mastodonBoostHandler,
+	mastodonFavouriteHandler,
+	mastodonReplyHandler,
+	mastodonSendDmHandler,
+} from "./platforms/mastodon";
+import { pinterestCreatePinHandler } from "./platforms/pinterest";
+import {
+	redditReplyModmailHandler,
+	redditReplyToCommentHandler,
+	redditSendPmHandler,
+	redditSubmitPostHandler,
+} from "./platforms/reddit";
+import { smsSendHandler, smsSendMmsHandler } from "./platforms/sms";
+import {
+	telegramEditMessageHandler,
+	telegramPinMessageHandler,
+	telegramReactHandler,
+	telegramSendKeyboardHandler,
+	telegramSendLocationHandler,
+	telegramSendMediaGroupHandler,
+	telegramSendMediaHandler,
+	telegramSendPollHandler,
+	telegramSendTextHandler,
+	telegramSetChatActionHandler,
+} from "./platforms/telegram";
+import {
+	threadsHideReplyHandler,
+	threadsReplyToPostHandler,
+} from "./platforms/threads";
+import {
+	twitterLikeTweetHandler,
+	twitterReplyToTweetHandler,
+	twitterRetweetHandler,
+	twitterSendDmHandler,
+	twitterSendDmMediaHandler,
+} from "./platforms/twitter";
+import {
+	whatsappMarkReadHandler,
+	whatsappReactHandler,
+	whatsappSendContactsHandler,
+	whatsappSendFlowHandler,
+	whatsappSendInteractiveHandler,
+	whatsappSendLocationHandler,
+	whatsappSendMediaHandler,
+	whatsappSendTemplateHandler,
+	whatsappSendTextHandler,
+} from "./platforms/whatsapp";
+import {
+	youtubeModerateCommentHandler,
+	youtubeReplyToCommentHandler,
+	youtubeSendLiveChatHandler,
+} from "./platforms/youtube";
 
 const universal: Record<string, NodeHandler> = {
 	trigger: triggerHandler,
 	message_text: messageTextHandler,
 	message_media: messageMediaHandler,
-	message_file: messageMediaHandler, // same handler, distinguished by config
+	message_file: messageMediaHandler,
 	condition: conditionHandler,
 	smart_delay: smartDelayHandler,
 	randomizer: randomizerHandler,
@@ -43,25 +167,126 @@ const universal: Record<string, NodeHandler> = {
 	user_input_file: userInputHandler,
 };
 
-/**
- * Stub handler for node types not yet implemented. Returns a failing result
- * so the enrollment records the gap, rather than silently skipping.
- */
+const platformHandlers: Record<string, NodeHandler> = {
+	// Instagram
+	instagram_send_text: instagramSendTextHandler,
+	instagram_send_media: instagramSendMediaHandler,
+	instagram_send_buttons: instagramSendButtonsHandler,
+	instagram_send_quick_replies: instagramSendQuickRepliesHandler,
+	instagram_send_generic_template: instagramSendGenericTemplateHandler,
+	instagram_typing: instagramTypingHandler,
+	instagram_mark_seen: instagramMarkSeenHandler,
+	instagram_reply_to_comment: instagramReplyToCommentHandler,
+	instagram_hide_comment: instagramHideCommentHandler,
+	// Facebook Messenger
+	facebook_send_text: facebookSendTextHandler,
+	facebook_send_media: facebookSendMediaHandler,
+	facebook_send_template: facebookSendTemplateHandler,
+	facebook_send_quick_replies: facebookSendQuickRepliesHandler,
+	facebook_send_button_template: facebookSendButtonTemplateHandler,
+	facebook_reply_to_comment: facebookReplyToCommentHandler,
+	facebook_private_reply: facebookPrivateReplyHandler,
+	facebook_hide_comment: facebookHideCommentHandler,
+	facebook_sender_action: facebookSenderActionHandler,
+	// WhatsApp Cloud API
+	whatsapp_send_text: whatsappSendTextHandler,
+	whatsapp_send_media: whatsappSendMediaHandler,
+	whatsapp_send_template: whatsappSendTemplateHandler,
+	whatsapp_send_interactive: whatsappSendInteractiveHandler,
+	whatsapp_send_flow: whatsappSendFlowHandler,
+	whatsapp_send_location: whatsappSendLocationHandler,
+	whatsapp_send_contacts: whatsappSendContactsHandler,
+	whatsapp_react: whatsappReactHandler,
+	whatsapp_mark_read: whatsappMarkReadHandler,
+	// Telegram
+	telegram_send_text: telegramSendTextHandler,
+	telegram_send_media: telegramSendMediaHandler,
+	telegram_send_media_group: telegramSendMediaGroupHandler,
+	telegram_send_poll: telegramSendPollHandler,
+	telegram_send_location: telegramSendLocationHandler,
+	telegram_send_keyboard: telegramSendKeyboardHandler,
+	telegram_edit_message: telegramEditMessageHandler,
+	telegram_pin_message: telegramPinMessageHandler,
+	telegram_react: telegramReactHandler,
+	telegram_set_chat_action: telegramSetChatActionHandler,
+	// Discord
+	discord_send_message: discordSendMessageHandler,
+	discord_send_embed: discordSendEmbedHandler,
+	discord_send_components: discordSendComponentsHandler,
+	discord_send_attachment: discordSendAttachmentHandler,
+	discord_react: discordReactHandler,
+	discord_edit_message: discordEditMessageHandler,
+	discord_start_thread: discordStartThreadHandler,
+	// SMS (Twilio / Telnyx)
+	sms_send: smsSendHandler,
+	sms_send_mms: smsSendMmsHandler,
+	// X / Twitter
+	twitter_send_dm: twitterSendDmHandler,
+	twitter_send_dm_media: twitterSendDmMediaHandler,
+	twitter_reply_to_tweet: twitterReplyToTweetHandler,
+	twitter_like_tweet: twitterLikeTweetHandler,
+	twitter_retweet: twitterRetweetHandler,
+	// Bluesky
+	bluesky_reply: blueskyReplyHandler,
+	bluesky_like: blueskyLikeHandler,
+	bluesky_repost: blueskyRepostHandler,
+	bluesky_send_dm: blueskySendDmHandler,
+	// Threads
+	threads_reply_to_post: threadsReplyToPostHandler,
+	threads_hide_reply: threadsHideReplyHandler,
+	// YouTube
+	youtube_reply_to_comment: youtubeReplyToCommentHandler,
+	youtube_send_live_chat: youtubeSendLiveChatHandler,
+	youtube_moderate_comment: youtubeModerateCommentHandler,
+	// LinkedIn
+	linkedin_reply_to_comment: linkedinReplyToCommentHandler,
+	linkedin_react_to_post: linkedinReactToPostHandler,
+	// Mastodon
+	mastodon_reply: mastodonReplyHandler,
+	mastodon_favourite: mastodonFavouriteHandler,
+	mastodon_boost: mastodonBoostHandler,
+	mastodon_send_dm: mastodonSendDmHandler,
+	// Reddit
+	reddit_reply_to_comment: redditReplyToCommentHandler,
+	reddit_send_pm: redditSendPmHandler,
+	reddit_reply_modmail: redditReplyModmailHandler,
+	reddit_submit_post: redditSubmitPostHandler,
+	// Google Business Profile
+	googlebusiness_reply_to_review: googlebusinessReplyToReviewHandler,
+	googlebusiness_post_update: googlebusinessPostUpdateHandler,
+	// Beehiiv
+	beehiiv_add_subscriber: beehiivAddSubscriberHandler,
+	beehiiv_publish_post: beehiivPublishPostHandler,
+	beehiiv_enroll_automation: beehiivEnrollAutomationHandler,
+	// Kit (ConvertKit v4)
+	kit_add_subscriber: kitAddSubscriberHandler,
+	kit_add_tag: kitAddTagHandler,
+	kit_send_broadcast: kitSendBroadcastHandler,
+	// Mailchimp
+	mailchimp_add_member: mailchimpAddMemberHandler,
+	mailchimp_add_tag: mailchimpAddTagHandler,
+	mailchimp_send_campaign: mailchimpSendCampaignHandler,
+	// Listmonk
+	listmonk_add_subscriber: listmonkAddSubscriberHandler,
+	listmonk_send_campaign: listmonkSendCampaignHandler,
+	// Pinterest
+	pinterest_create_pin: pinterestCreatePinHandler,
+};
+
 const notImplemented = (type: string): NodeHandler =>
 	async () => ({
 		kind: "fail" as const,
-		error: `Node type '${type}' is not yet implemented (Phase 8 — per-platform rollout).`,
+		error: `Node type '${type}' is not yet implemented.`,
 	});
 
-const platformSpecificTypes = [
-	// AI
+// Types still waiting on AI infra / logic extras / ops work. These remain as
+// stubs so the runner surfaces a clear error rather than silently skipping.
+const remainingStubTypes = [
 	"ai_step",
 	"ai_agent",
 	"ai_intent_router",
-	// Logic extras
 	"split_test",
 	"subflow_call",
-	// Contact/subscription extras
 	"subscription_add",
 	"subscription_remove",
 	"segment_add",
@@ -70,118 +295,16 @@ const platformSpecificTypes = [
 	"conversation_assign",
 	"conversation_status",
 	"webhook_out",
-	// Instagram
-	"instagram_send_text",
-	"instagram_send_media",
-	"instagram_send_buttons",
-	"instagram_send_quick_replies",
-	"instagram_send_generic_template",
-	"instagram_typing",
-	"instagram_mark_seen",
-	"instagram_reply_to_comment",
-	"instagram_hide_comment",
-	// Facebook
-	"facebook_send_text",
-	"facebook_send_media",
-	"facebook_send_template",
-	"facebook_send_quick_replies",
-	"facebook_send_button_template",
-	"facebook_reply_to_comment",
-	"facebook_private_reply",
-	"facebook_hide_comment",
-	"facebook_sender_action",
-	// WhatsApp
-	"whatsapp_send_text",
-	"whatsapp_send_media",
-	"whatsapp_send_template",
-	"whatsapp_send_interactive",
-	"whatsapp_send_flow",
-	"whatsapp_send_location",
-	"whatsapp_send_contacts",
-	"whatsapp_react",
-	"whatsapp_mark_read",
-	// Telegram
-	"telegram_send_text",
-	"telegram_send_media",
-	"telegram_send_media_group",
-	"telegram_send_poll",
-	"telegram_send_location",
-	"telegram_send_keyboard",
-	"telegram_edit_message",
-	"telegram_pin_message",
-	"telegram_react",
-	"telegram_set_chat_action",
-	// Discord
-	"discord_send_message",
-	"discord_send_embed",
-	"discord_send_components",
-	"discord_send_attachment",
-	"discord_react",
-	"discord_edit_message",
-	"discord_start_thread",
-	// SMS
-	"sms_send",
-	"sms_send_mms",
-	// Twitter/X
-	"twitter_send_dm",
-	"twitter_send_dm_media",
-	"twitter_reply_to_tweet",
-	"twitter_like_tweet",
-	"twitter_retweet",
-	// Bluesky
-	"bluesky_reply",
-	"bluesky_like",
-	"bluesky_repost",
-	"bluesky_send_dm",
-	// Threads
-	"threads_reply_to_post",
-	"threads_hide_reply",
-	// YouTube
-	"youtube_reply_to_comment",
-	"youtube_send_live_chat",
-	"youtube_moderate_comment",
-	// LinkedIn
-	"linkedin_reply_to_comment",
-	"linkedin_react_to_post",
-	// Mastodon
-	"mastodon_reply",
-	"mastodon_favourite",
-	"mastodon_boost",
-	"mastodon_send_dm",
-	// Reddit
-	"reddit_reply_to_comment",
-	"reddit_send_pm",
-	"reddit_reply_modmail",
-	"reddit_submit_post",
-	// Google Business
-	"googlebusiness_reply_to_review",
-	"googlebusiness_post_update",
-	// Beehiiv
-	"beehiiv_add_subscriber",
-	"beehiiv_publish_post",
-	"beehiiv_enroll_automation",
-	// Kit
-	"kit_add_subscriber",
-	"kit_add_tag",
-	"kit_send_broadcast",
-	// Mailchimp
-	"mailchimp_add_member",
-	"mailchimp_add_tag",
-	"mailchimp_send_campaign",
-	// Listmonk
-	"listmonk_add_subscriber",
-	"listmonk_send_campaign",
-	// Pinterest
-	"pinterest_create_pin",
 ];
 
-const platformStubs = Object.fromEntries(
-	platformSpecificTypes.map((t) => [t, notImplemented(t)]),
+const remainingStubs = Object.fromEntries(
+	remainingStubTypes.map((t) => [t, notImplemented(t)]),
 );
 
 export const nodeHandlers: Record<string, NodeHandler> = {
 	...universal,
-	...platformStubs,
+	...platformHandlers,
+	...remainingStubs,
 };
 
 export function getNodeHandler(type: string): NodeHandler {

@@ -772,3 +772,80 @@ All fields go inside `target_options.instagram` on your post request.
 - **Images over 8 MB are auto-compressed** by Instagram, which may degrade quality.
 - **100 posts per 24-hour rolling limit** includes feed posts, carousels, stories, and reels combined.
 - **User tags only work on images** — not videos or stories. For carousels, use `media_index` to target specific slides.
+
+## Automations
+
+The automations engine supports Instagram as a Tier 1 platform — both inbound conversational events (DMs, comments, mentions) and outbound send actions.
+
+### Triggers
+
+| Type | Fires on | Notes |
+| --- | --- | --- |
+| `instagram_dm` | Inbound direct message | Requires Instagram Login app + Messaging API permission |
+| `instagram_comment` | New comment on a post or reel | Payload includes `comment_id`, `post_id`, `parent_id`, `text` |
+| `instagram_story_reply` | Reply to your story | Story-reply specific |
+| `instagram_story_mention` | Account @-mentioned in a story | |
+| `instagram_mention` | Account @-mentioned in post/comment | |
+| `instagram_reaction` | Message reaction added/removed | |
+| `instagram_live_comment` | Comment during a Live | Time-sensitive |
+| `instagram_postback` | Structured button / ice-breaker postback | |
+| `instagram_referral` | User arrives via an IG Ref URL | |
+
+<Callout type="warn">
+Instagram does not expose a follower webhook via the public Graph API. The `follow-to-dm` template uses a `manual` trigger — you enroll new followers explicitly via the API or a separate polling job.
+</Callout>
+
+### Send nodes
+
+All Instagram send nodes hit `https://graph.instagram.com/v25.0/{ig-user-id}/messages` (or the associated comment endpoints). See the [Instagram Messaging API](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api).
+
+| Node | Purpose | Required fields |
+| --- | --- | --- |
+| `instagram_send_text` | Plain text DM | `text` (supports merge tags) |
+| `instagram_send_media` | Image / video / audio DM | `url`, `media_type` (default `image`) |
+| `instagram_send_buttons` | Button template (≤3 buttons) | `text`, `buttons[]` with `type: postback | web_url` |
+| `instagram_send_quick_replies` | Text + quick-reply chips (≤13) | `text`, `quick_replies[]` with `title`, `payload?` |
+| `instagram_send_generic_template` | Carousel of cards (≤10) | `elements[]` with `title`, optional `subtitle`, `image_url`, `buttons[]` |
+| `instagram_typing` | Sender action | `off: boolean` — true sends `typing_off`, false sends `typing_on` |
+| `instagram_mark_seen` | Sender action | — |
+| `instagram_reply_to_comment` | Public comment reply | `text` (+ optional `comment_id`; defaults to the trigger's `comment_id`) |
+| `instagram_hide_comment` | Hide a comment | `comment_id` (+ falls back to trigger's `comment_id`) |
+
+### Quick example: comment → DM
+
+<Tabs items={['TypeScript', 'curl']}>
+<Tab value="TypeScript">
+```typescript
+await client.automations.templates.commentToDm({
+  name: 'Spring launch comment → DM',
+  account_id: 'acc_instagram_xyz',
+  keywords: ['LINK', 'INFO'],
+  match_mode: 'contains',
+  dm_message: 'Hey {{first_name}}, here is the link you asked for: https://example.com/offer',
+  public_reply: 'Check your DMs! 📨',
+  once_per_user: true,
+});
+```
+</Tab>
+<Tab value="curl">
+```bash
+curl -X POST https://api.relayapi.dev/v1/automations/templates/comment-to-dm \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Spring launch comment → DM",
+    "account_id": "acc_instagram_xyz",
+    "keywords": ["LINK", "INFO"],
+    "dm_message": "Here is the link: https://example.com/offer",
+    "public_reply": "Check your DMs!"
+  }'
+```
+</Tab>
+</Tabs>
+
+### Rate limits + constraints
+
+- **Messaging**: Instagram enforces the 24-hour customer-service window. Inside 24h of the contact's last message you may DM freely; outside it, only `HUMAN_AGENT`-tagged messages are allowed (and those require a human-agent UX — not fully automated flows).
+- **Comment reply cap**: Graph API limits reply volume per post; avoid high-frequency reply bursts.
+- **Token routing**: Instagram Login tokens (IGAA prefix) route through `graph.instagram.com`; Facebook-auth legacy tokens use `graph.facebook.com`. The node handlers use `graph.instagram.com` by default — reconnect via Instagram Login if you hit a `#100` scope error.
+

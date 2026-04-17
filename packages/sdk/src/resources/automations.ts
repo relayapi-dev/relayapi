@@ -133,6 +133,19 @@ export class Automations extends APIResource {
   schema(options?: RequestOptions): APIPromise<AutomationSchemaResponse> {
     return this._client.get('/v1/automations/schema', options);
   }
+
+  /**
+   * Dry-run the automation graph without executing handlers or performing any
+   * side effects. Returns the predicted node path based on the chosen branch
+   * labels (or sensible defaults when none are supplied).
+   */
+  simulate(
+    id: string,
+    body: AutomationSimulateParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<AutomationSimulateResponse> {
+    return this._client.post(path`/v1/automations/${id}/simulate`, { body, ...options });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +433,31 @@ export interface AutomationRunLogResponse {
 
 export interface AutomationRunListResponse {
   data: AutomationRunLogResponse[];
+}
+
+export interface AutomationSimulateParams {
+  version?: number;
+  branch_choices?: Record<string, string>;
+  max_steps?: number;
+}
+
+export interface AutomationSimulateStep {
+  node_id: string;
+  node_key: string;
+  node_type: string;
+  branch_label: string | null;
+  note: string | null;
+}
+
+export interface AutomationSimulateResponse {
+  automation_id: string;
+  version: number;
+  path: AutomationSimulateStep[];
+  terminated: {
+    kind: 'complete' | 'exit' | 'step_cap' | 'dead_end' | 'cycle' | 'unknown_node';
+    reason?: string;
+    node_key?: string;
+  };
 }
 
 export interface AutomationSchemaResponse {

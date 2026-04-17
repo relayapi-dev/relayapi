@@ -29,6 +29,7 @@ import {
 	Settings,
 	Megaphone,
 	Target,
+	Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
@@ -99,6 +100,7 @@ const navItems: NavItem[] = [
 	},
 	{ label: "Contacts", icon: Users, href: "contacts" },
 	{ label: "Templates", icon: FileText, href: "templates" },
+	{ label: "Automation", icon: Workflow, href: "automation" },
 	{ label: "Campaigns", icon: Megaphone, href: "campaigns" },
 	{ label: "WhatsApp", icon: MessageCircle, href: "whatsapp" },
 	{ label: "Ads", icon: Target, href: "ads" },

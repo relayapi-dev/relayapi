@@ -1,10 +1,6 @@
 import { mapConcurrently } from "../lib/concurrency";
 import { incrementUsage } from "../middleware/usage-tracking";
 import { scheduleFirstMetricsRefresh } from "../services/analytics-refresh";
-import {
-	processEngagementCheck,
-	type EngagementCheckMessage,
-} from "../services/engagement-rule-processor";
 import { publishPostById } from "../services/publisher-runner";
 import type { Env } from "../types";
 
@@ -18,10 +14,6 @@ interface PublishMessage {
 	post_id?: string;
 	org_id?: string;
 	usage_tracked?: boolean;
-	rule_id?: string;
-	post_target_id?: string;
-	check_number?: number;
-	organization_id?: string;
 	thread_group_id?: string;
 	position?: number;
 }
@@ -49,13 +41,6 @@ export async function consumePublishQueue(
 				body as PublishMessage & { post_id: string; org_id: string },
 				env,
 			);
-		} else if (
-			body.type === "engagement_check" &&
-			body.rule_id &&
-			body.post_target_id &&
-			body.organization_id
-		) {
-			await handleEngagementCheck(message, body as EngagementCheckMessage, env);
 		} else {
 			message.ack();
 		}
@@ -158,23 +143,3 @@ async function handlePostPublish(
 	}
 }
 
-async function handleEngagementCheck(
-	message: Message<PublishMessage>,
-	body: EngagementCheckMessage,
-	env: Env,
-): Promise<void> {
-	try {
-		await processEngagementCheck(env, body);
-		message.ack();
-	} catch (err) {
-		console.error(`Engagement check failed for rule ${body.rule_id}:`, err);
-		if (message.attempts >= 5) {
-			console.error(
-				`[Engagement] Max retries exceeded for rule ${body.rule_id}, dropping`,
-			);
-			message.ack();
-		} else {
-			message.retry({ delaySeconds: 2 ** message.attempts });
-		}
-	}
-}

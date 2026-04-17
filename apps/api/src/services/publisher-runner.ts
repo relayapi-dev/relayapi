@@ -1,6 +1,5 @@
 import {
 	createDb,
-	engagementRules,
 	posts,
 	postTargets,
 	socialAccounts,
@@ -306,70 +305,7 @@ export async function publishToTargets(
 		);
 	}
 
-	// Schedule engagement rule checks for published targets
-	if (finalStatus === "published" || finalStatus === "partial") {
-		scheduleEngagementChecks(env, db, orgId, postId).catch((err) =>
-			console.error("[publisher-runner] Failed to schedule engagement checks:", err),
-		);
-	}
-
 	return responseTargets;
-}
-
-/**
- * Schedule engagement rule checks for all published targets of a post.
- * For each matching active rule, enqueues delayed messages at the rule's check intervals.
- */
-async function scheduleEngagementChecks(
-	env: Env,
-	db: ReturnType<typeof createDb>,
-	orgId: string,
-	postId: string,
-): Promise<void> {
-	// Fetch published targets for this post
-	const targets = await db
-		.select({ id: postTargets.id, socialAccountId: postTargets.socialAccountId })
-		.from(postTargets)
-		.where(and(eq(postTargets.postId, postId), eq(postTargets.status, "published")));
-
-	if (targets.length === 0) return;
-
-	const accountIds = [...new Set(targets.map((t) => t.socialAccountId))];
-
-	// Fetch active rules for these accounts
-	const rules = await db
-		.select()
-		.from(engagementRules)
-		.where(
-			and(
-				eq(engagementRules.organizationId, orgId),
-				eq(engagementRules.status, "active"),
-				inArray(engagementRules.accountId, accountIds),
-			),
-		);
-
-	if (rules.length === 0) return;
-
-	// For each rule × matching target, schedule delayed checks
-	for (const rule of rules) {
-		const matchingTargets = targets.filter((t) => t.socialAccountId === rule.accountId);
-		for (const target of matchingTargets) {
-			for (let check = 1; check <= rule.maxChecks; check++) {
-				const delaySeconds = rule.checkIntervalMinutes * 60 * check;
-				if (delaySeconds > 86_400) continue; // Cloudflare Queue max delay is 24h
-				await env.PUBLISH_QUEUE.send(
-					{
-						type: "engagement_check",
-						rule_id: rule.id,
-						post_target_id: target.id,
-						check_number: check,
-						organization_id: orgId,
-					},
-					{ delaySeconds },
-				);
-			}
-		}
-	}
 }
 
 /**

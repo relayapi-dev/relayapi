@@ -145,7 +145,6 @@ export const MergeContactResponse = z.object({
 	channels_moved: z.number().describe("Number of channels moved"),
 	fields_moved: z.number().describe("Number of custom field values moved"),
 	recipients_updated: z.number().describe("Number of broadcast recipients updated"),
-	enrollments_updated: z.number().describe("Number of sequence enrollments updated"),
 	conversations_updated: z.number().describe("Number of inbox conversations updated"),
 });
 

@@ -6,7 +6,6 @@ import {
 	customFieldDefinitions,
 	customFieldValues,
 	broadcastRecipients,
-	sequenceEnrollments,
 	inboxConversations,
 } from "@relayapi/db";
 import { and, eq, ilike, inArray, sql, desc, or } from "drizzle-orm";
@@ -997,14 +996,6 @@ app.openapi(mergeContact, async (c) => {
 		.returning({ id: broadcastRecipients.id });
 	const recipientsUpdated = recipientResult.length;
 
-	// Update sequence enrollments from source to target
-	const enrollmentResult = await db
-		.update(sequenceEnrollments)
-		.set({ contactId: targetId })
-		.where(eq(sequenceEnrollments.contactId, sourceId))
-		.returning({ id: sequenceEnrollments.id });
-	const enrollmentsUpdated = enrollmentResult.length;
-
 	// Update inbox conversations from source to target
 	const conversationResult = await db
 		.update(inboxConversations)
@@ -1021,7 +1012,6 @@ app.openapi(mergeContact, async (c) => {
 			channels_moved: channelsMoved,
 			fields_moved: fieldsMoved,
 			recipients_updated: recipientsUpdated,
-			enrollments_updated: enrollmentsUpdated,
 			conversations_updated: conversationsUpdated,
 		},
 		200,

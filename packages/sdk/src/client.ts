@@ -80,30 +80,6 @@ import {
   BroadcastListRecipientsParams,
 } from './resources/broadcasts';
 import {
-  CommentAutomations,
-  CommentAutomationResponse,
-  CommentAutomationListResponse,
-  CommentAutomationLogResponse,
-  CommentAutomationLogListResponse,
-  CommentAutomationCreateParams,
-  CommentAutomationUpdateParams,
-  CommentAutomationListLogsParams,
-} from './resources/comment-automations';
-import {
-  Sequences,
-  SequenceResponse,
-  SequenceStepResponse,
-  SequenceDetailResponse,
-  SequenceListResponse,
-  SequenceEnrollResponse,
-  SequenceEnrollmentResponse,
-  SequenceEnrollmentListResponse,
-  SequenceCreateParams,
-  SequenceUpdateParams,
-  SequenceEnrollParams,
-  SequenceListEnrollmentsParams,
-} from './resources/sequences';
-import {
   Automations,
   AutomationTemplates,
   AutomationResponse,
@@ -116,6 +92,9 @@ import {
   AutomationRunLogResponse,
   AutomationRunListResponse,
   AutomationSchemaResponse,
+  AutomationSimulateParams,
+  AutomationSimulateResponse,
+  AutomationSimulateStep,
   AutomationCreateParams,
   AutomationUpdateParams,
   AutomationListParams,
@@ -133,6 +112,37 @@ import {
   StoryReplyTemplateParams,
   GiveawayTemplateParams,
 } from './resources/automations';
+import {
+  Segments,
+  SegmentCreateParams,
+  SegmentUpdateParams,
+  SegmentListParams,
+  SegmentResponse,
+  SegmentListResponse,
+  SegmentFilter,
+  SegmentFilterPredicate,
+} from './resources/segments';
+import {
+  AiKnowledge,
+  AiKnowledgeDocuments,
+  KnowledgeBaseCreateParams,
+  KnowledgeBaseUpdateParams,
+  KnowledgeBaseListParams,
+  KnowledgeBaseResponse,
+  KnowledgeBaseListResponse,
+  KnowledgeDocumentCreateParams,
+  KnowledgeDocumentListParams,
+  KnowledgeDocumentResponse,
+  KnowledgeDocumentListResponse,
+} from './resources/ai-knowledge';
+import {
+  RefUrls,
+  RefUrlCreateParams,
+  RefUrlUpdateParams,
+  RefUrlListParams,
+  RefUrlResponse,
+  RefUrlListResponse,
+} from './resources/ref-urls';
 import {
   APIKeyCreateParams,
   APIKeyCreateResponse,
@@ -177,17 +187,6 @@ import {
   CrossPostActionInput,
   CrossPostActionListParams,
 } from './resources/cross-post-actions';
-import {
-  EngagementRules,
-  EngagementRuleResponse,
-  EngagementRuleListResponse,
-  EngagementRuleLogResponse,
-  EngagementRuleLogListResponse,
-  EngagementRuleCreateParams,
-  EngagementRuleUpdateParams,
-  EngagementRuleListParams,
-  EngagementRuleListLogsParams,
-} from './resources/engagement-rules';
 import {
   ContentTemplates,
   ContentTemplateCreateParams,
@@ -1093,16 +1092,16 @@ export class Relay {
   ads: API.Ads = new API.Ads(this);
   autoPostRules: API.AutoPostRules = new API.AutoPostRules(this);
   broadcasts: API.Broadcasts = new API.Broadcasts(this);
-  sequences: API.Sequences = new API.Sequences(this);
   automations: API.Automations = new API.Automations(this);
+  segments: API.Segments = new API.Segments(this);
+  aiKnowledge: API.AiKnowledge = new API.AiKnowledge(this);
+  refUrls: API.RefUrls = new API.RefUrls(this);
   shortLinks: API.ShortLinks = new API.ShortLinks(this);
-  commentAutomations: API.CommentAutomations = new API.CommentAutomations(this);
   contentTemplates: API.ContentTemplates = new API.ContentTemplates(this);
   tags: API.Tags = new API.Tags(this);
   ideaGroups: API.IdeaGroups = new API.IdeaGroups(this);
   ideas: API.Ideas = new API.Ideas(this);
   crossPostActions: API.CrossPostActions = new API.CrossPostActions(this);
-  engagementRules: API.EngagementRules = new API.EngagementRules(this);
   posts: API.Posts = new API.Posts(this);
   accounts: API.Accounts = new API.Accounts(this);
   media: API.Media = new API.Media(this);
@@ -1131,15 +1130,15 @@ export class Relay {
 Relay.Ads = Ads;
 Relay.AutoPostRules = AutoPostRules;
 Relay.Broadcasts = Broadcasts;
-Relay.Sequences = Sequences;
 Relay.Automations = Automations;
-Relay.CommentAutomations = CommentAutomations;
+Relay.Segments = Segments;
+Relay.AiKnowledge = AiKnowledge;
+Relay.RefUrls = RefUrls;
 Relay.ContentTemplates = ContentTemplates;
 Relay.Tags = Tags;
 Relay.IdeaGroups = IdeaGroups;
 Relay.Ideas = Ideas;
 Relay.CrossPostActions = CrossPostActions;
-Relay.EngagementRules = EngagementRules;
 Relay.Posts = Posts;
 Relay.Accounts = Accounts;
 Relay.Media = Media;
@@ -1225,21 +1224,6 @@ export declare namespace Relay {
   };
 
   export {
-    Sequences as Sequences,
-    type SequenceResponse as SequenceResponse,
-    type SequenceStepResponse as SequenceStepResponse,
-    type SequenceDetailResponse as SequenceDetailResponse,
-    type SequenceListResponse as SequenceListResponse,
-    type SequenceEnrollResponse as SequenceEnrollResponse,
-    type SequenceEnrollmentResponse as SequenceEnrollmentResponse,
-    type SequenceEnrollmentListResponse as SequenceEnrollmentListResponse,
-    type SequenceCreateParams as SequenceCreateParams,
-    type SequenceUpdateParams as SequenceUpdateParams,
-    type SequenceEnrollParams as SequenceEnrollParams,
-    type SequenceListEnrollmentsParams as SequenceListEnrollmentsParams,
-  };
-
-  export {
     Automations as Automations,
     AutomationTemplates as AutomationTemplates,
     type AutomationResponse as AutomationResponse,
@@ -1268,17 +1252,43 @@ export declare namespace Relay {
     type FollowToDmTemplateParams as FollowToDmTemplateParams,
     type StoryReplyTemplateParams as StoryReplyTemplateParams,
     type GiveawayTemplateParams as GiveawayTemplateParams,
+    type AutomationSimulateParams as AutomationSimulateParams,
+    type AutomationSimulateResponse as AutomationSimulateResponse,
+    type AutomationSimulateStep as AutomationSimulateStep,
   };
 
   export {
-    CommentAutomations as CommentAutomations,
-    type CommentAutomationResponse as CommentAutomationResponse,
-    type CommentAutomationListResponse as CommentAutomationListResponse,
-    type CommentAutomationLogResponse as CommentAutomationLogResponse,
-    type CommentAutomationLogListResponse as CommentAutomationLogListResponse,
-    type CommentAutomationCreateParams as CommentAutomationCreateParams,
-    type CommentAutomationUpdateParams as CommentAutomationUpdateParams,
-    type CommentAutomationListLogsParams as CommentAutomationListLogsParams,
+    Segments as Segments,
+    type SegmentCreateParams as SegmentCreateParams,
+    type SegmentUpdateParams as SegmentUpdateParams,
+    type SegmentListParams as SegmentListParams,
+    type SegmentResponse as SegmentResponse,
+    type SegmentListResponse as SegmentListResponse,
+    type SegmentFilter as SegmentFilter,
+    type SegmentFilterPredicate as SegmentFilterPredicate,
+  };
+
+  export {
+    AiKnowledge as AiKnowledge,
+    AiKnowledgeDocuments as AiKnowledgeDocuments,
+    type KnowledgeBaseCreateParams as KnowledgeBaseCreateParams,
+    type KnowledgeBaseUpdateParams as KnowledgeBaseUpdateParams,
+    type KnowledgeBaseListParams as KnowledgeBaseListParams,
+    type KnowledgeBaseResponse as KnowledgeBaseResponse,
+    type KnowledgeBaseListResponse as KnowledgeBaseListResponse,
+    type KnowledgeDocumentCreateParams as KnowledgeDocumentCreateParams,
+    type KnowledgeDocumentListParams as KnowledgeDocumentListParams,
+    type KnowledgeDocumentResponse as KnowledgeDocumentResponse,
+    type KnowledgeDocumentListResponse as KnowledgeDocumentListResponse,
+  };
+
+  export {
+    RefUrls as RefUrls,
+    type RefUrlCreateParams as RefUrlCreateParams,
+    type RefUrlUpdateParams as RefUrlUpdateParams,
+    type RefUrlListParams as RefUrlListParams,
+    type RefUrlResponse as RefUrlResponse,
+    type RefUrlListResponse as RefUrlListResponse,
   };
 
   export {
@@ -1287,18 +1297,6 @@ export declare namespace Relay {
     type CrossPostActionListResponse as CrossPostActionListResponse,
     type CrossPostActionInput as CrossPostActionInput,
     type CrossPostActionListParams as CrossPostActionListParams,
-  };
-
-  export {
-    EngagementRules as EngagementRules,
-    type EngagementRuleResponse as EngagementRuleResponse,
-    type EngagementRuleListResponse as EngagementRuleListResponse,
-    type EngagementRuleLogResponse as EngagementRuleLogResponse,
-    type EngagementRuleLogListResponse as EngagementRuleLogListResponse,
-    type EngagementRuleCreateParams as EngagementRuleCreateParams,
-    type EngagementRuleUpdateParams as EngagementRuleUpdateParams,
-    type EngagementRuleListParams as EngagementRuleListParams,
-    type EngagementRuleListLogsParams as EngagementRuleListLogsParams,
   };
 
   export {

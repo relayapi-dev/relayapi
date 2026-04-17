@@ -234,43 +234,6 @@ export {
   type CrossPostActionListParams,
 } from './cross-post-actions';
 export {
-  EngagementRules,
-  type EngagementRuleResponse,
-  type EngagementRuleListResponse,
-  type EngagementRuleLogResponse,
-  type EngagementRuleLogListResponse,
-  type EngagementRuleCreateParams,
-  type EngagementRuleUpdateParams,
-  type EngagementRuleListParams,
-  type EngagementRuleListLogsParams,
-} from './engagement-rules';
-export {
-  CommentAutomations,
-  type CommentAutomationResponse,
-  type CommentAutomationListResponse,
-  type CommentAutomationLogResponse,
-  type CommentAutomationLogListResponse,
-  type CommentAutomationListParams,
-  type CommentAutomationCreateParams,
-  type CommentAutomationUpdateParams,
-  type CommentAutomationListLogsParams,
-} from './comment-automations';
-export {
-  Sequences,
-  type SequenceResponse,
-  type SequenceStepResponse,
-  type SequenceDetailResponse,
-  type SequenceListResponse,
-  type SequenceEnrollResponse,
-  type SequenceEnrollmentResponse,
-  type SequenceEnrollmentListResponse,
-  type SequenceListParams,
-  type SequenceCreateParams,
-  type SequenceUpdateParams,
-  type SequenceEnrollParams,
-  type SequenceListEnrollmentsParams,
-} from './sequences';
-export {
   Automations,
   AutomationTemplates,
   type AutomationResponse,
@@ -299,7 +262,41 @@ export {
   type FollowToDmTemplateParams,
   type StoryReplyTemplateParams,
   type GiveawayTemplateParams,
+  type AutomationSimulateParams,
+  type AutomationSimulateResponse,
+  type AutomationSimulateStep,
 } from './automations';
+export {
+  Segments,
+  type SegmentCreateParams,
+  type SegmentUpdateParams,
+  type SegmentListParams,
+  type SegmentResponse,
+  type SegmentListResponse,
+  type SegmentFilter,
+  type SegmentFilterPredicate,
+} from './segments';
+export {
+  AiKnowledge,
+  AiKnowledgeDocuments,
+  type KnowledgeBaseCreateParams,
+  type KnowledgeBaseUpdateParams,
+  type KnowledgeBaseListParams,
+  type KnowledgeBaseResponse,
+  type KnowledgeBaseListResponse,
+  type KnowledgeDocumentCreateParams,
+  type KnowledgeDocumentListParams,
+  type KnowledgeDocumentResponse,
+  type KnowledgeDocumentListResponse,
+} from './ai-knowledge';
+export {
+  RefUrls,
+  type RefUrlCreateParams,
+  type RefUrlUpdateParams,
+  type RefUrlListParams,
+  type RefUrlResponse,
+  type RefUrlListResponse,
+} from './ref-urls';
 export {
   ShortLinks,
   type ShortLinkConfigResponse,

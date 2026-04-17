@@ -414,12 +414,17 @@ Trigger event → enrollment created → correct node type resolves → send suc
 ## Running state
 
 - Phase 0 — ☐ Pre-work (external approvals)
-- Phase 1 — ⚠️ Code complete, awaiting migration
+- Phase 1 — ⚠️ Code complete, awaiting migration (user ran db:migrate on 2026-04-17)
 - Phase 2 — ✅ Complete (audit fixes applied)
-- Phase 3 — ✅ Core complete (Phase 3b follow-ups: segments/ai-knowledge/ref-urls CRUD + simulate + legacy delete)
-- Phase 4 — ✅ Complete (scaffold matching Stainless pattern; regenerates with next OpenAPI pass)
-- Phase 4b — ☐ Legacy cleanup (new, from audit)
+- Phase 3 — ✅ Core complete
+- Phase 3b — ✅ Complete (segments/ai-knowledge/ref-urls CRUD + POST /v1/automations/:id/simulate. SDK + tsc clean)
+- Phase 4 — ✅ Complete (scaffold matching Stainless pattern)
+- Phase 4b — ⚠️ Code deleted; user must run `bun run db:generate` + `bun run db:migrate` to drop the legacy tables (`sequences`, `sequence_steps`, `sequence_enrollments`, `comment_automations`, `comment_automation_logs`, `engagement_rules`, `engagement_rule_logs`, `automation_rules`, `automation_logs`). Legacy routes, services, schemas, SDK resources, dashboard components, and Astro proxies are gone; the Campaigns page shows only Broadcasts + Auto-Post.
 - Phase 5 — ✅ Core docs complete (platform + cookbook pages in Phase 8)
-- Phase 6 — ☐ Dashboard UI (plan ready, run in dedicated session)
-- Phase 7 — ☐ MCP server (plan ready, depends on Phase 4 which is done)
-- Phase 8 — ☐ Platform coverage (per-platform iteration)
+- Phase 6 — 🔄 Scaffolded only. Sidebar entry ("Automation"), `/app/automation.astro`, `AutomationPage` (list), `AutomationTemplatePickerDialog`, and all SDK-backed Astro `/api/automations/*` proxies shipped. **Deferred**: React Flow canvas, node palette, property panel, detail/editor page, enrollment/run-history drill-down, simulator panel UI, publish validation UX. These are ~4–6 days on their own — run in a dedicated session per the original plan.
+- Phase 7 — ✅ Complete (`@relayapi/mcp-server` package under `packages/mcp/`, 14 tools, stdio transport, publish workflow. HTTP/Streamable transport deferred).
+- Phase 8 — 🔄 **Send nodes shipped for all 18 platforms** under `apps/api/src/services/automations/nodes/platforms/{platform}.ts`. Inbox-event-processor now calls `matchAndEnroll` (+ `findWaitingEnrollment` → `resumeFromInput`) for every inbound event, so the `matchAndEnroll` wiring is live for the platforms whose inbound webhooks already flow through the inbox queue (Instagram, Facebook, WhatsApp, Telegram, SMS, YouTube). Instagram node schemas are tightened to proper Zod discriminants (reference implementation). Instagram docs page has an Automations section. Unit test file `apps/api/src/__tests__/automations.test.ts` covers simulator + Zod validation (11 tests, all green). **Remaining (Phase 8.5)**:
+  - **Inbound webhook wiring for the remaining platforms**: Discord, Twitter/X, Bluesky, Threads, LinkedIn, Reddit, Mastodon, GBP, and the newsletter platforms. Each needs either a webhook route in `routes/platform-webhooks.ts` (streaming + webhook platforms) or a polling service (Reddit, LinkedIn) that ultimately calls `matchAndEnroll`. The normalizer in `inbox-event-processor.ts` also currently only emits `"comment" | "message"` — richer triggers (`*_mention`, `*_reaction`, `*_command`, `*_story_reply`, `*_button_click`) need normalizer branches added as each platform's webhook goes in.
+  - **Zod tightening for the other 17 platforms**: mechanical — copy the Instagram block (`InstagramSendTextNode`, etc.) and adapt fields per the handler expectations in `nodes/platforms/{platform}.ts`. Roughly 100 nodes remain on the loose `PlatformSendNode` catch-all.
+  - **Per-platform docs** for the remaining 17 platforms — append an Automations section to each `apps/docs/content/docs/platforms/{platform}.mdx`.
+  - **Integration tests** — the plan's 3-per-platform target is not met yet. Unit test coverage of the simulator + Zod is shipped.

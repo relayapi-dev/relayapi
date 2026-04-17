@@ -21,9 +21,13 @@ import {
 	AutomationResponse,
 	AutomationRunLogResponse,
 	AutomationSchemaResponse,
+	AutomationSimulateRequest,
+	AutomationSimulateResponse,
 	AutomationUpdateSpec,
 	AutomationWithGraphResponse,
 } from "../schemas/automations";
+import { simulateAutomation } from "../services/automations/simulator";
+import type { AutomationSnapshot } from "../services/automations/types";
 import { ErrorResponse, PaginationParams } from "../schemas/common";
 import type { Env, Variables } from "../types";
 
@@ -658,6 +662,111 @@ app.openapi(getSchema, async (c) => {
 		},
 		200,
 	);
+});
+
+// --- Simulate (dry-run graph traversal for the dashboard Playground) ---
+
+const simulateRoute = createRoute({
+	operationId: "simulateAutomation",
+	method: "post",
+	path: "/{id}/simulate",
+	tags: ["Automations"],
+	summary: "Simulate a graph run without executing handlers or side effects",
+	security: [{ Bearer: [] }],
+	request: {
+		params: IdParams,
+		body: {
+			content: { "application/json": { schema: AutomationSimulateRequest } },
+		},
+	},
+	responses: {
+		200: {
+			description: "Simulation result",
+			content: { "application/json": { schema: AutomationSimulateResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(simulateRoute, async (c) => {
+	const { id } = c.req.valid("param");
+	const body = c.req.valid("json");
+	const db = c.get("db");
+	const orgId = c.get("orgId");
+
+	const auto = await db.query.automations.findFirst({
+		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
+	});
+	if (!auto) {
+		return c.json(
+			{ error: { code: "not_found", message: "Automation not found" } },
+			404,
+		);
+	}
+
+	// Prefer an explicit version, then the draft (current), then the published snapshot.
+	const targetVersion = body.version ?? auto.version;
+
+	let snapshot: AutomationSnapshot | null = null;
+
+	const versionRow = await db.query.automationVersions.findFirst({
+		where: and(
+			eq(automationVersions.automationId, id),
+			eq(automationVersions.version, targetVersion),
+		),
+	});
+	if (versionRow) {
+		snapshot = versionRow.snapshot as AutomationSnapshot;
+	} else {
+		// Build an on-the-fly snapshot from the current draft graph so callers can
+		// simulate unpublished changes.
+		const nodes = await db
+			.select()
+			.from(automationNodes)
+			.where(eq(automationNodes.automationId, id));
+		const edges = await db
+			.select()
+			.from(automationEdges)
+			.where(eq(automationEdges.automationId, id));
+		const idToKey = new Map(nodes.map((n) => [n.id, n.key]));
+		snapshot = {
+			automation_id: id,
+			version: auto.version,
+			name: auto.name,
+			channel: auto.channel,
+			trigger: {
+				type: auto.triggerType,
+				account_id: auto.socialAccountId ?? undefined,
+				config: (auto.triggerConfig as Record<string, unknown>) ?? {},
+				filters: (auto.triggerFilters as Record<string, unknown>) ?? {},
+			},
+			entry_node_key: "trigger",
+			nodes: nodes.map((n) => ({
+				id: n.id,
+				key: n.key,
+				type: n.type,
+				config: (n.config as Record<string, unknown>) ?? {},
+			})),
+			edges: edges.map((e) => ({
+				id: e.id,
+				from_node_key: idToKey.get(e.fromNodeId) ?? "",
+				to_node_key: idToKey.get(e.toNodeId) ?? "",
+				label: e.label,
+				order: e.order,
+				condition_expr: e.conditionExpr ?? null,
+			})),
+		};
+	}
+
+	const result = simulateAutomation(snapshot, {
+		branch_choices: body.branch_choices,
+		max_steps: body.max_steps,
+	});
+
+	return c.json(result, 200);
 });
 
 // --- Enrollments & runs (read-only) ---

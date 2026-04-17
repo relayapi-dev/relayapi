@@ -12,6 +12,12 @@ import { upsertConversation, insertMessage } from "./inbox-persistence";
 import { dispatchWebhookEvent } from "./webhook-delivery";
 import { notifyRealtime } from "../lib/notify-post-update";
 import { subscribeYouTubeChannel } from "./webhook-subscription";
+import { findMatchingContact } from "./contact-linker";
+import {
+	findWaitingEnrollment,
+	matchAndEnroll,
+} from "./automations/trigger-matcher";
+import { resumeFromInput } from "./automations/runner";
 
 // ---------------------------------------------------------------------------
 // Normalized event structure
@@ -205,70 +211,11 @@ export async function processInboxEvent(
 				}
 		}
 
-		// Steps 2–2c: Automations only apply to inbound messages
+		// 2. Hand off inbound events to the unified automations engine. Outbound
+		// echoes never trigger automations. Contact resolution mirrors the inbox
+		// participant auto-linker so conditions / merge-tags see a real contact.
 		if (direction === "inbound") {
-			// 2. Run automation rules (best-effort)
-			if (conversation && messageId) {
-				try {
-					const { runAutomationRules } = await import("./automation-engine");
-					await runAutomationRules(
-						{ type: event.type, platform: event.platform, text: event.text, direction: "inbound", author: event.author, orgId: event.organization_id, accountId: event.account_id, platformMessageId: event.platform_event_id },
-						conversation.id,
-						messageId,
-						env,
-						db,
-					);
-				} catch (err) {
-					console.error("[inbox-processor] Automation failed:", err);
-				}
-			}
-
-			// 2b. Comment automations — keyword-to-DM (best-effort)
-			if (
-				event.type === "comment" &&
-				(event.platform === "instagram" || event.platform === "facebook") &&
-				event.author?.id &&
-				event.post_id
-			) {
-				try {
-					const { processCommentAutomation } = await import(
-						"./comment-automation-processor"
-					);
-					await processCommentAutomation(
-						{
-							organizationId: event.organization_id,
-							accountId: event.account_id,
-							platform: event.platform,
-							postId: event.post_id,
-							commentId: event.platform_event_id,
-							commenterId: event.author.id,
-							commenterName: event.author.name,
-							commentText: event.text ?? "",
-						},
-						db,
-						env.ENCRYPTION_KEY,
-					);
-				} catch (err) {
-					console.error("[inbox-processor] Comment automation failed:", err);
-				}
-			}
-
-			// 2c. Sequence exit-on-reply check (best-effort)
-			if (event.type === "message" && event.author?.id) {
-				try {
-					const { checkSequenceExitOnReply } = await import(
-						"./sequence-processor"
-					);
-					await checkSequenceExitOnReply(
-						event.organization_id,
-						event.platform,
-						event.author.id,
-						db,
-					);
-				} catch (err) {
-					console.error("[inbox-processor] Sequence exit check failed:", err);
-				}
-			}
+			await dispatchAutomationMatch(event, db, env);
 		}
 
 		// 3. Dispatch outbound webhook
@@ -298,6 +245,120 @@ export async function processInboxEvent(
 		await notifyRealtime(env, event.organization_id, realtimeEvent).catch((err) => {
 			console.error("[inbox-processor] notifyRealtime failed:", err);
 		});
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Automations bridge
+// ---------------------------------------------------------------------------
+
+/**
+ * Derives the automation trigger_type from the inbox event. Returns null if
+ * the platform doesn't surface inbound-event triggers today (e.g. YouTube
+ * PubSub events that don't map to message/comment semantics).
+ *
+ * The inbox normalizer currently produces only `"comment" | "message"`. Richer
+ * trigger types (mention, story_reply, reaction, button_click, command) require
+ * expanding the normalizer first; those paths stay on the stub for now.
+ */
+function deriveTriggerType(
+	platform: string,
+	type: NormalizedInboxEvent["type"],
+): string | null {
+	if (type === "comment") {
+		// instagram_comment, facebook_comment, youtube_comment, reddit_comment,
+		// linkedin_comment all follow `<platform>_comment`.
+		return `${platform}_comment`;
+	}
+	switch (platform) {
+		case "instagram":
+		case "facebook":
+		case "discord":
+		case "twitter":
+		case "bluesky":
+			return `${platform}_dm`;
+		case "whatsapp":
+		case "telegram":
+			return `${platform}_message`;
+		case "sms":
+			return "sms_received";
+		case "reddit":
+			return "reddit_dm";
+		case "mastodon":
+			// Mastodon "DMs" are mentions with direct visibility.
+			return "mastodon_mention";
+		case "threads":
+			return "threads_reply";
+		default:
+			return null;
+	}
+}
+
+/**
+ * Matches the inbound event against active automations and enrols candidates.
+ * Waiting enrollments (`user_input` nodes pending) take precedence — inbound
+ * text is fed back into the paused flow instead of starting a fresh one.
+ *
+ * Best-effort: automation failures never block inbox processing.
+ */
+async function dispatchAutomationMatch(
+	event: NormalizedInboxEvent,
+	db: ReturnType<typeof createDb>,
+	env: Env,
+): Promise<void> {
+	try {
+		const triggerType = deriveTriggerType(event.platform, event.type);
+		if (!triggerType) return;
+
+		const authorId = event.author?.id ?? event.participant?.id ?? null;
+		let contactId: string | null = null;
+		if (authorId) {
+			const match = await findMatchingContact(
+				db,
+				event.organization_id,
+				event.account_id,
+				authorId,
+				event.author?.name ?? null,
+			);
+			// Only act on exact / phone / email matches. Name-only suggestions
+			// are too loose to trigger automation enrollments silently.
+			if (match && match.confidence !== "name_suggestion") {
+				contactId = match.contactId;
+			}
+		}
+
+		// Resume a waiting user_input flow before firing new triggers.
+		if (contactId) {
+			const pending = await findWaitingEnrollment(env, {
+				organization_id: event.organization_id,
+				contact_id: contactId,
+			});
+			if (pending) {
+				await resumeFromInput(env, pending, event.text ?? "");
+				return;
+			}
+		}
+
+		await matchAndEnroll(env, {
+			organization_id: event.organization_id,
+			platform: event.platform,
+			trigger_type: triggerType,
+			account_id: event.account_id,
+			contact_id: contactId,
+			conversation_id: event.conversation_id ?? null,
+			payload: {
+				text: event.text ?? "",
+				post_id: event.post_id,
+				parent_id: event.parent_id,
+				comment_id: event.type === "comment" ? event.platform_event_id : undefined,
+				message_id:
+					event.type === "message" ? event.platform_event_id : undefined,
+				author: event.author,
+				created_at: event.created_at,
+			},
+		});
+	} catch (err) {
+		console.error("[inbox-processor] automation dispatch failed:", err);
 	}
 }
 

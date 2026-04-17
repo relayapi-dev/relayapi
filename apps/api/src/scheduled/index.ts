@@ -13,7 +13,6 @@ import { cleanupOldConversations } from "../services/inbox-maintenance";
 import { generateInvoices } from "../services/invoice-generator";
 import { processRecyclingPosts } from "../services/recycling-processor";
 import { processScheduledPosts } from "../services/scheduler";
-import { processSequenceSteps } from "../services/sequence-processor";
 import { syncShortLinkClicks } from "../services/short-link-click-sync";
 import { checkStreaks } from "../services/streak";
 import { enqueueExpiringTokenRefresh } from "../services/token-refresh";
@@ -26,10 +25,9 @@ export async function handleScheduled(
 	env: Env,
 	ctx: ExecutionContext,
 ): Promise<void> {
-	// Every minute: process scheduled posts + sequence steps + cross-post actions + automation schedule
+	// Every minute: scheduled posts + cross-post actions + automation schedule
 	ctx.waitUntil(processScheduledPosts(env));
 	ctx.waitUntil(processRecyclingPosts(env));
-	ctx.waitUntil(processSequenceSteps(env));
 	ctx.waitUntil(processScheduledBroadcasts(env));
 	ctx.waitUntil(processCrossPostActions(env));
 	ctx.waitUntil(processAutomationSchedule(env));
