@@ -25,11 +25,12 @@ import {
 	RequestCodeBody,
 	VerifyCodeBody,
 } from "../schemas/whatsapp";
+import { GRAPH_BASE } from "../config/api-versions";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
-const WA_API_BASE = "https://graph.facebook.com/v25.0";
+const WA_API_BASE = GRAPH_BASE.facebook;
 const MAX_NUMBERS_PER_ORG = 5;
 
 // ---------------------------------------------------------------------------

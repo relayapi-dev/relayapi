@@ -1,6 +1,7 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { createDb, socialAccounts, socialAccountSyncState } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import { GRAPH_BASE } from "../config/api-versions";
 import {
 	OAUTH_CONFIGS,
 	INSTAGRAM_DIRECT_CONFIG,
@@ -677,7 +678,7 @@ export async function exchangeAndSaveAccount(params: {
 				client_secret: clientSecret,
 				access_token: tokens.access_token,
 			});
-			const llRes = await fetch(`https://graph.instagram.com/v25.0/access_token?${llParams}`);
+			const llRes = await fetch(`${GRAPH_BASE.instagram}/access_token?${llParams}`);
 			if (llRes.ok) {
 				const llData = (await llRes.json()) as { access_token: string; expires_in?: number };
 				tokens.access_token = llData.access_token;
@@ -695,7 +696,7 @@ export async function exchangeAndSaveAccount(params: {
 	if ((platform === "facebook" || (platform === "instagram" && !isInstagramDirect)) && tokens.access_token) {
 		try {
 			const llRes = await fetch(
-				`https://graph.facebook.com/v25.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${clientId}&client_secret=${clientSecret}&fb_exchange_token=${tokens.access_token}`,
+				`${GRAPH_BASE.facebook}/oauth/access_token?grant_type=fb_exchange_token&client_id=${clientId}&client_secret=${clientSecret}&fb_exchange_token=${tokens.access_token}`,
 			);
 			if (llRes.ok) {
 				const llData = (await llRes.json()) as { access_token: string; expires_in?: number };
@@ -764,7 +765,7 @@ export async function exchangeAndSaveAccount(params: {
 				// Fetch pages with instagram_business_account to find the IGBA.
 				try {
 					const pagesRes = await fetch(
-						`https://graph.facebook.com/v25.0/me/accounts?fields=instagram_business_account{id,username,name,profile_picture_url}&access_token=${tokens.access_token}`,
+						`${GRAPH_BASE.facebook}/me/accounts?fields=instagram_business_account{id,username,name,profile_picture_url}&access_token=${tokens.access_token}`,
 					);
 					if (pagesRes.ok) {
 						const pagesData = (await pagesRes.json()) as {
@@ -1507,7 +1508,7 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 
 	// Step 1: Exchange the code for an access token
 	// https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow#exchangecode
-	const tokenUrl = new URL("https://graph.facebook.com/v25.0/oauth/access_token");
+	const tokenUrl = new URL(`${GRAPH_BASE.facebook}/oauth/access_token`);
 	tokenUrl.searchParams.set("client_id", appId);
 	tokenUrl.searchParams.set("client_secret", appSecret);
 	tokenUrl.searchParams.set("code", body.code);
@@ -1537,7 +1538,7 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 	// Step 2: Debug token to get WABA ID
 	// https://developers.facebook.com/docs/graph-api/reference/debug_token/
 	const appAccessToken = `${appId}|${appSecret}`;
-	const debugUrl = new URL("https://graph.facebook.com/v25.0/debug_token");
+	const debugUrl = new URL(`${GRAPH_BASE.facebook}/debug_token`);
 	debugUrl.searchParams.set("input_token", accessToken);
 	debugUrl.searchParams.set("access_token", appAccessToken);
 
@@ -1586,7 +1587,7 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 	// Step 3: Fetch phone number ID from WABA
 	// https://developers.facebook.com/docs/whatsapp/business-management-api/manage-phone-numbers
 	const phoneUrl = new URL(
-		`https://graph.facebook.com/v25.0/${wabaId}/phone_numbers`,
+		`${GRAPH_BASE.facebook}/${wabaId}/phone_numbers`,
 	);
 	phoneUrl.searchParams.set("access_token", accessToken);
 
@@ -1790,7 +1791,7 @@ app.openapi(listFacebookPages, async (c) => {
 		// Facebook Pages API: List pages managed by the authenticated user
 		// https://developers.facebook.com/docs/pages-api/overview
 		const res = await fetch(
-			`https://graph.facebook.com/v25.0/me/accounts?fields=id,name,category,access_token&access_token=${accessToken}`,
+			`${GRAPH_BASE.facebook}/me/accounts?fields=id,name,category,access_token&access_token=${accessToken}`,
 		);
 		if (!res.ok) {
 			return c.json({ pages: [] } as never, 200 as never);
@@ -1848,7 +1849,7 @@ app.openapi(selectFacebookPage, async (c) => {
 		// Facebook Pages API: List pages to find the selected page's access token
 		// https://developers.facebook.com/docs/pages-api/overview
 		const res = await fetch(
-			`https://graph.facebook.com/v25.0/me/accounts?access_token=${decryptedFbToken}`,
+			`${GRAPH_BASE.facebook}/me/accounts?access_token=${decryptedFbToken}`,
 		);
 		const json = (await res.json()) as {
 			data: Array<{
@@ -1872,7 +1873,7 @@ app.openapi(selectFacebookPage, async (c) => {
 		let pageAvatarUrl: string | null = null;
 		try {
 			const picRes = await fetch(
-				`https://graph.facebook.com/v25.0/${page.id}/picture?redirect=false&type=small&access_token=${page.access_token}`,
+				`${GRAPH_BASE.facebook}/${page.id}/picture?redirect=false&type=small&access_token=${page.access_token}`,
 			);
 			if (picRes.ok) {
 				const picJson = (await picRes.json()) as { data?: { url?: string } };

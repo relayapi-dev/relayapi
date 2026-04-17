@@ -760,31 +760,17 @@ export function NewPostDialog({
 
 		try {
 			const isEditMode = !!editPostId;
-			const isConvertMode = !!convertFromIdea && !isEditMode;
-
-			let url: string;
-			let method: string;
-			let requestBody: Record<string, unknown>;
-
-			if (isConvertMode) {
-				url = `/api/ideas/${convertFromIdea.id}/convert`;
-				method = "POST";
-				requestBody = {
-					targets: resolvedAccounts.map((a) => ({ account_id: a.id })),
-					scheduled_at: body.scheduled_at,
-					...(body.content ? { content: body.content } : {}),
-					...(body.timezone ? { timezone: body.timezone } : {}),
-				};
-			} else {
-				url = isEditMode ? `/api/posts/${editPostId}` : "/api/posts";
-				method = isEditMode ? "PATCH" : "POST";
-				requestBody = body;
+			if (convertFromIdea && !isEditMode) {
+				body.idea_id = convertFromIdea.id;
 			}
+
+			const url = isEditMode ? `/api/posts/${editPostId}` : "/api/posts";
+			const method = isEditMode ? "PATCH" : "POST";
 
 			const res = await fetch(url, {
 				method,
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(requestBody),
+				body: JSON.stringify(body),
 			});
 
 			if (!res.ok) {

@@ -1761,6 +1761,9 @@ export const broadcastRecipients = pgTable(
 		messageId: text("message_id"),
 		error: text("error"),
 		sentAt: timestamp("sent_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
 	},
 	(table) => [
 		index("broadcast_recipients_broadcast_idx").on(table.broadcastId),
@@ -2011,6 +2014,9 @@ export const adMetrics = pgTable(
 		cpmCents: integer("cpm_cents"),
 		demographics: jsonb("demographics"),
 		collectedAt: timestamp("collected_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
 	},
@@ -2596,6 +2602,9 @@ export const orgStreaks = pgTable(
 			withTimezone: true,
 		}),
 
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),

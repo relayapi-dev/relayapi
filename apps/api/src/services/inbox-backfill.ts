@@ -6,6 +6,7 @@
  */
 
 import { createDb, socialAccounts, eq } from "@relayapi/db";
+import { GRAPH_BASE } from "../config/api-versions";
 import { maybeDecrypt } from "../lib/crypto";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
@@ -92,7 +93,7 @@ async function backfillFacebook(
 	organizationId: string,
 ): Promise<void> {
 	// Fetch page posts
-	const postsUrl = `https://graph.facebook.com/v25.0/me/feed?access_token=${encodeURIComponent(token)}&limit=25&fields=id,message,created_time`;
+	const postsUrl = `${GRAPH_BASE.facebook}/me/feed?access_token=${encodeURIComponent(token)}&limit=25&fields=id,message,created_time`;
 	const postsRes = await fetch(postsUrl);
 	if (!postsRes.ok) {
 		console.log(
@@ -143,7 +144,7 @@ async function fetchAndStoreFacebookComments(
 	let page = 0;
 
 	while (page < MAX_PAGES) {
-		let url = `https://graph.facebook.com/v25.0/${postId}/comments?access_token=${encodeURIComponent(token)}&limit=50&fields=id,from{name,picture},message,created_time`;
+		let url = `${GRAPH_BASE.facebook}/${postId}/comments?access_token=${encodeURIComponent(token)}&limit=50&fields=id,from{name,picture},message,created_time`;
 		if (cursor) {
 			url += `&after=${encodeURIComponent(cursor)}`;
 		}

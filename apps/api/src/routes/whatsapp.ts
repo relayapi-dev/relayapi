@@ -37,11 +37,12 @@ import {
 	FlowAccountIdBody,
 	SendFlowBody,
 } from "../schemas/whatsapp";
+import { GRAPH_BASE } from "../config/api-versions";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
-const WA_API_BASE = "https://graph.facebook.com/v25.0";
+const WA_API_BASE = GRAPH_BASE.facebook;
 
 // ---------------------------------------------------------------------------
 // Helper: look up a WhatsApp social account by its relay account_id + org

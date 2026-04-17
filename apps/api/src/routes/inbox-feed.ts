@@ -1,6 +1,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { inboxConversations, inboxMessages } from "@relayapi/db";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { ErrorResponse } from "../schemas/common";
 import {
 	BulkActionBody,
@@ -608,7 +609,7 @@ app.openapi(sendMessageRoute, async (c) => {
 				} else {
 					// Graph API conversation — fetch participants
 					const convRes = await fetch(
-						`https://${msgHost}/v25.0/${conversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
+						`https://${msgHost}/${API_VERSIONS.meta_graph}/${conversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
 					);
 					if (convRes.ok) {
 						const convJson = (await convRes.json()) as {
@@ -621,7 +622,7 @@ app.openapi(sendMessageRoute, async (c) => {
 				}
 				if (!recipientId) return c.json({ success: false }, 200);
 
-				const fbSendUrl = `https://${msgHost}/v25.0/me/messages?access_token=${encodeURIComponent(account.accessToken)}`;
+				const fbSendUrl = `https://${msgHost}/${API_VERSIONS.meta_graph}/me/messages?access_token=${encodeURIComponent(account.accessToken)}`;
 				const fbHeaders = { "Content-Type": "application/json" };
 				let lastMessageId: string | undefined;
 				const sentMids: string[] = []; // Track all sent mids for echo suppression
@@ -802,7 +803,7 @@ app.openapi(sendMessageRoute, async (c) => {
 				}
 
 				const waRes = await fetch(
-					`https://graph.facebook.com/v25.0/${phoneNumberId}/messages`,
+					`${GRAPH_BASE.facebook}/${phoneNumberId}/messages`,
 					{
 						method: "POST",
 						headers: {
@@ -898,7 +899,7 @@ app.openapi(sendTypingRoute, async (c) => {
 				// Get recipient ID from conversation
 				// Docs: https://developers.facebook.com/docs/messenger-platform/send-messages/sender-actions
 				const convRes = await fetch(
-					`https://graph.facebook.com/v25.0/${conversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
+					`${GRAPH_BASE.facebook}/${conversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
 				);
 				if (!convRes.ok) return c.json({ success: true }, 200);
 				const convJson = (await convRes.json()) as {
@@ -910,7 +911,7 @@ app.openapi(sendTypingRoute, async (c) => {
 				if (!recipient) return c.json({ success: true }, 200);
 
 				await fetch(
-					`https://graph.facebook.com/v25.0/me/messages?access_token=${encodeURIComponent(account.accessToken)}`,
+					`${GRAPH_BASE.facebook}/me/messages?access_token=${encodeURIComponent(account.accessToken)}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -1042,7 +1043,7 @@ app.openapi(addReactionRoute, async (c) => {
 
 				// Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#reaction-messages
 				const waRes = await fetch(
-					`https://graph.facebook.com/v25.0/${account.platformAccountId}/messages`,
+					`${GRAPH_BASE.facebook}/${account.platformAccountId}/messages`,
 					{
 						method: "POST",
 						headers: {
@@ -1180,7 +1181,7 @@ app.openapi(removeReactionRoute, async (c) => {
 
 				// Send empty emoji to remove reaction
 				const waRes = await fetch(
-					`https://graph.facebook.com/v25.0/${account.platformAccountId}/messages`,
+					`${GRAPH_BASE.facebook}/${account.platformAccountId}/messages`,
 					{
 						method: "POST",
 						headers: {

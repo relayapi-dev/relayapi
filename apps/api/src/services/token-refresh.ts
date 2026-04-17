@@ -1,5 +1,6 @@
 import { createDb, socialAccounts, member } from "@relayapi/db";
 import { eq, and, isNotNull, lt, notInArray, gt, sql } from "drizzle-orm";
+import { GRAPH_BASE } from "../config/api-versions";
 import { OAUTH_CONFIGS } from "../config/oauth";
 import { decryptAccountTokens, maybeDecrypt, maybeEncrypt } from "../lib/crypto";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
@@ -443,7 +444,7 @@ async function refreshInstagram(
 		// Docs: https://developers.facebook.com/docs/instagram-platform/reference/refresh_access_token
 		// Docs show no version prefix, but unversioned graph.instagram.com endpoints
 		// return "Unsupported request - method type: get" as of March 2026.
-		`https://graph.instagram.com/v25.0/refresh_access_token?${params}`,
+		`${GRAPH_BASE.instagram}/refresh_access_token?${params}`,
 		{ timeout: 15_000 },
 	);
 	if (!res.ok) return null;
@@ -521,7 +522,7 @@ export async function fetchAvatarUrl(
 			}
 			case "instagram": {
 				const res = await fetchWithTimeout(
-					`https://graph.instagram.com/v25.0/me?fields=profile_picture_url&access_token=${accessToken}`,
+					`${GRAPH_BASE.instagram}/me?fields=profile_picture_url&access_token=${accessToken}`,
 					{ timeout: 10_000 },
 				);
 				if (!res.ok) return null;
@@ -530,7 +531,7 @@ export async function fetchAvatarUrl(
 			}
 			case "threads": {
 				const res = await fetchWithTimeout(
-					`https://graph.threads.net/v1.0/me?fields=threads_profile_picture_url&access_token=${accessToken}`,
+					`${GRAPH_BASE.threads}/me?fields=threads_profile_picture_url&access_token=${accessToken}`,
 					{ timeout: 10_000 },
 				);
 				if (!res.ok) return null;
@@ -551,7 +552,7 @@ export async function fetchAvatarUrl(
 			case "facebook": {
 				if (!platformAccountId) return null;
 				const res = await fetchWithTimeout(
-					`https://graph.facebook.com/v25.0/${platformAccountId}/picture?type=large&redirect=false&access_token=${accessToken}`,
+					`${GRAPH_BASE.facebook}/${platformAccountId}/picture?type=large&redirect=false&access_token=${accessToken}`,
 					{ timeout: 10_000 },
 				);
 				if (!res.ok) return null;

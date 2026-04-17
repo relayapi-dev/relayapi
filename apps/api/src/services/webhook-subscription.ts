@@ -1,5 +1,6 @@
 import { createDb, socialAccounts } from "@relayapi/db";
 import { eq } from "drizzle-orm";
+import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import type { Env } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -19,7 +20,7 @@ export async function subscribeFacebookPage(
 ): Promise<{ success: boolean; error?: string }> {
 	try {
 		const res = await fetch(
-			`https://graph.facebook.com/v25.0/${pageId}/subscribed_apps`,
+			`${GRAPH_BASE.facebook}/${pageId}/subscribed_apps`,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -125,7 +126,7 @@ export async function verifyWhatsAppWebhookSubscription(
 
 		// Check existing subscriptions
 		const checkRes = await fetch(
-			`https://graph.facebook.com/v25.0/${appId}/subscriptions?access_token=${encodeURIComponent(appAccessToken)}`,
+			`${GRAPH_BASE.facebook}/${appId}/subscriptions?access_token=${encodeURIComponent(appAccessToken)}`,
 		);
 
 		if (checkRes.ok) {
@@ -147,7 +148,7 @@ export async function verifyWhatsAppWebhookSubscription(
 
 		// Create/update subscription
 		const res = await fetch(
-			`https://graph.facebook.com/v25.0/${appId}/subscriptions`,
+			`${GRAPH_BASE.facebook}/${appId}/subscriptions`,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -204,7 +205,7 @@ export async function subscribeInstagramAccount(
 			: "graph.facebook.com";
 
 		const res = await fetch(
-			`https://${host}/v25.0/me/subscribed_apps`,
+			`https://${host}/${API_VERSIONS.meta_graph}/me/subscribed_apps`,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -256,7 +257,7 @@ export async function verifyInstagramWebhookSubscription(
 
 		// Check existing subscriptions
 		const checkRes = await fetch(
-			`https://graph.facebook.com/v25.0/${appId}/subscriptions?access_token=${encodeURIComponent(appAccessToken)}`,
+			`${GRAPH_BASE.facebook}/${appId}/subscriptions?access_token=${encodeURIComponent(appAccessToken)}`,
 		);
 
 		if (checkRes.ok) {
@@ -278,7 +279,7 @@ export async function verifyInstagramWebhookSubscription(
 
 		// Create/update subscription
 		const res = await fetch(
-			`https://graph.facebook.com/v25.0/${appId}/subscriptions`,
+			`${GRAPH_BASE.facebook}/${appId}/subscriptions`,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/x-www-form-urlencoded" },

@@ -1,3 +1,4 @@
+import { GRAPH_BASE } from "../../config/api-versions";
 import type {
 	PlatformAnalyticsFetcher,
 	PlatformOverview,
@@ -7,7 +8,7 @@ import type {
 	DateRange,
 } from "./types";
 
-const BASE_URL = "https://graph.threads.net/v1.0";
+const BASE_URL = GRAPH_BASE.threads;
 
 function toUnix(dateStr: string): number {
 	return Math.floor(new Date(`${dateStr}T00:00:00Z`).getTime() / 1000);

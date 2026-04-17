@@ -6,6 +6,7 @@
 import type { Database } from "@relayapi/db";
 import { socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import { GRAPH_BASE } from "../config/api-versions";
 import { maybeDecrypt } from "../lib/crypto";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
@@ -147,7 +148,7 @@ async function handleHide(
 
 		// Graph API: Hide a comment — POST /{comment-id}?is_hidden=true
 		const res = await fetchWithTimeout(
-			`https://graph.facebook.com/v25.0/${ctx.platformMessageId}`,
+			`${GRAPH_BASE.facebook}/${ctx.platformMessageId}`,
 			{
 				method: "POST",
 				headers: {

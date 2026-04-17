@@ -16,6 +16,7 @@ import {
 	usageRecords,
 } from "@relayapi/db";
 import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
+import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { maybeDecrypt } from "../lib/crypto";
 import { parseCsv } from "../lib/csv-parser";
 import { notifyRealtime } from "../lib/notify-post-update";
@@ -2407,7 +2408,7 @@ app.openapi(unpublishPost, async (c) => {
 						case "facebook":
 							deleteSuccess = (
 								await fetch(
-									`https://graph.facebook.com/v25.0/${target.platformPostId}`,
+									`${GRAPH_BASE.facebook}/${target.platformPostId}`,
 									{
 										method: "DELETE",
 										headers: { Authorization: `Bearer ${account.accessToken}` },
@@ -2425,7 +2426,7 @@ app.openapi(unpublishPost, async (c) => {
 								: "graph.facebook.com";
 							deleteSuccess = (
 								await fetch(
-									`https://${igHost}/v25.0/${target.platformPostId}`,
+									`https://${igHost}/${API_VERSIONS.meta_graph}/${target.platformPostId}`,
 									{
 										method: "DELETE",
 										headers: { Authorization: `Bearer ${account.accessToken}` },

@@ -25,8 +25,9 @@ import type {
 	UpdateAdParams,
 } from "./types";
 import { AdPlatformError } from "./types";
+import { GRAPH_BASE } from "../../config/api-versions";
 
-const GRAPH_API = "https://graph.facebook.com/v25.0";
+const GRAPH_API = GRAPH_BASE.facebook;
 
 // ---------------------------------------------------------------------------
 // Helpers

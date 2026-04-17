@@ -16,6 +16,7 @@ import {
 	socialAccounts,
 } from "@relayapi/db";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { GRAPH_BASE } from "../config/api-versions";
 import { maybeDecrypt } from "../lib/crypto";
 
 interface CommentEvent {
@@ -135,8 +136,8 @@ export async function processCommentAutomation(
 	try {
 		const dmEndpoint =
 			event.platform === "instagram"
-				? `https://graph.instagram.com/v25.0/${apiAccountId}/messages`
-				: `https://graph.facebook.com/v25.0/${apiAccountId}/messages`;
+				? `${GRAPH_BASE.instagram}/${apiAccountId}/messages`
+				: `${GRAPH_BASE.facebook}/${apiAccountId}/messages`;
 
 		console.log("[comment-automation] Sending DM", {
 			endpoint: dmEndpoint,
@@ -186,8 +187,8 @@ export async function processCommentAutomation(
 		try {
 			const replyEndpoint =
 				event.platform === "instagram"
-					? `https://graph.instagram.com/v25.0/${event.commentId}/replies`
-					: `https://graph.facebook.com/v25.0/${event.commentId}/comments`;
+					? `${GRAPH_BASE.instagram}/${event.commentId}/replies`
+					: `${GRAPH_BASE.facebook}/${event.commentId}/comments`;
 
 			const replyAbort = new AbortController();
 			const replyTimer = setTimeout(() => replyAbort.abort(), 10_000);

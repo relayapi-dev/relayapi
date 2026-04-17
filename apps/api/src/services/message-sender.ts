@@ -11,6 +11,7 @@
  * - Reddit: https://www.reddit.com/dev/api/#POST_api_compose
  */
 
+import { GRAPH_BASE } from "../config/api-versions";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
 
 export interface SendMessageRequest {
@@ -75,7 +76,7 @@ async function sendWhatsApp(req: SendMessageRequest): Promise<SendMessageResult>
 			};
 
 	const res = await fetchWithTimeout(
-		`https://graph.facebook.com/v25.0/${req.platformAccountId}/messages`,
+		`${GRAPH_BASE.facebook}/${req.platformAccountId}/messages`,
 		{
 			method: "POST",
 			headers: {
@@ -157,7 +158,7 @@ async function sendTwitterDM(req: SendMessageRequest): Promise<SendMessageResult
 
 async function sendInstagramDM(req: SendMessageRequest): Promise<SendMessageResult> {
 	const res = await fetchWithTimeout(
-		`https://graph.instagram.com/v25.0/${req.platformAccountId}/messages`,
+		`${GRAPH_BASE.instagram}/${req.platformAccountId}/messages`,
 		{
 			method: "POST",
 			headers: {
@@ -185,7 +186,7 @@ async function sendInstagramDM(req: SendMessageRequest): Promise<SendMessageResu
 
 async function sendFacebookMessage(req: SendMessageRequest): Promise<SendMessageResult> {
 	const res = await fetchWithTimeout(
-		`https://graph.facebook.com/v25.0/${req.platformAccountId}/messages`,
+		`${GRAPH_BASE.facebook}/${req.platformAccountId}/messages`,
 		{
 			method: "POST",
 			headers: {

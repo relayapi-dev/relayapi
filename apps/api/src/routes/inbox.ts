@@ -4,6 +4,7 @@ import {
 	socialAccounts,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { ErrorResponse } from "../schemas/common";
 import {
 	CommentActionResponse,
@@ -53,7 +54,7 @@ async function fetchFacebookComments(
 	try {
 		const objectId = postId ?? "me";
 		// Include nested replies via comments subfield (up to 5 per comment)
-		let url = `https://graph.facebook.com/v25.0/${objectId}/comments?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,from{name,picture},message,created_time,like_count,comment_count,is_hidden,comments.limit(5){id,from{name,picture},message,created_time,like_count,is_hidden}`;
+		let url = `${GRAPH_BASE.facebook}/${objectId}/comments?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,from{name,picture},message,created_time,like_count,comment_count,is_hidden,comments.limit(5){id,from{name,picture},message,created_time,like_count,is_hidden}`;
 		if (cursor) {
 			url += `&after=${encodeURIComponent(cursor)}`;
 		}
@@ -133,7 +134,7 @@ async function fetchInstagramComments(
 		// Instagram Graph API: GET comments on a media object, including nested replies
 		// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-media/comments/#reading
 		// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
-		let url = `https://${host}/v25.0/${postId}/comments?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,from,text,timestamp,like_count,hidden,replies{id,from,text,timestamp,like_count,hidden}`;
+		let url = `https://${host}/${API_VERSIONS.meta_graph}/${postId}/comments?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,from,text,timestamp,like_count,hidden,replies{id,from,text,timestamp,like_count,hidden}`;
 		if (cursor) {
 			url += `&after=${encodeURIComponent(cursor)}`;
 		}
@@ -331,7 +332,7 @@ async function fetchFacebookPosts(
 	try {
 		// Facebook Graph API: List published posts on a Page
 		// Docs: https://developers.facebook.com/docs/graph-api/reference/page/published_posts/
-		const url = `https://graph.facebook.com/v25.0/me/published_posts?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,message,created_time,full_picture,permalink_url,comments.summary(true)`;
+		const url = `${GRAPH_BASE.facebook}/me/published_posts?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,message,created_time,full_picture,permalink_url,comments.summary(true)`;
 		const res = await fetch(url);
 		if (!res.ok) return [];
 		const json = (await res.json()) as {
@@ -367,7 +368,7 @@ async function fetchInstagramPosts(
 		const host = igGraphHost(token);
 		// Instagram Graph API: List media for the authenticated user
 		// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media
-		const url = `https://${host}/v25.0/me/media?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,caption,timestamp,thumbnail_url,media_url,permalink,comments_count`;
+		const url = `https://${host}/${API_VERSIONS.meta_graph}/me/media?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,caption,timestamp,thumbnail_url,media_url,permalink,comments_count`;
 		const res = await fetch(url);
 		if (!res.ok) return [];
 		const json = (await res.json()) as {
@@ -1102,7 +1103,7 @@ app.openapi(replyToComment, async (c) => {
 				// Facebook Graph API: Post a comment reply on an object
 				// Docs: https://developers.facebook.com/docs/graph-api/reference/object/comments/#creating
 				const res = await fetch(
-					`https://graph.facebook.com/v25.0/${parentId}/comments`,
+					`${GRAPH_BASE.facebook}/${parentId}/comments`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -1124,7 +1125,7 @@ app.openapi(replyToComment, async (c) => {
 				// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
 				const igEdge = comment_id ? "replies" : "comments";
 				const igRes = await fetch(
-					`https://${igGraphHost(account.accessToken)}/v25.0/${parentId}/${igEdge}`,
+					`https://${igGraphHost(account.accessToken)}/${API_VERSIONS.meta_graph}/${parentId}/${igEdge}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -1194,7 +1195,7 @@ app.openapi(deleteComment, async (c) => {
 					// Facebook Graph API: Delete a comment
 					// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#deleting
 					const res = await fetch(
-						`https://graph.facebook.com/v25.0/${comment_id}?access_token=${encodeURIComponent(account.accessToken!)}`,
+						`${GRAPH_BASE.facebook}/${comment_id}?access_token=${encodeURIComponent(account.accessToken!)}`,
 						{ method: "DELETE" },
 					);
 					if (!res.ok) throw new Error(`fb ${res.status}`);
@@ -1205,7 +1206,7 @@ app.openapi(deleteComment, async (c) => {
 					// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#deleting
 					// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
 					const res = await fetch(
-						`https://${igGraphHost(account.accessToken!)}/v25.0/${comment_id}?access_token=${encodeURIComponent(account.accessToken!)}`,
+						`https://${igGraphHost(account.accessToken!)}/${API_VERSIONS.meta_graph}/${comment_id}?access_token=${encodeURIComponent(account.accessToken!)}`,
 						{ method: "DELETE" },
 					);
 					if (!res.ok) throw new Error(`ig ${res.status}`);
@@ -1254,7 +1255,7 @@ app.openapi(hideComment, async (c) => {
 				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#updating
 				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (the Facebook param)
 				const res = await fetch(
-					`https://${igGraphHost(account.accessToken!)}/v25.0/${comment_id}`,
+					`https://${igGraphHost(account.accessToken!)}/${API_VERSIONS.meta_graph}/${comment_id}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -1270,7 +1271,7 @@ app.openapi(hideComment, async (c) => {
 			// Facebook Graph API: Hide a comment (set is_hidden to true)
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#updating
 			const res = await fetch(
-				`https://graph.facebook.com/v25.0/${comment_id}`,
+				`${GRAPH_BASE.facebook}/${comment_id}`,
 				{
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -1309,7 +1310,7 @@ app.openapi(unhideComment, async (c) => {
 				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#updating
 				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (the Facebook param)
 				const res = await fetch(
-					`https://${igGraphHost(account.accessToken!)}/v25.0/${comment_id}`,
+					`https://${igGraphHost(account.accessToken!)}/${API_VERSIONS.meta_graph}/${comment_id}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -1325,7 +1326,7 @@ app.openapi(unhideComment, async (c) => {
 			// Facebook Graph API: Unhide a comment (set is_hidden to false)
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#updating
 			const res = await fetch(
-				`https://graph.facebook.com/v25.0/${comment_id}`,
+				`${GRAPH_BASE.facebook}/${comment_id}`,
 				{
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -1362,7 +1363,7 @@ app.openapi(likeComment, async (c) => {
 			// Facebook Graph API: Like a comment
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/object/likes/#creating
 			const res = await fetch(
-				`https://graph.facebook.com/v25.0/${comment_id}/likes`,
+				`${GRAPH_BASE.facebook}/${comment_id}/likes`,
 				{
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -1397,7 +1398,7 @@ app.openapi(unlikeComment, async (c) => {
 			// Facebook Graph API: Unlike a comment (remove like)
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/object/likes/#deleting
 			const res = await fetch(
-				`https://graph.facebook.com/v25.0/${comment_id}/likes?access_token=${encodeURIComponent(account.accessToken!)}`,
+				`${GRAPH_BASE.facebook}/${comment_id}/likes?access_token=${encodeURIComponent(account.accessToken!)}`,
 				{ method: "DELETE" },
 			);
 			if (!res.ok) throw new Error(`fb ${res.status}`);
@@ -1430,7 +1431,7 @@ app.openapi(privateReply, async (c) => {
 		// Facebook Messenger Platform: Send a private reply to a comment author
 		// Docs: https://developers.facebook.com/docs/messenger-platform/instagram/features/private-replies
 		const res = await fetch(
-			`https://graph.facebook.com/v25.0/${comment_id}/private_replies`,
+			`${GRAPH_BASE.facebook}/${comment_id}/private_replies`,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -1560,7 +1561,7 @@ app.openapi(listReviews, async (c) => {
 						return { reviews, cursor: json.nextPageToken ?? null };
 					}
 					case "facebook": {
-						let url = `https://graph.facebook.com/v25.0/${account.platformAccountId}/ratings?access_token=${encodeURIComponent(account.accessToken!)}&limit=${limit}&fields=reviewer,rating,review_text,created_time`;
+						let url = `${GRAPH_BASE.facebook}/${account.platformAccountId}/ratings?access_token=${encodeURIComponent(account.accessToken!)}&limit=${limit}&fields=reviewer,rating,review_text,created_time`;
 						if (cursor) url += `&after=${encodeURIComponent(cursor)}`;
 						const res = await fetch(url);
 						if (!res.ok) return { reviews: [], cursor: null };

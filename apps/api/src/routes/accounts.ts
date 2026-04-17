@@ -1,6 +1,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { socialAccounts, socialAccountSyncState, workspaces } from "@relayapi/db";
 import { and, desc, eq, isNull, gt, or, ilike, inArray } from "drizzle-orm";
+import { GRAPH_BASE } from "../config/api-versions";
 import { getOwnedAccount } from "../lib/accounts";
 import { deleteConnectedAccountGraph } from "../lib/delete-account";
 import { maybeDecrypt } from "../lib/crypto";
@@ -847,7 +848,7 @@ app.openapi(getFacebookPages, async (c) => {
 
 	try {
 		const res = await fetch(
-			`https://graph.facebook.com/v25.0/me/accounts?access_token=${account.accessToken}`,
+			`${GRAPH_BASE.facebook}/me/accounts?access_token=${account.accessToken}`,
 		);
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);

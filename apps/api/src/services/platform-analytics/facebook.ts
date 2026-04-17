@@ -1,3 +1,4 @@
+import { GRAPH_BASE } from "../../config/api-versions";
 import {
 	PlatformAnalyticsError,
 	type PlatformAnalyticsFetcher,
@@ -8,7 +9,7 @@ import {
 	type DateRange,
 } from "./types";
 
-const GRAPH_API_BASE = "https://graph.facebook.com/v25.0";
+const GRAPH_API_BASE = GRAPH_BASE.facebook;
 
 // ---------------------------------------------------------------------------
 // Helper: classify Facebook Graph API error into PlatformAnalyticsError
