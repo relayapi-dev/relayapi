@@ -2,12 +2,6 @@ import type { APIRoute } from "astro";
 import { API_BASE_URL } from "@/lib/api-base-url";
 import { getRelayClient } from "@/lib/relay";
 
-interface WsTicketResponse {
-  ticket: string;
-  expires_at: string;
-  ws_url: string;
-}
-
 /**
  * Returns the WebSocket connection URL and a short-lived ticket for the
  * authenticated user's org. The client uses this to connect directly to the
@@ -29,7 +23,7 @@ export const GET: APIRoute = async (ctx) => {
     );
   }
 
-  const data = await client.get<WsTicketResponse>("/v1/ws-ticket");
+  const data = await client.wsTicket.retrieve();
 
   const wsUrl = API_BASE_URL.replace(/^http/, "ws") + "/v1/ws";
 

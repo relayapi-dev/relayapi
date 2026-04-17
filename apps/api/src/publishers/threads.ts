@@ -1,6 +1,7 @@
+import { GRAPH_BASE } from "../config/api-versions";
 import { classifyPublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
-const GRAPH_API = "https://graph.threads.net/v1.0";
+const GRAPH_API = GRAPH_BASE.threads;
 
 interface ThreadsAuth {
 	access_token: string;

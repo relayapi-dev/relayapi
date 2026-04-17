@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { webhookEndpoints, webhookLogs } from "@relayapi/db";
-import { and, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
 	CreateWebhookBody,
@@ -553,7 +553,10 @@ app.openapi(getWebhookLogs, async (c) => {
 				and(
 					eq(webhookLogs.organizationId, orgId),
 					gte(webhookLogs.createdAt, sevenDaysAgo),
-					inArray(webhookEndpoints.workspaceId, workspaceScope),
+					or(
+						inArray(webhookEndpoints.workspaceId, workspaceScope),
+						isNull(webhookEndpoints.workspaceId),
+					),
 				),
 			)
 			.orderBy(desc(webhookLogs.createdAt))

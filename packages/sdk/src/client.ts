@@ -248,6 +248,7 @@ import {
   OrgSettingsUpdateResponse,
 } from './resources/org-settings';
 import { Usage, UsageListLogsParams, UsageListLogsResponse, UsageRetrieveResponse } from './resources/usage';
+import { WsTicket, WsTicketRetrieveResponse } from './resources/ws-ticket';
 import {
   WebhookCreateParams,
   WebhookCreateResponse,
@@ -1093,6 +1094,7 @@ export class Relay {
   signatures: API.Signatures = new API.Signatures(this);
   contacts: API.Contacts = new API.Contacts(this);
   whatsapp: API.Whatsapp = new API.Whatsapp(this);
+  wsTicket: API.WsTicket = new API.WsTicket(this);
 }
 
 Relay.Ads = Ads;
@@ -1128,6 +1130,7 @@ Relay.ShortLinks = ShortLinks;
 Relay.Signatures = Signatures;
 Relay.Contacts = Contacts;
 Relay.Whatsapp = Whatsapp;
+Relay.WsTicket = WsTicket;
 
 export declare namespace Relay {
   export type RequestOptions = Opts.RequestOptions;
@@ -1365,6 +1368,11 @@ export declare namespace Relay {
     type UsageRetrieveResponse as UsageRetrieveResponse,
     type UsageListLogsResponse as UsageListLogsResponse,
     type UsageListLogsParams as UsageListLogsParams,
+  };
+
+  export {
+    WsTicket as WsTicket,
+    type WsTicketRetrieveResponse as WsTicketRetrieveResponse,
   };
 
   export {

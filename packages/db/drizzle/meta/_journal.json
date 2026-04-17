@@ -148,6 +148,13 @@
       "when": 1776369157582,
       "tag": "0020_perfect_sentinels",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1776419593448,
+      "tag": "0021_sticky_bill_hollister",
+      "breakpoints": true
     }
   ]
 }

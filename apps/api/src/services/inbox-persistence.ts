@@ -13,7 +13,7 @@ import {
 	inboxMessages,
 } from "@relayapi/db";
 import { findMatchingContact } from "./contact-linker";
-import { and, desc, eq, gte, ilike, inArray, lt, lte, or, sql, asc, count } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, inArray, isNull, lt, lte, or, sql, asc, count } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -244,9 +244,14 @@ export async function listConversations(
 
 	const conditions = [eq(inboxConversations.organizationId, orgId)];
 
-	// Workspace scope enforcement
+	// Workspace scope enforcement — include org-level (NULL workspace) resources
 	if (filters?.workspaceScope && filters.workspaceScope !== "all") {
-		conditions.push(inArray(inboxConversations.workspaceId, filters.workspaceScope));
+		conditions.push(
+			or(
+				inArray(inboxConversations.workspaceId, filters.workspaceScope),
+				isNull(inboxConversations.workspaceId),
+			)!,
+		);
 	}
 
 	if (filters?.type) {
@@ -316,7 +321,12 @@ export async function getConversationWithMessages(
 		eq(inboxConversations.organizationId, orgId),
 	];
 	if (workspaceScope && workspaceScope !== "all") {
-		conditions.push(inArray(inboxConversations.workspaceId, workspaceScope));
+		conditions.push(
+			or(
+				inArray(inboxConversations.workspaceId, workspaceScope),
+				isNull(inboxConversations.workspaceId),
+			)!,
+		);
 	}
 
 	const [conversation] = await db
@@ -428,9 +438,14 @@ export async function getInboxStats(
 }> {
 	const conditions = [eq(inboxConversations.organizationId, orgId)];
 
-	// Workspace scope enforcement
+	// Workspace scope enforcement — include org-level (NULL workspace) resources
 	if (filters?.workspaceScope && filters.workspaceScope !== "all") {
-		conditions.push(inArray(inboxConversations.workspaceId, filters.workspaceScope));
+		conditions.push(
+			or(
+				inArray(inboxConversations.workspaceId, filters.workspaceScope),
+				isNull(inboxConversations.workspaceId),
+			)!,
+		);
 	}
 
 	if (filters?.platform) {
@@ -523,7 +538,12 @@ export async function updateConversation(
 		eq(inboxConversations.organizationId, orgId),
 	];
 	if (workspaceScope && workspaceScope !== "all") {
-		updateConditions.push(inArray(inboxConversations.workspaceId, workspaceScope));
+		updateConditions.push(
+			or(
+				inArray(inboxConversations.workspaceId, workspaceScope),
+				isNull(inboxConversations.workspaceId),
+			)!,
+		);
 	}
 
 	const [updated] = await db

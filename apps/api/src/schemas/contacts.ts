@@ -25,7 +25,9 @@ export const ContactResponse = z.object({
 	tags: z.array(z.string()).optional().describe("Tags"),
 	opted_in: z.boolean().describe("Whether contact has opted in"),
 	channels: z.array(ChannelResponse).optional().describe("Platform channels"),
+	metadata: z.record(z.string(), z.unknown()).nullable().optional().describe("Freeform metadata"),
 	created_at: z.string().datetime().describe("Created timestamp"),
+	updated_at: z.string().datetime().describe("Last update timestamp"),
 });
 
 export const ContactListResponse = paginatedResponse(ContactResponse);

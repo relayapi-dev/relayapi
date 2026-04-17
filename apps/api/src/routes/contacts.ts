@@ -47,7 +47,9 @@ function serializeContact(
 		phone: string | null;
 		tags: string[];
 		optedIn: boolean;
+		metadata: unknown;
 		createdAt: Date;
+		updatedAt: Date;
 	},
 	channels: (typeof contactChannels.$inferSelect)[] = [],
 ) {
@@ -59,7 +61,9 @@ function serializeContact(
 		tags: c.tags,
 		opted_in: c.optedIn,
 		channels: channels.map(serializeChannel),
+		metadata: (c.metadata as Record<string, unknown> | null) ?? null,
 		created_at: c.createdAt.toISOString(),
+		updated_at: c.updatedAt.toISOString(),
 	};
 }
 
@@ -432,7 +436,9 @@ app.openapi(listContacts, async (c) => {
 			phone: contacts.phone,
 			tags: contacts.tags,
 			optedIn: contacts.optedIn,
+			metadata: contacts.metadata,
 			createdAt: contacts.createdAt,
+			updatedAt: contacts.updatedAt,
 		})
 		.from(contacts)
 		.where(and(...conditions))

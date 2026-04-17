@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { inboxConversations, inboxMessages } from "@relayapi/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { ErrorResponse } from "../schemas/common";
 import {
 	BulkActionBody,
@@ -214,7 +214,12 @@ app.openapi(bulkRoute, async (c) => {
 			eq(inboxConversations.organizationId, orgId),
 		];
 		if (workspaceScope !== "all") {
-			conds.push(inArray(inboxConversations.workspaceId, workspaceScope));
+			conds.push(
+				or(
+					inArray(inboxConversations.workspaceId, workspaceScope),
+					isNull(inboxConversations.workspaceId),
+				)!,
+			);
 		}
 		return conds;
 	};
@@ -234,7 +239,12 @@ app.openapi(bulkRoute, async (c) => {
 			eq(inboxConversations.organizationId, orgId),
 		];
 		if (workspaceScope !== "all") {
-			scopeConds.push(inArray(inboxConversations.workspaceId, workspaceScope));
+			scopeConds.push(
+				or(
+					inArray(inboxConversations.workspaceId, workspaceScope),
+					isNull(inboxConversations.workspaceId),
+				)!,
+			);
 		}
 		const rows = await db
 			.select({ id: inboxConversations.id, labels: inboxConversations.labels })

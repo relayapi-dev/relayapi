@@ -1,4 +1,7 @@
+import { API_VERSIONS } from "../config/api-versions";
 import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+
+const DEBUG = false;
 
 // Instagram Login tokens (prefix "IGAA") must use graph.instagram.com
 // Facebook Login tokens (prefix "EAAC") must use graph.facebook.com
@@ -8,7 +11,7 @@ function getGraphApi(accessToken: string): string {
 	const host = accessToken.startsWith("IGAA")
 		? "graph.instagram.com"
 		: "graph.facebook.com";
-	return `https://${host}/v25.0`;
+	return `https://${host}/${API_VERSIONS.meta_graph}`;
 }
 
 interface InstagramAuth {
@@ -22,7 +25,7 @@ async function graphPost(
 	body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
 	const url = `${getGraphApi(auth.access_token)}${endpoint}`;
-	console.log(`[instagram-publisher] POST ${endpoint}`);
+	if (DEBUG) console.log(`[instagram-publisher] POST ${endpoint}`);
 	const res = await fetch(url, {
 		method: "POST",
 		headers: {
@@ -38,7 +41,7 @@ async function graphPost(
 		};
 		const detail = err.error?.message ?? res.statusText;
 		const subcode = err.error?.error_subcode;
-		console.error(`[instagram-publisher] POST ${endpoint} failed: ${res.status} ${err.error?.message ?? "unknown"}`);
+		if (DEBUG) console.error(`[instagram-publisher] POST ${endpoint} failed: ${res.status} ${err.error?.message ?? "unknown"}`);
 
 		// Classify Instagram-specific errors
 		if (detail.includes("Error validating access token") || detail.includes("REVOKED_ACCESS_TOKEN") ||
@@ -52,7 +55,7 @@ async function graphPost(
 	}
 
 	const result = await res.json() as Record<string, unknown>;
-	console.log(`[instagram-publisher] POST ${endpoint} success: id=${result.id ?? "unknown"}`);
+	if (DEBUG) console.log(`[instagram-publisher] POST ${endpoint} success: id=${result.id ?? "unknown"}`);
 	return result;
 }
 
@@ -115,7 +118,7 @@ async function pollContainerStatus(
 		});
 
 		const status = result.status_code as string;
-		console.log(`[instagram-publisher] Container ${containerId} status: ${status} (attempt ${i + 1}/${maxAttempts})`);
+		if (DEBUG) console.log(`[instagram-publisher] Container ${containerId} status: ${status} (attempt ${i + 1}/${maxAttempts})`);
 
 		if (status === "FINISHED") {
 			return;

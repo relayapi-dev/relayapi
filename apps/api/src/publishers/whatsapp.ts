@@ -1,6 +1,7 @@
+import { GRAPH_BASE } from "../config/api-versions";
 import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
-const WA_API_BASE = "https://graph.facebook.com/v25.0";
+const WA_API_BASE = GRAPH_BASE.facebook;
 
 interface WhatsAppMessageResponse {
 	messaging_product: string;

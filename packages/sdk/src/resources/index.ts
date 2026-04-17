@@ -209,6 +209,10 @@ export {
   type UsageListLogsParams,
 } from './usage';
 export {
+  WsTicket,
+  type WsTicketRetrieveResponse,
+} from './ws-ticket';
+export {
   Broadcasts,
   type BroadcastResponse,
   type BroadcastListResponse,

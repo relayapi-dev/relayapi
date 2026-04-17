@@ -636,7 +636,7 @@ export function IdeaDetailDialog({
 				showCloseButton={false}
 				className={cn(
 					"max-h-[90vh] p-0 gap-0 transition-[max-width] duration-200 ease-out",
-					sidePanel ? "max-w-4xl" : "max-w-2xl",
+					sidePanel ? "max-w-2xl md:max-w-4xl" : "max-w-2xl",
 				)}
 			>
 			<div className="flex max-h-[90vh]">
@@ -677,7 +677,7 @@ export function IdeaDetailDialog({
 														key={group.id}
 														type="button"
 														onClick={() => {
-															handleGroupChange(group.id);
+															void handleGroupChange(group.id);
 															setGroupPopoverOpen(false);
 														}}
 														className={cn(

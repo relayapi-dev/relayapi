@@ -443,7 +443,7 @@ export const postTargets = pgTable(
 	{
 		id: text("id")
 			.primaryKey()
-			.$defaultFn(() => generateId("")),
+			.$defaultFn(() => generateId("pt_")),
 		postId: text("post_id")
 			.notNull()
 			.references(() => posts.id, { onDelete: "cascade" }),
@@ -694,6 +694,7 @@ export const apiRequestLogs = pgTable(
 			table.organizationId,
 			table.createdAt,
 		),
+		index("api_request_logs_api_key_idx").on(table.apiKeyId),
 	],
 );
 
@@ -2800,5 +2801,6 @@ export const ideaActivity = pgTable(
 			table.ideaId,
 			table.createdAt,
 		),
+		index("idea_activity_actor_idx").on(table.actorId),
 	],
 );

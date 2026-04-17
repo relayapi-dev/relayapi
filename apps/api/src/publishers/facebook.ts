@@ -1,7 +1,8 @@
+import { GRAPH_BASE } from "../config/api-versions";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
 import { classifyPublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
-const GRAPH_API = "https://graph.facebook.com/v25.0";
+const GRAPH_API = GRAPH_BASE.facebook;
 
 interface FacebookAuth {
 	access_token: string;
