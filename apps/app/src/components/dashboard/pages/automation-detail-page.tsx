@@ -488,7 +488,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 							<span>·</span>
 							<span className="capitalize">{draft.channel}</span>
 							<span>·</span>
-							<span>{draft.trigger.type.replace(/_/g, " ")}</span>
+							<span>{draft.trigger_type.replace(/_/g, " ")}</span>
 							{dirty && <span className="text-amber-400">· unsaved</span>}
 						</div>
 					</div>

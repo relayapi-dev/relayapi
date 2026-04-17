@@ -48,6 +48,22 @@ const ListQuery = PaginationParams.extend({
 	trigger_type: z.string().optional(),
 });
 
+async function hasUserNodes(
+	db: ReturnType<typeof createDb>,
+	automationId: string,
+): Promise<boolean> {
+	const rows = await db
+		.select({ count: sql<number>`count(*)::int` })
+		.from(automationNodes)
+		.where(
+			and(
+				eq(automationNodes.automationId, automationId),
+				sql`${automationNodes.key} != 'trigger'`,
+			),
+		);
+	return (rows[0]?.count ?? 0) > 0;
+}
+
 // --- Serializers ---
 
 type SerializedAutomation = z.infer<typeof AutomationResponse>;
@@ -117,6 +133,19 @@ app.openapi(createAutomation, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 	const orgId = c.get("orgId");
+
+	// An empty node list is only valid for drafts. Publishing (status=active)
+	// requires at least one user node so the snapshot has something to execute.
+	if (body.status === "active" && body.nodes.length === 0) {
+		return c.json(
+			automationError(
+				"empty_automation",
+				"Active automations must have at least one node",
+				{ path: "nodes" },
+			),
+			400,
+		);
+	}
 
 	// Validate node keys are unique + edges reference known keys
 	const keys = new Set<string>();
@@ -209,21 +238,23 @@ app.openapi(createAutomation, async (c) => {
 		})
 		.returning();
 
-	// 3. Insert user nodes
-	const insertedNodes = await db
-		.insert(automationNodes)
-		.values(
-			body.nodes.map((n) => ({
-				automationId: auto.id,
-				key: n.key,
-				type: n.type as never,
-				config: extractNodeConfig(n),
-				canvasX: n.canvas_x,
-				canvasY: n.canvas_y,
-				notes: n.notes,
-			})),
-		)
-		.returning();
+	// 3. Insert user nodes (skip when draft has none — PG can't insert 0 rows)
+	const insertedNodes = body.nodes.length
+		? await db
+				.insert(automationNodes)
+				.values(
+					body.nodes.map((n) => ({
+						automationId: auto.id,
+						key: n.key,
+						type: n.type as never,
+						config: extractNodeConfig(n),
+						canvasX: n.canvas_x,
+						canvasY: n.canvas_y,
+						notes: n.notes,
+					})),
+				)
+				.returning()
+		: [];
 
 	const keyToId = new Map<string, string>([
 		["trigger", triggerNode!.id],
@@ -478,6 +509,10 @@ const updateAutomation = createRoute({
 			description: "Updated",
 			content: { "application/json": { schema: AutomationResponse } },
 		},
+		400: {
+			description: "Validation error",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		403: {
 			description: "Forbidden",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -535,6 +570,16 @@ app.openapi(updateAutomation, async (c) => {
 		.returning();
 
 	if (updates.status === "active" && row.publishedVersion === null) {
+		if (!(await hasUserNodes(db, id))) {
+			return c.json(
+				automationError(
+					"empty_automation",
+					"Cannot activate an automation with no nodes",
+					{ path: "nodes" },
+				),
+				400,
+			);
+		}
 		await publishVersion(db, id);
 		const refreshed = await db.query.automations.findFirst({
 			where: eq(automations.id, id),
@@ -565,6 +610,10 @@ for (const [name, action, status] of [
 				description: "Updated",
 				content: { "application/json": { schema: AutomationResponse } },
 			},
+			400: {
+				description: "Validation error",
+				content: { "application/json": { schema: ErrorResponse } },
+			},
 			403: {
 				description: "Forbidden",
 				content: { "application/json": { schema: ErrorResponse } },
@@ -594,6 +643,16 @@ for (const [name, action, status] of [
 
 		// Ensure a published snapshot exists before the runner can enrol anyone.
 		if (status === "active" && row.publishedVersion === null) {
+			if (!(await hasUserNodes(db, id))) {
+				return c.json(
+					automationError(
+						"empty_automation",
+						"Cannot activate an automation with no nodes",
+						{ path: "nodes" },
+					),
+					400,
+				);
+			}
 			await publishVersion(db, id);
 		}
 
@@ -620,6 +679,10 @@ const publishAutomation = createRoute({
 			description: "Published",
 			content: { "application/json": { schema: AutomationResponse } },
 		},
+		400: {
+			description: "Validation error",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		403: {
 			description: "Forbidden",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -645,6 +708,17 @@ app.openapi(publishAutomation, async (c) => {
 		return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
+
+	if (!(await hasUserNodes(db, id))) {
+		return c.json(
+			automationError(
+				"empty_automation",
+				"Cannot publish an automation with no nodes",
+				{ path: "nodes" },
+			),
+			400,
+		);
 	}
 
 	await publishVersion(db, id);

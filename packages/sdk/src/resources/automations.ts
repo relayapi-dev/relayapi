@@ -316,7 +316,7 @@ export interface AutomationCreateParams {
   channel: AutomationChannel;
   status?: AutomationStatus;
   trigger: AutomationTriggerSpec;
-  nodes: AutomationNodeSpec[];
+  nodes?: AutomationNodeSpec[];
   edges?: AutomationEdgeSpec[];
   exit_on_reply?: boolean;
   allow_reentry?: boolean;

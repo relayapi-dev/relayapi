@@ -28,7 +28,12 @@ export interface AutomationDetail {
 	description?: string | null;
 	channel: string;
 	status: AutomationStatus;
-	trigger: AutomationTriggerSpec;
+	// The API returns trigger metadata as flat fields (see serializeAutomation in
+	// apps/api/src/routes/automations.ts), not a nested `trigger` object — only
+	// create/update *requests* use the nested spec shape.
+	trigger_type: string;
+	trigger_config?: unknown;
+	trigger_filters?: unknown;
 	nodes: AutomationNodeSpec[];
 	edges: AutomationEdgeSpec[];
 	workspace_id?: string | null;

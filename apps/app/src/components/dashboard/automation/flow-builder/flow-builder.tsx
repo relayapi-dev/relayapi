@@ -118,7 +118,7 @@ function toReactFlowNodes(
 		position: { x: 0, y: 0 },
 		data: {
 			label: "Trigger",
-			triggerType: automation.trigger.type,
+			triggerType: automation.trigger_type,
 			channel: automation.channel,
 		},
 		draggable: true,

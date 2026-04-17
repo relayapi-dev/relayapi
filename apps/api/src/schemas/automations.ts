@@ -1678,7 +1678,7 @@ export const AutomationCreateSpec = z.object({
 	channel: AutomationChannelEnum,
 	status: AutomationStatusEnum.default("draft"),
 	trigger: TriggerSpec,
-	nodes: z.array(AutomationNodeSpec).min(1),
+	nodes: z.array(AutomationNodeSpec).default([]),
 	edges: z.array(AutomationEdgeSpec).default([]),
 	exit_on_reply: z.boolean().default(true),
 	allow_reentry: z.boolean().default(false),

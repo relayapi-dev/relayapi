@@ -86,8 +86,8 @@ export function SimulatorPanel({
 	onHighlightPath,
 }: Props) {
 	const triggerDef = useMemo(
-		() => schema.triggers.find((t) => t.type === automation.trigger.type),
-		[schema, automation.trigger.type],
+		() => schema.triggers.find((t) => t.type === automation.trigger_type),
+		[schema, automation.trigger_type],
 	);
 	const branchKeys = useMemo(() => branchingNodes(automation), [automation]);
 
