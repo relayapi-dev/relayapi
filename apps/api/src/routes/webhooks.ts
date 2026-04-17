@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, webhookEndpoints, webhookLogs } from "@relayapi/db";
+import { webhookEndpoints, webhookLogs } from "@relayapi/db";
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {

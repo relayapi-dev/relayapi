@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, generateId, media } from "@relayapi/db";
+import { generateId, media } from "@relayapi/db";
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { type S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";

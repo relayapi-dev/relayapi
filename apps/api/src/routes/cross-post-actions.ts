@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, crossPostActions, posts } from "@relayapi/db";
+import { crossPostActions, posts } from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {

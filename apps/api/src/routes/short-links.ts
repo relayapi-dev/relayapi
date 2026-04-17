@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, shortLinkConfigs, shortLinks } from "@relayapi/db";
+import { shortLinkConfigs, shortLinks } from "@relayapi/db";
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {

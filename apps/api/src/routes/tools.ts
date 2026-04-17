@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, socialAccounts, generateId } from "@relayapi/db";
+import { socialAccounts, generateId } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
 import { fetchPublicUrl } from "../lib/fetch-public-url";

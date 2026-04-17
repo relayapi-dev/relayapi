@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, socialAccounts } from "@relayapi/db";
+import { socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
 import { assertWorkspaceScope } from "../lib/workspace-scope";

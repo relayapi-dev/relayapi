@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { createDb, orgStreaks } from "@relayapi/db";
+import { orgStreaks } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import { ErrorResponse } from "../schemas/common";
 import { StreakResponse } from "../schemas/streak";

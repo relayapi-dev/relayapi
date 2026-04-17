@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, tags } from "@relayapi/db";
+import { tags } from "@relayapi/db";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { ErrorResponse, IdParam } from "../schemas/common";
 import {

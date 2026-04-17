@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, organizationSubscriptions, eq } from "@relayapi/db";
+import { organizationSubscriptions, eq } from "@relayapi/db";
 import type { Env, Variables } from "../types";
 import { ErrorResponse } from "../schemas/common";
 import { requireAllWorkspaceScopeMiddleware } from "../middleware/permissions";

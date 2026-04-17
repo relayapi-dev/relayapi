@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, socialAccounts, socialAccountSyncState, workspaces } from "@relayapi/db";
+import { socialAccounts, socialAccountSyncState, workspaces } from "@relayapi/db";
 import { and, desc, eq, isNull, gt, or, ilike, inArray } from "drizzle-orm";
 import { getOwnedAccount } from "../lib/accounts";
 import { deleteConnectedAccountGraph } from "../lib/delete-account";

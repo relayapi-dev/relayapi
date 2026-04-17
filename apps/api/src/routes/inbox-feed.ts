@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, inboxConversations, inboxMessages } from "@relayapi/db";
+import { inboxConversations, inboxMessages } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { ErrorResponse } from "../schemas/common";
 import {

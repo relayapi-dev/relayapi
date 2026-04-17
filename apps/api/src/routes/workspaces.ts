@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { workspaces, socialAccounts, createDb } from "@relayapi/db";
+import { workspaces, socialAccounts } from "@relayapi/db";
 import { eq, and, ilike, gt, inArray, sql } from "drizzle-orm";
 import {
 	WorkspaceListQuery,
