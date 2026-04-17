@@ -75,7 +75,7 @@ export const siteConfig = {
 	hero: {
 		badgeIcon: <Icons.stackedIcons className="size-4" />,
 		badge: "One API for every social platform",
-		title: '"Ehy openclaw, post this to all my socials"',
+		title: '"Ehy claude, post this to all my socials"',
 		description:
 			"Relay is an open-source unified API that lets your AI or app post to 17 social platforms at once.",
 		cta: {
