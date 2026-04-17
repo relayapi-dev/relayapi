@@ -25,8 +25,11 @@ export const POST: APIRoute = async (ctx) => {
 			);
 		}
 		const body = await ctx.request.json();
-		const fn = (client.automations.templates as unknown as Record<string, (input: unknown) => Promise<unknown>>)[method]!;
-		const data = await fn(body);
+		const templates = client.automations.templates as unknown as Record<
+			string,
+			(input: unknown) => Promise<unknown>
+		>;
+		const data = await templates[method]!(body);
 		return Response.json(data, { status: 201 });
 	} catch (e) {
 		return handleSdkError(e);
