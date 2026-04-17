@@ -7,17 +7,20 @@ interface Options {
 	version: number | string;
 	/** Whether the document has unsaved changes right now. */
 	dirty: boolean;
-	/** Saves and returns the version token that was persisted. */
-	onSave: () => Promise<number | string | void>;
+	/** Saves the current draft. */
+	onSave: () => Promise<void> | void;
 	debounceMs?: number;
 	enabled?: boolean;
 }
 
 /**
- * Debounced autosave that is safe against "user kept editing while save was
- * in flight": we re-arm the timer on every `version` change, and the caller's
- * onSave returns the version it actually persisted so we don't confuse caller
- * UI by clearing the dirty indicator for a newer edit.
+ * Debounced autosave safe against "user kept editing while save was in flight":
+ *
+ * - Re-arms the timer on every `version` change so we save ~debounceMs after
+ *   the *latest* edit, not the first one.
+ * - When the timer fires while another save is in progress, waits a short
+ *   retry interval and checks again instead of dropping the save silently —
+ *   otherwise the latest draft could sit unsaved until the next edit.
  */
 export function useAutosave({
 	version,
@@ -35,18 +38,30 @@ export function useAutosave({
 
 	useEffect(() => {
 		if (!enabled || !dirty) return;
-		const id = window.setTimeout(async () => {
-			if (savingRef.current) return;
+		let cancelled = false;
+		let timerId: number | undefined;
+
+		const attempt = async () => {
+			if (cancelled) return;
+			if (savingRef.current) {
+				// Another save is running. Wait a beat and check again so the
+				// latest draft gets flushed once the previous save lands.
+				timerId = window.setTimeout(attempt, 500);
+				return;
+			}
 			savingRef.current = true;
 			try {
 				await onSaveRef.current();
 			} finally {
 				savingRef.current = false;
 			}
-		}, debounceMs);
-		return () => window.clearTimeout(id);
-		// `version` is the re-arm trigger: every edit bumps it, which restarts
-		// the debounce window so we always save ~debounceMs after the *latest*
-		// edit, not the first one.
+		};
+
+		timerId = window.setTimeout(attempt, debounceMs);
+
+		return () => {
+			cancelled = true;
+			if (timerId !== undefined) window.clearTimeout(timerId);
+		};
 	}, [version, dirty, debounceMs, enabled]);
 }

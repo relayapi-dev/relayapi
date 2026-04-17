@@ -239,16 +239,36 @@ export async function advanceEnrollment(
 		currentNodeKey = nextKey;
 	}
 
-	// Hit step cap — re-enqueue for next tick
+	// Hit step cap — re-enqueue for next tick. The enrollment row is updated
+	// first so the next worker resumes from the right node. If the queue send
+	// fails, insert a scheduled tick so the cron sweep rescues the enrollment
+	// instead of letting it sit `active` with no worker scheduled.
 	await db
 		.update(automationEnrollments)
 		.set({
 			state,
-			currentNodeId: snapshot.nodes.find((n) => n.key === currentNodeKey)?.id ?? null,
+			currentNodeId:
+				snapshot.nodes.find((n) => n.key === currentNodeKey)?.id ?? null,
 			updatedAt: new Date(),
 		})
 		.where(eq(automationEnrollments.id, enrollment.id));
-	await env.AUTOMATION_QUEUE.send({ type: "advance", enrollment_id: enrollment.id });
+	try {
+		await env.AUTOMATION_QUEUE.send({
+			type: "advance",
+			enrollment_id: enrollment.id,
+		});
+	} catch (err) {
+		console.error(
+			"[runner] step-cap requeue failed, scheduling recovery tick for",
+			enrollment.id,
+			err,
+		);
+		// Schedule a tick ~10s out so the cron sweep reclaims the enrollment.
+		await db.insert(automationScheduledTicks).values({
+			enrollmentId: enrollment.id,
+			runAt: new Date(Date.now() + 10_000),
+		});
+	}
 }
 
 /**

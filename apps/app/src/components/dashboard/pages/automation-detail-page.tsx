@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ArrowLeft,
 	Loader2,
@@ -71,11 +71,26 @@ export function AutomationDetailPage({ automationId }: Props) {
 
 	const [draft, setDraft] = useState<AutomationDetail | null>(null);
 	const [dirty, setDirty] = useState(false);
+	// Also mirror `dirty` into a ref so the refetch-reset effect below can
+	// read the current value without re-running when dirty toggles.
+	const dirtyRef = useRef(false);
+	useEffect(() => {
+		dirtyRef.current = dirty;
+	}, [dirty]);
 	// Monotonic counter that bumps on every local edit. Used by useAutosave
 	// to re-arm its debounce timer from the latest edit, and by silentSave
-	// to detect whether the draft changed while a save was in flight.
+	// to detect whether the draft changed while a save was in flight. Mirrored
+	// into a ref so async save callbacks can read the *current* value instead
+	// of a stale closure snapshot.
 	const [editVersion, setEditVersion] = useState(0);
-	const bumpEdit = useCallback(() => setEditVersion((v) => v + 1), []);
+	const editVersionRef = useRef(0);
+	const bumpEdit = useCallback(() => {
+		setEditVersion((v) => {
+			const next = v + 1;
+			editVersionRef.current = next;
+			return next;
+		});
+	}, []);
 	const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null);
 	const [rightPanel, setRightPanel] = useState<
 		"property" | "simulator" | "history" | null
@@ -102,6 +117,11 @@ export function AutomationDetailPage({ automationId }: Props) {
 
 	useEffect(() => {
 		if (!fetched) return;
+		// If the user has unsaved local edits, don't let a background refetch
+		// clobber them. We only adopt the server snapshot on first load and on
+		// explicit refetches (publish / pause / resume / archive), which all
+		// happen when the draft is already clean.
+		if (dirtyRef.current) return;
 		setDraft(fetched);
 		setDirty(false);
 		setSelectedNodeKey(null);
@@ -256,7 +276,11 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const saveDraft = useCallback(async () => {
 		if (!draft) return;
 		setBanner(null);
-		const versionAtStart = editVersion;
+		// Capture the editVersion at send-time. `editVersionRef.current` reflects
+		// the live value (incl. edits made after this callback was created), so
+		// the post-save comparison correctly detects whether the user kept
+		// editing while the request was in flight.
+		const versionAtStart = editVersionRef.current;
 		const result = await patchAutomation.mutate({
 			nodes: draft.nodes,
 			edges: draft.edges,
@@ -264,29 +288,32 @@ export function AutomationDetailPage({ automationId }: Props) {
 			description: draft.description,
 		});
 		if (result) {
-			// Only clear the dirty flag if the user hasn't edited since we captured
-			// the snapshot. Otherwise newer edits would be silently marked saved.
-			setDirty((d) => (editVersion === versionAtStart ? false : d));
+			// Only clear `dirty` if no newer edits happened. We do NOT refetch
+			// on save — the PATCH response is the authoritative new server state
+			// and re-adopting it via the useEffect would wipe edits made while
+			// the save was in flight.
+			if (editVersionRef.current === versionAtStart) {
+				setDirty(false);
+			}
 			setBanner({ type: "success", message: "Draft saved" });
-			refetchAutomation();
 		} else if (patchAutomation.error) {
 			setBanner({ type: "error", message: patchAutomation.error });
 		}
-	}, [draft, editVersion, patchAutomation, refetchAutomation]);
+	}, [draft, patchAutomation]);
 
 	const silentSave = useCallback(async () => {
 		if (!draft) return;
-		const versionAtStart = editVersion;
+		const versionAtStart = editVersionRef.current;
 		const result = await patchAutomation.mutate({
 			nodes: draft.nodes,
 			edges: draft.edges,
 			name: draft.name,
 			description: draft.description,
 		});
-		if (result) {
-			setDirty((d) => (editVersion === versionAtStart ? false : d));
+		if (result && editVersionRef.current === versionAtStart) {
+			setDirty(false);
 		}
-	}, [draft, editVersion, patchAutomation]);
+	}, [draft, patchAutomation]);
 
 	useAutosave({
 		version: editVersion,
@@ -324,7 +351,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 		}
 		setBanner(null);
 		if (dirty) {
-			const versionAtStart = editVersion;
+			const versionAtStart = editVersionRef.current;
 			const saved = await patchAutomation.mutate({
 				nodes: draft.nodes,
 				edges: draft.edges,
@@ -336,7 +363,18 @@ export function AutomationDetailPage({ automationId }: Props) {
 				});
 				return;
 			}
-			setDirty((d) => (editVersion === versionAtStart ? false : d));
+			if (editVersionRef.current === versionAtStart) {
+				setDirty(false);
+			} else {
+				// User edited during the save. The server has v1 of their edits;
+				// local state has v2. Abort the publish so we don't publish a
+				// server snapshot that's behind the user's current draft.
+				setBanner({
+					type: "error",
+					message: "Draft changed during save — review + publish again",
+				});
+				return;
+			}
 		}
 		const published = await publishAutomation.mutate();
 		if (published) {
@@ -348,7 +386,6 @@ export function AutomationDetailPage({ automationId }: Props) {
 	}, [
 		draft,
 		dirty,
-		editVersion,
 		schema,
 		patchAutomation,
 		publishAutomation,

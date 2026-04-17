@@ -100,9 +100,9 @@ bun run db:migrate
 - ✅ Registered in `index.ts`.
 
 **Phase 3b (follow-ups)**:
-- `segments.ts`, `ai-knowledge.ts`, `ref-urls.ts` CRUD routes.
-- `POST /v1/automations/:id/simulate` Playground endpoint — currently NOT implemented (audit caught an over-promise in the earlier doc). Requires a dry-run mode on the runner.
-- Delete legacy routes as part of Phase 4b.
+- ✅ `segments.ts`, `ai-knowledge.ts`, `ref-urls.ts` CRUD routes.
+- ✅ `POST /v1/automations/:id/simulate` implemented in `services/automations/simulator.ts`. Dry-run traversal returning `{ path, terminated }`. Dashboard Simulator panel consumes it.
+- ✅ Legacy routes deleted as part of Phase 4b (code gone; DB migration user action pending).
 
 ---
 
@@ -156,7 +156,7 @@ Audit correctly noted that the legacy routes are still live. Collected here so t
 
 **Deferred to Phase 6/7/8**:
 - Flow Builder UI walkthrough (needs Phase 6 screenshots).
-- Simulator guide (needs the simulate endpoint from Phase 3b).
+- Simulator guide — endpoint now exists (`POST /v1/automations/:id/simulate`). Write the guide once the dashboard flow-builder UX stabilizes so screenshots match.
 - MCP-server-specific page (needs Phase 7).
 - Per-platform guides — one per platform under `content/docs/platforms/` — produced alongside Phase 8 per-platform work.
 - Cookbook recipes (comment-to-dm walkthrough, giveaway end-to-end, abandoned-cart, drip sequence with conditions) — easier to write with screenshots once the dashboard exists.

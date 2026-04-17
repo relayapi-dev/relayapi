@@ -627,7 +627,14 @@ app.openapi(getSchema, async (c) => {
 				config_schema: {},
 				output_labels: ["next"],
 			})),
-			nodes: AUTOMATION_NODE_TYPES.map((t) => ({
+			// Runtime-supported node types only. Types whose handlers are
+			// still stubbed (AI, split_test, subflow, subscription_*, segment_*,
+			// notify_admin, conversation_*, webhook_out) are filtered out so
+			// the dashboard palette / MCP tools / docs agents don't offer nodes
+			// that fail at execution time.
+			nodes: AUTOMATION_NODE_TYPES.filter(
+				(t) => !STUBBED_NODE_TYPES.has(t),
+			).map((t) => ({
 				type: t,
 				description: describeNode(t),
 				category: categoryForNode(t),

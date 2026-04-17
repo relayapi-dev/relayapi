@@ -176,6 +176,13 @@
       "when": 1776441159739,
       "tag": "0024_fixed_scorpion",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1776461573875,
+      "tag": "0025_productive_human_fly",
+      "breakpoints": true
     }
   ]
 }

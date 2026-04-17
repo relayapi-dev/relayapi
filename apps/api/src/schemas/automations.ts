@@ -1475,6 +1475,23 @@ export const PinterestCreatePinNode = z.object({
 // Discriminated union of all node types
 // ---------------------------------------------------------------------------
 
+// Node types that are declared in `AutomationNodeTypeEnum` + drizzle pgEnum but
+// whose runtime handlers are still stubs (they return `not yet implemented` at
+// execution time). We leave them in the DB enum for forward compatibility but
+// exclude them from the create-time discriminated union so the API rejects
+// them before they reach a published graph. When a type becomes runtime-ready,
+// add it back to this union and remove the corresponding `notImplemented`
+// entry from `services/automations/nodes/index.ts`.
+//
+// Currently stubbed:
+//   ai_step, ai_agent, ai_intent_router    (AI infra)
+//   split_test                              (logic extras)
+//   subflow_call                            (sub-enrollment)
+//   subscription_add, subscription_remove   (subscription lists)
+//   segment_add, segment_remove             (segment memberships)
+//   notify_admin                            (internal notifications)
+//   conversation_assign, conversation_status (inbox writes)
+//   webhook_out                             (ops)
 export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	z.object({ ...baseNode, type: z.literal("trigger") }),
 	MessageTextNode,
@@ -1490,26 +1507,13 @@ export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	ConditionNode,
 	SmartDelayNode,
 	RandomizerNode,
-	SplitTestNode,
 	GotoNode,
 	EndNode,
-	SubflowCallNode,
-	AIStepNode,
-	AIAgentNode,
-	AIIntentRouterNode,
 	TagAddNode,
 	TagRemoveNode,
 	FieldSetNode,
 	FieldClearNode,
-	SubscriptionAddNode,
-	SubscriptionRemoveNode,
-	SegmentAddNode,
-	SegmentRemoveNode,
-	NotifyAdminNode,
-	ConversationAssignNode,
-	ConversationStatusNode,
 	HttpRequestNode,
-	WebhookOutNode,
 	// Instagram (9)
 	InstagramSendTextNode,
 	InstagramSendMediaNode,
