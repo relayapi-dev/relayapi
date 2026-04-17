@@ -104,7 +104,7 @@ The endpoint enforces org ownership + verifies the enrollment belongs to the aut
 
 Typical failure paths + what to look for:
 
-- **Handler error** — `outcome: "failed"` + `error` field. Usually "social account not found or has no token" for send nodes, or "custom field '<slug>' not defined" for field writes.
+- **Handler error** — `outcome: "failed"` + `error` field. Usually "social account not found or has no token" for send nodes, or `custom field '<slug>' not defined` for field writes.
 - **Stuck waiting** — `status: waiting` + `next_run_at` in the past. Check the `automation_scheduled_ticks` table for pending ticks; the cron sweep claims only `BATCH_SIZE` per tick.
 - **Never enrolled** — trigger matcher did not find a match. Check the automation is `active`, `published_version` is non-null, trigger type and keyword config match the payload, and filters pass.
 - **Re-entry blocked** — contact already has an enrollment; either set `allow_reentry: true` or wait for `reentry_cooldown_min`.
