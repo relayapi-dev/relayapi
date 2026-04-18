@@ -1,4 +1,5 @@
 import { Suspense, lazy, useState, useEffect, useMemo, useCallback } from "react";
+import { startOfMonth, startOfWeek } from "date-fns";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import {
   Plus,
@@ -85,7 +86,7 @@ export interface PostsPageProps {
 
 export function PostsPage({
   initialAllData,
-  initialCalendarPeriod = "week",
+  initialCalendarPeriod = "month",
   initialDraftsData,
   initialFailedData,
   initialPublishedData,
@@ -109,6 +110,26 @@ export function PostsPage({
   const [activeTab, setActiveTab] = useState(initialTab);
   const [viewMode, setViewMode] = useState<"list" | "calendar">(initialViewMode);
   const [calendarPeriod, setCalendarPeriod] = useState<CalendarPeriod>(initialCalendarPeriod);
+  const [calendarDate, setCalendarDate] = useState<Date>(() =>
+    initialCalendarPeriod === "week"
+      ? startOfWeek(new Date(), { weekStartsOn: 1 })
+      : startOfMonth(new Date()),
+  );
+
+  const handleCalendarPeriodChange = useCallback((newPeriod: CalendarPeriod) => {
+    setCalendarPeriod(newPeriod);
+    setCalendarDate(
+      newPeriod === "week"
+        ? startOfWeek(new Date(), { weekStartsOn: 1 })
+        : startOfMonth(new Date()),
+    );
+    try {
+      localStorage.setItem("posts:calendarPeriod", newPeriod);
+    } catch { /* ignore */ }
+    const url = new URL(window.location.href);
+    url.searchParams.set("period", newPeriod);
+    window.history.replaceState({}, "", url.toString());
+  }, []);
 
   const switchTab = (tab: NonNullable<PostsPageProps["initialTab"]>) => {
     setActiveTab(tab);
@@ -395,8 +416,10 @@ export function PostsPage({
     setNewPostOpen(true);
   };
 
+  const isWeekCalendar = viewMode === "calendar" && calendarPeriod === "week" && !isMobile;
+
   return (
-    <div className="space-y-6">
+    <div className={cn("space-y-6", isWeekCalendar ? "pb-4" : "pb-16")}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-medium">Posts</h1>
@@ -606,7 +629,10 @@ export function PostsPage({
           <CalendarView
             statusFilter="All"
             filterQuery={{ ...filterQuery, include_external: "true" }}
-            initialPeriod={calendarPeriod}
+            period={calendarPeriod}
+            onPeriodChange={handleCalendarPeriodChange}
+            currentDate={calendarDate}
+            onDateChange={setCalendarDate}
             onOpenNewPost={(date) => {
               setNewPostInitialDate(date);
               setNewPostOpen(true);
@@ -624,7 +650,10 @@ export function PostsPage({
             <CalendarView
               statusFilter="Scheduled"
               filterQuery={filterQuery}
-              initialPeriod={calendarPeriod}
+              period={calendarPeriod}
+              onPeriodChange={handleCalendarPeriodChange}
+              currentDate={calendarDate}
+              onDateChange={setCalendarDate}
               onOpenNewPost={(date) => {
                 setNewPostInitialDate(date);
                 setNewPostOpen(true);

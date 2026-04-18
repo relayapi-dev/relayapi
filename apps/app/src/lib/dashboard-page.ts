@@ -94,7 +94,7 @@ export function getPostsPageRouteState(url: URL): Record<string, unknown> {
 		url,
 		"period",
 		["week", "month"] as const,
-		"week",
+		"month",
 	);
 
 	return {

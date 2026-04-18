@@ -17,15 +17,24 @@ interface CalendarViewProps {
   onOpenNewPost: (date?: string) => void;
   onEdit?: (postId: string) => void;
   onDelete?: (postId: string) => void;
-  initialPeriod?: CalendarPeriod;
+  period: CalendarPeriod;
+  onPeriodChange: (period: CalendarPeriod) => void;
+  currentDate: Date;
+  onDateChange: (date: Date) => void;
 }
 
-export function CalendarView({ statusFilter, filterQuery, onOpenNewPost, onEdit, onDelete, initialPeriod = "month" }: CalendarViewProps) {
+export function CalendarView({
+  statusFilter,
+  filterQuery,
+  onOpenNewPost,
+  onEdit,
+  onDelete,
+  period,
+  onPeriodChange,
+  currentDate,
+  onDateChange,
+}: CalendarViewProps) {
   const timezone = useTimezone();
-  const [period, setPeriod] = useState<CalendarPeriod>(initialPeriod);
-  const [currentDate, setCurrentDate] = useState(() =>
-    period === "week" ? startOfWeek(new Date(), { weekStartsOn: 1 }) : startOfMonth(new Date())
-  );
   const [draftsPanelOpen, setDraftsPanelOpen] = useState(false);
   const [activePost, setActivePost] = useState<CalendarPost | null>(null);
 
@@ -47,25 +56,20 @@ export function CalendarView({ statusFilter, filterQuery, onOpenNewPost, onEdit,
   }, [silentRefetch]));
 
   const handlePrev = useCallback(() => {
-    setCurrentDate((d) => period === "week" ? subWeeks(d, 1) : subMonths(d, 1));
-  }, [period]);
+    onDateChange(period === "week" ? subWeeks(currentDate, 1) : subMonths(currentDate, 1));
+  }, [period, currentDate, onDateChange]);
 
   const handleNext = useCallback(() => {
-    setCurrentDate((d) => period === "week" ? addWeeks(d, 1) : addMonths(d, 1));
-  }, [period]);
+    onDateChange(period === "week" ? addWeeks(currentDate, 1) : addMonths(currentDate, 1));
+  }, [period, currentDate, onDateChange]);
 
   const handleToday = useCallback(() => {
-    setCurrentDate(period === "week" ? startOfWeek(new Date(), { weekStartsOn: 1 }) : startOfMonth(new Date()));
-  }, [period]);
+    onDateChange(period === "week" ? startOfWeek(new Date(), { weekStartsOn: 1 }) : startOfMonth(new Date()));
+  }, [period, onDateChange]);
 
   const handlePeriodChange = useCallback((newPeriod: CalendarPeriod) => {
-    setPeriod(newPeriod);
-    setCurrentDate(newPeriod === "week" ? startOfWeek(new Date(), { weekStartsOn: 1 }) : startOfMonth(new Date()));
-    localStorage.setItem("posts:calendarPeriod", newPeriod);
-    const url = new URL(window.location.href);
-    url.searchParams.set("period", newPeriod);
-    window.history.replaceState({}, "", url.toString());
-  }, []);
+    onPeriodChange(newPeriod);
+  }, [onPeriodChange]);
 
   const handleClickDate = useCallback(
     (date: Date) => {

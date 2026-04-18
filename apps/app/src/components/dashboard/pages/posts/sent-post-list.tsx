@@ -64,6 +64,8 @@ interface SentPost {
   media_urls?: string[];
   media_type?: string | null;
   thumbnail_url?: string | null;
+  account_name?: string | null;
+  account_avatar_url?: string | null;
 }
 
 export interface SentPostListProps {
@@ -137,14 +139,17 @@ export function SentPostList({
           media: post.thumbnail_url
             ? [{ url: post.thumbnail_url, type: post.media_type ?? undefined }]
             : post.media_urls?.length
-              ? post.media_urls.map((url) => ({ url }))
+              ? post.media_urls.map((url) => ({
+                  url,
+                  type: post.media_type ?? undefined,
+                }))
               : post.media,
           target: {
             accountId: post.social_account_id || "",
             platform: post.platform || "",
             username: null,
-            displayName: null,
-            avatarUrl: null,
+            displayName: post.account_name ?? null,
+            avatarUrl: post.account_avatar_url ?? null,
             platformUrl: post.platform_url ?? null,
             platformPostId: post.platform_post_id ?? null,
             publishedAt,

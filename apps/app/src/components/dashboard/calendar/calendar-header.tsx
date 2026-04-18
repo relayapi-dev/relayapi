@@ -44,17 +44,21 @@ export function CalendarHeader({
         <h2 className="text-sm font-medium min-w-[140px]">
           {dateLabel}
         </h2>
-        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onToday}>
+        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onToday}>
           Today
         </Button>
+      </div>
 
-        {/* Week/Month toggle */}
-        <div className="flex items-center rounded-md border border-border overflow-hidden ml-2">
+      <div className="flex items-center gap-2">
+        {/* Week/Month toggle — styled like the Drafts button */}
+        <div className="inline-flex items-center rounded-md border border-border bg-background h-7 p-0.5 text-xs">
           <button
             onClick={() => onPeriodChange("week")}
             className={cn(
-              "px-2.5 py-1 text-xs font-medium transition-colors",
-              period === "week" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
+              "inline-flex items-center justify-center rounded-sm px-2.5 h-full font-medium transition-colors",
+              period === "week"
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
             Week
@@ -62,23 +66,26 @@ export function CalendarHeader({
           <button
             onClick={() => onPeriodChange("month")}
             className={cn(
-              "px-2.5 py-1 text-xs font-medium transition-colors",
-              period === "month" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
+              "inline-flex items-center justify-center rounded-sm px-2.5 h-full font-medium transition-colors",
+              period === "month"
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
             Month
           </button>
         </div>
+
+        <Button
+          variant={draftsOpen ? "secondary" : "outline"}
+          size="sm"
+          className="h-7 text-xs gap-1.5"
+          onClick={onToggleDrafts}
+        >
+          <FileEdit className="size-3" />
+          Drafts{draftCount > 0 && ` (${draftCount})`}
+        </Button>
       </div>
-      <Button
-        variant={draftsOpen ? "secondary" : "outline"}
-        size="sm"
-        className="h-7 text-xs gap-1.5"
-        onClick={onToggleDrafts}
-      >
-        <FileEdit className="size-3" />
-        Drafts{draftCount > 0 && ` (${draftCount})`}
-      </Button>
     </div>
   );
 }
