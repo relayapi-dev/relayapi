@@ -34,4 +34,4 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Run API tests
         working-directory: apps/api
-        run: bun test src/__tests__/connect-oauth.test.ts src/__tests__/unit.test.ts src/__tests__/auth.test.ts src/__tests__/publishers.test.ts
+        run: bun test src/__tests__

@@ -13,6 +13,20 @@ export const ChannelResponse = z.object({
 	created_at: z.string().datetime().describe("Created timestamp"),
 });
 
+export const ContactSegmentMembershipResponse = z.object({
+	segment_id: z.string().describe("Segment ID"),
+	workspace_id: z.string().nullable().describe("Workspace ID"),
+	name: z.string().describe("Segment name"),
+	description: z.string().nullable().describe("Segment description"),
+	is_dynamic: z.boolean().describe("Whether the segment is dynamically computed"),
+	source: z.string().describe("Membership source"),
+	created_at: z.string().datetime().describe("Membership created timestamp"),
+});
+
+export const ContactSegmentMembershipListResponse = z.object({
+	data: z.array(ContactSegmentMembershipResponse),
+});
+
 // =====================
 // Contact Response
 // =====================
@@ -25,6 +39,10 @@ export const ContactResponse = z.object({
 	tags: z.array(z.string()).optional().describe("Tags"),
 	opted_in: z.boolean().describe("Whether contact has opted in"),
 	channels: z.array(ChannelResponse).optional().describe("Platform channels"),
+	segment_ids: z
+		.array(z.string())
+		.optional()
+		.describe("Static segment memberships"),
 	metadata: z.record(z.string(), z.unknown()).nullable().optional().describe("Freeform metadata"),
 	created_at: z.string().datetime().describe("Created timestamp"),
 	updated_at: z.string().datetime().describe("Last update timestamp"),
@@ -45,6 +63,11 @@ export const ChannelIdParams = z.object({
 	channelId: z.string().describe("Channel ID"),
 });
 
+export const ContactSegmentParams = z.object({
+	id: z.string().describe("Contact ID"),
+	segmentId: z.string().describe("Segment ID"),
+});
+
 export const ContactFieldParams = z.object({
 	id: z.string().describe("Contact ID"),
 	slug: z.string().describe("Custom field slug"),
@@ -58,6 +81,7 @@ export const ContactQuery = z.object({
 	workspace_id: z.string().optional().describe("Filter by workspace ID"),
 	search: z.string().optional().describe("Search by name, phone, or email"),
 	tag: z.string().optional().describe("Filter by tag"),
+	segment_id: z.string().optional().describe("Filter by static segment membership"),
 	platform: z.string().optional().describe("Filter by platform"),
 	account_id: z.string().optional().describe("Filter by social account ID"),
 	cursor: z.string().optional().describe("Pagination cursor"),

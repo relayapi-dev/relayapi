@@ -1,16 +1,45 @@
 import { describe, it, expect, beforeEach, mock } from "bun:test";
 
-// Mock @relayapi/db to prevent import errors when running alongside other test files
-mock.module("@relayapi/db", () => ({
-	createDb: () => ({}),
-	usageRecords: {},
-	apiRequestLogs: {},
-}));
+let activeDb: ReturnType<typeof import("./__mocks__/db").createMockDb>;
+
+mock.module("@relayapi/db", () => {
+	const apikey = {
+		id: { name: "id" },
+		key: { name: "key" },
+		organizationId: { name: "organizationId" },
+		enabled: { name: "enabled" },
+		expiresAt: { name: "expiresAt" },
+		permissions: { name: "permissions" },
+		metadata: { name: "metadata" },
+		toString: () => "apikey",
+	};
+	const organizationSubscriptions = {
+		organizationId: { name: "organizationId" },
+		status: { name: "status" },
+		aiEnabled: { name: "aiEnabled" },
+		dailyToolLimit: { name: "dailyToolLimit" },
+		toString: () => "organization_subscriptions",
+	};
+
+	return {
+		createDb: () => activeDb,
+		apikey,
+		organizationSubscriptions,
+	};
+});
+
+mock.module("drizzle-orm", () => {
+	const { mockEq } = require("./__mocks__/db");
+	return {
+		eq: (col: unknown, val: unknown) => mockEq(col, val),
+	};
+});
 
 import { Hono } from "hono";
 import type { Env, Variables, KVKeyData } from "../types";
 import { authMiddleware } from "../middleware/auth";
 import { MockKV, createMockEnv, seedApiKeyInKV, hashKey } from "./__mocks__/env";
+import { createMockDb } from "./__mocks__/db";
 
 const TEST_KEY = "rlay_live_testauthkey0000000000000000000000000000000";
 type AuthErrorResponse = { error: { code: string; message: string } };
@@ -42,7 +71,44 @@ async function readJson<T>(response: Response): Promise<T> {
 	return (await response.json()) as T;
 }
 
+function seedDbApiKey(
+	hashedKey: string,
+	overrides: Partial<{
+		id: string;
+		organizationId: string;
+		enabled: boolean;
+		expiresAt: Date | null;
+		permissions: string;
+		metadata: Record<string, unknown> | null;
+		status: string;
+		aiEnabled: boolean;
+		dailyToolLimit: number;
+	}> = {},
+) {
+	activeDb._seed("apikey", [
+		{
+			id: overrides.id ?? "key_db_1",
+			key: hashedKey,
+			organizationId: overrides.organizationId ?? "org_db_1",
+			enabled: overrides.enabled ?? true,
+			expiresAt: overrides.expiresAt ?? null,
+			permissions: overrides.permissions ?? "posts:write,analytics:read",
+			metadata: overrides.metadata ?? null,
+		},
+	]);
+
+	activeDb._seed("organizationSubscriptions", [
+		{
+			organizationId: overrides.organizationId ?? "org_db_1",
+			status: overrides.status ?? "active",
+			aiEnabled: overrides.aiEnabled ?? true,
+			dailyToolLimit: overrides.dailyToolLimit ?? 10,
+		},
+	]);
+}
+
 beforeEach(async () => {
+	activeDb = createMockDb();
 	const mock = createMockEnv();
 	kv = mock.kv;
 	env = mock.env;
@@ -90,7 +156,7 @@ describe("authMiddleware", () => {
 		expect(body.error.message).toBe("Invalid API key format");
 	});
 
-	it("rejects API key not found in KV with 401", async () => {
+	it("returns 401 on KV miss when the API key is also missing from the DB", async () => {
 		const res = await app.fetch(
 			makeRequest({ Authorization: `Bearer ${TEST_KEY}` }),
 			env,
@@ -99,6 +165,41 @@ describe("authMiddleware", () => {
 		expect(res.status).toBe(401);
 		const body = await readJson<AuthErrorResponse>(res);
 		expect(body.error.message).toBe("Invalid API key");
+	});
+
+	it("rehydrates a KV miss from the DB and caches the API key record", async () => {
+		const hashedKey = await hashKey(TEST_KEY);
+		seedDbApiKey(hashedKey, {
+			id: "key_db_hydrated",
+			organizationId: "org_db_hydrated",
+			metadata: { workspace_scope: ["ws_123"] },
+		});
+
+		const res = await app.fetch(
+			makeRequest({ Authorization: `Bearer ${TEST_KEY}` }),
+			env,
+			mockCtx,
+		);
+
+		expect(res.status).toBe(200);
+		const body = await readJson<AuthSuccessResponse>(res);
+		expect(body.orgId).toBe("org_db_hydrated");
+		expect(body.keyId).toBe("key_db_hydrated");
+		expect(body.plan).toBe("pro");
+		expect(body.callsIncluded).toBe(10_000);
+
+		const cached = await kv.get(`apikey:${hashedKey}`, "json");
+		expect(cached).toEqual({
+			org_id: "org_db_hydrated",
+			key_id: "key_db_hydrated",
+			permissions: ["posts:write", "analytics:read"],
+			workspace_scope: ["ws_123"],
+			expires_at: null,
+			plan: "pro",
+			calls_included: 10_000,
+			ai_enabled: true,
+			daily_tool_limit: 10,
+		});
 	});
 
 	it("rejects expired API key with 401", async () => {

@@ -3,6 +3,7 @@ import { socialAccounts, generateId } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
+import { getLinkedInRestHeaders, LINKEDIN_REST_BASE } from "../lib/linkedin-rest";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import { PLATFORM_LIMITS, countChars } from "../config/platform-limits";
 import type { Platform } from "../schemas/common";
@@ -590,6 +591,7 @@ app.openapi(resolveMention, async (c) => {
 			200,
 		);
 	}
+	const resolvedVanityName = vanityName;
 
 	if (body.type === "person") {
 		return c.json(
@@ -601,18 +603,21 @@ app.openapi(resolveMention, async (c) => {
 			200,
 		);
 	}
+	const accessToken = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY);
+	if (!accessToken) {
+		return c.json(
+			{ resolved: false, error: "LinkedIn account not found or missing access token" },
+			200,
+		);
+	}
 
 	// Organization lookup via LinkedIn REST API
 	// Docs: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-lookup-api
 	try {
 		const res = await fetch(
-			`https://api.linkedin.com/rest/organizations?q=vanityName&vanityName=${encodeURIComponent(vanityName)}`,
+			`${LINKEDIN_REST_BASE}/organizations?q=vanityName&vanityName=${encodeURIComponent(resolvedVanityName)}`,
 			{
-				headers: {
-					Authorization: `Bearer ${await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY)}`,
-					"Linkedin-Version": "202603",
-					"X-Restli-Protocol-Version": "2.0.0",
-				},
+				headers: getLinkedInRestHeaders(accessToken),
 			},
 		);
 
@@ -636,7 +641,7 @@ app.openapi(resolveMention, async (c) => {
 		const org = data.elements?.[0];
 		if (!org) {
 			return c.json(
-				{ resolved: false, error: `Organization "${vanityName}" not found` },
+				{ resolved: false, error: `Organization "${resolvedVanityName}" not found` },
 				200,
 			);
 		}

@@ -1,6 +1,7 @@
 # F07 - LinkedIn version pins are duplicated and already drifted from the latest doc version
 
 Severity: low
+Status: ✅ Fixed
 
 ## Summary
 

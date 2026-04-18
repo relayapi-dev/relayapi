@@ -37,7 +37,8 @@ export async function relayApiRequest(
 	try {
 		return await this.helpers.request(options);
 	} catch (error) {
-		const errorData = (error as JsonObject)?.response?.body as JsonObject | undefined;
+		const response = (error as { response?: { body?: JsonObject } } | undefined)?.response;
+		const errorData = response?.body;
 		const message =
 			(errorData?.error as JsonObject)?.message as string ??
 			(error as Error).message ??

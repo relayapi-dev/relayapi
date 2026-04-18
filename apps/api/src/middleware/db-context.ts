@@ -1,5 +1,5 @@
-import { createDb } from "@relayapi/db";
 import { createMiddleware } from "hono/factory";
+import { getRequestDb } from "../lib/request-db";
 import type { Env, Variables } from "../types";
 
 /**
@@ -15,6 +15,6 @@ export const dbContextMiddleware = createMiddleware<{
 	Bindings: Env;
 	Variables: Variables;
 }>(async (c, next) => {
-	c.set("db", createDb(c.env.HYPERDRIVE.connectionString));
+	c.set("db", getRequestDb(c.env));
 	await next();
 });

@@ -126,11 +126,19 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 		getClientId: (env) => env.INSTAGRAM_APP_ID,
 		getClientSecret: (env) => env.INSTAGRAM_APP_SECRET,
 	},
-	// LinkedIn — 3-Legged OAuth Authorization Code Flow
-	// https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow
-	// Section: "Step 2: Request an Authorization Code" and "Step 3: Exchange Authorization Code for an Access Token"
+	// LinkedIn — 3-Legged OAuth Authorization Code Flow + organization selection
+	// Auth flow docs: https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow
+	// Sections: "Step 2: Request an Authorization Code" and "Step 3: Exchange Authorization Code for an Access Token"
 	// Auth: GET https://www.linkedin.com/oauth/v2/authorization — Token: POST https://www.linkedin.com/oauth/v2/accessToken
 	// Profile: GET https://api.linkedin.com/v2/userinfo (OpenID Connect) or GET https://api.linkedin.com/v2/me
+	// Org ACL docs: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-access-control-by-role?tabs=http&view=li-lms-2025-04
+	// Section: "Find a Member's Organization Access Control Information"
+	// Org roles: GET https://api.linkedin.com/rest/organizationAcls?q=roleAssignee
+	// Required headers/fields: Authorization, Linkedin-Version, X-Restli-Protocol-Version: 2.0.0, elements[].organization, elements[].organizationTarget
+	// Org lookup docs: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-lookup-api?view=li-lms-2026-01
+	// Sections: "Batch Get Non-Administered Organizations" and "Retrieve an Administered Organization"
+	// Org lookup: GET https://api.linkedin.com/rest/organizationsLookup?ids=List({organization ID1, organization ID2..})
+	// Lookup fields: results.{id}.id, results.{id}.localizedName, results.{id}.vanityName
 	// Access tokens expire in 60 days. client_id/client_secret in POST body (not Basic Auth).
 	linkedin: {
 		authUrl: "https://www.linkedin.com/oauth/v2/authorization",

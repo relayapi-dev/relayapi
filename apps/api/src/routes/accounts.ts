@@ -5,6 +5,7 @@ import { GRAPH_BASE } from "../config/api-versions";
 import { getOwnedAccount } from "../lib/accounts";
 import { deleteConnectedAccountGraph } from "../lib/delete-account";
 import { maybeDecrypt } from "../lib/crypto";
+import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import { dispatchWebhookEvent } from "../services/webhook-delivery";
 import { logConnectionEvent } from "./connections";
@@ -986,28 +987,14 @@ app.openapi(getLinkedInOrgs, async (c) => {
 	}
 
 	try {
-		// LinkedIn Organization Access Control API — List organizations by role
-		// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-access-control-by-role
-		const res = await fetch(
-			"https://api.linkedin.com/v2/organizationAcls?q=roleAssignee",
-			{
-				headers: { Authorization: `Bearer ${account.accessToken}` },
-			},
-		);
-		if (!res.ok) {
-			return c.json({ data: [] }, 200);
-		}
-		const json = (await res.json()) as {
-			elements: Array<{
-				organization: string;
-				organizationId: number;
-			}>;
-		};
+		const organizations =
+			await fetchLinkedInAccessibleOrganizations(account.accessToken);
 		return c.json(
 			{
-				data: json.elements.map((e) => ({
-					id: String(e.organizationId),
-					name: e.organization,
+				data: organizations.map((organization) => ({
+					id: organization.id,
+					name: organization.name,
+					vanity_name: organization.vanity_name,
 				})),
 			},
 			200,

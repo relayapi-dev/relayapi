@@ -1,6 +1,7 @@
 import { createMiddleware } from "hono/factory";
-import { apikey, createDb, organizationSubscriptions } from "@relayapi/db";
+import { apikey, organizationSubscriptions } from "@relayapi/db";
 import { eq } from "drizzle-orm";
+import { getRequestDb } from "../lib/request-db";
 import type { Env, KVKeyData, Variables } from "../types";
 import { PRICING } from "../types";
 
@@ -45,7 +46,7 @@ export async function hydrateApiKey(
 	env: Env,
 	hashedKey: string,
 ): Promise<KVKeyData | null> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
+	const db = getRequestDb(env);
 
 	const [row] = await db
 		.select({

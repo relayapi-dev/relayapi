@@ -8,9 +8,9 @@ import type {
 	ExternalPostData,
 } from "../types";
 import { RateLimitError } from "../types";
+import { getLinkedInRestHeaders, LINKEDIN_API_BASE } from "../../../lib/linkedin-rest";
 import { parseRateLimitHeaders } from "../rate-limits";
 
-const BASE = "https://api.linkedin.com";
 const DEFAULT_LIMIT = 50;
 
 async function liFetch(
@@ -18,12 +18,9 @@ async function liFetch(
 	accessToken: string,
 ): Promise<{ data: any; headers: Headers }> {
 	const res = await fetch(url, {
-		headers: {
-			Authorization: `Bearer ${accessToken}`,
-			"X-Restli-Protocol-Version": "2.0.0",
-			"LinkedIn-Version": "202603",
+		headers: getLinkedInRestHeaders(accessToken, {
 			"X-RestLi-Method": "FINDER",
-		},
+		}),
 	});
 	if (res.status === 429) {
 		const rl = parseRateLimitHeaders(res.headers);
@@ -92,7 +89,7 @@ export const linkedinPostFetcher: ExternalPostFetcher = {
 		const start = options.cursor ? Number.parseInt(options.cursor, 10) : 0;
 
 		const authorUrn = `urn:li:organization:${platformAccountId}`;
-		let url = `${BASE}/rest/posts?author=${encodeURIComponent(authorUrn)}&q=author&count=${limit}&start=${start}&sortBy=LAST_MODIFIED`;
+		let url = `${LINKEDIN_API_BASE}/rest/posts?author=${encodeURIComponent(authorUrn)}&q=author&count=${limit}&start=${start}&sortBy=LAST_MODIFIED`;
 
 		const { data: json, headers } = await liFetch(url, accessToken);
 		const elements = json.elements ?? [];
@@ -116,7 +113,7 @@ export const linkedinPostFetcher: ExternalPostFetcher = {
 			try {
 				const urn = postId.startsWith("urn:") ? postId : `urn:li:share:${postId}`;
 				const { data: json } = await liFetch(
-					`${BASE}/rest/socialActions/${encodeURIComponent(urn)}`,
+					`${LINKEDIN_API_BASE}/rest/socialActions/${encodeURIComponent(urn)}`,
 					accessToken,
 				);
 

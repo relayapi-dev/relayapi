@@ -7,10 +7,10 @@
  * Still stubbed (Phase 8 follow-ups or awaiting external approvals):
  *   - ai_step / ai_agent / ai_intent_router (needs AI infra)
  *   - subflow_call (logic extras)
- *   - segment_add / conversation_assign (ops)
  */
 
 import type { NodeHandler } from "../types";
+import { conversationAssignHandler } from "./conversation-assign";
 import { conversationStatusHandler } from "./conversation-status";
 import { conditionHandler } from "./condition";
 import { endHandler } from "./end";
@@ -23,6 +23,10 @@ import { notifyAdminHandler } from "./notify-admin";
 import { randomizerHandler } from "./randomizer";
 import { splitTestHandler } from "./split-test";
 import { smartDelayHandler } from "./smart-delay";
+import {
+	segmentAddHandler,
+	segmentRemoveHandler,
+} from "./segment-actions";
 import {
 	subscriptionAddHandler,
 	subscriptionRemoveHandler,
@@ -167,7 +171,10 @@ const universal: Record<string, NodeHandler> = {
 	field_clear: fieldClearHandler,
 	subscription_add: subscriptionAddHandler,
 	subscription_remove: subscriptionRemoveHandler,
+	segment_add: segmentAddHandler,
+	segment_remove: segmentRemoveHandler,
 	notify_admin: notifyAdminHandler,
+	conversation_assign: conversationAssignHandler,
 	http_request: httpRequestHandler,
 	webhook_out: webhookOutHandler,
 	conversation_status: conversationStatusHandler,
@@ -299,9 +306,6 @@ const remainingStubTypes = [
 	"ai_agent",
 	"ai_intent_router",
 	"subflow_call",
-	"segment_add",
-	"segment_remove",
-	"conversation_assign",
 ];
 
 const remainingStubs = Object.fromEntries(

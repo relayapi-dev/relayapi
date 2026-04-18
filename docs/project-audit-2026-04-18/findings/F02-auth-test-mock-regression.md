@@ -1,6 +1,7 @@
 # F02 - `auth.test.ts` is broken after KV miss rehydration was added
 
 Severity: high
+Status: ✅ Fixed
 
 ## Summary
 

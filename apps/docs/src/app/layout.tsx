@@ -5,10 +5,14 @@ import type { ReactNode } from "react";
 import { FeedbackWidget } from "@/components/feedback-widget";
 
 const inter = Inter({ subsets: ["latin"] });
+const metadataBase = new URL(
+  process.env.NEXT_PUBLIC_SITE_URL || "https://docs.relayapi.dev",
+);
 
 export const metadata = {
   title: "RelayAPI Docs",
   description: "Documentation for the RelayAPI unified social media API",
+  metadataBase,
   icons: {
     icon: "/favicon.svg",
   },

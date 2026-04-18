@@ -1,6 +1,7 @@
 # F09 - Selective post unpublish drops the `platforms` body before it reaches the API
 
 Severity: high
+Status: ✅ Fixed
 
 ## Summary
 

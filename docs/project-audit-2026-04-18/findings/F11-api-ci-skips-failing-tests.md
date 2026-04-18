@@ -1,6 +1,7 @@
 # F11 - API CI only runs a subset of tests, so known failing suites are not enforced
 
 Severity: medium
+Status: ✅ Fixed
 
 ## Summary
 

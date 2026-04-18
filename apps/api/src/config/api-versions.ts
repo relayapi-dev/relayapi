@@ -19,8 +19,8 @@ export const API_VERSIONS = {
 	pinterest: "v5",
 	// https://developers.tiktok.com/doc/content-posting-api-overview
 	tiktok: "v2",
-	// https://learn.microsoft.com/en-us/linkedin/marketing/versioning — YYYYMM format
-	linkedin: "202603",
+	// https://learn.microsoft.com/en-us/linkedin/marketing/versioning — Latest Version: April 2026 (202604)
+	linkedin: "202604",
 } as const;
 
 export const GRAPH_BASE = {

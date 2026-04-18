@@ -1,6 +1,7 @@
 # F04 - Usage metering undercounts non-`/bulk` multi-item endpoints
 
 Severity: medium
+Status: ✅ Fixed
 
 ## Summary
 

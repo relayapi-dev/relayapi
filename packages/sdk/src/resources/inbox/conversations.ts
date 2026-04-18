@@ -24,7 +24,7 @@ export class Conversations extends APIResource {
   }
 
   /**
-   * Update a conversation (status, labels, priority)
+   * Update a conversation (status, labels, priority, assignee)
    */
   update(
     conversationID: string,
@@ -169,6 +169,11 @@ export namespace ConversationGetResponse {
     status: 'open' | 'archived' | 'snoozed';
 
     /**
+     * Assigned organization user ID
+     */
+    assigned_user_id: string | null;
+
+    /**
      * Last updated timestamp
      */
     updated_at: string;
@@ -298,6 +303,11 @@ export namespace ConversationListResponse {
     status: 'open' | 'archived' | 'snoozed';
 
     /**
+     * Assigned organization user ID
+     */
+    assigned_user_id: string | null;
+
+    /**
      * Last updated timestamp
      */
     updated_at: string;
@@ -334,6 +344,11 @@ export namespace ConversationUpdateResponse {
      * Conversation status
      */
     status: 'open' | 'archived' | 'snoozed';
+
+    /**
+     * Assigned organization user ID
+     */
+    assigned_user_id: string | null;
 
     /**
      * Conversation labels
@@ -461,6 +476,11 @@ export interface ConversationUpdateParams {
    * Conversation priority
    */
   priority?: 'low' | 'normal' | 'high' | 'urgent';
+
+  /**
+   * Assigned organization user ID. Use null to clear the assignee.
+   */
+  assigned_user_id?: string | null;
 }
 
 export interface ConversationMarkReadParams {

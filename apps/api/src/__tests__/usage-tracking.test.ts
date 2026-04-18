@@ -76,6 +76,11 @@ function createTestApp(opts: {
 	app.get("/v1/posts", (c) => c.json({ ok: true }));
 	app.post("/v1/posts", (c) => c.json({ ok: true }));
 	app.post("/v1/posts/bulk", async (c) => c.json({ ok: true }));
+	app.post("/v1/posts/bulk-csv", async (c) => c.json({ ok: true }));
+	app.post("/v1/contacts/bulk", async (c) => c.json({ ok: true }));
+	app.post("/v1/contacts/bulk-operations", async (c) => c.json({ ok: true }));
+	app.post("/v1/whatsapp/bulk-send", async (c) => c.json({ ok: true }));
+	app.post("/v1/inbox/bulk", async (c) => c.json({ ok: true }));
 
 	return app;
 }
@@ -275,6 +280,101 @@ describe("usageTrackingMiddleware", () => {
 		expect(res.status).toBe(200);
 
 		// KV should show count = 3 (one per item, not one per request)
+		const stored = await kv.get(`usage:org_test:${month}`, "text");
+		expect(stored).toBe("3");
+	});
+
+	it("counts contact bulk-create items individually", async () => {
+		const month = currentMonthKey();
+		const app = createTestApp({ plan: "free", callsIncluded: 200 });
+		const req = new Request("http://localhost/v1/contacts/bulk", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ contacts: [{}, {}] }),
+		});
+		const { res } = await executeRequest(app, req, env);
+
+		expect(res.status).toBe(200);
+		const stored = await kv.get(`usage:org_test:${month}`, "text");
+		expect(stored).toBe("2");
+	});
+
+	it("counts contact bulk-operation targets individually", async () => {
+		const month = currentMonthKey();
+		const app = createTestApp({ plan: "free", callsIncluded: 200 });
+		const req = new Request("http://localhost/v1/contacts/bulk-operations", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ action: "delete", contact_ids: ["c1", "c2", "c3"] }),
+		});
+		const { res } = await executeRequest(app, req, env);
+
+		expect(res.status).toBe(200);
+		const stored = await kv.get(`usage:org_test:${month}`, "text");
+		expect(stored).toBe("3");
+	});
+
+	it("counts WhatsApp bulk recipients individually", async () => {
+		const month = currentMonthKey();
+		const app = createTestApp({ plan: "free", callsIncluded: 200 });
+		const req = new Request("http://localhost/v1/whatsapp/bulk-send", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				account_id: "acc_1",
+				recipients: [{ phone: "+15550001" }, { phone: "+15550002" }, { phone: "+15550003" }],
+				template: { name: "promo", language: "en" },
+			}),
+		});
+		const { res } = await executeRequest(app, req, env);
+
+		expect(res.status).toBe(200);
+		const stored = await kv.get(`usage:org_test:${month}`, "text");
+		expect(stored).toBe("3");
+	});
+
+	it("counts inbox bulk targets individually", async () => {
+		const month = currentMonthKey();
+		const app = createTestApp({ plan: "free", callsIncluded: 200 });
+		const req = new Request("http://localhost/v1/inbox/bulk", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				action: "archive",
+				targets: ["conv_1", "conv_2", "conv_3", "conv_4"],
+			}),
+		});
+		const { res } = await executeRequest(app, req, env);
+
+		expect(res.status).toBe(200);
+		const stored = await kv.get(`usage:org_test:${month}`, "text");
+		expect(stored).toBe("4");
+	});
+
+	it("counts bulk CSV rows individually without relying on parsedBody", async () => {
+		const month = currentMonthKey();
+		const app = createTestApp({ plan: "free", callsIncluded: 200 });
+		const formData = new FormData();
+		formData.set(
+			"file",
+			new File(
+				[
+					"content,targets,scheduled_at\n",
+					"Post 1,twitter,now\n",
+					"Post 2,linkedin,now\n",
+					"Post 3,facebook,now\n",
+				],
+				"posts.csv",
+				{ type: "text/csv" },
+			),
+		);
+		const req = new Request("http://localhost/v1/posts/bulk-csv", {
+			method: "POST",
+			body: formData,
+		});
+		const { res } = await executeRequest(app, req, env);
+
+		expect(res.status).toBe(200);
 		const stored = await kv.get(`usage:org_test:${month}`, "text");
 		expect(stored).toBe("3");
 	});

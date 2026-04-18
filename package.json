@@ -3,20 +3,24 @@
 	"private": true,
 	"workspaces": [
 		"apps/*",
-		"packages/*"
+		"packages/*",
+		"packages/integrations/*"
 	],
 	"scripts": {
 		"dev:api": "cd apps/api && bun run dev",
 		"dev:app": "cd apps/app && bun run dev",
 		"dev:docs": "cd apps/docs && bun run dev",
 		"dev:cli": "cd apps/cli && bun run dev",
-		"typecheck": "bun run typecheck:db && bun run typecheck:auth && bun run typecheck:api && bun run typecheck:app && bun run typecheck:docs && bun run typecheck:cli",
+		"typecheck": "bun run typecheck:db && bun run typecheck:auth && bun run build:sdk && bun run typecheck:api && bun run typecheck:app && bun run typecheck:docs && bun run typecheck:cli && bun run typecheck:n8n && bun run typecheck:zapier",
 		"typecheck:db": "cd packages/db && tsc --noEmit",
 		"typecheck:auth": "cd packages/auth && tsc --noEmit",
+		"build:sdk": "cd packages/sdk && tsc -p tsconfig.build.json",
 		"typecheck:api": "cd apps/api && tsc --noEmit",
 		"typecheck:app": "cd apps/app && tsc --noEmit",
 		"typecheck:docs": "cd apps/docs && tsc --noEmit",
 		"typecheck:cli": "cd apps/cli && tsc --noEmit",
+		"typecheck:n8n": "cd packages/integrations/n8n-node && tsc --noEmit",
+		"typecheck:zapier": "cd packages/integrations/zapier-app && tsc --noEmit",
 		"db:generate": "cd packages/db && bunx drizzle-kit generate",
 		"db:studio": "cd packages/db && bunx drizzle-kit studio",
 		"db:migrate": "cd packages/db && bunx drizzle-kit migrate"

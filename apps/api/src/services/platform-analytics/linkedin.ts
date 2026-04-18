@@ -6,8 +6,7 @@ import type {
 	DailyMetricPoint,
 	DateRange,
 } from "./types";
-
-const LINKEDIN_API_BASE = "https://api.linkedin.com";
+import { getLinkedInRestHeaders, LINKEDIN_API_BASE } from "../../lib/linkedin-rest";
 
 // Country code to name mapping for LinkedIn geo facets
 const COUNTRY_NAMES: Record<string, string> = {
@@ -79,11 +78,7 @@ async function linkedinFetch(
 ): Promise<Response> {
 	const url = path.startsWith("http") ? path : `${LINKEDIN_API_BASE}${path}`;
 	return fetch(url, {
-		headers: {
-			Authorization: `Bearer ${accessToken}`,
-			"Linkedin-Version": "202603",
-			"X-Restli-Protocol-Version": "2.0.0",
-		},
+		headers: getLinkedInRestHeaders(accessToken),
 	});
 }
 

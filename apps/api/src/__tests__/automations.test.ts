@@ -923,6 +923,37 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 			}).success,
 		).toBe(true);
 	});
+
+	it("accepts conversation_assign with a required assignee user", () => {
+		expect(
+			AutomationCreateSpec.safeParse({
+				name: "assign",
+				channel: "instagram" as const,
+				trigger: { type: "instagram_comment" },
+				nodes: [
+					{
+						type: "conversation_assign",
+						key: "assign_owner",
+						assignee_user_id: "user_123",
+					},
+				],
+			}).success,
+		).toBe(true);
+	});
+
+	it("accepts segment_add and segment_remove now that the runtime supports them", () => {
+		expect(
+			AutomationCreateSpec.safeParse({
+				name: "segment flow",
+				channel: "instagram" as const,
+				trigger: { type: "instagram_comment" },
+				nodes: [
+					{ type: "segment_add", key: "join_vip", segment_id: "seg_vip" },
+					{ type: "segment_remove", key: "leave_trial", segment_id: "seg_trial" },
+				],
+			}).success,
+		).toBe(true);
+	});
 });
 
 describe("resolveTemplatedValue", () => {
@@ -956,13 +987,15 @@ describe("automation manifest", () => {
 		expect(() => assertAutomationManifestIntegrity()).not.toThrow();
 	});
 
-	it("publishes notify_admin and excludes remaining stub nodes", () => {
+	it("publishes notify_admin plus the newly supported contact and inbox ops", () => {
 		const publishedNodeTypes = new Set(
 			PUBLISHED_AUTOMATION_NODE_MANIFEST.map((entry) => entry.type),
 		);
 		expect(publishedNodeTypes.has("notify_admin")).toBe(true);
-		expect(publishedNodeTypes.has("conversation_assign")).toBe(false);
-		expect(publishedNodeTypes.has("segment_add")).toBe(false);
+		expect(publishedNodeTypes.has("conversation_assign")).toBe(true);
+		expect(publishedNodeTypes.has("segment_add")).toBe(true);
+		expect(publishedNodeTypes.has("segment_remove")).toBe(true);
+		expect(publishedNodeTypes.has("subflow_call")).toBe(false);
 	});
 
 	it("only publishes runtime-supported triggers", () => {

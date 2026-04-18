@@ -1,6 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	createDb,
 	contacts,
 	contactChannels,
 	customFieldDefinitions,
@@ -27,12 +26,26 @@ import {
 	BulkOperationsResponse,
 	MergeContactBody,
 	MergeContactResponse,
+	ContactSegmentMembershipListResponse,
+	ContactSegmentMembershipResponse,
+	ContactSegmentParams,
 	SetContactFieldBody,
 	SetContactFieldResponse,
 } from "../schemas/contacts";
 import type { Env, Variables } from "../types";
 import { assertScopedCreateWorkspace } from "../lib/request-access";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+	isWorkspaceScopeDenied,
+} from "../lib/workspace-scope";
+import {
+	addContactToStaticSegment,
+	ensureStaticSegment,
+	getContactSegmentIds,
+	listContactSegmentMemberships,
+	removeContactFromStaticSegment,
+} from "../services/segment-memberships";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -51,6 +64,7 @@ function serializeContact(
 		updatedAt: Date;
 	},
 	channels: (typeof contactChannels.$inferSelect)[] = [],
+	segmentIds: string[] = [],
 ) {
 	return {
 		id: c.id,
@@ -60,6 +74,7 @@ function serializeContact(
 		tags: c.tags,
 		opted_in: c.optedIn,
 		channels: channels.map(serializeChannel),
+		segment_ids: segmentIds,
 		metadata: (c.metadata as Record<string, unknown> | null) ?? null,
 		created_at: c.createdAt.toISOString(),
 		updated_at: c.updatedAt.toISOString(),
@@ -254,7 +269,77 @@ const removeChannel = createRoute({
 	},
 });
 
-// 9. Bulk create contacts
+// 9. List static segment memberships for a contact
+const listContactSegments = createRoute({
+	operationId: "listContactSegments",
+	method: "get",
+	path: "/{id}/segments",
+	tags: ["Contacts"],
+	summary: "List static segment memberships for a contact",
+	security: [{ Bearer: [] }],
+	request: { params: ContactIdParams },
+	responses: {
+		200: {
+			description: "Contact segment memberships",
+			content: {
+				"application/json": {
+					schema: ContactSegmentMembershipListResponse,
+				},
+			},
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+// 10. Add a contact to a static segment
+const addContactSegment = createRoute({
+	operationId: "addContactSegment",
+	method: "put",
+	path: "/{id}/segments/{segmentId}",
+	tags: ["Contacts"],
+	summary: "Add a contact to a static segment",
+	security: [{ Bearer: [] }],
+	request: { params: ContactSegmentParams },
+	responses: {
+		200: {
+			description: "Membership added",
+			content: {
+				"application/json": { schema: ContactSegmentMembershipResponse },
+			},
+		},
+		400: {
+			description: "Invalid segment",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+// 11. Remove a contact from a static segment
+const removeContactSegment = createRoute({
+	operationId: "removeContactSegment",
+	method: "delete",
+	path: "/{id}/segments/{segmentId}",
+	tags: ["Contacts"],
+	summary: "Remove a contact from a static segment",
+	security: [{ Bearer: [] }],
+	request: { params: ContactSegmentParams },
+	responses: {
+		204: { description: "Membership removed" },
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+// 12. Bulk create contacts
 const bulkCreate = createRoute({
 	operationId: "bulkCreateContacts",
 	method: "post",
@@ -273,7 +358,7 @@ const bulkCreate = createRoute({
 	},
 });
 
-// 10. Bulk operations (add_tags, remove_tags, delete)
+// 13. Bulk operations (add_tags, remove_tags, delete)
 const bulkOperations = createRoute({
 	operationId: "bulkContactOperations",
 	method: "post",
@@ -292,7 +377,7 @@ const bulkOperations = createRoute({
 	},
 });
 
-// 11. Merge contacts
+// 14. Merge contacts
 const mergeContact = createRoute({
 	operationId: "mergeContact",
 	method: "post",
@@ -316,7 +401,7 @@ const mergeContact = createRoute({
 	},
 });
 
-// 12. Set custom field value
+// 15. Set custom field value
 const setFieldValue = createRoute({
 	operationId: "setContactFieldValue",
 	method: "put",
@@ -344,7 +429,7 @@ const setFieldValue = createRoute({
 	},
 });
 
-// 13. Clear custom field value
+// 16. Clear custom field value
 const clearFieldValue = createRoute({
 	operationId: "clearContactFieldValue",
 	method: "delete",
@@ -369,8 +454,16 @@ const clearFieldValue = createRoute({
 // 1. List contacts
 app.openapi(listContacts, async (c) => {
 	const orgId = c.get("orgId");
-	const { workspace_id, search, tag, platform, account_id, cursor, limit } =
-		c.req.valid("query");
+	const {
+		workspace_id,
+		search,
+		tag,
+		segment_id,
+		platform,
+		account_id,
+		cursor,
+		limit,
+	} = c.req.valid("query");
 	const db = c.get("db");
 
 	const conditions = [eq(contacts.organizationId, orgId)];
@@ -393,6 +486,17 @@ app.openapi(listContacts, async (c) => {
 
 	if (tag) {
 		conditions.push(sql`${tag} = ANY(${contacts.tags})`);
+	}
+
+	if (segment_id) {
+		conditions.push(
+			sql`EXISTS (
+				SELECT 1 FROM contact_segment_memberships csm
+				WHERE csm.contact_id = ${contacts.id}
+				AND csm.segment_id = ${segment_id}
+				AND csm.organization_id = ${orgId}
+			)`,
+		);
 	}
 
 	if (platform && account_id) {
@@ -474,10 +578,16 @@ app.openapi(listContacts, async (c) => {
 		channelsByContact.set(ch.contactId, list);
 	}
 
+	const segmentIdsByContact = await getContactSegmentIds(db, contactIds);
+
 	return c.json(
 		{
 			data: data.map((ct) =>
-				serializeContact(ct, channelsByContact.get(ct.id) ?? []),
+				serializeContact(
+					ct,
+					channelsByContact.get(ct.id) ?? [],
+					segmentIdsByContact.get(ct.id) ?? [],
+				),
 			),
 			next_cursor:
 				hasMore && data.length > 0 ? data[data.length - 1]!.id : null,
@@ -536,7 +646,7 @@ app.openapi(createContact, async (c) => {
 		}
 	}
 
-	return c.json(serializeContact(contact, channelRows), 201);
+	return c.json(serializeContact(contact, channelRows, []), 201);
 });
 
 // 3. Get contact
@@ -569,7 +679,9 @@ app.openapi(getContact, async (c) => {
 		.from(contactChannels)
 		.where(eq(contactChannels.contactId, contact.id));
 
-	return c.json(serializeContact(contact, channels), 200);
+	const segmentIds = (await getContactSegmentIds(db, [contact.id])).get(contact.id) ?? [];
+
+	return c.json(serializeContact(contact, channels, segmentIds), 200);
 });
 
 // 4. Update contact
@@ -623,7 +735,9 @@ app.openapi(updateContact, async (c) => {
 		.from(contactChannels)
 		.where(eq(contactChannels.contactId, updated.id));
 
-	return c.json(serializeContact(updated, channels), 200);
+	const segmentIds = (await getContactSegmentIds(db, [updated.id])).get(updated.id) ?? [];
+
+	return c.json(serializeContact(updated, channels, segmentIds), 200);
 });
 
 // 5. Delete contact
@@ -781,7 +895,139 @@ app.openapi(removeChannel, async (c) => {
 	return c.body(null, 204);
 });
 
-// 9. Bulk create contacts
+// 9. List contact segments
+// @ts-expect-error — handler may return 403 from assertWorkspaceScope
+app.openapi(listContactSegments, async (c) => {
+	const orgId = c.get("orgId");
+	const { id } = c.req.valid("param");
+	const db = c.get("db");
+
+	const [contact] = await db
+		.select({ id: contacts.id, workspaceId: contacts.workspaceId })
+		.from(contacts)
+		.where(and(eq(contacts.id, id), eq(contacts.organizationId, orgId)))
+		.limit(1);
+
+	if (!contact) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Contact not found" } },
+			404,
+		);
+	}
+
+	const denied = assertWorkspaceScope(c, contact.workspaceId);
+	if (denied) return denied;
+
+	const memberships = (await listContactSegmentMemberships(db, orgId, id)).filter(
+		(row) => !isWorkspaceScopeDenied(c, row.workspace_id),
+	);
+
+	return c.json({ data: memberships }, 200);
+});
+
+// 10. Add contact to segment
+// @ts-expect-error — handler may return 400/403 from scope and validation checks
+app.openapi(addContactSegment, async (c) => {
+	const orgId = c.get("orgId");
+	const { id, segmentId } = c.req.valid("param");
+	const db = c.get("db");
+
+	const [contact] = await db
+		.select({ id: contacts.id, workspaceId: contacts.workspaceId })
+		.from(contacts)
+		.where(and(eq(contacts.id, id), eq(contacts.organizationId, orgId)))
+		.limit(1);
+
+	if (!contact) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Contact not found" } },
+			404,
+		);
+	}
+
+	const denied = assertWorkspaceScope(c, contact.workspaceId);
+	if (denied) return denied;
+
+	const segmentResult = await ensureStaticSegment(db, orgId, segmentId);
+	if ("error" in segmentResult) {
+		return c.json(
+			{ error: { code: "BAD_REQUEST", message: segmentResult.error } },
+			400,
+		);
+	}
+
+	const segmentDenied = assertWorkspaceScope(c, segmentResult.segment.workspaceId);
+	if (segmentDenied) return segmentDenied;
+
+	await addContactToStaticSegment(db, {
+		organizationId: orgId,
+		contactId: id,
+		segmentId,
+		source: "manual",
+		createdByUserId: null,
+	});
+
+	const membership = (
+		await listContactSegmentMemberships(db, orgId, id)
+	).find((row) => row.segment_id === segmentId);
+
+	return c.json(
+		membership ?? {
+			segment_id: segmentResult.segment.id,
+			workspace_id: segmentResult.segment.workspaceId ?? null,
+			name: segmentResult.segment.name,
+			description: segmentResult.segment.description ?? null,
+			is_dynamic: false,
+			source: "manual",
+			created_at: new Date().toISOString(),
+		},
+		200,
+	);
+});
+
+// 11. Remove contact from segment
+app.openapi(removeContactSegment, async (c) => {
+	const orgId = c.get("orgId");
+	const { id, segmentId } = c.req.valid("param");
+	const db = c.get("db");
+
+	const [contact] = await db
+		.select({ id: contacts.id, workspaceId: contacts.workspaceId })
+		.from(contacts)
+		.where(and(eq(contacts.id, id), eq(contacts.organizationId, orgId)))
+		.limit(1);
+
+	if (!contact) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Contact not found" } },
+			404,
+		);
+	}
+
+	const denied = assertWorkspaceScope(c, contact.workspaceId);
+	if (denied) return denied;
+
+	const segmentResult = await ensureStaticSegment(db, orgId, segmentId);
+	if ("error" in segmentResult) {
+		return c.json(
+			{ error: { code: "BAD_REQUEST", message: segmentResult.error } },
+			400,
+		);
+	}
+
+	const segmentDenied = assertWorkspaceScope(c, segmentResult.segment.workspaceId);
+	if (segmentDenied) return segmentDenied;
+
+	await removeContactFromStaticSegment(db, {
+		organizationId: orgId,
+		contactId: id,
+		segmentId,
+	});
+
+	return c.body(null, 204);
+});
+
+// 12. Bulk create contacts
 // @ts-expect-error — handler may return 400/403 from scoped workspace checks
 app.openapi(bulkCreate, async (c) => {
 	const orgId = c.get("orgId");

@@ -1,6 +1,9 @@
 import { apiRequestLogs, createDb, usageRecords } from "@relayapi/db";
 import { sql } from "drizzle-orm";
+import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
+import { parseCsv } from "../lib/csv-parser";
+import { getRequestDb } from "../lib/request-db";
 import { sendNotificationToOrg } from "../services/notification-manager";
 import type { Env, Variables } from "../types";
 import { PRICING } from "../types";
@@ -61,12 +64,86 @@ type UsageWrite = {
 	units: number;
 };
 
+type UsageTrackingContext = Context<{
+	Bindings: Env;
+	Variables: Variables;
+}>;
+
+const JSON_BULK_USAGE_FIELDS: Record<string, string> = {
+	"/v1/posts/bulk": "posts",
+	"/v1/contacts/bulk": "contacts",
+	"/v1/contacts/bulk-operations": "contact_ids",
+	"/v1/whatsapp/bulk-send": "recipients",
+	"/v1/inbox/bulk": "targets",
+};
+
+function isJsonContentType(contentType: string | undefined): boolean {
+	if (!contentType) return false;
+	const mimeType = contentType.split(";")[0]!.trim().toLowerCase();
+	return mimeType === "application/json" || mimeType.endsWith("+json");
+}
+
+function countBodyItems(
+	body: Record<string, unknown> | null | undefined,
+	field: string,
+): number {
+	const items = body?.[field];
+	return Array.isArray(items) && items.length > 0 ? items.length : 1;
+}
+
+async function readJsonBodyFromClone(
+	c: UsageTrackingContext,
+): Promise<Record<string, unknown> | null> {
+	if (!isJsonContentType(c.req.header("content-type"))) return null;
+	try {
+		return (await c.req.raw.clone().json()) as Record<string, unknown>;
+	} catch {
+		return null;
+	}
+}
+
+async function countBulkCsvUnits(
+	c: UsageTrackingContext,
+): Promise<number> {
+	try {
+		const formData = await c.req.raw.clone().formData();
+		const file = formData.get("file");
+		if (!(file instanceof File)) return 1;
+		const rows = parseCsv(await file.text());
+		return rows.length > 0 ? rows.length : 1;
+	} catch {
+		return 1;
+	}
+}
+
+async function getUsageUnits(
+	c: UsageTrackingContext,
+): Promise<number> {
+	if (c.req.method !== "POST") return 1;
+
+	const bulkField = JSON_BULK_USAGE_FIELDS[c.req.path];
+	if (bulkField) {
+		const cachedBody = c.get("parsedBody") as
+			| Record<string, unknown>
+			| null
+			| undefined;
+		const body = cachedBody ?? (await readJsonBodyFromClone(c));
+		return countBodyItems(body, bulkField);
+	}
+
+	if (c.req.path === "/v1/posts/bulk-csv") {
+		return countBulkCsvUnits(c);
+	}
+
+	return 1;
+}
+
 async function persistUsageAndLogs(
 	env: Env,
 	entry: ApiLogEntry,
 	usage?: UsageWrite,
 ): Promise<void> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
+	const db = getRequestDb(env);
 	const tasks: Promise<unknown>[] = [
 		db.insert(apiRequestLogs).values({
 			organizationId: entry.orgId,
@@ -155,15 +232,8 @@ export const usageTrackingMiddleware = createMiddleware<{
 	const callsIncluded = c.get("callsIncluded");
 
 	// Determine how many units this request costs.
-	// Bulk endpoints cost 1 per item, not 1 per request.
-	let units = 1;
-	if (c.req.method === "POST" && c.req.path.endsWith("/bulk")) {
-		const body = c.get("parsedBody");
-		const postItems = body?.posts;
-		if (Array.isArray(postItems)) {
-			units = postItems.length;
-		}
-	}
+	// Multi-item endpoints cost 1 per item, not 1 per request.
+	const units = await getUsageUnits(c);
 
 	// Read the counter synchronously (needed for free-plan gate + threshold detection),
 	// then defer the KV write via waitUntil — the handler no longer blocks on it.

@@ -152,6 +152,7 @@ mock.module("../services/webhook-delivery", () => ({
 
 const mockLogConnectionEvent = mock(async () => {});
 mock.module("../routes/connections", () => ({
+	default: new (require("@hono/zod-openapi").OpenAPIHono)(),
 	logConnectionEvent: mockLogConnectionEvent,
 }));
 

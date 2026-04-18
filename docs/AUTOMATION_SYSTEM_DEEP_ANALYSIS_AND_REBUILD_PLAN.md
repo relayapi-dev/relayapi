@@ -1059,15 +1059,19 @@ Implemented so far:
 - `split_test` is now runtime-supported instead of stubbed
 - `webhook_out` is now runtime-supported instead of stubbed
 - `subscription_add` and `subscription_remove` are now runtime-supported instead of stubbed
+- `segment_add` and `segment_remove` are now runtime-supported against real static segment memberships
+- `conversation_assign` is now runtime-supported with user-only replace semantics
 - `conversation_status` is now runtime-supported instead of stubbed
 - `notify_admin` is now runtime-supported for in-app and email delivery
 - runtime templating now covers outbound webhook payloads and HTTP request payloads
+- inbox APIs now expose `assigned_user_id` and support manual reassignment
+- contact APIs now expose `segment_ids` plus manual add/remove/list operations for static segment memberships
 
 Still open:
 
 - Switch
 - Delay/Wait expansion beyond current nodes
-- HTTP/code/subflow/loop/human approval rollout
+- HTTP/subflow/loop/human approval rollout
 - broader retry/error policy controls
 
 Time: 3-6 weeks
@@ -1077,7 +1081,6 @@ Ship:
 - Switch
 - Delay/Wait
 - HTTP
-- Code
 - Loop
 - Subflow
 - better retry/error policies
@@ -1243,24 +1246,24 @@ Goal:
 Blocked today:
 
 - `conversation_assign`
-  - current `inbox_conversations` schema has no assignee columns
-  - node schema allows `assignee_user_id` and `assignee_team_id`, but runtime
-    has nowhere canonical to store them
+  - implemented: `inbox_conversations.assigned_user_id`
+  - implemented: runtime handler and inbox API exposure
+  - remaining gap: no team assignment in this phase
 - `segment_add` / `segment_remove`
-  - `segments` table exists, but there is no contact-segment membership table
-  - dynamic segments also need a product decision: computed-only vs manual override
+  - implemented: `contact_segment_memberships`
+  - implemented: automation runtime handlers and contact API management surface
+  - remaining gap: dynamic segments remain computed-only by design
 - `subflow_call`
   - needs parent/child enrollment linkage and snapshot inheritance rules
 
 Proposed schema work:
 
-- add assignment columns to `inbox_conversations`
-  - minimum viable: `assigned_user_id`
-  - optional if team model exists or is introduced: `assigned_team_id`
-- add `contact_segment_memberships`
+- completed: add `assigned_user_id` to `inbox_conversations`
+- completed: add `contact_segment_memberships`
   - `contact_id`
   - `segment_id`
   - `source` (`manual`, `automation`, `import`, etc.)
+  - `created_by_user_id`
   - timestamps
 - add subflow linkage if subflow support remains in scope:
   - `parent_enrollment_id`
@@ -1278,7 +1281,9 @@ Likely files:
 
 Done when:
 
-- blocked nodes can be implemented against a real persistence model instead of fake runtime behavior
+- blocked nodes that depend on persistence can be implemented against a real
+  model instead of fake runtime behavior
+- remaining persistence blocker is limited to `subflow_call`
 
 ### Milestone 5: Control-flow expansion
 
@@ -1415,18 +1420,28 @@ This is the order implementation should follow from here:
 
 ### Explicit blockers that require decisions
 
-These should not be hand-waved during implementation:
+These were open blockers. Product decisions are now fixed and should be
+treated as implementation requirements, not open questions:
 
 - `conversation_assign`
-  - user-only assignment is straightforward
-  - team assignment needs either an existing team model or a product decision to defer it
+  - scope: `user-only`
+  - behavior: replace the current assignee
+  - no team assignment in this phase
 - `segment_add` / `segment_remove`
-  - requires a real manual membership model
-  - must decide how manual membership interacts with dynamic segment filters
+  - scope: manual/static segment memberships only
+  - dynamic filter-based segments remain computed and read-only
 - `subflow_call`
-  - requires parent/child lifecycle semantics
-- `code` / `human_approval`
-  - require product, security, and execution-boundary decisions, not just a node handler
+  - execution: synchronous
+  - versioning: child version pinned when the parent is published
+- `code`
+  - removed from the current automation-platform scope
+- `human_approval`
+  - minimal version is approved for this program
+  - support explicit users or org admins, with `approved` / `rejected` /
+    `timed_out` branches
+- supporting product surfaces
+  - approved: assignment and manual segment state should be visible and
+    manageable outside the raw node handlers where needed
 
 ### Verification rule per milestone
 

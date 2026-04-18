@@ -87,6 +87,7 @@ export interface ConversationUpdates {
 	status?: Conversation["status"];
 	labels?: string[];
 	priority?: string;
+	assignedUserId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -531,6 +532,9 @@ export async function updateConversation(
 	}
 	if (updates.priority !== undefined) {
 		setClause.priority = updates.priority;
+	}
+	if (updates.assignedUserId !== undefined) {
+		setClause.assignedUserId = updates.assignedUserId;
 	}
 
 	const updateConditions = [

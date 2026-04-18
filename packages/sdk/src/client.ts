@@ -1098,6 +1098,7 @@ export class Relay {
   refUrls: API.RefUrls = new API.RefUrls(this);
   shortLinks: API.ShortLinks = new API.ShortLinks(this);
   contentTemplates: API.ContentTemplates = new API.ContentTemplates(this);
+  customFields: API.CustomFields = new API.CustomFields(this);
   tags: API.Tags = new API.Tags(this);
   ideaGroups: API.IdeaGroups = new API.IdeaGroups(this);
   ideas: API.Ideas = new API.Ideas(this);

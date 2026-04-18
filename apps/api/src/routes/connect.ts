@@ -14,6 +14,7 @@ import type { Platform } from "../schemas/common";
 import { ErrorResponse } from "../schemas/common";
 import { maybeEncrypt, maybeDecrypt } from "../lib/crypto";
 import { isAllowedCustomerRedirectUrl } from "../lib/customer-redirect";
+import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
 import {
 	assertAllWorkspaceScope,
 	assertWriteAccess,
@@ -2028,30 +2029,15 @@ app.openapi(listLinkedInOrgs, async (c) => {
 	const decryptedLiToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
 
 	try {
-		// LinkedIn Organizations: List organizations where the user has an admin role
-		// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-access-control-by-role
-		const res = await fetch(
-			"https://api.linkedin.com/v2/organizationAcls?q=roleAssignee",
-			{
-				headers: {
-					Authorization: `Bearer ${decryptedLiToken}`,
-				},
-			},
-		);
-		if (!res.ok) {
-			return c.json({ organizations: [] } as never, 200 as never);
-		}
-		const json = (await res.json()) as {
-			elements: Array<{
-				organization: string;
-				organizationId: number;
-			}>;
-		};
+		const organizations =
+			await fetchLinkedInAccessibleOrganizations(decryptedLiToken);
 		return c.json(
 			{
-				organizations: json.elements.map((e) => ({
-					id: String(e.organizationId),
-					name: e.organization,
+				organizations: organizations.map((organization) => ({
+					urn: organization.urn,
+					name: organization.name,
+					logo_url: organization.logo_url,
+					vanity_name: organization.vanity_name,
 				})),
 			} as never,
 			200 as never,

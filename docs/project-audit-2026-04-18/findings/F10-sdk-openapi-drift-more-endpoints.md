@@ -1,6 +1,7 @@
 # F10 - The published SDK is materially behind the live OpenAPI surface
 
 Severity: medium
+Status: ✅ Fixed
 
 ## Summary
 

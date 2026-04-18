@@ -1,8 +1,7 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
+import { getLinkedInRestHeaders, LINKEDIN_API_BASE } from "../lib/linkedin-rest";
 import { classifyPublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
-const LINKEDIN_API = "https://api.linkedin.com";
-const LINKEDIN_VERSION = "202603";
 const CHARACTER_LIMIT = 3000;
 
 interface LinkedInAuth {
@@ -16,13 +15,10 @@ async function linkedinFetch(
 ): Promise<Response> {
 	const res = await fetch(url, {
 		...options,
-		headers: {
-			Authorization: `Bearer ${auth.access_token}`,
+		headers: getLinkedInRestHeaders(auth.access_token, {
 			"Content-Type": "application/json",
-			"Linkedin-Version": LINKEDIN_VERSION,
-			"X-Restli-Protocol-Version": "2.0.0",
-			...(options.headers ?? {}),
-		},
+			...(options.headers as Record<string, string> | undefined),
+		}),
 	});
 	// Classify HTTP-level errors that apply to all LinkedIn API calls
 	if (res.status === 401) throw new Error(`TOKEN_EXPIRED: LinkedIn token expired or invalid`);
@@ -62,7 +58,7 @@ async function uploadImage(
 	// LinkedIn Images API — Initialize image upload
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api#initialize-image-upload
 	const initRes = await linkedinFetch(
-		`${LINKEDIN_API}/rest/images?action=initializeUpload`,
+		`${LINKEDIN_API_BASE}/rest/images?action=initializeUpload`,
 		auth,
 		{
 			method: "POST",
@@ -121,7 +117,7 @@ async function uploadVideo(
 	// LinkedIn Videos API — Initialize video upload
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api#initialize-video-upload
 	const initRes = await linkedinFetch(
-		`${LINKEDIN_API}/rest/videos?action=initializeUpload`,
+		`${LINKEDIN_API_BASE}/rest/videos?action=initializeUpload`,
 		auth,
 		{
 			method: "POST",
@@ -191,7 +187,7 @@ async function uploadVideo(
 	// LinkedIn Videos API — Finalize the upload (required step)
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api
 	const finalizeRes = await linkedinFetch(
-		`${LINKEDIN_API}/rest/videos?action=finalizeUpload`,
+		`${LINKEDIN_API_BASE}/rest/videos?action=finalizeUpload`,
 		auth,
 		{
 			method: "POST",
@@ -235,7 +231,7 @@ async function pollVideoStatus(
 		// LinkedIn Videos API — Get video status
 		// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api
 		const res = await linkedinFetch(
-			`${LINKEDIN_API}/rest/videos/${encodedUrn}`,
+			`${LINKEDIN_API_BASE}/rest/videos/${encodedUrn}`,
 			auth,
 			{ method: "GET" },
 		);
@@ -277,7 +273,7 @@ async function uploadDocument(
 	// LinkedIn Documents API — Initialize document upload
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/documents-api#initialize-document-upload
 	const initRes = await linkedinFetch(
-		`${LINKEDIN_API}/rest/documents?action=initializeUpload`,
+		`${LINKEDIN_API_BASE}/rest/documents?action=initializeUpload`,
 		auth,
 		{
 			method: "POST",
@@ -332,7 +328,7 @@ async function postFirstComment(
 	// LinkedIn Comments API — Post a comment on a post
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/comments-api
 	const res = await linkedinFetch(
-		`${LINKEDIN_API}/rest/socialActions/${encodedPostUrn}/comments`,
+		`${LINKEDIN_API_BASE}/rest/socialActions/${encodedPostUrn}/comments`,
 		auth,
 		{
 			method: "POST",
@@ -420,7 +416,7 @@ export const linkedinPublisher: Publisher = {
 			const authorUrn = account.platform_account_id;
 			// LinkedIn Posts API — Reshare a post
 			// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api#create-a-post
-			const res = await linkedinFetch(`${LINKEDIN_API}/rest/posts`, auth, {
+			const res = await linkedinFetch(`${LINKEDIN_API_BASE}/rest/posts`, auth, {
 				method: "POST",
 				body: JSON.stringify({
 					author: authorUrn,
@@ -459,7 +455,7 @@ export const linkedinPublisher: Publisher = {
 			// LinkedIn Comments API — Post a comment on a post
 			// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/comments-api
 			const res = await linkedinFetch(
-				`${LINKEDIN_API}/rest/socialActions/${encodedPostUrn}/comments`,
+				`${LINKEDIN_API_BASE}/rest/socialActions/${encodedPostUrn}/comments`,
 				auth,
 				{
 					method: "POST",
@@ -590,7 +586,7 @@ export const linkedinPublisher: Publisher = {
 
 			// LinkedIn Posts API — Create a post
 			// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api#create-a-post
-			const res = await linkedinFetch(`${LINKEDIN_API}/rest/posts`, auth, {
+			const res = await linkedinFetch(`${LINKEDIN_API_BASE}/rest/posts`, auth, {
 				method: "POST",
 				body: JSON.stringify(postBody),
 			});

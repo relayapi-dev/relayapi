@@ -19,6 +19,7 @@ import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { maybeDecrypt } from "../lib/crypto";
 import { parseCsv } from "../lib/csv-parser";
+import { getLinkedInRestHeaders, LINKEDIN_REST_BASE } from "../lib/linkedin-rest";
 import { notifyRealtime } from "../lib/notify-post-update";
 import { presignRelayMediaUrls } from "../lib/r2-presign";
 import {
@@ -2439,14 +2440,10 @@ app.openapi(unpublishPost, async (c) => {
 						case "linkedin":
 							deleteSuccess = (
 								await fetch(
-									`https://api.linkedin.com/rest/posts/${encodeURIComponent(target.platformPostId!)}`,
+									`${LINKEDIN_REST_BASE}/posts/${encodeURIComponent(target.platformPostId!)}`,
 									{
 										method: "DELETE",
-										headers: {
-											Authorization: `Bearer ${account.accessToken}`,
-											"LinkedIn-Version": "202402",
-											"X-Restli-Protocol-Version": "2.0.0",
-										},
+										headers: getLinkedInRestHeaders(account.accessToken),
 										signal,
 									},
 								)

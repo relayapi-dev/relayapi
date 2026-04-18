@@ -1,6 +1,7 @@
 # F03 - Root workspace globs omit nested integration packages
 
 Severity: medium
+Status: ✅ Fixed
 
 ## Summary
 

@@ -34,6 +34,7 @@ export function createMockDb() {
 		if (s.includes("apikey")) return "apikey";
 		if (s.includes("usage_records")) return "usageRecords";
 		if (s.includes("api_request_logs")) return "apiRequestLogs";
+		if (s.includes("connection_logs")) return "connectionLogs";
 		if (s.includes("social_accounts")) return "socialAccounts";
 		if (s.includes("social_account_sync_state")) return "socialAccountSyncState";
 		return s;
@@ -57,6 +58,9 @@ export function createMockDb() {
 				}
 				return chain;
 			},
+			orderBy(_value: unknown) {
+				return chain;
+			},
 			limit(n: number) {
 				limitCount = n;
 				return chain;
@@ -66,6 +70,11 @@ export function createMockDb() {
 				try {
 					let rows = data.get(tableName) ?? [];
 					if (filterFn) rows = rows.filter(filterFn);
+					if (fields && Object.keys(fields).length === 1 && "total" in fields) {
+						calls.push({ type: "select", table: tableName });
+						resolve([{ total: rows.length }]);
+						return;
+					}
 					if (fields) {
 						rows = rows.map((row) => {
 							const mapped: Record<string, unknown> = {};

@@ -17,6 +17,7 @@ export const FeedConversationItem = z.object({
 	participant_avatar: z.string().nullable().describe("Participant avatar URL"),
 	participant_metadata: z.any().nullable().optional().describe("Platform-specific participant data (e.g. Instagram profile)"),
 	status: ConversationStatusEnum.describe("Conversation status"),
+	assigned_user_id: z.string().nullable().describe("Assigned organization user ID"),
 	priority: z.string().nullable().describe("Priority level"),
 	labels: z.array(z.string()).describe("Labels"),
 	unread_count: z.number().describe("Unread message count"),
@@ -181,6 +182,12 @@ export const UpdateConversationBody = z.object({
 	status: ConversationStatusEnum.optional().describe("New status"),
 	labels: z.array(z.string()).optional().describe("Labels to set"),
 	priority: z.string().optional().describe("Priority level"),
+	assigned_user_id: z
+		.string()
+		.min(1)
+		.nullable()
+		.optional()
+		.describe("Assigned organization user ID. Use null to clear the assignee."),
 });
 
 export const UpdateConversationResponse = z.object({

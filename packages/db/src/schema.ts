@@ -1036,6 +1036,9 @@ export const inboxConversations = pgTable(
 		contactId: text("contact_id").references(() => contacts.id, {
 			onDelete: "set null",
 		}),
+		assignedUserId: text("assigned_user_id").references(() => user.id, {
+			onDelete: "set null",
+		}),
 		// Timestamps
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -1062,6 +1065,7 @@ export const inboxConversations = pgTable(
 		),
 		index("inbox_conv_org_workspace_idx").on(table.organizationId, table.workspaceId),
 		index("inbox_conv_contact_idx").on(table.contactId),
+		index("inbox_conv_assigned_user_idx").on(table.assignedUserId),
 	],
 );
 
@@ -3027,6 +3031,37 @@ export const segments = pgTable(
 	(table) => [
 		index("segments_org_idx").on(table.organizationId),
 		index("segments_workspace_idx").on(table.workspaceId),
+	],
+);
+
+export const contactSegmentMemberships = pgTable(
+	"contact_segment_memberships",
+	{
+		contactId: text("contact_id")
+			.notNull()
+			.references(() => contacts.id, { onDelete: "cascade" }),
+		segmentId: text("segment_id")
+			.notNull()
+			.references(() => segments.id, { onDelete: "cascade" }),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		source: text("source").notNull().default("manual"),
+		createdByUserId: text("created_by_user_id").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.contactId, table.segmentId],
+			name: "contact_segment_memberships_pk",
+		}),
+		index("contact_segment_memberships_org_idx").on(table.organizationId),
+		index("contact_segment_memberships_segment_idx").on(table.segmentId),
+		index("contact_segment_memberships_contact_idx").on(table.contactId),
 	],
 );
 

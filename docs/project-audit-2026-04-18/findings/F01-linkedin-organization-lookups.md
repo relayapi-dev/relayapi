@@ -1,6 +1,7 @@
 # F01 - LinkedIn organization lookup uses the wrong endpoint and response shape
 
 Severity: high
+Status: ✅ Fixed
 
 ## Summary
 

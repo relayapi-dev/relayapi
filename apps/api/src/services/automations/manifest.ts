@@ -204,8 +204,15 @@ function nodeDescription(type: string): string {
 	if (type === "split_test") return "Route contacts into weighted experiment variants";
 	if (type === "subscription_add") return "Subscribe the enrolled contact to a list";
 	if (type === "subscription_remove") return "Unsubscribe the enrolled contact from a list";
+	if (type === "segment_add") return "Add the enrolled contact to a static segment";
+	if (type === "segment_remove") {
+		return "Remove the enrolled contact from a static segment";
+	}
 	if (type === "notify_admin") {
 		return "Send an internal notification to organization members";
+	}
+	if (type === "conversation_assign") {
+		return "Assign the linked inbox conversation to an organization user";
 	}
 	if (type === "conversation_status") return "Update the linked inbox conversation status";
 	if (type === "http_request") {

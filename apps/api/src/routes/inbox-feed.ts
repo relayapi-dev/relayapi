@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { inboxConversations, inboxMessages } from "@relayapi/db";
+import { inboxConversations, inboxMessages, member } from "@relayapi/db";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { ErrorResponse } from "../schemas/common";
@@ -52,6 +52,7 @@ function serializeConversation(row: {
 	participantAvatar: string | null;
 	participantMetadata?: unknown;
 	status: string;
+	assignedUserId: string | null;
 	priority: string | null;
 	labels: string[] | null;
 	unreadCount: number;
@@ -71,6 +72,7 @@ function serializeConversation(row: {
 		participant_avatar: row.participantAvatar,
 		participant_metadata: row.participantMetadata ?? null,
 		status: row.status,
+		assigned_user_id: row.assignedUserId,
 		priority: row.priority,
 		labels: row.labels ?? [],
 		unread_count: row.unreadCount,
@@ -524,10 +526,31 @@ app.openapi(updateConversationRoute, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 
+	if (body.assigned_user_id) {
+		const orgMember = await db.query.member.findFirst({
+			where: and(
+				eq(member.organizationId, orgId),
+				eq(member.userId, body.assigned_user_id),
+			),
+		});
+		if (!orgMember) {
+			return c.json(
+				{
+					error: {
+						code: "BAD_REQUEST",
+						message: `Organization member '${body.assigned_user_id}' not found`,
+					},
+				} as never,
+				400 as never,
+			);
+		}
+	}
+
 	const updated = await updateConversation(db, id, orgId, {
 		status: body.status,
 		labels: body.labels,
 		priority: body.priority,
+		assignedUserId: body.assigned_user_id,
 	}, c.get("workspaceScope"));
 
 	if (!updated) {

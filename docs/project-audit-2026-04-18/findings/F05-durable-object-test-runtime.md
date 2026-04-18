@@ -1,6 +1,7 @@
 # F05 - Full API performance tests fail outside the Workers runtime
 
 Severity: medium
+Status: ✅ Fixed
 
 ## Summary
 

@@ -8,6 +8,12 @@ import { buildHeaders } from '../../internal/headers';
 import { RequestOptions } from '../../internal/request-options';
 import { path } from '../../internal/utils/path';
 
+function isRequestOptions(
+  value: PostUnpublishParams | RequestOptions | undefined,
+): value is RequestOptions {
+  return !!value && typeof value === 'object' && !('platforms' in value);
+}
+
 export class Posts extends APIResource {
   logs: LogsAPI.Logs = new LogsAPI.Logs(this._client);
 
@@ -101,6 +107,17 @@ export class Posts extends APIResource {
   }
 
   /**
+   * Upload a CSV file to create multiple posts.
+   */
+  bulkCsvUpload(
+    body: FormData,
+    query: PostBulkCsvUploadParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<PostBulkCsvUploadResponse> {
+    return this._client.post('/v1/posts/bulk-csv', { body, query, ...options });
+  }
+
+  /**
    * Retry publishing for failed targets on a post.
    *
    * @example
@@ -121,8 +138,43 @@ export class Posts extends APIResource {
    * const response = await client.posts.unpublish('id');
    * ```
    */
-  unpublish(id: string, options?: RequestOptions): APIPromise<PostUnpublishResponse> {
-    return this._client.post(path`/v1/posts/${id}/unpublish`, options);
+  unpublish(
+    id: string,
+    bodyOrOptions?: PostUnpublishParams | RequestOptions,
+    options?: RequestOptions,
+  ): APIPromise<PostUnpublishResponse> {
+    const body = isRequestOptions(bodyOrOptions) ? undefined : bodyOrOptions;
+    const requestOptions = isRequestOptions(bodyOrOptions) ? bodyOrOptions : options;
+    return this._client.post(path`/v1/posts/${id}/unpublish`, { body, ...requestOptions });
+  }
+
+  /**
+   * Get notes for a post.
+   */
+  getNotes(id: string, options?: RequestOptions): APIPromise<PostNotesResponse> {
+    return this._client.get(path`/v1/posts/${id}/notes`, options);
+  }
+
+  /**
+   * Update notes for a post.
+   */
+  updateNotes(
+    id: string,
+    body: PostUpdateNotesParams,
+    options?: RequestOptions,
+  ): APIPromise<PostNotesResponse> {
+    return this._client.patch(path`/v1/posts/${id}/notes`, { body, ...options });
+  }
+
+  /**
+   * Update metadata on a published video.
+   */
+  updateMetadata(
+    id: string,
+    body: PostUpdateMetadataParams,
+    options?: RequestOptions,
+  ): APIPromise<PostUpdateMetadataResponse> {
+    return this._client.post(path`/v1/posts/${id}/update-metadata`, { body, ...options });
   }
 
   /**
@@ -1093,6 +1145,143 @@ export namespace PostUnpublishResponse {
   }
 }
 
+export interface PostUnpublishParams {
+  /**
+   * Restrict the unpublish action to specific platforms.
+   */
+  platforms?: Array<string>;
+}
+
+export interface PostNotesResponse {
+  /**
+   * Notes stored for the post.
+   */
+  notes: string | null;
+}
+
+export interface PostUpdateNotesParams {
+  /**
+   * Notes content to store for the post.
+   */
+  notes: string;
+}
+
+export interface PostUpdateMetadataResponse {
+  platform: string;
+
+  success: boolean;
+
+  updated_fields: Array<string>;
+
+  video_id: string;
+}
+
+export interface PostUpdateMetadataParams {
+  /**
+   * Platform to update metadata on (YouTube only for now)
+   */
+  platform: 'youtube';
+
+  /**
+   * Account ID (required when post ID is '_' for direct video ID mode)
+   */
+  account_id?: string;
+
+  /**
+   * YouTube video ID (required when post ID is '_' for direct mode)
+   */
+  video_id?: string;
+
+  /**
+   * Video title (max 100 chars)
+   */
+  title?: string;
+
+  /**
+   * Video description
+   */
+  description?: string;
+
+  /**
+   * Video tags
+   */
+  tags?: Array<string>;
+
+  /**
+   * Video visibility
+   */
+  visibility?: 'public' | 'private' | 'unlisted';
+
+  /**
+   * YouTube category ID
+   */
+  category_id?: string;
+
+  /**
+   * COPPA compliance flag
+   */
+  made_for_kids?: boolean;
+
+  /**
+   * YouTube playlist ID to add the video to
+   */
+  playlist_id?: string;
+}
+
+export interface PostBulkCsvUploadParams {
+  /**
+   * Set to "true" to validate without creating posts.
+   */
+  dry_run?: string;
+}
+
+export interface PostBulkCsvUploadResponse {
+  data: Array<PostBulkCsvUploadResponse.Data>;
+
+  summary: PostBulkCsvUploadResponse.Summary;
+}
+
+export namespace PostBulkCsvUploadResponse {
+  export interface Data {
+    /**
+     * 1-based row number
+     */
+    row: number;
+
+    status: 'success' | 'error' | 'skipped';
+
+    /**
+     * Created post ID (only on success)
+     */
+    post_id?: string;
+
+    error?: Data.Error;
+  }
+
+  export namespace Data {
+    export interface Error {
+      code: string;
+
+      message: string;
+    }
+  }
+
+  export interface Summary {
+    failed: number;
+
+    posts_created: number;
+
+    /**
+     * Rows skipped in dry_run mode
+     */
+    skipped: number;
+
+    succeeded: number;
+
+    total_rows: number;
+  }
+}
+
 export interface PostCreateParams {
   /**
    * Publish intent. Use "now" to publish immediately, "draft" to save as draft,
@@ -1379,13 +1568,20 @@ export declare namespace Posts {
     type PostUpdateResponse as PostUpdateResponse,
     type PostListResponse as PostListResponse,
     type PostBulkCreateResponse as PostBulkCreateResponse,
+    type PostBulkCsvUploadResponse as PostBulkCsvUploadResponse,
     type PostRetryResponse as PostRetryResponse,
     type PostUnpublishResponse as PostUnpublishResponse,
+    type PostUnpublishParams as PostUnpublishParams,
+    type PostNotesResponse as PostNotesResponse,
+    type PostUpdateNotesParams as PostUpdateNotesParams,
+    type PostUpdateMetadataResponse as PostUpdateMetadataResponse,
+    type PostUpdateMetadataParams as PostUpdateMetadataParams,
     type ExternalPost as ExternalPost,
     type PostCreateParams as PostCreateParams,
     type PostUpdateParams as PostUpdateParams,
     type PostListParams as PostListParams,
     type PostBulkCreateParams as PostBulkCreateParams,
+    type PostBulkCsvUploadParams as PostBulkCsvUploadParams,
   };
 
   export {

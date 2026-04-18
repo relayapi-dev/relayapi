@@ -112,6 +112,37 @@ export class Contacts extends APIResource {
   }
 
   /**
+   * List static segment memberships for a contact
+   */
+  listSegments(
+    contactId: string,
+    options?: RequestOptions,
+  ): APIPromise<ContactListSegmentsResponse> {
+    return this._client.get(path`/v1/contacts/${contactId}/segments`, options);
+  }
+
+  /**
+   * Add a contact to a static segment
+   */
+  addSegment(
+    contactId: string,
+    segmentId: string,
+    options?: RequestOptions,
+  ): APIPromise<ContactAddSegmentResponse> {
+    return this._client.put(path`/v1/contacts/${contactId}/segments/${segmentId}`, { ...options });
+  }
+
+  /**
+   * Remove a contact from a static segment
+   */
+  removeSegment(contactId: string, segmentId: string, options?: RequestOptions): APIPromise<void> {
+    return this._client.delete(path`/v1/contacts/${contactId}/segments/${segmentId}`, {
+      ...options,
+      headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
+    });
+  }
+
+  /**
    * Set a custom field value for a contact
    */
   setField(
@@ -165,6 +196,43 @@ export interface ContactChannel {
   created_at: string;
 }
 
+export interface ContactSegmentMembership {
+  /**
+   * Segment ID
+   */
+  segment_id: string;
+
+  /**
+   * Workspace ID
+   */
+  workspace_id: string | null;
+
+  /**
+   * Segment name
+   */
+  name: string;
+
+  /**
+   * Segment description
+   */
+  description: string | null;
+
+  /**
+   * Whether the segment is dynamically computed
+   */
+  is_dynamic: boolean;
+
+  /**
+   * Membership source
+   */
+  source: string;
+
+  /**
+   * Membership created timestamp
+   */
+  created_at: string;
+}
+
 export interface ContactCreateResponse {
   /**
    * Contact ID
@@ -205,6 +273,11 @@ export interface ContactCreateResponse {
    * Platform channels
    */
   channels?: Array<ContactChannel>;
+
+  /**
+   * Static segment memberships
+   */
+  segment_ids?: Array<string>;
 }
 
 export interface ContactRetrieveResponse {
@@ -247,6 +320,11 @@ export interface ContactRetrieveResponse {
    * Platform channels
    */
   channels?: Array<ContactChannel>;
+
+  /**
+   * Static segment memberships
+   */
+  segment_ids?: Array<string>;
 }
 
 export interface ContactListResponse {
@@ -304,6 +382,11 @@ export namespace ContactListResponse {
      * Platform channels
      */
     channels?: Array<ContactChannel>;
+
+    /**
+     * Static segment memberships
+     */
+    segment_ids?: Array<string>;
   }
 }
 
@@ -347,6 +430,11 @@ export interface ContactUpdateResponse {
    * Platform channels
    */
   channels?: Array<ContactChannel>;
+
+  /**
+   * Static segment memberships
+   */
+  segment_ids?: Array<string>;
 }
 
 export interface ContactBulkCreateResponse {
@@ -422,6 +510,47 @@ export interface ContactAddChannelResponse {
 
   /**
    * Created timestamp
+   */
+  created_at: string;
+}
+
+export interface ContactListSegmentsResponse {
+  data: Array<ContactSegmentMembership>;
+}
+
+export interface ContactAddSegmentResponse {
+  /**
+   * Segment ID
+   */
+  segment_id: string;
+
+  /**
+   * Workspace ID
+   */
+  workspace_id: string | null;
+
+  /**
+   * Segment name
+   */
+  name: string;
+
+  /**
+   * Segment description
+   */
+  description: string | null;
+
+  /**
+   * Whether the segment is dynamically computed
+   */
+  is_dynamic: boolean;
+
+  /**
+   * Membership source
+   */
+  source: string;
+
+  /**
+   * Membership created timestamp
    */
   created_at: string;
 }
@@ -505,6 +634,11 @@ export interface ContactListParams {
    * Filter by tag
    */
   tag?: string;
+
+  /**
+   * Filter by static segment membership
+   */
+  segment_id?: string;
 
   /**
    * Filter by platform
@@ -640,6 +774,7 @@ export interface ContactSetFieldParams {
 export declare namespace Contacts {
   export {
     type ContactChannel as ContactChannel,
+    type ContactSegmentMembership as ContactSegmentMembership,
     type ContactCreateResponse as ContactCreateResponse,
     type ContactRetrieveResponse as ContactRetrieveResponse,
     type ContactListResponse as ContactListResponse,
@@ -649,6 +784,8 @@ export declare namespace Contacts {
     type ContactMergeResponse as ContactMergeResponse,
     type ContactListChannelsResponse as ContactListChannelsResponse,
     type ContactAddChannelResponse as ContactAddChannelResponse,
+    type ContactListSegmentsResponse as ContactListSegmentsResponse,
+    type ContactAddSegmentResponse as ContactAddSegmentResponse,
     type ContactSetFieldResponse as ContactSetFieldResponse,
     type ContactCreateParams as ContactCreateParams,
     type ContactListParams as ContactListParams,

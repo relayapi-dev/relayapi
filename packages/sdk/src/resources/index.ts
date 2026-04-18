@@ -131,6 +131,14 @@ export {
   type ContactAddChannelParams,
   type ContactSetFieldParams,
 } from './contacts';
+export {
+  CustomFields,
+  type CustomFieldResponse,
+  type CustomFieldListResponse,
+  type CustomFieldCreateParams,
+  type CustomFieldUpdateParams,
+  type CustomFieldListParams,
+} from './custom-fields';
 export { Connections, type ConnectionListLogsResponse, type ConnectionListLogsParams } from './connections';
 export {
   OrgSettings,
@@ -155,6 +163,7 @@ export {
   type MediaListResponse,
   type MediaRetrieveResponse,
   type MediaGetPresignURLResponse,
+  type MediaConfirmParams,
   type MediaUploadResponse,
   type MediaListParams,
   type MediaGetPresignURLParams,
@@ -170,12 +179,19 @@ export {
   type PostUpdateResponse,
   type PostListResponse,
   type PostBulkCreateResponse,
+  type PostBulkCsvUploadResponse,
   type PostRetryResponse,
   type PostUnpublishResponse,
+  type PostUnpublishParams,
+  type PostNotesResponse,
+  type PostUpdateNotesParams,
+  type PostUpdateMetadataResponse,
+  type PostUpdateMetadataParams,
   type PostCreateParams,
   type PostUpdateParams,
   type PostListParams,
   type PostBulkCreateParams,
+  type PostBulkCsvUploadParams,
 } from './posts/posts';
 export {
   Queue,

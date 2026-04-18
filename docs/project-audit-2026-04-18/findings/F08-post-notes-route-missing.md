@@ -1,6 +1,7 @@
 # F08 - Dashboard post notes panel calls a missing Astro API route
 
 Severity: high
+Status: ✅ Fixed
 
 ## Summary
 

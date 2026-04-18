@@ -46,6 +46,13 @@ export class Media extends APIResource {
   }
 
   /**
+   * Confirm that a presigned upload completed successfully.
+   */
+  confirm(body: MediaConfirmParams, options?: RequestOptions): APIPromise<MediaRetrieveResponse> {
+    return this._client.post('/v1/media/confirm', { body, ...options });
+  }
+
+  /**
    * Upload a raw file body. Pass the filename as a query parameter and set the
    * Content-Type header.
    */
@@ -162,6 +169,13 @@ export interface MediaGetPresignURLParams {
   filename: string;
 }
 
+export interface MediaConfirmParams {
+  /**
+   * The storage key from the presign response URL
+   */
+  storage_key: string;
+}
+
 export interface MediaUploadParams {
   /**
    * Query param: Original filename
@@ -249,6 +263,7 @@ export declare namespace Media {
     type MediaListResponse as MediaListResponse,
     type MediaRetrieveResponse as MediaRetrieveResponse,
     type MediaGetPresignURLResponse as MediaGetPresignURLResponse,
+    type MediaConfirmParams as MediaConfirmParams,
     type MediaUploadResponse as MediaUploadResponse,
     type MediaListParams as MediaListParams,
     type MediaGetPresignURLParams as MediaGetPresignURLParams,

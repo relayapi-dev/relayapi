@@ -1,6 +1,7 @@
 # F06 - Docs site metadata lacks `metadataBase`
 
 Severity: low to medium
+Status: ✅ Fixed
 
 ## Summary
 

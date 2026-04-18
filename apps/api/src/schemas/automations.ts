@@ -166,9 +166,6 @@ export const STUBBED_NODE_TYPES: ReadonlySet<string> = new Set([
 	"ai_agent",
 	"ai_intent_router",
 	"subflow_call",
-	"segment_add",
-	"segment_remove",
-	"conversation_assign",
 ]);
 
 export const AUTOMATION_NODE_TYPES = [
@@ -726,8 +723,10 @@ export const NotifyAdminNode = z.object({
 export const ConversationAssignNode = z.object({
 	...baseNode,
 	type: z.literal("conversation_assign"),
-	assignee_user_id: z.string().optional(),
-	assignee_team_id: z.string().optional(),
+	assignee_user_id: z
+		.string()
+		.min(1)
+		.describe("Organization user ID to assign to the linked inbox conversation"),
 });
 
 export const ConversationStatusNode = z.object({
@@ -1556,8 +1555,6 @@ export const PinterestCreatePinNode = z.object({
 // Currently stubbed:
 //   ai_step, ai_agent, ai_intent_router     (AI infra)
 //   subflow_call                            (sub-enrollment)
-//   segment_add, segment_remove             (segment memberships)
-//   conversation_assign                     (inbox writes)
 export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	z.object({ ...baseNode, type: z.literal("trigger") }),
 	MessageTextNode,
@@ -1582,7 +1579,10 @@ export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	FieldClearNode,
 	SubscriptionAddNode,
 	SubscriptionRemoveNode,
+	SegmentAddNode,
+	SegmentRemoveNode,
 	NotifyAdminNode,
+	ConversationAssignNode,
 	ConversationStatusNode,
 	HttpRequestNode,
 	WebhookOutNode,
