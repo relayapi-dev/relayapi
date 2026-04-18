@@ -1687,19 +1687,30 @@ function buildNodeConfigSchemaMap(): Record<string, unknown> {
 		}
 	).options;
 	for (const opt of options) {
-		const shape = opt.shape;
-		const typeField = shape.type as unknown as { value?: string } | undefined;
-		const typeName = typeField?.value;
-		if (!typeName) continue;
-		const mask: Record<string, true> = {};
-		for (const base of BASE_NODE_FIELDS) {
-			if (base in shape) mask[base] = true;
-		}
-		const configOnly = opt.omit(mask as { [K in keyof typeof shape]?: true });
+		// Wrap per-option so one failing option (e.g. a z.object().refine(...),
+		// which Zod 4 forbids from .omit()) doesn't crash the whole /schema
+		// endpoint. Refined options fall back to `{}` for fields_schema.
 		try {
+			const shape = opt.shape;
+			const typeField = shape.type as unknown as { value?: string } | undefined;
+			const typeName = typeField?.value;
+			if (!typeName) continue;
+			const mask: Record<string, true> = {};
+			for (const base of BASE_NODE_FIELDS) {
+				if (base in shape) mask[base] = true;
+			}
+			const configOnly = opt.omit(mask as { [K in keyof typeof shape]?: true });
 			out[typeName] = z.toJSONSchema(configOnly);
 		} catch {
-			out[typeName] = {};
+			// Refined object schemas: still try to surface the type so the node
+			// appears in the catalog with an empty fields_schema.
+			try {
+				const shape = opt.shape;
+				const typeField = shape.type as unknown as { value?: string } | undefined;
+				if (typeField?.value) out[typeField.value] = {};
+			} catch {
+				// give up; skip this option
+			}
 		}
 	}
 	return out;
