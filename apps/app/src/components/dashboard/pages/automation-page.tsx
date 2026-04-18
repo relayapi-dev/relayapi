@@ -1,7 +1,22 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { BookOpen, Loader2, Plus, Workflow } from "lucide-react";
+import { BookOpen, Loader2, MoreHorizontal, Plus, Trash2, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
@@ -54,6 +69,9 @@ function humanTrigger(t: string): string {
 
 export function AutomationPage() {
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<AutomationResponse | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const {
     data: automations,
@@ -63,7 +81,28 @@ export function AutomationPage() {
     loadMore,
     loadingMore,
     refetch,
+    setData,
   } = usePaginatedApi<AutomationResponse>("automations");
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/automations/${deleteTarget.id}`, { method: "DELETE" });
+      if (res.ok || res.status === 204) {
+        setData((prev) => prev.filter((a) => a.id !== deleteTarget.id));
+        setDeleteTarget(null);
+      } else {
+        const body = await res.json().catch(() => null);
+        setDeleteError(body?.error?.message || body?.message || `Error ${res.status}`);
+      }
+    } catch {
+      setDeleteError("Network connection lost.");
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -157,6 +196,7 @@ export function AutomationPage() {
                   <th className="px-4 py-2.5 text-right hidden md:table-cell">Enrolled</th>
                   <th className="px-4 py-2.5 text-right hidden md:table-cell">Completed</th>
                   <th className="px-4 py-2.5 text-right hidden sm:table-cell">Created</th>
+                  <th className="px-4 py-2.5 w-8" />
                 </tr>
               </thead>
               <tbody>
@@ -189,6 +229,33 @@ export function AutomationPage() {
                     <td className="px-4 py-3 text-xs text-muted-foreground text-right hidden sm:table-cell">
                       {formatDate(a.created_at)}
                     </td>
+                    <td
+                      className="px-2 py-3 text-right"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            className="rounded-md p-1.5 hover:bg-accent/50 transition-colors"
+                            aria-label="Automation actions"
+                          >
+                            <MoreHorizontal className="size-4 text-muted-foreground" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-36">
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => {
+                              setDeleteError(null);
+                              setDeleteTarget(a);
+                            }}
+                          >
+                            <Trash2 className="size-3.5 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </td>
                   </motion.tr>
                 ))}
               </tbody>
@@ -208,6 +275,45 @@ export function AutomationPage() {
         onOpenChange={setTemplateDialogOpen}
         onCreated={refetch}
       />
+
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent showCloseButton={false} className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">Delete automation</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete{" "}
+              <span className="font-medium text-foreground">
+                {deleteTarget?.name || "this automation"}
+              </span>
+              ? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <p className="text-sm text-destructive">{deleteError}</p>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" size="sm">Cancel</Button>
+            </DialogClose>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={deleting}
+              onClick={handleDelete}
+            >
+              {deleting ? <Loader2 className="size-3.5 animate-spin" /> : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
