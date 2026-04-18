@@ -3,7 +3,7 @@ import { Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { AutomationNodeSpec, SchemaNodeDef } from "./types";
 
-const INPUT_CLS =
+export const INPUT_CLS =
 	"h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground";
 
 type PrimitiveArrayKind = "string" | "number" | "boolean";
@@ -23,7 +23,7 @@ interface ArraySpec {
 	maxItems?: number;
 }
 
-interface FieldDef {
+export interface FieldDef {
 	name: string;
 	type: "string" | "number" | "boolean" | "textarea" | "enum" | "object" | "array";
 	required: boolean;
@@ -32,7 +32,7 @@ interface FieldDef {
 	array?: ArraySpec;
 }
 
-function parseFieldsSchema(fieldsSchema: unknown): FieldDef[] {
+export function parseFieldsSchema(fieldsSchema: unknown): FieldDef[] {
 	if (!fieldsSchema || typeof fieldsSchema !== "object") return [];
 	const schema = fieldsSchema as {
 		properties?: Record<string, unknown>;
@@ -279,7 +279,7 @@ export function PropertyPanel({
 	);
 }
 
-function FieldRow({
+export function FieldRow({
 	field,
 	value,
 	onChange,

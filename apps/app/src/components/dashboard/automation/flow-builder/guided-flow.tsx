@@ -171,6 +171,25 @@ export function GuidedFlow({
 		return map;
 	}, [automation.edges]);
 
+	// Sequential step numbering (trigger = 1, then each node in DFS order).
+	// Zapier shows "1. Catch Hook", "2. Filter conditions", ... — we mirror that.
+	const stepNumber = useMemo(() => {
+		const map = new Map<string, number>();
+		map.set("trigger", 1);
+		let i = 2;
+		const visited = new Set<string>(["trigger"]);
+		const walk = (key: string) => {
+			for (const c of childrenByKey.get(key) ?? []) {
+				if (visited.has(c.target)) continue;
+				visited.add(c.target);
+				map.set(c.target, i++);
+				walk(c.target);
+			}
+		};
+		walk("trigger");
+		return map;
+	}, [childrenByKey]);
+
 	// Detect orphaned nodes (no incoming edge and key !== 'trigger'). Rendered
 	// at the bottom so the user can re-attach them.
 	const orphans = useMemo(() => {
@@ -207,6 +226,7 @@ export function GuidedFlow({
 					readOnly={readOnly}
 					visited={new Set(["trigger"])}
 					depth={0}
+					stepNumber={stepNumber}
 				/>
 
 				{orphans.length > 0 && (
@@ -252,6 +272,7 @@ function ChainRenderer({
 	readOnly,
 	visited,
 	depth,
+	stepNumber,
 }: {
 	parentKey: string;
 	parentEdgeLabel?: string;
@@ -268,6 +289,7 @@ function ChainRenderer({
 	readOnly?: boolean;
 	visited: Set<string>;
 	depth: number;
+	stepNumber: Map<string, number>;
 }) {
 	const children = childrenByKey.get(parentKey) ?? [];
 
@@ -282,18 +304,22 @@ function ChainRenderer({
 			<>
 				<Connector label={child.label === "next" ? undefined : child.label} />
 				{!readOnly && (
-					<AddStepButton
-						parentKey={parentKey}
-						label={child.label}
-						schema={schema}
-						automationChannel={automationChannel}
-						onInsert={onInsertAfter}
-						tone="inline"
-					/>
+					<>
+						<AddStepButton
+							parentKey={parentKey}
+							label={child.label}
+							schema={schema}
+							automationChannel={automationChannel}
+							onInsert={onInsertAfter}
+							tone="inline"
+						/>
+						<Connector />
+					</>
 				)}
 				<StepCard
 					node={node}
 					def={schemaByType.get(node.type) ?? null}
+					index={stepNumber.get(node.key)}
 					selected={selectedKey === node.key}
 					hasError={errorKeys.has(node.key)}
 					onClick={() => onSelect(node.key)}
@@ -314,6 +340,7 @@ function ChainRenderer({
 					readOnly={readOnly}
 					visited={nextVisited}
 					depth={depth}
+					stepNumber={stepNumber}
 				/>
 			</>
 		);
@@ -344,6 +371,7 @@ function ChainRenderer({
 							readOnly={readOnly}
 							visited={visited}
 							depth={depth + 1}
+							stepNumber={stepNumber}
 						/>
 					))}
 				</div>
@@ -388,6 +416,7 @@ function BranchColumn({
 	readOnly,
 	visited,
 	depth,
+	stepNumber,
 }: {
 	branchLabel: string;
 	parentKey: string;
@@ -405,6 +434,7 @@ function BranchColumn({
 	readOnly?: boolean;
 	visited: Set<string>;
 	depth: number;
+	stepNumber: Map<string, number>;
 }) {
 	const node = nodesByKey.get(firstChildKey);
 	const branchVisited = new Set(visited);
@@ -429,6 +459,7 @@ function BranchColumn({
 					<StepCard
 						node={node}
 						def={schemaByType.get(node.type) ?? null}
+						index={stepNumber.get(node.key)}
 						selected={selectedKey === node.key}
 						hasError={errorKeys.has(node.key)}
 						onClick={() => onSelect(node.key)}
@@ -449,6 +480,7 @@ function BranchColumn({
 						readOnly={readOnly}
 						visited={branchVisited}
 						depth={depth}
+						stepNumber={stepNumber}
 					/>
 				</>
 			)}
@@ -489,34 +521,24 @@ function TriggerCard({
 					"border-emerald-500/60 ring-2 ring-emerald-500/20 shadow-md",
 			)}
 		>
-			<div className="flex items-center gap-3">
-				<div
+			<div className="flex items-center justify-between gap-2">
+				<span
 					className={cn(
-						"shrink-0 size-10 rounded-lg flex items-center justify-center",
+						"inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide",
 						TRIGGER_ACCENT.bg,
+						TRIGGER_ACCENT.text,
 					)}
 				>
-					<Zap className={cn("size-4", TRIGGER_ACCENT.text)} />
-				</div>
-				<div className="min-w-0 flex-1">
-					<div className="flex items-center gap-1.5">
-						<span
-							className={cn(
-								"inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-								TRIGGER_ACCENT.bg,
-								TRIGGER_ACCENT.text,
-							)}
-						>
-							Trigger
-						</span>
-						<span className="text-[11px] text-muted-foreground capitalize">
-							{automation.channel}
-						</span>
-					</div>
-					<div className="mt-1 text-[15px] font-medium leading-tight truncate">
-						{automation.trigger_type.replace(/_/g, " ")}
-					</div>
-				</div>
+					<Zap className="size-3.5" />
+					Trigger
+				</span>
+				<span className="text-[11px] text-muted-foreground capitalize">
+					{automation.channel}
+				</span>
+			</div>
+			<div className="mt-2.5 text-[15px] font-medium leading-tight">
+				<span className="text-muted-foreground mr-1.5">1.</span>
+				{automation.trigger_type.replace(/_/g, " ")}
 			</div>
 		</button>
 	);
@@ -525,6 +547,7 @@ function TriggerCard({
 function StepCard({
 	node,
 	def,
+	index,
 	selected,
 	hasError,
 	onClick,
@@ -532,6 +555,7 @@ function StepCard({
 }: {
 	node: AutomationNodeSpec;
 	def: SchemaNodeDef | null;
+	index?: number;
 	selected: boolean;
 	hasError: boolean;
 	onClick: () => void;
@@ -553,43 +577,35 @@ function StepCard({
 						"border-destructive/50 ring-2 ring-destructive/20 hover:border-destructive/60",
 				)}
 			>
-				<div className="flex items-center gap-3">
-					<div
+				<div className="flex items-center justify-between gap-2">
+					<span
 						className={cn(
-							"shrink-0 size-10 rounded-lg flex items-center justify-center",
+							"inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide",
 							accent.bg,
+							accent.text,
 						)}
 					>
-						<Icon className={cn("size-4", accent.text)} />
-					</div>
-					<div className="min-w-0 flex-1">
-						<div className="flex items-center gap-1.5">
-							<span
-								className={cn(
-									"inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-									accent.bg,
-									accent.text,
-								)}
-							>
-								{node.type.replace(/_/g, " ")}
-							</span>
-							{hasError && (
-								<span className="inline-flex items-center gap-1 text-[10px] font-medium text-destructive">
-									<AlertCircle className="size-3" />
-									error
-								</span>
-							)}
-						</div>
-						<div className="mt-1 text-[15px] font-medium leading-tight truncate">
-							{node.key}
-						</div>
-						{summary && (
-							<div className="text-[12px] text-muted-foreground mt-0.5 line-clamp-2">
-								{summary}
-							</div>
-						)}
-					</div>
+						<Icon className="size-3.5" />
+						{node.type.replace(/_/g, " ")}
+					</span>
+					{hasError && (
+						<span className="inline-flex items-center gap-1 text-[11px] font-medium text-destructive">
+							<AlertCircle className="size-3" />
+							error
+						</span>
+					)}
 				</div>
+				<div className="mt-2.5 text-[15px] font-medium leading-tight truncate">
+					{index !== undefined && (
+						<span className="text-muted-foreground mr-1.5">{index}.</span>
+					)}
+					{node.key}
+				</div>
+				{summary && (
+					<div className="text-[12px] text-muted-foreground mt-1 line-clamp-2">
+						{summary}
+					</div>
+				)}
 			</button>
 			{onDelete && (
 				<button
