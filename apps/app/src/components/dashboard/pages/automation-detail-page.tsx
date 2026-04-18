@@ -253,23 +253,27 @@ export function AutomationDetailPage({ automationId }: Props) {
 		(key: string) => {
 			setDraft((prev) => {
 				if (!prev) return prev;
-				const incoming = prev.edges.find((e) => e.to === key);
-				const outgoing = prev.edges.find((e) => e.from === key);
+				const incomingEdges = prev.edges.filter((e) => e.to === key);
+				const outgoingEdges = prev.edges.filter((e) => e.from === key);
 				const nodes = prev.nodes.filter((n) => n.key !== key);
 				let edges = prev.edges.filter(
 					(e) => e.from !== key && e.to !== key,
 				);
-				// If the deleted node had one incoming and one outgoing, rewire
-				// the parent directly to the child so the chain stays intact.
-				if (incoming && outgoing) {
+				// Rewire the chain only when the deleted node sits on a linear
+				// path (exactly one in, exactly one out). Branching or fan-in
+				// topologies would need user intent to resolve, so we just drop
+				// the incident edges in those cases.
+				if (incomingEdges.length === 1 && outgoingEdges.length === 1) {
+					const [incoming] = incomingEdges;
+					const [outgoing] = outgoingEdges;
 					edges = [
 						...edges,
 						{
-							from: incoming.from,
-							to: outgoing.to,
-							label: incoming.label,
-							order: incoming.order,
-							condition_expr: incoming.condition_expr,
+							from: incoming!.from,
+							to: outgoing!.to,
+							label: incoming!.label,
+							order: incoming!.order,
+							condition_expr: incoming!.condition_expr,
 						},
 					];
 				}
