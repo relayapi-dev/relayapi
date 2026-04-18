@@ -19,6 +19,7 @@ import {
 	AUTOMATION_CHANNELS,
 	AUTOMATION_NODE_TYPES,
 	AUTOMATION_TRIGGER_TYPES,
+	AutomationNodeSpec,
 	STUBBED_NODE_TYPES,
 	AutomationCreateSpec,
 	AutomationEnrollmentResponse,
@@ -370,6 +371,11 @@ const getSchema = createRoute({
 });
 
 app.openapi(getSchema, async (c) => {
+	// Convert the per-type Zod schemas (without the universal base fields like
+	// `type`, `key`, `notes`, `canvas_x`, `canvas_y`) into JSON Schema so the
+	// dashboard / MCP clients can render real config forms instead of generic
+	// JSON editors.
+	const nodeConfigSchema = buildNodeConfigSchemaMap();
 	return c.json(
 		{
 			triggers: AUTOMATION_TRIGGER_TYPES.map((t) => ({
@@ -392,7 +398,7 @@ app.openapi(getSchema, async (c) => {
 				type: t,
 				description: describeNode(t),
 				category: categoryForNode(t),
-				fields_schema: {},
+				fields_schema: nodeConfigSchema[t] ?? {},
 				output_labels: outputLabelsForNode(t),
 			})),
 			templates: [
@@ -1301,6 +1307,45 @@ function transportForTrigger(t: string): "webhook" | "polling" | "streaming" {
 	if (t.startsWith("mastodon_") || t.startsWith("bluesky_"))
 		return "streaming";
 	return "webhook";
+}
+
+const BASE_NODE_FIELDS = new Set([
+	"type",
+	"key",
+	"notes",
+	"canvas_x",
+	"canvas_y",
+]);
+
+/**
+ * Build `type → JSON Schema` map for every option of AutomationNodeSpec's
+ * discriminated union. We strip the universal base fields so the UI shows
+ * only per-type configuration.
+ */
+function buildNodeConfigSchemaMap(): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	const options = (
+		AutomationNodeSpec as unknown as {
+			options: Array<z.ZodObject<z.ZodRawShape>>;
+		}
+	).options;
+	for (const opt of options) {
+		const shape = opt.shape;
+		const typeField = shape.type as unknown as { value?: string } | undefined;
+		const typeName = typeField?.value;
+		if (!typeName) continue;
+		const mask: Record<string, true> = {};
+		for (const base of BASE_NODE_FIELDS) {
+			if (base in shape) mask[base] = true;
+		}
+		const configOnly = opt.omit(mask as { [K in keyof typeof shape]?: true });
+		try {
+			out[typeName] = z.toJSONSchema(configOnly);
+		} catch {
+			out[typeName] = {};
+		}
+	}
+	return out;
 }
 
 function describeNode(t: string): string {

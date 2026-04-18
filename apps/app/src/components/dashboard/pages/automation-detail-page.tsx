@@ -17,9 +17,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { useApi, useMutation } from "@/hooks/use-api";
 import { cn } from "@/lib/utils";
-import { FlowBuilder } from "@/components/dashboard/automation/flow-builder/flow-builder";
-import { NodePalette } from "@/components/dashboard/automation/flow-builder/node-palette";
+import { GuidedFlow } from "@/components/dashboard/automation/flow-builder/guided-flow";
 import { PropertyPanel } from "@/components/dashboard/automation/flow-builder/property-panel";
+import { TriggerPanel } from "@/components/dashboard/automation/flow-builder/trigger-panel";
 import { SimulatorPanel } from "@/components/dashboard/automation/flow-builder/simulator-panel";
 import { RunHistoryPanel } from "@/components/dashboard/automation/flow-builder/run-history-panel";
 import {
@@ -37,7 +37,6 @@ import type {
 	AutomationEdgeSpec,
 	AutomationNodeSpec,
 	AutomationSchema,
-	SchemaNodeDef,
 } from "@/components/dashboard/automation/flow-builder/types";
 
 interface Props {
@@ -144,9 +143,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const [rightPanel, setRightPanel] = useState<
 		"property" | "simulator" | "history" | null
 	>(null);
-	const [highlightKeys, setHighlightKeys] = useState<Set<string>>(
-		() => new Set(),
-	);
+	const [, setHighlightKeys] = useState<Set<string>>(() => new Set());
 	const [banner, setBanner] = useState<{
 		type: "error" | "success";
 		message: string;
@@ -218,64 +215,68 @@ export function AutomationDetailPage({ automationId }: Props) {
 
 	const canPublish = issues.every((i) => i.severity !== "error");
 
-	const handleGraphChange = useCallback(
-		(nodes: AutomationNodeSpec[], edges: AutomationEdgeSpec[]) => {
-			setDraft((prev) => (prev ? { ...prev, nodes, edges } : prev));
-			setDirty(true);
-			bumpEdit();
-			history.push({ nodes, edges });
-		},
-		[history, bumpEdit],
-	);
-
-	const addNode = useCallback(
-		(def: SchemaNodeDef) => {
-			setDraft((prev) => {
-				if (!prev) return prev;
-				const existing = new Set(prev.nodes.map((n) => n.key));
-				const key = generateUniqueKey(def.type, existing);
-				const maxY = prev.nodes.reduce(
-					(m, n) => Math.max(m, n.canvas_y ?? 0),
-					0,
-				);
-				const newNode: AutomationNodeSpec = {
-					type: def.type,
-					key,
-					canvas_x: 0,
-					canvas_y: maxY + 140,
-				};
-				const next = {
-					...prev,
-					nodes: [...prev.nodes, newNode],
-				};
-				history.push({ nodes: next.nodes, edges: next.edges });
-				return next;
-			});
-			setDirty(true);
-			bumpEdit();
-		},
-		[history, bumpEdit],
-	);
-
-	const addNodeAtPosition = useCallback(
-		(nodeType: string, position: { x: number; y: number }) => {
+	const insertAfter = useCallback(
+		(parentKey: string, label: string, nodeType: string) => {
 			setDraft((prev) => {
 				if (!prev) return prev;
 				const existing = new Set(prev.nodes.map((n) => n.key));
 				const key = generateUniqueKey(nodeType, existing);
-				const newNode: AutomationNodeSpec = {
-					type: nodeType,
-					key,
-					canvas_x: Math.round(position.x),
-					canvas_y: Math.round(position.y),
-				};
+				const newNode: AutomationNodeSpec = { type: nodeType, key };
+				// If an edge from parent with this label already exists, splice
+				// the new node in: parent → new → oldTarget. Otherwise append.
+				const existingEdge = prev.edges.find(
+					(e) => e.from === parentKey && (e.label ?? "next") === label,
+				);
+				const newEdges = existingEdge
+					? [
+							...prev.edges.map((e) =>
+								e === existingEdge ? { ...e, to: key } : e,
+							),
+							{ from: key, to: existingEdge.to, label: "next" },
+						]
+					: [...prev.edges, { from: parentKey, to: key, label }];
 				const next = {
 					...prev,
 					nodes: [...prev.nodes, newNode],
+					edges: newEdges,
 				};
 				history.push({ nodes: next.nodes, edges: next.edges });
 				return next;
 			});
+			setDirty(true);
+			bumpEdit();
+		},
+		[history, bumpEdit],
+	);
+
+	const deleteNode = useCallback(
+		(key: string) => {
+			setDraft((prev) => {
+				if (!prev) return prev;
+				const incoming = prev.edges.find((e) => e.to === key);
+				const outgoing = prev.edges.find((e) => e.from === key);
+				const nodes = prev.nodes.filter((n) => n.key !== key);
+				let edges = prev.edges.filter(
+					(e) => e.from !== key && e.to !== key,
+				);
+				// If the deleted node had one incoming and one outgoing, rewire
+				// the parent directly to the child so the chain stays intact.
+				if (incoming && outgoing) {
+					edges = [
+						...edges,
+						{
+							from: incoming.from,
+							to: outgoing.to,
+							label: incoming.label,
+							order: incoming.order,
+							condition_expr: incoming.condition_expr,
+						},
+					];
+				}
+				history.push({ nodes, edges });
+				return { ...prev, nodes, edges };
+			});
+			setSelectedNodeKey((prev) => (prev === key ? null : prev));
 			setDirty(true);
 			bumpEdit();
 		},
@@ -308,20 +309,40 @@ export function AutomationDetailPage({ automationId }: Props) {
 	);
 
 	const deleteSelectedNode = useCallback(() => {
-		if (!selectedNodeKey) return;
-		setDraft((prev) => {
-			if (!prev) return prev;
-			const nodes = prev.nodes.filter((n) => n.key !== selectedNodeKey);
-			const edges = prev.edges.filter(
-				(e) => e.from !== selectedNodeKey && e.to !== selectedNodeKey,
-			);
-			history.push({ nodes, edges });
-			return { ...prev, nodes, edges };
-		});
-		setSelectedNodeKey(null);
-		setDirty(true);
-		bumpEdit();
-	}, [selectedNodeKey, history, bumpEdit]);
+		if (!selectedNodeKey || selectedNodeKey === "trigger") return;
+		deleteNode(selectedNodeKey);
+	}, [selectedNodeKey, deleteNode]);
+
+	const updateTrigger = useCallback(
+		(
+			patch: Partial<
+				Pick<
+					AutomationDetail,
+					"trigger_type" | "trigger_config" | "trigger_filters"
+				>
+			>,
+		) => {
+			setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
+			setDirty(true);
+			bumpEdit();
+		},
+		[bumpEdit],
+	);
+
+	const buildPatchBody = useCallback(
+		(d: AutomationDetail) => ({
+			nodes: d.nodes,
+			edges: d.edges,
+			name: d.name,
+			description: d.description,
+			trigger: {
+				type: d.trigger_type,
+				config: (d.trigger_config as Record<string, unknown> | undefined) ?? undefined,
+				filters: d.trigger_filters as Record<string, unknown> | undefined,
+			},
+		}),
+		[],
+	);
 
 	const saveDraft = useCallback(async () => {
 		if (!draft) return;
@@ -331,12 +352,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 		// the post-save comparison correctly detects whether the user kept
 		// editing while the request was in flight.
 		const versionAtStart = editVersionRef.current;
-		const result = await patchAutomation.mutate({
-			nodes: draft.nodes,
-			edges: draft.edges,
-			name: draft.name,
-			description: draft.description,
-		});
+		const result = await patchAutomation.mutate(buildPatchBody(draft));
 		if (result) {
 			// Only clear `dirty` if no newer edits happened. We do NOT refetch
 			// on save — the PATCH response is the authoritative new server state
@@ -349,21 +365,16 @@ export function AutomationDetailPage({ automationId }: Props) {
 		} else if (patchAutomation.error) {
 			setBanner({ type: "error", message: patchAutomation.error });
 		}
-	}, [draft, patchAutomation]);
+	}, [draft, patchAutomation, buildPatchBody]);
 
 	const silentSave = useCallback(async () => {
 		if (!draft) return;
 		const versionAtStart = editVersionRef.current;
-		const result = await patchAutomation.mutate({
-			nodes: draft.nodes,
-			edges: draft.edges,
-			name: draft.name,
-			description: draft.description,
-		});
+		const result = await patchAutomation.mutate(buildPatchBody(draft));
 		if (result && editVersionRef.current === versionAtStart) {
 			setDirty(false);
 		}
-	}, [draft, patchAutomation]);
+	}, [draft, patchAutomation, buildPatchBody]);
 
 	useAutosave({
 		version: editVersion,
@@ -402,10 +413,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 		setBanner(null);
 		if (dirty) {
 			const versionAtStart = editVersionRef.current;
-			const saved = await patchAutomation.mutate({
-				nodes: draft.nodes,
-				edges: draft.edges,
-			});
+			const saved = await patchAutomation.mutate(buildPatchBody(draft));
 			if (!saved) {
 				setBanner({
 					type: "error",
@@ -440,6 +448,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 		patchAutomation,
 		publishAutomation,
 		refetchAutomation,
+		buildPatchBody,
 	]);
 
 	const togglePause = useCallback(async () => {
@@ -695,25 +704,18 @@ export function AutomationDetailPage({ automationId }: Props) {
 			)}
 
 			<div className="flex-1 flex min-h-0">
-				<NodePalette
-					schema={schema}
-					channel={draft.channel}
-					onAddNode={addNode}
-					disabled={isArchived}
-				/>
 				<div className="flex-1 min-w-0">
-					<FlowBuilder
+					<GuidedFlow
 						automation={draft}
 						schema={schema}
 						errorKeys={errorKeys}
-						highlightKeys={highlightKeys}
-						selectedNodeKey={selectedNodeKey}
-						onSelectNode={(key) => {
+						selectedKey={selectedNodeKey}
+						onSelect={(key) => {
 							setSelectedNodeKey(key);
 							if (key) setRightPanel("property");
 						}}
-						onGraphChange={handleGraphChange}
-						onDropNodeType={addNodeAtPosition}
+						onInsertAfter={insertAfter}
+						onDeleteNode={deleteNode}
 						readOnly={isArchived}
 					/>
 				</div>
@@ -730,6 +732,17 @@ export function AutomationDetailPage({ automationId }: Props) {
 						onClose={() => setRightPanel(null)}
 						onHighlightPath={(keys) => setHighlightKeys(new Set(keys))}
 					/>
+				) : selectedNodeKey === "trigger" ? (
+					<TriggerPanel
+						automation={draft}
+						schema={schema}
+						onChange={updateTrigger}
+						onClose={() => {
+							setSelectedNodeKey(null);
+							setRightPanel(null);
+						}}
+						readOnly={isArchived}
+					/>
 				) : selectedNode ? (
 					<PropertyPanel
 						node={selectedNode}
@@ -745,7 +758,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 				) : (
 					<div className="w-80 border-l border-border bg-card/30 flex items-center justify-center p-6">
 						<p className="text-xs text-muted-foreground text-center">
-							Select a node to edit, or open the Simulator / Run history panel.
+							Select a step to configure it, or open the Simulator / Run
+							history panel.
 						</p>
 					</div>
 				)}
