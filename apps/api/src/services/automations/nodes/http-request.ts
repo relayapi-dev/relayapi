@@ -1,13 +1,35 @@
+import { contacts } from "@relayapi/db";
+import { eq } from "drizzle-orm";
 import { fetchWithTimeout } from "../../../lib/fetch-timeout";
+import { resolveTemplatedValue } from "../resolve-templated-value";
 import type { NodeHandler } from "../types";
 
 export const httpRequestHandler: NodeHandler = async (ctx) => {
-	const url = ctx.node.config.url as string | undefined;
+	const contact = ctx.enrollment.contact_id
+		? await ctx.db.query.contacts.findFirst({
+				where: eq(contacts.id, ctx.enrollment.contact_id),
+			})
+		: null;
+	const templateCtx = {
+		contact: (contact as Record<string, unknown> | null | undefined) ?? null,
+		state: ctx.enrollment.state,
+	};
+
+	const url = resolveTemplatedValue(
+		ctx.node.config.url,
+		templateCtx,
+	) as string | undefined;
 	if (!url) return { kind: "fail", error: "http_request missing 'url'" };
 
-	const method = (ctx.node.config.method as string | undefined) ?? "POST";
-	const headers = (ctx.node.config.headers as Record<string, string>) ?? {};
-	const body = ctx.node.config.body;
+	const method =
+		(resolveTemplatedValue(ctx.node.config.method, templateCtx) as string | undefined) ??
+		"POST";
+	const headers =
+		(resolveTemplatedValue(
+			ctx.node.config.headers ?? {},
+			templateCtx,
+		) as Record<string, string>) ?? {};
+	const body = resolveTemplatedValue(ctx.node.config.body, templateCtx);
 	const timeoutMs = (ctx.node.config.timeout_ms as number | undefined) ?? 10000;
 	const saveToField = ctx.node.config.save_response_to_field as
 		| string

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Play, Loader2, X, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { resolveNodeOutputLabels } from "./output-labels";
 import type { AutomationDetail, AutomationSchema } from "./types";
 
 interface SimulatedStep {
@@ -24,6 +25,10 @@ interface SimulateResult {
 	error?: string;
 }
 
+interface EnrollResult {
+	enrollment_id: string;
+}
+
 interface Props {
 	automation: AutomationDetail;
 	schema: AutomationSchema;
@@ -34,24 +39,22 @@ interface Props {
 const INPUT_CLS =
 	"h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground";
 
-// Node types that actually branch. For these the user gets a key/value row in
-// "branch choices" so they can force a specific outgoing label instead of the
-// simulator's default.
-function branchingNodes(automation: AutomationDetail): string[] {
-	const keys: string[] = [];
-	for (const n of automation.nodes) {
-		if (
-			n.type === "condition" ||
-			n.type === "randomizer" ||
-			n.type === "split_test" ||
-			n.type === "ai_intent_router" ||
-			n.type === "ai_agent" ||
-			n.type.startsWith("user_input_")
-		) {
-			keys.push(n.key);
-		}
-	}
-	return keys;
+interface BranchChoiceField {
+	key: string;
+	labels: string[];
+}
+
+function branchingNodes(
+	automation: AutomationDetail,
+	schema: AutomationSchema,
+): BranchChoiceField[] {
+	const schemaByType = new Map(schema.nodes.map((node) => [node.type, node]));
+	return automation.nodes
+		.map((node) => ({
+			key: node.key,
+			labels: resolveNodeOutputLabels(node, schemaByType.get(node.type) ?? null),
+		}))
+		.filter((node) => node.labels.length > 1);
 }
 
 // For each terminated.kind, a user-readable label + color.
@@ -89,13 +92,19 @@ export function SimulatorPanel({
 		() => schema.triggers.find((t) => t.type === automation.trigger_type),
 		[schema, automation.trigger_type],
 	);
-	const branchKeys = useMemo(() => branchingNodes(automation), [automation]);
+	const branchKeys = useMemo(() => branchingNodes(automation, schema), [automation, schema]);
 
 	const [branchChoices, setBranchChoices] = useState<Record<string, string>>({});
 	const [maxSteps, setMaxSteps] = useState(50);
 	const [loading, setLoading] = useState(false);
 	const [result, setResult] = useState<SimulateResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [liveTestContactId, setLiveTestContactId] = useState("");
+	const [liveTestConversationId, setLiveTestConversationId] = useState("");
+	const [liveTestPayload, setLiveTestPayload] = useState("{}");
+	const [liveTestLoading, setLiveTestLoading] = useState(false);
+	const [liveTestError, setLiveTestError] = useState<string | null>(null);
+	const [liveTestResult, setLiveTestResult] = useState<EnrollResult | null>(null);
 
 	const setChoice = (key: string, value: string) => {
 		setBranchChoices((prev) => {
@@ -140,6 +149,53 @@ export function SimulatorPanel({
 		setResult(null);
 		setError(null);
 		onHighlightPath([]);
+	};
+
+	const runLiveTest = async () => {
+		setLiveTestLoading(true);
+		setLiveTestError(null);
+		setLiveTestResult(null);
+
+		let parsedPayload: Record<string, unknown> | undefined;
+		try {
+			const trimmed = liveTestPayload.trim();
+			if (trimmed) {
+				const parsed = JSON.parse(trimmed);
+				if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+					parsedPayload = parsed as Record<string, unknown>;
+				} else {
+					setLiveTestError("Payload must be a JSON object.");
+					setLiveTestLoading(false);
+					return;
+				}
+			}
+		} catch (err) {
+			setLiveTestError(err instanceof Error ? err.message : "Invalid JSON payload");
+			setLiveTestLoading(false);
+			return;
+		}
+
+		try {
+			const res = await fetch(`/api/automations/${automation.id}/enroll`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					contact_id: liveTestContactId.trim() || undefined,
+					conversation_id: liveTestConversationId.trim() || undefined,
+					payload: parsedPayload,
+				}),
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => null);
+				setLiveTestError(body?.error?.message ?? `Error ${res.status}`);
+			} else {
+				setLiveTestResult((await res.json()) as EnrollResult);
+			}
+		} catch (err) {
+			setLiveTestError(err instanceof Error ? err.message : "Network error");
+		} finally {
+			setLiveTestLoading(false);
+		}
 	};
 
 	return (
@@ -188,18 +244,33 @@ export function SimulatorPanel({
 							simulator's default.
 						</p>
 						<div className="space-y-1">
-							{branchKeys.map((key) => (
-								<div key={key} className="flex items-center gap-1.5">
+							{branchKeys.map((branch) => (
+								<div key={branch.key} className="flex items-center gap-1.5">
 									<span className="text-[11px] font-mono text-muted-foreground w-28 truncate">
-										{key}
+										{branch.key}
 									</span>
-									<input
-										type="text"
-										value={branchChoices[key] ?? ""}
-										onChange={(e) => setChoice(key, e.target.value)}
-										placeholder="label (e.g. yes)"
-										className={INPUT_CLS}
-									/>
+									{branch.labels.length <= 6 ? (
+										<select
+											value={branchChoices[branch.key] ?? ""}
+											onChange={(e) => setChoice(branch.key, e.target.value)}
+											className={INPUT_CLS}
+										>
+											<option value="">Default</option>
+											{branch.labels.map((label) => (
+												<option key={label} value={label}>
+													{label}
+												</option>
+											))}
+										</select>
+									) : (
+										<input
+											type="text"
+											value={branchChoices[branch.key] ?? ""}
+											onChange={(e) => setChoice(branch.key, e.target.value)}
+											placeholder={`label (${branch.labels[0] ?? "branch"})`}
+											className={INPUT_CLS}
+										/>
+									)}
 								</div>
 							))}
 						</div>
@@ -300,6 +371,87 @@ export function SimulatorPanel({
 						</ol>
 					</div>
 				)}
+
+				<div className="border-t border-border pt-3 space-y-2">
+					<div>
+						<h4 className="text-[10px] font-medium text-muted-foreground">
+							Live test
+						</h4>
+						<p className="text-[10px] text-muted-foreground/70 mt-0.5">
+							Queue a real enrollment. This executes actual steps and can send
+							messages or call webhooks.
+						</p>
+					</div>
+
+					<div>
+						<label className="text-[10px] font-medium text-muted-foreground block mb-1">
+							Contact ID
+						</label>
+						<input
+							type="text"
+							value={liveTestContactId}
+							onChange={(e) => setLiveTestContactId(e.target.value)}
+							placeholder="Optional contact id (ct_...)"
+							className={INPUT_CLS}
+						/>
+					</div>
+
+					<div>
+						<label className="text-[10px] font-medium text-muted-foreground block mb-1">
+							Conversation ID
+						</label>
+						<input
+							type="text"
+							value={liveTestConversationId}
+							onChange={(e) => setLiveTestConversationId(e.target.value)}
+							placeholder="Optional conversation id"
+							className={INPUT_CLS}
+						/>
+					</div>
+
+					<div>
+						<label className="text-[10px] font-medium text-muted-foreground block mb-1">
+							Initial payload
+						</label>
+						<textarea
+							value={liveTestPayload}
+							onChange={(e) => setLiveTestPayload(e.target.value)}
+							rows={5}
+							className="w-full text-xs font-mono rounded-md border border-input bg-background px-2 py-1.5 resize-y"
+						/>
+						<p className="text-[10px] text-muted-foreground/70 mt-0.5">
+							Available to the workflow as <span className="font-mono">state.*</span>.
+						</p>
+					</div>
+
+					<Button
+						onClick={runLiveTest}
+						disabled={liveTestLoading}
+						size="sm"
+						variant="outline"
+						className="w-full h-7 text-xs gap-1.5"
+					>
+						{liveTestLoading ? (
+							<Loader2 className="size-3.5 animate-spin" />
+						) : (
+							<Play className="size-3.5" />
+						)}
+						Queue live test
+					</Button>
+
+					{liveTestError && (
+						<div className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
+							{liveTestError}
+						</div>
+					)}
+
+					{liveTestResult && (
+						<div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1.5 text-[11px] text-emerald-400">
+							Enrollment queued:{" "}
+							<span className="font-mono">{liveTestResult.enrollment_id}</span>
+						</div>
+					)}
+				</div>
 
 			</div>
 		</div>

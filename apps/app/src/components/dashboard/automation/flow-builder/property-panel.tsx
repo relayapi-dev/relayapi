@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { AutomationNodeSpec, SchemaNodeDef } from "./types";
-
-export const INPUT_CLS =
-	"h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground";
+import { useApi } from "@/hooks/use-api";
+import {
+	buildDataReferenceGroups,
+	type DataReferenceGroup,
+} from "./data-references";
+import { FilterGroupEditor, type FilterGroup } from "./filter-group-editor";
+import { INPUT_CLS } from "./field-styles";
+import { resolveNodeOutputLabels } from "./output-labels";
+import type { AutomationDetail, AutomationNodeSpec, SchemaNodeDef } from "./types";
 
 type PrimitiveArrayKind = "string" | "number" | "boolean";
 
@@ -149,8 +154,10 @@ function defaultArrayItem(spec: ArraySpec): unknown {
 }
 
 interface Props {
+	automation: AutomationDetail;
 	node: AutomationNodeSpec | null;
 	nodeDef: SchemaNodeDef | null;
+	automationChannel: string;
 	onChange: (patch: Partial<AutomationNodeSpec>) => void;
 	onDelete: () => void;
 	onClose: () => void;
@@ -158,8 +165,10 @@ interface Props {
 }
 
 export function PropertyPanel({
+	automation,
 	node,
 	nodeDef,
+	automationChannel,
 	onChange,
 	onDelete,
 	onClose,
@@ -168,6 +177,10 @@ export function PropertyPanel({
 	const fields = useMemo(
 		() => (nodeDef ? parseFieldsSchema(nodeDef.fields_schema) : []),
 		[nodeDef],
+	);
+	const dataReferences = useMemo(
+		() => buildDataReferenceGroups(automation),
+		[automation],
 	);
 
 	const [localKey, setLocalKey] = useState(node?.key ?? "");
@@ -248,6 +261,11 @@ export function PropertyPanel({
 				</div>
 
 				<div className="border-t border-border pt-3 space-y-3">
+					<NodeGuidance
+						node={node}
+						nodeDef={nodeDef}
+						automationChannel={automationChannel}
+					/>
 					{fields.length === 0 && (
 						<p className="text-[10px] text-muted-foreground">
 							This node type has no additional configuration.
@@ -256,8 +274,10 @@ export function PropertyPanel({
 					{fields.map((f) => (
 						<FieldRow
 							key={f.name}
+							node={node}
 							field={f}
 							value={node[f.name]}
+							dataReferences={dataReferences}
 							onChange={(v) => onChange({ [f.name]: v })}
 						/>
 					))}
@@ -280,14 +300,19 @@ export function PropertyPanel({
 }
 
 export function FieldRow({
+	node,
 	field,
 	value,
+	dataReferences,
 	onChange,
 }: {
+	node?: AutomationNodeSpec | null;
 	field: FieldDef;
 	value: unknown;
+	dataReferences?: DataReferenceGroup[];
 	onChange: (v: unknown) => void;
 }) {
+	const refs = dataReferences ?? [];
 	const label = (
 		<label className="text-[10px] font-medium text-muted-foreground block mb-1">
 			{field.name.replace(/_/g, " ")}
@@ -298,18 +323,79 @@ export function FieldRow({
 		<p className="text-[10px] text-muted-foreground/70 mt-0.5">{field.description}</p>
 	) : null;
 
-	if (field.type === "textarea") {
+	if (node?.type === "condition" && field.name === "if" && field.type === "object") {
 		return (
-			<div>
-				{label}
-				<textarea
-					value={(value as string) ?? ""}
-					onChange={(e) => onChange(e.target.value)}
-					rows={4}
-					className="w-full text-xs rounded-md border border-input bg-background px-2 py-1.5 resize-y"
+			<div className="space-y-2">
+				<div>
+					{label}
+					<p className="text-[10px] text-muted-foreground/70">
+						Build a structured rule group. This is not JavaScript. Matching contacts
+						follow the <span className="font-medium text-foreground">yes</span> path;
+						others follow <span className="font-medium text-foreground">no</span>.
+					</p>
+				</div>
+				<FilterGroupEditor
+					value={value as FilterGroup | undefined}
+					onChange={(next) => onChange(next)}
+					labels={{
+						all: {
+							label: "All rules must match",
+							helper: "The yes path is taken only if every rule matches.",
+						},
+						any: {
+							label: "Any rule can match",
+							helper: "At least one of these rules can make the condition pass.",
+						},
+						none: {
+							label: "None of these may match",
+							helper: "If any of these rules match, the condition goes to no.",
+						},
+					}}
 				/>
 				{hint}
 			</div>
+		);
+	}
+
+	if (node?.type === "webhook_out" && field.name === "endpoint_id") {
+		return (
+			<WebhookEndpointField
+				label={label}
+				hint={hint}
+				value={value}
+				onChange={onChange}
+			/>
+		);
+	}
+
+	if (
+		node &&
+		((node.type === "field_set" && field.name === "value") ||
+			(node.type === "http_request" && field.name === "body") ||
+			(node.type === "webhook_out" && field.name === "payload"))
+	) {
+		return (
+			<DynamicValueField
+				label={label}
+				hint={hint}
+				value={value}
+				onChange={onChange}
+				dataReferences={refs}
+			/>
+		);
+	}
+
+	if (field.type === "textarea") {
+		return (
+			<TemplatedTextField
+				label={label}
+				hint={hint}
+				value={value}
+				onChange={onChange}
+				rows={4}
+				multiline
+				dataReferences={refs}
+			/>
 		);
 	}
 
@@ -369,7 +455,15 @@ export function FieldRow({
 	}
 
 	if (field.type === "object") {
-		return <ObjectJsonField label={label} hint={hint} value={value} onChange={onChange} />;
+		return (
+			<TemplatedJsonField
+				label={label}
+				hint={hint}
+				value={value}
+				onChange={onChange}
+				dataReferences={refs}
+			/>
+		);
 	}
 
 	if (field.type === "array" && field.array) {
@@ -385,15 +479,440 @@ export function FieldRow({
 	}
 
 	return (
+		<TemplatedTextField
+			label={label}
+			hint={hint}
+			value={value}
+			onChange={onChange}
+			dataReferences={refs}
+		/>
+	);
+}
+
+interface WebhookListResponse {
+	data: Array<{
+		id: string;
+		url: string;
+		enabled: boolean;
+	}>;
+}
+
+function WebhookEndpointField({
+	label,
+	hint,
+	value,
+	onChange,
+}: {
+	label: React.ReactNode;
+	hint: React.ReactNode;
+	value: unknown;
+	onChange: (v: unknown) => void;
+}) {
+	const { data, loading } = useApi<WebhookListResponse>("webhooks", {
+		query: { limit: 100 },
+	});
+
+	return (
 		<div>
 			{label}
-			<input
-				type="text"
+			<select
 				value={(value as string) ?? ""}
 				onChange={(e) => onChange(e.target.value || undefined)}
-				className={INPUT_CLS}
-			/>
+				className="w-full h-7 text-xs rounded-md border border-input bg-background px-2"
+			>
+				<option value="">
+					{loading ? "Loading webhook endpoints…" : "Select a webhook endpoint"}
+				</option>
+				{(data?.data ?? []).map((endpoint) => (
+					<option key={endpoint.id} value={endpoint.id}>
+						{endpoint.url}
+						{endpoint.enabled ? "" : " (disabled)"}
+					</option>
+				))}
+			</select>
+			<p className="text-[10px] text-muted-foreground/70 mt-0.5">
+				Send this step’s event to one of your existing RelayAPI webhook endpoints.
+			</p>
 			{hint}
+		</div>
+	);
+}
+
+function DynamicValueField({
+	label,
+	hint,
+	value,
+	onChange,
+	dataReferences,
+}: {
+	label: React.ReactNode;
+	hint: React.ReactNode;
+	value: unknown;
+	onChange: (v: unknown) => void;
+	dataReferences: DataReferenceGroup[];
+}) {
+	const inferredMode =
+		value !== null && value !== undefined && typeof value === "object" ? "json" : "text";
+	const [mode, setMode] = useState<"text" | "json">(inferredMode);
+
+	useEffect(() => {
+		setMode(inferredMode);
+	}, [inferredMode]);
+
+	return (
+		<div className="space-y-2">
+			<div className="flex items-center justify-between gap-2">
+				<div className="min-w-0">{label}</div>
+				<div className="inline-flex rounded-md border border-border bg-background p-0.5">
+					<button
+						type="button"
+						onClick={() => setMode("text")}
+						className={`rounded px-2 py-1 text-[10px] font-medium ${
+							mode === "text" ? "bg-accent text-foreground" : "text-muted-foreground"
+						}`}
+					>
+						Text
+					</button>
+					<button
+						type="button"
+						onClick={() => setMode("json")}
+						className={`rounded px-2 py-1 text-[10px] font-medium ${
+							mode === "json" ? "bg-accent text-foreground" : "text-muted-foreground"
+						}`}
+					>
+						JSON
+					</button>
+				</div>
+			</div>
+			{mode === "text" ? (
+				<TemplatedTextField
+					label={null}
+					hint={hint}
+					value={typeof value === "string" ? value : value === undefined ? "" : String(value)}
+					onChange={(next) => onChange(next === "" ? undefined : next)}
+					rows={4}
+					multiline
+					dataReferences={dataReferences}
+					hideLabel
+				/>
+			) : (
+				<TemplatedJsonField
+					label={null}
+					hint={hint}
+					value={value}
+					onChange={onChange}
+					dataReferences={dataReferences}
+					hideLabel
+				/>
+			)}
+		</div>
+	);
+}
+
+function TemplatedTextField({
+	label,
+	hint,
+	value,
+	onChange,
+	dataReferences,
+	multiline,
+	rows = 1,
+	hideLabel = false,
+}: {
+	label: React.ReactNode;
+	hint: React.ReactNode;
+	value: unknown;
+	onChange: (v: unknown) => void;
+	dataReferences: DataReferenceGroup[];
+	multiline?: boolean;
+	rows?: number;
+	hideLabel?: boolean;
+}) {
+	const textValue = (value as string | undefined) ?? "";
+	const [mode, setMode] = useState<"static" | "dynamic">(
+		textValue.includes("{{") ? "dynamic" : "static",
+	);
+	const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+
+	useEffect(() => {
+		setMode(textValue.includes("{{") ? "dynamic" : "static");
+	}, [textValue]);
+
+	const insertToken = (tokenValue: string) => {
+		const el = inputRef.current;
+		const start = el?.selectionStart ?? textValue.length;
+		const end = el?.selectionEnd ?? textValue.length;
+		const prefix = textValue.slice(0, start);
+		const suffix = textValue.slice(end);
+		const needsLeadingSpace = prefix.length > 0 && !/\s$/.test(prefix);
+		const insertion = `${needsLeadingSpace ? " " : ""}${tokenValue}`;
+		const next = `${prefix}${insertion}${suffix}`;
+		onChange(next);
+		requestAnimationFrame(() => {
+			const target = inputRef.current;
+			if (!target) return;
+			const caret = prefix.length + insertion.length;
+			target.focus();
+			target.setSelectionRange(caret, caret);
+		});
+	};
+
+	return (
+		<div className="space-y-2">
+			{!hideLabel && label}
+			<div className="flex items-center justify-between gap-2">
+				<p className="text-[10px] text-muted-foreground/80">
+					{mode === "dynamic"
+						? "Insert contact and state values with merge-tag tokens."
+						: "Use plain text or switch to dynamic mode to insert data."}
+				</p>
+				<div className="inline-flex rounded-md border border-border bg-background p-0.5">
+					<button
+						type="button"
+						onClick={() => setMode("static")}
+						className={`rounded px-2 py-1 text-[10px] font-medium ${
+							mode === "static" ? "bg-accent text-foreground" : "text-muted-foreground"
+						}`}
+					>
+						Static
+					</button>
+					<button
+						type="button"
+						onClick={() => setMode("dynamic")}
+						className={`rounded px-2 py-1 text-[10px] font-medium ${
+							mode === "dynamic" ? "bg-accent text-foreground" : "text-muted-foreground"
+						}`}
+					>
+						Dynamic
+					</button>
+				</div>
+			</div>
+			{mode === "dynamic" && (
+				<DataReferencePicker
+					groups={dataReferences}
+					onPick={insertToken}
+				/>
+			)}
+			{multiline ? (
+				<textarea
+					ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+					value={textValue}
+					onChange={(e) => onChange(e.target.value || undefined)}
+					rows={rows}
+					className="w-full text-xs rounded-md border border-input bg-background px-2 py-1.5 resize-y"
+				/>
+			) : (
+				<input
+					ref={inputRef as React.RefObject<HTMLInputElement>}
+					type="text"
+					value={textValue}
+					onChange={(e) => onChange(e.target.value || undefined)}
+					className={INPUT_CLS}
+				/>
+			)}
+			{hint}
+		</div>
+	);
+}
+
+function TemplatedJsonField({
+	label,
+	hint,
+	value,
+	onChange,
+	dataReferences,
+	hideLabel = false,
+}: {
+	label: React.ReactNode;
+	hint: React.ReactNode;
+	value: unknown;
+	onChange: (v: unknown) => void;
+	dataReferences: DataReferenceGroup[];
+	hideLabel?: boolean;
+}) {
+	const stringify = (v: unknown) => {
+		if (v === undefined || v === null) return "";
+		try {
+			return JSON.stringify(v, null, 2);
+		} catch {
+			return String(v);
+		}
+	};
+	const [text, setText] = useState(() => stringify(value));
+	const [parseError, setParseError] = useState<string | null>(null);
+	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+	useEffect(() => {
+		setText(stringify(value));
+		setParseError(null);
+	}, [value]);
+
+	const insertToken = (tokenValue: string) => {
+		const el = textareaRef.current;
+		const start = el?.selectionStart ?? text.length;
+		const end = el?.selectionEnd ?? text.length;
+		const next = `${text.slice(0, start)}${tokenValue}${text.slice(end)}`;
+		setText(next);
+		try {
+			const parsed = JSON.parse(next);
+			setParseError(null);
+			onChange(parsed);
+		} catch (err) {
+			setParseError(err instanceof Error ? err.message : "Invalid JSON");
+		}
+		requestAnimationFrame(() => {
+			const target = textareaRef.current;
+			if (!target) return;
+			const caret = start + tokenValue.length;
+			target.focus();
+			target.setSelectionRange(caret, caret);
+		});
+	};
+
+	return (
+		<div className="space-y-2">
+			{!hideLabel && label}
+			<p className="text-[10px] text-muted-foreground/80">
+				Strings inside JSON can use merge tags like <span className="font-mono">{`{{state.text}}`}</span>.
+			</p>
+			<DataReferencePicker groups={dataReferences} onPick={insertToken} />
+			<textarea
+				ref={textareaRef}
+				value={text}
+				onChange={(e) => {
+					const next = e.target.value;
+					setText(next);
+					if (next.trim() === "") {
+						setParseError(null);
+						onChange(undefined);
+						return;
+					}
+					try {
+						const parsed = JSON.parse(next);
+						setParseError(null);
+						onChange(parsed);
+					} catch (err) {
+						setParseError(err instanceof Error ? err.message : "Invalid JSON");
+					}
+				}}
+				rows={6}
+				className={`w-full text-xs font-mono rounded-md border bg-background px-2 py-1.5 resize-y ${
+					parseError ? "border-destructive" : "border-input"
+				}`}
+			/>
+			{parseError ? (
+				<p className="text-[10px] text-destructive">{parseError}</p>
+			) : (
+				<p className="text-[10px] text-muted-foreground/70">JSON payload</p>
+			)}
+			{hint}
+		</div>
+	);
+}
+
+function DataReferencePicker({
+	groups,
+	onPick,
+}: {
+	groups: DataReferenceGroup[];
+	onPick: (tokenValue: string) => void;
+}) {
+	return (
+		<div className="rounded-lg border border-border/70 bg-muted/20 px-2.5 py-2 space-y-2">
+			<div>
+				<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+					Data
+				</div>
+				<p className="mt-0.5 text-[10px] text-muted-foreground/70">
+					Click to insert a merge tag at the cursor.
+				</p>
+			</div>
+			<div className="space-y-2">
+				{groups.map((group) => (
+					<div key={group.key} className="space-y-1">
+						<div>
+							<div className="text-[10px] font-medium text-foreground">
+								{group.label}
+							</div>
+							{group.description && (
+								<p className="text-[10px] text-muted-foreground/70">
+									{group.description}
+								</p>
+							)}
+						</div>
+						<div className="flex flex-wrap gap-1.5">
+							{group.refs.map((ref) => (
+								<button
+									key={ref.key}
+									type="button"
+									onClick={() => onPick(ref.token)}
+									className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-medium text-foreground hover:bg-accent"
+									title={ref.description ?? ref.token}
+								>
+									{ref.label}
+								</button>
+							))}
+						</div>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
+function NodeGuidance({
+	node,
+	nodeDef,
+	automationChannel,
+}: {
+	node: AutomationNodeSpec;
+	nodeDef: SchemaNodeDef | null;
+	automationChannel: string;
+}) {
+	const outputs = resolveNodeOutputLabels(node, nodeDef);
+	const recipientHint =
+		node.type === "message_text" ||
+		node.type === "message_media" ||
+		node.type === "message_file";
+
+	if (!recipientHint && node.type !== "condition" && outputs.length <= 1) {
+		return null;
+	}
+
+	return (
+		<div className="space-y-2">
+			{recipientHint && (
+				<div className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2">
+					<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+						Recipient
+					</div>
+					<p className="mt-1 text-[11px] text-foreground">
+						This step sends to the contact who entered the automation on{" "}
+						<span className="font-medium capitalize">{automationChannel}</span>.
+					</p>
+					<p className="mt-1 text-[10px] text-muted-foreground/70">
+						The runtime resolves the contact’s channel identifier automatically.
+						Recipient overrides are not configurable in the current engine yet.
+					</p>
+				</div>
+			)}
+			{outputs.length > 1 && (
+				<div className="rounded-lg border border-border/80 bg-background px-3 py-2">
+					<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+						Outputs
+					</div>
+					<div className="mt-1 flex flex-wrap gap-1.5">
+						{outputs.map((output) => (
+							<span
+								key={output}
+								className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+							>
+								{output}
+							</span>
+						))}
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

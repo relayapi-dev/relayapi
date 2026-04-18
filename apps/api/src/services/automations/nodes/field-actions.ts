@@ -1,5 +1,6 @@
-import { customFieldDefinitions, customFieldValues } from "@relayapi/db";
+import { contacts, customFieldDefinitions, customFieldValues } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import { resolveTemplatedValue } from "../resolve-templated-value";
 import type { NodeHandler } from "../types";
 
 function serialize(v: unknown): string {
@@ -10,7 +11,7 @@ function serialize(v: unknown): string {
 
 export const fieldSetHandler: NodeHandler = async (ctx) => {
 	const fieldKey = ctx.node.config.field as string | undefined;
-	const value = ctx.node.config.value;
+	const rawValue = ctx.node.config.value;
 	if (!fieldKey) return { kind: "fail", error: "field_set missing 'field'" };
 	if (!ctx.enrollment.contact_id)
 		return { kind: "fail", error: "no contact" };
@@ -24,6 +25,14 @@ export const fieldSetHandler: NodeHandler = async (ctx) => {
 	if (!def) {
 		return { kind: "fail", error: `custom field '${fieldKey}' not defined` };
 	}
+
+	const contact = await ctx.db.query.contacts.findFirst({
+		where: eq(contacts.id, ctx.enrollment.contact_id),
+	});
+	const value = resolveTemplatedValue(rawValue, {
+		contact: (contact as Record<string, unknown> | null | undefined) ?? null,
+		state: ctx.enrollment.state,
+	});
 
 	await ctx.db
 		.insert(customFieldValues)

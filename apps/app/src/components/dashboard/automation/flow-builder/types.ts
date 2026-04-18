@@ -34,6 +34,7 @@ export interface AutomationDetail {
 	trigger_type: string;
 	trigger_config?: unknown;
 	trigger_filters?: unknown;
+	social_account_id?: string | null;
 	nodes: AutomationNodeSpec[];
 	edges: AutomationEdgeSpec[];
 	workspace_id?: string | null;

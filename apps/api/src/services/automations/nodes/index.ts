@@ -6,12 +6,12 @@
  *
  * Still stubbed (Phase 8 follow-ups or awaiting external approvals):
  *   - ai_step / ai_agent / ai_intent_router (needs AI infra)
- *   - split_test, subflow_call (logic extras)
- *   - subscription_add / segment_add / notify_admin / conversation_assign /
- *     conversation_status / webhook_out (ops)
+ *   - subflow_call (logic extras)
+ *   - segment_add / notify_admin / conversation_assign (ops)
  */
 
 import type { NodeHandler } from "../types";
+import { conversationStatusHandler } from "./conversation-status";
 import { conditionHandler } from "./condition";
 import { endHandler } from "./end";
 import { fieldClearHandler, fieldSetHandler } from "./field-actions";
@@ -20,10 +20,16 @@ import { httpRequestHandler } from "./http-request";
 import { messageMediaHandler } from "./message-media";
 import { messageTextHandler } from "./message-text";
 import { randomizerHandler } from "./randomizer";
+import { splitTestHandler } from "./split-test";
 import { smartDelayHandler } from "./smart-delay";
+import {
+	subscriptionAddHandler,
+	subscriptionRemoveHandler,
+} from "./subscription-actions";
 import { tagAddHandler, tagRemoveHandler } from "./tag-actions";
 import { triggerHandler } from "./trigger";
 import { userInputHandler } from "./user-input";
+import { webhookOutHandler } from "./webhook-out";
 
 import {
 	beehiivAddSubscriberHandler,
@@ -151,13 +157,18 @@ const universal: Record<string, NodeHandler> = {
 	condition: conditionHandler,
 	smart_delay: smartDelayHandler,
 	randomizer: randomizerHandler,
+	split_test: splitTestHandler,
 	goto: gotoHandler,
 	end: endHandler,
 	tag_add: tagAddHandler,
 	tag_remove: tagRemoveHandler,
 	field_set: fieldSetHandler,
 	field_clear: fieldClearHandler,
+	subscription_add: subscriptionAddHandler,
+	subscription_remove: subscriptionRemoveHandler,
 	http_request: httpRequestHandler,
+	webhook_out: webhookOutHandler,
+	conversation_status: conversationStatusHandler,
 	user_input_text: userInputHandler,
 	user_input_email: userInputHandler,
 	user_input_phone: userInputHandler,
@@ -285,16 +296,11 @@ const remainingStubTypes = [
 	"ai_step",
 	"ai_agent",
 	"ai_intent_router",
-	"split_test",
 	"subflow_call",
-	"subscription_add",
-	"subscription_remove",
 	"segment_add",
 	"segment_remove",
 	"notify_admin",
 	"conversation_assign",
-	"conversation_status",
-	"webhook_out",
 ];
 
 const remainingStubs = Object.fromEntries(

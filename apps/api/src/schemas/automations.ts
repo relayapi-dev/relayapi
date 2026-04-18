@@ -165,16 +165,11 @@ export const STUBBED_NODE_TYPES: ReadonlySet<string> = new Set([
 	"ai_step",
 	"ai_agent",
 	"ai_intent_router",
-	"split_test",
 	"subflow_call",
-	"subscription_add",
-	"subscription_remove",
 	"segment_add",
 	"segment_remove",
 	"notify_admin",
 	"conversation_assign",
-	"conversation_status",
-	"webhook_out",
 ]);
 
 export const AUTOMATION_NODE_TYPES = [
@@ -435,6 +430,7 @@ export const TriggerSpec = z.object({
 	type: AutomationTriggerTypeEnum,
 	account_id: z
 		.string()
+		.nullable()
 		.optional()
 		.describe("Social account to attach the trigger to"),
 	config: z
@@ -722,7 +718,9 @@ export const ConversationAssignNode = z.object({
 export const ConversationStatusNode = z.object({
 	...baseNode,
 	type: z.literal("conversation_status"),
-	status: z.enum(["open", "pending", "resolved", "closed"]),
+	status: z
+		.enum(["open", "archived", "snoozed"])
+		.describe("Inbox conversation status"),
 });
 
 export const HttpRequestNode = z.object({
@@ -1541,14 +1539,11 @@ export const PinterestCreatePinNode = z.object({
 // entry from `services/automations/nodes/index.ts`.
 //
 // Currently stubbed:
-//   ai_step, ai_agent, ai_intent_router    (AI infra)
-//   split_test                              (logic extras)
+//   ai_step, ai_agent, ai_intent_router     (AI infra)
 //   subflow_call                            (sub-enrollment)
-//   subscription_add, subscription_remove   (subscription lists)
 //   segment_add, segment_remove             (segment memberships)
 //   notify_admin                            (internal notifications)
-//   conversation_assign, conversation_status (inbox writes)
-//   webhook_out                             (ops)
+//   conversation_assign                     (inbox writes)
 export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	z.object({ ...baseNode, type: z.literal("trigger") }),
 	MessageTextNode,
@@ -1564,13 +1559,18 @@ export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	ConditionNode,
 	SmartDelayNode,
 	RandomizerNode,
+	SplitTestNode,
 	GotoNode,
 	EndNode,
 	TagAddNode,
 	TagRemoveNode,
 	FieldSetNode,
 	FieldClearNode,
+	SubscriptionAddNode,
+	SubscriptionRemoveNode,
+	ConversationStatusNode,
 	HttpRequestNode,
+	WebhookOutNode,
 	// Instagram (9)
 	InstagramSendTextNode,
 	InstagramSendMediaNode,

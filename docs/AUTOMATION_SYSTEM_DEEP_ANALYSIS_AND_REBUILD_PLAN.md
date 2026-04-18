@@ -892,6 +892,19 @@ Prioritize a smaller, excellent node set before expanding breadth.
 
 ## Phase 0: Stop the bleeding
 
+Status: Completed on 2026-04-18
+
+Implemented:
+
+- real trigger config schemas in `/automations/schema`
+- template input schemas in `/automations/schema`
+- archive moved next to run history
+- floating delete removed in favor of overflow step actions
+- trigger account binding exposed in the editor
+- trigger and message behavior clarified in UI
+- condition node upgraded from raw JSON-only editing to a structured rule builder
+- trigger card and step error states now surface validation failures directly
+
 Time: 3-5 days
 
 Ship:
@@ -911,6 +924,19 @@ Success criteria:
 
 ## Phase 1: Schema and catalog integrity
 
+Status: In progress
+
+Implemented so far:
+
+- runtime catalog guard prevents supported triggers/templates from silently losing schemas
+- SDK contract updated for nullable trigger account binding
+- schema endpoint now reflects real trigger/template shapes instead of placeholder empty objects
+
+Still open:
+
+- single manifest registry shared by runtime, docs, templates, and UI
+- broader parity tests beyond the current runtime guard
+
 Time: 1-2 weeks
 
 Ship:
@@ -926,6 +952,19 @@ Success criteria:
 - no empty trigger config schemas for supported triggers
 
 ## Phase 2: Editor UX overhaul
+
+Status: Completed on 2026-04-18
+
+Implemented:
+
+- redesigned trigger and step cards around app + operation semantics
+- explicit multi-output badges on cards
+- branch-aware rendering for condition and other multi-output nodes
+- branch columns with per-output add-step affordances
+- node summaries improved
+- overflow menus replace hover-delete affordances
+- trigger-level validation errors now highlight the trigger card
+- simulator branch controls now use known output labels when available
 
 Time: 2-3 weeks
 
@@ -944,6 +983,23 @@ Success criteria:
 
 ## Phase 3: Data mapping and condition builder
 
+Status: In progress
+
+Implemented so far:
+
+- visual condition builder for `condition.if`
+- data reference browser in the property panel for `contact.*` and `state.*` values
+- static vs dynamic authoring modes for text-like fields
+- merge-tag insertion at cursor for dynamic text fields
+- JSON mapping editors for object/payload/body fields with merge-tag support
+- webhook endpoint picker for `webhook_out`
+- runtime recursive templating for `field_set`, `http_request`, and `webhook_out`
+
+Still open:
+
+- explicit recipient override / mapping for universal message nodes
+- broader structured mapping affordances for array-heavy platform nodes
+
 Time: 2-3 weeks
 
 Ship:
@@ -961,6 +1017,20 @@ Success criteria:
 
 ## Phase 4: Test and execution experience
 
+Status: In progress
+
+Implemented so far:
+
+- run history now supports per-step detail inspection
+- execution logs now persist structured payload metadata from the runner
+- simulator branch choice UX improved
+- builder now supports queuing a live test enrollment from the simulator panel
+
+Still open:
+
+- trigger test/sample capture
+- broader step output previews and rerun workflows
+
 Time: 2-3 weeks
 
 Ship:
@@ -976,6 +1046,23 @@ Success criteria:
 - debugging moves from support-only to self-serve
 
 ## Phase 5: Workflow platform expansion
+
+Status: In progress
+
+Implemented so far:
+
+- `split_test` is now runtime-supported instead of stubbed
+- `webhook_out` is now runtime-supported instead of stubbed
+- `subscription_add` and `subscription_remove` are now runtime-supported instead of stubbed
+- `conversation_status` is now runtime-supported instead of stubbed
+- runtime templating now covers outbound webhook payloads and HTTP request payloads
+
+Still open:
+
+- Switch
+- Delay/Wait expansion beyond current nodes
+- HTTP/code/subflow/loop/human approval rollout
+- broader retry/error policy controls
 
 Time: 3-6 weeks
 

@@ -275,7 +275,7 @@ export type AutomationEnrollmentStatus =
 
 export interface AutomationTriggerSpec {
   type: string;
-  account_id?: string;
+  account_id?: string | null;
   config?: Record<string, unknown>;
   filters?: {
     tags_any?: string[];

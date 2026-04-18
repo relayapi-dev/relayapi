@@ -10,6 +10,7 @@ import { isWorkspaceScopeDenied } from "../lib/workspace-scope";
 import { applyQuietHours } from "../services/automations/nodes/smart-delay";
 import { messageMediaHandler } from "../services/automations/nodes/message-media";
 import { validateInput } from "../services/automations/nodes/user-input-validation";
+import { resolveTemplatedValue } from "../services/automations/resolve-templated-value";
 
 // ---------------------------------------------------------------------------
 // simulateAutomation — static graph traversal
@@ -83,6 +84,40 @@ describe("simulateAutomation", () => {
 		);
 		const result = simulateAutomation(snap, { branch_choices: { cond: "no" } });
 		expect(result.path.map((s) => s.node_key)).toEqual(["trigger", "cond", "no"]);
+	});
+
+	it("supports split_test labels during simulation", () => {
+		const snap = mkSnapshot(
+			[
+				{ id: "n1", key: "trigger", type: "trigger", config: {} },
+				{
+					id: "n2",
+					key: "experiment",
+					type: "split_test",
+					config: {
+						variants: [
+							{ label: "control", weight: 50 },
+							{ label: "variant_b", weight: 50 },
+						],
+					},
+				},
+				{ id: "n3", key: "control_done", type: "end", config: { reason: "control" } },
+				{ id: "n4", key: "variant_done", type: "end", config: { reason: "variant" } },
+			],
+			[
+				{ id: "e1", from_node_key: "trigger", to_node_key: "experiment", label: "next", order: 0, condition_expr: null },
+				{ id: "e2", from_node_key: "experiment", to_node_key: "control_done", label: "control", order: 0, condition_expr: null },
+				{ id: "e3", from_node_key: "experiment", to_node_key: "variant_done", label: "variant_b", order: 0, condition_expr: null },
+			],
+		);
+		const result = simulateAutomation(snap, {
+			branch_choices: { experiment: "variant_b" },
+		});
+		expect(result.path.map((s) => s.node_key)).toEqual([
+			"trigger",
+			"experiment",
+			"variant_done",
+		]);
 	});
 
 	it("detects a cycle when a node is re-entered without a branch_choice", () => {
@@ -266,6 +301,26 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 					],
 				},
 			],
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("accepts split_test nodes now that the runtime supports them", () => {
+		const result = AutomationCreateSpec.safeParse({
+			name: "experiment",
+			channel: "instagram",
+			trigger: { type: "instagram_comment" },
+			nodes: [
+				{
+					type: "split_test",
+					key: "experiment",
+					variants: [
+						{ label: "control", weight: 50 },
+						{ label: "variant_b", weight: 50 },
+					],
+				},
+			],
+			edges: [],
 		});
 		expect(result.success).toBe(true);
 	});
@@ -737,21 +792,119 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 		expect(AutomationCreateSpec.safeParse(mkBody("ai_step")).success).toBe(false);
 	});
 
-	it("rejects split_test", () => {
-		expect(AutomationCreateSpec.safeParse(mkBody("split_test")).success).toBe(
-			false,
-		);
+	it("accepts split_test when configured with variants", () => {
+		expect(
+			AutomationCreateSpec.safeParse({
+				name: "t",
+				channel: "instagram" as const,
+				trigger: { type: "instagram_comment" },
+				nodes: [
+					{
+						type: "split_test",
+						key: "experiment",
+						variants: [
+							{ label: "a", weight: 50 },
+							{ label: "b", weight: 50 },
+						],
+					},
+					{ type: "end", key: "e" },
+				],
+				edges: [{ from: "trigger", to: "experiment" }],
+			}).success,
+		).toBe(true);
 	});
 
-	it("rejects webhook_out", () => {
-		expect(AutomationCreateSpec.safeParse(mkBody("webhook_out")).success).toBe(
-			false,
-		);
+	it("accepts webhook_out when configured with endpoint and event", () => {
+		expect(
+			AutomationCreateSpec.safeParse({
+				name: "t",
+				channel: "instagram" as const,
+				trigger: { type: "instagram_comment" },
+				nodes: [
+					{
+						type: "webhook_out",
+						key: "notify_partner",
+						endpoint_id: "wh_123",
+						event: "automation.partner_sync",
+						payload: {
+							comment_id: "{{state.comment_id}}",
+							name: "{{first_name}}",
+						},
+					},
+					{ type: "end", key: "e" },
+				],
+				edges: [{ from: "trigger", to: "notify_partner" }],
+			}).success,
+		).toBe(true);
+	});
+
+	it("accepts subscription_add when configured with a list id", () => {
+		expect(
+			AutomationCreateSpec.safeParse({
+				name: "t",
+				channel: "instagram" as const,
+				trigger: { type: "instagram_comment" },
+				nodes: [
+					{
+						type: "subscription_add",
+						key: "subscribe",
+						list_id: "sublist_123",
+					},
+					{ type: "end", key: "e" },
+				],
+				edges: [{ from: "trigger", to: "subscribe" }],
+			}).success,
+		).toBe(true);
+	});
+
+	it("accepts conversation_status with inbox-supported statuses", () => {
+		expect(
+			AutomationCreateSpec.safeParse({
+				name: "t",
+				channel: "instagram" as const,
+				trigger: { type: "instagram_comment" },
+				nodes: [
+					{
+						type: "conversation_status",
+						key: "archive_thread",
+						status: "archived",
+					},
+					{ type: "end", key: "e" },
+				],
+				edges: [{ from: "trigger", to: "archive_thread" }],
+			}).success,
+		).toBe(true);
 	});
 
 	it("rejects notify_admin", () => {
 		expect(AutomationCreateSpec.safeParse(mkBody("notify_admin")).success).toBe(
 			false,
 		);
+	});
+});
+
+describe("resolveTemplatedValue", () => {
+	it("resolves merge tags recursively in nested objects and arrays", () => {
+		expect(
+			resolveTemplatedValue(
+				{
+					message: "Hi {{first_name}}",
+					metadata: {
+						comment_id: "{{state.comment_id}}",
+						tags: ["{{state.variant}}", "static"],
+					},
+				},
+				{
+					contact: { first_name: "Zan" },
+					state: { comment_id: "c_123", variant: "control" },
+				},
+			),
+		).toEqual({
+			message: "Hi Zan",
+			metadata: {
+				comment_id: "c_123",
+				tags: ["control", "static"],
+			},
+		});
 	});
 });

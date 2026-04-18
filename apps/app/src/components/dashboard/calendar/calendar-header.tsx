@@ -41,12 +41,12 @@ export function CalendarHeader({
         <Button variant="outline" size="sm" className="h-7 w-7 p-0" onClick={onNext}>
           <ChevronRight className="size-3.5" />
         </Button>
-        <h2 className="text-sm font-medium min-w-[140px]">
-          {dateLabel}
-        </h2>
         <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onToday}>
           Today
         </Button>
+        <h2 className="text-sm font-medium min-w-[140px]">
+          {dateLabel}
+        </h2>
       </div>
 
       <div className="flex items-center gap-2">

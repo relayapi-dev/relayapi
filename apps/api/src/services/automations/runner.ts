@@ -122,20 +122,52 @@ export async function advanceEnrollment(
 		} catch (e) {
 			result = { kind: "fail", error: String(e) };
 		}
-		const duration = Date.now() - startedAt;
+			const duration = Date.now() - startedAt;
 
-		state = { ...state, ...(result.kind !== "fail" ? result.state_patch ?? {} : {}) };
+			state = { ...state, ...(result.kind !== "fail" ? result.state_patch ?? {} : {}) };
 
-		await db.insert(automationRunLogs).values({
-			enrollmentId: enrollment.id,
-			nodeId: node.id,
-			nodeType: node.type as never,
+			const label = result.kind === "next" ? (result.label ?? "next") : null;
+			const nextKey =
+				result.kind === "goto"
+					? result.target_node_key
+					: result.kind === "next"
+						? resolveNextNodeKey(snapshot, currentNodeKey, label ?? "next")
+						: null;
+			const logPayload: Record<string, unknown> = {
+				result_kind: result.kind,
+				state_patch: result.kind === "fail" ? null : (result.state_patch ?? null),
+			};
+			if (result.kind === "next") {
+				logPayload.output_label = label;
+				logPayload.next_node_key = nextKey;
+			}
+			if (result.kind === "goto") {
+				logPayload.target_node_key = result.target_node_key;
+			}
+			if (result.kind === "wait") {
+				logPayload.next_run_at = result.next_run_at.toISOString();
+			}
+			if (result.kind === "complete" && result.reason) {
+				logPayload.reason = result.reason;
+			}
+			if (result.kind === "exit") {
+				logPayload.reason = result.reason;
+			}
+			if (result.kind === "fail") {
+				logPayload.error = result.error;
+			}
+
+			await db.insert(automationRunLogs).values({
+				enrollmentId: enrollment.id,
+				nodeId: node.id,
+				nodeType: node.type as never,
 			executedAt: new Date(),
-			outcome: outcomeFromResult(result),
-			branchLabel: result.kind === "next" ? (result.label ?? "next") : null,
-			durationMs: duration,
-			error: result.kind === "fail" ? result.error : null,
-		});
+				outcome: outcomeFromResult(result),
+				branchLabel: result.kind === "next" ? (result.label ?? "next") : null,
+				durationMs: duration,
+				error: result.kind === "fail" ? result.error : null,
+				payload: logPayload,
+			});
 
 		if (result.kind === "fail") {
 			await markFailed(db, enrollment.id, result.error);
@@ -210,14 +242,7 @@ export async function advanceEnrollment(
 			return;
 		}
 
-		// Resolve next node based on edge label
-		const label = result.kind === "goto" ? null : (result.label ?? "next");
-		const nextKey =
-			result.kind === "goto"
-				? result.target_node_key
-				: resolveNextNodeKey(snapshot, currentNodeKey, label ?? "next");
-
-		if (!nextKey) {
+			if (!nextKey) {
 			// Graph terminates implicitly (no outgoing edge). This counts as a
 			// successful completion — increment totalCompleted just like an
 			// explicit `complete` result.

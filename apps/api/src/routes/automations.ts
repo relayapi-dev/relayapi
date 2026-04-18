@@ -33,7 +33,13 @@ import {
 	AutomationSimulateResponse,
 	AutomationUpdateSpec,
 	AutomationWithGraphResponse,
+	CommentToDmTemplateInput,
+	FollowToDmTemplateInput,
+	GiveawayTemplateInput,
+	KeywordReplyTemplateInput,
 	RUNTIME_SUPPORTED_TRIGGER_TYPES,
+	StoryReplyTemplateInput,
+	WelcomeDmTemplateInput,
 } from "../schemas/automations";
 import { simulateAutomation } from "../services/automations/simulator";
 import { enrollDirectly } from "../services/automations/trigger-matcher";
@@ -547,6 +553,9 @@ app.openapi(getSchema, async (c) => {
 	// dashboard / MCP clients can render real config forms instead of generic
 	// JSON editors.
 	const nodeConfigSchema = buildNodeConfigSchemaMap();
+	const triggerConfigSchema = buildTriggerConfigSchemaMap();
+	const templateInputSchema = buildTemplateInputSchemaMap();
+	assertAutomationCatalogIntegrity(nodeConfigSchema, triggerConfigSchema, templateInputSchema);
 	return c.json(
 		{
 			// Filter to the runtime-supported subset so palettes / AI agents don't
@@ -560,12 +569,12 @@ app.openapi(getSchema, async (c) => {
 				channel: channelForTrigger(t),
 				tier: tierForTrigger(t),
 				transport: transportForTrigger(t),
-				config_schema: {},
+				config_schema: triggerConfigSchema[t] ?? {},
 				output_labels: ["next"],
 			})),
 			// Runtime-supported node types only. Types whose handlers are
-			// still stubbed (AI, split_test, subflow, subscription_*, segment_*,
-			// notify_admin, conversation_*, webhook_out) are filtered out so
+			// still stubbed (AI, subflow, segment_*, notify_admin,
+			// conversation_assign) are filtered out so
 			// the dashboard palette / MCP tools / docs agents don't offer nodes
 			// that fail at execution time.
 			nodes: AUTOMATION_NODE_TYPES.filter(
@@ -582,37 +591,37 @@ app.openapi(getSchema, async (c) => {
 					id: "comment-to-dm",
 					name: "Comment to DM",
 					description: "Reply to an Instagram comment + send a DM to the commenter",
-					input_schema: {},
+					input_schema: templateInputSchema["comment-to-dm"] ?? {},
 				},
 				{
 					id: "welcome-dm",
 					name: "Welcome DM",
 					description: "Send a welcome DM when a contact starts a conversation",
-					input_schema: {},
+					input_schema: templateInputSchema["welcome-dm"] ?? {},
 				},
 				{
 					id: "keyword-reply",
 					name: "Keyword Reply",
 					description: "Reply to DMs matching a keyword",
-					input_schema: {},
+					input_schema: templateInputSchema["keyword-reply"] ?? {},
 				},
 				{
 					id: "story-reply",
 					name: "Story Reply",
 					description: "Respond when a user replies to an Instagram story",
-					input_schema: {},
+					input_schema: templateInputSchema["story-reply"] ?? {},
 				},
 				{
 					id: "follow-to-dm",
 					name: "Follow to DM",
 					description: "DM new followers on Instagram",
-					input_schema: {},
+					input_schema: templateInputSchema["follow-to-dm"] ?? {},
 				},
 				{
 					id: "giveaway",
 					name: "Giveaway",
 					description: "Run a giveaway that enters users who comment a keyword",
-					input_schema: {},
+					input_schema: templateInputSchema.giveaway ?? {},
 				},
 			],
 			merge_tags: [
@@ -1716,6 +1725,96 @@ function buildNodeConfigSchemaMap(): Record<string, unknown> {
 	return out;
 }
 
+function buildTriggerConfigSchemaMap(): Record<string, unknown> {
+	const keywordMatchSchema = z.object({
+		keywords: z
+			.array(z.string())
+			.min(1)
+			.max(50)
+			.optional()
+			.describe("Optional keyword list. Leave empty to match every inbound event."),
+		match_mode: z
+			.enum(["contains", "exact"])
+			.optional()
+			.describe("How inbound text is matched against the keyword list."),
+	});
+
+	const commentTriggerSchema = keywordMatchSchema.extend({
+		post_id: z
+			.string()
+			.nullable()
+			.optional()
+			.describe("Optional platform post ID. Leave empty to match comments on any post."),
+	});
+
+	return {
+		instagram_comment: z.toJSONSchema(commentTriggerSchema),
+		facebook_comment: z.toJSONSchema(commentTriggerSchema),
+		instagram_dm: z.toJSONSchema(keywordMatchSchema),
+		facebook_dm: z.toJSONSchema(keywordMatchSchema),
+		whatsapp_message: z.toJSONSchema(keywordMatchSchema),
+		telegram_message: z.toJSONSchema(keywordMatchSchema),
+		sms_received: z.toJSONSchema(keywordMatchSchema),
+		manual: {},
+		external_api: {},
+	};
+}
+
+function buildTemplateInputSchemaMap(): Record<string, unknown> {
+	return {
+		"comment-to-dm": z.toJSONSchema(CommentToDmTemplateInput),
+		"welcome-dm": z.toJSONSchema(WelcomeDmTemplateInput),
+		"keyword-reply": z.toJSONSchema(KeywordReplyTemplateInput),
+		"story-reply": z.toJSONSchema(StoryReplyTemplateInput),
+		"follow-to-dm": z.toJSONSchema(FollowToDmTemplateInput),
+		giveaway: z.toJSONSchema(GiveawayTemplateInput),
+	};
+}
+
+function assertAutomationCatalogIntegrity(
+	nodeConfigSchema: Record<string, unknown>,
+	triggerConfigSchema: Record<string, unknown>,
+	templateInputSchema: Record<string, unknown>,
+): void {
+	const missingTriggerSchemas = AUTOMATION_TRIGGER_TYPES.filter((type) =>
+		RUNTIME_SUPPORTED_TRIGGER_TYPES.has(type),
+	).filter((type) => !(type in triggerConfigSchema));
+	if (missingTriggerSchemas.length > 0) {
+		throw new Error(
+			`Missing trigger config schemas for: ${missingTriggerSchemas.join(", ")}`,
+		);
+	}
+
+	const publishedNodeTypes = AUTOMATION_NODE_TYPES.filter(
+		(type) => !STUBBED_NODE_TYPES.has(type),
+	);
+	const missingNodeSchemas = publishedNodeTypes.filter(
+		(type) => !(type in nodeConfigSchema),
+	);
+	if (missingNodeSchemas.length > 0) {
+		throw new Error(
+			`Missing node config schemas for: ${missingNodeSchemas.join(", ")}`,
+		);
+	}
+
+	const expectedTemplates = [
+		"comment-to-dm",
+		"welcome-dm",
+		"keyword-reply",
+		"story-reply",
+		"follow-to-dm",
+		"giveaway",
+	];
+	const missingTemplateSchemas = expectedTemplates.filter(
+		(id) => !(id in templateInputSchema),
+	);
+	if (missingTemplateSchemas.length > 0) {
+		throw new Error(
+			`Missing template input schemas for: ${missingTemplateSchemas.join(", ")}`,
+		);
+	}
+}
+
 function describeNode(t: string): string {
 	if (t === "trigger") return "Virtual root node — the automation's entry point";
 	if (t.startsWith("message_")) return `Send a ${t.slice(8)} message to the contact`;
@@ -1725,8 +1824,14 @@ function describeNode(t: string): string {
 		return "Branch on contact tags, fields, or captured state";
 	if (t === "smart_delay") return "Wait a fixed duration before continuing";
 	if (t === "randomizer") return "Split into weighted random branches";
+	if (t === "split_test") return "Route contacts into weighted experiment variants";
+	if (t === "subscription_add") return "Subscribe the enrolled contact to a list";
+	if (t === "subscription_remove") return "Unsubscribe the enrolled contact from a list";
+	if (t === "conversation_status") return "Update the linked inbox conversation status";
 	if (t === "http_request")
 		return "Call an external HTTP endpoint and optionally capture the response";
+	if (t === "webhook_out")
+		return "Deliver a signed event payload to a RelayAPI webhook endpoint";
 	if (t === "ai_agent")
 		return "Hand the conversation to an AI agent with a knowledge base";
 	if (t === "goto") return "Jump to another node in the graph";

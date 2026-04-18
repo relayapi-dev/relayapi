@@ -202,7 +202,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 
 	const issues: ValidationIssue[] = useMemo(() => {
 		if (!draft || !schema) return [];
-		return validateGraph(draft.nodes, draft.edges, schema.nodes);
+		return validateGraph(draft, schema);
 	}, [draft, schema]);
 
 	const errorKeys = useMemo(() => {
@@ -322,7 +322,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 			patch: Partial<
 				Pick<
 					AutomationDetail,
-					"trigger_type" | "trigger_config" | "trigger_filters"
+					"trigger_type" | "trigger_config" | "trigger_filters" | "social_account_id"
 				>
 			>,
 		) => {
@@ -341,6 +341,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 			description: d.description,
 			trigger: {
 				type: d.trigger_type,
+				account_id:
+					d.social_account_id === undefined ? undefined : d.social_account_id,
 				config: (d.trigger_config as Record<string, unknown> | undefined) ?? undefined,
 				filters: d.trigger_filters as Record<string, unknown> | undefined,
 			},
@@ -404,7 +406,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 		// gate is based on React-rendered state; this ensures we never send
 		// a publish request for an invalid graph even if the render is stale.
 		const freshIssues = schema
-			? validateGraph(draft.nodes, draft.edges, schema.nodes)
+			? validateGraph(draft, schema)
 			: [];
 		const blocking = freshIssues.filter((i) => i.severity === "error");
 		if (blocking.length > 0) {
@@ -613,6 +615,16 @@ export function AutomationDetailPage({ automationId }: Props) {
 							<Button
 								variant="ghost"
 								size="sm"
+								onClick={archive}
+								disabled={archiveAutomation.loading}
+								className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-destructive"
+							>
+								<Archive className="size-3.5" />
+							</Button>
+							<div className="w-px h-4 bg-border mx-0.5" />
+							<Button
+								variant="ghost"
+								size="sm"
 								onClick={saveDraft}
 								disabled={!dirty || patchAutomation.loading}
 								className="h-7 text-xs gap-1.5"
@@ -656,15 +668,6 @@ export function AutomationDetailPage({ automationId }: Props) {
 									<Upload className="size-3.5" />
 								)}
 								{isActive ? "Publish new version" : "Publish"}
-							</Button>
-							<Button
-								variant="ghost"
-								size="sm"
-								onClick={archive}
-								disabled={archiveAutomation.loading}
-								className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-destructive"
-							>
-								<Archive className="size-3.5" />
 							</Button>
 						</>
 					)}
@@ -749,8 +752,10 @@ export function AutomationDetailPage({ automationId }: Props) {
 					/>
 				) : selectedNode ? (
 					<PropertyPanel
+						automation={draft}
 						node={selectedNode}
 						nodeDef={selectedNodeDef}
+						automationChannel={draft.channel}
 						onChange={updateSelectedNode}
 						onDelete={deleteSelectedNode}
 						onClose={() => {
