@@ -179,10 +179,56 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
     }
   };
 
+  const validateForm = (): string | null => {
+    if (!form.name.trim()) return "Name is required.";
+    if (!form.account_id) return "Please select an account.";
+    const keywords = (form.keywords ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const entryKeywords = (form.entry_keywords ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    switch (selected) {
+      case "comment-to-dm":
+        if (keywords.length === 0)
+          return "Add at least one keyword (comma-separated).";
+        if (!form.dm_message?.trim()) return "DM message is required.";
+        return null;
+      case "welcome-dm":
+        if (!form.welcome_message?.trim())
+          return "Welcome message is required.";
+        return null;
+      case "keyword-reply":
+        if (keywords.length === 0)
+          return "Add at least one keyword (comma-separated).";
+        if (!form.reply_message?.trim()) return "Reply message is required.";
+        return null;
+      case "follow-to-dm":
+        if (!form.welcome_message?.trim())
+          return "Welcome message is required.";
+        return null;
+      case "story-reply":
+        if (!form.dm_message?.trim()) return "DM message is required.";
+        return null;
+      case "giveaway":
+        if (entryKeywords.length === 0)
+          return "Add at least one entry keyword (comma-separated).";
+        if (!form.entry_tag?.trim()) return "Entry tag is required.";
+        if (!form.confirmation_dm?.trim())
+          return "Confirmation DM is required.";
+        return null;
+      default:
+        return null;
+    }
+  };
+
   const submit = async () => {
     if (!selected) return;
-    if (!form.name.trim() || !form.account_id) {
-      setError("Name and account are required.");
+    const problem = validateForm();
+    if (problem) {
+      setError(problem);
       return;
     }
     setError(null);
@@ -195,7 +241,10 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        setError(body?.error?.message ?? `Error ${res.status}`);
+        setError(
+          body?.error?.message ??
+            `Request failed (${res.status}). Check the form and try again.`,
+        );
         return;
       }
       const created = (await res.json().catch(() => null)) as { id?: string } | null;

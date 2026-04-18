@@ -91,6 +91,26 @@ export function handleSdkError(err: unknown): Response {
       message = body.message || message;
     } else if (typeof body === "string") {
       message = body;
+    } else if (body?.error?.name === "ZodError") {
+      // Hono's zod-openapi validation errors come through as
+      // { success: false, error: { name: "ZodError", message: "<JSON array>" } }.
+      // Parse the message and surface the first issue in a readable form.
+      code = "VALIDATION_ERROR";
+      try {
+        const issues = JSON.parse(body.error.message);
+        if (Array.isArray(issues) && issues.length > 0) {
+          const first = issues[0] as {
+            path?: Array<string | number>;
+            message?: string;
+          };
+          const path = Array.isArray(first.path) ? first.path.join(".") : "";
+          message = path
+            ? `${path}: ${first.message ?? "invalid value"}`
+            : (first.message ?? "Validation failed");
+        }
+      } catch {
+        message = body.error.message || "Validation failed";
+      }
     }
 
     return Response.json(
