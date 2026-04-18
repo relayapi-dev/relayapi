@@ -64,15 +64,44 @@ const CATEGORY_ICON: Record<string, typeof Box> = {
 	flow: CornerDownRight,
 };
 
-const CATEGORY_ACCENT: Record<string, { border: string; icon: string }> = {
-	content: { border: "border-sky-500", icon: "text-sky-600" },
-	input: { border: "border-violet-500", icon: "text-violet-600" },
-	logic: { border: "border-amber-500", icon: "text-amber-600" },
-	ops: { border: "border-neutral-400", icon: "text-neutral-600" },
-	ai: { border: "border-fuchsia-500", icon: "text-fuchsia-600" },
-	action: { border: "border-teal-500", icon: "text-teal-600" },
-	platform_send: { border: "border-indigo-500", icon: "text-indigo-600" },
-	flow: { border: "border-neutral-400", icon: "text-neutral-600" },
+const CATEGORY_ACCENT: Record<string, { bg: string; text: string }> = {
+	content: {
+		bg: "bg-sky-50 dark:bg-sky-500/10",
+		text: "text-sky-700 dark:text-sky-400",
+	},
+	input: {
+		bg: "bg-violet-50 dark:bg-violet-500/10",
+		text: "text-violet-700 dark:text-violet-400",
+	},
+	logic: {
+		bg: "bg-amber-50 dark:bg-amber-500/10",
+		text: "text-amber-700 dark:text-amber-400",
+	},
+	ops: {
+		bg: "bg-neutral-100 dark:bg-neutral-500/15",
+		text: "text-neutral-700 dark:text-neutral-300",
+	},
+	ai: {
+		bg: "bg-fuchsia-50 dark:bg-fuchsia-500/10",
+		text: "text-fuchsia-700 dark:text-fuchsia-400",
+	},
+	action: {
+		bg: "bg-teal-50 dark:bg-teal-500/10",
+		text: "text-teal-700 dark:text-teal-400",
+	},
+	platform_send: {
+		bg: "bg-indigo-50 dark:bg-indigo-500/10",
+		text: "text-indigo-700 dark:text-indigo-400",
+	},
+	flow: {
+		bg: "bg-neutral-100 dark:bg-neutral-500/15",
+		text: "text-neutral-700 dark:text-neutral-300",
+	},
+};
+
+const TRIGGER_ACCENT = {
+	bg: "bg-emerald-50 dark:bg-emerald-500/10",
+	text: "text-emerald-700 dark:text-emerald-400",
 };
 
 function resolveIcon(nodeType: string, category: string) {
@@ -157,7 +186,7 @@ export function GuidedFlow({
 
 	return (
 		<div className="h-full overflow-y-auto bg-muted/40">
-			<div className="mx-auto max-w-md px-6 py-10 space-y-0">
+			<div className="mx-auto max-w-xl px-6 py-10 space-y-0">
 				<TriggerCard
 					automation={automation}
 					selected={selectedKey === "trigger"}
@@ -429,13 +458,14 @@ function BranchColumn({
 
 function Connector({ label }: { label?: string }) {
 	return (
-		<div className="flex items-center justify-center py-1">
+		<div className="flex flex-col items-center py-1">
 			<div className="w-px h-4 bg-border" />
 			{label && (
-				<span className="ml-2 rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
+				<span className="my-0.5 rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
 					{label}
 				</span>
 			)}
+			<div className="w-px h-4 bg-border" />
 		</div>
 	);
 }
@@ -454,22 +484,39 @@ function TriggerCard({
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"w-full rounded-md border-2 bg-card px-3 py-2.5 text-left shadow-sm transition-all",
-				"border-emerald-500 hover:shadow-md",
-				selected && "ring-2 ring-ring ring-offset-1 ring-offset-background",
+				"w-full rounded-xl border border-border bg-card px-4 py-3.5 text-left shadow-sm transition-all hover:shadow-md hover:border-foreground/20",
+				selected &&
+					"border-emerald-500/60 ring-2 ring-emerald-500/20 shadow-md",
 			)}
 		>
-			<div className="flex items-center gap-1.5 text-emerald-600">
-				<Zap className="size-3.5" />
-				<span className="text-[10px] font-semibold uppercase tracking-wide">
-					Trigger
-				</span>
-			</div>
-			<div className="mt-1 text-sm font-medium">
-				{automation.trigger_type.replace(/_/g, " ")}
-			</div>
-			<div className="text-[11px] text-muted-foreground mt-0.5">
-				{automation.channel}
+			<div className="flex items-center gap-3">
+				<div
+					className={cn(
+						"shrink-0 size-10 rounded-lg flex items-center justify-center",
+						TRIGGER_ACCENT.bg,
+					)}
+				>
+					<Zap className={cn("size-4", TRIGGER_ACCENT.text)} />
+				</div>
+				<div className="min-w-0 flex-1">
+					<div className="flex items-center gap-1.5">
+						<span
+							className={cn(
+								"inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+								TRIGGER_ACCENT.bg,
+								TRIGGER_ACCENT.text,
+							)}
+						>
+							Trigger
+						</span>
+						<span className="text-[11px] text-muted-foreground capitalize">
+							{automation.channel}
+						</span>
+					</div>
+					<div className="mt-1 text-[15px] font-medium leading-tight truncate">
+						{automation.trigger_type.replace(/_/g, " ")}
+					</div>
+				</div>
 			</div>
 		</button>
 	);
@@ -500,28 +547,49 @@ function StepCard({
 				type="button"
 				onClick={onClick}
 				className={cn(
-					"w-full rounded-md border-2 bg-card px-3 py-2.5 text-left shadow-sm transition-all",
-					accent.border,
-					"hover:shadow-md",
-					selected && "ring-2 ring-ring ring-offset-1 ring-offset-background",
-					hasError && "border-destructive ring-1 ring-destructive/40",
+					"w-full rounded-xl border border-border bg-card px-4 py-3.5 text-left shadow-sm transition-all hover:shadow-md hover:border-foreground/20",
+					selected && "border-foreground/30 ring-2 ring-ring/30 shadow-md",
+					hasError &&
+						"border-destructive/50 ring-2 ring-destructive/20 hover:border-destructive/60",
 				)}
 			>
-				<div className={cn("flex items-center gap-1.5", accent.icon)}>
-					<Icon className="size-3.5" />
-					<span className="text-[10px] font-semibold uppercase tracking-wide">
-						{node.type.replace(/_/g, " ")}
-					</span>
-					{hasError && (
-						<AlertCircle className="size-3 text-destructive ml-auto" />
-					)}
-				</div>
-				<div className="mt-1 text-sm font-medium truncate">{node.key}</div>
-				{summary && (
-					<div className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
-						{summary}
+				<div className="flex items-center gap-3">
+					<div
+						className={cn(
+							"shrink-0 size-10 rounded-lg flex items-center justify-center",
+							accent.bg,
+						)}
+					>
+						<Icon className={cn("size-4", accent.text)} />
 					</div>
-				)}
+					<div className="min-w-0 flex-1">
+						<div className="flex items-center gap-1.5">
+							<span
+								className={cn(
+									"inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+									accent.bg,
+									accent.text,
+								)}
+							>
+								{node.type.replace(/_/g, " ")}
+							</span>
+							{hasError && (
+								<span className="inline-flex items-center gap-1 text-[10px] font-medium text-destructive">
+									<AlertCircle className="size-3" />
+									error
+								</span>
+							)}
+						</div>
+						<div className="mt-1 text-[15px] font-medium leading-tight truncate">
+							{node.key}
+						</div>
+						{summary && (
+							<div className="text-[12px] text-muted-foreground mt-0.5 line-clamp-2">
+								{summary}
+							</div>
+						)}
+					</div>
+				</div>
 			</button>
 			{onDelete && (
 				<button
@@ -530,11 +598,11 @@ function StepCard({
 						e.stopPropagation();
 						onDelete();
 					}}
-					className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity p-1"
+					className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 rounded-md p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all"
 					aria-label="Delete step"
 					title="Delete step"
 				>
-					<Trash2 className="size-3" />
+					<Trash2 className="size-3.5" />
 				</button>
 			)}
 		</div>
@@ -581,18 +649,25 @@ function AddStepButton({
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>
-				<button
-					type="button"
-					className={cn(
-						"mx-auto flex items-center gap-1.5 rounded-full border border-dashed border-border bg-background px-3 py-1 text-[11px] text-muted-foreground hover:border-foreground hover:text-foreground transition-colors",
-						tone === "inline" && "my-1",
-						tone === "end" && "mt-2",
-					)}
-				>
-					<Plus className="size-3" />
-					Add step
-					<ChevronDown className="size-3" />
-				</button>
+				{tone === "inline" ? (
+					<button
+						type="button"
+						aria-label="Add step"
+						title="Add step"
+						className="mx-auto my-1 flex size-7 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:border-foreground hover:text-foreground hover:shadow-md transition-all"
+					>
+						<Plus className="size-3.5" />
+					</button>
+				) : (
+					<button
+						type="button"
+						className="mx-auto mt-3 flex items-center gap-2 rounded-lg border border-dashed border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground shadow-sm hover:border-foreground hover:text-foreground hover:shadow-md transition-all"
+					>
+						<Plus className="size-3.5" />
+						Add step
+						<ChevronDown className="size-3.5" />
+					</button>
+				)}
 			</PopoverTrigger>
 			<PopoverContent
 				align="center"
@@ -632,7 +707,7 @@ function AddStepButton({
 												}}
 												className="w-full px-3 py-1.5 text-left text-xs hover:bg-accent/40 flex items-center gap-2"
 											>
-												<Icon className={cn("size-3.5", accent.icon)} />
+												<Icon className={cn("size-3.5", accent.text)} />
 												<span className="truncate">
 													{def.type.replace(/_/g, " ")}
 												</span>
