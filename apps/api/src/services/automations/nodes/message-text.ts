@@ -14,33 +14,16 @@ export const messageTextHandler: NodeHandler = async (ctx) => {
 	if (!textTemplate) {
 		return { kind: "fail", error: "message_text missing 'text'" };
 	}
+	const recipientMode =
+		(ctx.node.config.recipient_mode as string | undefined) ?? "enrolled_contact";
+	const recipientTemplate = ctx.node.config.recipient_identifier as
+		| string
+		| undefined;
 
 	const channel = ctx.snapshot.channel;
 	const accountId = ctx.snapshot.trigger.account_id;
 	if (!accountId) {
 		return { kind: "fail", error: "automation has no social account bound" };
-	}
-
-	if (!ctx.enrollment.contact_id) {
-		return { kind: "fail", error: "enrollment has no contact_id" };
-	}
-
-	const contact = await ctx.db.query.contacts.findFirst({
-		where: eq(contacts.id, ctx.enrollment.contact_id),
-	});
-	if (!contact) return { kind: "fail", error: "contact not found" };
-
-	const chan = await ctx.db.query.contactChannels.findFirst({
-		where: and(
-			eq(contactChannels.contactId, ctx.enrollment.contact_id),
-			eq(contactChannels.platform, channel),
-		),
-	});
-	if (!chan) {
-		return {
-			kind: "fail",
-			error: `contact has no ${channel} channel identifier`,
-		};
 	}
 
 	const account = await ctx.db.query.socialAccounts.findFirst({
@@ -55,16 +38,63 @@ export const messageTextHandler: NodeHandler = async (ctx) => {
 		ctx.env.ENCRYPTION_KEY,
 	);
 
+	const contact = ctx.enrollment.contact_id
+		? await ctx.db.query.contacts.findFirst({
+				where: eq(contacts.id, ctx.enrollment.contact_id),
+			})
+		: null;
+	if (ctx.enrollment.contact_id && !contact) {
+		return { kind: "fail", error: "contact not found" };
+	}
+
 	const text = applyMergeTags(textTemplate, {
 		contact: contact as unknown as Record<string, unknown>,
 		state: ctx.enrollment.state,
 	});
+	let recipientId: string | null = null;
+
+	if (recipientMode === "custom_identifier" || recipientTemplate) {
+		const resolved = applyMergeTags(recipientTemplate ?? "", {
+			contact: contact as unknown as Record<string, unknown>,
+			state: ctx.enrollment.state,
+		}).trim();
+		if (!resolved) {
+			return {
+				kind: "fail",
+				error:
+					"message_text custom recipient_identifier resolved to an empty value",
+			};
+		}
+		recipientId = resolved;
+	} else {
+		if (!ctx.enrollment.contact_id) {
+			return {
+				kind: "fail",
+				error:
+					"message_text needs an enrolled contact or a custom recipient_identifier",
+			};
+		}
+
+		const chan = await ctx.db.query.contactChannels.findFirst({
+			where: and(
+				eq(contactChannels.contactId, ctx.enrollment.contact_id),
+				eq(contactChannels.platform, channel),
+			),
+		});
+		if (!chan) {
+			return {
+				kind: "fail",
+				error: `contact has no ${channel} channel identifier`,
+			};
+		}
+		recipientId = chan.identifier;
+	}
 
 	const result = await sendMessage({
 		platform: channel,
 		accessToken,
 		platformAccountId: account.platformAccountId,
-		recipientId: chan.identifier,
+		recipientId,
 		text,
 	});
 
@@ -74,6 +104,9 @@ export const messageTextHandler: NodeHandler = async (ctx) => {
 
 	return {
 		kind: "next",
-		state_patch: { last_message_id: result.messageId },
+		state_patch: {
+			last_message_id: result.messageId,
+			last_recipient_id: recipientId,
+		},
 	};
 };

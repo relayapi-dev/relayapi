@@ -7,11 +7,7 @@ export const POST: APIRoute = async (ctx) => {
 	try {
 		const id = ctx.params.id!;
 		const body = await ctx.request.json();
-		const data = await (
-			client.automations as unknown as {
-				enroll: (automationId: string, payload: unknown) => Promise<unknown>;
-			}
-		).enroll(id, body);
+		const data = await client.automations.enroll(id, body);
 		return Response.json(data, { status: 201 });
 	} catch (e) {
 		return handleSdkError(e);

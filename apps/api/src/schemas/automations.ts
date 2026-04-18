@@ -168,7 +168,6 @@ export const STUBBED_NODE_TYPES: ReadonlySet<string> = new Set([
 	"subflow_call",
 	"segment_add",
 	"segment_remove",
-	"notify_admin",
 	"conversation_assign",
 ]);
 
@@ -468,6 +467,17 @@ export const MessageTextNode = z.object({
 	...baseNode,
 	type: z.literal("message_text"),
 	text: mergeTagString,
+	recipient_mode: z
+		.enum(["enrolled_contact", "custom_identifier"])
+		.default("enrolled_contact")
+		.describe(
+			"How the recipient is resolved. Defaults to the enrolled contact on the automation channel.",
+		),
+	recipient_identifier: mergeTagString
+		.optional()
+		.describe(
+			"Optional channel-native recipient identifier. Supports merge tags and overrides the enrolled contact lookup.",
+		),
 });
 
 export const MessageMediaNode = z.object({
@@ -703,8 +713,13 @@ export const NotifyAdminNode = z.object({
 	...baseNode,
 	type: z.literal("notify_admin"),
 	channel: z.enum(["email", "in_app", "webhook"]).default("in_app"),
-	recipients: z.array(z.string()).optional(),
-	title: z.string(),
+	recipients: z
+		.array(mergeTagString)
+		.optional()
+		.describe(
+			"Optional organization member user IDs. Leave empty to notify every member in the organization.",
+		),
+	title: mergeTagString,
 	body: mergeTagString,
 });
 
@@ -1542,7 +1557,6 @@ export const PinterestCreatePinNode = z.object({
 //   ai_step, ai_agent, ai_intent_router     (AI infra)
 //   subflow_call                            (sub-enrollment)
 //   segment_add, segment_remove             (segment memberships)
-//   notify_admin                            (internal notifications)
 //   conversation_assign                     (inbox writes)
 export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	z.object({ ...baseNode, type: z.literal("trigger") }),
@@ -1568,6 +1582,7 @@ export const AutomationNodeSpec = z.discriminatedUnion("type", [
 	FieldClearNode,
 	SubscriptionAddNode,
 	SubscriptionRemoveNode,
+	NotifyAdminNode,
 	ConversationStatusNode,
 	HttpRequestNode,
 	WebhookOutNode,
@@ -1802,6 +1817,20 @@ export const AutomationEnrollmentResponse = z.object({
 	completed_at: z.string().datetime().nullable(),
 	exited_at: z.string().datetime().nullable(),
 	exit_reason: z.string().nullable(),
+});
+
+export const AutomationSampleResponse = z.object({
+	enrollment_id: z.string(),
+	automation_version: z.number().int(),
+	contact_id: z.string().nullable(),
+	conversation_id: z.string().nullable(),
+	status: AutomationEnrollmentStatusEnum,
+	state: z.any(),
+	enrolled_at: z.string().datetime(),
+});
+
+export const AutomationSampleListResponse = z.object({
+	data: z.array(AutomationSampleResponse),
 });
 
 // ---------------------------------------------------------------------------

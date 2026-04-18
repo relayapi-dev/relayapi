@@ -487,8 +487,8 @@ export function IdeasPage() {
 	};
 
 	return (
-		<div className="space-y-6">
-			<div className="flex items-center justify-between">
+		<div className="flex flex-col gap-6 h-[calc(100dvh-5rem)] md:h-[calc(100dvh-2rem)]">
+			<div className="flex items-center justify-between shrink-0">
 				<h1 className="text-lg font-medium">Ideas</h1>
 				<div className="flex items-center gap-2">
 					<FilterBar />
@@ -604,11 +604,11 @@ export function IdeasPage() {
 					</motion.div>
 				</motion.div>
 			) : (
-				<div className="relative -mx-4">
+				<div className="relative -mx-4 flex-1 min-h-0">
 					<div
 						ref={scrollRef}
 						onScroll={updateScrollFades}
-						className="overflow-x-auto px-4 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+						className="h-full overflow-x-auto px-4 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
 					>
 						<IdeaBoard
 							groups={sortedGroups}

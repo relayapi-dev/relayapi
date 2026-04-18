@@ -129,6 +129,18 @@ export class Automations extends APIResource {
   }
 
   /**
+   * Fetch recent enrollment payloads that can be reused as trigger samples in
+   * the builder and test tooling.
+   */
+  listSamples(
+    id: string,
+    query: AutomationListSamplesParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<AutomationSampleListResponse> {
+    return this._client.get(path`/v1/automations/${id}/samples`, { query, ...options });
+  }
+
+  /**
    * Get the per-node execution log for a specific enrollment. The endpoint
    * verifies ownership against the caller's org and the automation id in the
    * URL — it will not return logs that belong to another enrollment.
@@ -360,6 +372,10 @@ export interface AutomationListEnrollmentsParams {
   status?: AutomationEnrollmentStatus;
 }
 
+export interface AutomationListSamplesParams {
+  limit?: number;
+}
+
 export interface AutomationEnrollParams {
   contact_id?: string;
   conversation_id?: string;
@@ -463,6 +479,20 @@ export interface AutomationRunLogResponse {
 
 export interface AutomationRunListResponse {
   data: AutomationRunLogResponse[];
+}
+
+export interface AutomationSampleResponse {
+  enrollment_id: string;
+  automation_version: number;
+  contact_id: string | null;
+  conversation_id: string | null;
+  status: AutomationEnrollmentStatus;
+  state: unknown;
+  enrolled_at: string;
+}
+
+export interface AutomationSampleListResponse {
+  data: AutomationSampleResponse[];
 }
 
 export interface AutomationSimulateParams {

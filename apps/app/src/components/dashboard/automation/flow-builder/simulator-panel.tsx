@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Play, Loader2, X, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,18 @@ interface SimulateResult {
 
 interface EnrollResult {
 	enrollment_id: string;
+}
+
+interface SampleResult {
+	data: Array<{
+		enrollment_id: string;
+		automation_version: number;
+		contact_id: string | null;
+		conversation_id: string | null;
+		status: string;
+		state: unknown;
+		enrolled_at: string;
+	}>;
 }
 
 interface Props {
@@ -105,6 +117,41 @@ export function SimulatorPanel({
 	const [liveTestLoading, setLiveTestLoading] = useState(false);
 	const [liveTestError, setLiveTestError] = useState<string | null>(null);
 	const [liveTestResult, setLiveTestResult] = useState<EnrollResult | null>(null);
+	const [samples, setSamples] = useState<SampleResult["data"]>([]);
+	const [samplesLoading, setSamplesLoading] = useState(false);
+	const [samplesError, setSamplesError] = useState<string | null>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+		const loadSamples = async () => {
+			setSamplesLoading(true);
+			setSamplesError(null);
+			try {
+				const res = await fetch(`/api/automations/${automation.id}/samples?limit=5`);
+				if (!res.ok) {
+					const body = await res.json().catch(() => null);
+					if (!cancelled) {
+						setSamplesError(body?.error?.message ?? `Error ${res.status}`);
+					}
+					return;
+				}
+				const json = (await res.json()) as SampleResult;
+				if (!cancelled) {
+					setSamples(json.data ?? []);
+				}
+			} catch (err) {
+				if (!cancelled) {
+					setSamplesError(err instanceof Error ? err.message : "Network error");
+				}
+			} finally {
+				if (!cancelled) setSamplesLoading(false);
+			}
+		};
+		void loadSamples();
+		return () => {
+			cancelled = true;
+		};
+	}, [automation.id]);
 
 	const setChoice = (key: string, value: string) => {
 		setBranchChoices((prev) => {
@@ -196,6 +243,18 @@ export function SimulatorPanel({
 		} finally {
 			setLiveTestLoading(false);
 		}
+	};
+
+	const applySample = (sample: SampleResult["data"][number]) => {
+		setLiveTestContactId(sample.contact_id ?? "");
+		setLiveTestConversationId(sample.conversation_id ?? "");
+		try {
+			setLiveTestPayload(JSON.stringify(sample.state ?? {}, null, 2));
+		} catch {
+			setLiveTestPayload("{}");
+		}
+		setLiveTestError(null);
+		setLiveTestResult(null);
 	};
 
 	return (
@@ -381,6 +440,67 @@ export function SimulatorPanel({
 							Queue a real enrollment. This executes actual steps and can send
 							messages or call webhooks.
 						</p>
+					</div>
+
+					<div className="rounded-md border border-border/70 bg-card/50 px-2.5 py-2 space-y-2">
+						<div className="flex items-center justify-between gap-2">
+							<div>
+								<div className="text-[10px] font-medium text-muted-foreground">
+									Recent samples
+								</div>
+								<p className="text-[10px] text-muted-foreground/70 mt-0.5">
+									Reuse recent enrollment payloads as test input.
+								</p>
+							</div>
+							{samplesLoading && (
+								<Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+							)}
+						</div>
+						{samplesError ? (
+							<div className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
+								{samplesError}
+							</div>
+						) : samples.length === 0 ? (
+							<p className="text-[10px] text-muted-foreground/70">
+								No captured samples yet. Run the automation once or queue a live
+								test to populate this list.
+							</p>
+						) : (
+							<div className="space-y-1.5">
+								{samples.map((sample) => (
+									<div
+										key={sample.enrollment_id}
+										className="rounded-md border border-border bg-background/80 px-2 py-1.5"
+									>
+										<div className="flex items-center justify-between gap-2">
+											<div className="min-w-0">
+												<div className="text-[11px] font-medium font-mono truncate">
+													{sample.enrollment_id}
+												</div>
+												<div className="text-[10px] text-muted-foreground/70">
+													v{sample.automation_version} · {sample.status}
+												</div>
+											</div>
+											<Button
+												type="button"
+												size="sm"
+												variant="outline"
+												className="h-6 px-2 text-[10px]"
+												onClick={() => applySample(sample)}
+											>
+												Use sample
+											</Button>
+										</div>
+										<div className="mt-1 text-[10px] text-muted-foreground/70">
+											{sample.contact_id ? `Contact ${sample.contact_id}` : "No contact"} ·{" "}
+											{sample.conversation_id
+												? `Conversation ${sample.conversation_id}`
+												: "No conversation"}
+										</div>
+									</div>
+								))}
+							</div>
+						)}
 					</div>
 
 					<div>

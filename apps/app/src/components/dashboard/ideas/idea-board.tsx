@@ -115,7 +115,7 @@ function SortableColumn({
 	const cardIds = ideas.map((i) => `${CARD_PREFIX}${i.id}`);
 
 	return (
-		<div ref={setNodeRef} style={style}>
+		<div ref={setNodeRef} style={style} className="h-full">
 			<IdeaColumn
 				id={group.id}
 				name={group.name}
@@ -370,7 +370,7 @@ export function IdeaBoard({
 				items={columnIds}
 				strategy={horizontalListSortingStrategy}
 			>
-				<div className="flex gap-4 items-start pb-4">
+				<div className="flex gap-4 items-start pb-4 h-full">
 					{localGroups.map((group) => {
 						const ideas = localIdeasByGroup.get(group.id) ?? [];
 						return (

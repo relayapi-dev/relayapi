@@ -228,7 +228,7 @@ function CommentsListView({
   }, []);
 
   return (
-    <>
+    <div className="pb-16">
       <div
         ref={containerRef}
         className="space-y-3"
@@ -375,7 +375,7 @@ function CommentsListView({
         </AnimatePresence>
       </div>
       <LoadMore hasMore={hasMore} loading={loadingMore} onLoadMore={onLoadMore} count={comments.length} />
-    </>
+    </div>
   );
 }
 

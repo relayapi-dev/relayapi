@@ -10,6 +10,12 @@ import { isWorkspaceScopeDenied } from "../lib/workspace-scope";
 import { applyQuietHours } from "../services/automations/nodes/smart-delay";
 import { messageMediaHandler } from "../services/automations/nodes/message-media";
 import { validateInput } from "../services/automations/nodes/user-input-validation";
+import {
+	assertAutomationManifestIntegrity,
+	PUBLISHED_AUTOMATION_NODE_MANIFEST,
+	PUBLISHED_AUTOMATION_TRIGGER_MANIFEST,
+	AUTOMATION_TEMPLATE_MANIFEST,
+} from "../services/automations/manifest";
 import { resolveTemplatedValue } from "../services/automations/resolve-templated-value";
 
 // ---------------------------------------------------------------------------
@@ -876,10 +882,46 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 		).toBe(true);
 	});
 
-	it("rejects notify_admin", () => {
-		expect(AutomationCreateSpec.safeParse(mkBody("notify_admin")).success).toBe(
-			false,
-		);
+	it("accepts message_text with a custom recipient override", () => {
+		expect(
+			AutomationCreateSpec.safeParse({
+				name: "t",
+				channel: "instagram" as const,
+				trigger: { type: "manual" },
+				nodes: [
+					{
+						type: "message_text",
+						key: "send_direct",
+						text: "Hi there",
+						recipient_mode: "custom_identifier",
+						recipient_identifier: "{{state.author.id}}",
+					},
+					{ type: "end", key: "e" },
+				],
+				edges: [{ from: "trigger", to: "send_direct" }],
+			}).success,
+		).toBe(true);
+	});
+
+	it("accepts notify_admin with in-app delivery", () => {
+		expect(
+			AutomationCreateSpec.safeParse({
+				name: "t",
+				channel: "instagram" as const,
+				trigger: { type: "instagram_comment" },
+				nodes: [
+					{
+						type: "notify_admin",
+						key: "alert_team",
+						channel: "in_app",
+						title: "New VIP comment from {{state.author.name}}",
+						body: "Comment {{state.comment_id}} requires review.",
+					},
+					{ type: "end", key: "e" },
+				],
+				edges: [{ from: "trigger", to: "alert_team" }],
+			}).success,
+		).toBe(true);
 	});
 });
 
@@ -906,5 +948,39 @@ describe("resolveTemplatedValue", () => {
 				tags: ["control", "static"],
 			},
 		});
+	});
+});
+
+describe("automation manifest", () => {
+	it("passes the integrity guard", () => {
+		expect(() => assertAutomationManifestIntegrity()).not.toThrow();
+	});
+
+	it("publishes notify_admin and excludes remaining stub nodes", () => {
+		const publishedNodeTypes = new Set(
+			PUBLISHED_AUTOMATION_NODE_MANIFEST.map((entry) => entry.type),
+		);
+		expect(publishedNodeTypes.has("notify_admin")).toBe(true);
+		expect(publishedNodeTypes.has("conversation_assign")).toBe(false);
+		expect(publishedNodeTypes.has("segment_add")).toBe(false);
+	});
+
+	it("only publishes runtime-supported triggers", () => {
+		const publishedTriggerTypes = new Set(
+			PUBLISHED_AUTOMATION_TRIGGER_MANIFEST.map((entry) => entry.type),
+		);
+		expect(publishedTriggerTypes.has("instagram_comment")).toBe(true);
+		expect(publishedTriggerTypes.has("instagram_story_reply")).toBe(false);
+	});
+
+	it("exposes the expected quick-create templates", () => {
+		expect(AUTOMATION_TEMPLATE_MANIFEST.map((entry) => entry.id)).toEqual([
+			"comment-to-dm",
+			"welcome-dm",
+			"keyword-reply",
+			"story-reply",
+			"follow-to-dm",
+			"giveaway",
+		]);
 	});
 });

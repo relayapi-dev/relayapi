@@ -929,12 +929,14 @@ Status: In progress
 Implemented so far:
 
 - runtime catalog guard prevents supported triggers/templates from silently losing schemas
+- shared automation manifest registry now powers the `/v1/automations/schema` trigger/node/template catalog
+- manifest parity tests now cover integrity, published trigger/node visibility, and template coverage
 - SDK contract updated for nullable trigger account binding
 - schema endpoint now reflects real trigger/template shapes instead of placeholder empty objects
 
 Still open:
 
-- single manifest registry shared by runtime, docs, templates, and UI
+- deeper manifest reuse across template materialization and remaining editor metadata surfaces
 - broader parity tests beyond the current runtime guard
 
 Time: 1-2 weeks
@@ -992,13 +994,14 @@ Implemented so far:
 - static vs dynamic authoring modes for text-like fields
 - merge-tag insertion at cursor for dynamic text fields
 - JSON mapping editors for object/payload/body fields with merge-tag support
+- array editors now support data-token insertion for focused string fields
 - webhook endpoint picker for `webhook_out`
 - runtime recursive templating for `field_set`, `http_request`, and `webhook_out`
+- universal `message_text` now supports explicit recipient override via custom recipient identifiers
 
 Still open:
 
-- explicit recipient override / mapping for universal message nodes
-- broader structured mapping affordances for array-heavy platform nodes
+- richer specialized editors for complex nested platform payloads beyond the generic array/object builders
 
 Time: 2-3 weeks
 
@@ -1025,10 +1028,12 @@ Implemented so far:
 - execution logs now persist structured payload metadata from the runner
 - simulator branch choice UX improved
 - builder now supports queuing a live test enrollment from the simulator panel
+- builder now surfaces recent enrollment payloads as reusable trigger samples for live testing
+- run history now supports rerunning an enrollment with the same contact/conversation/payload
+- run history now surfaces the captured enrollment state for inspection and replay
 
 Still open:
 
-- trigger test/sample capture
 - broader step output previews and rerun workflows
 
 Time: 2-3 weeks
@@ -1055,6 +1060,7 @@ Implemented so far:
 - `webhook_out` is now runtime-supported instead of stubbed
 - `subscription_add` and `subscription_remove` are now runtime-supported instead of stubbed
 - `conversation_status` is now runtime-supported instead of stubbed
+- `notify_admin` is now runtime-supported for in-app and email delivery
 - runtime templating now covers outbound webhook payloads and HTTP request payloads
 
 Still open:
@@ -1079,6 +1085,358 @@ Ship:
 Success criteria:
 
 - system becomes a credible automation platform rather than a narrow template runner
+
+## Detailed Execution Plan
+
+This section turns the phase roadmap into an execution program with explicit
+dependencies, file ownership, and completion criteria. The purpose is to avoid
+the previous ambiguity where "good progress" was treated like "finished".
+
+### Program rule
+
+Implementation should continue until one of these is true:
+
+- every milestone below is complete and verified
+- a real blocker requires a product or data-model decision
+- local user changes conflict with the required implementation
+
+Everything else should count as "continue".
+
+### Definition of finished
+
+The automation system should only be called "finished" for this rebuild when
+all of the following are true:
+
+- schema/catalog data comes from a single manifest model across runtime, schema
+  endpoint, templates, SDK-facing metadata, and builder palette/forms
+- no major automation node used in the product requires raw JSON to be usable
+- operators can simulate, live test, inspect state, inspect per-step output,
+  and rerun flows without touching the database manually
+- the currently exposed node catalog is either runtime-supported or hidden
+- missing core nodes (`conversation_assign`, segment membership ops, multi-path
+  switching, richer wait controls) are either implemented or explicitly removed
+  from the supported product scope
+- verification exists at API, SDK, and builder levels so regressions are caught
+
+### Milestone 1: Finish manifest unification
+
+Goal:
+
+- remove the remaining duplicated trigger/node/template catalog logic
+
+Why first:
+
+- every further editor and template improvement depends on trusted metadata
+
+Implementation:
+
+- move remaining template definitions in `apps/api/src/routes/automation-templates.ts`
+  onto the shared manifest contract
+- make the builder/template picker consume manifest-driven template metadata
+  instead of route-local assumptions where possible
+- extend `apps/api/src/services/automations/manifest.ts` to carry richer UI
+  metadata where JSON Schema alone is insufficient
+- keep `/v1/automations/schema` as the canonical machine-readable surface
+- add tests that fail when:
+  - a published node has no schema
+  - a published trigger has no schema
+  - a template exists in routes but not in the manifest
+  - a stubbed node leaks into the published catalog
+
+Likely files:
+
+- `apps/api/src/services/automations/manifest.ts`
+- `apps/api/src/routes/automations.ts`
+- `apps/api/src/routes/automation-templates.ts`
+- `packages/sdk/src/resources/automations.ts`
+- `apps/app/src/components/dashboard/automation/template-picker-dialog.tsx`
+- `apps/api/src/__tests__/automations.test.ts`
+
+Done when:
+
+- manifest is the single source of truth for published trigger/node/template metadata
+- no route-local automation catalog duplication remains except intentional runtime wiring
+
+### Milestone 2: Finish builder mapping UX
+
+Goal:
+
+- make complex nodes operable without raw JSON editing
+
+Current status:
+
+- good baseline exists for strings, JSON payloads, webhook payloads, recipient
+  overrides, and array token insertion
+
+Still required:
+
+- specialized editors for common nested platform shapes:
+  - WhatsApp template components
+  - Telegram keyboards/polls
+  - Instagram/Facebook buttons and quick replies
+  - card/template element arrays
+- manifest-level field hints for editor behavior:
+  - `editor: "merge_text"`
+  - `editor: "json_payload"`
+  - `editor: "button_array"`
+  - `editor: "template_components"`
+- structured preview of the final mapped config before save where useful
+
+Likely files:
+
+- `apps/api/src/services/automations/manifest.ts`
+- `apps/app/src/components/dashboard/automation/flow-builder/property-panel.tsx`
+- `apps/app/src/components/dashboard/automation/flow-builder/data-references.ts`
+- `apps/app/src/components/dashboard/automation/flow-builder/types.ts`
+
+Done when:
+
+- common social automation nodes can be configured visually
+- raw JSON remains only as an advanced fallback, not the primary UX
+
+### Milestone 3: Execution and testing tooling
+
+Goal:
+
+- make debugging self-serve from the builder
+
+Current status:
+
+- simulation exists
+- live test enrollment exists
+- recent samples exist
+- rerun from history exists
+- run state and per-step logs are visible
+
+Still required:
+
+- step output preview:
+  - expose output/result payloads consistently in run logs
+  - distinguish input, output, and state patch in the log model
+- rerun from step where safe:
+  - either via a dedicated rerun endpoint or a server-side replay helper
+- action test workflow:
+  - test a single node against a captured sample without advancing the full flow
+- optional trigger sample pinning:
+  - save a sample as a reusable named test fixture per automation
+
+Likely files:
+
+- `apps/api/src/routes/automations.ts`
+- `apps/api/src/services/automations/runner.ts`
+- `apps/api/src/services/automations/types.ts`
+- `apps/app/src/components/dashboard/automation/flow-builder/run-history-panel.tsx`
+- `apps/app/src/components/dashboard/automation/flow-builder/simulator-panel.tsx`
+- `packages/sdk/src/resources/automations.ts`
+
+Done when:
+
+- a user can select a run, inspect state and step outputs, and replay a flow or
+  step using captured data without manual API crafting
+
+### Milestone 4: Data-model expansion for blocked runtime nodes
+
+Goal:
+
+- unblock the nodes that cannot be implemented safely with the current schema
+
+Blocked today:
+
+- `conversation_assign`
+  - current `inbox_conversations` schema has no assignee columns
+  - node schema allows `assignee_user_id` and `assignee_team_id`, but runtime
+    has nowhere canonical to store them
+- `segment_add` / `segment_remove`
+  - `segments` table exists, but there is no contact-segment membership table
+  - dynamic segments also need a product decision: computed-only vs manual override
+- `subflow_call`
+  - needs parent/child enrollment linkage and snapshot inheritance rules
+
+Proposed schema work:
+
+- add assignment columns to `inbox_conversations`
+  - minimum viable: `assigned_user_id`
+  - optional if team model exists or is introduced: `assigned_team_id`
+- add `contact_segment_memberships`
+  - `contact_id`
+  - `segment_id`
+  - `source` (`manual`, `automation`, `import`, etc.)
+  - timestamps
+- add subflow linkage if subflow support remains in scope:
+  - `parent_enrollment_id`
+  - `resume_parent_on_child_complete` semantics
+
+Likely files:
+
+- `packages/db/src/schema.ts`
+- generated migration files
+- `apps/api/src/services/automations/nodes/conversation-assign.ts`
+- `apps/api/src/services/automations/nodes/segment-actions.ts`
+- `apps/api/src/services/automations/nodes/subflow-call.ts`
+- `apps/api/src/services/automations/nodes/index.ts`
+- `apps/api/src/schemas/automations.ts`
+
+Done when:
+
+- blocked nodes can be implemented against a real persistence model instead of fake runtime behavior
+
+### Milestone 5: Control-flow expansion
+
+Goal:
+
+- close the gap between the current flow runner and a real automation engine
+
+Required nodes:
+
+- `switch`
+  - multi-case successor to binary `condition`
+  - explicit labeled outputs and default branch
+- richer wait controls
+  - `wait_until`
+  - `wait_for_event`
+  - clearer time-window semantics
+- optional later tranche:
+  - `loop`
+  - `code`
+  - `human_approval`
+
+Required engine work:
+
+- add new node types to the enum/schema/manifest
+- support deterministic branch labels in simulator and builder
+- ensure run logs capture branch choice and wait metadata
+
+Likely files:
+
+- `packages/db/src/schema.ts`
+- `apps/api/src/schemas/automations.ts`
+- `apps/api/src/services/automations/nodes/*.ts`
+- `apps/api/src/services/automations/simulator.ts`
+- `apps/app/src/components/dashboard/automation/flow-builder/*`
+
+Done when:
+
+- branching is not limited to binary conditions and weighted splits
+- wait semantics cover the common automation cases without hacks
+
+### Milestone 6: Reliability and policy controls
+
+Goal:
+
+- make failures predictable and operator-controlled
+
+Required work:
+
+- add per-node retry policy metadata:
+  - max attempts
+  - retry delay/backoff
+  - timeout
+- decide per-node failure behavior:
+  - fail automation
+  - continue on error
+  - route to explicit error branch
+- surface policy state in run logs and builder UI
+
+Likely files:
+
+- `apps/api/src/schemas/automations.ts`
+- `apps/api/src/services/automations/runner.ts`
+- `apps/app/src/components/dashboard/automation/flow-builder/property-panel.tsx`
+- `apps/app/src/components/dashboard/automation/flow-builder/run-history-panel.tsx`
+
+Done when:
+
+- automation failures are configured intentionally instead of being implicit runner defaults
+
+### Milestone 7: Template/editor/runtime convergence
+
+Goal:
+
+- eliminate the remaining split between quick-create templates and the generic builder
+
+Required work:
+
+- ensure every template is expressible as a normal manifest-backed automation graph
+- ensure template forms are generated from the same input metadata model
+- ensure generated template graphs use only supported nodes and labels
+- add tests that create templates, read resulting graphs, and validate them
+  against manifest expectations
+
+Likely files:
+
+- `apps/api/src/routes/automation-templates.ts`
+- `apps/api/src/services/automations/manifest.ts`
+- `apps/app/src/components/dashboard/automation/template-picker-dialog.tsx`
+- `apps/api/src/__tests__/automations.test.ts`
+
+Done when:
+
+- templates are just a guided entry point into the same automation system, not a special path
+
+### Milestone 8: Final QA and scope gate
+
+Goal:
+
+- close the rebuild with an explicit supported-product boundary
+
+Required work:
+
+- end-to-end smoke coverage for:
+  - comment trigger → DM
+  - DM keyword flow
+  - condition branch
+  - split test
+  - webhook out
+  - notify admin
+  - history replay
+- verify app/API/SDK typecheck cleanly together
+- explicitly mark unsupported nodes as hidden/stubbed if they remain out of scope
+- update docs to define:
+  - supported trigger list
+  - supported node list
+  - unsupported/coming-later node list
+
+Done when:
+
+- the product has a truthful and test-backed automation scope
+
+### Implementation order
+
+This is the order implementation should follow from here:
+
+1. Milestone 1: finish manifest unification
+2. Milestone 3: finish execution/testing tooling
+3. Milestone 4: add missing persistence model for blocked nodes
+4. Milestone 5: add control-flow nodes once metadata and runtime base are stable
+5. Milestone 2: finish specialized mapping editors in parallel where metadata is ready
+6. Milestone 6: reliability and retry policy controls
+7. Milestone 7: template/editor/runtime convergence
+8. Milestone 8: final QA and scope gate
+
+### Explicit blockers that require decisions
+
+These should not be hand-waved during implementation:
+
+- `conversation_assign`
+  - user-only assignment is straightforward
+  - team assignment needs either an existing team model or a product decision to defer it
+- `segment_add` / `segment_remove`
+  - requires a real manual membership model
+  - must decide how manual membership interacts with dynamic segment filters
+- `subflow_call`
+  - requires parent/child lifecycle semantics
+- `code` / `human_approval`
+  - require product, security, and execution-boundary decisions, not just a node handler
+
+### Verification rule per milestone
+
+Every milestone should close with:
+
+- relevant API tests
+- app typecheck
+- API typecheck
+- SDK typecheck
+- roadmap doc status update
 
 ## Reality Check
 

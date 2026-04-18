@@ -16,13 +16,9 @@ import {
 	WORKSPACE_ACCESS_DENIED_BODY,
 } from "../lib/workspace-scope";
 import {
-	AUTOMATION_CHANNELS,
-	AUTOMATION_NODE_TYPES,
-	AUTOMATION_TRIGGER_TYPES,
-	AutomationNodeSpec,
-	STUBBED_NODE_TYPES,
 	AutomationCreateSpec,
 	AutomationEnrollmentResponse,
+	AutomationSampleListResponse,
 	AutomationEnrollRequest,
 	AutomationEnrollResponse,
 	AutomationListResponse,
@@ -33,14 +29,13 @@ import {
 	AutomationSimulateResponse,
 	AutomationUpdateSpec,
 	AutomationWithGraphResponse,
-	CommentToDmTemplateInput,
-	FollowToDmTemplateInput,
-	GiveawayTemplateInput,
-	KeywordReplyTemplateInput,
-	RUNTIME_SUPPORTED_TRIGGER_TYPES,
-	StoryReplyTemplateInput,
-	WelcomeDmTemplateInput,
 } from "../schemas/automations";
+import {
+	assertAutomationManifestIntegrity,
+	PUBLISHED_AUTOMATION_NODE_MANIFEST,
+	PUBLISHED_AUTOMATION_TRIGGER_MANIFEST,
+	AUTOMATION_TEMPLATE_MANIFEST,
+} from "../services/automations/manifest";
 import { simulateAutomation } from "../services/automations/simulator";
 import { enrollDirectly } from "../services/automations/trigger-matcher";
 import type { AutomationSnapshot } from "../services/automations/types";
@@ -548,82 +543,12 @@ const getSchema = createRoute({
 });
 
 app.openapi(getSchema, async (c) => {
-	// Convert the per-type Zod schemas (without the universal base fields like
-	// `type`, `key`, `notes`, `canvas_x`, `canvas_y`) into JSON Schema so the
-	// dashboard / MCP clients can render real config forms instead of generic
-	// JSON editors.
-	const nodeConfigSchema = buildNodeConfigSchemaMap();
-	const triggerConfigSchema = buildTriggerConfigSchemaMap();
-	const templateInputSchema = buildTemplateInputSchemaMap();
-	assertAutomationCatalogIntegrity(nodeConfigSchema, triggerConfigSchema, templateInputSchema);
+	assertAutomationManifestIntegrity();
 	return c.json(
 		{
-			// Filter to the runtime-supported subset so palettes / AI agents don't
-			// offer triggers that the normalizer can't emit today. See
-			// RUNTIME_SUPPORTED_TRIGGER_TYPES in schemas/automations.ts.
-			triggers: AUTOMATION_TRIGGER_TYPES.filter((t) =>
-				RUNTIME_SUPPORTED_TRIGGER_TYPES.has(t),
-			).map((t) => ({
-				type: t,
-				description: describeTrigger(t),
-				channel: channelForTrigger(t),
-				tier: tierForTrigger(t),
-				transport: transportForTrigger(t),
-				config_schema: triggerConfigSchema[t] ?? {},
-				output_labels: ["next"],
-			})),
-			// Runtime-supported node types only. Types whose handlers are
-			// still stubbed (AI, subflow, segment_*, notify_admin,
-			// conversation_assign) are filtered out so
-			// the dashboard palette / MCP tools / docs agents don't offer nodes
-			// that fail at execution time.
-			nodes: AUTOMATION_NODE_TYPES.filter(
-				(t) => !STUBBED_NODE_TYPES.has(t),
-			).map((t) => ({
-				type: t,
-				description: describeNode(t),
-				category: categoryForNode(t),
-				fields_schema: nodeConfigSchema[t] ?? {},
-				output_labels: outputLabelsForNode(t),
-			})),
-			templates: [
-				{
-					id: "comment-to-dm",
-					name: "Comment to DM",
-					description: "Reply to an Instagram comment + send a DM to the commenter",
-					input_schema: templateInputSchema["comment-to-dm"] ?? {},
-				},
-				{
-					id: "welcome-dm",
-					name: "Welcome DM",
-					description: "Send a welcome DM when a contact starts a conversation",
-					input_schema: templateInputSchema["welcome-dm"] ?? {},
-				},
-				{
-					id: "keyword-reply",
-					name: "Keyword Reply",
-					description: "Reply to DMs matching a keyword",
-					input_schema: templateInputSchema["keyword-reply"] ?? {},
-				},
-				{
-					id: "story-reply",
-					name: "Story Reply",
-					description: "Respond when a user replies to an Instagram story",
-					input_schema: templateInputSchema["story-reply"] ?? {},
-				},
-				{
-					id: "follow-to-dm",
-					name: "Follow to DM",
-					description: "DM new followers on Instagram",
-					input_schema: templateInputSchema["follow-to-dm"] ?? {},
-				},
-				{
-					id: "giveaway",
-					name: "Giveaway",
-					description: "Run a giveaway that enters users who comment a keyword",
-					input_schema: templateInputSchema.giveaway ?? {},
-				},
-			],
+			triggers: PUBLISHED_AUTOMATION_TRIGGER_MANIFEST,
+			nodes: PUBLISHED_AUTOMATION_NODE_MANIFEST,
+			templates: AUTOMATION_TEMPLATE_MANIFEST,
 			merge_tags: [
 				"first_name",
 				"last_name",
@@ -1384,6 +1309,84 @@ app.openapi(listEnrollments, async (c) => {
 	);
 });
 
+const listSamples = createRoute({
+	operationId: "listAutomationSamples",
+	method: "get",
+	path: "/{id}/samples",
+	tags: ["Automations"],
+	summary: "List recent enrollment payloads as trigger samples",
+	security: [{ Bearer: [] }],
+	request: {
+		params: IdParams,
+		query: z.object({
+			limit: z.coerce.number().int().min(1).max(20).default(10),
+		}),
+	},
+	responses: {
+		200: {
+			description: "Recent samples",
+			content: {
+				"application/json": { schema: AutomationSampleListResponse },
+			},
+		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(listSamples, async (c) => {
+	const { id } = c.req.valid("param");
+	const { limit } = c.req.valid("query");
+	const db = c.get("db");
+	const orgId = c.get("orgId");
+
+	const auto = await db.query.automations.findFirst({
+		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
+	});
+	if (!auto) {
+		return c.json(
+			{ error: { code: "not_found", message: "Automation not found" } },
+			404,
+		);
+	}
+	if (isWorkspaceScopeDenied(c, auto.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
+
+	const rows = await db
+		.select()
+		.from(automationEnrollments)
+		.where(
+			and(
+				eq(automationEnrollments.automationId, id),
+				eq(automationEnrollments.organizationId, orgId),
+			),
+		)
+		.orderBy(desc(automationEnrollments.enrolledAt), desc(automationEnrollments.id))
+		.limit(limit);
+
+	return c.json(
+		{
+			data: rows.map((row) => ({
+				enrollment_id: row.id,
+				automation_version: row.automationVersion,
+				contact_id: row.contactId,
+				conversation_id: row.conversationId,
+				status: row.status,
+				state: row.state,
+				enrolled_at: row.enrolledAt.toISOString(),
+			})),
+		},
+		200,
+	);
+});
+
 const getRuns = createRoute({
 	operationId: "listAutomationRuns",
 	method: "get",
@@ -1608,280 +1611,6 @@ export async function publishVersion(
 		.returning({ publishedVersion: automations.publishedVersion });
 
 	return updated?.publishedVersion ?? auto.version;
-}
-
-// Minimal catalog metadata for introspection — expanded in Phase 5 (docs).
-
-function describeTrigger(t: string): string {
-	const map: Record<string, string> = {
-		instagram_comment: "Fires when a user comments on an Instagram post or reel",
-		instagram_dm: "Fires when a user DMs the Instagram business account",
-		instagram_story_reply: "Fires when a user replies to an Instagram story",
-		instagram_follow_to_dm: "Fires when a new user follows the account",
-		whatsapp_message: "Fires on any inbound WhatsApp message",
-		whatsapp_keyword: "Fires when an inbound WhatsApp message matches a keyword",
-		telegram_message: "Fires on any inbound Telegram message",
-		telegram_command: "Fires when a Telegram user sends a bot command",
-		scheduled_time: "Fires on a cron schedule",
-		manual: "No automatic trigger — enrolled via API",
-	};
-	return map[t] ?? `Trigger type: ${t}`;
-}
-
-function channelForTrigger(
-	t: string,
-): (typeof AUTOMATION_CHANNELS)[number] {
-	for (const ch of AUTOMATION_CHANNELS) {
-		if (ch !== "multi" && t.startsWith(`${ch}_`)) return ch;
-	}
-	return "multi";
-}
-
-function tierForTrigger(t: string): number {
-	const tier1 = [
-		"instagram",
-		"facebook",
-		"whatsapp",
-		"telegram",
-		"discord",
-		"sms",
-		"twitter",
-		"bluesky",
-	];
-	const tier2 = [
-		"threads",
-		"youtube",
-		"linkedin",
-		"mastodon",
-		"reddit",
-		"googlebusiness",
-	];
-	const tier3 = ["beehiiv", "kit", "mailchimp"];
-	for (const p of tier1) if (t.startsWith(`${p}_`)) return 1;
-	for (const p of tier2) if (t.startsWith(`${p}_`)) return 2;
-	for (const p of tier3) if (t.startsWith(`${p}_`)) return 3;
-	return 0;
-}
-
-function transportForTrigger(t: string): "webhook" | "polling" | "streaming" {
-	if (
-		t.startsWith("reddit_") ||
-		t.startsWith("linkedin_") ||
-		t.startsWith("youtube_")
-	)
-		return "polling";
-	if (t.startsWith("mastodon_") || t.startsWith("bluesky_"))
-		return "streaming";
-	return "webhook";
-}
-
-const BASE_NODE_FIELDS = new Set([
-	"type",
-	"key",
-	"notes",
-	"canvas_x",
-	"canvas_y",
-]);
-
-/**
- * Build `type → JSON Schema` map for every option of AutomationNodeSpec's
- * discriminated union. We strip the universal base fields so the UI shows
- * only per-type configuration.
- */
-function buildNodeConfigSchemaMap(): Record<string, unknown> {
-	const out: Record<string, unknown> = {};
-	const options = (
-		AutomationNodeSpec as unknown as {
-			options: Array<z.ZodObject<z.ZodRawShape>>;
-		}
-	).options;
-	for (const opt of options) {
-		// Wrap per-option so one failing option (e.g. a z.object().refine(...),
-		// which Zod 4 forbids from .omit()) doesn't crash the whole /schema
-		// endpoint. Refined options fall back to `{}` for fields_schema.
-		try {
-			const shape = opt.shape;
-			const typeField = shape.type as unknown as { value?: string } | undefined;
-			const typeName = typeField?.value;
-			if (!typeName) continue;
-			const mask: Record<string, true> = {};
-			for (const base of BASE_NODE_FIELDS) {
-				if (base in shape) mask[base] = true;
-			}
-			const configOnly = opt.omit(mask as { [K in keyof typeof shape]?: true });
-			out[typeName] = z.toJSONSchema(configOnly);
-		} catch {
-			// Refined object schemas: still try to surface the type so the node
-			// appears in the catalog with an empty fields_schema.
-			try {
-				const shape = opt.shape;
-				const typeField = shape.type as unknown as { value?: string } | undefined;
-				if (typeField?.value) out[typeField.value] = {};
-			} catch {
-				// give up; skip this option
-			}
-		}
-	}
-	return out;
-}
-
-function buildTriggerConfigSchemaMap(): Record<string, unknown> {
-	const keywordMatchSchema = z.object({
-		keywords: z
-			.array(z.string())
-			.min(1)
-			.max(50)
-			.optional()
-			.describe("Optional keyword list. Leave empty to match every inbound event."),
-		match_mode: z
-			.enum(["contains", "exact"])
-			.optional()
-			.describe("How inbound text is matched against the keyword list."),
-	});
-
-	const commentTriggerSchema = keywordMatchSchema.extend({
-		post_id: z
-			.string()
-			.nullable()
-			.optional()
-			.describe("Optional platform post ID. Leave empty to match comments on any post."),
-	});
-
-	return {
-		instagram_comment: z.toJSONSchema(commentTriggerSchema),
-		facebook_comment: z.toJSONSchema(commentTriggerSchema),
-		instagram_dm: z.toJSONSchema(keywordMatchSchema),
-		facebook_dm: z.toJSONSchema(keywordMatchSchema),
-		whatsapp_message: z.toJSONSchema(keywordMatchSchema),
-		telegram_message: z.toJSONSchema(keywordMatchSchema),
-		sms_received: z.toJSONSchema(keywordMatchSchema),
-		manual: {},
-		external_api: {},
-	};
-}
-
-function buildTemplateInputSchemaMap(): Record<string, unknown> {
-	return {
-		"comment-to-dm": z.toJSONSchema(CommentToDmTemplateInput),
-		"welcome-dm": z.toJSONSchema(WelcomeDmTemplateInput),
-		"keyword-reply": z.toJSONSchema(KeywordReplyTemplateInput),
-		"story-reply": z.toJSONSchema(StoryReplyTemplateInput),
-		"follow-to-dm": z.toJSONSchema(FollowToDmTemplateInput),
-		giveaway: z.toJSONSchema(GiveawayTemplateInput),
-	};
-}
-
-function assertAutomationCatalogIntegrity(
-	nodeConfigSchema: Record<string, unknown>,
-	triggerConfigSchema: Record<string, unknown>,
-	templateInputSchema: Record<string, unknown>,
-): void {
-	const missingTriggerSchemas = AUTOMATION_TRIGGER_TYPES.filter((type) =>
-		RUNTIME_SUPPORTED_TRIGGER_TYPES.has(type),
-	).filter((type) => !(type in triggerConfigSchema));
-	if (missingTriggerSchemas.length > 0) {
-		throw new Error(
-			`Missing trigger config schemas for: ${missingTriggerSchemas.join(", ")}`,
-		);
-	}
-
-	const publishedNodeTypes = AUTOMATION_NODE_TYPES.filter(
-		(type) => !STUBBED_NODE_TYPES.has(type),
-	);
-	const missingNodeSchemas = publishedNodeTypes.filter(
-		(type) => !(type in nodeConfigSchema),
-	);
-	if (missingNodeSchemas.length > 0) {
-		throw new Error(
-			`Missing node config schemas for: ${missingNodeSchemas.join(", ")}`,
-		);
-	}
-
-	const expectedTemplates = [
-		"comment-to-dm",
-		"welcome-dm",
-		"keyword-reply",
-		"story-reply",
-		"follow-to-dm",
-		"giveaway",
-	];
-	const missingTemplateSchemas = expectedTemplates.filter(
-		(id) => !(id in templateInputSchema),
-	);
-	if (missingTemplateSchemas.length > 0) {
-		throw new Error(
-			`Missing template input schemas for: ${missingTemplateSchemas.join(", ")}`,
-		);
-	}
-}
-
-function describeNode(t: string): string {
-	if (t === "trigger") return "Virtual root node — the automation's entry point";
-	if (t.startsWith("message_")) return `Send a ${t.slice(8)} message to the contact`;
-	if (t.startsWith("user_input_"))
-		return `Ask the contact for ${t.slice(11)} and save to a custom field`;
-	if (t === "condition")
-		return "Branch on contact tags, fields, or captured state";
-	if (t === "smart_delay") return "Wait a fixed duration before continuing";
-	if (t === "randomizer") return "Split into weighted random branches";
-	if (t === "split_test") return "Route contacts into weighted experiment variants";
-	if (t === "subscription_add") return "Subscribe the enrolled contact to a list";
-	if (t === "subscription_remove") return "Unsubscribe the enrolled contact from a list";
-	if (t === "conversation_status") return "Update the linked inbox conversation status";
-	if (t === "http_request")
-		return "Call an external HTTP endpoint and optionally capture the response";
-	if (t === "webhook_out")
-		return "Deliver a signed event payload to a RelayAPI webhook endpoint";
-	if (t === "ai_agent")
-		return "Hand the conversation to an AI agent with a knowledge base";
-	if (t === "goto") return "Jump to another node in the graph";
-	if (t === "end") return "Terminate the automation";
-	return t;
-}
-
-function categoryForNode(
-	t: string,
-): "content" | "input" | "logic" | "ai" | "action" | "ops" | "platform_send" {
-	if (t === "trigger") return "logic";
-	if (t.startsWith("message_")) return "content";
-	if (t.startsWith("user_input_")) return "input";
-	if (["condition", "smart_delay", "randomizer", "split_test", "goto", "end", "subflow_call"].includes(t))
-		return "logic";
-	if (["ai_step", "ai_agent", "ai_intent_router"].includes(t)) return "ai";
-	if (
-		[
-			"tag_add",
-			"tag_remove",
-			"field_set",
-			"field_clear",
-			"subscription_add",
-			"subscription_remove",
-			"segment_add",
-			"segment_remove",
-		].includes(t)
-	)
-		return "action";
-	if (
-		[
-			"notify_admin",
-			"conversation_assign",
-			"conversation_status",
-			"http_request",
-			"webhook_out",
-		].includes(t)
-	)
-		return "ops";
-	return "platform_send";
-}
-
-function outputLabelsForNode(t: string): string[] {
-	if (t === "condition") return ["yes", "no"];
-	if (t === "randomizer") return ["branch_1", "branch_2", "branch_N"];
-	if (t === "split_test") return ["variant_a", "variant_b"];
-	if (t.startsWith("user_input_")) return ["captured", "no_match", "timeout"];
-	if (t === "ai_agent") return ["complete", "handoff"];
-	if (t === "ai_intent_router") return ["intent_1", "intent_2"];
-	return ["next"];
 }
 
 export default app;

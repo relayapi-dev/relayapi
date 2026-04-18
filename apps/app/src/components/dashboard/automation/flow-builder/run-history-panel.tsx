@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
 interface EnrollmentRow {
 	id: string;
 	contact_id: string | null;
+	conversation_id: string | null;
+	state: unknown;
 	status: string;
 	enrolled_at: string;
 	completed_at: string | null;
@@ -95,6 +97,8 @@ export function RunHistoryPanel({
 	const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 	const [runs, setRuns] = useState<RunLogRow[]>([]);
 	const [runsLoading, setRunsLoading] = useState(false);
+	const [rerunLoading, setRerunLoading] = useState(false);
+	const [rerunMessage, setRerunMessage] = useState<string | null>(null);
 
 	const loadEnrollments = () => {
 		let cancelled = false;
@@ -130,6 +134,7 @@ export function RunHistoryPanel({
 		if (!selected) {
 			setRuns([]);
 			setSelectedRunId(null);
+			setRerunMessage(null);
 			onHighlightPath([]);
 			return;
 		}
@@ -181,6 +186,51 @@ export function RunHistoryPanel({
 			return String(selectedRun.payload);
 		}
 	}, [selectedRun]);
+	const enrollmentStateText = useMemo(() => {
+		if (!selectedEnrollment?.state) return null;
+		try {
+			return JSON.stringify(selectedEnrollment.state, null, 2);
+		} catch {
+			return String(selectedEnrollment.state);
+		}
+	}, [selectedEnrollment]);
+
+	const rerunEnrollment = async () => {
+		if (!selectedEnrollment) return;
+		setRerunLoading(true);
+		setRerunMessage(null);
+		try {
+			const res = await fetch(`/api/automations/${automationId}/enroll`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					contact_id: selectedEnrollment.contact_id ?? undefined,
+					conversation_id: selectedEnrollment.conversation_id ?? undefined,
+					payload:
+						selectedEnrollment.state &&
+						typeof selectedEnrollment.state === "object" &&
+						!Array.isArray(selectedEnrollment.state)
+							? selectedEnrollment.state
+							: undefined,
+				}),
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => null);
+				throw new Error(body?.error?.message ?? `Error ${res.status}`);
+			}
+			const json = (await res.json()) as { enrollment_id?: string };
+			setRerunMessage(
+				json.enrollment_id
+					? `Queued new enrollment ${json.enrollment_id}`
+					: "Enrollment queued",
+			);
+			loadEnrollments();
+		} catch (e) {
+			setRerunMessage(e instanceof Error ? e.message : "Failed to rerun enrollment");
+		} finally {
+			setRerunLoading(false);
+		}
+	};
 
 	return (
 		<div className="w-80 border-l border-border bg-card/30 flex flex-col overflow-hidden">
@@ -248,10 +298,43 @@ export function RunHistoryPanel({
 							Contact: {selectedEnrollment.contact_id ?? "—"}
 						</div>
 						<div className="text-[10px] text-muted-foreground">
+							Conversation: {selectedEnrollment.conversation_id ?? "—"}
+						</div>
+						<div className="text-[10px] text-muted-foreground">
 							{formatDate(selectedEnrollment.enrolled_at)}
 							{selectedEnrollment.completed_at &&
 								` → ${formatDate(selectedEnrollment.completed_at)}`}
 						</div>
+						<div className="pt-1">
+							<button
+								type="button"
+								onClick={rerunEnrollment}
+								disabled={rerunLoading}
+								className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[10px] font-medium text-foreground hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+							>
+								{rerunLoading ? (
+									<Loader2 className="size-3 animate-spin" />
+								) : (
+									<RefreshCw className="size-3" />
+								)}
+								Rerun with same payload
+							</button>
+							{rerunMessage && (
+								<p className="mt-1 text-[10px] text-muted-foreground">
+									{rerunMessage}
+								</p>
+							)}
+						</div>
+						{enrollmentStateText && (
+							<div className="pt-1">
+								<div className="text-[10px] font-medium text-muted-foreground mb-1">
+									Enrollment state
+								</div>
+								<pre className="max-h-40 overflow-auto rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[10px] text-foreground whitespace-pre-wrap break-all">
+									{enrollmentStateText}
+								</pre>
+							</div>
+						)}
 					</div>
 					<div className="px-3 py-2 space-y-2">
 						{runsLoading ? (

@@ -474,6 +474,7 @@ export function FieldRow({
 				spec={field.array}
 				value={value}
 				onChange={onChange}
+				dataReferences={refs}
 			/>
 		);
 	}
@@ -891,8 +892,16 @@ function NodeGuidance({
 						<span className="font-medium capitalize">{automationChannel}</span>.
 					</p>
 					<p className="mt-1 text-[10px] text-muted-foreground/70">
-						The runtime resolves the contact’s channel identifier automatically.
-						Recipient overrides are not configurable in the current engine yet.
+						By default the runtime resolves the contact’s channel identifier
+						automatically. Set{" "}
+						<span className="font-medium text-foreground">
+							recipient mode
+						</span>{" "}
+						to custom and provide a{" "}
+						<span className="font-medium text-foreground">
+							recipient identifier
+						</span>{" "}
+						to override it.
 					</p>
 				</div>
 			)}
@@ -994,19 +1003,78 @@ function ArrayField({
 	spec,
 	value,
 	onChange,
+	dataReferences,
 }: {
 	label: React.ReactNode;
 	hint: React.ReactNode;
 	spec: ArraySpec;
 	value: unknown;
 	onChange: (v: unknown) => void;
+	dataReferences: DataReferenceGroup[];
 }) {
 	const arr = Array.isArray(value) ? (value as unknown[]) : [];
 	const canAdd = spec.maxItems === undefined || arr.length < spec.maxItems;
 	const canRemove = spec.minItems === undefined || arr.length > spec.minItems;
+	const [activeTarget, setActiveTarget] = useState<string | null>(null);
+	const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
 	const update = (next: unknown[]) =>
 		onChange(next.length === 0 ? undefined : next);
+	const hasStringTargets =
+		spec.itemKind === "string" ||
+		(spec.itemKind === "object" &&
+			(spec.itemFields ?? []).some((field) => field.type === "string" && !field.enumValues));
+
+	const setTargetValue = (target: string, nextValue: string) => {
+		const copy = [...arr];
+		if (target.startsWith("item:")) {
+			const index = Number(target.slice(5));
+			if (!Number.isNaN(index)) {
+				copy[index] = nextValue;
+			}
+		} else if (target.startsWith("field:")) {
+			const [, rawIndex, ...fieldParts] = target.split(":");
+			const index = Number(rawIndex);
+			const fieldName = fieldParts.join(":");
+			if (!Number.isNaN(index) && fieldName) {
+				const row = (copy[index] ?? {}) as Record<string, unknown>;
+				copy[index] = { ...row, [fieldName]: nextValue };
+			}
+		}
+		update(copy);
+	};
+
+	const currentTargetValue = (target: string): string => {
+		if (target.startsWith("item:")) {
+			const index = Number(target.slice(5));
+			return ((arr[index] as string | undefined) ?? "").toString();
+		}
+		if (target.startsWith("field:")) {
+			const [, rawIndex, ...fieldParts] = target.split(":");
+			const index = Number(rawIndex);
+			const fieldName = fieldParts.join(":");
+			const row = (arr[index] ?? {}) as Record<string, unknown>;
+			return ((row[fieldName] as string | undefined) ?? "").toString();
+		}
+		return "";
+	};
+
+	const insertToken = (tokenValue: string) => {
+		if (!activeTarget) return;
+		const input = inputRefs.current[activeTarget];
+		const currentValue = currentTargetValue(activeTarget);
+		const start = input?.selectionStart ?? currentValue.length;
+		const end = input?.selectionEnd ?? currentValue.length;
+		const nextValue = `${currentValue.slice(0, start)}${tokenValue}${currentValue.slice(end)}`;
+		setTargetValue(activeTarget, nextValue);
+		requestAnimationFrame(() => {
+			const target = inputRefs.current[activeTarget];
+			if (!target) return;
+			const caret = start + tokenValue.length;
+			target.focus();
+			target.setSelectionRange(caret, caret);
+		});
+	};
 
 	if (spec.itemKind === "unknown") {
 		// Unknown leaf shape — fall back to JSON editor.
@@ -1016,6 +1084,14 @@ function ArrayField({
 	return (
 		<div>
 			{label}
+			{hasStringTargets && dataReferences.length > 0 && (
+				<div className="my-2">
+					<p className="mb-1 text-[10px] text-muted-foreground/70">
+						Focus a string field, then click a token to insert dynamic data.
+					</p>
+					<DataReferencePicker groups={dataReferences} onPick={insertToken} />
+				</div>
+			)}
 			<div className="space-y-1.5">
 				{arr.map((item, i) => (
 					<div key={i} className="flex items-start gap-1.5">
@@ -1078,7 +1154,11 @@ function ArrayField({
 												) : (
 													<input
 														type="text"
+														ref={(el) => {
+															inputRefs.current[`field:${i}:${f.name}`] = el;
+														}}
 														value={(row[f.name] as string) ?? ""}
+														onFocus={() => setActiveTarget(`field:${i}:${f.name}`)}
 														onChange={(e) => {
 															const copy = [...arr];
 															copy[i] = { ...row, [f.name]: e.target.value };
@@ -1116,7 +1196,11 @@ function ArrayField({
 							) : (
 								<input
 									type="text"
+									ref={(el) => {
+										inputRefs.current[`item:${i}`] = el;
+									}}
 									value={(item as string) ?? ""}
+									onFocus={() => setActiveTarget(`item:${i}`)}
 									onChange={(e) => {
 										const copy = [...arr];
 										copy[i] = e.target.value;

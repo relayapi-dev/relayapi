@@ -31,6 +31,16 @@ function triggerRefs(triggerType: string): DataReference[] {
 	if (triggerType.endsWith("_comment")) {
 		return [
 			{
+				key: "state.author.id",
+				label: "Author ID",
+				token: token("state.author.id"),
+			},
+			{
+				key: "state.author.name",
+				label: "Author name",
+				token: token("state.author.name"),
+			},
+			{
 				key: "state.comment_id",
 				label: "Comment ID",
 				token: token("state.comment_id"),
@@ -53,6 +63,16 @@ function triggerRefs(triggerType: string): DataReference[] {
 		triggerType === "sms_received"
 	) {
 		return [
+			{
+				key: "state.author.id",
+				label: "Sender ID",
+				token: token("state.author.id"),
+			},
+			{
+				key: "state.author.name",
+				label: "Sender name",
+				token: token("state.author.name"),
+			},
 			{
 				key: "state.text",
 				label: "Inbound text",
