@@ -121,6 +121,36 @@ export type AutomationTriggerType = (typeof AUTOMATION_TRIGGER_TYPES)[number];
 export const AutomationTriggerTypeEnum = z.enum(AUTOMATION_TRIGGER_TYPES);
 
 /**
+ * Trigger types the runtime can actually emit today. This is a strict subset
+ * of `AUTOMATION_TRIGGER_TYPES` because the DB enum includes every trigger we
+ * plan to support, while only the listed subset has:
+ *   (a) a platform normalizer in `inbox-event-processor.ts`, OR
+ *   (b) a `POST /v1/automations/:id/enroll` path (manual / external_api), OR
+ *   (c) a scheduled dispatcher (not implemented yet).
+ *
+ * The `GET /v1/automations/schema` catalog filters to this set so the dashboard
+ * palette / MCP tools / AI agents only surface triggers that will actually
+ * fire — picking, for example, `instagram_story_reply` today would let a
+ * draft activate but it would never enroll anyone because the Instagram
+ * normalizer doesn't emit story-reply events yet.
+ *
+ * When runtime support lands for a new trigger type, add it here.
+ */
+export const RUNTIME_SUPPORTED_TRIGGER_TYPES: ReadonlySet<string> = new Set([
+	// Inbox-driven (platform normalizer exists in inbox-event-processor.ts).
+	"instagram_dm",
+	"instagram_comment",
+	"facebook_dm",
+	"facebook_comment",
+	"whatsapp_message",
+	"telegram_message",
+	"sms_received",
+	// Manual enrollment via POST /v1/automations/:id/enroll.
+	"manual",
+	"external_api",
+]);
+
+/**
  * Runtime-stubbed node types. These appear in the DB pgEnum for forward
  * compatibility but are intentionally NOT included in:
  *   - `AutomationNodeSpec` (the create-time discriminated union), so the API
@@ -1861,6 +1891,24 @@ export const GiveawayTemplateInput = z.object({
 // Simulate — static graph traversal for the dashboard Playground / agents.
 // No handlers execute; no side effects.
 // ---------------------------------------------------------------------------
+
+export const AutomationEnrollRequest = z.object({
+	contact_id: z
+		.string()
+		.optional()
+		.describe(
+			"Contact to enroll. Optional — flows that don't reference the contact (smart_delay → http_request, randomizer, etc.) can enroll anonymously.",
+		),
+	conversation_id: z.string().optional(),
+	payload: z
+		.record(z.string(), z.any())
+		.optional()
+		.describe("Initial enrollment state (available as `state.*` merge tags)"),
+});
+
+export const AutomationEnrollResponse = z.object({
+	enrollment_id: z.string(),
+});
 
 export const AutomationSimulateRequest = z.object({
 	version: z

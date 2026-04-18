@@ -23,6 +23,8 @@ import {
 	STUBBED_NODE_TYPES,
 	AutomationCreateSpec,
 	AutomationEnrollmentResponse,
+	AutomationEnrollRequest,
+	AutomationEnrollResponse,
 	AutomationListResponse,
 	AutomationResponse,
 	AutomationRunLogResponse,
@@ -31,8 +33,10 @@ import {
 	AutomationSimulateResponse,
 	AutomationUpdateSpec,
 	AutomationWithGraphResponse,
+	RUNTIME_SUPPORTED_TRIGGER_TYPES,
 } from "../schemas/automations";
 import { simulateAutomation } from "../services/automations/simulator";
+import { enrollDirectly } from "../services/automations/trigger-matcher";
 import type { AutomationSnapshot } from "../services/automations/types";
 import { ErrorResponse, PaginationParams } from "../schemas/common";
 import type { Env, Variables } from "../types";
@@ -53,6 +57,13 @@ async function hasUserNodes(
 	db: ReturnType<typeof createDb>,
 	automationId: string,
 ): Promise<boolean> {
+	return (await countUserNodes(db, automationId)) > 0;
+}
+
+async function countUserNodes(
+	db: ReturnType<typeof createDb>,
+	automationId: string,
+): Promise<number> {
 	const rows = await db
 		.select({ count: sql<number>`count(*)::int` })
 		.from(automationNodes)
@@ -62,7 +73,167 @@ async function hasUserNodes(
 				sql`${automationNodes.key} != 'trigger'`,
 			),
 		);
-	return (rows[0]?.count ?? 0) > 0;
+	return rows[0]?.count ?? 0;
+}
+
+/**
+ * Replaces an automation's non-trigger nodes and all edges with the supplied
+ * set. The virtual `trigger` node is preserved so `entry_node_id` stays valid.
+ * Cascading FKs on automation_edges delete edges tied to removed nodes; the
+ * bulk edge delete cleans up the rest (including old trigger → ... edges).
+ */
+async function replaceAutomationGraph(
+	db: ReturnType<typeof createDb>,
+	automationId: string,
+	newNodes: Array<{
+		key: string;
+		type: string;
+		notes?: string;
+		canvas_x?: number;
+		canvas_y?: number;
+		[field: string]: unknown;
+	}>,
+	newEdges: Array<{
+		from: string;
+		to: string;
+		label?: string;
+		order?: number;
+		condition_expr?: unknown;
+	}>,
+): Promise<void> {
+	// Delete all edges first so we can drop nodes without FK-cascade side effects.
+	await db
+		.delete(automationEdges)
+		.where(eq(automationEdges.automationId, automationId));
+	// Drop non-trigger nodes. The trigger node is kept so entry_node_id stays
+	// pointed at a real row.
+	await db
+		.delete(automationNodes)
+		.where(
+			and(
+				eq(automationNodes.automationId, automationId),
+				sql`${automationNodes.key} != 'trigger'`,
+			),
+		);
+
+	const triggerNode = await db.query.automationNodes.findFirst({
+		where: and(
+			eq(automationNodes.automationId, automationId),
+			eq(automationNodes.key, "trigger"),
+		),
+	});
+	if (!triggerNode) {
+		// Shouldn't happen — create guarantees a trigger node — but self-heal
+		// rather than 500 the request.
+		const [created] = await db
+			.insert(automationNodes)
+			.values({
+				automationId,
+				key: "trigger",
+				type: "trigger" as never,
+				config: {},
+			})
+			.returning();
+		if (!created) throw new Error("failed to re-create trigger node");
+		await db
+			.update(automations)
+			.set({ entryNodeId: created.id })
+			.where(eq(automations.id, automationId));
+	}
+
+	const inserted = newNodes.length
+		? await db
+				.insert(automationNodes)
+				.values(
+					newNodes.map((n) => ({
+						automationId,
+						key: n.key,
+						type: n.type as never,
+						config: extractNodeConfig(n),
+						canvasX: n.canvas_x,
+						canvasY: n.canvas_y,
+						notes: n.notes,
+					})),
+				)
+				.returning()
+		: [];
+
+	const triggerId =
+		triggerNode?.id ??
+		(
+			await db.query.automationNodes.findFirst({
+				where: and(
+					eq(automationNodes.automationId, automationId),
+					eq(automationNodes.key, "trigger"),
+				),
+			})
+		)?.id;
+	if (!triggerId) throw new Error("trigger node missing after replace");
+
+	const keyToId = new Map<string, string>([
+		["trigger", triggerId],
+		...inserted.map((n) => [n.key, n.id] as [string, string]),
+	]);
+
+	if (newEdges.length) {
+		await db.insert(automationEdges).values(
+			newEdges.map((e) => ({
+				automationId,
+				fromNodeId: keyToId.get(e.from)!,
+				toNodeId: keyToId.get(e.to)!,
+				label: e.label ?? "next",
+				order: e.order ?? 0,
+				conditionExpr: e.condition_expr ?? null,
+			})),
+		);
+	}
+}
+
+/**
+ * Replace only the edge set (node list unchanged). Used when PATCH sends
+ * `edges` but omits `nodes`.
+ */
+async function replaceEdgesOnly(
+	db: ReturnType<typeof createDb>,
+	automationId: string,
+	newEdges: Array<{
+		from: string;
+		to: string;
+		label?: string;
+		order?: number;
+		condition_expr?: unknown;
+	}>,
+): Promise<void> {
+	const existingNodes = await db
+		.select()
+		.from(automationNodes)
+		.where(eq(automationNodes.automationId, automationId));
+	const keyToId = new Map(existingNodes.map((n) => [n.key, n.id]));
+
+	await db
+		.delete(automationEdges)
+		.where(eq(automationEdges.automationId, automationId));
+
+	if (!newEdges.length) return;
+
+	for (const e of newEdges) {
+		if (!keyToId.has(e.from) || !keyToId.has(e.to)) {
+			throw new Error(
+				`edge references unknown node: from='${e.from}' to='${e.to}'`,
+			);
+		}
+	}
+
+	await db.insert(automationEdges).values(
+		newEdges.map((e) => ({
+			automationId,
+			fromNodeId: keyToId.get(e.from)!,
+			toNodeId: keyToId.get(e.to)!,
+			label: e.label ?? "next",
+			order: e.order ?? 0,
+			conditionExpr: e.condition_expr ?? null,
+		})),
+	);
 }
 
 // --- Serializers ---
@@ -378,7 +549,12 @@ app.openapi(getSchema, async (c) => {
 	const nodeConfigSchema = buildNodeConfigSchemaMap();
 	return c.json(
 		{
-			triggers: AUTOMATION_TRIGGER_TYPES.map((t) => ({
+			// Filter to the runtime-supported subset so palettes / AI agents don't
+			// offer triggers that the normalizer can't emit today. See
+			// RUNTIME_SUPPORTED_TRIGGER_TYPES in schemas/automations.ts.
+			triggers: AUTOMATION_TRIGGER_TYPES.filter((t) =>
+				RUNTIME_SUPPORTED_TRIGGER_TYPES.has(t),
+			).map((t) => ({
 				type: t,
 				description: describeTrigger(t),
 				channel: channelForTrigger(t),
@@ -504,7 +680,7 @@ const updateAutomation = createRoute({
 	method: "patch",
 	path: "/{id}",
 	tags: ["Automations"],
-	summary: "Update automation metadata",
+	summary: "Update automation metadata + graph",
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParams,
@@ -512,8 +688,8 @@ const updateAutomation = createRoute({
 	},
 	responses: {
 		200: {
-			description: "Updated",
-			content: { "application/json": { schema: AutomationResponse } },
+			description: "Updated (includes full graph)",
+			content: { "application/json": { schema: AutomationWithGraphResponse } },
 		},
 		400: {
 			description: "Validation error",
@@ -546,6 +722,73 @@ app.openapi(updateAutomation, async (c) => {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
+	// Validate the graph replacement up-front — node keys unique, edges reference
+	// known keys — so we never partially apply before discovering an error.
+	if (body.nodes) {
+		const keys = new Set<string>();
+		for (const n of body.nodes) {
+			if (keys.has(n.key)) {
+				return c.json(
+					automationError(
+						"duplicate_node_key",
+						`Node key '${n.key}' appears more than once`,
+						{ path: "nodes[].key", details: { key: n.key } },
+					),
+					400,
+				);
+			}
+			keys.add(n.key);
+		}
+		const allKeys = new Set([...keys, "trigger"]);
+		const edges = body.edges ?? [];
+		for (let i = 0; i < edges.length; i++) {
+			const e = edges[i]!;
+			if (!allKeys.has(e.from)) {
+				return c.json(
+					automationError(
+						"unknown_node_reference",
+						`Edge ${i} references unknown node '${e.from}'`,
+						{ path: `edges[${i}].from`, suggestion: suggest(e.from, Array.from(allKeys)) },
+					),
+					400,
+				);
+			}
+			if (!allKeys.has(e.to)) {
+				return c.json(
+					automationError(
+						"unknown_node_reference",
+						`Edge ${i} references unknown node '${e.to}'`,
+						{ path: `edges[${i}].to`, suggestion: suggest(e.to, Array.from(allKeys)) },
+					),
+					400,
+				);
+			}
+		}
+	}
+
+	// Decide whether activation will need a new published snapshot, and compute
+	// the post-update user-node count so we can reject an empty activation BEFORE
+	// writing anything. The old code wrote the update first and returned 400
+	// afterwards, stranding the row as status=active / publishedVersion=null.
+	const willActivate =
+		body.status === "active" && row.publishedVersion === null;
+	if (willActivate) {
+		const finalNodeCount =
+			body.nodes !== undefined
+				? body.nodes.length
+				: await countUserNodes(db, id);
+		if (finalNodeCount === 0) {
+			return c.json(
+				automationError(
+					"empty_automation",
+					"Cannot activate an automation with no nodes",
+					{ path: "nodes" },
+				),
+				400,
+			);
+		}
+	}
+
 	const updates: Partial<typeof automations.$inferInsert> = {};
 	if (body.name !== undefined) updates.name = body.name;
 	if (body.description !== undefined) updates.description = body.description;
@@ -566,7 +809,17 @@ app.openapi(updateAutomation, async (c) => {
 	}
 	updates.updatedAt = new Date();
 
-	// Persist the metadata update FIRST, then publish — otherwise a PATCH that
+	// Replace the graph first so publishVersion (below) captures the new draft.
+	// The old code ignored nodes/edges entirely — the dashboard editor
+	// autosaved node/edge edits against a PATCH that silently dropped them,
+	// which is why activation fed an old graph into the published snapshot.
+	if (body.nodes !== undefined) {
+		await replaceAutomationGraph(db, id, body.nodes, body.edges ?? []);
+	} else if (body.edges !== undefined) {
+		await replaceEdgesOnly(db, id, body.edges);
+	}
+
+	// Persist the metadata update next, then publish — otherwise a PATCH that
 	// activates + changes trigger/channel/etc. in the same request would
 	// publish the stale pre-PATCH row.
 	const [updated] = await db
@@ -575,25 +828,11 @@ app.openapi(updateAutomation, async (c) => {
 		.where(eq(automations.id, id))
 		.returning();
 
-	if (updates.status === "active" && row.publishedVersion === null) {
-		if (!(await hasUserNodes(db, id))) {
-			return c.json(
-				automationError(
-					"empty_automation",
-					"Cannot activate an automation with no nodes",
-					{ path: "nodes" },
-				),
-				400,
-			);
-		}
+	if (willActivate) {
 		await publishVersion(db, id);
-		const refreshed = await db.query.automations.findFirst({
-			where: eq(automations.id, id),
-		});
-		if (refreshed) return c.json(serializeAutomation(refreshed), 200);
 	}
 
-	return c.json(serializeAutomation(updated!), 200);
+	return c.json(await loadGraphResponse(db, id), 200);
 });
 
 // --- Publish / pause / resume / archive ---
@@ -733,6 +972,124 @@ app.openapi(publishAutomation, async (c) => {
 		where: eq(automations.id, id),
 	});
 	return c.json(serializeAutomation(updated!), 200);
+});
+
+// --- Manual enrollment ---
+//
+// Creates an enrollment without going through the trigger-matcher. Intended
+// for `manual` and `external_api` triggers, but also useful for operator-driven
+// replay / backfill on any active automation. The automation must be active
+// and have a published snapshot — the runner has nothing to execute otherwise.
+
+const enrollAutomation = createRoute({
+	operationId: "enrollAutomation",
+	method: "post",
+	path: "/{id}/enroll",
+	tags: ["Automations"],
+	summary: "Manually enroll a contact into the automation",
+	security: [{ Bearer: [] }],
+	request: {
+		params: IdParams,
+		body: {
+			content: { "application/json": { schema: AutomationEnrollRequest } },
+		},
+	},
+	responses: {
+		201: {
+			description: "Enrolled",
+			content: { "application/json": { schema: AutomationEnrollResponse } },
+		},
+		400: {
+			description: "Validation error",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Re-entry blocked",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		500: {
+			description: "Enqueue failed",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(enrollAutomation, async (c) => {
+	const { id } = c.req.valid("param");
+	const body = c.req.valid("json");
+	const db = c.get("db");
+	const orgId = c.get("orgId");
+
+	const row = await db.query.automations.findFirst({
+		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
+	});
+	if (!row) {
+		return c.json(
+			{ error: { code: "not_found", message: "Automation not found" } },
+			404,
+		);
+	}
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
+
+	const result = await enrollDirectly(c.env, {
+		organization_id: orgId,
+		automation_id: id,
+		contact_id: body.contact_id ?? null,
+		conversation_id: body.conversation_id ?? null,
+		payload: body.payload,
+	});
+
+	if (!result.ok) {
+		if (result.reason === "not_found") {
+			return c.json(
+				{ error: { code: "not_found", message: "Automation not found" } },
+				404,
+			);
+		}
+		if (result.reason === "not_active") {
+			return c.json(
+				automationError(
+					"not_active",
+					"Automation must be active to accept enrollments",
+				),
+				400,
+			);
+		}
+		if (result.reason === "not_published") {
+			return c.json(
+				automationError(
+					"not_published",
+					"Automation has no published snapshot — publish first",
+				),
+				400,
+			);
+		}
+		if (result.reason === "reentry_blocked") {
+			return c.json(
+				automationError(
+					"reentry_blocked",
+					"Contact has an active enrollment or is within the re-entry cooldown window",
+				),
+				409,
+			);
+		}
+		return c.json(
+			automationError("enroll_failed", "Failed to enqueue enrollment"),
+			500,
+		);
+	}
+
+	return c.json({ enrollment_id: result.enrollment_id }, 201);
 });
 
 // --- Delete ---

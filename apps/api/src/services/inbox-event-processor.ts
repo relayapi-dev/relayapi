@@ -12,7 +12,7 @@ import { upsertConversation, insertMessage } from "./inbox-persistence";
 import { dispatchWebhookEvent } from "./webhook-delivery";
 import { notifyRealtime } from "../lib/notify-post-update";
 import { subscribeYouTubeChannel } from "./webhook-subscription";
-import { findMatchingContact } from "./contact-linker";
+import { ensureContactForAuthor, findMatchingContact } from "./contact-linker";
 import {
 	findWaitingEnrollment,
 	matchAndEnroll,
@@ -330,18 +330,20 @@ async function dispatchAutomationMatch(
 		const authorId = event.author?.id ?? event.participant?.id ?? null;
 		let contactId: string | null = null;
 		if (authorId) {
-			const match = await findMatchingContact(
+			// ensureContactForAuthor returns an existing contact when one matches
+			// the (platform, account, identifier) tuple or has a matching
+			// phone/email. When nothing matches, it creates a minimal contact +
+			// channel so downstream automation nodes (message_text, user_input,
+			// tag_add) have something to write to. Without this, "reply to new
+			// DM" flows fail on the first node because the author is unknown.
+			contactId = await ensureContactForAuthor(
 				db,
 				event.organization_id,
 				event.account_id,
+				event.platform,
 				authorId,
 				event.author?.name ?? null,
 			);
-			// Only act on exact / phone / email matches. Name-only suggestions
-			// are too loose to trigger automation enrollments silently.
-			if (match && match.confidence !== "name_suggestion") {
-				contactId = match.contactId;
-			}
 		}
 
 		// Resume a waiting user_input flow before firing new triggers.

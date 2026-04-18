@@ -16,6 +16,7 @@ export type AutomationQueueMessage =
 	| { type: "resume_from_input"; enrollment_id: string; input_value: unknown }
 	| {
 			type: "enroll";
+			organization_id: string;
 			automation_id: string;
 			contact_id: string | null;
 			trigger_payload: Record<string, unknown>;

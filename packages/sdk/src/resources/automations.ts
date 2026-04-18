@@ -45,14 +45,16 @@ export class Automations extends APIResource {
   }
 
   /**
-   * Update automation metadata. If `status` transitions to "active" and no
-   * version has been published yet, the current graph is auto-published.
+   * Update automation metadata and/or graph. `nodes` and `edges`, when
+   * provided, fully replace the existing draft graph (the virtual `trigger`
+   * node is preserved). If `status` transitions to "active" and no version has
+   * been published yet, the updated graph is auto-published.
    */
   update(
     id: string,
     body: AutomationUpdateParams | null | undefined = {},
     options?: RequestOptions,
-  ): APIPromise<AutomationResponse> {
+  ): APIPromise<AutomationWithGraphResponse> {
     return this._client.patch(path`/v1/automations/${id}`, { body, ...options });
   }
 
@@ -96,6 +98,23 @@ export class Automations extends APIResource {
    */
   archive(id: string, options?: RequestOptions): APIPromise<AutomationResponse> {
     return this._client.post(path`/v1/automations/${id}/archive`, options);
+  }
+
+  /**
+   * Manually enroll a contact into an active, published automation. Used for
+   * `manual` and `external_api` triggers, or for operator-driven replay. The
+   * automation's re-entry rules still apply — attempting to re-enrol a contact
+   * that is already active (or within the cooldown) returns 409.
+   */
+  enroll(
+    id: string,
+    body: AutomationEnrollParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<AutomationEnrollResponse> {
+    return this._client.post(path`/v1/automations/${id}/enroll`, {
+      body,
+      ...options,
+    });
   }
 
   /**
@@ -339,6 +358,16 @@ export interface AutomationListEnrollmentsParams {
   cursor?: string;
   limit?: number;
   status?: AutomationEnrollmentStatus;
+}
+
+export interface AutomationEnrollParams {
+  contact_id?: string;
+  conversation_id?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface AutomationEnrollResponse {
+  enrollment_id: string;
 }
 
 export interface AutomationResponse {

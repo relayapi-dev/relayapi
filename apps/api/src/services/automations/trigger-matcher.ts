@@ -190,6 +190,122 @@ export async function matchAndEnroll(
 }
 
 /**
+ * Direct enrollment — skips trigger-type / config / filter matching, but still
+ * enforces re-entry rules and requires the automation to be active + published.
+ *
+ * Called from `POST /v1/automations/:id/enroll` and from the queue consumer's
+ * `enroll` branch. Returns the new enrollment id, or a string reason why the
+ * enrollment was rejected.
+ */
+export async function enrollDirectly(
+	env: Env,
+	input: {
+		organization_id: string;
+		automation_id: string;
+		contact_id?: string | null;
+		conversation_id?: string | null;
+		payload?: Record<string, unknown>;
+	},
+): Promise<
+	| { ok: true; enrollment_id: string }
+	| {
+			ok: false;
+			reason:
+				| "not_found"
+				| "not_active"
+				| "not_published"
+				| "reentry_blocked"
+				| "queue_failed";
+	  }
+> {
+	const db = createDb(env.HYPERDRIVE.connectionString);
+
+	const auto = await db.query.automations.findFirst({
+		where: and(
+			eq(automations.id, input.automation_id),
+			eq(automations.organizationId, input.organization_id),
+		),
+	});
+	if (!auto) return { ok: false, reason: "not_found" };
+	if (auto.status !== "active") return { ok: false, reason: "not_active" };
+	if (auto.publishedVersion === null)
+		return { ok: false, reason: "not_published" };
+
+	// Re-entry guard — mirrors matchAndEnroll so manual and trigger-driven
+	// enrollments share the same cooldown semantics.
+	if (input.contact_id) {
+		if (!auto.allowReentry) {
+			const existing = await db.query.automationEnrollments.findFirst({
+				where: and(
+					eq(automationEnrollments.automationId, auto.id),
+					eq(automationEnrollments.contactId, input.contact_id),
+				),
+			});
+			if (existing) return { ok: false, reason: "reentry_blocked" };
+		} else if (auto.reentryCooldownMin && auto.reentryCooldownMin > 0) {
+			const cooldownStart = new Date(
+				Date.now() - auto.reentryCooldownMin * 60 * 1000,
+			);
+			const recent = await db
+				.select({ id: automationEnrollments.id })
+				.from(automationEnrollments)
+				.where(
+					and(
+						eq(automationEnrollments.automationId, auto.id),
+						eq(automationEnrollments.contactId, input.contact_id),
+						gte(automationEnrollments.enrolledAt, cooldownStart),
+					),
+				)
+				.orderBy(desc(automationEnrollments.enrolledAt))
+				.limit(1);
+			if (recent.length > 0) return { ok: false, reason: "reentry_blocked" };
+		}
+	}
+
+	const [created] = await db
+		.insert(automationEnrollments)
+		.values({
+			automationId: auto.id,
+			automationVersion: auto.publishedVersion,
+			organizationId: auto.organizationId,
+			contactId: input.contact_id ?? null,
+			conversationId: input.conversation_id ?? null,
+			state: input.payload ?? {},
+			status: "active",
+		})
+		.returning({ id: automationEnrollments.id });
+
+	if (!created) return { ok: false, reason: "queue_failed" };
+
+	try {
+		await env.AUTOMATION_QUEUE.send({
+			type: "advance",
+			enrollment_id: created.id,
+		});
+	} catch (err) {
+		console.error(
+			"[trigger-matcher] AUTOMATION_QUEUE.send failed; rolling back manual enrollment",
+			created.id,
+			err,
+		);
+		await db
+			.delete(automationEnrollments)
+			.where(eq(automationEnrollments.id, created.id));
+		return { ok: false, reason: "queue_failed" };
+	}
+
+	await db
+		.update(automations)
+		.set({
+			totalEnrolled: sql`${automations.totalEnrolled} + 1`,
+			updatedAt: new Date(),
+		})
+		.where(eq(automations.id, auto.id));
+
+	return { ok: true, enrollment_id: created.id };
+}
+
+/**
  * Checks whether trigger config (e.g. keyword list, post_id) matches the incoming payload.
  * Trigger-type-specific matching is lightweight and declarative.
  */
