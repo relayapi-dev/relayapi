@@ -44,6 +44,55 @@ interface Props {
 	automationId: string;
 }
 
+// The API returns graph nodes as { id, key, type, config: {...}, canvas_x, canvas_y, notes }
+// and edges as { id, from_node_key, to_node_key, label, order, condition_expr }. The frontend
+// model uses flat node fields (spread config at top level) and { from, to } on edges. We
+// normalize on read so the builder never sees the wrapped/renamed API shape.
+interface ApiAutomationNode {
+	id: string;
+	key: string;
+	type: string;
+	config: Record<string, unknown> | null;
+	canvas_x: number | null;
+	canvas_y: number | null;
+	notes: string | null;
+}
+
+interface ApiAutomationEdge {
+	id: string;
+	from_node_key: string;
+	to_node_key: string;
+	label: string;
+	order: number;
+	condition_expr?: unknown;
+}
+
+interface ApiAutomationDetail extends Omit<AutomationDetail, "nodes" | "edges"> {
+	nodes: ApiAutomationNode[];
+	edges: ApiAutomationEdge[];
+}
+
+function normalizeAutomation(api: ApiAutomationDetail): AutomationDetail {
+	return {
+		...api,
+		nodes: api.nodes.map<AutomationNodeSpec>((n) => ({
+			type: n.type,
+			key: n.key,
+			notes: n.notes ?? undefined,
+			canvas_x: n.canvas_x ?? undefined,
+			canvas_y: n.canvas_y ?? undefined,
+			...(n.config ?? {}),
+		})),
+		edges: api.edges.map<AutomationEdgeSpec>((e) => ({
+			from: e.from_node_key,
+			to: e.to_node_key,
+			label: e.label,
+			order: e.order,
+			condition_expr: e.condition_expr,
+		})),
+	};
+}
+
 function generateUniqueKey(type: string, existing: Set<string>): string {
 	const base = type.toLowerCase().replace(/[^a-z0-9_]/g, "_");
 	let candidate = base;
@@ -63,7 +112,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 		loading: loadingAutomation,
 		error: automationError,
 		refetch: refetchAutomation,
-	} = useApi<AutomationDetail>(automationPath);
+	} = useApi<ApiAutomationDetail>(automationPath);
 
 	const { data: schema, loading: loadingSchema } = useApi<AutomationSchema>(
 		"automations/schema",
@@ -122,11 +171,12 @@ export function AutomationDetailPage({ automationId }: Props) {
 		// explicit refetches (publish / pause / resume / archive), which all
 		// happen when the draft is already clean.
 		if (dirtyRef.current) return;
-		setDraft(fetched);
+		const normalized = normalizeAutomation(fetched);
+		setDraft(normalized);
 		setDirty(false);
 		setSelectedNodeKey(null);
 		setHighlightKeys(new Set());
-		history.reset({ nodes: fetched.nodes, edges: fetched.edges });
+		history.reset({ nodes: normalized.nodes, edges: normalized.edges });
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [fetched]);
 
@@ -463,7 +513,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const isArchived = draft.status === "archived";
 
 	return (
-		<div className="flex flex-col -mx-5 sm:-mx-8 md:-mx-10 -mt-4 md:-mt-8 h-[calc(100vh-2rem)] md:h-[calc(100vh-4rem)] border-t border-border">
+		<div className="flex flex-col -mx-5 sm:-mx-8 md:-mx-10 -mt-4 md:-mt-8 h-[calc(100dvh-1rem)] md:h-screen border-t border-border">
 			<header className="flex items-center justify-between gap-4 px-4 py-2 border-b border-border">
 				<div className="flex items-center gap-3 min-w-0">
 					<a

@@ -40,25 +40,25 @@ const ICONS: Record<string, typeof Box> = {
 };
 
 const COLORS: Record<string, string> = {
-	content: "border-sky-500/40 bg-sky-500/5",
-	input: "border-violet-500/40 bg-violet-500/5",
-	logic: "border-amber-500/40 bg-amber-500/5",
-	ops: "border-neutral-500/40 bg-neutral-500/5",
-	ai: "border-fuchsia-500/40 bg-fuchsia-500/5",
-	action: "border-teal-500/40 bg-teal-500/5",
-	platform_send: "border-indigo-500/40 bg-indigo-500/5",
-	flow: "border-neutral-500/40 bg-neutral-500/5",
+	content: "border-sky-500/60",
+	input: "border-violet-500/60",
+	logic: "border-amber-500/60",
+	ops: "border-neutral-400",
+	ai: "border-fuchsia-500/60",
+	action: "border-teal-500/60",
+	platform_send: "border-indigo-500/60",
+	flow: "border-neutral-400",
 };
 
 const CATEGORY_ICON_COLOR: Record<string, string> = {
-	content: "text-sky-400",
-	input: "text-violet-400",
-	logic: "text-amber-400",
-	ops: "text-neutral-400",
-	ai: "text-fuchsia-400",
-	action: "text-teal-400",
-	platform_send: "text-indigo-400",
-	flow: "text-neutral-400",
+	content: "text-sky-600",
+	input: "text-violet-600",
+	logic: "text-amber-600",
+	ops: "text-neutral-600",
+	ai: "text-fuchsia-600",
+	action: "text-teal-600",
+	platform_send: "text-indigo-600",
+	flow: "text-neutral-600",
 };
 
 function resolveIcon(nodeType: string, category: string) {
@@ -78,17 +78,17 @@ function GenericNodeImpl({ data, selected }: NodeProps) {
 
 	return (
 		<div
-			className={`rounded-md border bg-card/90 px-3 py-2 text-xs min-w-[220px] transition-all ${color} ${
+			className={`rounded-md border-2 bg-card px-3 py-2 text-xs min-w-[220px] shadow-sm transition-all ${color} ${
 				selected ? "ring-2 ring-ring ring-offset-1 ring-offset-background" : ""
-			} ${d.hasError ? "border-destructive/70 ring-1 ring-destructive/40" : ""} ${
-				d.highlighted ? "ring-2 ring-sky-400 shadow-lg shadow-sky-500/20" : ""
+			} ${d.hasError ? "border-destructive ring-1 ring-destructive/40" : ""} ${
+				d.highlighted ? "ring-2 ring-sky-500 shadow-lg shadow-sky-500/20" : ""
 			} ${d.dimmed ? "opacity-40" : ""}`}
 			title={d.hasError ? "This node has validation errors — check the banner above" : undefined}
 		>
 			<Handle
 				type="target"
 				position={Position.Top}
-				className="!bg-muted-foreground !border-muted-foreground"
+				className="!bg-foreground !border-foreground"
 			/>
 			<div className="flex items-center justify-between gap-1.5">
 				<div className={`flex items-center gap-1.5 ${iconColor}`}>
@@ -112,7 +112,7 @@ function GenericNodeImpl({ data, selected }: NodeProps) {
 			<Handle
 				type="source"
 				position={Position.Bottom}
-				className="!bg-muted-foreground !border-muted-foreground"
+				className="!bg-foreground !border-foreground"
 			/>
 		</div>
 	);

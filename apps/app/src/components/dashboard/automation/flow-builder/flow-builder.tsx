@@ -441,7 +441,7 @@ function FlowBuilderInner({
 	);
 
 	return (
-		<div ref={wrapperRef} className="w-full h-full">
+		<div ref={wrapperRef} className="w-full h-full bg-muted/40">
 			<ReactFlow
 				nodes={nodes}
 				edges={edges}
@@ -458,7 +458,6 @@ function FlowBuilderInner({
 				onDrop={onDrop}
 				fitView
 				proOptions={{ hideAttribution: true }}
-				colorMode="dark"
 			>
 				<Background gap={16} size={1} />
 				<Controls />

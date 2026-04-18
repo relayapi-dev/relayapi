@@ -13,11 +13,11 @@ function TriggerNodeImpl({ data, selected }: NodeProps) {
 	const d = data as TriggerNodeData;
 	return (
 		<div
-			className={`rounded-md border-2 bg-emerald-500/10 px-3 py-2 text-xs min-w-[220px] transition-colors ${
-				selected ? "border-emerald-400" : "border-emerald-500/40"
+			className={`rounded-md border-2 bg-card px-3 py-2 text-xs min-w-[220px] shadow-sm transition-colors ${
+				selected ? "border-emerald-600" : "border-emerald-500"
 			}`}
 		>
-			<div className="flex items-center gap-1.5 text-emerald-400">
+			<div className="flex items-center gap-1.5 text-emerald-600">
 				<Zap className="size-3.5" />
 				<span className="text-[10px] font-semibold uppercase tracking-wide">
 					Trigger
@@ -30,7 +30,7 @@ function TriggerNodeImpl({ data, selected }: NodeProps) {
 			<Handle
 				type="source"
 				position={Position.Bottom}
-				className="!bg-emerald-500 !border-emerald-500"
+				className="!bg-emerald-600 !border-emerald-600"
 			/>
 		</div>
 	);
