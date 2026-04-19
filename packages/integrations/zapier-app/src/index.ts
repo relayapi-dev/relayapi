@@ -45,4 +45,13 @@ const App = {
 };
 
 export default App;
-module.exports = App;
+
+declare const module:
+  | {
+      exports?: unknown;
+    }
+  | undefined;
+
+if (typeof module !== 'undefined') {
+  module.exports = App;
+}

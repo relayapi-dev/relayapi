@@ -1,4 +1,4 @@
-import { describe, it, expect } from '@jest/globals';
+import { beforeAll, describe, expect, it } from '@jest/globals';
 
 // Minimal mock of zapier-platform-core's createAppTester and tools
 const zapier = require('zapier-platform-core');
