@@ -177,9 +177,9 @@ const TRIGGER_OPERATION_OVERRIDES: Record<string, string> = {
 	external_api: "External API event",
 };
 
-const CARD_WIDTH_CLASS = "w-[22rem] max-w-full";
-const CARD_MIN_HEIGHT_CLASS = "min-h-[8.5rem]";
-const BRANCH_COLUMN_WIDTH_CLASS = "w-[23.5rem] max-w-full flex-none";
+const CARD_WIDTH_CLASS = "w-[18.5rem] max-w-full";
+const CARD_MIN_HEIGHT_CLASS = "min-h-[6.75rem]";
+const BRANCH_COLUMN_WIDTH_CLASS = "w-[20rem] max-w-full flex-none";
 
 function titleize(value: string): string {
 	return value
@@ -703,14 +703,14 @@ function BranchColumn({
 	const branchVisited = new Set(visited);
 	if (node) branchVisited.add(firstChildKey!);
 	return (
-		<div className="relative flex h-full w-full flex-col rounded-[28px] border border-dashed border-border/70 bg-background/80 px-3 py-3 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.42)] backdrop-blur-sm">
+		<div className="relative flex h-full w-full flex-col rounded-[26px] border border-dashed border-border/70 bg-background/80 px-2.5 py-2.5 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.42)] backdrop-blur-sm">
 			<div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-border/70 to-transparent" />
-			<div className="mb-3 flex items-start justify-between gap-3">
+			<div className="mb-2.5 flex items-start justify-between gap-3">
 				<div className="min-w-0">
 					<div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground/80">
 						Branch
 					</div>
-					<div className="mt-1 truncate text-[13px] font-semibold text-foreground">
+					<div className="mt-1 truncate text-[12px] font-semibold text-foreground">
 						{presentLabel(branchLabel)}
 					</div>
 				</div>
@@ -821,20 +821,20 @@ function TriggerCard({
 			<div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/50 to-transparent dark:via-emerald-500/20" />
 			<div
 				className={cn(
-					"relative flex h-full flex-col justify-between px-3.5 py-3.5",
+					"relative flex h-full flex-col justify-between px-3 py-2.5",
 					CARD_MIN_HEIGHT_CLASS,
 				)}
 			>
-				<div className="flex items-start gap-3">
+				<div className="flex items-start gap-2.5">
 					<div
 						className={cn(
-							"mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-2xl border shadow-sm",
+							"mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-xl border shadow-sm",
 							TRIGGER_ACCENT.bg,
 							TRIGGER_ACCENT.text,
 							TRIGGER_ACCENT.border,
 						)}
 					>
-						<Zap className="size-4" />
+						<Zap className="size-3.5" />
 					</div>
 					<div className="min-w-0 flex-1">
 						<div className="flex items-start justify-between gap-3">
@@ -849,7 +849,7 @@ function TriggerCard({
 								>
 									{channelLabel}
 								</span>
-								<span className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/80">
+								<span className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground/80">
 									Entry point
 								</span>
 							</div>
@@ -860,20 +860,20 @@ function TriggerCard({
 										Error
 									</span>
 								)}
-								<span className="inline-flex items-center rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+								<span className="inline-flex items-center rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
 									Start
 								</span>
 							</div>
 						</div>
-						<div className="mt-2 text-[15px] font-semibold leading-tight text-foreground">
+						<div className="mt-1.5 text-[14px] font-semibold leading-tight text-foreground">
 							{operation}
 						</div>
-						<div className="mt-1 line-clamp-2 text-[12px] text-muted-foreground">
+						<div className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">
 							{summary}
 						</div>
 					</div>
 				</div>
-				<div className="mt-3 flex flex-wrap items-center gap-1.5 pl-12">
+				<div className="mt-2 flex flex-wrap items-center gap-1.5 pl-10">
 					<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
 						{presentLabel(automation.trigger_type)}
 					</span>
@@ -924,20 +924,20 @@ function StepCard({
 				type="button"
 				onClick={onClick}
 				className={cn(
-					"relative flex w-full flex-col justify-between px-3.5 py-3.5 pr-12 text-left",
+					"relative flex w-full flex-col justify-between px-3 py-2.5 pr-10 text-left",
 					CARD_MIN_HEIGHT_CLASS,
 				)}
 			>
-				<div className="flex items-start gap-3">
+				<div className="flex items-start gap-2.5">
 					<div
 						className={cn(
-							"mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-2xl border shadow-sm",
+							"mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-xl border shadow-sm",
 							accent.bg,
 							accent.text,
 							accent.border,
 						)}
 					>
-						<Icon className="size-4" />
+						<Icon className="size-3.5" />
 					</div>
 					<div className="min-w-0 flex-1">
 						<div className="flex items-start justify-between gap-3">
@@ -967,23 +967,23 @@ function StepCard({
 									</span>
 								)}
 								{index !== undefined && (
-									<span className="inline-flex items-center rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+									<span className="inline-flex items-center rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
 										Step {index}
 									</span>
 								)}
 							</div>
 						</div>
-						<div className="mt-2 text-[15px] font-semibold leading-tight text-foreground">
+						<div className="mt-1.5 text-[14px] font-semibold leading-tight text-foreground">
 							{presentation.operation}
 						</div>
 						{summary && (
-							<div className="mt-1 line-clamp-2 text-[12px] text-muted-foreground">
+							<div className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">
 								{summary}
 							</div>
 						)}
 					</div>
 				</div>
-				<div className="mt-3 flex min-h-5 flex-wrap items-center gap-1.5 pl-11">
+				<div className="mt-2 flex min-h-4 flex-wrap items-center gap-1.5 pl-9">
 					<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
 						{presentLabel(node.type)}
 					</span>
