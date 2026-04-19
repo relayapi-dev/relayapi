@@ -30,6 +30,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { resolveNodeOutputLabels, resolveSourceOutputLabels } from "./output-labels";
 import type {
@@ -324,7 +325,7 @@ export function GuidedFlow({
 	}, [automation.nodes, childrenByKey]);
 
 	return (
-		<div className="h-full overflow-y-auto bg-muted/40">
+		<ScrollArea className="h-full bg-muted/40">
 			<div className="mx-auto max-w-2xl px-6 py-10 space-y-0">
 				<TriggerCard
 					automation={automation}
@@ -372,7 +373,7 @@ export function GuidedFlow({
 					</div>
 				)}
 			</div>
-		</div>
+		</ScrollArea>
 	);
 }
 
