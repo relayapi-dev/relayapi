@@ -177,6 +177,10 @@ const TRIGGER_OPERATION_OVERRIDES: Record<string, string> = {
 	external_api: "External API event",
 };
 
+const CARD_WIDTH_CLASS = "w-[22rem] max-w-full";
+const CARD_MIN_HEIGHT_CLASS = "min-h-[8.5rem]";
+const BRANCH_COLUMN_WIDTH_CLASS = "w-[23.5rem] max-w-full flex-none";
+
 function titleize(value: string): string {
 	return value
 		.split("_")
@@ -290,7 +294,7 @@ function canvasCardClass({
 	isTrigger?: boolean;
 }) {
 	return cn(
-		"group relative w-full overflow-hidden rounded-[26px] border border-border/70 bg-gradient-to-br from-background via-background to-muted/40 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-[0_24px_48px_-34px_rgba(15,23,42,0.5)]",
+		"group relative overflow-hidden rounded-[26px] border border-border/70 bg-gradient-to-br from-background via-background to-muted/40 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-[0_24px_48px_-34px_rgba(15,23,42,0.5)]",
 		highlighted &&
 			"border-sky-400/55 shadow-[0_22px_44px_-30px_rgba(14,165,233,0.38)]",
 		selected &&
@@ -502,7 +506,7 @@ function ChainRenderer({
 		return (
 			<>
 				<Connector label="branches" />
-				<div className="flex flex-col gap-4 md:flex-row md:items-start">
+				<div className="mx-auto flex w-fit max-w-full flex-col items-center gap-4 md:flex-row md:items-stretch md:justify-center">
 					{branchLabels.map((label) => {
 						const child = visibleChildren.find(
 							(entry) => entry.label === label,
@@ -510,7 +514,7 @@ function ChainRenderer({
 						return (
 							<div
 								key={`${parentKey}:${label}`}
-								className="w-full min-w-0 md:w-[18.5rem] md:flex-none xl:w-[20rem]"
+								className={BRANCH_COLUMN_WIDTH_CLASS}
 							>
 								<BranchColumn
 									branchLabel={label}
@@ -600,11 +604,11 @@ function ChainRenderer({
 		return (
 			<>
 				<Connector label="branches" />
-				<div className="flex flex-col gap-4 md:flex-row md:items-start">
+				<div className="mx-auto flex w-fit max-w-full flex-col items-center gap-4 md:flex-row md:items-stretch md:justify-center">
 					{visibleChildren.map((child) => (
 						<div
 							key={`${child.label}->${child.target}`}
-							className="w-full min-w-0 md:w-[18.5rem] md:flex-none xl:w-[20rem]"
+							className={BRANCH_COLUMN_WIDTH_CLASS}
 						>
 							<BranchColumn
 								branchLabel={child.label}
@@ -699,7 +703,7 @@ function BranchColumn({
 	const branchVisited = new Set(visited);
 	if (node) branchVisited.add(firstChildKey!);
 	return (
-		<div className="relative rounded-[28px] border border-dashed border-border/70 bg-background/80 px-3 py-3 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.42)] backdrop-blur-sm">
+		<div className="relative flex h-full w-full flex-col rounded-[28px] border border-dashed border-border/70 bg-background/80 px-3 py-3 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.42)] backdrop-blur-sm">
 			<div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-border/70 to-transparent" />
 			<div className="mb-3 flex items-start justify-between gap-3">
 				<div className="min-w-0">
@@ -799,6 +803,9 @@ function TriggerCard({
 				"",
 			),
 		);
+	const summary = `Starts when a matching ${presentLabel(
+		automation.trigger_type,
+	).toLowerCase()} event arrives.`;
 
 	return (
 		<button
@@ -806,62 +813,70 @@ function TriggerCard({
 			onClick={onClick}
 			className={cn(
 				canvasCardClass({ selected, hasError, highlighted, isTrigger: true }),
-				"mx-auto block max-w-[40rem] px-4 py-4 text-left",
+				"mx-auto block text-left",
+				CARD_WIDTH_CLASS,
 			)}
 		>
 			<div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.14),transparent_28%)] dark:bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.06),transparent_28%)]" />
 			<div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/50 to-transparent dark:via-emerald-500/20" />
-			<div className="relative flex items-start gap-3">
-				<div
-					className={cn(
-						"mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-2xl border shadow-sm",
-						TRIGGER_ACCENT.bg,
-						TRIGGER_ACCENT.text,
-						TRIGGER_ACCENT.border,
-					)}
-				>
-					<Zap className="size-4" />
-				</div>
-				<div className="min-w-0 flex-1">
-					<div className="flex items-start justify-between gap-3">
-						<div className="flex min-w-0 flex-wrap items-center gap-2">
-							<span
-								className={cn(
-									"inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
-									TRIGGER_ACCENT.bg,
-									TRIGGER_ACCENT.text,
-									TRIGGER_ACCENT.border,
-								)}
-							>
-								{channelLabel}
-							</span>
-							<span className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/80">
-								Entry point
-							</span>
-						</div>
-						<div className="flex shrink-0 items-center gap-1.5">
-							{hasError && (
-								<span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
-									<AlertCircle className="size-3" />
-									Error
+			<div
+				className={cn(
+					"relative flex h-full flex-col justify-between px-3.5 py-3.5",
+					CARD_MIN_HEIGHT_CLASS,
+				)}
+			>
+				<div className="flex items-start gap-3">
+					<div
+						className={cn(
+							"mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-2xl border shadow-sm",
+							TRIGGER_ACCENT.bg,
+							TRIGGER_ACCENT.text,
+							TRIGGER_ACCENT.border,
+						)}
+					>
+						<Zap className="size-4" />
+					</div>
+					<div className="min-w-0 flex-1">
+						<div className="flex items-start justify-between gap-3">
+							<div className="flex min-w-0 flex-wrap items-center gap-2">
+								<span
+									className={cn(
+										"inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]",
+										TRIGGER_ACCENT.bg,
+										TRIGGER_ACCENT.text,
+										TRIGGER_ACCENT.border,
+									)}
+								>
+									{channelLabel}
 								</span>
-							)}
-							<span className="inline-flex items-center rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-								Start
-							</span>
+								<span className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/80">
+									Entry point
+								</span>
+							</div>
+							<div className="flex shrink-0 items-center gap-1.5">
+								{hasError && (
+									<span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
+										<AlertCircle className="size-3" />
+										Error
+									</span>
+								)}
+								<span className="inline-flex items-center rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+									Start
+								</span>
+							</div>
+						</div>
+						<div className="mt-2 text-[15px] font-semibold leading-tight text-foreground">
+							{operation}
+						</div>
+						<div className="mt-1 line-clamp-2 text-[12px] text-muted-foreground">
+							{summary}
 						</div>
 					</div>
-					<div className="mt-3 text-[16px] font-semibold leading-tight text-foreground">
-						{operation}
-					</div>
-					<div className="mt-1 text-[12px] text-muted-foreground">
-						This automation begins when the selected trigger fires.
-					</div>
-					<div className="mt-3 flex flex-wrap items-center gap-2">
-						<span className="rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
-							{presentLabel(automation.trigger_type)}
-						</span>
-					</div>
+				</div>
+				<div className="mt-3 flex flex-wrap items-center gap-1.5 pl-12">
+					<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+						{presentLabel(automation.trigger_type)}
+					</span>
 				</div>
 			</div>
 		</button>
@@ -899,7 +914,8 @@ function StepCard({
 		<div
 			className={cn(
 				canvasCardClass({ selected, hasError, highlighted }),
-				"mx-auto max-w-[26rem]",
+				"mx-auto",
+				CARD_WIDTH_CLASS,
 			)}
 		>
 			<div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.12),transparent_30%)] dark:bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.05),transparent_30%)]" />
@@ -907,12 +923,15 @@ function StepCard({
 			<button
 				type="button"
 				onClick={onClick}
-				className="relative w-full px-3.5 py-3.5 pr-12 text-left"
+				className={cn(
+					"relative flex w-full flex-col justify-between px-3.5 py-3.5 pr-12 text-left",
+					CARD_MIN_HEIGHT_CLASS,
+				)}
 			>
 				<div className="flex items-start gap-3">
 					<div
 						className={cn(
-							"mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-2xl border shadow-sm",
+							"mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-2xl border shadow-sm",
 							accent.bg,
 							accent.text,
 							accent.border,
@@ -925,7 +944,7 @@ function StepCard({
 							<div className="flex min-w-0 flex-wrap items-center gap-2">
 								<span
 									className={cn(
-										"inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
+										"inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]",
 										accent.bg,
 										accent.text,
 										accent.border,
@@ -958,27 +977,27 @@ function StepCard({
 							{presentation.operation}
 						</div>
 						{summary && (
-							<div className="mt-1.5 text-[12px] text-muted-foreground line-clamp-1">
+							<div className="mt-1 line-clamp-2 text-[12px] text-muted-foreground">
 								{summary}
 							</div>
 						)}
-						<div className="mt-2 flex flex-wrap items-center gap-1.5">
-							<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-								{presentLabel(node.type)}
-							</span>
-							{node.notes && (
-								<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-									Has note
-								</span>
-							)}
-						</div>
-						{outputs.length > 1 && (
-							<div className="mt-2 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/75">
-								{outputs.slice(0, 3).map(presentLabel).join(" · ")}
-								{outputs.length > 3 && ` +${outputs.length - 3}`}
-							</div>
-						)}
 					</div>
+				</div>
+				<div className="mt-3 flex min-h-5 flex-wrap items-center gap-1.5 pl-11">
+					<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+						{presentLabel(node.type)}
+					</span>
+					{node.notes && (
+						<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+							Has note
+						</span>
+					)}
+					{outputs.length > 1 && (
+						<span className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/75">
+							{outputs.slice(0, 3).map(presentLabel).join(" · ")}
+							{outputs.length > 3 && ` +${outputs.length - 3}`}
+						</span>
+					)}
 				</div>
 			</button>
 			{onDelete && (
