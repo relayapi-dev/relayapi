@@ -47,9 +47,7 @@ const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 const IdParams = z.object({ id: z.string() });
 const ListQuery = PaginationParams.extend({
 	workspace_id: z.string().optional(),
-	status: z
-		.enum(["draft", "active", "paused", "archived"])
-		.optional(),
+	status: z.enum(["draft", "active", "paused", "archived"]).optional(),
 	channel: z.string().optional(),
 	trigger_type: z.string().optional(),
 });
@@ -516,9 +514,12 @@ app.openapi(listAutomations, async (c) => {
 
 	const hasMore = rows.length > limit;
 	const items = rows.slice(0, limit).map(serializeAutomation);
-	const nextCursor = hasMore ? rows[limit - 1]?.id ?? null : null;
+	const nextCursor = hasMore ? (rows[limit - 1]?.id ?? null) : null;
 
-	return c.json({ data: items, next_cursor: nextCursor, has_more: hasMore }, 200);
+	return c.json(
+		{ data: items, next_cursor: nextCursor, has_more: hasMore },
+		200,
+	);
 });
 
 // --- Schema introspection (for MCP / AI agents) ---
@@ -598,7 +599,10 @@ app.openapi(getAutomation, async (c) => {
 		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
 	});
 	if (!row) {
-		return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Automation not found" } },
+			404,
+		);
 	}
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
@@ -650,7 +654,10 @@ app.openapi(updateAutomation, async (c) => {
 		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
 	});
 	if (!row) {
-		return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Automation not found" } },
+			404,
+		);
 	}
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
@@ -682,7 +689,10 @@ app.openapi(updateAutomation, async (c) => {
 					automationError(
 						"unknown_node_reference",
 						`Edge ${i} references unknown node '${e.from}'`,
-						{ path: `edges[${i}].from`, suggestion: suggest(e.from, Array.from(allKeys)) },
+						{
+							path: `edges[${i}].from`,
+							suggestion: suggest(e.from, Array.from(allKeys)),
+						},
 					),
 					400,
 				);
@@ -692,7 +702,10 @@ app.openapi(updateAutomation, async (c) => {
 					automationError(
 						"unknown_node_reference",
 						`Edge ${i} references unknown node '${e.to}'`,
-						{ path: `edges[${i}].to`, suggestion: suggest(e.to, Array.from(allKeys)) },
+						{
+							path: `edges[${i}].to`,
+							suggestion: suggest(e.to, Array.from(allKeys)),
+						},
 					),
 					400,
 				);
@@ -728,7 +741,8 @@ app.openapi(updateAutomation, async (c) => {
 	if (body.description !== undefined) updates.description = body.description;
 	if (body.status !== undefined) updates.status = body.status;
 	if (body.channel !== undefined) updates.channel = body.channel as never;
-	if (body.exit_on_reply !== undefined) updates.exitOnReply = body.exit_on_reply;
+	if (body.exit_on_reply !== undefined)
+		updates.exitOnReply = body.exit_on_reply;
 	if (body.allow_reentry !== undefined)
 		updates.allowReentry = body.allow_reentry;
 	if (body.reentry_cooldown_min !== undefined)
@@ -809,13 +823,13 @@ for (const [name, action, status] of [
 		const db = c.get("db");
 		const orgId = c.get("orgId");
 		const row = await db.query.automations.findFirst({
-			where: and(
-				eq(automations.id, id),
-				eq(automations.organizationId, orgId),
-			),
+			where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
 		});
 		if (!row)
-			return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
+			return c.json(
+				{ error: { code: "not_found", message: "Automation not found" } },
+				404,
+			);
 		if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 			return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 		}
@@ -878,13 +892,13 @@ app.openapi(publishAutomation, async (c) => {
 	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const row = await db.query.automations.findFirst({
-		where: and(
-			eq(automations.id, id),
-			eq(automations.organizationId, orgId),
-		),
+		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
 	});
 	if (!row)
-		return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Automation not found" } },
+			404,
+		);
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
@@ -1054,13 +1068,13 @@ app.openapi(deleteAutomation, async (c) => {
 	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const row = await db.query.automations.findFirst({
-		where: and(
-			eq(automations.id, id),
-			eq(automations.organizationId, orgId),
-		),
+		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
 	});
 	if (!row)
-		return c.json({ error: { code: "not_found", message: "Automation not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Automation not found" } },
+			404,
+		);
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
@@ -1279,7 +1293,10 @@ app.openapi(listEnrollments, async (c) => {
 		.select()
 		.from(automationEnrollments)
 		.where(and(...conditions))
-		.orderBy(desc(automationEnrollments.enrolledAt), desc(automationEnrollments.id))
+		.orderBy(
+			desc(automationEnrollments.enrolledAt),
+			desc(automationEnrollments.id),
+		)
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -1368,7 +1385,10 @@ app.openapi(listSamples, async (c) => {
 				eq(automationEnrollments.organizationId, orgId),
 			),
 		)
-		.orderBy(desc(automationEnrollments.enrolledAt), desc(automationEnrollments.id))
+		.orderBy(
+			desc(automationEnrollments.enrolledAt),
+			desc(automationEnrollments.id),
+		)
 		.limit(limit);
 
 	return c.json(
@@ -1464,6 +1484,9 @@ app.openapi(getRuns, async (c) => {
 	const idToKey = new Map<string, string>(
 		snap?.nodes.map((n) => [n.id, n.key]) ?? [],
 	);
+	const idToConfig = new Map<string, Record<string, unknown>>(
+		snap?.nodes.map((n) => [n.id, n.config]) ?? [],
+	);
 
 	return c.json(
 		{
@@ -1471,8 +1494,9 @@ app.openapi(getRuns, async (c) => {
 				id: l.id,
 				enrollment_id: l.enrollmentId,
 				node_id: l.nodeId,
-				node_key: l.nodeId ? idToKey.get(l.nodeId) ?? null : null,
+				node_key: l.nodeId ? (idToKey.get(l.nodeId) ?? null) : null,
 				node_type: l.nodeType,
+				node_config: l.nodeId ? (idToConfig.get(l.nodeId) ?? null) : null,
 				executed_at: l.executedAt.toISOString(),
 				outcome: l.outcome,
 				branch_label: l.branchLabel,
@@ -1492,7 +1516,14 @@ app.openapi(getRuns, async (c) => {
 function extractNodeConfig(node: unknown): Record<string, unknown> {
 	// node is a discriminated-union member; every field except `type`, `key`, `notes`, `canvas_x`, `canvas_y` is config
 	const n = node as Record<string, unknown>;
-	const { type: _t, key: _k, notes: _n, canvas_x: _x, canvas_y: _y, ...rest } = n;
+	const {
+		type: _t,
+		key: _k,
+		notes: _n,
+		canvas_x: _x,
+		canvas_y: _y,
+		...rest
+	} = n;
 	return rest;
 }
 

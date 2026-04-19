@@ -434,7 +434,9 @@ export const TriggerSpec = z.object({
 	config: z
 		.record(z.string(), z.any())
 		.optional()
-		.describe("Trigger-specific config (keyword list, post_id, ref slug, cron, etc.)"),
+		.describe(
+			"Trigger-specific config (keyword list, post_id, ref slug, cron, etc.)",
+		),
 	filters: TriggerFilters.optional(),
 });
 
@@ -458,7 +460,9 @@ const baseNode = {
 
 const mergeTagString = z
 	.string()
-	.describe("Supports {{first_name}}, {{contact.email}}, {{state.captured_field}} merge tags");
+	.describe(
+		"Supports {{first_name}}, {{contact.email}}, {{state.captured_field}} merge tags",
+	);
 
 // -- Universal content --
 
@@ -501,10 +505,17 @@ export const MessageFileNode = z.object({
 const userInputBase = {
 	...baseNode,
 	prompt: mergeTagString,
-	save_to_field: z.string().describe("Custom field key to persist captured value"),
+	save_to_field: z
+		.string()
+		.describe("Custom field key to persist captured value"),
 	retry_prompt: mergeTagString.optional(),
 	max_attempts: z.number().int().min(1).max(5).default(2),
-	timeout_minutes: z.number().int().min(1).max(60 * 24 * 7).optional(),
+	timeout_minutes: z
+		.number()
+		.int()
+		.min(1)
+		.max(60 * 24 * 7)
+		.optional(),
 };
 
 export const UserInputTextNode = z.object({
@@ -600,7 +611,10 @@ export const SplitTestNode = z.object({
 			}),
 		)
 		.min(2),
-	goal_field: z.string().optional().describe("Field to track as conversion goal"),
+	goal_field: z
+		.string()
+		.optional()
+		.describe("Field to track as conversion goal"),
 });
 
 export const GotoNode = z.object({
@@ -728,7 +742,9 @@ export const ConversationAssignNode = z.object({
 	assignee_user_id: z
 		.string()
 		.min(1)
-		.describe("Organization user ID to assign to the linked inbox conversation"),
+		.describe(
+			"Organization user ID to assign to the linked inbox conversation",
+		),
 });
 
 export const ConversationStatusNode = z.object({
@@ -850,7 +866,9 @@ export const InstagramReplyToCommentNode = z.object({
 	comment_id: z
 		.string()
 		.optional()
-		.describe("Defaults to enrollment state.comment_id from the trigger payload"),
+		.describe(
+			"Defaults to enrollment state.comment_id from the trigger payload",
+		),
 });
 
 export const InstagramHideCommentNode = z.object({
@@ -1043,9 +1061,7 @@ export const TelegramSendMediaNode = z.object({
 	type: z.literal("telegram_send_media"),
 	url: z.string().url(),
 	caption: mergeTagString.optional(),
-	media_type: z
-		.enum(["image", "video", "audio", "document"])
-		.default("image"),
+	media_type: z.enum(["image", "video", "audio", "document"]).default("image"),
 });
 
 export const TelegramSendMediaGroupNode = z.object({
@@ -1378,7 +1394,9 @@ export const RedditReplyToCommentNode = z.object({
 	thing_id: z
 		.string()
 		.optional()
-		.describe("Reddit fullname prefix (e.g. t1_... for comments, t3_... for posts)"),
+		.describe(
+			"Reddit fullname prefix (e.g. t1_... for comments, t3_... for posts)",
+		),
 });
 
 export const RedditSendPmNode = z.object({
@@ -1408,7 +1426,8 @@ export const RedditSubmitPostNode = z
 		url: z.string().url().optional(),
 	})
 	.refine((v) => v.text || v.url, {
-		message: "reddit_submit_post needs either text (self post) or url (link post)",
+		message:
+			"reddit_submit_post needs either text (self post) or url (link post)",
 	});
 
 // -- Google Business Profile --
@@ -1425,7 +1444,9 @@ export const GoogleBusinessPostUpdateNode = z.object({
 	type: z.literal("googlebusiness_post_update"),
 	summary: mergeTagString,
 	language_code: z.string().default("en"),
-	topic_type: z.enum(["STANDARD", "EVENT", "OFFER", "ALERT"]).default("STANDARD"),
+	topic_type: z
+		.enum(["STANDARD", "EVENT", "OFFER", "ALERT"])
+		.default("STANDARD"),
 	media_url: z.string().url().optional(),
 	call_to_action: z
 		.object({
@@ -1702,12 +1723,16 @@ export type AutomationNodeSpec = z.infer<typeof AutomationNodeSpec>;
 export const AutomationEdgeSpec = z.object({
 	from: z
 		.string()
-		.describe("Source node key. Use 'trigger' to reference the virtual entry node"),
+		.describe(
+			"Source node key. Use 'trigger' to reference the virtual entry node",
+		),
 	to: z.string().describe("Target node key"),
 	label: z
 		.string()
 		.default("next")
-		.describe("'next' | 'yes' | 'no' | 'branch_N' | 'captured' | 'no_match' | 'timeout' | 'handoff'"),
+		.describe(
+			"'next' | 'yes' | 'no' | 'branch_N' | 'captured' | 'no_match' | 'timeout' | 'handoff'",
+		),
 	order: z.number().int().default(0),
 	condition_expr: z.any().optional(),
 });
@@ -1797,6 +1822,7 @@ export const AutomationRunLogResponse = z.object({
 	node_id: z.string().nullable(),
 	node_key: z.string().nullable(),
 	node_type: AutomationNodeTypeEnum.nullable(),
+	node_config: z.record(z.string(), z.any()).nullable(),
 	executed_at: z.string().datetime(),
 	outcome: z.string(),
 	branch_label: z.string().nullable(),

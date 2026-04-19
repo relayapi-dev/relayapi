@@ -33,6 +33,7 @@ interface RunLogRow {
 	node_id: string | null;
 	node_key: string | null;
 	node_type: string | null;
+	node_config: Record<string, unknown> | null;
 	executed_at: string;
 	outcome: string;
 	branch_label: string | null;
@@ -66,6 +67,21 @@ function formatDate(s: string) {
 		hour: "numeric",
 		minute: "2-digit",
 	});
+}
+
+function formatJson(value: unknown): string | null {
+	if (value === undefined || value === null) return null;
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch {
+		return String(value);
+	}
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
 }
 
 // Enrollment statuses emitted by the API: active | waiting | completed |
@@ -117,7 +133,8 @@ export function RunHistoryPanel({
 				if (!cancelled) setEnrollments(data.data ?? []);
 			})
 			.catch((e) => {
-				if (!cancelled) setError(e instanceof Error ? e.message : "Network error");
+				if (!cancelled)
+					setError(e instanceof Error ? e.message : "Network error");
 			})
 			.finally(() => {
 				if (!cancelled) setLoading(false);
@@ -151,16 +168,23 @@ export function RunHistoryPanel({
 			})
 			.then((data) => {
 				if (cancelled) return;
-				setRuns(data.data ?? []);
+				const nextRuns = data.data ?? [];
+				setRuns(nextRuns);
+				setSelectedRunId((prev) =>
+					prev && nextRuns.some((run) => run.id === prev)
+						? prev
+						: (nextRuns[0]?.id ?? null),
+				);
 				// Highlight via node_key since the canvas is keyed by node.key,
 				// not the database node_id.
-				const path = (data.data ?? [])
+				const path = nextRuns
 					.map((r) => r.node_key)
 					.filter((k): k is string => typeof k === "string");
 				onHighlightPath(path);
 			})
 			.catch((e) => {
-				if (!cancelled) setError(e instanceof Error ? e.message : "Network error");
+				if (!cancelled)
+					setError(e instanceof Error ? e.message : "Network error");
 			})
 			.finally(() => {
 				if (!cancelled) setRunsLoading(false);
@@ -178,28 +202,95 @@ export function RunHistoryPanel({
 		() => runs.find((run) => run.id === selectedRunId) ?? null,
 		[runs, selectedRunId],
 	);
+	const selectedRunPayload = useMemo(
+		() => asRecord(selectedRun?.payload),
+		[selectedRun],
+	);
 
-	const payloadText = useMemo(() => {
-		if (!selectedRun?.payload) return null;
-		try {
-			return JSON.stringify(selectedRun.payload, null, 2);
-		} catch {
-			return String(selectedRun.payload);
+	const payloadText = useMemo(
+		() => formatJson(selectedRun?.payload),
+		[selectedRun],
+	);
+	const enrollmentStateText = useMemo(
+		() => formatJson(selectedEnrollment?.state),
+		[selectedEnrollment],
+	);
+	const nodeConfigText = useMemo(
+		() => formatJson(selectedRun?.node_config),
+		[selectedRun],
+	);
+	const stateBeforeText = useMemo(
+		() => formatJson(selectedRunPayload?.state_before),
+		[selectedRunPayload],
+	);
+	const statePatchText = useMemo(
+		() => formatJson(selectedRunPayload?.state_patch),
+		[selectedRunPayload],
+	);
+	const stateAfterText = useMemo(
+		() => formatJson(selectedRunPayload?.state_after),
+		[selectedRunPayload],
+	);
+	const transitionText = useMemo(() => {
+		if (!selectedRunPayload) return null;
+		const resultKind = selectedRunPayload.result_kind;
+		if (typeof resultKind !== "string") return null;
+		if (resultKind === "next") {
+			const outputLabel =
+				typeof selectedRunPayload.output_label === "string"
+					? selectedRunPayload.output_label
+					: (selectedRun?.branch_label ?? null);
+			const nextNodeKey =
+				typeof selectedRunPayload.next_node_key === "string"
+					? selectedRunPayload.next_node_key
+					: null;
+			return [
+				outputLabel ? `Output ${outputLabel}` : null,
+				nextNodeKey ? `to ${nextNodeKey}` : null,
+			]
+				.filter(Boolean)
+				.join(" ");
 		}
-	}, [selectedRun]);
-	const enrollmentStateText = useMemo(() => {
-		if (!selectedEnrollment?.state) return null;
-		try {
-			return JSON.stringify(selectedEnrollment.state, null, 2);
-		} catch {
-			return String(selectedEnrollment.state);
+		if (resultKind === "goto") {
+			return typeof selectedRunPayload.target_node_key === "string"
+				? `Jumped to ${selectedRunPayload.target_node_key}`
+				: "Jumped to target node";
 		}
-	}, [selectedEnrollment]);
+		if (resultKind === "wait") {
+			return typeof selectedRunPayload.next_run_at === "string"
+				? `Waiting until ${formatDate(selectedRunPayload.next_run_at)}`
+				: "Waiting for scheduled resume";
+		}
+		if (resultKind === "wait_for_input") return "Waiting for user input";
+		if (resultKind === "complete") {
+			return typeof selectedRunPayload.reason === "string"
+				? `Completed: ${selectedRunPayload.reason}`
+				: "Completed";
+		}
+		if (resultKind === "exit") {
+			return typeof selectedRunPayload.reason === "string"
+				? `Exited: ${selectedRunPayload.reason}`
+				: "Exited";
+		}
+		if (resultKind === "fail") {
+			return typeof selectedRunPayload.error === "string"
+				? selectedRunPayload.error
+				: (selectedRun?.error ?? null);
+		}
+		return resultKind;
+	}, [selectedRun, selectedRunPayload]);
 
 	const rerunEnrollment = async () => {
 		if (!selectedEnrollment) return;
 		setRerunLoading(true);
 		setRerunMessage(null);
+		const replayPayload =
+			asRecord(asRecord(runs[0]?.payload)?.state_before) ??
+			(selectedEnrollment.state &&
+			typeof selectedEnrollment.state === "object" &&
+			!Array.isArray(selectedEnrollment.state)
+				? (selectedEnrollment.state as Record<string, unknown>)
+				: undefined);
 		try {
 			const res = await fetch(`/api/automations/${automationId}/enroll`, {
 				method: "POST",
@@ -207,12 +298,7 @@ export function RunHistoryPanel({
 				body: JSON.stringify({
 					contact_id: selectedEnrollment.contact_id ?? undefined,
 					conversation_id: selectedEnrollment.conversation_id ?? undefined,
-					payload:
-						selectedEnrollment.state &&
-						typeof selectedEnrollment.state === "object" &&
-						!Array.isArray(selectedEnrollment.state)
-							? selectedEnrollment.state
-							: undefined,
+					payload: replayPayload,
 				}),
 			});
 			if (!res.ok) {
@@ -227,7 +313,9 @@ export function RunHistoryPanel({
 			);
 			loadEnrollments();
 		} catch (e) {
-			setRerunMessage(e instanceof Error ? e.message : "Failed to rerun enrollment");
+			setRerunMessage(
+				e instanceof Error ? e.message : "Failed to rerun enrollment",
+			);
 		} finally {
 			setRerunLoading(false);
 		}
@@ -282,7 +370,9 @@ export function RunHistoryPanel({
 					</button>
 					<div className="px-3 py-2 border-b border-border space-y-1">
 						<div className="flex items-center justify-between gap-2">
-							<span className="text-[10px] text-muted-foreground">Enrollment</span>
+							<span className="text-[10px] text-muted-foreground">
+								Enrollment
+							</span>
 							<span
 								className={cn(
 									"rounded-full px-2 py-0.5 text-[10px] font-medium",
@@ -318,7 +408,7 @@ export function RunHistoryPanel({
 								) : (
 									<RefreshCw className="size-3" />
 								)}
-								Rerun with same payload
+								Replay enrollment
 							</button>
 							{rerunMessage && (
 								<p className="mt-1 text-[10px] text-muted-foreground">
@@ -350,60 +440,64 @@ export function RunHistoryPanel({
 							<>
 								<ol className="space-y-1.5">
 									{runs.map((r) => (
-									<li
-										key={r.id}
-										className={cn(
-											"rounded-md border px-2 py-1.5 text-[11px]",
-											SUCCESS_OUTCOMES.has(r.outcome)
-												? "border-emerald-500/30 bg-emerald-500/5"
-												: FAIL_OUTCOMES.has(r.outcome)
-													? "border-destructive/30 bg-destructive/5"
-													: "border-border bg-card",
-											selectedRunId === r.id && "ring-2 ring-ring/30",
-										)}
-									>
-										<button
-											type="button"
-											onClick={() =>
-												setSelectedRunId((prev) => (prev === r.id ? null : r.id))
-											}
-											className="w-full text-left"
-										>
-											<div className="flex items-center gap-1.5">
-												{SUCCESS_OUTCOMES.has(r.outcome) ? (
-													<CheckCircle2 className="size-3 text-emerald-400" />
-												) : FAIL_OUTCOMES.has(r.outcome) ? (
-													<XCircle className="size-3 text-destructive" />
-												) : (
-													<CircleDot className="size-3 text-muted-foreground" />
-												)}
-												<span className="font-medium truncate">
-													{r.node_key ?? r.node_id ?? "(system)"}
-												</span>
-												{r.branch_label && (
-													<span className="ml-auto rounded-full bg-muted px-1.5 py-0 text-[9px] font-medium text-muted-foreground">
-														→ {r.branch_label}
-													</span>
-												)}
-											</div>
-											<div className="flex items-center gap-2 mt-0.5 text-muted-foreground text-[10px]">
-												{r.node_type && <span>{r.node_type.replace(/_/g, " ")}</span>}
-												<span>·</span>
-												<span>{formatDate(r.executed_at)}</span>
-												{r.duration_ms !== null && (
-													<>
-														<span>·</span>
-														<span>{r.duration_ms}ms</span>
-													</>
-												)}
-											</div>
-											{r.error && (
-												<div className="mt-0.5 text-destructive/80 text-[10px]">
-													{r.error}
-												</div>
+										<li
+											key={r.id}
+											className={cn(
+												"rounded-md border px-2 py-1.5 text-[11px]",
+												SUCCESS_OUTCOMES.has(r.outcome)
+													? "border-emerald-500/30 bg-emerald-500/5"
+													: FAIL_OUTCOMES.has(r.outcome)
+														? "border-destructive/30 bg-destructive/5"
+														: "border-border bg-card",
+												selectedRunId === r.id && "ring-2 ring-ring/30",
 											)}
-										</button>
-									</li>
+										>
+											<button
+												type="button"
+												onClick={() =>
+													setSelectedRunId((prev) =>
+														prev === r.id ? null : r.id,
+													)
+												}
+												className="w-full text-left"
+											>
+												<div className="flex items-center gap-1.5">
+													{SUCCESS_OUTCOMES.has(r.outcome) ? (
+														<CheckCircle2 className="size-3 text-emerald-400" />
+													) : FAIL_OUTCOMES.has(r.outcome) ? (
+														<XCircle className="size-3 text-destructive" />
+													) : (
+														<CircleDot className="size-3 text-muted-foreground" />
+													)}
+													<span className="font-medium truncate">
+														{r.node_key ?? r.node_id ?? "(system)"}
+													</span>
+													{r.branch_label && (
+														<span className="ml-auto rounded-full bg-muted px-1.5 py-0 text-[9px] font-medium text-muted-foreground">
+															→ {r.branch_label}
+														</span>
+													)}
+												</div>
+												<div className="flex items-center gap-2 mt-0.5 text-muted-foreground text-[10px]">
+													{r.node_type && (
+														<span>{r.node_type.replace(/_/g, " ")}</span>
+													)}
+													<span>·</span>
+													<span>{formatDate(r.executed_at)}</span>
+													{r.duration_ms !== null && (
+														<>
+															<span>·</span>
+															<span>{r.duration_ms}ms</span>
+														</>
+													)}
+												</div>
+												{r.error && (
+													<div className="mt-0.5 text-destructive/80 text-[10px]">
+														{r.error}
+													</div>
+												)}
+											</button>
+										</li>
 									))}
 								</ol>
 								{selectedRun && (
@@ -412,32 +506,47 @@ export function RunHistoryPanel({
 											Step detail
 										</div>
 										<div className="mt-1 text-[11px] font-medium">
-											{selectedRun.node_key ?? selectedRun.node_id ?? "(system)"}
+											{selectedRun.node_key ??
+												selectedRun.node_id ??
+												"(system)"}
 										</div>
 										<div className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
 											<span>Outcome: {selectedRun.outcome}</span>
 											{selectedRun.branch_label && (
 												<span>Branch: {selectedRun.branch_label}</span>
 											)}
+											{selectedRun.node_type && (
+												<span>Node: {selectedRun.node_type}</span>
+											)}
 											{selectedRun.duration_ms !== null && (
 												<span>Duration: {selectedRun.duration_ms}ms</span>
 											)}
+											<span>
+												Executed: {formatDate(selectedRun.executed_at)}
+											</span>
 										</div>
 										{selectedRun.error && (
 											<div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-[10px] text-destructive">
 												{selectedRun.error}
 											</div>
 										)}
-										{payloadText && (
-											<div className="mt-2">
-												<div className="text-[10px] font-medium text-muted-foreground mb-1">
-													Log payload
+										{transitionText && (
+											<div className="mt-2 rounded-md border border-border bg-muted/20 px-2 py-1.5 text-[10px] text-foreground">
+												<div className="mb-1 font-medium text-muted-foreground">
+													Transition
 												</div>
-												<pre className="max-h-52 overflow-auto rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[10px] text-foreground whitespace-pre-wrap break-all">
-													{payloadText}
-												</pre>
+												<div>{transitionText}</div>
 											</div>
 										)}
+										<JsonBlock title="Node config" value={nodeConfigText} />
+										<JsonBlock title="State before" value={stateBeforeText} />
+										<JsonBlock title="State patch" value={statePatchText} />
+										<JsonBlock title="State after" value={stateAfterText} />
+										<JsonBlock
+											title="Raw log payload"
+											value={payloadText}
+											maxHeightClassName="max-h-52"
+										/>
 									</div>
 								)}
 							</>
@@ -469,9 +578,12 @@ export function RunHistoryPanel({
 										className="w-full px-3 py-2 text-left hover:bg-accent/30 border-b border-border/60 text-[11px] flex items-start justify-between gap-2"
 									>
 										<div className="min-w-0 flex-1">
-											<div className="font-mono text-[10px] truncate">{e.id}</div>
+											<div className="font-mono text-[10px] truncate">
+												{e.id}
+											</div>
 											<div className="text-muted-foreground text-[10px] mt-0.5">
-												{e.contact_id ?? "no contact"} · {formatDate(e.enrolled_at)}
+												{e.contact_id ?? "no contact"} ·{" "}
+												{formatDate(e.enrolled_at)}
 											</div>
 										</div>
 										<span
@@ -489,6 +601,33 @@ export function RunHistoryPanel({
 					)}
 				</ScrollArea>
 			)}
+		</div>
+	);
+}
+
+function JsonBlock({
+	title,
+	value,
+	maxHeightClassName = "max-h-40",
+}: {
+	title: string;
+	value: string | null;
+	maxHeightClassName?: string;
+}) {
+	if (!value) return null;
+	return (
+		<div className="mt-2">
+			<div className="mb-1 text-[10px] font-medium text-muted-foreground">
+				{title}
+			</div>
+			<pre
+				className={cn(
+					"overflow-auto rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[10px] text-foreground whitespace-pre-wrap break-all",
+					maxHeightClassName,
+				)}
+			>
+				{value}
+			</pre>
 		</div>
 	);
 }

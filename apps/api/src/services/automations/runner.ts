@@ -60,16 +60,13 @@ export async function advanceEnrollment(
 	let currentNodeKey = enrollment.currentNodeId
 		? nodeKeyById(snapshot, enrollment.currentNodeId)
 		: snapshot.entry_node_key;
-	let state: Record<string, unknown> = (enrollment.state as Record<string, unknown>) ?? {};
+	let state: Record<string, unknown> =
+		(enrollment.state as Record<string, unknown>) ?? {};
 	let resumeLabel = opts?.resumeLabel;
 
 	// Resume path: advance past the waiting node without re-executing it.
 	if (resumeLabel) {
-		const nextKey = resolveNextNodeKey(
-			snapshot,
-			currentNodeKey,
-			resumeLabel,
-		);
+		const nextKey = resolveNextNodeKey(snapshot, currentNodeKey, resumeLabel);
 		if (!nextKey) {
 			await db
 				.update(automationEnrollments)
@@ -93,7 +90,11 @@ export async function advanceEnrollment(
 	for (let step = 0; step < MAX_STEPS_PER_TICK; step++) {
 		const node = snapshot.nodes.find((n) => n.key === currentNodeKey);
 		if (!node) {
-			await markFailed(db, enrollment.id, `node '${currentNodeKey}' not in snapshot`);
+			await markFailed(
+				db,
+				enrollment.id,
+				`node '${currentNodeKey}' not in snapshot`,
+			);
 			return;
 		}
 
@@ -115,6 +116,7 @@ export async function advanceEnrollment(
 			snapshot,
 			node,
 		};
+		const stateBefore = cloneJson(state);
 
 		let result: NodeExecutionResult;
 		try {
@@ -122,52 +124,60 @@ export async function advanceEnrollment(
 		} catch (e) {
 			result = { kind: "fail", error: String(e) };
 		}
-			const duration = Date.now() - startedAt;
+		const duration = Date.now() - startedAt;
 
-			state = { ...state, ...(result.kind !== "fail" ? result.state_patch ?? {} : {}) };
+		state = {
+			...state,
+			...(result.kind !== "fail" ? (result.state_patch ?? {}) : {}),
+		};
+		const stateAfter = cloneJson(state);
 
-			const label = result.kind === "next" ? (result.label ?? "next") : null;
-			const nextKey =
-				result.kind === "goto"
-					? result.target_node_key
-					: result.kind === "next"
-						? resolveNextNodeKey(snapshot, currentNodeKey, label ?? "next")
-						: null;
-			const logPayload: Record<string, unknown> = {
-				result_kind: result.kind,
-				state_patch: result.kind === "fail" ? null : (result.state_patch ?? null),
-			};
-			if (result.kind === "next") {
-				logPayload.output_label = label;
-				logPayload.next_node_key = nextKey;
-			}
-			if (result.kind === "goto") {
-				logPayload.target_node_key = result.target_node_key;
-			}
-			if (result.kind === "wait") {
-				logPayload.next_run_at = result.next_run_at.toISOString();
-			}
-			if (result.kind === "complete" && result.reason) {
-				logPayload.reason = result.reason;
-			}
-			if (result.kind === "exit") {
-				logPayload.reason = result.reason;
-			}
-			if (result.kind === "fail") {
-				logPayload.error = result.error;
-			}
+		const label = result.kind === "next" ? (result.label ?? "next") : null;
+		const nextKey =
+			result.kind === "goto"
+				? result.target_node_key
+				: result.kind === "next"
+					? resolveNextNodeKey(snapshot, currentNodeKey, label ?? "next")
+					: null;
+		const logPayload: Record<string, unknown> = {
+			result_kind: result.kind,
+			node_config: cloneJson(node.config),
+			state_before: stateBefore,
+			state_patch:
+				result.kind === "fail" ? null : cloneJson(result.state_patch ?? null),
+			state_after: stateAfter,
+		};
+		if (result.kind === "next") {
+			logPayload.output_label = label;
+			logPayload.next_node_key = nextKey;
+		}
+		if (result.kind === "goto") {
+			logPayload.target_node_key = result.target_node_key;
+		}
+		if (result.kind === "wait") {
+			logPayload.next_run_at = result.next_run_at.toISOString();
+		}
+		if (result.kind === "complete" && result.reason) {
+			logPayload.reason = result.reason;
+		}
+		if (result.kind === "exit") {
+			logPayload.reason = result.reason;
+		}
+		if (result.kind === "fail") {
+			logPayload.error = result.error;
+		}
 
-			await db.insert(automationRunLogs).values({
-				enrollmentId: enrollment.id,
-				nodeId: node.id,
-				nodeType: node.type as never,
+		await db.insert(automationRunLogs).values({
+			enrollmentId: enrollment.id,
+			nodeId: node.id,
+			nodeType: node.type as never,
 			executedAt: new Date(),
-				outcome: outcomeFromResult(result),
-				branchLabel: result.kind === "next" ? (result.label ?? "next") : null,
-				durationMs: duration,
-				error: result.kind === "fail" ? result.error : null,
-				payload: logPayload,
-			});
+			outcome: outcomeFromResult(result),
+			branchLabel: result.kind === "next" ? (result.label ?? "next") : null,
+			durationMs: duration,
+			error: result.kind === "fail" ? result.error : null,
+			payload: logPayload,
+		});
 
 		if (result.kind === "fail") {
 			await markFailed(db, enrollment.id, result.error);
@@ -242,7 +252,7 @@ export async function advanceEnrollment(
 			return;
 		}
 
-			if (!nextKey) {
+		if (!nextKey) {
 			// Graph terminates implicitly (no outgoing edge). This counts as a
 			// successful completion — increment totalCompleted just like an
 			// explicit `complete` result.
@@ -450,7 +460,9 @@ async function loadSnapshot(
 }
 
 function nodeKeyById(snapshot: AutomationSnapshot, nodeId: string): string {
-	return snapshot.nodes.find((n) => n.id === nodeId)?.key ?? snapshot.entry_node_key;
+	return (
+		snapshot.nodes.find((n) => n.id === nodeId)?.key ?? snapshot.entry_node_key
+	);
 }
 
 function resolveNextNodeKey(
@@ -508,6 +520,10 @@ function outcomeFromResult(result: NodeExecutionResult): string {
 		case "fail":
 			return "failed";
 	}
+}
+
+function cloneJson<T>(value: T): T {
+	return JSON.parse(JSON.stringify(value ?? null)) as T;
 }
 
 // Helpers to increment a counter in an update. Drizzle doesn't have a clean

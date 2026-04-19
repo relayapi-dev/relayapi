@@ -281,14 +281,18 @@ function outputSummaryLabel(
 function canvasCardClass({
 	selected,
 	hasError,
+	highlighted,
 	isTrigger,
 }: {
 	selected: boolean;
 	hasError: boolean;
+	highlighted?: boolean;
 	isTrigger?: boolean;
 }) {
 	return cn(
 		"group relative w-full overflow-hidden rounded-[26px] border border-border/70 bg-gradient-to-br from-background via-background to-muted/40 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-[0_24px_48px_-34px_rgba(15,23,42,0.5)]",
+		highlighted &&
+			"border-sky-400/55 shadow-[0_22px_44px_-30px_rgba(14,165,233,0.38)]",
 		selected &&
 			(isTrigger
 				? "border-emerald-500/60 ring-2 ring-emerald-500/20 shadow-[0_24px_48px_-30px_rgba(16,185,129,0.28)]"
@@ -307,6 +311,7 @@ interface Props {
 	automation: AutomationDetail;
 	schema: AutomationSchema;
 	errorKeys: Set<string>;
+	highlightKeys: Set<string>;
 	selectedKey: string | null;
 	onSelect: (key: string | null) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
@@ -318,6 +323,7 @@ export function GuidedFlow({
 	automation,
 	schema,
 	errorKeys,
+	highlightKeys,
 	selectedKey,
 	onSelect,
 	onInsertAfter,
@@ -382,6 +388,7 @@ export function GuidedFlow({
 					<TriggerCard
 						automation={automation}
 						hasError={errorKeys.has("trigger")}
+						highlighted={highlightKeys.has("trigger")}
 						selected={selectedKey === "trigger"}
 						onClick={() => onSelect("trigger")}
 					/>
@@ -391,6 +398,7 @@ export function GuidedFlow({
 						nodesByKey={nodesByKey}
 						schemaByType={schemaByType}
 						errorKeys={errorKeys}
+						highlightKeys={highlightKeys}
 						selectedKey={selectedKey}
 						onSelect={onSelect}
 						onInsertAfter={onInsertAfter}
@@ -416,6 +424,7 @@ export function GuidedFlow({
 										node={node}
 										def={schemaByType.get(node.type) ?? null}
 										selected={selectedKey === node.key}
+										highlighted={highlightKeys.has(node.key)}
 										hasError={errorKeys.has(node.key)}
 										onClick={() => onSelect(node.key)}
 										onDelete={
@@ -439,6 +448,7 @@ function ChainRenderer({
 	nodesByKey,
 	schemaByType,
 	errorKeys,
+	highlightKeys,
 	selectedKey,
 	onSelect,
 	onInsertAfter,
@@ -457,6 +467,7 @@ function ChainRenderer({
 	nodesByKey: Map<string, AutomationNodeSpec>;
 	schemaByType: Map<string, SchemaNodeDef>;
 	errorKeys: Set<string>;
+	highlightKeys: Set<string>;
 	selectedKey: string | null;
 	onSelect: (key: string | null) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
@@ -509,6 +520,7 @@ function ChainRenderer({
 									nodesByKey={nodesByKey}
 									schemaByType={schemaByType}
 									errorKeys={errorKeys}
+									highlightKeys={highlightKeys}
 									selectedKey={selectedKey}
 									onSelect={onSelect}
 									onInsertAfter={onInsertAfter}
@@ -556,6 +568,7 @@ function ChainRenderer({
 					def={schemaByType.get(node.type) ?? null}
 					index={stepNumber.get(node.key)}
 					selected={selectedKey === node.key}
+					highlighted={highlightKeys.has(node.key)}
 					hasError={errorKeys.has(node.key)}
 					onClick={() => onSelect(node.key)}
 					onDelete={readOnly ? undefined : () => onDeleteNode(node.key)}
@@ -566,6 +579,7 @@ function ChainRenderer({
 					nodesByKey={nodesByKey}
 					schemaByType={schemaByType}
 					errorKeys={errorKeys}
+					highlightKeys={highlightKeys}
 					selectedKey={selectedKey}
 					onSelect={onSelect}
 					onInsertAfter={onInsertAfter}
@@ -600,6 +614,7 @@ function ChainRenderer({
 								nodesByKey={nodesByKey}
 								schemaByType={schemaByType}
 								errorKeys={errorKeys}
+								highlightKeys={highlightKeys}
 								selectedKey={selectedKey}
 								onSelect={onSelect}
 								onInsertAfter={onInsertAfter}
@@ -647,6 +662,7 @@ function BranchColumn({
 	nodesByKey,
 	schemaByType,
 	errorKeys,
+	highlightKeys,
 	selectedKey,
 	onSelect,
 	onInsertAfter,
@@ -666,6 +682,7 @@ function BranchColumn({
 	nodesByKey: Map<string, AutomationNodeSpec>;
 	schemaByType: Map<string, SchemaNodeDef>;
 	errorKeys: Set<string>;
+	highlightKeys: Set<string>;
 	selectedKey: string | null;
 	onSelect: (key: string | null) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
@@ -714,6 +731,7 @@ function BranchColumn({
 						def={schemaByType.get(node.type) ?? null}
 						index={stepNumber.get(node.key)}
 						selected={selectedKey === node.key}
+						highlighted={highlightKeys.has(node.key)}
 						hasError={errorKeys.has(node.key)}
 						onClick={() => onSelect(node.key)}
 						onDelete={readOnly ? undefined : () => onDeleteNode(node.key)}
@@ -724,6 +742,7 @@ function BranchColumn({
 						nodesByKey={nodesByKey}
 						schemaByType={schemaByType}
 						errorKeys={errorKeys}
+						highlightKeys={highlightKeys}
 						selectedKey={selectedKey}
 						onSelect={onSelect}
 						onInsertAfter={onInsertAfter}
@@ -760,11 +779,13 @@ function Connector({ label }: { label?: string }) {
 function TriggerCard({
 	automation,
 	hasError,
+	highlighted,
 	selected,
 	onClick,
 }: {
 	automation: AutomationDetail;
 	hasError: boolean;
+	highlighted: boolean;
 	selected: boolean;
 	onClick: () => void;
 }) {
@@ -784,7 +805,7 @@ function TriggerCard({
 			type="button"
 			onClick={onClick}
 			className={cn(
-				canvasCardClass({ selected, hasError, isTrigger: true }),
+				canvasCardClass({ selected, hasError, highlighted, isTrigger: true }),
 				"mx-auto block max-w-[40rem] px-4 py-4 text-left",
 			)}
 		>
@@ -852,6 +873,7 @@ function StepCard({
 	def,
 	index,
 	selected,
+	highlighted,
 	hasError,
 	onClick,
 	onDelete,
@@ -860,6 +882,7 @@ function StepCard({
 	def: SchemaNodeDef | null;
 	index?: number;
 	selected: boolean;
+	highlighted: boolean;
 	hasError: boolean;
 	onClick: () => void;
 	onDelete?: () => void;
@@ -875,7 +898,7 @@ function StepCard({
 	return (
 		<div
 			className={cn(
-				canvasCardClass({ selected, hasError }),
+				canvasCardClass({ selected, hasError, highlighted }),
 				"mx-auto max-w-[26rem]",
 			)}
 		>

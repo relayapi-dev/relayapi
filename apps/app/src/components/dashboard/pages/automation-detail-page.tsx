@@ -66,7 +66,8 @@ interface ApiAutomationEdge {
 	condition_expr?: unknown;
 }
 
-interface ApiAutomationDetail extends Omit<AutomationDetail, "nodes" | "edges"> {
+interface ApiAutomationDetail
+	extends Omit<AutomationDetail, "nodes" | "edges"> {
 	nodes: ApiAutomationNode[];
 	edges: ApiAutomationEdge[];
 }
@@ -113,9 +114,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 		refetch: refetchAutomation,
 	} = useApi<ApiAutomationDetail>(automationPath);
 
-	const { data: schema, loading: loadingSchema } = useApi<AutomationSchema>(
-		"automations/schema",
-	);
+	const { data: schema, loading: loadingSchema } =
+		useApi<AutomationSchema>("automations/schema");
 
 	const [draft, setDraft] = useState<AutomationDetail | null>(null);
 	const [dirty, setDirty] = useState(false);
@@ -143,15 +143,22 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const [rightPanel, setRightPanel] = useState<
 		"property" | "simulator" | "history" | null
 	>(null);
-	const [, setHighlightKeys] = useState<Set<string>>(() => new Set());
+	const [highlightKeys, setHighlightKeys] = useState<Set<string>>(
+		() => new Set(),
+	);
 	const [banner, setBanner] = useState<{
 		type: "error" | "success";
 		message: string;
 	} | null>(null);
+	const handleHighlightPath = useCallback((keys: string[]) => {
+		setHighlightKeys(new Set(keys));
+	}, []);
 
 	const restoreSnapshot = useCallback(
 		(snap: GraphSnapshot) => {
-			setDraft((prev) => (prev ? { ...prev, nodes: snap.nodes, edges: snap.edges } : prev));
+			setDraft((prev) =>
+				prev ? { ...prev, nodes: snap.nodes, edges: snap.edges } : prev,
+			);
 			setDirty(true);
 			bumpEdit();
 		},
@@ -177,7 +184,10 @@ export function AutomationDetailPage({ automationId }: Props) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [fetched]);
 
-	const patchAutomation = useMutation<AutomationDetail>(automationPath, "PATCH");
+	const patchAutomation = useMutation<AutomationDetail>(
+		automationPath,
+		"PATCH",
+	);
 	const publishAutomation = useMutation<AutomationDetail>(
 		`${automationPath}/publish`,
 		"POST",
@@ -256,9 +266,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 				const incomingEdges = prev.edges.filter((e) => e.to === key);
 				const outgoingEdges = prev.edges.filter((e) => e.from === key);
 				const nodes = prev.nodes.filter((n) => n.key !== key);
-				let edges = prev.edges.filter(
-					(e) => e.from !== key && e.to !== key,
-				);
+				let edges = prev.edges.filter((e) => e.from !== key && e.to !== key);
 				// Rewire the chain only when the deleted node sits on a linear
 				// path (exactly one in, exactly one out). Branching or fan-in
 				// topologies would need user intent to resolve, so we just drop
@@ -322,7 +330,10 @@ export function AutomationDetailPage({ automationId }: Props) {
 			patch: Partial<
 				Pick<
 					AutomationDetail,
-					"trigger_type" | "trigger_config" | "trigger_filters" | "social_account_id"
+					| "trigger_type"
+					| "trigger_config"
+					| "trigger_filters"
+					| "social_account_id"
 				>
 			>,
 		) => {
@@ -343,7 +354,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 				type: d.trigger_type,
 				account_id:
 					d.social_account_id === undefined ? undefined : d.social_account_id,
-				config: (d.trigger_config as Record<string, unknown> | undefined) ?? undefined,
+				config:
+					(d.trigger_config as Record<string, unknown> | undefined) ??
+					undefined,
 				filters: d.trigger_filters as Record<string, unknown> | undefined,
 			},
 		}),
@@ -405,9 +418,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 		// Re-run validation fresh right before publishing. The `canPublish`
 		// gate is based on React-rendered state; this ensures we never send
 		// a publish request for an invalid graph even if the render is stale.
-		const freshIssues = schema
-			? validateGraph(draft, schema)
-			: [];
+		const freshIssues = schema ? validateGraph(draft, schema) : [];
 		const blocking = freshIssues.filter((i) => i.severity === "error");
 		if (blocking.length > 0) {
 			setBanner({
@@ -470,7 +481,11 @@ export function AutomationDetailPage({ automationId }: Props) {
 	}, [draft, pauseAutomation, resumeAutomation, refetchAutomation]);
 
 	const archive = useCallback(async () => {
-		if (!confirm("Archive this automation? It will stop processing new enrollments.")) {
+		if (
+			!confirm(
+				"Archive this automation? It will stop processing new enrollments.",
+			)
+		) {
 			return;
 		}
 		setBanner(null);
@@ -488,7 +503,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 	}, [draft, selectedNodeKey]);
 
 	const selectedNodeDef = selectedNode
-		? schemaNodesByType.get(selectedNode.type) ?? null
+		? (schemaNodesByType.get(selectedNode.type) ?? null)
 		: null;
 
 	const existingKeys = useMemo(
@@ -716,6 +731,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 						automation={draft}
 						schema={schema}
 						errorKeys={errorKeys}
+						highlightKeys={highlightKeys}
 						selectedKey={selectedNodeKey}
 						onSelect={(key) => {
 							setSelectedNodeKey(key);
@@ -731,13 +747,13 @@ export function AutomationDetailPage({ automationId }: Props) {
 						automation={draft}
 						schema={schema}
 						onClose={() => setRightPanel(null)}
-						onHighlightPath={(keys) => setHighlightKeys(new Set(keys))}
+						onHighlightPath={handleHighlightPath}
 					/>
 				) : rightPanel === "history" ? (
 					<RunHistoryPanel
 						automationId={draft.id}
 						onClose={() => setRightPanel(null)}
-						onHighlightPath={(keys) => setHighlightKeys(new Set(keys))}
+						onHighlightPath={handleHighlightPath}
 					/>
 				) : selectedNodeKey === "trigger" ? (
 					<TriggerPanel
@@ -767,8 +783,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 				) : (
 					<div className="w-80 border-l border-border bg-card/30 flex items-center justify-center p-6">
 						<p className="text-xs text-muted-foreground text-center">
-							Select a step to configure it, or open the Simulator / Run
-							history panel.
+							Select a step to configure it, or open the Simulator / Run history
+							panel.
 						</p>
 					</div>
 				)}
@@ -786,7 +802,9 @@ function StatusBadge({ status }: { status: AutomationDetail["status"] }) {
 	};
 	const cfg = map[status] ?? map.draft!;
 	return (
-		<span className={cn("inline-flex items-center gap-1 font-medium", cfg.classes)}>
+		<span
+			className={cn("inline-flex items-center gap-1 font-medium", cfg.classes)}
+		>
 			{status === "active" && <PlayCircle className="size-2.5" />}
 			{cfg.label}
 		</span>
