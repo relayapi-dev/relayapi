@@ -6,6 +6,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface IdeaColumnProps {
 	id: string;
@@ -107,17 +108,19 @@ export function IdeaColumn({
 				</DropdownMenu>
 			</div>
 
-			<div className="p-2 space-y-2 flex-1 min-h-[100px] overflow-y-auto">
-				{children}
-				<button
-					type="button"
-					className="w-full rounded-md border border-dashed border-border p-2 text-xs text-muted-foreground hover:bg-accent/20 transition-colors"
-					onClick={onNewIdea}
-				>
-					<Plus className="size-3 inline mr-1" />
-					New Idea
-				</button>
-			</div>
+			<ScrollArea className="flex-1 min-h-[100px]">
+				<div className="p-2 space-y-2">
+					{children}
+					<button
+						type="button"
+						className="w-full rounded-md border border-dashed border-border p-2 text-xs text-muted-foreground hover:bg-accent/20 transition-colors"
+						onClick={onNewIdea}
+					>
+						<Plus className="size-3 inline mr-1" />
+						New Idea
+					</button>
+				</div>
+			</ScrollArea>
 		</div>
 	);
 }

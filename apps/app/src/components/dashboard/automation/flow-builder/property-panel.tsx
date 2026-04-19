@@ -277,6 +277,7 @@ export function PropertyPanel({
 							node={node}
 							field={f}
 							value={node[f.name]}
+							automationChannel={automationChannel}
 							dataReferences={dataReferences}
 							onChange={(v) => onChange({ [f.name]: v })}
 						/>
@@ -303,12 +304,14 @@ export function FieldRow({
 	node,
 	field,
 	value,
+	automationChannel,
 	dataReferences,
 	onChange,
 }: {
 	node?: AutomationNodeSpec | null;
 	field: FieldDef;
 	value: unknown;
+	automationChannel?: string;
 	dataReferences?: DataReferenceGroup[];
 	onChange: (v: unknown) => void;
 }) {
@@ -381,6 +384,47 @@ export function FieldRow({
 				value={value}
 				onChange={onChange}
 				dataReferences={refs}
+			/>
+		);
+	}
+
+	if (node?.type === "message_text" && field.name === "recipient_identifier") {
+		const recipientMode =
+			(node.recipient_mode as string | undefined) ?? "enrolled_contact";
+		if (recipientMode !== "custom_identifier") {
+			return (
+				<InheritedValueNotice
+					label={label}
+					title={`Using enrolled contact${automationChannel ? ` on ${automationChannel}` : ""}`}
+					description={`The runtime looks up the enrolled contact's${automationChannel ? ` ${automationChannel}` : ""} identifier automatically. Switch recipient mode to custom identifier to override it.`}
+					hint={hint}
+				/>
+			);
+		}
+		return (
+			<TemplatedTextField
+				label={label}
+				hint={hint}
+				value={value}
+				onChange={onChange}
+				dataReferences={refs}
+			/>
+		);
+	}
+
+	if (node?.type === "instagram_reply_to_comment" && field.name === "comment_id") {
+		return (
+			<OptionalOverrideField
+				label={label}
+				hint={hint}
+				value={value}
+				onChange={onChange}
+				dataReferences={refs}
+				defaultTitle="Using trigger comment_id"
+				defaultDescription="This step replies to the comment that enrolled the contact. The runtime reads state.comment_id from the trigger payload unless you override it here."
+				defaultToken="{{state.comment_id}}"
+				overrideLabel="Set explicit comment id"
+				resetLabel="Use trigger comment_id instead"
 			/>
 		);
 	}
@@ -487,6 +531,111 @@ export function FieldRow({
 			onChange={onChange}
 			dataReferences={refs}
 		/>
+	);
+}
+
+function InheritedValueNotice({
+	label,
+	title,
+	description,
+	hint,
+}: {
+	label: React.ReactNode;
+	title: string;
+	description: string;
+	hint: React.ReactNode;
+}) {
+	return (
+		<div className="space-y-2">
+			{label}
+			<div className="rounded-lg border border-border/80 bg-muted/25 px-3 py-2">
+				<div className="text-[11px] font-medium text-foreground">{title}</div>
+				<p className="mt-1 text-[10px] text-muted-foreground/80">{description}</p>
+			</div>
+			{hint}
+		</div>
+	);
+}
+
+function OptionalOverrideField({
+	label,
+	hint,
+	value,
+	onChange,
+	dataReferences,
+	defaultTitle,
+	defaultDescription,
+	defaultToken,
+	overrideLabel,
+	resetLabel,
+}: {
+	label: React.ReactNode;
+	hint: React.ReactNode;
+	value: unknown;
+	onChange: (v: unknown) => void;
+	dataReferences: DataReferenceGroup[];
+	defaultTitle: string;
+	defaultDescription: string;
+	defaultToken: string;
+	overrideLabel: string;
+	resetLabel: string;
+}) {
+	const hasValue = typeof value === "string" && value.trim().length > 0;
+	const [editingOverride, setEditingOverride] = useState(hasValue);
+
+	useEffect(() => {
+		if (hasValue) {
+			setEditingOverride(true);
+		}
+	}, [hasValue]);
+
+	if (!editingOverride && !hasValue) {
+		return (
+			<div className="space-y-2">
+				{label}
+				<div className="rounded-lg border border-border/80 bg-muted/25 px-3 py-2">
+					<div className="text-[11px] font-medium text-foreground">{defaultTitle}</div>
+					<p className="mt-1 text-[10px] text-muted-foreground/80">
+						{defaultDescription}
+					</p>
+					<div className="mt-2 inline-flex items-center rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
+						{defaultToken}
+					</div>
+					<div className="mt-2">
+						<button
+							type="button"
+							onClick={() => setEditingOverride(true)}
+							className="text-[10px] font-medium text-foreground underline-offset-2 hover:underline"
+						>
+							{overrideLabel}
+						</button>
+					</div>
+				</div>
+				{hint}
+			</div>
+		);
+	}
+
+	return (
+		<div className="space-y-2">
+			<TemplatedTextField
+				label={label}
+				hint={hint}
+				value={value}
+				onChange={onChange}
+				dataReferences={dataReferences}
+			/>
+			<button
+				type="button"
+				onClick={() => {
+					setEditingOverride(false);
+					onChange(undefined);
+				}}
+				className="text-[10px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+			>
+				{resetLabel}
+			</button>
+		</div>
 	);
 }
 
@@ -880,6 +1029,8 @@ function NodeGuidance({
 		return null;
 	}
 
+	const commentReplyHint = node.type === "instagram_reply_to_comment";
+
 	return (
 		<div className="space-y-2">
 			{recipientHint && (
@@ -902,6 +1053,23 @@ function NodeGuidance({
 							recipient identifier
 						</span>{" "}
 						to override it.
+					</p>
+				</div>
+			)}
+			{commentReplyHint && (
+				<div className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2">
+					<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+						Comment target
+					</div>
+					<p className="mt-1 text-[11px] text-foreground">
+						By default this step replies to the comment that triggered the
+						automation.
+					</p>
+					<p className="mt-1 text-[10px] text-muted-foreground/70">
+						Leave <span className="font-medium text-foreground">comment id</span>{" "}
+						empty to use <span className="font-mono text-foreground">{`{{state.comment_id}}`}</span>{" "}
+						from the trigger payload. Only set it when you want to override the
+						target comment explicitly.
 					</p>
 				</div>
 			)}
