@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useApi } from "@/hooks/use-api";
 import {
 	buildDataReferenceGroups,
@@ -220,7 +221,8 @@ export function PropertyPanel({
 				</button>
 			</div>
 
-			<div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+			<ScrollArea className="flex-1">
+				<div className="px-3 py-3 space-y-3">
 				<div>
 					<label className="text-[10px] font-medium text-muted-foreground block mb-1">
 						Key <span className="text-destructive">*</span>
@@ -283,7 +285,8 @@ export function PropertyPanel({
 						/>
 					))}
 				</div>
-			</div>
+				</div>
+			</ScrollArea>
 
 			<div className="px-3 py-2 border-t border-border">
 				<Button

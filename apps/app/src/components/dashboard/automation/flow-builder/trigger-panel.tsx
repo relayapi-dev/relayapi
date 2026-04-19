@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Tag, X, Zap } from "lucide-react";
 import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type {
 	AutomationDetail,
@@ -127,7 +128,8 @@ export function TriggerPanel({
 				</button>
 			</div>
 
-			<div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+			<ScrollArea className="flex-1">
+				<div className="px-3 py-3 space-y-3">
 				<div className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2">
 					<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
 						Trigger binding
@@ -274,7 +276,8 @@ export function TriggerPanel({
 						readOnly={readOnly}
 					/>
 				</div>
-			</div>
+				</div>
+			</ScrollArea>
 		</div>
 	);
 }

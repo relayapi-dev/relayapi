@@ -9,6 +9,7 @@ import {
 	XCircle,
 	CircleDot,
 } from "lucide-react";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 interface EnrollmentRow {
@@ -267,7 +268,7 @@ export function RunHistoryPanel({
 			</div>
 
 			{selected && selectedEnrollment ? (
-				<div className="flex-1 overflow-y-auto">
+				<ScrollArea className="flex-1">
 					<button
 						type="button"
 						onClick={() => {
@@ -442,9 +443,9 @@ export function RunHistoryPanel({
 							</>
 						)}
 					</div>
-				</div>
+				</ScrollArea>
 			) : (
-				<div className="flex-1 overflow-y-auto">
+				<ScrollArea className="flex-1">
 					{loading ? (
 						<div className="flex justify-center py-10">
 							<Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -486,7 +487,7 @@ export function RunHistoryPanel({
 							))}
 						</ul>
 					)}
-				</div>
+				</ScrollArea>
 			)}
 		</div>
 	);

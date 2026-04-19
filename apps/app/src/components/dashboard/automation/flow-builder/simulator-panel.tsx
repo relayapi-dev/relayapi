@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Play, Loader2, X, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { resolveNodeOutputLabels } from "./output-labels";
 import type { AutomationDetail, AutomationSchema } from "./types";
@@ -278,7 +279,8 @@ export function SimulatorPanel({
 				</button>
 			</div>
 
-			<div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+			<ScrollArea className="flex-1">
+				<div className="px-3 py-3 space-y-3">
 				{triggerDef && (
 					<div className="rounded-md border border-border/60 bg-card/50 px-2 py-1.5">
 						<div className="text-[10px] font-medium text-muted-foreground">
@@ -572,8 +574,8 @@ export function SimulatorPanel({
 						</div>
 					)}
 				</div>
-
-			</div>
+				</div>
+			</ScrollArea>
 		</div>
 	);
 }
