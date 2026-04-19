@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import {
 	AlertCircle,
-	ArrowRight,
 	Bot,
 	Box,
 	ChevronDown,
@@ -30,9 +29,11 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { resolveNodeOutputLabels, resolveSourceOutputLabels } from "./output-labels";
+import {
+	resolveNodeOutputLabels,
+	resolveSourceOutputLabels,
+} from "./output-labels";
 import type {
 	AutomationDetail,
 	AutomationNodeSpec,
@@ -73,7 +74,10 @@ const CATEGORY_ICON: Record<string, typeof Box> = {
 	flow: CornerDownRight,
 };
 
-const CATEGORY_ACCENT: Record<string, { bg: string; text: string; border: string }> = {
+const CATEGORY_ACCENT: Record<
+	string,
+	{ bg: string; text: string; border: string }
+> = {
 	content: {
 		bg: "bg-sky-50 dark:bg-sky-500/10",
 		text: "text-sky-700 dark:text-sky-400",
@@ -181,29 +185,32 @@ function titleize(value: string): string {
 		.join(" ");
 }
 
+function presentLabel(value: string): string {
+	return value.includes("_") ? titleize(value) : value;
+}
+
 function resolveIcon(nodeType: string, category: string) {
 	if (nodeType === "goto") return CornerDownRight;
 	if (nodeType === "end") return StopCircle;
 	if (nodeType === "http_request") return Globe;
-	if (nodeType === "randomizer" || nodeType === "split") return Shuffle;
+	if (nodeType === "randomizer" || nodeType === "split_test") return Shuffle;
 	return CATEGORY_ICON[category] ?? Box;
 }
 
 function describeNodePresentation(nodeType: string, category: string) {
 	const [prefix, ...rest] = nodeType.split("_");
 	if (NODE_OPERATION_OVERRIDES[nodeType]) {
-		const app =
-			nodeType.startsWith("message_")
-				? "Messaging"
-				: nodeType.startsWith("user_input_")
-					? "Input"
-					: category === "logic"
-						? "Logic"
-						: category === "action"
-							? "Contacts"
-							: category === "ops"
-								? "Operations"
-								: titleize(category);
+		const app = nodeType.startsWith("message_")
+			? "Messaging"
+			: nodeType.startsWith("user_input_")
+				? "Input"
+				: category === "logic"
+					? "Logic"
+					: category === "action"
+						? "Contacts"
+						: category === "ops"
+							? "Operations"
+							: titleize(category);
 		return { app, operation: NODE_OPERATION_OVERRIDES[nodeType]! };
 	}
 	if (prefix && PLATFORM_LABELS[prefix]) {
@@ -216,7 +223,10 @@ function describeNodePresentation(nodeType: string, category: string) {
 		return { app: "Messaging", operation: titleize(nodeType.slice(8)) };
 	}
 	if (nodeType.startsWith("user_input_")) {
-		return { app: "Input", operation: `Collect ${titleize(nodeType.slice(11))}` };
+		return {
+			app: "Input",
+			operation: `Collect ${titleize(nodeType.slice(11))}`,
+		};
 	}
 	return {
 		app:
@@ -232,6 +242,12 @@ function describeNodePresentation(nodeType: string, category: string) {
 }
 
 function nodeSummary(spec: AutomationNodeSpec): string | undefined {
+	if (spec.type === "split_test" && Array.isArray(spec.variants)) {
+		return `${spec.variants.length} variant${spec.variants.length === 1 ? "" : "s"} configured`;
+	}
+	if (spec.type === "randomizer" && Array.isArray(spec.branches)) {
+		return `${spec.branches.length} branch${spec.branches.length === 1 ? "" : "es"} configured`;
+	}
 	if (typeof spec.text === "string") return spec.text as string;
 	if (typeof spec.prompt === "string") return spec.prompt as string;
 	if (typeof spec.when === "string") return spec.when as string;
@@ -245,6 +261,41 @@ function nodeSummary(spec: AutomationNodeSpec): string | undefined {
 		return `${spec.duration_minutes} min`;
 	}
 	return undefined;
+}
+
+function outputSummaryLabel(
+	nodeType: string,
+	outputs: string[],
+): string | null {
+	if (outputs.length <= 1) return null;
+	if (nodeType === "split_test") {
+		return `${outputs.length} variant${outputs.length === 1 ? "" : "s"}`;
+	}
+	if (nodeType === "randomizer") {
+		return `${outputs.length} branch${outputs.length === 1 ? "" : "es"}`;
+	}
+	if (nodeType === "condition") return `${outputs.length} paths`;
+	return `${outputs.length} outputs`;
+}
+
+function canvasCardClass({
+	selected,
+	hasError,
+	isTrigger,
+}: {
+	selected: boolean;
+	hasError: boolean;
+	isTrigger?: boolean;
+}) {
+	return cn(
+		"group relative w-full overflow-hidden rounded-[26px] border border-border/70 bg-gradient-to-br from-background via-background to-muted/40 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-[0_24px_48px_-34px_rgba(15,23,42,0.5)]",
+		selected &&
+			(isTrigger
+				? "border-emerald-500/60 ring-2 ring-emerald-500/20 shadow-[0_24px_48px_-30px_rgba(16,185,129,0.28)]"
+				: "border-foreground/20 ring-2 ring-ring/20 shadow-[0_24px_48px_-34px_rgba(15,23,42,0.55)]"),
+		hasError &&
+			"border-destructive/45 ring-2 ring-destructive/20 shadow-[0_22px_44px_-32px_rgba(220,38,38,0.4)] hover:border-destructive/60",
+	);
 }
 
 interface ChildLink {
@@ -325,55 +376,59 @@ export function GuidedFlow({
 	}, [automation.nodes, childrenByKey]);
 
 	return (
-		<ScrollArea className="h-full bg-muted/40">
-			<div className="mx-auto max-w-2xl px-6 py-10 space-y-0">
-				<TriggerCard
-					automation={automation}
-					hasError={errorKeys.has("trigger")}
-					selected={selectedKey === "trigger"}
-					onClick={() => onSelect("trigger")}
-				/>
-				<ChainRenderer
-					parentKey="trigger"
-					childrenByKey={childrenByKey}
-					nodesByKey={nodesByKey}
-					schemaByType={schemaByType}
-					errorKeys={errorKeys}
-					selectedKey={selectedKey}
-					onSelect={onSelect}
-					onInsertAfter={onInsertAfter}
-					onDeleteNode={onDeleteNode}
-					schema={schema}
-					automationTriggerType={automation.trigger_type}
-					automationChannel={automation.channel}
-					readOnly={readOnly}
-					visited={new Set(["trigger"])}
-					depth={0}
-					stepNumber={stepNumber}
-				/>
+		<div className="h-full overflow-auto bg-muted/35">
+			<div className="min-h-full bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.86),transparent_42%)] px-4 py-8 dark:bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.05),transparent_36%)] sm:px-6 lg:px-8">
+				<div className="mx-auto w-max min-w-full space-y-0">
+					<TriggerCard
+						automation={automation}
+						hasError={errorKeys.has("trigger")}
+						selected={selectedKey === "trigger"}
+						onClick={() => onSelect("trigger")}
+					/>
+					<ChainRenderer
+						parentKey="trigger"
+						childrenByKey={childrenByKey}
+						nodesByKey={nodesByKey}
+						schemaByType={schemaByType}
+						errorKeys={errorKeys}
+						selectedKey={selectedKey}
+						onSelect={onSelect}
+						onInsertAfter={onInsertAfter}
+						onDeleteNode={onDeleteNode}
+						schema={schema}
+						automationTriggerType={automation.trigger_type}
+						automationChannel={automation.channel}
+						readOnly={readOnly}
+						visited={new Set(["trigger"])}
+						depth={0}
+						stepNumber={stepNumber}
+					/>
 
-				{orphans.length > 0 && (
-					<div className="mt-10 pt-6 border-t border-border">
-						<p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-							Unreachable nodes
-						</p>
-						<div className="space-y-2">
-							{orphans.map((node) => (
-								<StepCard
-									key={node.key}
-									node={node}
-									def={schemaByType.get(node.type) ?? null}
-									selected={selectedKey === node.key}
-									hasError={errorKeys.has(node.key)}
-									onClick={() => onSelect(node.key)}
-									onDelete={readOnly ? undefined : () => onDeleteNode(node.key)}
-								/>
-							))}
+					{orphans.length > 0 && (
+						<div className="mt-10 pt-6 border-t border-border">
+							<p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+								Unreachable nodes
+							</p>
+							<div className="space-y-2">
+								{orphans.map((node) => (
+									<StepCard
+										key={node.key}
+										node={node}
+										def={schemaByType.get(node.type) ?? null}
+										selected={selectedKey === node.key}
+										hasError={errorKeys.has(node.key)}
+										onClick={() => onSelect(node.key)}
+										onDelete={
+											readOnly ? undefined : () => onDeleteNode(node.key)
+										}
+									/>
+								))}
+							</div>
 						</div>
-					</div>
-				)}
+					)}
+				</div>
 			</div>
-		</ScrollArea>
+		</div>
 	);
 }
 
@@ -415,52 +470,58 @@ function ChainRenderer({
 	stepNumber: Map<string, number>;
 }) {
 	const children = childrenByKey.get(parentKey) ?? [];
-	const visibleChildren = children.filter((child) => !visited.has(child.target));
-	const expectedOutputs =
-		resolveSourceOutputLabels(
-			parentKey,
-			nodesByKey,
-			schemaByType,
-			schema.triggers.find((trigger) => trigger.type === automationTriggerType) ?? null,
-		);
+	const visibleChildren = children.filter(
+		(child) => !visited.has(child.target),
+	);
+	const expectedOutputs = resolveSourceOutputLabels(
+		parentKey,
+		nodesByKey,
+		schemaByType,
+		schema.triggers.find((trigger) => trigger.type === automationTriggerType) ??
+			null,
+	);
 
 	if (expectedOutputs.length > 1) {
 		const branchLabels = Array.from(
-			new Set([...expectedOutputs, ...visibleChildren.map((child) => child.label)]),
+			new Set([
+				...expectedOutputs,
+				...visibleChildren.map((child) => child.label),
+			]),
 		);
 		return (
 			<>
 				<Connector label="branches" />
-				<div
-					className={cn(
-						"grid gap-3",
-						branchLabels.length >= 3 ? "md:grid-cols-2 xl:grid-cols-3" : "md:grid-cols-2",
-					)}
-				>
+				<div className="flex flex-col gap-4 md:flex-row md:items-start">
 					{branchLabels.map((label) => {
-						const child = visibleChildren.find((entry) => entry.label === label);
+						const child = visibleChildren.find(
+							(entry) => entry.label === label,
+						);
 						return (
-							<BranchColumn
+							<div
 								key={`${parentKey}:${label}`}
-								branchLabel={label}
-								parentKey={parentKey}
-								firstChildKey={child?.target}
-								childrenByKey={childrenByKey}
-								nodesByKey={nodesByKey}
-								schemaByType={schemaByType}
-								errorKeys={errorKeys}
-								selectedKey={selectedKey}
-								onSelect={onSelect}
-								onInsertAfter={onInsertAfter}
-								onDeleteNode={onDeleteNode}
-								schema={schema}
-								automationTriggerType={automationTriggerType}
-								automationChannel={automationChannel}
-								readOnly={readOnly}
-								visited={visited}
-								depth={depth + 1}
-								stepNumber={stepNumber}
-							/>
+								className="w-full min-w-0 md:w-[18.5rem] md:flex-none xl:w-[20rem]"
+							>
+								<BranchColumn
+									branchLabel={label}
+									parentKey={parentKey}
+									firstChildKey={child?.target}
+									childrenByKey={childrenByKey}
+									nodesByKey={nodesByKey}
+									schemaByType={schemaByType}
+									errorKeys={errorKeys}
+									selectedKey={selectedKey}
+									onSelect={onSelect}
+									onInsertAfter={onInsertAfter}
+									onDeleteNode={onDeleteNode}
+									schema={schema}
+									automationTriggerType={automationTriggerType}
+									automationChannel={automationChannel}
+									readOnly={readOnly}
+									visited={visited}
+									depth={depth + 1}
+									stepNumber={stepNumber}
+								/>
+							</div>
 						);
 					})}
 				</div>
@@ -525,29 +586,33 @@ function ChainRenderer({
 		return (
 			<>
 				<Connector label="branches" />
-				<div className="grid gap-3 md:grid-cols-2">
+				<div className="flex flex-col gap-4 md:flex-row md:items-start">
 					{visibleChildren.map((child) => (
-						<BranchColumn
+						<div
 							key={`${child.label}->${child.target}`}
-							branchLabel={child.label}
-							parentKey={parentKey}
-							firstChildKey={child.target}
-							childrenByKey={childrenByKey}
-							nodesByKey={nodesByKey}
-							schemaByType={schemaByType}
-							errorKeys={errorKeys}
-							selectedKey={selectedKey}
-							onSelect={onSelect}
-							onInsertAfter={onInsertAfter}
-							onDeleteNode={onDeleteNode}
-							schema={schema}
-							automationTriggerType={automationTriggerType}
-							automationChannel={automationChannel}
-							readOnly={readOnly}
-							visited={visited}
-							depth={depth + 1}
-							stepNumber={stepNumber}
-						/>
+							className="w-full min-w-0 md:w-[18.5rem] md:flex-none xl:w-[20rem]"
+						>
+							<BranchColumn
+								branchLabel={child.label}
+								parentKey={parentKey}
+								firstChildKey={child.target}
+								childrenByKey={childrenByKey}
+								nodesByKey={nodesByKey}
+								schemaByType={schemaByType}
+								errorKeys={errorKeys}
+								selectedKey={selectedKey}
+								onSelect={onSelect}
+								onInsertAfter={onInsertAfter}
+								onDeleteNode={onDeleteNode}
+								schema={schema}
+								automationTriggerType={automationTriggerType}
+								automationChannel={automationChannel}
+								readOnly={readOnly}
+								visited={visited}
+								depth={depth + 1}
+								stepNumber={stepNumber}
+							/>
+						</div>
 					))}
 				</div>
 			</>
@@ -617,12 +682,18 @@ function BranchColumn({
 	const branchVisited = new Set(visited);
 	if (node) branchVisited.add(firstChildKey!);
 	return (
-		<div className="rounded-xl border border-dashed border-border bg-background/70 px-3 py-3">
-			<div className="mb-2 flex items-center justify-between gap-2">
-				<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-					{branchLabel}
+		<div className="relative rounded-[28px] border border-dashed border-border/70 bg-background/80 px-3 py-3 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.42)] backdrop-blur-sm">
+			<div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-border/70 to-transparent" />
+			<div className="mb-3 flex items-start justify-between gap-3">
+				<div className="min-w-0">
+					<div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground/80">
+						Branch
+					</div>
+					<div className="mt-1 truncate text-[13px] font-semibold text-foreground">
+						{presentLabel(branchLabel)}
+					</div>
 				</div>
-				<span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+				<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
 					Output
 				</span>
 			</div>
@@ -673,14 +744,15 @@ function BranchColumn({
 
 function Connector({ label }: { label?: string }) {
 	return (
-		<div className="flex flex-col items-center py-1">
-			<div className="w-px h-4 bg-border" />
+		<div className="flex flex-col items-center py-1.5">
+			<div className="h-4 w-px bg-border/80" />
 			{label && (
-				<span className="my-0.5 rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-					{label}
+				<span className="my-1 rounded-full border border-border/70 bg-background/85 px-2.5 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur">
+					{presentLabel(label)}
 				</span>
 			)}
-			<div className="w-px h-4 bg-border" />
+			{!label && <span className="my-1 size-1.5 rounded-full bg-border/70" />}
+			<div className="h-4 w-px bg-border/80" />
 		</div>
 	);
 }
@@ -712,17 +784,16 @@ function TriggerCard({
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"w-full rounded-2xl border border-border/80 bg-card px-4 py-4 text-left shadow-sm transition-all hover:shadow-md hover:border-foreground/20",
-				selected &&
-					"border-emerald-500/60 ring-2 ring-emerald-500/20 shadow-md",
-				hasError &&
-					"border-destructive/50 ring-2 ring-destructive/20 hover:border-destructive/60",
+				canvasCardClass({ selected, hasError, isTrigger: true }),
+				"mx-auto block max-w-[40rem] px-4 py-4 text-left",
 			)}
 		>
-			<div className="flex items-start gap-3">
+			<div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.14),transparent_28%)] dark:bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.06),transparent_28%)]" />
+			<div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/50 to-transparent dark:via-emerald-500/20" />
+			<div className="relative flex items-start gap-3">
 				<div
 					className={cn(
-						"mt-0.5 flex size-10 items-center justify-center rounded-xl border",
+						"mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-2xl border shadow-sm",
 						TRIGGER_ACCENT.bg,
 						TRIGGER_ACCENT.text,
 						TRIGGER_ACCENT.border,
@@ -731,34 +802,44 @@ function TriggerCard({
 					<Zap className="size-4" />
 				</div>
 				<div className="min-w-0 flex-1">
-					<div className="flex items-center justify-between gap-2">
-						<div className="text-[11px] font-medium text-muted-foreground">
-							{channelLabel}
+					<div className="flex items-start justify-between gap-3">
+						<div className="flex min-w-0 flex-wrap items-center gap-2">
+							<span
+								className={cn(
+									"inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
+									TRIGGER_ACCENT.bg,
+									TRIGGER_ACCENT.text,
+									TRIGGER_ACCENT.border,
+								)}
+							>
+								{channelLabel}
+							</span>
+							<span className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/80">
+								Entry point
+							</span>
 						</div>
-						<div className="flex items-center gap-1.5">
+						<div className="flex shrink-0 items-center gap-1.5">
 							{hasError && (
 								<span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
 									<AlertCircle className="size-3" />
 									Error
 								</span>
 							)}
-							<span
-								className={cn(
-									"inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide",
-									TRIGGER_ACCENT.bg,
-									TRIGGER_ACCENT.text,
-								)}
-							>
-								Trigger
+							<span className="inline-flex items-center rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+								Start
 							</span>
 						</div>
 					</div>
-					<div className="mt-1 text-[15px] font-semibold leading-tight">
-						<span className="text-muted-foreground mr-1.5">1.</span>
+					<div className="mt-3 text-[16px] font-semibold leading-tight text-foreground">
 						{operation}
 					</div>
-					<div className="mt-1 text-[11px] text-muted-foreground font-mono">
-						{automation.trigger_type}
+					<div className="mt-1 text-[12px] text-muted-foreground">
+						This automation begins when the selected trigger fires.
+					</div>
+					<div className="mt-3 flex flex-wrap items-center gap-2">
+						<span className="rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+							{presentLabel(automation.trigger_type)}
+						</span>
 					</div>
 				</div>
 			</div>
@@ -789,25 +870,26 @@ function StepCard({
 	const summary = nodeSummary(node);
 	const outputs = resolveNodeOutputLabels(node, def);
 	const presentation = describeNodePresentation(node.type, category);
+	const outputsLabel = outputSummaryLabel(node.type, outputs);
 
 	return (
 		<div
 			className={cn(
-				"relative rounded-2xl border border-border/80 bg-card shadow-sm transition-all hover:shadow-md hover:border-foreground/20",
-				selected && "border-foreground/30 ring-2 ring-ring/30 shadow-md",
-				hasError &&
-					"border-destructive/50 ring-2 ring-destructive/20 hover:border-destructive/60",
+				canvasCardClass({ selected, hasError }),
+				"mx-auto max-w-[26rem]",
 			)}
 		>
+			<div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.12),transparent_30%)] dark:bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.05),transparent_30%)]" />
+			<div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-border/80 to-transparent" />
 			<button
 				type="button"
 				onClick={onClick}
-				className="w-full px-4 py-4 pr-12 text-left"
+				className="relative w-full px-3.5 py-3.5 pr-12 text-left"
 			>
 				<div className="flex items-start gap-3">
 					<div
 						className={cn(
-							"mt-0.5 flex size-10 items-center justify-center rounded-xl border",
+							"mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-2xl border shadow-sm",
 							accent.bg,
 							accent.text,
 							accent.border,
@@ -816,42 +898,61 @@ function StepCard({
 						<Icon className="size-4" />
 					</div>
 					<div className="min-w-0 flex-1">
-						<div className="flex items-center gap-2">
-							<div className="text-[11px] font-medium text-muted-foreground">
-								{presentation.app}
-							</div>
-							{hasError && (
-								<span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
-									<AlertCircle className="size-3" />
-									Error
+						<div className="flex items-start justify-between gap-3">
+							<div className="flex min-w-0 flex-wrap items-center gap-2">
+								<span
+									className={cn(
+										"inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
+										accent.bg,
+										accent.text,
+										accent.border,
+									)}
+								>
+									{presentation.app}
 								</span>
-							)}
+								{outputsLabel && (
+									<span className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+										<GitBranch className="size-3" />
+										{outputsLabel}
+									</span>
+								)}
+							</div>
+							<div className="flex shrink-0 items-center gap-1.5">
+								{hasError && (
+									<span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
+										<AlertCircle className="size-3" />
+										Error
+									</span>
+								)}
+								{index !== undefined && (
+									<span className="inline-flex items-center rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+										Step {index}
+									</span>
+								)}
+							</div>
 						</div>
-						<div className="mt-1 text-[15px] font-semibold leading-tight truncate">
-							{index !== undefined && (
-								<span className="text-muted-foreground mr-1.5">{index}.</span>
-							)}
+						<div className="mt-2 text-[15px] font-semibold leading-tight text-foreground">
 							{presentation.operation}
 						</div>
-						<div className="mt-1 text-[11px] text-muted-foreground font-mono truncate">
-							{node.key}
-						</div>
 						{summary && (
-							<div className="mt-2 text-[12px] text-muted-foreground line-clamp-2">
+							<div className="mt-1.5 text-[12px] text-muted-foreground line-clamp-1">
 								{summary}
 							</div>
 						)}
+						<div className="mt-2 flex flex-wrap items-center gap-1.5">
+							<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+								{presentLabel(node.type)}
+							</span>
+							{node.notes && (
+								<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+									Has note
+								</span>
+							)}
+						</div>
 						{outputs.length > 1 && (
-							<div className="mt-3 flex flex-wrap items-center gap-1.5">
-								{outputs.map((output) => (
-									<span
-										key={output}
-										className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
-									>
-										{output}
-										<ArrowRight className="size-3" />
-									</span>
-								))}
+							<div className="mt-2 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/75">
+								{outputs.slice(0, 3).map(presentLabel).join(" · ")}
+								{outputs.length > 3 && ` +${outputs.length - 3}`}
 							</div>
 						)}
 					</div>
@@ -933,14 +1034,14 @@ function AddStepButton({
 						type="button"
 						aria-label="Add step"
 						title="Add step"
-						className="mx-auto my-1 flex size-7 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:border-foreground hover:text-foreground hover:shadow-md transition-all"
+						className="mx-auto my-1 flex size-8 items-center justify-center rounded-full border border-border/70 bg-background/90 text-muted-foreground shadow-sm backdrop-blur transition-all hover:-translate-y-0.5 hover:border-foreground hover:text-foreground hover:shadow-md"
 					>
 						<Plus className="size-3.5" />
 					</button>
 				) : (
 					<button
 						type="button"
-						className="mx-auto mt-3 flex items-center gap-2 rounded-lg border border-dashed border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground shadow-sm hover:border-foreground hover:text-foreground hover:shadow-md transition-all"
+						className="mx-auto mt-3 flex items-center gap-2 rounded-2xl border border-dashed border-border/70 bg-background/90 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground shadow-sm backdrop-blur transition-all hover:-translate-y-0.5 hover:border-foreground hover:text-foreground hover:shadow-md"
 					>
 						<Plus className="size-3.5" />
 						Add step
@@ -959,45 +1060,52 @@ function AddStepButton({
 						After <span className="font-mono">{parentKey}</span>
 						{label !== "next" && (
 							<>
-								{" "}on <span className="font-mono">{label}</span>
+								{" "}
+								on <span className="font-mono">{label}</span>
 							</>
 						)}
 					</div>
 				</div>
 				<div className="py-1">
-					{CATEGORY_ORDER.filter((category) => grouped.has(category)).map((category) => {
-						const list = grouped.get(category) ?? [];
-						return (
-							<div key={category}>
-								<div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-									{CATEGORY_LABEL[category] ?? category}
+					{CATEGORY_ORDER.filter((category) => grouped.has(category)).map(
+						(category) => {
+							const list = grouped.get(category) ?? [];
+							return (
+								<div key={category}>
+									<div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+										{CATEGORY_LABEL[category] ?? category}
+									</div>
+									<ul>
+										{list.map((def) => {
+											const Icon = CATEGORY_ICON[category] ?? Box;
+											const accent =
+												CATEGORY_ACCENT[category] ?? CATEGORY_ACCENT.ops!;
+											return (
+												<li key={def.type}>
+													<button
+														type="button"
+														onClick={() => {
+															onInsert(parentKey, label, def.type);
+															setOpen(false);
+														}}
+														className="w-full px-3 py-1.5 text-left text-xs hover:bg-accent/40 flex items-center gap-2"
+													>
+														<Icon className={cn("size-3.5", accent.text)} />
+														<span className="truncate">
+															{
+																describeNodePresentation(def.type, def.category)
+																	.operation
+															}
+														</span>
+													</button>
+												</li>
+											);
+										})}
+									</ul>
 								</div>
-								<ul>
-									{list.map((def) => {
-										const Icon = CATEGORY_ICON[category] ?? Box;
-										const accent = CATEGORY_ACCENT[category] ?? CATEGORY_ACCENT.ops!;
-										return (
-											<li key={def.type}>
-												<button
-													type="button"
-													onClick={() => {
-														onInsert(parentKey, label, def.type);
-														setOpen(false);
-													}}
-													className="w-full px-3 py-1.5 text-left text-xs hover:bg-accent/40 flex items-center gap-2"
-												>
-													<Icon className={cn("size-3.5", accent.text)} />
-													<span className="truncate">
-														{describeNodePresentation(def.type, def.category).operation}
-													</span>
-												</button>
-											</li>
-										);
-									})}
-								</ul>
-							</div>
-						);
-					})}
+							);
+						},
+					)}
 				</div>
 			</PopoverContent>
 		</Popover>
