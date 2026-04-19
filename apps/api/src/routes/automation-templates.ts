@@ -12,7 +12,9 @@ import {
 	type Database,
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
+import type { z } from "@hono/zod-openapi";
 import {
+	AutomationWithGraphResponse,
 	CommentToDmTemplateInput,
 	FollowToDmTemplateInput,
 	GiveawayTemplateInput,
@@ -20,34 +22,20 @@ import {
 	StoryReplyTemplateInput,
 	WelcomeDmTemplateInput,
 } from "../schemas/automations";
-import { AutomationWithGraphResponse } from "../schemas/automations";
 import { ErrorResponse } from "../schemas/common";
+import {
+	buildCommentToDmTemplate,
+	buildFollowToDmTemplate,
+	buildGiveawayTemplate,
+	buildKeywordReplyTemplate,
+	buildStoryReplyTemplate,
+	buildWelcomeDmTemplate,
+	type MaterializedTemplateSpec,
+} from "../services/automations/template-builders";
 import type { Env, Variables } from "../types";
 import { publishVersion } from "./automations";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
-
-interface BuiltSpec {
-	name: string;
-	channel: string;
-	workspace_id: string | null;
-	trigger: {
-		type: string;
-		account_id: string;
-		config: Record<string, unknown>;
-		filters: Record<string, unknown>;
-	};
-	nodes: Array<{
-		key: string;
-		type: string;
-		config: Record<string, unknown>;
-	}>;
-	edges: Array<{ from: string; to: string; label?: string }>;
-	status?: "draft" | "active";
-	allow_reentry?: boolean;
-}
-
-import type { z } from "@hono/zod-openapi";
 import type { AutomationWithGraphResponse as _TGraph } from "../schemas/automations";
 
 type MaterializedAutomation = z.infer<typeof _TGraph>;
@@ -56,21 +44,23 @@ async function materialize(
 	db: Database,
 	orgId: string,
 	createdBy: string,
-	spec: BuiltSpec,
+	spec: MaterializedTemplateSpec,
 ): Promise<MaterializedAutomation> {
 	const [auto] = await db
 		.insert(automations)
 		.values({
 			organizationId: orgId,
-			workspaceId: spec.workspace_id,
+			workspaceId: spec.workspace_id ?? null,
 			name: spec.name,
-			status: spec.status ?? "draft",
+			status: spec.status,
 			channel: spec.channel as never,
 			triggerType: spec.trigger.type as never,
 			triggerConfig: spec.trigger.config,
 			triggerFilters: spec.trigger.filters,
-			socialAccountId: spec.trigger.account_id,
-			allowReentry: spec.allow_reentry ?? false,
+			socialAccountId: spec.trigger.account_id ?? null,
+			exitOnReply: spec.exit_on_reply,
+			allowReentry: spec.allow_reentry,
+			reentryCooldownMin: spec.reentry_cooldown_min ?? null,
 			createdBy,
 		})
 		.returning();
@@ -93,7 +83,7 @@ async function materialize(
 				automationId: auto.id,
 				key: n.key,
 				type: n.type as never,
-				config: n.config,
+				config: extractNodeConfig(n),
 			})),
 		)
 		.returning();
@@ -185,6 +175,14 @@ async function materialize(
 	};
 }
 
+function extractNodeConfig(
+	node: MaterializedTemplateSpec["nodes"][number],
+): Record<string, unknown> {
+	const { type: _t, key: _k, notes: _n, canvas_x: _x, canvas_y: _y, ...rest } =
+		node;
+	return rest;
+}
+
 // ---------------------------------------------------------------------------
 // Comment to DM
 // ---------------------------------------------------------------------------
@@ -217,46 +215,12 @@ app.openapi(
 	}),
 	async (c) => {
 		const body = c.req.valid("json");
-		// The DM send uses the universal `message_text` node which resolves
-		// channel + recipient at runtime. The optional public comment reply
-		// uses `instagram_reply_to_comment`.
-		const nodes: BuiltSpec["nodes"] = [
-			{
-				key: "send_dm",
-				type: "message_text",
-				config: { text: body.dm_message },
-			},
-		];
-		const edges: BuiltSpec["edges"] = [{ from: "trigger", to: "send_dm" }];
-		if (body.public_reply) {
-			nodes.push({
-				key: "public_reply",
-				type: "instagram_reply_to_comment",
-				config: { text: body.public_reply },
-			});
-			edges.push({ from: "send_dm", to: "public_reply" });
-		}
-		// once_per_user: true (the default) → allow_reentry=false on the
-		// automation header, which the trigger-matcher already enforces.
-		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
-			name: body.name,
-			channel: "instagram",
-			workspace_id: body.workspace_id ?? null,
-			trigger: {
-				type: "instagram_comment",
-				account_id: body.account_id,
-				config: {
-					keywords: body.keywords,
-					match_mode: body.match_mode,
-					post_id: body.post_id ?? null,
-				},
-				filters: {},
-			},
-			nodes,
-			edges,
-			status: "draft",
-			allow_reentry: !body.once_per_user,
-		});
+		const result = await materialize(
+			c.get("db"),
+			c.get("orgId"),
+			c.get("keyId"),
+			buildCommentToDmTemplate(body),
+		);
 		return c.json(result, 201);
 	},
 );
@@ -289,33 +253,12 @@ app.openapi(
 	}),
 	async (c) => {
 		const body = c.req.valid("json");
-		const triggerTypeByChannel: Record<string, string> = {
-			instagram: "instagram_dm",
-			facebook: "facebook_dm",
-			whatsapp: "whatsapp_message",
-		};
-		// Welcome send goes through the universal message_text node which works
-		// for any DM-capable channel via the message-sender service.
-		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
-			name: body.name,
-			channel: body.channel,
-			workspace_id: body.workspace_id ?? null,
-			trigger: {
-				type: triggerTypeByChannel[body.channel]!,
-				account_id: body.account_id,
-				config: {},
-				filters: {},
-			},
-			nodes: [
-				{
-					key: "welcome",
-					type: "message_text",
-					config: { text: body.welcome_message },
-				},
-			],
-			edges: [{ from: "trigger", to: "welcome" }],
-			status: "draft",
-		});
+		const result = await materialize(
+			c.get("db"),
+			c.get("orgId"),
+			c.get("keyId"),
+			buildWelcomeDmTemplate(body),
+		);
 		return c.json(result, 201);
 	},
 );
@@ -348,34 +291,12 @@ app.openapi(
 	}),
 	async (c) => {
 		const body = c.req.valid("json");
-		const triggerMap: Record<string, string> = {
-			instagram: "instagram_dm",
-			facebook: "facebook_dm",
-			whatsapp: "whatsapp_keyword",
-			telegram: "telegram_message",
-			twitter: "twitter_dm",
-			sms: "sms_received",
-		};
-		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
-			name: body.name,
-			channel: body.channel,
-			workspace_id: body.workspace_id ?? null,
-			trigger: {
-				type: triggerMap[body.channel] ?? "manual",
-				account_id: body.account_id,
-				config: { keywords: body.keywords, match_mode: body.match_mode },
-				filters: {},
-			},
-			nodes: [
-				{
-					key: "reply",
-					type: "message_text",
-					config: { text: body.reply_message },
-				},
-			],
-			edges: [{ from: "trigger", to: "reply" }],
-			status: "draft",
-		});
+		const result = await materialize(
+			c.get("db"),
+			c.get("orgId"),
+			c.get("keyId"),
+			buildKeywordReplyTemplate(body),
+		);
 		return c.json(result, 201);
 	},
 );
@@ -408,26 +329,12 @@ app.openapi(
 	}),
 	async (c) => {
 		const body = c.req.valid("json");
-		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
-			name: body.name,
-			channel: "instagram",
-			workspace_id: body.workspace_id ?? null,
-			trigger: {
-				type: "manual",
-				account_id: body.account_id,
-				config: {},
-				filters: {},
-			},
-			nodes: [
-				{
-					key: "welcome",
-					type: "message_text",
-					config: { text: body.welcome_message },
-				},
-			],
-			edges: [{ from: "trigger", to: "welcome" }],
-			status: "draft",
-		});
+		const result = await materialize(
+			c.get("db"),
+			c.get("orgId"),
+			c.get("keyId"),
+			buildFollowToDmTemplate(body),
+		);
 		return c.json(result, 201);
 	},
 );
@@ -450,37 +357,26 @@ app.openapi(
 			},
 		},
 		responses: {
-			201: {
-				description: "Created",
+			409: {
+				description: "Template unavailable",
 				content: {
-					"application/json": { schema: AutomationWithGraphResponse },
+					"application/json": { schema: ErrorResponse },
 				},
 			},
 		},
 	}),
 	async (c) => {
-		const body = c.req.valid("json");
-		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
-			name: body.name,
-			channel: "instagram",
-			workspace_id: body.workspace_id ?? null,
-			trigger: {
-				type: "instagram_story_reply",
-				account_id: body.account_id,
-				config: {},
-				filters: {},
-			},
-			nodes: [
-				{
-					key: "reply",
-					type: "message_text",
-					config: { text: body.dm_message },
+		c.req.valid("json");
+		const unavailable = buildStoryReplyTemplate();
+		return c.json(
+			{
+				error: {
+					code: "template_unavailable",
+					message: unavailable.message,
 				},
-			],
-			edges: [{ from: "trigger", to: "reply" }],
-			status: "draft",
-		});
-		return c.json(result, 201);
+			},
+			409,
+		);
 	},
 );
 
@@ -512,40 +408,12 @@ app.openapi(
 	}),
 	async (c) => {
 		const body = c.req.valid("json");
-		const triggerType =
-			body.channel === "facebook" ? "facebook_comment" : "instagram_comment";
-		const result = await materialize(c.get("db"), c.get("orgId"), c.get("keyId"), {
-			name: body.name,
-			channel: body.channel,
-			workspace_id: body.workspace_id ?? null,
-			trigger: {
-				type: triggerType,
-				account_id: body.account_id,
-				config: {
-					keywords: body.entry_keywords,
-					match_mode: "contains",
-					post_id: body.post_id ?? null,
-				},
-				filters: {},
-			},
-			nodes: [
-				{
-					key: "tag_entry",
-					type: "tag_add",
-					config: { tag: body.entry_tag },
-				},
-				{
-					key: "confirm_dm",
-					type: "message_text",
-					config: { text: body.confirmation_dm },
-				},
-			],
-			edges: [
-				{ from: "trigger", to: "tag_entry" },
-				{ from: "tag_entry", to: "confirm_dm" },
-			],
-			status: "draft",
-		});
+		const result = await materialize(
+			c.get("db"),
+			c.get("orgId"),
+			c.get("keyId"),
+			buildGiveawayTemplate(body),
+		);
 		return c.json(result, 201);
 	},
 );

@@ -12,7 +12,6 @@ import {
 	KeywordReplyTemplateInput,
 	RUNTIME_SUPPORTED_TRIGGER_TYPES,
 	STUBBED_NODE_TYPES,
-	StoryReplyTemplateInput,
 	WelcomeDmTemplateInput,
 } from "../../schemas/automations";
 
@@ -122,6 +121,8 @@ function buildTriggerConfigSchemaMap(): Record<string, unknown> {
 		facebook_dm: z.toJSONSchema(keywordMatchSchema),
 		whatsapp_message: z.toJSONSchema(keywordMatchSchema),
 		telegram_message: z.toJSONSchema(keywordMatchSchema),
+		twitter_dm: z.toJSONSchema(keywordMatchSchema),
+		reddit_dm: z.toJSONSchema(keywordMatchSchema),
 		sms_received: z.toJSONSchema(keywordMatchSchema),
 		manual: {},
 		external_api: {},
@@ -136,7 +137,10 @@ function buildTriggerDescription(type: string): string {
 		facebook_dm: "Fires on any inbound Facebook Messenger message",
 		instagram_follow_to_dm: "Fires when a new user follows the account",
 		whatsapp_message: "Fires on any inbound WhatsApp message",
-		whatsapp_keyword: "Fires when an inbound WhatsApp message matches a keyword",
+		twitter_dm: "Fires on any inbound X direct message",
+		reddit_dm: "Fires on any inbound Reddit direct message",
+		whatsapp_keyword:
+			"Reserved alias for WhatsApp keyword triggers; use whatsapp_message with keyword config today",
 		telegram_message: "Fires on any inbound Telegram message",
 		telegram_command: "Fires when a Telegram user sends a bot command",
 		scheduled_time: "Fires on a cron schedule",
@@ -308,12 +312,6 @@ export const AUTOMATION_TEMPLATE_MANIFEST: AutomationTemplateManifestEntry[] = [
 		input_schema: z.toJSONSchema(KeywordReplyTemplateInput),
 	},
 	{
-		id: "story-reply",
-		name: "Story Reply",
-		description: "Respond when a user replies to an Instagram story",
-		input_schema: z.toJSONSchema(StoryReplyTemplateInput),
-	},
-	{
 		id: "follow-to-dm",
 		name: "Follow to DM",
 		description: "DM new followers on Instagram",
@@ -392,7 +390,6 @@ export function assertAutomationManifestIntegrity(): void {
 		"comment-to-dm",
 		"welcome-dm",
 		"keyword-reply",
-		"story-reply",
 		"follow-to-dm",
 		"giveaway",
 	];

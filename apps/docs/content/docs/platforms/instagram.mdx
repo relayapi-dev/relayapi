@@ -783,7 +783,7 @@ The automations engine supports Instagram as a Tier 1 platform — both inbound 
 | --- | --- | --- |
 | `instagram_dm` | Inbound direct message | Requires Instagram Login app + Messaging API permission |
 | `instagram_comment` | New comment on a post or reel | Payload includes `comment_id`, `post_id`, `parent_id`, `text` |
-| `instagram_story_reply` | Reply to your story | Story-reply specific |
+| `instagram_story_reply` | Reserved for story replies | Not runtime-supported yet |
 | `instagram_story_mention` | Account @-mentioned in a story | |
 | `instagram_mention` | Account @-mentioned in post/comment | |
 | `instagram_reaction` | Message reaction added/removed | |
@@ -848,4 +848,3 @@ curl -X POST https://api.relayapi.dev/v1/automations/templates/comment-to-dm \
 - **Messaging**: Instagram enforces the 24-hour customer-service window. Inside 24h of the contact's last message you may DM freely; outside it, only `HUMAN_AGENT`-tagged messages are allowed (and those require a human-agent UX — not fully automated flows).
 - **Comment reply cap**: Graph API limits reply volume per post; avoid high-frequency reply bursts.
 - **Token routing**: Instagram Login tokens (IGAA prefix) route through `graph.instagram.com`; Facebook-auth legacy tokens use `graph.facebook.com`. The node handlers use `graph.instagram.com` by default — reconnect via Instagram Login if you hit a `#100` scope error.
-

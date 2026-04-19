@@ -34,7 +34,7 @@ These platforms support both inbound DMs and public engagement events.
 | --- | --- |
 | `instagram_dm` | Direct message received |
 | `instagram_comment` | Comment on a post or reel |
-| `instagram_story_reply` | User replies to one of your stories |
+| `instagram_story_reply` | Reserved for story replies; not runtime-supported yet |
 | `instagram_story_mention` | User mentions your account in a story |
 | `instagram_mention` | User @-mentions your account in a post/comment |
 | `instagram_reaction` | Message reaction (emoji) added/removed |
@@ -61,7 +61,7 @@ Note: Instagram does not expose a follower webhook through the public Graph API 
 | Type | Fires on |
 | --- | --- |
 | `whatsapp_message` | Any inbound message |
-| `whatsapp_keyword` | Inbound message text matching a keyword |
+| `whatsapp_keyword` | Reserved trigger alias; use `whatsapp_message` with keyword config today |
 | `whatsapp_button_click` | User taps a button from a reply-button message |
 | `whatsapp_list_reply` | User picks from a list message |
 | `whatsapp_flow_submit` | User completes a WhatsApp Flow form (arrives as `interactive.type='nfm_reply'`) |

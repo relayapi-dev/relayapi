@@ -230,6 +230,7 @@ export class AutomationTemplates extends APIResource {
 
   /**
    * Quick-create: respond when a user replies to an Instagram story.
+   * Currently unavailable until the runtime can emit story-reply enrollments.
    */
   storyReply(
     body: StoryReplyTemplateParams,

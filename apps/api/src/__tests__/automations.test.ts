@@ -17,6 +17,14 @@ import {
 	AUTOMATION_TEMPLATE_MANIFEST,
 } from "../services/automations/manifest";
 import { resolveTemplatedValue } from "../services/automations/resolve-templated-value";
+import {
+	buildCommentToDmTemplate,
+	buildFollowToDmTemplate,
+	buildGiveawayTemplate,
+	buildKeywordReplyTemplate,
+	buildStoryReplyTemplate,
+	buildWelcomeDmTemplate,
+} from "../services/automations/template-builders";
 
 // ---------------------------------------------------------------------------
 // simulateAutomation — static graph traversal
@@ -1004,6 +1012,9 @@ describe("automation manifest", () => {
 		);
 		expect(publishedTriggerTypes.has("instagram_comment")).toBe(true);
 		expect(publishedTriggerTypes.has("instagram_story_reply")).toBe(false);
+		expect(publishedTriggerTypes.has("twitter_dm")).toBe(true);
+		expect(publishedTriggerTypes.has("reddit_dm")).toBe(true);
+		expect(publishedTriggerTypes.has("whatsapp_keyword")).toBe(false);
 	});
 
 	it("exposes the expected quick-create templates", () => {
@@ -1011,9 +1022,83 @@ describe("automation manifest", () => {
 			"comment-to-dm",
 			"welcome-dm",
 			"keyword-reply",
-			"story-reply",
 			"follow-to-dm",
 			"giveaway",
 		]);
+	});
+});
+
+describe("template builders", () => {
+	it("materializes shipped templates into valid published trigger/node graphs", () => {
+		const templates = [
+			buildCommentToDmTemplate({
+				name: "Comment to DM",
+				account_id: "acc_123",
+				keywords: ["link"],
+				dm_message: "Check your DMs",
+			}),
+			buildWelcomeDmTemplate({
+				name: "Welcome DM",
+				account_id: "acc_123",
+				channel: "whatsapp",
+				welcome_message: "Welcome aboard",
+			}),
+			buildKeywordReplyTemplate({
+				name: "Keyword Reply",
+				account_id: "acc_123",
+				channel: "twitter",
+				keywords: ["help"],
+				reply_message: "How can we help?",
+			}),
+			buildKeywordReplyTemplate({
+				name: "Keyword Reply Reddit",
+				account_id: "acc_123",
+				channel: "reddit",
+				keywords: ["mods"],
+				reply_message: "Message received",
+			}),
+			buildFollowToDmTemplate({
+				name: "Follow to DM",
+				account_id: "acc_123",
+				welcome_message: "Thanks for following",
+			}),
+			buildGiveawayTemplate({
+				name: "Giveaway",
+				account_id: "acc_123",
+				channel: "instagram",
+				entry_keywords: ["enter"],
+				confirmation_dm: "You are in",
+			}),
+		];
+		const publishedTriggerTypes = new Set(
+			PUBLISHED_AUTOMATION_TRIGGER_MANIFEST.map((entry) => entry.type),
+		);
+		const publishedNodeTypes = new Set(
+			PUBLISHED_AUTOMATION_NODE_MANIFEST.map((entry) => entry.type),
+		);
+
+		for (const template of templates) {
+			const reparsed = AutomationCreateSpec.parse(template);
+			expect(reparsed.status).toBe("draft");
+			expect(template.edges.length).toBeGreaterThan(0);
+			expect(template.trigger.type === "manual" || publishedTriggerTypes.has(template.trigger.type)).toBe(
+				true,
+			);
+
+			for (const node of template.nodes) {
+				expect(publishedNodeTypes.has(node.type)).toBe(true);
+				if (node.type === "message_text") {
+					expect(node.recipient_mode).toBe("enrolled_contact");
+				}
+			}
+		}
+	});
+
+	it("marks the story reply template unavailable until runtime support exists", () => {
+		expect(buildStoryReplyTemplate()).toEqual({
+			kind: "unavailable",
+			message:
+				"The story-reply template is unavailable until instagram_story_reply enrollments are supported by the runtime.",
+		});
 	});
 });

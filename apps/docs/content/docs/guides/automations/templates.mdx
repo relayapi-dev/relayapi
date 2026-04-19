@@ -6,11 +6,13 @@ icon: Sparkles
 
 ## Why Templates
 
-A full automation spec has a graph of nodes + edges. For the 80% of common patterns — comment-to-DM, welcome flows, keyword replies, giveaways — the graph is mostly boilerplate. Templates expose those patterns as single-call endpoints: pass a handful of fields, get back a published automation.
+A full automation spec has a graph of nodes + edges. For the 80% of common patterns — comment-to-DM, welcome flows, keyword replies, giveaways — the graph is mostly boilerplate. Templates expose those patterns as single-call endpoints: pass a handful of fields, get back a valid draft automation with the full graph already expanded.
 
-All templates are under `/v1/automations/templates/:template_id` and return the full `AutomationWithGraphResponse`, so the caller can immediately inspect the generated graph or edit it via the normal CRUD endpoints.
+All shipped templates are under `/v1/automations/templates/:template_id` and return the full `AutomationWithGraphResponse`, so the caller can inspect the generated graph, tweak it, and publish it through the normal automation workflow.
 
 ## Available Templates
+
+`story-reply` is intentionally not listed here. The route stays reserved, but Instagram story-reply enrollments are not runtime-supported yet, so the shortcut currently returns `template_unavailable` instead of creating a broken draft.
 
 ### `POST /v1/automations/templates/comment-to-dm`
 
@@ -75,7 +77,16 @@ curl -X POST /v1/automations/templates/keyword-reply \
   }'
 ```
 
-Channels: any `AutomationChannel`. Trigger type varies by channel (`instagram_dm`, `whatsapp_keyword`, `telegram_message`, etc.).
+Channels: `instagram`, `facebook`, `whatsapp`, `telegram`, `twitter`, `reddit`.
+
+Underlying trigger types:
+
+- `instagram` → `instagram_dm`
+- `facebook` → `facebook_dm`
+- `whatsapp` → `whatsapp_message` with keyword matching in `trigger.config`
+- `telegram` → `telegram_message`
+- `twitter` → `twitter_dm`
+- `reddit` → `reddit_dm`
 
 ### `POST /v1/automations/templates/follow-to-dm`
 
@@ -91,19 +102,6 @@ curl -X POST /v1/automations/templates/follow-to-dm \
 ```
 
 **Important**: Instagram does not expose a public follower webhook via Graph API v25. This template is scaffolded with a `manual` trigger — the automation runs correctly when contacts are enrolled via `POST /v1/automations/:id/enroll`, but there is no automatic IG-side firing until/unless Meta ships a follower webhook.
-
-### `POST /v1/automations/templates/story-reply`
-
-Respond with a DM when a user replies to one of your Instagram stories.
-
-```bash
-curl -X POST /v1/automations/templates/story-reply \
-  -d '{
-    "name": "Story reply auto-response",
-    "account_id": "acc_abc123",
-    "dm_message": "Thanks for the reply! Here's my discount code: WELCOME10"
-  }'
-```
 
 ### `POST /v1/automations/templates/giveaway`
 
@@ -126,8 +124,8 @@ Channels: `instagram`, `facebook`.
 
 ## Editing a Template's Output
 
-Templates return the generated automation's full graph. If you want to tweak it, call the regular PATCH / graph-replace endpoints — the automation is no different from one built manually.
+Templates return the generated automation's full graph as a draft. If you want to tweak it, call the regular PATCH / graph-replace endpoints — the automation is no different from one built manually.
 
 ## Adding a Template
 
-Templates are thin server-side expanders of the full spec. Adding a new one is ~30 lines in `apps/api/src/routes/automation-templates.ts` — a new `createRoute` and a call to the shared `materialize()` helper with the BuiltSpec for your pattern.
+Templates are thin server-side expanders of the full spec. Add the graph builder in `apps/api/src/services/automations/template-builders.ts`, validate it through `AutomationCreateSpec`, then expose it in `apps/api/src/routes/automation-templates.ts` through the shared `materialize()` helper.

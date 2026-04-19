@@ -159,9 +159,19 @@ export function validateGraph(
 
 function extractRequiredFields(fieldsSchema: unknown): string[] {
 	if (!fieldsSchema || typeof fieldsSchema !== "object") return [];
-	const schema = fieldsSchema as { required?: unknown; properties?: unknown };
+	const schema = fieldsSchema as {
+		required?: unknown;
+		properties?: Record<string, { default?: unknown }> | unknown;
+	};
 	if (Array.isArray(schema.required)) {
-		return schema.required.filter((v): v is string => typeof v === "string");
+		const properties =
+			schema.properties && typeof schema.properties === "object"
+				? (schema.properties as Record<string, { default?: unknown }>)
+				: {};
+		return schema.required.filter((v): v is string => {
+			if (typeof v !== "string") return false;
+			return properties[v]?.default === undefined;
+		});
 	}
 	return [];
 }

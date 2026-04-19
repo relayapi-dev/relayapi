@@ -32,6 +32,8 @@ Send a plain text DM. Supports `{{...}}` merge tags.
 { "key": "reply", "type": "message_text", "text": "Hey {{first_name}}, thanks for reaching out!" }
 ```
 
+`recipient_mode` defaults to `enrolled_contact`. Only set `recipient_mode: "custom_identifier"` when you want the step to send to a different platform identifier explicitly.
+
 Output labels: `next`.
 
 ### `message_media` / `message_file` (not supported — use platform-specific nodes)

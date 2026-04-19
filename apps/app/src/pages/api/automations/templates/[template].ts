@@ -6,7 +6,6 @@ const DISPATCH = {
 	"welcome-dm": "welcomeDm",
 	"keyword-reply": "keywordReply",
 	"follow-to-dm": "followToDm",
-	"story-reply": "storyReply",
 	giveaway: "giveaway",
 } as const;
 

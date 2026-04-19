@@ -145,6 +145,8 @@ export const RUNTIME_SUPPORTED_TRIGGER_TYPES: ReadonlySet<string> = new Set([
 	"whatsapp_message",
 	"telegram_message",
 	"sms_received",
+	"twitter_dm",
+	"reddit_dm",
 	// Manual enrollment via POST /v1/automations/:id/enroll.
 	"manual",
 	"external_api",

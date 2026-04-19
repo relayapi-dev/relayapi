@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, MessageSquare, MessageCircle, UserPlus, Reply, Gift, Send } from "lucide-react";
+import { ArrowLeft, Loader2, MessageSquare, UserPlus, Reply, Gift, Send } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -25,7 +25,6 @@ type TemplateId =
   | "welcome-dm"
   | "keyword-reply"
   | "follow-to-dm"
-  | "story-reply"
   | "giveaway";
 
 interface TemplateMeta {
@@ -70,13 +69,6 @@ const TEMPLATES: TemplateMeta[] = [
     name: "Follow to DM",
     description: "DM new followers (manual enrollment for IG)",
     icon: UserPlus,
-    supportedPlatforms: ["instagram"],
-  },
-  {
-    id: "story-reply",
-    name: "Story Reply",
-    description: "Respond when someone replies to an Instagram story",
-    icon: MessageCircle,
     supportedPlatforms: ["instagram"],
   },
   {
@@ -163,8 +155,6 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
         };
       case "follow-to-dm":
         return { ...base, welcome_message: form.welcome_message ?? "" };
-      case "story-reply":
-        return { ...base, dm_message: form.dm_message ?? "" };
       case "giveaway":
         return {
           ...base,
@@ -208,9 +198,6 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
       case "follow-to-dm":
         if (!form.welcome_message?.trim())
           return "Welcome message is required.";
-        return null;
-      case "story-reply":
-        if (!form.dm_message?.trim()) return "DM message is required.";
         return null;
       case "giveaway":
         if (entryKeywords.length === 0)
@@ -402,15 +389,6 @@ export function AutomationTemplatePickerDialog({ open, onOpenChange, onCreated }
                 value={form.reply_message ?? ""}
                 onChange={(v) => setForm((f) => ({ ...f, reply_message: v }))}
                 placeholder="Thanks for reaching out!"
-              />
-            )}
-
-            {selected === "story-reply" && (
-              <TextareaField
-                label="DM message"
-                value={form.dm_message ?? ""}
-                onChange={(v) => setForm((f) => ({ ...f, dm_message: v }))}
-                placeholder="Appreciate the story reply!"
               />
             )}
 

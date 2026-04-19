@@ -116,7 +116,7 @@ bun run db:migrate
 
 **Completed**:
 - ✅ `routes/automations.ts` — CRUD, publish, pause, resume, archive, delete, schema introspection, enrollments list, run logs list. **Fixed**: run logs endpoint now verifies org + automation ownership; cursor pagination implemented on enrollments; auto-publish on activation in update + resume.
-- ✅ `routes/automation-templates.ts` — six templates (comment-to-dm, welcome-dm, keyword-reply, follow-to-dm, story-reply, giveaway). **Fixed**: use universal `message_text` node so templates actually run end-to-end.
+- ✅ `routes/automation-templates.ts` — five shipped templates (comment-to-dm, welcome-dm, keyword-reply, follow-to-dm, giveaway) plus a reserved `story-reply` route that returns `template_unavailable` until runtime support exists. **Fixed**: use universal `message_text` node so templates actually run end-to-end.
 - ✅ `lib/automation-errors.ts` — Levenshtein + structured error helper.
 - ✅ Registered in `index.ts`.
 
@@ -132,7 +132,7 @@ bun run db:migrate
 **Status**: ✅ Code complete
 
 **Completed**:
-- ✅ `packages/sdk/src/resources/automations.ts` — hand-written scaffold following the Stainless pattern. Covers all `/v1/automations` endpoints and all six templates. Typed `AutomationChannel`, `AutomationNodeSpec`, `AutomationEdgeSpec`, `AutomationCreateParams`, etc.
+- ✅ `packages/sdk/src/resources/automations.ts` — hand-written scaffold following the Stainless pattern. Covers all `/v1/automations` endpoints, the five shipped templates, and the reserved `story-reply` endpoint. Typed `AutomationChannel`, `AutomationNodeSpec`, `AutomationEdgeSpec`, `AutomationCreateParams`, etc.
 - ✅ Registered in `packages/sdk/src/client.ts` (import + constructor + static + namespace export) and `packages/sdk/src/resources/index.ts`.
 - ✅ `bun run typecheck` passes (all apps + packages).
 
@@ -169,7 +169,7 @@ bun run db:migrate
 - ✅ `index.mdx` — overview, anatomy, lifecycle, quickstart (template + full spec), merge tags.
 - ✅ `triggers.mdx` — complete trigger catalog grouped by tier (1/2/3/cross-platform) with platform-specific notes (IG has no follower webhook, LinkedIn polling-only, Reddit no webhooks, GBP Q&A deprecated, etc.).
 - ✅ `nodes.mdx` — full node catalog by category (content, input, logic, AI, actions, ops, platform sends) with field shapes + output labels.
-- ✅ `templates.mdx` — all six templates with curl examples and field tables; note about `follow-to-dm` using `manual` trigger.
+- ✅ `templates.mdx` — all shipped templates with curl examples and field tables; note about `follow-to-dm` using `manual` trigger and `story-reply` being unavailable until runtime support exists.
 - ✅ `edges-and-labels.mdx` — label conventions, resolution fallback, waiting-node resume, loops.
 - ✅ `enrollments-and-runs.mdx` — monitoring + debugging.
 - ✅ `ai-friendly-api.mdx` — schema introspection, validation suggestions, MCP tool surface preview.
@@ -321,7 +321,7 @@ server.tool(
   "Create an automation from a built-in template. Call get_automation_schema first to see available templates and their input shapes.",
   {
     template_id: z.enum(["comment-to-dm", "welcome-dm", "keyword-reply",
-                         "follow-to-dm", "story-reply", "giveaway"]),
+                         "follow-to-dm", "giveaway"]),
     input: z.record(z.unknown()).describe("Template-specific input; shape per get_automation_schema"),
   },
   async ({ template_id, input }) => {
