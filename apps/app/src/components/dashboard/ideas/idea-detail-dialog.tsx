@@ -970,9 +970,9 @@ export function IdeaDetailDialog({
 			</div>
 
 			{isEditMode && sidePanel && (
-				<div className="w-80 shrink-0 border-l border-border flex flex-col bg-background">
+				<div className="w-80 shrink-0 border-l border-border flex flex-col bg-background min-h-0">
 					<div className="flex items-center justify-between px-4 py-3 border-b border-border">
-						<p className="text-sm font-medium flex items-center gap-1.5">
+						<p className="text-sm font-medium flex h-7 items-center gap-1.5">
 							{sidePanel === "comments" ? (
 								<>
 									<MessageCircle className="size-3.5" />
@@ -985,7 +985,7 @@ export function IdeaDetailDialog({
 						<button
 							type="button"
 							onClick={() => setSidePanel(null)}
-							className="rounded-xs opacity-70 hover:opacity-100 transition-opacity p-0.5"
+							className="h-7 flex items-center justify-center rounded-xs opacity-70 hover:opacity-100 transition-opacity px-0.5"
 							aria-label="Close panel"
 						>
 							<X className="size-4" />
@@ -1017,7 +1017,7 @@ export function IdeaDetailDialog({
 							</div>
 
 							<div className="shrink-0 border-t border-border px-4 py-3">
-								<div className="flex items-center gap-2 border border-border rounded-md px-3 py-2">
+								<div className="flex h-7 items-center gap-2 border border-border rounded-md px-3">
 									<input
 										type="text"
 										value={newComment}

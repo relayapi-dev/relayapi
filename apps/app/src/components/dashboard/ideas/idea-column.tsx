@@ -109,7 +109,7 @@ export function IdeaColumn({
 			</div>
 
 			<ScrollArea className="flex-1 min-h-[100px]">
-				<div className="p-2 space-y-2">
+				<div className="pl-2 pr-3 py-2 space-y-2">
 					{children}
 					<button
 						type="button"
