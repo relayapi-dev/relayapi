@@ -178,7 +178,7 @@ const TRIGGER_OPERATION_OVERRIDES: Record<string, string> = {
 };
 
 const CARD_WIDTH_CLASS = "w-[18.5rem] max-w-full";
-const CARD_MIN_HEIGHT_CLASS = "min-h-[6.75rem]";
+const CARD_MIN_HEIGHT_CLASS = "min-h-[6rem]";
 const BRANCH_COLUMN_WIDTH_CLASS = "w-[20rem] max-w-full flex-none";
 
 function titleize(value: string): string {
@@ -767,15 +767,15 @@ function BranchColumn({
 
 function Connector({ label }: { label?: string }) {
 	return (
-		<div className="flex flex-col items-center py-1.5">
-			<div className="h-4 w-px bg-border/80" />
+		<div className="flex flex-col items-center py-0.5">
+			<div className="h-2.5 w-px bg-border/80" />
 			{label && (
-				<span className="my-1 rounded-full border border-border/70 bg-background/85 px-2.5 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur">
+				<span className="my-0.5 rounded-full border border-border/70 bg-background/85 px-2.5 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur">
 					{presentLabel(label)}
 				</span>
 			)}
-			{!label && <span className="my-1 size-1.5 rounded-full bg-border/70" />}
-			<div className="h-4 w-px bg-border/80" />
+			{!label && <span className="my-0.5 size-1.5 rounded-full bg-border/70" />}
+			<div className="h-2.5 w-px bg-border/80" />
 		</div>
 	);
 }
@@ -821,11 +821,11 @@ function TriggerCard({
 			<div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/50 to-transparent dark:via-emerald-500/20" />
 			<div
 				className={cn(
-					"relative flex h-full flex-col justify-between px-3 py-2.5",
+					"relative flex h-full flex-col justify-between px-2.5 py-2",
 					CARD_MIN_HEIGHT_CLASS,
 				)}
 			>
-				<div className="flex items-start gap-2.5">
+				<div className="flex items-start gap-2">
 					<div
 						className={cn(
 							"mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-xl border shadow-sm",
@@ -853,7 +853,7 @@ function TriggerCard({
 									Entry point
 								</span>
 							</div>
-							<div className="flex shrink-0 items-center gap-1.5">
+							<div className="flex shrink-0 items-center gap-1">
 								{hasError && (
 									<span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
 										<AlertCircle className="size-3" />
@@ -865,7 +865,7 @@ function TriggerCard({
 								</span>
 							</div>
 						</div>
-						<div className="mt-1.5 text-[14px] font-semibold leading-tight text-foreground">
+						<div className="mt-1 text-[13px] font-semibold leading-tight text-foreground">
 							{operation}
 						</div>
 						<div className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">
@@ -873,7 +873,7 @@ function TriggerCard({
 						</div>
 					</div>
 				</div>
-				<div className="mt-2 flex flex-wrap items-center gap-1.5 pl-10">
+				<div className="mt-1.5 flex flex-wrap items-center gap-1 pl-9">
 					<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
 						{presentLabel(automation.trigger_type)}
 					</span>
@@ -924,20 +924,20 @@ function StepCard({
 				type="button"
 				onClick={onClick}
 				className={cn(
-					"relative flex w-full flex-col justify-between px-3 py-2.5 pr-10 text-left",
+					"relative flex w-full flex-col justify-between px-2.5 py-2 pr-9 text-left",
 					CARD_MIN_HEIGHT_CLASS,
 				)}
 			>
-				<div className="flex items-start gap-2.5">
+				<div className="flex items-start gap-2">
 					<div
 						className={cn(
-							"mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-xl border shadow-sm",
+							"mt-0.5 flex size-6.5 shrink-0 items-center justify-center rounded-xl border shadow-sm",
 							accent.bg,
 							accent.text,
 							accent.border,
 						)}
 					>
-						<Icon className="size-3.5" />
+						<Icon className="size-3" />
 					</div>
 					<div className="min-w-0 flex-1">
 						<div className="flex items-start justify-between gap-3">
@@ -959,7 +959,7 @@ function StepCard({
 									</span>
 								)}
 							</div>
-							<div className="flex shrink-0 items-center gap-1.5">
+							<div className="flex shrink-0 items-center gap-1">
 								{hasError && (
 									<span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
 										<AlertCircle className="size-3" />
@@ -973,17 +973,17 @@ function StepCard({
 								)}
 							</div>
 						</div>
-						<div className="mt-1.5 text-[14px] font-semibold leading-tight text-foreground">
+						<div className="mt-1 text-[13px] font-semibold leading-tight text-foreground">
 							{presentation.operation}
 						</div>
 						{summary && (
-							<div className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">
+							<div className="mt-0.5 line-clamp-1 text-[11px] text-muted-foreground">
 								{summary}
 							</div>
 						)}
 					</div>
 				</div>
-				<div className="mt-2 flex min-h-4 flex-wrap items-center gap-1.5 pl-9">
+				<div className="mt-1.5 flex min-h-3.5 flex-wrap items-center gap-1 pl-8.5">
 					<span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
 						{presentLabel(node.type)}
 					</span>
@@ -1076,14 +1076,14 @@ function AddStepButton({
 						type="button"
 						aria-label="Add step"
 						title="Add step"
-						className="mx-auto my-1 flex size-8 items-center justify-center rounded-full border border-border/70 bg-background/90 text-muted-foreground shadow-sm backdrop-blur transition-all hover:-translate-y-0.5 hover:border-foreground hover:text-foreground hover:shadow-md"
+						className="mx-auto my-0.5 flex size-7 items-center justify-center rounded-full border border-border/70 bg-background/90 text-muted-foreground shadow-sm backdrop-blur transition-all hover:-translate-y-0.5 hover:border-foreground hover:text-foreground hover:shadow-md"
 					>
-						<Plus className="size-3.5" />
+						<Plus className="size-3" />
 					</button>
 				) : (
 					<button
 						type="button"
-						className="mx-auto mt-3 flex items-center gap-2 rounded-2xl border border-dashed border-border/70 bg-background/90 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground shadow-sm backdrop-blur transition-all hover:-translate-y-0.5 hover:border-foreground hover:text-foreground hover:shadow-md"
+						className="mx-auto mt-2 flex items-center gap-2 rounded-2xl border border-dashed border-border/70 bg-background/90 px-3.5 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground shadow-sm backdrop-blur transition-all hover:-translate-y-0.5 hover:border-foreground hover:text-foreground hover:shadow-md"
 					>
 						<Plus className="size-3.5" />
 						Add step
