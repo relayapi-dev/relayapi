@@ -120,3 +120,7 @@ Other prefixes (`chore:`, `docs:`, `refactor:`, etc.) are included in the next r
 - **Playwright screenshots**: Always save to `/tmp/` (e.g. `filename: "/tmp/screenshot.png"`). Never save screenshots or other artifacts in the repo directory.
 - **Installing packages**: This is a monorepo with workspaces. NEVER install packages in the root `package.json`. Always install in the specific app/package that needs it (e.g. `cd apps/app && bun add <pkg>` or edit that app's `package.json` directly). The root `package.json` should only contain workspace-level tooling like `@biomejs/biome`.
 - **SDK updates**: When modifying API routes or schemas (`apps/api/src/routes/`, `apps/api/src/schemas/`), always update the TypeScript SDK at `packages/sdk/src/resources/` to match. Don't ask — just do it.
+
+## Review
+
+Codex will review your output once you are done.

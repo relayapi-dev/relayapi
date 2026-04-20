@@ -2,6 +2,7 @@ import { contacts, contactChannels, socialAccounts } from "@relayapi/db";
 import { eq, and } from "drizzle-orm";
 import { decryptToken } from "../../../lib/crypto";
 import { sendMessage } from "../../message-sender";
+import { findScopedContactChannel } from "../contact-channel";
 import { applyMergeTags } from "../merge-tags";
 import type { NodeHandler } from "../types";
 
@@ -75,16 +76,15 @@ export const messageTextHandler: NodeHandler = async (ctx) => {
 			};
 		}
 
-		const chan = await ctx.db.query.contactChannels.findFirst({
-			where: and(
-				eq(contactChannels.contactId, ctx.enrollment.contact_id),
-				eq(contactChannels.platform, channel),
-			),
+		const chan = await findScopedContactChannel(ctx.db, {
+			contactId: ctx.enrollment.contact_id,
+			platform: channel,
+			socialAccountId: accountId,
 		});
 		if (!chan) {
 			return {
 				kind: "fail",
-				error: `contact has no ${channel} channel identifier`,
+				error: `contact has no ${channel} channel identifier for this account`,
 			};
 		}
 		recipientId = chan.identifier;
