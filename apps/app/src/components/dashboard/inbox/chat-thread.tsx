@@ -350,7 +350,7 @@ export function ChatThread({
             </div>
           </div>
         ) : (
-          <div className="mx-auto flex max-w-4xl flex-col gap-3">
+          <div className="flex flex-col gap-3">
             <AnimatePresence initial={false}>
               {messages.map((msg, index) => {
                 const isOutbound = msg.sender === "user";
@@ -392,12 +392,6 @@ export function ChatThread({
                       )}
 
                       <div className="max-w-[78%] min-w-0">
-                        {!isOutbound && (
-                          <p className="mb-1 px-1 text-[12px] font-medium text-slate-500">
-                            {msg.author_name || displayName}
-                          </p>
-                        )}
-
                         {msg.text && (
                           <div
                             className={cn(

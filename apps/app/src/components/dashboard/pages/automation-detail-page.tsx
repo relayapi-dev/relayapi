@@ -32,6 +32,13 @@ import {
 	validateGraph,
 	type ValidationIssue,
 } from "@/components/dashboard/automation/flow-builder/validation";
+import {
+	defaultTriggerLabel,
+	triggerCanvasPosition,
+	triggerDisplayRows,
+	withTriggerCanvasPosition,
+	withTriggerDisplayRows,
+} from "@/components/dashboard/automation/flow-builder/trigger-ui";
 import type {
 	AutomationDetail,
 	AutomationEdgeSpec,
@@ -232,17 +239,19 @@ export function AutomationDetailPage({ automationId }: Props) {
 				const existing = new Set(prev.nodes.map((n) => n.key));
 				const key = generateUniqueKey(nodeType, existing);
 				const parentNode = prev.nodes.find((n) => n.key === parentKey);
+				const triggerPosition =
+					parentKey === "trigger" ? triggerCanvasPosition(prev) : null;
 				const baseX =
 					typeof parentNode?.canvas_x === "number"
 						? parentNode.canvas_x
-						: parentKey === "trigger"
-							? 0
+						: typeof triggerPosition?.x === "number"
+							? triggerPosition.x
 							: undefined;
 				const baseY =
 					typeof parentNode?.canvas_y === "number"
 						? parentNode.canvas_y
-						: parentKey === "trigger"
-							? 0
+						: typeof triggerPosition?.y === "number"
+							? triggerPosition.y
 							: undefined;
 				const newNode: AutomationNodeSpec = {
 					type: nodeType,
@@ -282,6 +291,22 @@ export function AutomationDetailPage({ automationId }: Props) {
 			let changed = false;
 			setDraft((prev) => {
 				if (!prev) return prev;
+				if (key === "trigger") {
+					const current = triggerCanvasPosition(prev);
+					if (current?.x === position.x && current?.y === position.y) {
+						return prev;
+					}
+					const next = {
+						...prev,
+						trigger_config: withTriggerCanvasPosition(prev.trigger_config, {
+							x: position.x,
+							y: position.y,
+						}),
+					};
+					history.push({ nodes: next.nodes, edges: next.edges });
+					changed = true;
+					return next;
+				}
 				const current = prev.nodes.find((node) => node.key === key);
 				if (!current) return prev;
 				if (
@@ -300,6 +325,39 @@ export function AutomationDetailPage({ automationId }: Props) {
 				return { ...prev, nodes };
 			});
 			if (!changed) return;
+			setDirty(true);
+			bumpEdit();
+		},
+		[history, bumpEdit],
+	);
+
+	const addTriggerRow = useCallback(() => {
+		setDraft((prev) => {
+			if (!prev) return prev;
+			const rows = triggerDisplayRows(prev);
+			const nextRows = [
+				...rows,
+				defaultTriggerLabel(prev.trigger_type, rows.length + 1),
+			];
+			const next = {
+				...prev,
+				trigger_config: withTriggerDisplayRows(prev.trigger_config, nextRows),
+			};
+			history.push({ nodes: next.nodes, edges: next.edges });
+			return next;
+		});
+		setDirty(true);
+		bumpEdit();
+	}, [history, bumpEdit]);
+
+	const deleteEdge = useCallback(
+		(edgeIndex: number) => {
+			setDraft((prev) => {
+				if (!prev || !prev.edges[edgeIndex]) return prev;
+				const edges = prev.edges.filter((_, index) => index !== edgeIndex);
+				history.push({ nodes: prev.nodes, edges });
+				return { ...prev, edges };
+			});
 			setDirty(true);
 			bumpEdit();
 		},
@@ -803,6 +861,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 						highlightKeys={highlightKeys}
 						selectedKey={selectedNodeKey}
 						onMoveNode={moveNode}
+						onAddTriggerRow={addTriggerRow}
 						onSelect={(key) => {
 							setSelectedNodeKey(key);
 							if (key) {
@@ -812,6 +871,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 							}
 						}}
 						onInsertAfter={insertAfter}
+						onDeleteEdge={deleteEdge}
 						onDeleteNode={deleteNode}
 						readOnly={isArchived}
 					/>

@@ -13,14 +13,15 @@ import {
 	Send,
 	StopCircle,
 	Tag,
+	Trash2,
 	Zap,
 	ZoomIn,
 	ZoomOut,
 } from "lucide-react";
 import {
-	BaseEdge,
 	EdgeLabelRenderer,
 	Handle,
+	MarkerType,
 	Panel,
 	Position,
 	ReactFlow,
@@ -48,12 +49,16 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { resolveNodeOutputLabels } from "./output-labels";
+import {
+	defaultTriggerLabel,
+	triggerCanvasPosition,
+	triggerDisplayRows,
+} from "./trigger-ui";
 import type {
 	AutomationDetail,
 	AutomationNodeSpec,
 	AutomationSchema,
 	SchemaNodeDef,
-	SchemaTriggerDef,
 } from "./types";
 
 const CATEGORY_ORDER = [
@@ -147,6 +152,7 @@ interface SharedNodeData {
 	highlighted: boolean;
 	readOnly?: boolean;
 	schema: AutomationSchema;
+	onAddTriggerRow: () => void;
 	onDeleteNode: (key: string) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
 	onSelect: (key: string | null) => void;
@@ -155,7 +161,6 @@ interface SharedNodeData {
 interface TriggerCardData extends SharedNodeData {
 	kind: "trigger";
 	automation: AutomationDetail;
-	triggerDef: SchemaTriggerDef | null;
 	connectedOutputs: string[];
 }
 
@@ -170,12 +175,13 @@ type FlowCardData = TriggerCardData | StepCardData;
 
 interface FlowEdgeData {
 	automationChannel: string;
+	edgeIndex: number;
 	label: string;
+	onDeleteEdge: (edgeIndex: number) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
 	parentKey: string;
 	readOnly?: boolean;
 	schema: AutomationSchema;
-	showInsertControl: boolean;
 }
 
 interface Props {
@@ -185,8 +191,10 @@ interface Props {
 	highlightKeys: Set<string>;
 	selectedKey: string | null;
 	onMoveNode?: (key: string, position: XYPosition) => void;
+	onAddTriggerRow: () => void;
 	onSelect: (key: string | null) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
+	onDeleteEdge: (edgeIndex: number) => void;
 	onDeleteNode: (key: string) => void;
 	readOnly?: boolean;
 }
@@ -342,8 +350,12 @@ function resolveNodePosition(
 	automation: AutomationDetail,
 	autoPositions: Map<string, XYPosition>,
 ): XYPosition {
-	if (key === TRIGGER_ID)
-		return autoPositions.get(TRIGGER_ID) ?? { x: 0, y: 0 };
+	if (key === TRIGGER_ID) {
+		return (
+			triggerCanvasPosition(automation) ??
+			autoPositions.get(TRIGGER_ID) ?? { x: 0, y: 0 }
+		);
+	}
 	const node = automation.nodes.find((entry) => entry.key === key);
 	if (
 		node &&
@@ -417,10 +429,10 @@ function cardShellClass({
 			: "w-[346px] border-[#e6e9ef]",
 		kind === "step" &&
 			selected &&
-			"border-[#63d26f] shadow-[0_0_0_1px_rgba(99,210,111,0.45),0_3px_12px_rgba(34,44,66,0.1)]",
+			"border-[#4680ff] shadow-[0_0_0_1px_rgba(70,128,255,0.3),0_3px_12px_rgba(34,44,66,0.1)]",
 		kind === "trigger" &&
 			selected &&
-			"border-[#cfd6e3] shadow-[0_3px_12px_rgba(34,44,66,0.1)]",
+			"border-[#63d26f] shadow-[0_0_0_1px_rgba(99,210,111,0.3),0_3px_12px_rgba(34,44,66,0.1)]",
 		highlighted && "ring-1 ring-[#a7d8ff]",
 		hasError && "border-[#f4af4d] shadow-[0_0_0_1px_rgba(244,175,77,0.28)]",
 	);
@@ -544,20 +556,6 @@ function AddStepMenu({
 	);
 }
 
-function triggerListLabel(triggerType: string) {
-	const base = triggerType
-		.replace(/^instagram_/, "")
-		.replace(/^facebook_/, "")
-		.replace(/^whatsapp_/, "")
-		.replace(/^telegram_/, "");
-	const normalized = titleize(base);
-	if (normalized === "Dm") return "Message #1";
-	if (normalized === "Story Reply") return "Story Reply #1";
-	if (normalized === "Story Mention") return "Story Mention #1";
-	if (normalized === "Comment") return "Comment Reply #1";
-	return `${normalized} #1`;
-}
-
 function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 	const summary =
 		TRIGGER_OPERATION_OVERRIDES[data.automation.trigger_type] ??
@@ -567,7 +565,7 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 				"",
 			),
 		);
-	const triggerLabel = triggerListLabel(data.automation.trigger_type);
+	const rows = triggerDisplayRows(data.automation);
 
 	return (
 		<div
@@ -582,44 +580,63 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 				type="source"
 				position={Position.Right}
 				className="!size-[16px] !border-[3px] !border-white !bg-[#95a3bb] !shadow-[0_1px_4px_rgba(34,44,66,0.18)]"
-				style={{ right: -9, top: "90%" }}
+				style={{ right: -9, top: "calc(100% - 24px)" }}
 				isConnectable={false}
 			/>
-			<button
-				type="button"
+			<div
+				role="button"
+				tabIndex={0}
 				onClick={() => data.onSelect(TRIGGER_ID)}
-				className="nodrag block w-full px-5 py-4 text-left"
+				onKeyDown={(event) => {
+					if (event.key === "Enter" || event.key === " ") {
+						event.preventDefault();
+						data.onSelect(TRIGGER_ID);
+					}
+				}}
+				className="nodrag block w-full cursor-pointer px-5 py-4 text-left"
 			>
 				<div className="flex items-center gap-2 text-[17px] font-semibold text-[#353a44]">
 					<Zap className="size-[18px] text-[#353a44]" />
 					<span>When...</span>
 				</div>
 
-				<div className="mt-4 rounded-[16px] bg-[#f4f5f8] px-4 py-3">
-					<div className="flex items-center gap-3">
-						{platformIconBubble(data.automation.channel)}
-						<div className="min-w-0">
-							<div className="truncate text-[17px] font-semibold leading-5 text-[#404552]">
-								{summary}
-							</div>
-							<div className="mt-1 text-[13px] leading-4 text-[#7e8695]">
-								{triggerLabel}
+				<div className="mt-4 space-y-4">
+					{rows.map((rowLabel, index) => (
+						<div
+							key={`${rowLabel}-${index}`}
+							className="rounded-[16px] bg-[#f5f5f5] px-4 py-3"
+						>
+							<div className="flex items-center gap-3">
+								{platformIconBubble(data.automation.channel)}
+								<div className="min-w-0">
+									<div className="truncate text-[17px] font-semibold leading-5 text-[#404552]">
+										{summary}
+									</div>
+									<div className="mt-1 text-[13px] leading-4 text-[#7e8695]">
+										{rowLabel ||
+											defaultTriggerLabel(
+												data.automation.trigger_type,
+												index + 1,
+											)}
+									</div>
+								</div>
 							</div>
 						</div>
-					</div>
+					))}
 				</div>
 
 				<button
 					type="button"
 					onClick={(event) => {
 						event.stopPropagation();
+						data.onAddTriggerRow();
 						data.onSelect(TRIGGER_ID);
 					}}
 					className="mt-6 flex h-[54px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[17px] font-semibold text-[#4680ff] transition hover:border-[#bfc6d3] hover:bg-[#fafbfc]"
 				>
 					+ New Trigger
 				</button>
-			</button>
+			</div>
 		</div>
 	);
 }
@@ -656,7 +673,7 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 				type="target"
 				position={Position.Left}
 				className="!pointer-events-none !size-3 !border-0 !bg-transparent !opacity-0"
-				style={{ left: -6, top: 28 }}
+				style={{ left: -6, top: 40 }}
 				isConnectable={false}
 			/>
 			<Handle
@@ -692,7 +709,7 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 					</div>
 				</div>
 
-				<div className="mt-4 rounded-[16px] bg-[#f4f5f8] px-4 py-3">
+				<div className="mt-4 rounded-[16px] bg-[#f5f5f5] px-4 py-3">
 					<div className="line-clamp-3 min-h-[26px] text-[16px] leading-[26px] text-[#404552]">
 						{preview}
 					</div>
@@ -773,6 +790,7 @@ function AutomationFlowEdge({
 	targetX,
 	targetY,
 }: EdgeProps<FlowEdgeData>) {
+	const [hovered, setHovered] = useState(false);
 	const [path, labelX, labelY] = getSmoothStepPath({
 		sourceX,
 		sourceY,
@@ -786,19 +804,37 @@ function AutomationFlowEdge({
 	const showBranchLabel =
 		data?.label && data.label !== "next" && source !== TRIGGER_ID;
 	const showThenLabel = source === TRIGGER_ID && data?.label === "next";
+	const stroke = hovered ? "#4680ff" : "#9aa7bd";
 	if (!data) {
 		return (
-			<BaseEdge
-				path={path}
+			<path
+				d={path}
+				fill="none"
+				stroke="#9aa7bd"
+				strokeWidth={2.2}
 				markerEnd={markerEnd}
-				style={{ stroke: "#9aa7bd", strokeWidth: 2.2 }}
 			/>
 		);
 	}
 
 	return (
 		<>
-			<BaseEdge path={path} style={{ stroke: "#9aa7bd", strokeWidth: 2.2 }} />
+			<path
+				d={path}
+				fill="none"
+				stroke={stroke}
+				strokeWidth={2.2}
+				markerEnd={markerEnd}
+			/>
+			<path
+				d={path}
+				fill="none"
+				stroke="transparent"
+				strokeWidth={18}
+				style={{ pointerEvents: "stroke" }}
+				onMouseEnter={() => setHovered(true)}
+				onMouseLeave={() => setHovered(false)}
+			/>
 			<EdgeLabelRenderer>
 				<>
 					{showThenLabel ? (
@@ -811,29 +847,47 @@ function AutomationFlowEdge({
 							Then
 						</div>
 					) : null}
-					{showBranchLabel || data.showInsertControl ? (
+					{showBranchLabel ? (
 						<div
-							className="nodrag nopan absolute flex items-center gap-2"
+							className="pointer-events-none absolute"
+							style={{
+								transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY - 24}px)`,
+							}}
+						>
+							<span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598] shadow-[0_1px_4px_rgba(34,44,66,0.08)]">
+								{presentLabel(data.label)}
+							</span>
+						</div>
+					) : null}
+					{!data.readOnly ? (
+						<div
+							className={cn(
+								"nodrag nopan absolute flex items-center gap-1 rounded-xl border border-[#e5e9f1] bg-white p-1 shadow-[0_8px_20px_rgba(34,44,66,0.12)] transition-opacity duration-150",
+								hovered ? "opacity-100" : "opacity-0",
+							)}
 							style={{
 								transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
 							}}
+							onMouseEnter={() => setHovered(true)}
+							onMouseLeave={() => setHovered(false)}
 						>
-							{showBranchLabel ? (
-								<span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598] shadow-[0_1px_4px_rgba(34,44,66,0.08)]">
-									{presentLabel(data.label)}
-								</span>
-							) : null}
-							{data.showInsertControl ? (
-								<AddStepMenu
-									automationChannel={data.automationChannel}
-									className="h-7 w-7 rounded-full border border-[#d7dce6] bg-white p-0 text-[#7b8598] shadow-[0_1px_4px_rgba(34,44,66,0.08)]"
-									label={data.label}
-									onInsert={data.onInsertAfter}
-									parentKey={data.parentKey}
-									schema={data.schema}
-									tone="edge"
-								/>
-							) : null}
+							<button
+								type="button"
+								onClick={() => data.onDeleteEdge(data.edgeIndex)}
+								className="flex size-7 items-center justify-center rounded-lg text-[#f26a4b] transition hover:bg-[#fff4ef]"
+								aria-label="Delete connection"
+							>
+								<Trash2 className="size-3.5" />
+							</button>
+							<AddStepMenu
+								automationChannel={data.automationChannel}
+								className="rounded-lg border-0 shadow-none hover:bg-[#f5f7fb]"
+								label={data.label}
+								onInsert={data.onInsertAfter}
+								parentKey={data.parentKey}
+								schema={data.schema}
+								tone="edge"
+							/>
 						</div>
 					) : null}
 				</>
@@ -889,6 +943,8 @@ function FlowCanvasControls() {
 function GuidedFlowCanvas({
 	automation,
 	errorKeys,
+	onAddTriggerRow,
+	onDeleteEdge,
 	highlightKeys,
 	onDeleteNode,
 	onInsertAfter,
@@ -908,13 +964,6 @@ function GuidedFlowCanvas({
 	const childrenByKey = useMemo(
 		() => buildChildrenByKey(automation.edges),
 		[automation.edges],
-	);
-	const triggerDef = useMemo(
-		() =>
-			schema.triggers.find(
-				(trigger) => trigger.type === automation.trigger_type,
-			) ?? null,
-		[automation.trigger_type, schema.triggers],
 	);
 	const autoPositions = useMemo(
 		() => computeAutoPositions(automation, childrenByKey),
@@ -936,14 +985,14 @@ function GuidedFlowCanvas({
 					),
 					hasError: errorKeys.has(TRIGGER_ID),
 					highlighted: highlightKeys.has(TRIGGER_ID),
+					onAddTriggerRow,
 					onDeleteNode,
 					onInsertAfter,
 					onSelect,
 					readOnly,
 					schema,
-					triggerDef,
 				},
-				draggable: false,
+				draggable: !readOnly,
 				selected: selectedKey === TRIGGER_ID,
 				selectable: true,
 			},
@@ -964,6 +1013,7 @@ function GuidedFlowCanvas({
 					hasError: errorKeys.has(node.key),
 					highlighted: highlightKeys.has(node.key),
 					node,
+					onAddTriggerRow,
 					onDeleteNode,
 					onInsertAfter,
 					onSelect,
@@ -984,12 +1034,12 @@ function GuidedFlowCanvas({
 		errorKeys,
 		highlightKeys,
 		onDeleteNode,
+		onAddTriggerRow,
 		onInsertAfter,
 		onSelect,
 		readOnly,
 		schema,
 		schemaByType,
-		triggerDef,
 	]);
 
 	const flowEdges = useMemo<Edge<FlowEdgeData>[]>(() => {
@@ -1000,26 +1050,29 @@ function GuidedFlowCanvas({
 			type: "automation",
 			data: {
 				automationChannel: automation.channel,
+				edgeIndex: index,
 				label: edge.label ?? "next",
+				onDeleteEdge,
 				onInsertAfter,
 				parentKey: edge.from,
 				readOnly,
 				schema,
-				showInsertControl:
-					!readOnly &&
-					(selectedKey === edge.from ||
-						selectedKey === edge.to ||
-						selectedKey === TRIGGER_ID),
+			},
+			markerEnd: {
+				type: MarkerType.ArrowClosed,
+				width: 18,
+				height: 18,
+				color: "#9aa7bd",
 			},
 			selectable: false,
 		}));
 	}, [
 		automation.channel,
 		automation.edges,
+		onDeleteEdge,
 		onInsertAfter,
 		readOnly,
 		schema,
-		selectedKey,
 	]);
 
 	useEffect(() => {
@@ -1041,13 +1094,16 @@ function GuidedFlowCanvas({
 				edgeTypes={edgeTypes}
 				onNodeClick={(_, node) => onSelect(node.id)}
 				onNodeDragStop={(_, node) => {
-					if (node.id === TRIGGER_ID || !onMoveNode) return;
+					if (!onMoveNode) return;
 					onMoveNode(node.id, node.position);
 				}}
 				onPaneClick={() => onSelect(null)}
 				proOptions={{ hideAttribution: true }}
 				fitView
 				fitViewOptions={{ padding: 0.18 }}
+				defaultEdgeOptions={{
+					type: "automation",
+				}}
 				maxZoom={1.6}
 				minZoom={0.3}
 				nodesConnectable={false}

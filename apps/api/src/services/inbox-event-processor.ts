@@ -5,6 +5,7 @@ import {
 	socialAccounts,
 } from "@relayapi/db";
 import { and, eq, sql } from "drizzle-orm";
+import { GRAPH_BASE } from "../config/api-versions";
 import { maybeDecrypt } from "../lib/crypto";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
@@ -12,7 +13,7 @@ import { upsertConversation, insertMessage } from "./inbox-persistence";
 import { dispatchWebhookEvent } from "./webhook-delivery";
 import { notifyRealtime } from "../lib/notify-post-update";
 import { subscribeYouTubeChannel } from "./webhook-subscription";
-import { ensureContactForAuthor, findMatchingContact } from "./contact-linker";
+import { ensureContactForAuthor } from "./contact-linker";
 import {
 	findWaitingEnrollment,
 	matchAndEnroll,
@@ -31,7 +32,7 @@ interface NormalizedInboxEvent {
 	platform_event_id: string;
 	author?: { name: string; id: string; avatar_url?: string };
 	/** Conversation partner (customer) — defaults to author for inbound, set explicitly for outbound echoes */
-	participant?: { name: string; id: string };
+	participant?: { name: string; id: string; avatar_url?: string };
 	text?: string;
 	/**
 	 * Structured file payload for inbound media messages (WhatsApp image/video/
@@ -56,6 +57,150 @@ interface NormalizedInboxEvent {
 	created_at: string;
 	direction?: "inbound" | "outbound";
 	raw: unknown;
+}
+
+type ParticipantMetadataRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): ParticipantMetadataRecord | null {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as ParticipantMetadataRecord)
+		: null;
+}
+
+function isMissingParticipantIdentity(
+	name: string | null | undefined,
+	participantId: string | null | undefined,
+): boolean {
+	if (!name) return true;
+	if (!participantId) return false;
+	const trimmed = name.trim();
+	return trimmed.length === 0 || trimmed === participantId;
+}
+
+function isStaleProfile(fetchedAt: unknown, maxAgeMs: number): boolean {
+	if (typeof fetchedAt !== "string" || fetchedAt.length === 0) return true;
+	const timestamp = Date.parse(fetchedAt);
+	if (Number.isNaN(timestamp)) return true;
+	return Date.now() - timestamp > maxAgeMs;
+}
+
+function instagramGraphBase(token: string): string {
+	return token.startsWith("IGAA") ? GRAPH_BASE.instagram : GRAPH_BASE.facebook;
+}
+
+async function fetchInstagramParticipantProfile(
+	participantId: string,
+	token: string,
+): Promise<{
+	displayName: string | null;
+	avatarUrl: string | null;
+	metadata: ParticipantMetadataRecord;
+} | null> {
+	const profileAbort = new AbortController();
+	const profileTimer = setTimeout(() => profileAbort.abort(), 5_000);
+
+	try {
+		const profileRes = await fetch(
+			`${instagramGraphBase(token)}/${participantId}?fields=name,username,profile_pic,follower_count,is_user_follow_business,is_business_follow_user&access_token=${encodeURIComponent(token)}`,
+			{ signal: profileAbort.signal },
+		);
+
+		if (!profileRes.ok) {
+			const errorText = await profileRes.text().catch(() => "");
+			console.error(
+				`[inbox-processor] Instagram participant profile lookup failed (${profileRes.status}): ${errorText.slice(0, 200)}`,
+			);
+			return null;
+		}
+
+		const profile = (await profileRes.json()) as {
+			name?: string | null;
+			username?: string | null;
+			profile_pic?: string | null;
+			follower_count?: number | null;
+			is_user_follow_business?: boolean | null;
+			is_business_follow_user?: boolean | null;
+		};
+		const displayName = profile.name ?? profile.username ?? null;
+
+		if (!displayName && !profile.profile_pic) {
+			return null;
+		}
+
+		return {
+			displayName,
+			avatarUrl: profile.profile_pic ?? null,
+			metadata: {
+				scopedId: participantId,
+				name: profile.name ?? null,
+				username: profile.username ?? null,
+				profilePic: profile.profile_pic ?? null,
+				followerCount: profile.follower_count ?? null,
+				isUserFollowBusiness: profile.is_user_follow_business ?? null,
+				isBusinessFollowUser: profile.is_business_follow_user ?? null,
+				fetchedAt: new Date().toISOString(),
+			},
+		};
+	} finally {
+		clearTimeout(profileTimer);
+	}
+}
+
+async function fetchFacebookParticipantProfile(
+	participantId: string,
+	token: string,
+): Promise<{
+	displayName: string | null;
+	avatarUrl: string | null;
+	metadata: ParticipantMetadataRecord;
+} | null> {
+	const profileAbort = new AbortController();
+	const profileTimer = setTimeout(() => profileAbort.abort(), 5_000);
+
+	try {
+		const profileRes = await fetch(
+			`${GRAPH_BASE.facebook}/${participantId}?fields=name,first_name,last_name,profile_pic&access_token=${encodeURIComponent(token)}`,
+			{ signal: profileAbort.signal },
+		);
+
+		if (!profileRes.ok) {
+			const errorText = await profileRes.text().catch(() => "");
+			console.error(
+				`[inbox-processor] Facebook participant profile lookup failed (${profileRes.status}): ${errorText.slice(0, 200)}`,
+			);
+			return null;
+		}
+
+		const profile = (await profileRes.json()) as {
+			name?: string | null;
+			first_name?: string | null;
+			last_name?: string | null;
+			profile_pic?: string | null;
+		};
+		const fallbackName = [profile.first_name, profile.last_name]
+			.filter((part): part is string => typeof part === "string" && part.length > 0)
+			.join(" ");
+		const displayName = profile.name ?? (fallbackName || null);
+
+		if (!displayName && !profile.profile_pic) {
+			return null;
+		}
+
+		return {
+			displayName,
+			avatarUrl: profile.profile_pic ?? null,
+			metadata: {
+				psid: participantId,
+				name: displayName,
+				firstName: profile.first_name ?? null,
+				lastName: profile.last_name ?? null,
+				profilePic: profile.profile_pic ?? null,
+				fetchedAt: new Date().toISOString(),
+			},
+		};
+	} finally {
+		clearTimeout(profileTimer);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +257,7 @@ export async function processInboxEvent(
 		let conversation: Awaited<ReturnType<typeof upsertConversation>> | null = null;
 		let messageId: string | null = null;
 		const direction = event.direction ?? "inbound";
+		const conversationPartner = event.participant ?? event.author;
 		// Look up social account (workspace + token for enrichment)
 		const [sa] = await db
 			.select({
@@ -122,9 +268,6 @@ export async function processInboxEvent(
 			.where(eq(socialAccounts.id, event.account_id))
 			.limit(1);
 		try {
-			// For outbound echoes (external platforms), use the participant field for the customer
-			const conversationPartner = event.participant ?? event.author;
-
 			conversation = await upsertConversation(db, {
 				organizationId: event.organization_id,
 				workspaceId: sa?.workspaceId ?? null,
@@ -135,7 +278,8 @@ export async function processInboxEvent(
 					event.post_id || event.conversation_id || event.platform_event_id,
 				participantName: conversationPartner?.name ?? null,
 				participantPlatformId: conversationPartner?.id ?? null,
-				participantAvatar: event.author?.avatar_url ?? null,
+				participantAvatar:
+					conversationPartner?.avatar_url ?? event.author?.avatar_url ?? null,
 				postPlatformId: event.post_id ?? null,
 			});
 			if (conversation) {
@@ -156,76 +300,109 @@ export async function processInboxEvent(
 			console.error("[inbox-processor] DB storage failed:", err);
 		}
 
-		// 1b. Instagram profile enrichment — fetch profile data for new DM conversations.
-		// Note: the returned conversation row reflects the pre-insert message count, so
-		// brand-new conversations have messageCount === 0 here, not 1.
-		const existingParticipantMetadata =
-			conversation?.participantMetadata &&
-			typeof conversation.participantMetadata === "object"
-				? (conversation.participantMetadata as Record<string, unknown>)
-				: null;
-		const existingInstagramProfile =
-			existingParticipantMetadata?.instagramProfile &&
-			typeof existingParticipantMetadata.instagramProfile === "object"
-				? (existingParticipantMetadata.instagramProfile as Record<string, unknown>)
-				: null;
+		// 1b. Meta participant profile enrichment — Instagram/Messenger webhooks
+		// carry the participant's scoped ID, but not their display name/avatar.
+		// Fetch and persist the profile data so the inbox shows the real person.
+		const existingParticipantMetadata = asRecord(conversation?.participantMetadata);
+		const existingInstagramProfile = asRecord(
+			existingParticipantMetadata?.instagramProfile,
+		);
+		const existingFacebookProfile = asRecord(
+			existingParticipantMetadata?.facebookProfile,
+		);
+		const participantId = conversationPartner?.id ?? null;
+		const needsIdentityRefresh =
+			isMissingParticipantIdentity(conversation?.participantName, participantId) ||
+			!conversation?.participantAvatar;
 
 		if (
-			direction === "inbound" &&
 			conversation &&
-			conversation.messageCount <= 1 &&
-			!existingInstagramProfile?.username &&
-			event.platform === "instagram" &&
 			event.type === "message" &&
-			event.author?.id
+			participantId &&
+			sa?.accessToken &&
+			((event.platform === "instagram" &&
+				(needsIdentityRefresh ||
+					isStaleProfile(
+						existingInstagramProfile?.fetchedAt,
+						1000 * 60 * 60 * 24,
+					))) ||
+				(event.platform === "facebook" &&
+					(needsIdentityRefresh ||
+						isStaleProfile(
+							existingFacebookProfile?.fetchedAt,
+							1000 * 60 * 60 * 24,
+						))))
 		) {
 			try {
-				if (sa?.accessToken) {
-					const token = await maybeDecrypt(sa.accessToken, env.ENCRYPTION_KEY);
-					if (!token) throw new Error("Failed to decrypt access token");
-					// Docs: https://developers.facebook.com/docs/instagram-api/reference/ig-user
-						const profileHost = token.startsWith("IGAA") ? "graph.instagram.com" : "graph.facebook.com";
-						const profileAbort = new AbortController();
-						const profileTimer = setTimeout(() => profileAbort.abort(), 5_000);
-						const profileRes = await fetch(
-							`https://${profileHost}/v25.0/${event.author.id}?fields=username,followers_count,media_count&access_token=${encodeURIComponent(token)}`,
-							{ signal: profileAbort.signal },
-						);
-						clearTimeout(profileTimer);
-						if (profileRes.ok) {
-							const profile = (await profileRes.json()) as {
-								username?: string;
-								followers_count?: number;
-								media_count?: number;
-							};
-							await db
-								.update(inboxConversations)
-								.set({
-									participantName:
-										profile.username ?? conversation.participantName,
-									participantMetadata: {
-										...(existingParticipantMetadata ?? {}),
-										instagramProfile: {
-											...(existingInstagramProfile ?? {}),
-											scopedId: event.author.id,
-											username: profile.username ?? null,
-											followersCount: profile.followers_count ?? null,
-											mediaCount: profile.media_count ?? null,
-											fetchedAt: new Date().toISOString(),
-										},
-									},
-								})
-								.where(
-									and(
-										eq(inboxConversations.id, conversation.id),
-										eq(inboxConversations.organizationId, event.organization_id),
-									),
-								);
-						}
+				const token = await maybeDecrypt(sa.accessToken, env.ENCRYPTION_KEY);
+				if (!token) throw new Error("Failed to decrypt access token");
+
+				const profile =
+					event.platform === "instagram"
+						? await fetchInstagramParticipantProfile(participantId, token)
+						: await fetchFacebookParticipantProfile(participantId, token);
+				if (profile) {
+					const conversationPatch: Partial<
+						typeof inboxConversations.$inferInsert
+					> = {
+						participantMetadata: {
+							...(existingParticipantMetadata ?? {}),
+							[event.platform === "instagram"
+								? "instagramProfile"
+								: "facebookProfile"]: {
+								...(event.platform === "instagram"
+									? existingInstagramProfile ?? {}
+									: existingFacebookProfile ?? {}),
+								...profile.metadata,
+							},
+						},
+					};
+
+					if (profile.displayName) {
+						conversationPatch.participantName = profile.displayName;
 					}
-				} catch (err) {
-					console.error("[inbox-processor] IG profile enrichment failed:", err);
+					if (profile.avatarUrl) {
+						conversationPatch.participantAvatar = profile.avatarUrl;
+					}
+
+					await db
+						.update(inboxConversations)
+						.set(conversationPatch)
+						.where(
+							and(
+								eq(inboxConversations.id, conversation.id),
+								eq(inboxConversations.organizationId, event.organization_id),
+							),
+						);
+
+					const messagePatch: Partial<typeof inboxMessages.$inferInsert> = {};
+					if (profile.displayName) {
+						messagePatch.authorName = profile.displayName;
+					}
+					if (profile.avatarUrl) {
+						messagePatch.authorAvatarUrl = profile.avatarUrl;
+					}
+
+					if (messagePatch.authorName || messagePatch.authorAvatarUrl) {
+						await db
+							.update(inboxMessages)
+							.set(messagePatch)
+							.where(
+								and(
+									eq(inboxMessages.conversationId, conversation.id),
+									eq(inboxMessages.organizationId, event.organization_id),
+									eq(inboxMessages.authorPlatformId, participantId),
+									eq(inboxMessages.direction, "inbound"),
+								),
+							);
+					}
 				}
+			} catch (err) {
+				console.error(
+					`[inbox-processor] ${event.platform} participant profile enrichment failed:`,
+					err,
+				);
+			}
 		}
 
 		// 2. Hand off inbound events to the unified automations engine. Outbound

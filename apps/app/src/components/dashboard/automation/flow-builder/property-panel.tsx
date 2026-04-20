@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
+import { ChevronLeft, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useApi } from "@/hooks/use-api";
+import { platformIcons } from "@/lib/platform-icons";
+import { cn } from "@/lib/utils";
 import {
 	buildDataReferenceGroups,
 	type DataReferenceGroup,
@@ -10,7 +12,68 @@ import {
 import { FilterGroupEditor, type FilterGroup } from "./filter-group-editor";
 import { INPUT_CLS } from "./field-styles";
 import { resolveNodeOutputLabels } from "./output-labels";
-import type { AutomationDetail, AutomationNodeSpec, SchemaNodeDef } from "./types";
+import type {
+	AutomationDetail,
+	AutomationNodeSpec,
+	SchemaNodeDef,
+} from "./types";
+
+const PANEL_WIDTH_CLS = "w-[360px] xl:w-[392px]";
+
+const PANEL_TITLE_OVERRIDES: Record<string, string> = {
+	message_text: "Send Message",
+	message_media: "Send Media",
+	message_file: "Send File",
+	smart_delay: "Delay",
+	condition: "Condition",
+	randomizer: "Randomizer",
+	http_request: "HTTP Request",
+	goto: "Go To Step",
+	end: "End Automation",
+	tag_add: "Add Tag",
+	tag_remove: "Remove Tag",
+	field_set: "Set Field",
+	field_clear: "Clear Field",
+};
+
+function titleize(value: string): string {
+	return value
+		.split("_")
+		.filter(Boolean)
+		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+		.join(" ");
+}
+
+function panelHeaderTone(nodeType: string) {
+	if (nodeType.startsWith("message_")) {
+		return {
+			bar: "bg-[#edd5f5]",
+			badge: "text-[#8f5bb3]",
+			iconBg: "bg-[#f7ecfb]",
+		};
+	}
+	if (nodeType === "condition" || nodeType === "randomizer") {
+		return {
+			bar: "bg-[#e6f1ff]",
+			badge: "text-[#4a7ae8]",
+			iconBg: "bg-[#edf4ff]",
+		};
+	}
+	return {
+		bar: "bg-[#eef5ff]",
+		badge: "text-[#61758a]",
+		iconBg: "bg-[#f5f8fc]",
+	};
+}
+
+function panelDisplayTitle(
+	node: AutomationNodeSpec,
+	nodeDef: SchemaNodeDef | null,
+) {
+	return (
+		PANEL_TITLE_OVERRIDES[node.type] ?? titleize(nodeDef?.type ?? node.type)
+	);
+}
 
 type PrimitiveArrayKind = "string" | "number" | "boolean";
 
@@ -31,7 +94,14 @@ interface ArraySpec {
 
 export interface FieldDef {
 	name: string;
-	type: "string" | "number" | "boolean" | "textarea" | "enum" | "object" | "array";
+	type:
+		| "string"
+		| "number"
+		| "boolean"
+		| "textarea"
+		| "enum"
+		| "object"
+		| "array";
 	required: boolean;
 	description?: string;
 	enumValues?: string[];
@@ -69,7 +139,12 @@ export function parseFieldsSchema(fieldsSchema: unknown): FieldDef[] {
 		else if (t === "array") type = "array";
 		else if (t === "object") type = "object";
 		else if (prop.enum && Array.isArray(prop.enum)) type = "enum";
-		else if (prop.format === "textarea" || name === "text" || name === "prompt" || name === "body")
+		else if (
+			prop.format === "textarea" ||
+			name === "text" ||
+			name === "prompt" ||
+			name === "body"
+		)
 			type = "textarea";
 
 		const field: FieldDef = {
@@ -179,10 +254,29 @@ export function PropertyPanel({
 		() => (nodeDef ? parseFieldsSchema(nodeDef.fields_schema) : []),
 		[nodeDef],
 	);
+	const primaryComposerField = useMemo(
+		() =>
+			fields.find((field) => ["text", "prompt", "body"].includes(field.name)) ??
+			null,
+		[fields],
+	);
+	const detailFields = useMemo(
+		() => fields.filter((field) => field.name !== primaryComposerField?.name),
+		[fields, primaryComposerField],
+	);
 	const dataReferences = useMemo(
 		() => buildDataReferenceGroups(automation),
 		[automation],
 	);
+	const outputs = node ? resolveNodeOutputLabels(node, nodeDef) : [];
+	const showGuidanceCard = node
+		? node.type === "message_text" ||
+			node.type === "message_media" ||
+			node.type === "message_file" ||
+			node.type === "instagram_reply_to_comment" ||
+			node.type === "condition" ||
+			outputs.length > 1
+		: false;
 
 	const [localKey, setLocalKey] = useState(node?.key ?? "");
 	useEffect(() => {
@@ -191,8 +285,13 @@ export function PropertyPanel({
 
 	if (!node) {
 		return (
-			<div className="w-80 border-l border-border bg-card/30 flex items-center justify-center p-6">
-				<p className="text-xs text-muted-foreground text-center">
+			<div
+				className={cn(
+					PANEL_WIDTH_CLS,
+					"flex items-center justify-center border-l border-[#e6e9ef] bg-white p-8",
+				)}
+			>
+				<p className="text-sm text-[#7e8695] text-center">
 					Select a node to edit its properties
 				</p>
 			</div>
@@ -202,29 +301,17 @@ export function PropertyPanel({
 	const keyIsValid =
 		/^[a-zA-Z][a-zA-Z0-9_]*$/.test(localKey) &&
 		(localKey === node.key || !existingKeys.includes(localKey));
-
-	return (
-		<div className="w-80 border-l border-border bg-card/30 flex flex-col overflow-hidden">
-			<div className="px-3 py-2 border-b border-border flex items-center justify-between">
-				<div>
-					<h3 className="text-xs font-medium">{node.type.replace(/_/g, " ")}</h3>
-					<p className="text-[10px] text-muted-foreground mt-0.5">
-						{nodeDef?.description ?? "Node properties"}
-					</p>
-				</div>
-				<button
-					type="button"
-					onClick={onClose}
-					className="text-muted-foreground hover:text-foreground"
-				>
-					<X className="size-3.5" />
-				</button>
+	const title = panelDisplayTitle(node, nodeDef);
+	const headerTone = panelHeaderTone(node.type);
+	const platformIcon = platformIcons[automationChannel];
+	const technicalFields = (
+		<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
+			<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
+				Technical
 			</div>
-
-			<ScrollArea className="flex-1">
-				<div className="px-3 py-3 space-y-3">
+			<div className="mt-4 space-y-4">
 				<div>
-					<label className="text-[10px] font-medium text-muted-foreground block mb-1">
+					<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
 						Key <span className="text-destructive">*</span>
 					</label>
 					<input
@@ -241,16 +328,16 @@ export function PropertyPanel({
 						className={INPUT_CLS}
 					/>
 					{!keyIsValid && (
-						<p className="text-[10px] text-destructive mt-0.5">
+						<p className="mt-1 text-[11px] text-destructive">
 							{existingKeys.includes(localKey) && localKey !== node.key
 								? "Key already in use"
-								: "Must start with a letter; only letters, digits, underscores"}
+								: "Must start with a letter and only use letters, digits, or underscores"}
 						</p>
 					)}
 				</div>
 
 				<div>
-					<label className="text-[10px] font-medium text-muted-foreground block mb-1">
+					<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
 						Notes
 					</label>
 					<input
@@ -258,45 +345,183 @@ export function PropertyPanel({
 						value={(node.notes as string) ?? ""}
 						onChange={(e) => onChange({ notes: e.target.value })}
 						className={INPUT_CLS}
-						placeholder="Optional annotation"
+						placeholder="Optional internal note"
 					/>
 				</div>
+			</div>
+		</div>
+	);
 
-				<div className="border-t border-border pt-3 space-y-3">
-					<NodeGuidance
-						node={node}
-						nodeDef={nodeDef}
-						automationChannel={automationChannel}
-					/>
-					{fields.length === 0 && (
-						<p className="text-[10px] text-muted-foreground">
-							This node type has no additional configuration.
+	return (
+		<div
+			className={cn(
+				PANEL_WIDTH_CLS,
+				"flex flex-col overflow-hidden border-l border-[#e6e9ef] bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.03)]",
+			)}
+		>
+			<div
+				className={cn("border-b border-[#e6e9ef] px-4 py-4", headerTone.bar)}
+			>
+				<div className="flex items-center gap-3">
+					<button
+						type="button"
+						onClick={onClose}
+						className="rounded-full p-1 text-[#6f7786] transition hover:bg-white/70 hover:text-[#353a44]"
+						aria-label="Close editor"
+					>
+						<ChevronLeft className="size-4" />
+					</button>
+					<div className="min-w-0 flex-1">
+						<div className="flex items-center gap-2">
+							<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
+								{title}
+							</h3>
+							<Pencil className="size-3.5 shrink-0 text-[#7e8695]" />
+						</div>
+						<p className="mt-1 text-[12px] text-[#6f7786]">
+							{nodeDef?.description ?? "Configure this step"}
 						</p>
-					)}
-					{fields.map((f) => (
-						<FieldRow
-							key={f.name}
-							node={node}
-							field={f}
-							value={node[f.name]}
-							automationChannel={automationChannel}
-							dataReferences={dataReferences}
-							onChange={(v) => onChange({ [f.name]: v })}
-						/>
-					))}
+					</div>
 				</div>
+			</div>
+
+			<ScrollArea className="flex-1 bg-[#fbfcfe]">
+				<div className="space-y-5 px-4 py-5">
+					{node.type.startsWith("message_") ? (
+						<>
+							<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
+								<div className="flex items-center gap-3">
+									<div
+										className={cn(
+											"flex size-10 items-center justify-center rounded-full",
+											headerTone.iconBg,
+										)}
+									>
+										<div className={cn("scale-[0.9]", headerTone.badge)}>
+											{platformIcon}
+										</div>
+									</div>
+									<div>
+										<div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#8b92a0]">
+											Message Window
+										</div>
+										<div className="mt-1 text-[14px] font-medium text-[#4680ff]">
+											Send within 24 hour window
+										</div>
+									</div>
+								</div>
+							</div>
+
+							{primaryComposerField ? (
+								<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
+									<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
+										Message
+									</div>
+									<div className="mt-4 overflow-hidden rounded-[18px] bg-[#f5f5f5]">
+										<textarea
+											value={(node[primaryComposerField.name] as string) ?? ""}
+											onChange={(event) =>
+												onChange({
+													[primaryComposerField.name]: event.target.value,
+												})
+											}
+											rows={5}
+											className="min-h-[108px] w-full resize-y border-0 bg-transparent px-4 py-4 text-[14px] leading-6 text-[#353a44] outline-none placeholder:text-[#9aa3b2]"
+											placeholder="Enter your text..."
+										/>
+										<div className="border-t border-dashed border-[#d9dde6] px-4 py-3 text-center text-[13px] font-medium text-[#7e8695]">
+											+ Add Button
+										</div>
+									</div>
+									<div className="mt-4 flex">
+										<div className="rounded-full border border-dashed border-[#d9dde6] px-4 py-2 text-[13px] font-medium text-[#7e8695]">
+											+ Add Quick Reply
+										</div>
+									</div>
+								</div>
+							) : null}
+
+							<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
+								<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
+									Step Settings
+								</div>
+								<div className="mt-4 space-y-4">
+									<NodeGuidance
+										node={node}
+										nodeDef={nodeDef}
+										automationChannel={automationChannel}
+									/>
+									{detailFields.length === 0 ? (
+										<p className="text-[13px] text-[#7e8695]">
+											This step has no additional settings.
+										</p>
+									) : (
+										detailFields.map((f) => (
+											<FieldRow
+												key={f.name}
+												node={node}
+												field={f}
+												value={node[f.name]}
+												automationChannel={automationChannel}
+												dataReferences={dataReferences}
+												onChange={(v) => onChange({ [f.name]: v })}
+											/>
+										))
+									)}
+								</div>
+							</div>
+
+							{technicalFields}
+						</>
+					) : (
+						<>
+							{showGuidanceCard ? (
+								<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
+									<NodeGuidance
+										node={node}
+										nodeDef={nodeDef}
+										automationChannel={automationChannel}
+									/>
+								</div>
+							) : null}
+							<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
+								<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
+									Settings
+								</div>
+								<div className="mt-4 space-y-4">
+									{fields.length === 0 ? (
+										<p className="text-[13px] text-[#7e8695]">
+											This node type has no additional configuration.
+										</p>
+									) : (
+										fields.map((f) => (
+											<FieldRow
+												key={f.name}
+												node={node}
+												field={f}
+												value={node[f.name]}
+												automationChannel={automationChannel}
+												dataReferences={dataReferences}
+												onChange={(v) => onChange({ [f.name]: v })}
+											/>
+										))
+									)}
+								</div>
+							</div>
+							{technicalFields}
+						</>
+					)}
 				</div>
 			</ScrollArea>
 
-			<div className="px-3 py-2 border-t border-border">
+			<div className="border-t border-[#e6e9ef] bg-white px-4 py-3">
 				<Button
 					variant="ghost"
-					size="sm"
 					onClick={onDelete}
-					className="w-full gap-1.5 text-xs h-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+					className="h-10 w-full gap-2 rounded-xl text-[13px] font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
 				>
-					<Trash2 className="size-3.5" />
-					Delete node
+					<Trash2 className="size-4" />
+					Delete step
 				</Button>
 			</div>
 		</div>
@@ -320,24 +545,30 @@ export function FieldRow({
 }) {
 	const refs = dataReferences ?? [];
 	const label = (
-		<label className="text-[10px] font-medium text-muted-foreground block mb-1">
+		<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
 			{field.name.replace(/_/g, " ")}
 			{field.required && <span className="text-destructive ml-0.5">*</span>}
 		</label>
 	);
 	const hint = field.description ? (
-		<p className="text-[10px] text-muted-foreground/70 mt-0.5">{field.description}</p>
+		<p className="mt-1 text-[11px] text-[#7e8695]">{field.description}</p>
 	) : null;
 
-	if (node?.type === "condition" && field.name === "if" && field.type === "object") {
+	if (
+		node?.type === "condition" &&
+		field.name === "if" &&
+		field.type === "object"
+	) {
 		return (
 			<div className="space-y-2">
 				<div>
 					{label}
 					<p className="text-[10px] text-muted-foreground/70">
-						Build a structured rule group. This is not JavaScript. Matching contacts
-						follow the <span className="font-medium text-foreground">yes</span> path;
-						others follow <span className="font-medium text-foreground">no</span>.
+						Build a structured rule group. This is not JavaScript. Matching
+						contacts follow the{" "}
+						<span className="font-medium text-foreground">yes</span> path;
+						others follow{" "}
+						<span className="font-medium text-foreground">no</span>.
 					</p>
 				</div>
 				<FilterGroupEditor
@@ -350,7 +581,8 @@ export function FieldRow({
 						},
 						any: {
 							label: "Any rule can match",
-							helper: "At least one of these rules can make the condition pass.",
+							helper:
+								"At least one of these rules can make the condition pass.",
 						},
 						none: {
 							label: "None of these may match",
@@ -415,7 +647,10 @@ export function FieldRow({
 		);
 	}
 
-	if (node?.type === "instagram_reply_to_comment" && field.name === "comment_id") {
+	if (
+		node?.type === "instagram_reply_to_comment" &&
+		field.name === "comment_id"
+	) {
 		return (
 			<OptionalOverrideField
 				label={label}
@@ -453,7 +688,7 @@ export function FieldRow({
 				<select
 					value={(value as string) ?? ""}
 					onChange={(e) => onChange(e.target.value || undefined)}
-					className="w-full h-7 text-xs rounded-md border border-input bg-background px-2"
+					className="h-10 w-full rounded-xl border border-[#d9dde6] bg-white px-3 text-[13px] text-[#353a44] shadow-[0_1px_2px_rgba(16,24,40,0.04)] outline-none"
 				>
 					<option value="">—</option>
 					{field.enumValues?.map((v) => (
@@ -469,12 +704,12 @@ export function FieldRow({
 
 	if (field.type === "boolean") {
 		return (
-			<label className="flex items-center gap-2 text-xs">
+			<label className="flex items-center gap-3 text-[13px] text-[#353a44]">
 				<input
 					type="checkbox"
 					checked={value === true}
 					onChange={(e) => onChange(e.target.checked)}
-					className="h-3.5 w-3.5 rounded border-input"
+					className="h-4 w-4 rounded border-[#cdd5e1]"
 				/>
 				<span>
 					{field.name.replace(/_/g, " ")}
@@ -553,7 +788,9 @@ function InheritedValueNotice({
 			{label}
 			<div className="rounded-lg border border-border/80 bg-muted/25 px-3 py-2">
 				<div className="text-[11px] font-medium text-foreground">{title}</div>
-				<p className="mt-1 text-[10px] text-muted-foreground/80">{description}</p>
+				<p className="mt-1 text-[10px] text-muted-foreground/80">
+					{description}
+				</p>
 			</div>
 			{hint}
 		</div>
@@ -597,7 +834,9 @@ function OptionalOverrideField({
 			<div className="space-y-2">
 				{label}
 				<div className="rounded-lg border border-border/80 bg-muted/25 px-3 py-2">
-					<div className="text-[11px] font-medium text-foreground">{defaultTitle}</div>
+					<div className="text-[11px] font-medium text-foreground">
+						{defaultTitle}
+					</div>
 					<p className="mt-1 text-[10px] text-muted-foreground/80">
 						{defaultDescription}
 					</p>
@@ -684,7 +923,8 @@ function WebhookEndpointField({
 				))}
 			</select>
 			<p className="text-[10px] text-muted-foreground/70 mt-0.5">
-				Send this step’s event to one of your existing RelayAPI webhook endpoints.
+				Send this step’s event to one of your existing RelayAPI webhook
+				endpoints.
 			</p>
 			{hint}
 		</div>
@@ -705,7 +945,9 @@ function DynamicValueField({
 	dataReferences: DataReferenceGroup[];
 }) {
 	const inferredMode =
-		value !== null && value !== undefined && typeof value === "object" ? "json" : "text";
+		value !== null && value !== undefined && typeof value === "object"
+			? "json"
+			: "text";
 	const [mode, setMode] = useState<"text" | "json">(inferredMode);
 
 	useEffect(() => {
@@ -721,7 +963,9 @@ function DynamicValueField({
 						type="button"
 						onClick={() => setMode("text")}
 						className={`rounded px-2 py-1 text-[10px] font-medium ${
-							mode === "text" ? "bg-accent text-foreground" : "text-muted-foreground"
+							mode === "text"
+								? "bg-accent text-foreground"
+								: "text-muted-foreground"
 						}`}
 					>
 						Text
@@ -730,7 +974,9 @@ function DynamicValueField({
 						type="button"
 						onClick={() => setMode("json")}
 						className={`rounded px-2 py-1 text-[10px] font-medium ${
-							mode === "json" ? "bg-accent text-foreground" : "text-muted-foreground"
+							mode === "json"
+								? "bg-accent text-foreground"
+								: "text-muted-foreground"
 						}`}
 					>
 						JSON
@@ -741,7 +987,13 @@ function DynamicValueField({
 				<TemplatedTextField
 					label={null}
 					hint={hint}
-					value={typeof value === "string" ? value : value === undefined ? "" : String(value)}
+					value={
+						typeof value === "string"
+							? value
+							: value === undefined
+								? ""
+								: String(value)
+					}
 					onChange={(next) => onChange(next === "" ? undefined : next)}
 					rows={4}
 					multiline
@@ -824,7 +1076,9 @@ function TemplatedTextField({
 						type="button"
 						onClick={() => setMode("static")}
 						className={`rounded px-2 py-1 text-[10px] font-medium ${
-							mode === "static" ? "bg-accent text-foreground" : "text-muted-foreground"
+							mode === "static"
+								? "bg-accent text-foreground"
+								: "text-muted-foreground"
 						}`}
 					>
 						Static
@@ -833,7 +1087,9 @@ function TemplatedTextField({
 						type="button"
 						onClick={() => setMode("dynamic")}
 						className={`rounded px-2 py-1 text-[10px] font-medium ${
-							mode === "dynamic" ? "bg-accent text-foreground" : "text-muted-foreground"
+							mode === "dynamic"
+								? "bg-accent text-foreground"
+								: "text-muted-foreground"
 						}`}
 					>
 						Dynamic
@@ -841,10 +1097,7 @@ function TemplatedTextField({
 				</div>
 			</div>
 			{mode === "dynamic" && (
-				<DataReferencePicker
-					groups={dataReferences}
-					onPick={insertToken}
-				/>
+				<DataReferencePicker groups={dataReferences} onPick={insertToken} />
 			)}
 			{multiline ? (
 				<textarea
@@ -926,7 +1179,8 @@ function TemplatedJsonField({
 		<div className="space-y-2">
 			{!hideLabel && label}
 			<p className="text-[10px] text-muted-foreground/80">
-				Strings inside JSON can use merge tags like <span className="font-mono">{`{{state.text}}`}</span>.
+				Strings inside JSON can use merge tags like{" "}
+				<span className="font-mono">{`{{state.text}}`}</span>.
 			</p>
 			<DataReferencePicker groups={dataReferences} onPick={insertToken} />
 			<textarea
@@ -1037,20 +1291,18 @@ function NodeGuidance({
 	return (
 		<div className="space-y-2">
 			{recipientHint && (
-				<div className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2">
-					<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+				<div className="rounded-[18px] border border-[#e6e9ef] bg-[#f8fafc] px-4 py-3">
+					<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
 						Recipient
 					</div>
-					<p className="mt-1 text-[11px] text-foreground">
+					<p className="mt-2 text-[13px] text-[#353a44]">
 						This step sends to the contact who entered the automation on{" "}
 						<span className="font-medium capitalize">{automationChannel}</span>.
 					</p>
-					<p className="mt-1 text-[10px] text-muted-foreground/70">
+					<p className="mt-2 text-[11px] text-[#7e8695]">
 						By default the runtime resolves the contact’s channel identifier
 						automatically. Set{" "}
-						<span className="font-medium text-foreground">
-							recipient mode
-						</span>{" "}
+						<span className="font-medium text-foreground">recipient mode</span>{" "}
 						to custom and provide a{" "}
 						<span className="font-medium text-foreground">
 							recipient identifier
@@ -1060,32 +1312,34 @@ function NodeGuidance({
 				</div>
 			)}
 			{commentReplyHint && (
-				<div className="rounded-lg border border-border/80 bg-muted/30 px-3 py-2">
-					<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+				<div className="rounded-[18px] border border-[#e6e9ef] bg-[#f8fafc] px-4 py-3">
+					<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
 						Comment target
 					</div>
-					<p className="mt-1 text-[11px] text-foreground">
+					<p className="mt-2 text-[13px] text-[#353a44]">
 						By default this step replies to the comment that triggered the
 						automation.
 					</p>
-					<p className="mt-1 text-[10px] text-muted-foreground/70">
-						Leave <span className="font-medium text-foreground">comment id</span>{" "}
-						empty to use <span className="font-mono text-foreground">{`{{state.comment_id}}`}</span>{" "}
+					<p className="mt-2 text-[11px] text-[#7e8695]">
+						Leave{" "}
+						<span className="font-medium text-foreground">comment id</span>{" "}
+						empty to use{" "}
+						<span className="font-mono text-foreground">{`{{state.comment_id}}`}</span>{" "}
 						from the trigger payload. Only set it when you want to override the
 						target comment explicitly.
 					</p>
 				</div>
 			)}
 			{outputs.length > 1 && (
-				<div className="rounded-lg border border-border/80 bg-background px-3 py-2">
-					<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+				<div className="rounded-[18px] border border-[#e6e9ef] bg-white px-4 py-3">
+					<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
 						Outputs
 					</div>
-					<div className="mt-1 flex flex-wrap gap-1.5">
+					<div className="mt-2 flex flex-wrap gap-2">
 						{outputs.map((output) => (
 							<span
 								key={output}
-								className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+								className="rounded-full border border-[#d9dde6] bg-[#f8fafc] px-3 py-1 text-[11px] font-medium text-[#6f7786]"
 							>
 								{output}
 							</span>
@@ -1157,7 +1411,9 @@ function ObjectJsonField({
 			{parseError ? (
 				<p className="text-[10px] text-destructive mt-0.5">{parseError}</p>
 			) : (
-				<p className="text-[10px] text-muted-foreground/70 mt-0.5">JSON object</p>
+				<p className="text-[10px] text-muted-foreground/70 mt-0.5">
+					JSON object
+				</p>
 			)}
 			{hint}
 		</div>
@@ -1194,7 +1450,9 @@ function ArrayField({
 	const hasStringTargets =
 		spec.itemKind === "string" ||
 		(spec.itemKind === "object" &&
-			(spec.itemFields ?? []).some((field) => field.type === "string" && !field.enumValues));
+			(spec.itemFields ?? []).some(
+				(field) => field.type === "string" && !field.enumValues,
+			));
 
 	const setTargetValue = (target: string, nextValue: string) => {
 		const copy = [...arr];
@@ -1249,7 +1507,14 @@ function ArrayField({
 
 	if (spec.itemKind === "unknown") {
 		// Unknown leaf shape — fall back to JSON editor.
-		return <ObjectJsonField label={label} hint={hint} value={value} onChange={onChange} />;
+		return (
+			<ObjectJsonField
+				label={label}
+				hint={hint}
+				value={value}
+				onChange={onChange}
+			/>
+		);
 	}
 
 	return (
@@ -1299,13 +1564,17 @@ function ArrayField({
 												) : f.type === "number" ? (
 													<input
 														type="number"
-														value={(row[f.name] as number | string | undefined) ?? ""}
+														value={
+															(row[f.name] as number | string | undefined) ?? ""
+														}
 														onChange={(e) => {
 															const copy = [...arr];
 															copy[i] = {
 																...row,
 																[f.name]:
-																	e.target.value === "" ? "" : Number(e.target.value),
+																	e.target.value === ""
+																		? ""
+																		: Number(e.target.value),
 															};
 															update(copy);
 														}}
@@ -1329,7 +1598,9 @@ function ArrayField({
 															inputRefs.current[`field:${i}:${f.name}`] = el;
 														}}
 														value={(row[f.name] as string) ?? ""}
-														onFocus={() => setActiveTarget(`field:${i}:${f.name}`)}
+														onFocus={() =>
+															setActiveTarget(`field:${i}:${f.name}`)
+														}
 														onChange={(e) => {
 															const copy = [...arr];
 															copy[i] = { ...row, [f.name]: e.target.value };
@@ -1348,7 +1619,8 @@ function ArrayField({
 									value={(item as number | string | undefined) ?? ""}
 									onChange={(e) => {
 										const copy = [...arr];
-										copy[i] = e.target.value === "" ? 0 : Number(e.target.value);
+										copy[i] =
+											e.target.value === "" ? 0 : Number(e.target.value);
 										update(copy);
 									}}
 									className={INPUT_CLS}
