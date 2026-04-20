@@ -47,10 +47,7 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import {
-	resolveNodeOutputLabels,
-	resolveSourceOutputLabels,
-} from "./output-labels";
+import { resolveNodeOutputLabels } from "./output-labels";
 import type {
 	AutomationDetail,
 	AutomationNodeSpec,
@@ -562,12 +559,6 @@ function triggerListLabel(triggerType: string) {
 }
 
 function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
-	const outputLabels = resolveSourceOutputLabels(
-		TRIGGER_ID,
-		new Map(),
-		new Map(),
-		data.triggerDef,
-	);
 	const summary =
 		TRIGGER_OPERATION_OVERRIDES[data.automation.trigger_type] ??
 		titleize(
@@ -600,7 +591,7 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 				className="nodrag block w-full px-5 py-4 text-left"
 			>
 				<div className="flex items-center gap-2 text-[17px] font-semibold text-[#353a44]">
-					<LightningBolt className="size-[18px] text-[#353a44]" />
+					<Zap className="size-[18px] text-[#353a44]" />
 					<span>When...</span>
 				</div>
 

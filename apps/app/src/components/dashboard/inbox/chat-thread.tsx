@@ -32,10 +32,12 @@ const platformInboxUrls: Record<string, string> = {
 
 function normalizeAttachments(value: unknown): Array<{ type: string; url: string }> {
   if (!Array.isArray(value)) return [];
+
   return value.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
     const rawType = "type" in item ? item.type : null;
     const rawUrl = "url" in item ? item.url : null;
+
     return typeof rawType === "string" && typeof rawUrl === "string"
       ? [{ type: rawType, url: rawUrl }]
       : [];
@@ -60,7 +62,7 @@ function dayKey(dateStr: string) {
 
 function EmptyThreadState() {
   return (
-    <div className="flex h-full items-center justify-center bg-[#f7f8fc] px-6">
+    <div className="flex h-full items-center justify-center bg-white px-6">
       <div className="max-w-sm text-center">
         <div className="relative mx-auto mb-8 h-32 w-32">
           <div className="absolute left-3 top-11 h-11 w-11 rounded-full bg-[#64ddee]" />
@@ -76,7 +78,7 @@ function EmptyThreadState() {
         </div>
         <h3 className="text-[28px] font-semibold tracking-tight text-slate-800">Inbox</h3>
         <p className="mt-3 text-[15px] leading-6 text-slate-500">
-          Select a conversation to view the full thread and reply from one place.
+          This is where messages from your connected channels appear. Select a chat to continue the conversation.
         </p>
       </div>
     </div>
@@ -120,6 +122,7 @@ export function ChatThread({
           if (!cancelled) setError(err?.error?.message || "Failed to load messages");
           return;
         }
+
         const json = await res.json();
         if (!cancelled) {
           setMessages((json.messages || json.data || []).map(mapApiMessage));
@@ -205,6 +208,7 @@ export function ChatThread({
         body: JSON.stringify({ text, account_id: conversation.account_id }),
       });
       const json = await res.json().catch(() => null);
+
       if (!res.ok) {
         setMessages((prev) => prev.filter((message) => message.id !== tempId));
         setSendError(json?.error?.message || json?.error || "Failed to send message");
@@ -227,6 +231,7 @@ export function ChatThread({
 
   const handleStatusButton = async () => {
     if (!conversation || !onStatusChange || statusPending) return;
+
     const nextStatus = conversation.status === "archived" ? "open" : "archived";
     setStatusPending(true);
     try {
@@ -252,35 +257,35 @@ export function ChatThread({
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
       <div className="border-b border-[#e7e9ef] bg-white">
-        <div className="flex min-h-16 items-center justify-between gap-4 px-5 py-3">
+        <div className="flex min-h-[52px] items-center justify-between gap-4 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-3">
             {conversation.participant_avatar ? (
               <img
                 src={conversation.participant_avatar}
                 alt={displayName}
-                className="size-11 rounded-full border border-[#e5e7eb] object-cover"
+                className="size-10 rounded-full border border-[#e5e7eb] object-cover"
               />
             ) : (
-              <div className="flex size-11 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f4f6fa] text-sm font-semibold text-slate-500">
+              <div className="flex size-10 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f4f6fa] text-sm font-semibold text-slate-500">
                 {displayName.charAt(0).toUpperCase()}
               </div>
             )}
 
             <div className="min-w-0">
-              <p className="truncate text-[15px] font-semibold text-slate-900">{displayName}</p>
+              <p className="truncate text-[14px] font-semibold text-slate-900">{displayName}</p>
               <p className="truncate text-[12px] text-slate-500">
                 {conversation.assigned_user_id ? "Assigned" : "Unassigned"}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
             {platformUrl && (
               <a
                 href={platformUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex size-9 items-center justify-center rounded-full border border-[#d9dee8] bg-white text-slate-500 transition-colors hover:bg-[#f8f9fc] hover:text-slate-800"
+                className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800"
                 title={`Open ${platformLabel}`}
               >
                 <ExternalLink className="size-4" />
@@ -290,7 +295,7 @@ export function ChatThread({
               type="button"
               onClick={() => void handleStatusButton()}
               disabled={statusPending || !onStatusChange}
-              className="inline-flex size-9 items-center justify-center rounded-full border border-[#d9dee8] bg-white text-slate-500 transition-colors hover:bg-[#f8f9fc] hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               title={isArchived ? "Restore conversation" : "Archive conversation"}
             >
               {statusPending ? (
@@ -304,45 +309,39 @@ export function ChatThread({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-[#eef0f5] px-5 py-2.5 text-[12px]">
-          <span className="rounded-full border border-[#d9dee8] bg-white px-3 py-1 font-medium text-slate-600">
+        <div className="flex items-center justify-between border-t border-[#eef0f5] px-4">
+          <span className="border-b-2 border-[#2d71f8] px-1 py-2 text-[13px] font-medium text-slate-800">
             {platformLabel}
           </span>
-          <span
-            className={cn(
-              "rounded-full px-3 py-1 font-medium",
-              conversation.assigned_user_id
-                ? "bg-[#eef5ff] text-[#2d71f8]"
-                : "bg-[#fff4e8] text-[#c97713]",
+          <div className="flex items-center gap-3 text-[12px] text-slate-400">
+            <span>{conversation.assigned_user_id ? "Assigned" : "Unassigned"}</span>
+            {(conversation.unread_count ?? 0) > 0 && (
+              <span className="font-medium text-[#2d71f8]">{conversation.unread_count} unread</span>
             )}
-          >
-            {conversation.assigned_user_id ? "Assigned" : "Unassigned"}
-          </span>
-          {(conversation.unread_count ?? 0) > 0 && (
-            <span className="rounded-full bg-[#eef5ff] px-3 py-1 font-semibold text-[#2d71f8]">
-              {conversation.unread_count} unread
-            </span>
-          )}
+            {isArchived && (
+              <span className="font-medium text-slate-500">Archived</span>
+            )}
+          </div>
         </div>
       </div>
 
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="relative flex-1 overflow-y-auto bg-[#f7f8fc] px-4 py-5 sm:px-6"
+        className="relative flex-1 overflow-y-auto bg-white px-4 py-5 sm:px-6"
       >
         {loading ? (
           <div className="flex h-full items-center justify-center py-12">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : error ? (
-          <div className="mx-auto flex max-w-xl items-start gap-3 rounded-2xl border border-[#f2c0c0] bg-[#fff6f6] px-4 py-3 text-sm text-[#b14242]">
+          <div className="mx-auto flex max-w-xl items-start gap-3 rounded-md border border-[#f2c0c0] bg-[#fff6f6] px-4 py-3 text-sm text-[#b14242]">
             <TriangleAlert className="mt-0.5 size-4 shrink-0" />
             <span>{error}</span>
           </div>
         ) : messages.length === 0 ? (
           <div className="flex h-full items-center justify-center py-12">
-            <div className="rounded-3xl border border-dashed border-[#d7dde7] bg-white/70 px-8 py-10 text-center">
+            <div className="text-center">
               <MessageCircle className="mx-auto size-9 text-slate-300" />
               <p className="mt-3 text-sm font-medium text-slate-700">No messages yet</p>
               <p className="mt-1 text-xs text-slate-500">
@@ -351,7 +350,7 @@ export function ChatThread({
             </div>
           </div>
         ) : (
-          <div className="mx-auto flex max-w-4xl flex-col gap-4">
+          <div className="mx-auto flex max-w-4xl flex-col gap-3">
             <AnimatePresence initial={false}>
               {messages.map((msg, index) => {
                 const isOutbound = msg.sender === "user";
@@ -369,8 +368,9 @@ export function ChatThread({
                     }}
                   >
                     {showDayDivider && (
-                      <div className="my-2 flex justify-center">
-                        <span className="rounded-full border border-[#e4e8f0] bg-white px-3 py-1 text-[11px] font-medium text-slate-500 shadow-sm">
+                      <div className="relative my-4 flex items-center justify-center">
+                        <div className="absolute inset-x-0 top-1/2 border-t border-[#ececf1]" />
+                        <span className="relative bg-white px-3 text-[12px] font-medium text-slate-400">
                           {formatMessageDayLabel(msg.created_at)}
                         </span>
                       </div>
@@ -391,7 +391,7 @@ export function ChatThread({
                         )
                       )}
 
-                      <div className={cn("max-w-[78%] min-w-0", isOutbound && "items-end")}>
+                      <div className="max-w-[78%] min-w-0">
                         {!isOutbound && (
                           <p className="mb-1 px-1 text-[12px] font-medium text-slate-500">
                             {msg.author_name || displayName}
@@ -401,10 +401,10 @@ export function ChatThread({
                         {msg.text && (
                           <div
                             className={cn(
-                              "rounded-[20px] px-4 py-3 text-[14px] leading-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
+                              "rounded-[18px] px-4 py-2.5 text-[14px] leading-6",
                               isOutbound
-                                ? "rounded-br-md border border-[#d7e4ff] bg-[#edf4ff] text-[#27364d]"
-                                : "rounded-bl-md border border-[#e4e8f0] bg-white text-slate-700",
+                                ? "rounded-br-md bg-[#edf3ff] text-[#304259]"
+                                : "rounded-bl-md bg-[#f3f4f6] text-slate-700",
                             )}
                           >
                             <p className="whitespace-pre-wrap break-words">{msg.text}</p>
@@ -421,7 +421,7 @@ export function ChatThread({
                                     href={attachment.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="block overflow-hidden rounded-2xl border border-[#dde3ee] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)]"
+                                    className="block overflow-hidden rounded-xl border border-[#dde3ee] bg-white"
                                   >
                                     <img
                                       src={attachment.url}
@@ -438,7 +438,7 @@ export function ChatThread({
                                   href={attachment.url}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-2 rounded-full border border-[#d9dee8] bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:bg-[#f8f9fc]"
+                                  className="inline-flex items-center gap-2 rounded-md border border-[#d9dee8] bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-[#f8f9fc]"
                                 >
                                   <ExternalLink className="size-3" />
                                   Attachment
@@ -471,7 +471,7 @@ export function ChatThread({
           <button
             type="button"
             onClick={scrollToBottom}
-            className="sticky bottom-4 left-1/2 flex -translate-x-1/2 items-center justify-center rounded-full border border-[#d9dee8] bg-white p-2 text-slate-500 shadow-md transition-colors hover:bg-[#f8f9fc]"
+            className="sticky bottom-4 left-1/2 flex -translate-x-1/2 items-center justify-center rounded-full border border-[#d9dee8] bg-white p-2 text-slate-500 shadow-sm transition-colors hover:bg-[#f8f9fc]"
           >
             <ArrowDown className="size-4" />
           </button>
