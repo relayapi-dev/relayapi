@@ -1,6 +1,7 @@
 import {
 	automationEnrollments,
 	automations,
+	automationTriggers,
 	contacts,
 	customFieldDefinitions,
 	customFieldValues,
@@ -28,18 +29,22 @@ export async function matchAndEnroll(
 ): Promise<string[]> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
-	const candidates = await db
-		.select()
-		.from(automations)
+	const rows = await db
+		.select({
+			automation: automations,
+			trigger: automationTriggers,
+		})
+		.from(automationTriggers)
+		.innerJoin(automations, eq(automationTriggers.automationId, automations.id))
 		.where(
 			and(
 				eq(automations.organizationId, input.organization_id),
 				eq(automations.status, "active"),
-				eq(automations.triggerType, input.trigger_type as never),
+				eq(automationTriggers.type, input.trigger_type as never),
 			),
 		);
 
-	if (candidates.length === 0) return [];
+	if (rows.length === 0) return [];
 
 	// Load contact context for filter evaluation (once, cached)
 	let tags: string[] = [];
@@ -76,25 +81,30 @@ export async function matchAndEnroll(
 
 	const enrolledIds: string[] = [];
 
-	for (const auto of candidates) {
-		// Optional account scoping
+	for (const { automation: auto, trigger } of rows) {
+		// Optional account scoping uses the matched trigger
 		if (
 			input.account_id &&
-			auto.socialAccountId &&
-			auto.socialAccountId !== input.account_id
+			trigger.socialAccountId &&
+			trigger.socialAccountId !== input.account_id
 		) {
 			continue;
 		}
 
 		// Trigger config matching (keywords, post_id, etc.) — delegated to trigger-specific matcher
-		if (!matchTriggerConfig(auto.triggerConfig as Record<string, unknown>, input.payload)) {
+		if (
+			!matchTriggerConfig(
+				trigger.config as Record<string, unknown>,
+				input.payload,
+			)
+		) {
 			continue;
 		}
 
 		// Filter check (tags, segments, predicates)
 		if (
 			!matchesTriggerFilters(
-				(auto.triggerFilters as Record<string, unknown>) ?? {},
+				(trigger.filters as Record<string, unknown>) ?? {},
 				{ tags, fields, contact },
 			)
 		) {
@@ -144,6 +154,7 @@ export async function matchAndEnroll(
 			.values({
 				automationId: auto.id,
 				automationVersion: version,
+				triggerId: trigger.id,
 				organizationId: auto.organizationId,
 				contactId: input.contact_id ?? null,
 				conversationId: input.conversation_id ?? null,

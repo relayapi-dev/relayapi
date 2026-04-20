@@ -325,21 +325,37 @@ export type AutomationEnrollmentStatus =
 	| "exited"
 	| "failed";
 
-export interface AutomationTriggerSpec {
+export interface AutomationTriggerFilters {
+	tags_any?: string[];
+	tags_all?: string[];
+	tags_none?: string[];
+	segment_id?: string;
+	predicates?: {
+		all?: Array<{ field: string; op: string; value?: unknown }>;
+		any?: Array<{ field: string; op: string; value?: unknown }>;
+		none?: Array<{ field: string; op: string; value?: unknown }>;
+	};
+}
+
+export interface AutomationTriggerInput {
+	/** Server-assigned id for existing triggers; omit to create new. */
+	id?: string;
 	type: string;
 	account_id?: string | null;
 	config?: Record<string, unknown>;
-	filters?: {
-		tags_any?: string[];
-		tags_all?: string[];
-		tags_none?: string[];
-		segment_id?: string;
-		predicates?: {
-			all?: Array<{ field: string; op: string; value?: unknown }>;
-			any?: Array<{ field: string; op: string; value?: unknown }>;
-			none?: Array<{ field: string; op: string; value?: unknown }>;
-		};
-	};
+	filters?: AutomationTriggerFilters;
+	label?: string;
+	order_index?: number;
+}
+
+export interface AutomationTrigger {
+	id: string;
+	type: string;
+	account_id: string | null;
+	config: unknown;
+	filters: unknown;
+	label: string;
+	order_index: number;
 }
 
 export interface AutomationNodeSpec {
@@ -386,7 +402,7 @@ export interface AutomationCreateParams {
 	workspace_id?: string;
 	channel: AutomationChannel;
 	status?: AutomationStatus;
-	trigger: AutomationTriggerSpec;
+	triggers: AutomationTriggerInput[];
 	nodes?: AutomationNodeSpec[];
 	edges?: AutomationEdgeSpec[];
 	exit_on_reply?: boolean;
@@ -435,10 +451,7 @@ export interface AutomationResponse {
 	description: string | null;
 	status: AutomationStatus;
 	channel: AutomationChannel;
-	trigger_type: string;
-	trigger_config: unknown;
-	trigger_filters: unknown;
-	social_account_id: string | null;
+	triggers: AutomationTrigger[];
 	entry_node_id: string | null;
 	version: number;
 	published_version: number | null;

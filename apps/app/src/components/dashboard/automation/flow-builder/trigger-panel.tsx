@@ -1,42 +1,21 @@
 import { useMemo } from "react";
-import { ChevronLeft, Tag, X, Zap } from "lucide-react";
+import { ChevronLeft, Tag, Trash2, X, Zap } from "lucide-react";
 import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { platformIcons } from "@/lib/platform-icons";
 import { cn } from "@/lib/utils";
 import type {
 	AutomationDetail,
-	AutomationNodeSpec,
 	AutomationSchema,
+	AutomationTriggerSpec,
 	SchemaTriggerDef,
 } from "./types";
 import { FilterGroupEditor, type FilterGroup } from "./filter-group-editor";
 import { INPUT_CLS } from "./field-styles";
 import { FieldRow, parseFieldsSchema } from "./property-panel";
-import {
-	defaultTriggerLabel,
-	triggerDisplayRows,
-	withTriggerDisplayRows,
-} from "./trigger-ui";
 import { TriggerTypePicker } from "./guided-flow";
 
 const PANEL_WIDTH_CLS = "w-[360px] xl:w-[392px]";
-
-const STEP_TITLE_OVERRIDES: Record<string, string> = {
-	message_text: "Send Message",
-	message_media: "Send Media",
-	message_file: "Send File",
-	condition: "Condition",
-	smart_delay: "Delay",
-	randomizer: "Randomizer",
-	http_request: "HTTP Request",
-	goto: "Go To Step",
-	end: "End Automation",
-	tag_add: "Add Tag",
-	tag_remove: "Remove Tag",
-	field_set: "Set Field",
-	field_clear: "Clear Field",
-};
 
 const TRIGGER_OPERATION_OVERRIDES: Record<string, string> = {
 	instagram_comment: "User comments on your Post or Reel",
@@ -60,37 +39,24 @@ function titleize(value: string): string {
 		.join(" ");
 }
 
-function triggerOperationLabel(automation: AutomationDetail) {
+function triggerOperationLabelFor(triggerType: string, channel: string) {
 	return (
-		TRIGGER_OPERATION_OVERRIDES[automation.trigger_type] ??
-		titleize(
-			automation.trigger_type.replace(
-				new RegExp(`^${automation.channel}_`),
-				"",
-			),
-		)
+		TRIGGER_OPERATION_OVERRIDES[triggerType] ??
+		titleize(triggerType.replace(new RegExp(`^${channel}_`), ""))
 	);
-}
-
-function nextStepLabel(node: AutomationNodeSpec | undefined) {
-	if (!node) return "Choose next step";
-	return STEP_TITLE_OVERRIDES[node.type] ?? titleize(node.type);
 }
 
 interface Props {
 	automation: AutomationDetail;
 	schema: AutomationSchema;
-	onChange: (
-		patch: Partial<
-			Pick<
-				AutomationDetail,
-				| "trigger_type"
-				| "trigger_config"
-				| "trigger_filters"
-				| "social_account_id"
-			>
-		>,
+	selectedTriggerId: string | null;
+	onSelectTrigger: (triggerId: string | null) => void;
+	onAddTrigger: (triggerType: string) => void;
+	onUpdateTrigger: (
+		triggerId: string,
+		patch: Partial<AutomationTriggerSpec>,
 	) => void;
+	onRemoveTrigger: (triggerId: string) => void;
 	onClose: () => void;
 	readOnly?: boolean;
 }
@@ -106,74 +72,187 @@ interface TriggerFiltersShape {
 export function TriggerPanel({
 	automation,
 	schema,
-	onChange,
+	selectedTriggerId,
+	onSelectTrigger,
+	onAddTrigger,
+	onUpdateTrigger,
+	onRemoveTrigger,
 	onClose,
 	readOnly,
 }: Props) {
+	const selected = selectedTriggerId
+		? (automation.triggers.find((t) => t.id === selectedTriggerId) ?? null)
+		: null;
+
+	if (!selected) {
+		return (
+			<TriggerListMode
+				automation={automation}
+				schema={schema}
+				onSelectTrigger={onSelectTrigger}
+				onAddTrigger={onAddTrigger}
+				onClose={onClose}
+				readOnly={readOnly}
+			/>
+		);
+	}
+
+	return (
+		<TriggerDetailMode
+			automation={automation}
+			schema={schema}
+			trigger={selected}
+			onBack={() => onSelectTrigger(null)}
+			onChange={(patch) => onUpdateTrigger(selected.id, patch)}
+			onRemove={() => onRemoveTrigger(selected.id)}
+			canRemove={automation.triggers.length > 1}
+			readOnly={readOnly}
+		/>
+	);
+}
+
+interface TriggerListModeProps {
+	automation: AutomationDetail;
+	schema: AutomationSchema;
+	onSelectTrigger: (triggerId: string | null) => void;
+	onAddTrigger: (triggerType: string) => void;
+	onClose: () => void;
+	readOnly?: boolean;
+}
+
+function TriggerListMode({
+	automation,
+	schema,
+	onSelectTrigger,
+	onAddTrigger,
+	onClose,
+	readOnly,
+}: TriggerListModeProps) {
+	return (
+		<div
+			className={cn(
+				PANEL_WIDTH_CLS,
+				"flex flex-col overflow-hidden border-l border-[#e6e9ef] bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.03)]",
+			)}
+		>
+			<div className="border-b border-[#e6e9ef] bg-[#e4f5e6] px-4 py-4">
+				<div className="flex items-center gap-3">
+					<button
+						type="button"
+						onClick={onClose}
+						className="rounded-full p-1 text-[#6f7786] transition hover:bg-white/70 hover:text-[#353a44]"
+						aria-label="Close"
+					>
+						<ChevronLeft className="size-4" />
+					</button>
+					<div className="min-w-0 flex-1">
+						<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
+							When...
+						</h3>
+						<p className="mt-1 text-[12px] text-[#6f7786]">
+							Configure the triggers that start this automation.
+						</p>
+					</div>
+				</div>
+			</div>
+			<ScrollArea className="flex-1 bg-[#fbfcfe]">
+				<div className="space-y-3 px-4 py-4">
+					{automation.triggers.map((t) => (
+						<button
+							key={t.id}
+							type="button"
+							onClick={() => onSelectTrigger(t.id)}
+							className="flex w-full items-center gap-3 rounded-[16px] border border-[#e6e9ef] bg-white px-4 py-3 text-left transition hover:border-[#4680ff]"
+						>
+							<div className="flex size-10 items-center justify-center rounded-full bg-[#f7ecfb] text-[#8f5bb3]">
+								<div className="scale-[0.9]">
+									{platformIcons[automation.channel] ?? (
+										<Zap className="size-4" />
+									)}
+								</div>
+							</div>
+							<div className="min-w-0 flex-1">
+								<div className="text-[12px] text-[#8b92a0]">{t.label}</div>
+								<div className="truncate text-[14px] font-medium text-[#353a44]">
+									{triggerOperationLabelFor(t.type, automation.channel)}
+								</div>
+							</div>
+						</button>
+					))}
+					{!readOnly && (
+						<TriggerTypePicker
+							automationChannel={automation.channel}
+							schema={schema}
+							onPick={onAddTrigger}
+						>
+							<button
+								type="button"
+								className="mt-2 flex h-11 w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[15px] font-medium text-[#4680ff] transition hover:border-[#bfc6d3] hover:bg-[#fafbfc]"
+							>
+								+ New Trigger
+							</button>
+						</TriggerTypePicker>
+					)}
+				</div>
+			</ScrollArea>
+		</div>
+	);
+}
+
+interface TriggerDetailModeProps {
+	automation: AutomationDetail;
+	schema: AutomationSchema;
+	trigger: AutomationTriggerSpec;
+	onBack: () => void;
+	onChange: (patch: Partial<AutomationTriggerSpec>) => void;
+	onRemove: () => void;
+	canRemove: boolean;
+	readOnly?: boolean;
+}
+
+function TriggerDetailMode({
+	automation,
+	schema,
+	trigger,
+	onBack,
+	onChange,
+	onRemove,
+	canRemove,
+	readOnly,
+}: TriggerDetailModeProps) {
 	const triggersForChannel = useMemo<SchemaTriggerDef[]>(() => {
 		return schema.triggers
 			.filter((t) => t.channel === automation.channel)
 			.sort((a, b) => a.type.localeCompare(b.type));
 	}, [schema.triggers, automation.channel]);
 
-	const selected = triggersForChannel.find(
-		(t) => t.type === automation.trigger_type,
+	const selectedTriggerDef = triggersForChannel.find(
+		(t) => t.type === trigger.type,
 	);
 
 	const configFields = useMemo(
-		() => (selected ? parseFieldsSchema(selected.config_schema) : []),
-		[selected],
+		() =>
+			selectedTriggerDef
+				? parseFieldsSchema(selectedTriggerDef.config_schema)
+				: [],
+		[selectedTriggerDef],
 	);
 
 	const config = useMemo<Record<string, unknown>>(
-		() =>
-			automation.trigger_config && typeof automation.trigger_config === "object"
-				? (automation.trigger_config as Record<string, unknown>)
-				: {},
-		[automation.trigger_config],
+		() => trigger.config ?? {},
+		[trigger.config],
 	);
 
 	const filters = useMemo<TriggerFiltersShape>(
-		() =>
-			automation.trigger_filters &&
-			typeof automation.trigger_filters === "object"
-				? (automation.trigger_filters as TriggerFiltersShape)
-				: {},
-		[automation.trigger_filters],
-	);
-
-	const displayRows = useMemo(
-		() => triggerDisplayRows(automation),
-		[automation],
-	);
-	const triggerSummary = useMemo(
-		() => triggerOperationLabel(automation),
-		[automation],
-	);
-	const connectedSteps = useMemo(
-		() =>
-			automation.edges
-				.filter((edge) => edge.from === "trigger")
-				.sort(
-					(a, b) =>
-						(a.order ?? Number.MAX_SAFE_INTEGER) -
-							(b.order ?? Number.MAX_SAFE_INTEGER) ||
-						(a.label ?? "next").localeCompare(b.label ?? "next"),
-				)
-				.map((edge) => ({
-					edge,
-					node: automation.nodes.find((node) => node.key === edge.to),
-				})),
-		[automation.edges, automation.nodes],
+		() => (trigger.filters ?? {}) as TriggerFiltersShape,
+		[trigger.filters],
 	);
 
 	const setConfigField = (name: string, v: unknown) => {
 		const next = { ...config };
 		if (v === undefined || v === null || v === "") delete next[name];
 		else next[name] = v;
-		onChange({
-			trigger_config: Object.keys(next).length ? next : undefined,
-		});
+		onChange({ config: next });
 	};
 
 	const setFilters = (patch: Partial<TriggerFiltersShape>) => {
@@ -192,15 +271,7 @@ export function TriggerPanel({
 				delete next[k];
 			}
 		}
-		onChange({
-			trigger_filters: Object.keys(next).length ? next : undefined,
-		});
-	};
-
-	const setDisplayRows = (rows: string[]) => {
-		onChange({
-			trigger_config: withTriggerDisplayRows(automation.trigger_config, rows),
-		});
+		onChange({ filters: next as Record<string, unknown> });
 	};
 
 	return (
@@ -214,18 +285,26 @@ export function TriggerPanel({
 				<div className="flex items-center gap-3">
 					<button
 						type="button"
-						onClick={onClose}
+						onClick={onBack}
 						className="rounded-full p-1 text-[#6f7786] transition hover:bg-white/70 hover:text-[#353a44]"
-						aria-label="Close trigger editor"
+						aria-label="Back to trigger list"
 					>
 						<ChevronLeft className="size-4" />
 					</button>
 					<div className="min-w-0 flex-1">
-						<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
-							When...
-						</h3>
+						<input
+							type="text"
+							value={trigger.label}
+							disabled={readOnly}
+							onChange={(event) => onChange({ label: event.target.value })}
+							placeholder="Trigger label"
+							className={cn(
+								"w-full truncate border-0 bg-transparent p-0 text-[18px] font-semibold text-[#353a44] outline-none",
+								readOnly && "opacity-60",
+							)}
+						/>
 						<p className="mt-1 text-[12px] text-[#6f7786]">
-							Configure what starts this automation.
+							{triggerOperationLabelFor(trigger.type, automation.channel)}
 						</p>
 					</div>
 				</div>
@@ -233,131 +312,6 @@ export function TriggerPanel({
 
 			<ScrollArea className="flex-1 bg-[#fbfcfe]">
 				<div className="space-y-5 px-4 py-5">
-					<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
-						<div className="space-y-3">
-							{displayRows.map((row, index) => (
-								<div
-									key={`${row}-${index}`}
-									className="rounded-[18px] border border-[#e6e9ef] bg-white p-4 shadow-[0_1px_2px_rgba(16,24,40,0.04)]"
-								>
-									<div className="flex items-start gap-3">
-										<div className="mt-0.5 flex size-7 items-center justify-center rounded-full bg-[#f7ecfb] text-[#8f5bb3]">
-											<div className="scale-[0.8]">
-												{platformIcons[automation.channel] ?? (
-													<Zap className="size-3.5" />
-												)}
-											</div>
-										</div>
-										<div className="min-w-0 flex-1">
-											<input
-												type="text"
-												value={row}
-												disabled={readOnly}
-												onChange={(event) => {
-													const next = [...displayRows];
-													next[index] = event.target.value;
-													setDisplayRows(next);
-												}}
-												placeholder={defaultTriggerLabel(
-													automation.trigger_type,
-													index + 1,
-												)}
-												className={cn(
-													"w-full border-0 bg-transparent p-0 text-[12px] font-medium text-[#8b92a0] outline-none",
-													readOnly && "opacity-60",
-												)}
-											/>
-											<div className="mt-1 text-[15px] font-medium text-[#353a44]">
-												{triggerSummary}
-											</div>
-										</div>
-										{!readOnly && displayRows.length > 1 ? (
-											<button
-												type="button"
-												onClick={() =>
-													setDisplayRows(
-														displayRows.filter(
-															(_, rowIndex) => rowIndex !== index,
-														),
-													)
-												}
-												className="rounded-md p-1 text-[#98a0ae] transition hover:bg-[#f6f8fb] hover:text-destructive"
-												aria-label={`Remove trigger row ${index + 1}`}
-											>
-												<X className="size-3.5" />
-											</button>
-										) : null}
-									</div>
-								</div>
-							))}
-						</div>
-
-						{!readOnly && (
-							<TriggerTypePicker
-								automationChannel={automation.channel}
-								schema={schema}
-								onPick={(pickedType) => {
-									if (pickedType !== automation.trigger_type) {
-										onChange({
-											trigger_type: pickedType,
-											trigger_config: withTriggerDisplayRows(undefined, [
-												defaultTriggerLabel(pickedType, 1),
-											]),
-										});
-										return;
-									}
-									setDisplayRows([
-										...displayRows,
-										defaultTriggerLabel(pickedType, displayRows.length + 1),
-									]);
-								}}
-							>
-								<button
-									type="button"
-									className="mt-4 flex h-11 w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[16px] font-medium text-[#4680ff] transition hover:border-[#bfc6d3] hover:bg-[#fafbfc]"
-								>
-									+ New Trigger
-								</button>
-							</TriggerTypePicker>
-						)}
-					</div>
-
-					<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
-						<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
-							Then...
-						</div>
-						<div className="mt-4 space-y-3">
-							{connectedSteps.length === 0 ? (
-								<div className="rounded-[16px] border border-dashed border-[#d9dde6] px-4 py-4 text-[13px] text-[#7e8695]">
-									Add a step to continue after the trigger runs.
-								</div>
-							) : (
-								connectedSteps.map(({ edge, node }) => (
-									<div
-										key={`${edge.to}-${edge.label ?? "next"}`}
-										className="flex items-center gap-3 rounded-[16px] border border-[#d9dde6] bg-white px-4 py-4"
-									>
-										<div className="flex size-10 items-center justify-center rounded-full bg-[#f7ecfb] text-[#8f5bb3]">
-											<div className="scale-[0.9]">
-												{platformIcons[automation.channel] ?? (
-													<Zap className="size-4" />
-												)}
-											</div>
-										</div>
-										<div className="min-w-0 flex-1">
-											<div className="text-[12px] text-[#8b92a0]">
-												{titleize(automation.channel)}
-											</div>
-											<div className="truncate text-[16px] font-medium text-[#353a44]">
-												{nextStepLabel(node)}
-											</div>
-										</div>
-									</div>
-								))
-							)}
-						</div>
-					</div>
-
 					<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
 						<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
 							Trigger Settings
@@ -377,13 +331,10 @@ export function TriggerPanel({
 									Trigger type <span className="text-destructive">*</span>
 								</label>
 								<select
-									value={automation.trigger_type}
+									value={trigger.type}
 									disabled={readOnly}
 									onChange={(e) =>
-										onChange({
-											trigger_type: e.target.value,
-											trigger_config: undefined,
-										})
+										onChange({ type: e.target.value, config: {} })
 									}
 									className="h-10 w-full rounded-xl border border-[#d9dde6] bg-white px-3 text-[13px] text-[#353a44] shadow-[0_1px_2px_rgba(16,24,40,0.04)] outline-none disabled:opacity-60"
 								>
@@ -393,9 +344,9 @@ export function TriggerPanel({
 										</option>
 									))}
 								</select>
-								{selected?.description && (
+								{selectedTriggerDef?.description && (
 									<p className="mt-1 text-[11px] text-[#7e8695]">
-										{selected.description}
+										{selectedTriggerDef.description}
 									</p>
 								)}
 							</div>
@@ -408,9 +359,9 @@ export function TriggerPanel({
 									className={cn(readOnly && "pointer-events-none opacity-60")}
 								>
 									<AccountSearchCombobox
-										value={automation.social_account_id ?? null}
+										value={trigger.account_id ?? null}
 										onSelect={(accountId) =>
-											onChange({ social_account_id: accountId })
+											onChange({ account_id: accountId })
 										}
 										platforms={
 											automation.channel === "multi"
@@ -492,6 +443,30 @@ export function TriggerPanel({
 							/>
 						</div>
 					</div>
+
+					{!readOnly && (
+						<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
+							<button
+								type="button"
+								onClick={onRemove}
+								disabled={!canRemove}
+								className={cn(
+									"flex w-full items-center justify-center gap-2 rounded-[14px] border border-dashed px-3 py-3 text-[13px] font-medium transition",
+									canRemove
+										? "border-destructive/30 text-destructive hover:bg-destructive/5"
+										: "border-[#e6e9ef] text-[#bfc6d3] cursor-not-allowed",
+								)}
+							>
+								<Trash2 className="size-3.5" />
+								Delete trigger
+							</button>
+							{!canRemove && (
+								<p className="mt-2 text-center text-[11px] text-[#7e8695]">
+									At least one trigger is required.
+								</p>
+							)}
+						</div>
+					)}
 				</div>
 			</ScrollArea>
 		</div>

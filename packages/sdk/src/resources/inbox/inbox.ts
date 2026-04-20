@@ -9,6 +9,7 @@ import {
   ConversationUpdateParams,
   ConversationUpdateResponse,
   Conversations,
+  InboxNote,
   MessageActionResponse,
   MessageAddReactionParams,
   MessageDeleteParams,
@@ -16,6 +17,12 @@ import {
   MessageSendParams,
   MessageSendResponse,
   MessageSendTypingParams,
+  NoteCreateParams,
+  NoteDeleteParams,
+  NoteDeleteResponse,
+  NoteListResponse,
+  NoteResponse,
+  NoteUpdateParams,
 } from './conversations';
 import * as CommentsAPI from './comments/comments';
 import {
@@ -64,6 +71,10 @@ export declare namespace Inbox {
     type ConversationUpdateResponse as ConversationUpdateResponse,
     type MessageSendResponse as MessageSendResponse,
     type MessageActionResponse as MessageActionResponse,
+    type InboxNote as InboxNote,
+    type NoteListResponse as NoteListResponse,
+    type NoteResponse as NoteResponse,
+    type NoteDeleteResponse as NoteDeleteResponse,
     type ConversationListParams as ConversationListParams,
     type ConversationUpdateParams as ConversationUpdateParams,
     type MessageSendParams as MessageSendParams,
@@ -71,6 +82,9 @@ export declare namespace Inbox {
     type MessageAddReactionParams as MessageAddReactionParams,
     type MessageRemoveReactionParams as MessageRemoveReactionParams,
     type MessageDeleteParams as MessageDeleteParams,
+    type NoteCreateParams as NoteCreateParams,
+    type NoteUpdateParams as NoteUpdateParams,
+    type NoteDeleteParams as NoteDeleteParams,
   };
 
   export {

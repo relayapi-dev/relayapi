@@ -1,9 +1,6 @@
 import type {
 	AutomationDetail,
-	AutomationEdgeSpec,
-	AutomationNodeSpec,
 	AutomationSchema,
-	SchemaNodeDef,
 } from "./types";
 import { resolveNodeOutputLabels } from "./output-labels";
 
@@ -14,53 +11,73 @@ export interface ValidationIssue {
 }
 
 export function validateGraph(
-	automation: Pick<
-		AutomationDetail,
-		"trigger_type" | "trigger_config" | "social_account_id" | "nodes" | "edges"
-	>,
+	automation: Pick<AutomationDetail, "triggers" | "nodes" | "edges">,
 	schema: AutomationSchema,
 ): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
+
+	if (!automation.triggers || automation.triggers.length === 0) {
+		issues.push({
+			severity: "error",
+			message: "Automation must have at least one trigger",
+			nodeKey: "trigger",
+		});
+		return issues;
+	}
+
 	const { nodes, edges } = automation;
 	const nodeKeys = new Set(nodes.map((n) => n.key));
 	nodeKeys.add("trigger");
 	const schemaByType = new Map(schema.nodes.map((n) => [n.type, n]));
-	const triggerDef = schema.triggers.find((trigger) => trigger.type === automation.trigger_type);
 
-	if (!triggerDef) {
-		issues.push({
-			nodeKey: "trigger",
-			message: `Unknown trigger type "${automation.trigger_type}"`,
-			severity: "error",
-		});
-	} else {
+	for (const trigger of automation.triggers) {
+		const triggerDef = schema.triggers.find((s) => s.type === trigger.type);
+		if (!triggerDef) {
+			issues.push({
+				severity: "error",
+				message: `Trigger "${trigger.label}" has unknown type "${trigger.type}"`,
+				nodeKey: `trigger:${trigger.id}`,
+			});
+			continue;
+		}
 		const requiredTriggerFields = extractRequiredFields(triggerDef.config_schema);
 		const triggerConfig =
-			automation.trigger_config && typeof automation.trigger_config === "object"
-				? (automation.trigger_config as Record<string, unknown>)
+			trigger.config && typeof trigger.config === "object"
+				? (trigger.config as Record<string, unknown>)
 				: {};
 		for (const field of requiredTriggerFields) {
 			const value = triggerConfig[field];
 			if (value === undefined || value === null || value === "") {
 				issues.push({
-					nodeKey: "trigger",
-					message: `Trigger is missing required field "${field}"`,
 					severity: "error",
+					message: `Trigger "${trigger.label}" is missing required field "${field}"`,
+					nodeKey: `trigger:${trigger.id}`,
 				});
 			}
 		}
 		if (
-			automation.trigger_type !== "manual" &&
-			automation.trigger_type !== "external_api" &&
-			!automation.social_account_id
+			trigger.type !== "manual" &&
+			trigger.type !== "external_api" &&
+			!trigger.account_id
 		) {
 			issues.push({
-				nodeKey: "trigger",
-				message: "Trigger is missing a bound account",
 				severity: "error",
+				message: `Trigger "${trigger.label}" is missing a bound account`,
+				nodeKey: `trigger:${trigger.id}`,
 			});
 		}
 	}
+
+	// Union of allowed output labels across all triggers. For the `trigger`
+	// virtual source on the canvas, an edge label is valid if *any* trigger
+	// exposes it as an output.
+	const triggerOutputLabels = new Set<string>();
+	for (const trigger of automation.triggers) {
+		const def = schema.triggers.find((s) => s.type === trigger.type);
+		const labels = def?.output_labels ?? ["next"];
+		for (const label of labels) triggerOutputLabels.add(label);
+	}
+	if (triggerOutputLabels.size === 0) triggerOutputLabels.add("next");
 
 	for (const e of edges) {
 		if (!nodeKeys.has(e.from)) {
@@ -78,7 +95,7 @@ export function validateGraph(
 		const sourceNode = nodes.find((n) => n.key === e.from);
 		const allowedLabels =
 			e.from === "trigger"
-				? triggerDef?.output_labels ?? ["next"]
+				? Array.from(triggerOutputLabels)
 				: resolveNodeOutputLabels(
 						sourceNode,
 						sourceNode ? schemaByType.get(sourceNode.type) ?? null : null,

@@ -1,6 +1,3 @@
-import type { AutomationDetail } from "./types";
-
-export const TRIGGER_UI_DISPLAY_KEY = "__ui_display_triggers";
 export const TRIGGER_UI_POSITION_KEY = "__ui_canvas_position";
 
 export interface TriggerCanvasPosition {
@@ -36,39 +33,16 @@ export function defaultTriggerLabel(
 	return `${normalized} #${index}`;
 }
 
-export function triggerDisplayRows(
-	automation: Pick<AutomationDetail, "trigger_config" | "trigger_type">,
-): string[] {
-	const config = triggerConfigRecord(automation.trigger_config);
-	const rows = config[TRIGGER_UI_DISPLAY_KEY];
-	if (Array.isArray(rows)) {
-		const normalized = rows
-			.map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-			.filter(Boolean);
-		if (normalized.length > 0) return normalized;
-	}
-	return [defaultTriggerLabel(automation.trigger_type, 1)];
-}
-
-export function withTriggerDisplayRows(
-	configValue: unknown,
-	rows: string[],
-): Record<string, unknown> | undefined {
-	const config = triggerConfigRecord(configValue);
-	const normalized = rows.map((row) => row.trim()).filter(Boolean);
-	if (normalized.length > 1 || normalized[0] !== undefined) {
-		config[TRIGGER_UI_DISPLAY_KEY] = normalized;
-	} else {
-		delete config[TRIGGER_UI_DISPLAY_KEY];
-	}
-	return Object.keys(config).length > 0 ? config : undefined;
+export function makeLocalTriggerId(): string {
+	return `local_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export function triggerCanvasPosition(
-	automation: Pick<AutomationDetail, "trigger_config">,
+	triggers: Array<{ config: Record<string, unknown> }>,
 ): TriggerCanvasPosition | null {
-	const config = triggerConfigRecord(automation.trigger_config);
-	const value = config[TRIGGER_UI_POSITION_KEY];
+	const first = triggers[0];
+	if (!first) return null;
+	const value = first.config?.[TRIGGER_UI_POSITION_KEY];
 	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 	const x = (value as Record<string, unknown>).x;
 	const y = (value as Record<string, unknown>).y;
@@ -78,8 +52,8 @@ export function triggerCanvasPosition(
 export function withTriggerCanvasPosition(
 	configValue: unknown,
 	position: TriggerCanvasPosition,
-): Record<string, unknown> | undefined {
+): Record<string, unknown> {
 	const config = triggerConfigRecord(configValue);
 	config[TRIGGER_UI_POSITION_KEY] = position;
-	return Object.keys(config).length > 0 ? config : undefined;
+	return config;
 }

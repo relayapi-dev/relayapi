@@ -8,6 +8,7 @@ import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import {
 	automationEdges,
 	automationNodes,
+	automationTriggers,
 	automations,
 	type Database,
 } from "@relayapi/db";
@@ -46,25 +47,38 @@ async function materialize(
 	createdBy: string,
 	spec: MaterializedTemplateSpec,
 ): Promise<MaterializedAutomation> {
-	const [auto] = await db
-		.insert(automations)
-		.values({
-			organizationId: orgId,
-			workspaceId: spec.workspace_id ?? null,
-			name: spec.name,
-			status: spec.status,
-			channel: spec.channel as never,
-			triggerType: spec.trigger.type as never,
-			triggerConfig: spec.trigger.config,
-			triggerFilters: spec.trigger.filters,
-			socialAccountId: spec.trigger.account_id ?? null,
-			exitOnReply: spec.exit_on_reply,
-			allowReentry: spec.allow_reentry,
-			reentryCooldownMin: spec.reentry_cooldown_min ?? null,
-			createdBy,
-		})
-		.returning();
-	if (!auto) throw new Error("insert automation failed");
+	// Insert automation header + per-trigger rows in a single transaction.
+	const { auto } = await db.transaction(async (tx) => {
+		const [inserted] = await tx
+			.insert(automations)
+			.values({
+				organizationId: orgId,
+				workspaceId: spec.workspace_id ?? null,
+				name: spec.name,
+				status: spec.status,
+				channel: spec.channel as never,
+				exitOnReply: spec.exit_on_reply,
+				allowReentry: spec.allow_reentry,
+				reentryCooldownMin: spec.reentry_cooldown_min ?? null,
+				createdBy,
+			})
+			.returning();
+		if (!inserted) throw new Error("insert automation failed");
+
+		await tx.insert(automationTriggers).values(
+			spec.triggers.map((t, idx) => ({
+				automationId: inserted.id,
+				type: t.type as never,
+				config: t.config ?? {},
+				filters: t.filters ?? {},
+				socialAccountId: t.account_id ?? null,
+				label: t.label ?? `Trigger #${idx + 1}`,
+				orderIndex: t.order_index ?? idx,
+			})),
+		);
+
+		return { auto: inserted };
+	});
 
 	const [triggerNode] = await db
 		.insert(automationNodes)
@@ -76,17 +90,19 @@ async function materialize(
 		})
 		.returning();
 
-	const nodeRows = await db
-		.insert(automationNodes)
-		.values(
-			spec.nodes.map((n) => ({
-				automationId: auto.id,
-				key: n.key,
-				type: n.type as never,
-				config: extractNodeConfig(n),
-			})),
-		)
-		.returning();
+	const nodeRows = spec.nodes.length
+		? await db
+				.insert(automationNodes)
+				.values(
+					spec.nodes.map((n) => ({
+						automationId: auto.id,
+						key: n.key,
+						type: n.type as never,
+						config: extractNodeConfig(n),
+					})),
+				)
+				.returning()
+		: [];
 
 	const keyToId = new Map<string, string>([
 		["trigger", triggerNode!.id],
@@ -114,13 +130,12 @@ async function materialize(
 		await publishVersion(db, auto.id);
 	}
 
+	// Read the stored rows back so the response reflects real DB-assigned IDs.
 	const updated = await db.query.automations.findFirst({
 		where: eq(automations.id, auto.id),
 	});
 	if (!updated) throw new Error("automation disappeared");
 
-	// Read the stored nodes + edges back so the response reflects the real IDs
-	// + order assigned by the database — not fabricated placeholders.
 	const storedNodes = await db
 		.select()
 		.from(automationNodes)
@@ -129,6 +144,10 @@ async function materialize(
 		.select()
 		.from(automationEdges)
 		.where(eq(automationEdges.automationId, auto.id));
+	const storedTriggers = await db
+		.select()
+		.from(automationTriggers)
+		.where(eq(automationTriggers.automationId, auto.id));
 	const idToKey = new Map(storedNodes.map((n) => [n.id, n.key]));
 
 	return {
@@ -139,11 +158,18 @@ async function materialize(
 		description: updated.description ?? null,
 		status: updated.status as MaterializedAutomation["status"],
 		channel: updated.channel as MaterializedAutomation["channel"],
-		trigger_type:
-			updated.triggerType as MaterializedAutomation["trigger_type"],
-		trigger_config: updated.triggerConfig,
-		trigger_filters: updated.triggerFilters,
-		social_account_id: updated.socialAccountId,
+		triggers: storedTriggers
+			.slice()
+			.sort((a, b) => a.orderIndex - b.orderIndex)
+			.map((t) => ({
+				id: t.id,
+				type: t.type,
+				account_id: t.socialAccountId,
+				config: t.config,
+				filters: t.filters,
+				label: t.label,
+				order_index: t.orderIndex,
+			})),
 		entry_node_id: updated.entryNodeId,
 		version: updated.version,
 		published_version: updated.publishedVersion,

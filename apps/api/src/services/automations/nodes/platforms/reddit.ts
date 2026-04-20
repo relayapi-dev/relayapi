@@ -18,6 +18,7 @@ import { eq } from "drizzle-orm";
 import { decryptToken } from "../../../../lib/crypto";
 import { fetchWithTimeout } from "../../../../lib/fetch-timeout";
 import { applyMergeTags } from "../../merge-tags";
+import { resolveEnrollmentTrigger } from "../../resolve-trigger";
 import type {
 	NodeExecutionContext,
 	NodeExecutionResult,
@@ -35,7 +36,8 @@ interface RdtCtx {
 async function loadCtx(
 	ctx: NodeExecutionContext,
 ): Promise<RdtCtx | NodeExecutionResult> {
-	const accountId = ctx.snapshot.trigger.account_id;
+	const trigger = resolveEnrollmentTrigger(ctx.snapshot, ctx.enrollment.trigger_id);
+	const accountId = trigger.account_id;
 	if (!accountId) return { kind: "fail", error: "automation has no social account bound" };
 	const account = await ctx.db.query.socialAccounts.findFirst({
 		where: eq(socialAccounts.id, accountId),

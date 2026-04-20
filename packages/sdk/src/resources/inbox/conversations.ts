@@ -119,6 +119,55 @@ export class Conversations extends APIResource {
       },
     );
   }
+
+  /**
+   * List internal notes on a conversation
+   */
+  listNotes(conversationID: string, options?: RequestOptions): APIPromise<NoteListResponse> {
+    return this._client.get(path`/v1/inbox/conversations/${conversationID}/notes`, options);
+  }
+
+  /**
+   * Add an internal note to a conversation
+   */
+  createNote(
+    conversationID: string,
+    body: NoteCreateParams,
+    options?: RequestOptions,
+  ): APIPromise<NoteResponse> {
+    return this._client.post(path`/v1/inbox/conversations/${conversationID}/notes`, {
+      body,
+      ...options,
+    });
+  }
+
+  /**
+   * Update an internal note
+   */
+  updateNote(
+    noteID: string,
+    body: NoteUpdateParams,
+    options?: RequestOptions,
+  ): APIPromise<NoteResponse> {
+    return this._client.patch(path`/v1/inbox/notes/${noteID}`, {
+      body,
+      ...options,
+    });
+  }
+
+  /**
+   * Delete an internal note
+   */
+  deleteNote(
+    noteID: string,
+    params: NoteDeleteParams,
+    options?: RequestOptions,
+  ): APIPromise<NoteDeleteResponse> {
+    return this._client.delete(path`/v1/inbox/notes/${noteID}`, {
+      query: params,
+      ...options,
+    });
+  }
 }
 
 export interface ConversationGetResponse {
@@ -668,6 +717,54 @@ export interface MessageDeleteParams {
   account_id: string;
 }
 
+export interface InboxNote {
+  id: string;
+
+  conversation_id: string;
+
+  organization_id: string;
+
+  user_id: string;
+
+  author_name: string | null;
+
+  author_email: string | null;
+
+  text: string;
+
+  created_at: string;
+
+  updated_at: string;
+}
+
+export interface NoteListResponse {
+  data: Array<InboxNote>;
+}
+
+export interface NoteResponse {
+  note: InboxNote;
+}
+
+export interface NoteCreateParams {
+  text: string;
+
+  user_id: string;
+}
+
+export interface NoteUpdateParams {
+  text: string;
+
+  user_id: string;
+}
+
+export interface NoteDeleteParams {
+  user_id: string;
+}
+
+export interface NoteDeleteResponse {
+  success: boolean;
+}
+
 export declare namespace Conversations {
   export {
     type ConversationGetResponse as ConversationGetResponse,
@@ -676,6 +773,10 @@ export declare namespace Conversations {
     type ConversationMarkReadResponse as ConversationMarkReadResponse,
     type MessageSendResponse as MessageSendResponse,
     type MessageActionResponse as MessageActionResponse,
+    type InboxNote as InboxNote,
+    type NoteListResponse as NoteListResponse,
+    type NoteResponse as NoteResponse,
+    type NoteDeleteResponse as NoteDeleteResponse,
     type ConversationListParams as ConversationListParams,
     type ConversationUpdateParams as ConversationUpdateParams,
     type ConversationMarkReadParams as ConversationMarkReadParams,
@@ -684,5 +785,8 @@ export declare namespace Conversations {
     type MessageAddReactionParams as MessageAddReactionParams,
     type MessageRemoveReactionParams as MessageRemoveReactionParams,
     type MessageDeleteParams as MessageDeleteParams,
+    type NoteCreateParams as NoteCreateParams,
+    type NoteUpdateParams as NoteUpdateParams,
+    type NoteDeleteParams as NoteDeleteParams,
   };
 }

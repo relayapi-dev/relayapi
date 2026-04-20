@@ -18,8 +18,13 @@ export interface AutomationEdgeSpec {
 }
 
 export interface AutomationTriggerSpec {
+	id: string;
 	type: string;
-	[field: string]: unknown;
+	account_id: string | null;
+	config: Record<string, unknown>;
+	filters: Record<string, unknown>;
+	label: string;
+	order_index: number;
 }
 
 export interface AutomationDetail {
@@ -28,13 +33,7 @@ export interface AutomationDetail {
 	description?: string | null;
 	channel: string;
 	status: AutomationStatus;
-	// The API returns trigger metadata as flat fields (see serializeAutomation in
-	// apps/api/src/routes/automations.ts), not a nested `trigger` object — only
-	// create/update *requests* use the nested spec shape.
-	trigger_type: string;
-	trigger_config?: unknown;
-	trigger_filters?: unknown;
-	social_account_id?: string | null;
+	triggers: AutomationTriggerSpec[];
 	nodes: AutomationNodeSpec[];
 	edges: AutomationEdgeSpec[];
 	workspace_id?: string | null;

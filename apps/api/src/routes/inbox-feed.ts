@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { inboxConversations, inboxMessages, member } from "@relayapi/db";
+import { inboxConversationNotes, inboxConversations, inboxMessages, member, user as userTable } from "@relayapi/db";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { ErrorResponse } from "../schemas/common";
@@ -25,6 +25,15 @@ import {
 	SendMessageBody,
 	SendTypingBody,
 } from "../schemas/inbox";
+import {
+	CreateInboxNoteBody,
+	DeleteInboxNoteQuery,
+	DeleteInboxNoteResponse,
+	InboxNoteResponse,
+	ListInboxNotesResponse,
+	NoteIdParam,
+	UpdateInboxNoteBody,
+} from "../schemas/inbox-notes";
 import {
 	getConversationWithMessages,
 	getInboxStats,
@@ -1411,6 +1420,427 @@ app.openapi(deleteMessageRoute, async (c) => {
 	} catch {
 		return c.json({ success: false }, 200);
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Notes — list
+// ---------------------------------------------------------------------------
+
+const listNotesRoute = createRoute({
+	operationId: "listConversationNotes",
+	method: "get",
+	path: "/conversations/{id}/notes",
+	tags: ["Inbox"],
+	summary: "List internal notes on a conversation",
+	security: [{ Bearer: [] }],
+	request: { params: ConversationIdParam },
+	responses: {
+		200: {
+			description: "List of notes",
+			content: { "application/json": { schema: ListInboxNotesResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Conversation not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(listNotesRoute, async (c) => {
+	const db = c.get("db");
+	const orgId = c.get("orgId");
+	const { id: conversationId } = c.req.valid("param");
+
+	const [conv] = await db
+		.select({ id: inboxConversations.id })
+		.from(inboxConversations)
+		.where(
+			and(
+				eq(inboxConversations.id, conversationId),
+				eq(inboxConversations.organizationId, orgId),
+			),
+		)
+		.limit(1);
+
+	if (!conv) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Conversation not found" } } as never,
+			404 as never,
+		);
+	}
+
+	const rows = await db
+		.select({
+			id: inboxConversationNotes.id,
+			conversationId: inboxConversationNotes.conversationId,
+			organizationId: inboxConversationNotes.organizationId,
+			userId: inboxConversationNotes.userId,
+			text: inboxConversationNotes.text,
+			createdAt: inboxConversationNotes.createdAt,
+			updatedAt: inboxConversationNotes.updatedAt,
+			authorName: userTable.name,
+			authorEmail: userTable.email,
+		})
+		.from(inboxConversationNotes)
+		.leftJoin(userTable, eq(userTable.id, inboxConversationNotes.userId))
+		.where(eq(inboxConversationNotes.conversationId, conversationId))
+		.orderBy(inboxConversationNotes.createdAt);
+
+	return c.json(
+		{
+			data: rows.map((r) => ({
+				id: r.id,
+				conversation_id: r.conversationId,
+				organization_id: r.organizationId,
+				user_id: r.userId,
+				author_name: r.authorName ?? null,
+				author_email: r.authorEmail ?? null,
+				text: r.text,
+				created_at: r.createdAt.toISOString(),
+				updated_at: r.updatedAt.toISOString(),
+			})),
+		} as never,
+		200,
+	);
+});
+
+// ---------------------------------------------------------------------------
+// Notes — create
+// ---------------------------------------------------------------------------
+
+const createNoteRoute = createRoute({
+	operationId: "createConversationNote",
+	method: "post",
+	path: "/conversations/{id}/notes",
+	tags: ["Inbox"],
+	summary: "Add an internal note to a conversation",
+	security: [{ Bearer: [] }],
+	request: {
+		params: ConversationIdParam,
+		body: {
+			content: { "application/json": { schema: CreateInboxNoteBody } },
+		},
+	},
+	responses: {
+		201: {
+			description: "Created note",
+			content: { "application/json": { schema: InboxNoteResponse } },
+		},
+		400: {
+			description: "Bad request",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Conversation not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(createNoteRoute, async (c) => {
+	const db = c.get("db");
+	const orgId = c.get("orgId");
+	const { id: conversationId } = c.req.valid("param");
+	const body = c.req.valid("json");
+
+	// Verify the acting user belongs to the org
+	const orgMember = await db.query.member.findFirst({
+		where: and(
+			eq(member.organizationId, orgId),
+			eq(member.userId, body.user_id),
+		),
+	});
+	if (!orgMember) {
+		return c.json(
+			{
+				error: {
+					code: "BAD_REQUEST",
+					message: `Organization member '${body.user_id}' not found`,
+				},
+			} as never,
+			400 as never,
+		);
+	}
+
+	const [conv] = await db
+		.select({ id: inboxConversations.id })
+		.from(inboxConversations)
+		.where(
+			and(
+				eq(inboxConversations.id, conversationId),
+				eq(inboxConversations.organizationId, orgId),
+			),
+		)
+		.limit(1);
+
+	if (!conv) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Conversation not found" } } as never,
+			404 as never,
+		);
+	}
+
+	const [row] = await db
+		.insert(inboxConversationNotes)
+		.values({
+			conversationId,
+			organizationId: orgId,
+			userId: body.user_id,
+			text: body.text,
+		})
+		.returning();
+
+	if (!row) {
+		return c.json(
+			{
+				error: {
+					code: "INTERNAL_ERROR",
+					message: "Failed to create note",
+				},
+			} as never,
+			500 as never,
+		);
+	}
+
+	const [author] = await db
+		.select({ name: userTable.name, email: userTable.email })
+		.from(userTable)
+		.where(eq(userTable.id, body.user_id))
+		.limit(1);
+
+	return c.json(
+		{
+			note: {
+				id: row.id,
+				conversation_id: row.conversationId,
+				organization_id: row.organizationId,
+				user_id: row.userId,
+				author_name: author?.name ?? null,
+				author_email: author?.email ?? null,
+				text: row.text,
+				created_at: row.createdAt.toISOString(),
+				updated_at: row.updatedAt.toISOString(),
+			},
+		} as never,
+		201,
+	);
+});
+
+// ---------------------------------------------------------------------------
+// Notes — update
+// ---------------------------------------------------------------------------
+
+const updateNoteRoute = createRoute({
+	operationId: "updateInboxNote",
+	method: "patch",
+	path: "/notes/{noteId}",
+	tags: ["Inbox"],
+	summary: "Update an internal note",
+	security: [{ Bearer: [] }],
+	request: {
+		params: NoteIdParam,
+		body: { content: { "application/json": { schema: UpdateInboxNoteBody } } },
+	},
+	responses: {
+		200: {
+			description: "Updated note",
+			content: { "application/json": { schema: InboxNoteResponse } },
+		},
+		400: {
+			description: "Bad request",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Note not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(updateNoteRoute, async (c) => {
+	const db = c.get("db");
+	const orgId = c.get("orgId");
+	const { noteId } = c.req.valid("param");
+	const body = c.req.valid("json");
+
+	// Verify the acting user belongs to the org
+	const orgMember = await db.query.member.findFirst({
+		where: and(
+			eq(member.organizationId, orgId),
+			eq(member.userId, body.user_id),
+		),
+	});
+	if (!orgMember) {
+		return c.json(
+			{
+				error: {
+					code: "BAD_REQUEST",
+					message: `Organization member '${body.user_id}' not found`,
+				},
+			} as never,
+			400 as never,
+		);
+	}
+
+	const [existing] = await db
+		.select()
+		.from(inboxConversationNotes)
+		.where(eq(inboxConversationNotes.id, noteId))
+		.limit(1);
+
+	if (!existing || existing.organizationId !== orgId) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Note not found" } } as never,
+			404 as never,
+		);
+	}
+
+	if (existing.userId !== body.user_id) {
+		return c.json(
+			{ error: { code: "FORBIDDEN", message: "Cannot edit another user's note" } } as never,
+			403 as never,
+		);
+	}
+
+	const [row] = await db
+		.update(inboxConversationNotes)
+		.set({ text: body.text, updatedAt: new Date() })
+		.where(eq(inboxConversationNotes.id, noteId))
+		.returning();
+
+	if (!row) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Note not found" } } as never,
+			404 as never,
+		);
+	}
+
+	const [author] = await db
+		.select({ name: userTable.name, email: userTable.email })
+		.from(userTable)
+		.where(eq(userTable.id, row.userId))
+		.limit(1);
+
+	return c.json(
+		{
+			note: {
+				id: row.id,
+				conversation_id: row.conversationId,
+				organization_id: row.organizationId,
+				user_id: row.userId,
+				author_name: author?.name ?? null,
+				author_email: author?.email ?? null,
+				text: row.text,
+				created_at: row.createdAt.toISOString(),
+				updated_at: row.updatedAt.toISOString(),
+			},
+		} as never,
+		200,
+	);
+});
+
+// ---------------------------------------------------------------------------
+// Notes — delete
+// ---------------------------------------------------------------------------
+
+const deleteNoteRoute = createRoute({
+	operationId: "deleteInboxNote",
+	method: "delete",
+	path: "/notes/{noteId}",
+	tags: ["Inbox"],
+	summary: "Delete an internal note",
+	security: [{ Bearer: [] }],
+	request: {
+		params: NoteIdParam,
+		query: DeleteInboxNoteQuery,
+	},
+	responses: {
+		200: {
+			description: "Deleted",
+			content: { "application/json": { schema: DeleteInboxNoteResponse } },
+		},
+		400: {
+			description: "Bad request",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Note not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(deleteNoteRoute, async (c) => {
+	const db = c.get("db");
+	const orgId = c.get("orgId");
+	const { noteId } = c.req.valid("param");
+	const { user_id: actingUserId } = c.req.valid("query");
+
+	const orgMember = await db.query.member.findFirst({
+		where: and(
+			eq(member.organizationId, orgId),
+			eq(member.userId, actingUserId),
+		),
+	});
+	if (!orgMember) {
+		return c.json(
+			{
+				error: {
+					code: "BAD_REQUEST",
+					message: `Organization member '${actingUserId}' not found`,
+				},
+			} as never,
+			400 as never,
+		);
+	}
+
+	const [existing] = await db
+		.select()
+		.from(inboxConversationNotes)
+		.where(eq(inboxConversationNotes.id, noteId))
+		.limit(1);
+
+	if (!existing || existing.organizationId !== orgId) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Note not found" } } as never,
+			404 as never,
+		);
+	}
+
+	if (existing.userId !== actingUserId) {
+		return c.json(
+			{ error: { code: "FORBIDDEN", message: "Cannot delete another user's note" } } as never,
+			403 as never,
+		);
+	}
+
+	await db.delete(inboxConversationNotes).where(eq(inboxConversationNotes.id, noteId));
+
+	return c.json({ success: true } as never, 200);
 });
 
 export default app;

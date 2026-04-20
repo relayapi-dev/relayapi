@@ -51,11 +51,7 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { resolveNodeOutputLabels } from "./output-labels";
-import {
-	defaultTriggerLabel,
-	triggerCanvasPosition,
-	triggerDisplayRows,
-} from "./trigger-ui";
+import { triggerCanvasPosition } from "./trigger-ui";
 import type {
 	AutomationDetail,
 	AutomationNodeSpec,
@@ -168,7 +164,6 @@ interface SharedNodeData {
 	highlighted: boolean;
 	readOnly?: boolean;
 	schema: AutomationSchema;
-	onAddTriggerRow: (triggerType?: string) => void;
 	onDeleteNode: (key: string) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
 	onSelect: (key: string | null) => void;
@@ -178,6 +173,8 @@ interface TriggerCardData extends SharedNodeData {
 	kind: "trigger";
 	automation: AutomationDetail;
 	connectedOutputs: string[];
+	onAddTrigger: (triggerType: string) => void;
+	onSelectTrigger: (triggerId: string) => void;
 }
 
 interface StepCardData extends SharedNodeData {
@@ -207,7 +204,8 @@ interface Props {
 	highlightKeys: Set<string>;
 	selectedKey: string | null;
 	onMoveNode?: (key: string, position: XYPosition) => void;
-	onAddTriggerRow: (triggerType?: string) => void;
+	onAddTrigger: (triggerType: string) => void;
+	onSelectTrigger: (triggerId: string) => void;
 	onSelect: (key: string | null) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
 	onDeleteEdge: (edgeIndex: number) => void;
@@ -463,7 +461,7 @@ function resolveNodePosition(
 ): XYPosition {
 	if (key === TRIGGER_ID) {
 		return (
-			triggerCanvasPosition(automation) ??
+			triggerCanvasPosition(automation.triggers) ??
 			autoPositions.get(TRIGGER_ID) ?? { x: 0, y: 0 }
 		);
 	}
@@ -668,16 +666,7 @@ function AddStepMenu({
 }
 
 function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
-	const triggerType = data.automation.trigger_type ?? "";
 	const channel = data.automation.channel ?? "";
-	const summary =
-		TRIGGER_OPERATION_OVERRIDES[triggerType] ??
-		(triggerType
-			? titleize(
-					channel ? triggerType.replace(new RegExp(`^${channel}_`), "") : triggerType,
-				)
-			: "Configure trigger");
-	const rows = triggerDisplayRows(data.automation);
 
 	return (
 		<div
@@ -718,27 +707,36 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 					<span>When...</span>
 				</div>
 
-				{rows.length > 0 ? (
+				{data.automation.triggers.length > 0 ? (
 					<div className="mt-4 space-y-3">
-						{rows.map((rowLabel, index) => (
-							<div
-								key={`${rowLabel}-${index}`}
-								className="rounded-[16px] bg-[#f4f5f8] px-4 py-3"
-							>
-								<div className="flex items-center gap-3">
+						{data.automation.triggers.map((t) => {
+							const summary =
+								TRIGGER_OPERATION_OVERRIDES[t.type] ??
+								(channel
+									? titleize(t.type.replace(new RegExp(`^${channel}_`), ""))
+									: titleize(t.type));
+							return (
+								<button
+									key={t.id}
+									type="button"
+									onClick={(event) => {
+										event.stopPropagation();
+										data.onSelectTrigger(t.id);
+									}}
+									className="nodrag flex w-full items-center gap-3 rounded-[16px] bg-[#f4f5f8] px-4 py-3 text-left transition hover:bg-[#eceef3]"
+								>
 									{platformIconBubble(channel)}
-									<div className="min-w-0">
+									<div className="min-w-0 flex-1">
 										<div className="truncate text-[13px] font-medium leading-4 text-[#8b92a0]">
-											{rowLabel ||
-												defaultTriggerLabel(triggerType, index + 1)}
+											{t.label}
 										</div>
 										<div className="mt-0.5 text-[15px] font-semibold leading-5 text-[#404552]">
 											{summary}
 										</div>
 									</div>
-								</div>
-							</div>
-						))}
+								</button>
+							);
+						})}
 					</div>
 				) : (
 					<div className="mt-4 rounded-[16px] border border-dashed border-[#d9dde6] bg-white px-4 py-5 text-center text-[13px] text-[#7e8695]">
@@ -748,10 +746,7 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 
 				<TriggerTypePicker
 					automationChannel={channel}
-					onPick={(triggerType) => {
-						data.onAddTriggerRow(triggerType);
-						data.onSelect(TRIGGER_ID);
-					}}
+					onPick={(triggerType) => data.onAddTrigger(triggerType)}
 					schema={data.schema}
 				>
 					<button
@@ -1108,7 +1103,8 @@ function FlowCanvasControls() {
 function GuidedFlowCanvas({
 	automation,
 	errorKeys,
-	onAddTriggerRow,
+	onAddTrigger,
+	onSelectTrigger,
 	onDeleteEdge,
 	highlightKeys,
 	onDeleteNode,
@@ -1150,7 +1146,8 @@ function GuidedFlowCanvas({
 					),
 					hasError: errorKeys.has(TRIGGER_ID),
 					highlighted: highlightKeys.has(TRIGGER_ID),
-					onAddTriggerRow,
+					onAddTrigger,
+					onSelectTrigger,
 					onDeleteNode,
 					onInsertAfter,
 					onSelect,
@@ -1179,7 +1176,6 @@ function GuidedFlowCanvas({
 					hasError: errorKeys.has(node.key),
 					highlighted: highlightKeys.has(node.key),
 					node,
-					onAddTriggerRow,
 					onDeleteNode,
 					onInsertAfter,
 					onSelect,
@@ -1200,12 +1196,14 @@ function GuidedFlowCanvas({
 		errorKeys,
 		highlightKeys,
 		onDeleteNode,
-		onAddTriggerRow,
+		onAddTrigger,
+		onSelectTrigger,
 		onInsertAfter,
 		onSelect,
 		readOnly,
 		schema,
 		schemaByType,
+		selectedKey,
 	]);
 
 	const flowEdges = useMemo<Edge<FlowEdgeData>[]>(() => {

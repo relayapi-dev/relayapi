@@ -425,6 +425,10 @@ export const TriggerFilters = z.object({
 // ---------------------------------------------------------------------------
 
 export const TriggerSpec = z.object({
+	id: z
+		.string()
+		.optional()
+		.describe("Server-assigned id for existing triggers; omit to create new"),
 	type: AutomationTriggerTypeEnum,
 	account_id: z
 		.string()
@@ -438,6 +442,28 @@ export const TriggerSpec = z.object({
 			"Trigger-specific config (keyword list, post_id, ref slug, cron, etc.)",
 		),
 	filters: TriggerFilters.optional(),
+	label: z
+		.string()
+		.min(1)
+		.max(120)
+		.optional()
+		.describe("User-facing label, e.g. 'Story Reply #1'"),
+	order_index: z.number().int().min(0).optional(),
+});
+
+export const TriggersSpec = z
+	.array(TriggerSpec)
+	.min(1)
+	.describe("One or more triggers that start this automation");
+
+export const AutomationTriggerResponse = z.object({
+	id: z.string(),
+	type: AutomationTriggerTypeEnum,
+	account_id: z.string().nullable(),
+	config: z.any(),
+	filters: z.any(),
+	label: z.string(),
+	order_index: z.number().int(),
 });
 
 // ---------------------------------------------------------------------------
@@ -1749,7 +1775,7 @@ export const AutomationCreateSpec = z.object({
 	workspace_id: z.string().optional(),
 	channel: AutomationChannelEnum,
 	status: AutomationStatusEnum.default("draft"),
-	trigger: TriggerSpec,
+	triggers: TriggersSpec,
 	nodes: z.array(AutomationNodeSpec).default([]),
 	edges: z.array(AutomationEdgeSpec).default([]),
 	exit_on_reply: z.boolean().default(true),
@@ -1773,10 +1799,7 @@ export const AutomationResponse = z.object({
 	description: z.string().nullable(),
 	status: AutomationStatusEnum,
 	channel: AutomationChannelEnum,
-	trigger_type: AutomationTriggerTypeEnum,
-	trigger_config: z.any(),
-	trigger_filters: z.any(),
-	social_account_id: z.string().nullable(),
+	triggers: z.array(AutomationTriggerResponse),
 	entry_node_id: z.string().nullable(),
 	version: z.number().int(),
 	published_version: z.number().int().nullable(),

@@ -42,9 +42,17 @@ describe("validateGraph", () => {
 	it("does not fail defaulted required node fields", () => {
 		const issues = validateGraph(
 			{
-				trigger_type: "instagram_comment",
-				trigger_config: {},
-				social_account_id: "acc_123",
+				triggers: [
+					{
+						id: "tr_1",
+						type: "instagram_comment",
+						account_id: "acc_123",
+						config: {},
+						filters: {},
+						label: "Trigger #1",
+						order_index: 0,
+					},
+				],
 				nodes: [
 					{
 						key: "send_dm",
@@ -58,16 +66,26 @@ describe("validateGraph", () => {
 		);
 
 		expect(
-			issues.some((issue) => issue.message.includes('missing required field "recipient_mode"')),
+			issues.some((issue) =>
+				issue.message.includes('missing required field "recipient_mode"'),
+			),
 		).toBe(false);
 	});
 
 	it("still fails required fields that do not have defaults", () => {
 		const issues = validateGraph(
 			{
-				trigger_type: "instagram_comment",
-				trigger_config: {},
-				social_account_id: "acc_123",
+				triggers: [
+					{
+						id: "tr_1",
+						type: "instagram_comment",
+						account_id: "acc_123",
+						config: {},
+						filters: {},
+						label: "Trigger #1",
+						order_index: 0,
+					},
+				],
 				nodes: [
 					{
 						key: "send_dm",
@@ -80,7 +98,9 @@ describe("validateGraph", () => {
 		);
 
 		expect(
-			issues.some((issue) => issue.message.includes('missing required field "text"')),
+			issues.some((issue) =>
+				issue.message.includes('missing required field "text"'),
+			),
 		).toBe(true);
 	});
 });

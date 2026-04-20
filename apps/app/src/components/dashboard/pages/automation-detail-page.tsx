@@ -33,17 +33,16 @@ import {
 	type ValidationIssue,
 } from "@/components/dashboard/automation/flow-builder/validation";
 import {
-	defaultTriggerLabel,
+	makeLocalTriggerId,
 	triggerCanvasPosition,
-	triggerDisplayRows,
 	withTriggerCanvasPosition,
-	withTriggerDisplayRows,
 } from "@/components/dashboard/automation/flow-builder/trigger-ui";
 import type {
 	AutomationDetail,
 	AutomationEdgeSpec,
 	AutomationNodeSpec,
 	AutomationSchema,
+	AutomationTriggerSpec,
 } from "@/components/dashboard/automation/flow-builder/types";
 
 interface Props {
@@ -51,9 +50,10 @@ interface Props {
 }
 
 // The API returns graph nodes as { id, key, type, config: {...}, canvas_x, canvas_y, notes }
-// and edges as { id, from_node_key, to_node_key, label, order, condition_expr }. The frontend
-// model uses flat node fields (spread config at top level) and { from, to } on edges. We
-// normalize on read so the builder never sees the wrapped/renamed API shape.
+// and edges as { id, from_node_key, to_node_key, label, order, condition_expr }. Triggers are
+// returned as an array of { id, type, account_id, config, filters, label, order_index }.
+// The frontend model uses flat node fields (spread config at top level) and { from, to } on edges.
+// We normalize on read so the builder never sees the wrapped/renamed API shape.
 interface ApiAutomationNode {
 	id: string;
 	key: string;
@@ -73,15 +73,27 @@ interface ApiAutomationEdge {
 	condition_expr?: unknown;
 }
 
+interface ApiAutomationTrigger {
+	id: string;
+	type: string;
+	account_id: string | null;
+	config: Record<string, unknown>;
+	filters: Record<string, unknown>;
+	label: string;
+	order_index: number;
+}
+
 interface ApiAutomationDetail
-	extends Omit<AutomationDetail, "nodes" | "edges"> {
+	extends Omit<AutomationDetail, "nodes" | "edges" | "triggers"> {
 	nodes: ApiAutomationNode[];
 	edges: ApiAutomationEdge[];
+	triggers: ApiAutomationTrigger[];
 }
 
 function normalizeAutomation(api: ApiAutomationDetail): AutomationDetail {
 	return {
 		...api,
+		triggers: [...api.triggers].sort((a, b) => a.order_index - b.order_index),
 		nodes: api.nodes.map<AutomationNodeSpec>((n) => ({
 			type: n.type,
 			key: n.key,
@@ -147,6 +159,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 		});
 	}, []);
 	const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null);
+	const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(
+		null,
+	);
 	const [rightPanel, setRightPanel] = useState<
 		"property" | "simulator" | "history" | null
 	>(null);
@@ -186,6 +201,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 		setDraft(normalized);
 		setDirty(false);
 		setSelectedNodeKey(null);
+		setSelectedTriggerId(null);
 		setHighlightKeys(new Set());
 		history.reset({ nodes: normalized.nodes, edges: normalized.edges });
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -240,7 +256,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 				const key = generateUniqueKey(nodeType, existing);
 				const parentNode = prev.nodes.find((n) => n.key === parentKey);
 				const triggerPosition =
-					parentKey === "trigger" ? triggerCanvasPosition(prev) : null;
+					parentKey === "trigger" ? triggerCanvasPosition(prev.triggers) : null;
 				const baseX =
 					typeof parentNode?.canvas_x === "number"
 						? parentNode.canvas_x
@@ -292,17 +308,26 @@ export function AutomationDetailPage({ automationId }: Props) {
 			setDraft((prev) => {
 				if (!prev) return prev;
 				if (key === "trigger") {
-					const current = triggerCanvasPosition(prev);
+					const current = triggerCanvasPosition(prev.triggers);
 					if (current?.x === position.x && current?.y === position.y) {
 						return prev;
 					}
-					const next = {
-						...prev,
-						trigger_config: withTriggerCanvasPosition(prev.trigger_config, {
-							x: position.x,
-							y: position.y,
-						}),
-					};
+					// Store canvas position on the first trigger's config (it's cosmetic
+					// UI state shared across all triggers on the canvas).
+					const first = prev.triggers[0];
+					if (!first) return prev;
+					const triggers = prev.triggers.map((t, idx) =>
+						idx === 0
+							? {
+									...t,
+									config: withTriggerCanvasPosition(t.config, {
+										x: position.x,
+										y: position.y,
+									}),
+								}
+							: t,
+					);
+					const next = { ...prev, triggers };
 					history.push({ nodes: next.nodes, edges: next.edges });
 					changed = true;
 					return next;
@@ -331,29 +356,64 @@ export function AutomationDetailPage({ automationId }: Props) {
 		[history, bumpEdit],
 	);
 
-	const addTriggerRow = useCallback(
-		(triggerType?: string) => {
+	const addTrigger = useCallback(
+		(triggerType: string) => {
+			let createdId: string | null = null;
 			setDraft((prev) => {
 				if (!prev) return prev;
-				const typeChanged =
-					typeof triggerType === "string" && triggerType !== prev.trigger_type;
-				const nextTriggerType = typeChanged ? triggerType : prev.trigger_type;
-				const rows = typeChanged ? [] : triggerDisplayRows(prev);
-				const nextRows = [
-					...rows,
-					defaultTriggerLabel(nextTriggerType, rows.length + 1),
-				];
-				const next = {
-					...prev,
-					trigger_type: nextTriggerType,
-					trigger_config: withTriggerDisplayRows(
-						typeChanged ? undefined : prev.trigger_config,
-						nextRows,
-					),
+				const orderIndex = prev.triggers.length;
+				const localId = makeLocalTriggerId();
+				createdId = localId;
+				const newTrigger: AutomationTriggerSpec = {
+					id: localId,
+					type: triggerType,
+					account_id: null,
+					config: {},
+					filters: {},
+					label: `Trigger #${orderIndex + 1}`,
+					order_index: orderIndex,
 				};
+				const next = { ...prev, triggers: [...prev.triggers, newTrigger] };
 				history.push({ nodes: next.nodes, edges: next.edges });
 				return next;
 			});
+			setDirty(true);
+			bumpEdit();
+			if (createdId) setSelectedTriggerId(createdId);
+		},
+		[history, bumpEdit],
+	);
+
+	const updateTrigger = useCallback(
+		(triggerId: string, patch: Partial<AutomationTriggerSpec>) => {
+			setDraft((prev) => {
+				if (!prev) return prev;
+				const triggers = prev.triggers.map((t) =>
+					t.id === triggerId ? { ...t, ...patch } : t,
+				);
+				const next = { ...prev, triggers };
+				history.push({ nodes: next.nodes, edges: next.edges });
+				return next;
+			});
+			setDirty(true);
+			bumpEdit();
+		},
+		[history, bumpEdit],
+	);
+
+	const removeTrigger = useCallback(
+		(triggerId: string) => {
+			setDraft((prev) => {
+				if (!prev) return prev;
+				if (prev.triggers.length <= 1) return prev; // keep at least one
+				const triggers = prev.triggers
+					.filter((t) => t.id !== triggerId)
+					.map((t, idx) => ({ ...t, order_index: idx }));
+				const next = { ...prev, triggers };
+				history.push({ nodes: next.nodes, edges: next.edges });
+				return next;
+			});
+			setSelectedTriggerId((prev) => (prev === triggerId ? null : prev));
 			setDirty(true);
 			bumpEdit();
 		},
@@ -440,40 +500,21 @@ export function AutomationDetailPage({ automationId }: Props) {
 		deleteNode(selectedNodeKey);
 	}, [selectedNodeKey, deleteNode]);
 
-	const updateTrigger = useCallback(
-		(
-			patch: Partial<
-				Pick<
-					AutomationDetail,
-					| "trigger_type"
-					| "trigger_config"
-					| "trigger_filters"
-					| "social_account_id"
-				>
-			>,
-		) => {
-			setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
-			setDirty(true);
-			bumpEdit();
-		},
-		[bumpEdit],
-	);
-
 	const buildPatchBody = useCallback(
 		(d: AutomationDetail) => ({
 			nodes: d.nodes,
 			edges: d.edges,
 			name: d.name,
 			description: d.description,
-			trigger: {
-				type: d.trigger_type,
-				account_id:
-					d.social_account_id === undefined ? undefined : d.social_account_id,
-				config:
-					(d.trigger_config as Record<string, unknown> | undefined) ??
-					undefined,
-				filters: d.trigger_filters as Record<string, unknown> | undefined,
-			},
+			triggers: d.triggers.map((t) => ({
+				id: t.id.startsWith("local_") ? undefined : t.id,
+				type: t.type,
+				account_id: t.account_id,
+				config: t.config,
+				filters: t.filters,
+				label: t.label,
+				order_index: t.order_index,
+			})),
 		}),
 		[],
 	);
@@ -681,6 +722,13 @@ export function AutomationDetailPage({ automationId }: Props) {
 		publishAutomation.loading ||
 		(draft.status === "draft" && resumeAutomation.loading);
 
+	const triggerSummaryLabel =
+		draft.triggers.length === 0
+			? "no triggers"
+			: draft.triggers.length === 1
+				? draft.triggers[0]!.type.replace(/_/g, " ")
+				: `${draft.triggers.length} triggers`;
+
 	return (
 		<div className="flex h-full min-h-0 flex-col overflow-hidden border-t border-border bg-[#f5f6fa]">
 			<header className="z-20 flex shrink-0 items-center justify-between gap-4 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
@@ -707,7 +755,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 							<span>·</span>
 							<span className="capitalize">{draft.channel}</span>
 							<span>·</span>
-							<span>{draft.trigger_type.replace(/_/g, " ")}</span>
+							<span>{triggerSummaryLabel}</span>
 							{dirty && <span className="text-amber-400">· unsaved</span>}
 						</div>
 					</div>
@@ -871,10 +919,18 @@ export function AutomationDetailPage({ automationId }: Props) {
 						highlightKeys={highlightKeys}
 						selectedKey={selectedNodeKey}
 						onMoveNode={moveNode}
-						onAddTriggerRow={addTriggerRow}
+						onAddTrigger={addTrigger}
+						onSelectTrigger={(triggerId) => {
+							setSelectedNodeKey("trigger");
+							setSelectedTriggerId(triggerId);
+							setRightPanel("property");
+						}}
 						onSelect={(key) => {
 							setSelectedNodeKey(key);
-							if (key) {
+							if (key === "trigger") {
+								setSelectedTriggerId(null); // entering list mode
+								setRightPanel("property");
+							} else if (key) {
 								setRightPanel("property");
 							} else if (rightPanel === "property") {
 								setRightPanel(null);
@@ -903,9 +959,14 @@ export function AutomationDetailPage({ automationId }: Props) {
 					<TriggerPanel
 						automation={draft}
 						schema={schema}
-						onChange={updateTrigger}
+						selectedTriggerId={selectedTriggerId}
+						onSelectTrigger={setSelectedTriggerId}
+						onAddTrigger={addTrigger}
+						onUpdateTrigger={updateTrigger}
+						onRemoveTrigger={removeTrigger}
 						onClose={() => {
 							setSelectedNodeKey(null);
+							setSelectedTriggerId(null);
 							setRightPanel(null);
 						}}
 						readOnly={isArchived}

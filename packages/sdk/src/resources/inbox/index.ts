@@ -19,6 +19,10 @@ export {
   type ConversationUpdateResponse,
   type MessageSendResponse,
   type MessageActionResponse,
+  type InboxNote,
+  type NoteListResponse,
+  type NoteResponse,
+  type NoteDeleteResponse,
   type ConversationListParams,
   type ConversationUpdateParams,
   type MessageSendParams,
@@ -26,6 +30,9 @@ export {
   type MessageAddReactionParams,
   type MessageRemoveReactionParams,
   type MessageDeleteParams,
+  type NoteCreateParams,
+  type NoteUpdateParams,
+  type NoteDeleteParams,
 } from './conversations';
 export { Inbox } from './inbox';
 export { Reviews, type ReviewListResponse, type ReviewListParams } from './reviews/index';

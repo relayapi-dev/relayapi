@@ -1120,6 +1120,39 @@ export const inboxMessages = pgTable(
 	],
 );
 
+export const inboxConversationNotes = pgTable(
+	"inbox_conversation_notes",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("note_")),
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => inboxConversations.id, { onDelete: "cascade" }),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		text: text("text").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("inbox_note_conv_created_idx").on(
+			table.conversationId,
+			table.createdAt,
+		),
+		index("inbox_note_org_idx").on(table.organizationId),
+		index("inbox_note_user_idx").on(table.userId),
+	],
+);
+
 // ---------------------------------------------------------------------------
 // Auto-Post Rules (RSS / Feed auto-posting)
 // ---------------------------------------------------------------------------
@@ -2772,13 +2805,6 @@ export const automations = pgTable(
 		description: text("description"),
 		status: automationStatusEnum("status").notNull().default("draft"),
 		channel: automationChannelEnum("channel").notNull(),
-		triggerType: automationTriggerTypeEnum("trigger_type").notNull(),
-		triggerConfig: jsonb("trigger_config").notNull().default(sql`'{}'::jsonb`),
-		triggerFilters: jsonb("trigger_filters").notNull().default(sql`'{}'::jsonb`),
-		socialAccountId: text("social_account_id").references(
-			() => socialAccounts.id,
-			{ onDelete: "set null" },
-		),
 		entryNodeId: text("entry_node_id"),
 		version: integer("version").notNull().default(1),
 		publishedVersion: integer("published_version"),
@@ -2799,12 +2825,39 @@ export const automations = pgTable(
 	(table) => [
 		index("automations_org_idx").on(table.organizationId),
 		index("automations_workspace_idx").on(table.workspaceId),
-		index("automations_trigger_matcher_idx").on(
-			table.organizationId,
-			table.status,
-			table.triggerType,
+		index("automations_active_idx").on(table.organizationId, table.status),
+	],
+);
+
+export const automationTriggers = pgTable(
+	"automation_triggers",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("atrg_")),
+		automationId: text("automation_id")
+			.notNull()
+			.references(() => automations.id, { onDelete: "cascade" }),
+		type: automationTriggerTypeEnum("type").notNull(),
+		config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
+		filters: jsonb("filters").notNull().default(sql`'{}'::jsonb`),
+		socialAccountId: text("social_account_id").references(
+			() => socialAccounts.id,
+			{ onDelete: "set null" },
 		),
-		index("automations_account_idx").on(table.socialAccountId),
+		label: text("label").notNull(),
+		orderIndex: integer("order_index").notNull().default(0),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("automation_triggers_automation_idx").on(table.automationId),
+		index("automation_triggers_matcher_idx").on(table.type),
+		index("automation_triggers_account_idx").on(table.socialAccountId),
 	],
 );
 
@@ -2904,6 +2957,9 @@ export const automationEnrollments = pgTable(
 			.notNull()
 			.references(() => automations.id, { onDelete: "cascade" }),
 		automationVersion: integer("automation_version").notNull(),
+		triggerId: text("trigger_id").references(() => automationTriggers.id, {
+			onDelete: "set null",
+		}),
 		organizationId: text("organization_id")
 			.notNull()
 			.references(() => organization.id),
@@ -2940,6 +2996,7 @@ export const automationEnrollments = pgTable(
 			table.contactId,
 			table.status,
 		),
+		index("automation_enrollments_trigger_idx").on(table.triggerId),
 	],
 );
 

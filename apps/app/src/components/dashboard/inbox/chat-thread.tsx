@@ -13,7 +13,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { ConversationItem, InboxOrganizationMember, MessageItem } from "./shared";
+import type { ConversationItem, InboxOrganizationMember, MessageItem, NoteItem, ThreadItem } from "./shared";
 import {
   formatMessageDayLabel,
   formatMessageTime,
@@ -30,7 +30,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { MessageComposer } from "./message-composer";
+import { NoteCard } from "./conversation-notes";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useUser } from "@/components/dashboard/user-context";
 
 const platformInboxUrls: Record<string, string> = {
   instagram: "https://www.instagram.com/direct/inbox/",
@@ -115,6 +117,9 @@ export function ChatThread({
   onStatusChange?: (nextStatus: "open" | "archived") => Promise<void>;
 }) {
   const [messages, setMessages] = useState<MessageItem[]>([]);
+  const [notes, setNotes] = useState<NoteItem[]>([]);
+  const currentUser = useUser();
+  const currentUserId = currentUser?.id ?? null;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
@@ -213,9 +218,39 @@ export function ChatThread({
     setShowScrollButton(distanceFromBottom > 120);
   }, []);
 
-  const handleSend = async (text: string) => {
-    if (!conversation) return;
+  useEffect(() => {
+    if (!conversation) {
+      setNotes([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/inbox/conversations/${encodeURIComponent(conversation.id)}/notes`,
+        );
+        if (cancelled) return;
+        if (!res.ok) return;
+        const json = (await res.json()) as { data?: NoteItem[] };
+        if (cancelled) return;
+        setNotes(Array.isArray(json.data) ? json.data : []);
+      } catch {
+        // Notes are non-critical; silent failure.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversation?.id]);
 
+  const handleSend = async ({
+    text,
+    attachments,
+  }: {
+    text: string;
+    attachments: Array<{ url: string; type: string }>;
+  }) => {
+    if (!conversation) return;
     setSendError(null);
 
     const tempId = `temp-${Date.now()}`;
@@ -225,35 +260,58 @@ export function ChatThread({
       author_name: "You",
       text,
       created_at: new Date().toISOString(),
+      attachments,
     };
     setMessages((prev) => [...prev, optimisticMsg]);
 
     try {
-      const res = await fetch(`/api/inbox/conversations/${encodeURIComponent(conversation.id)}/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, account_id: conversation.account_id }),
-      });
+      const res = await fetch(
+        `/api/inbox/conversations/${encodeURIComponent(conversation.id)}/send`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: text || undefined,
+            account_id: conversation.account_id,
+            attachments: attachments.length > 0 ? attachments : undefined,
+          }),
+        },
+      );
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setMessages((prev) => prev.filter((message) => message.id !== tempId));
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
         setSendError(json?.error?.message || json?.error || "Failed to send message");
         return;
       }
 
       setMessages((prev) =>
-        prev.map((message) =>
-          message.id === tempId
-            ? { ...message, id: json.message_id || tempId }
-            : message,
+        prev.map((m) =>
+          m.id === tempId ? { ...m, id: json.message_id || tempId } : m,
         ),
       );
       onMessageSent?.();
     } catch {
-      setMessages((prev) => prev.filter((message) => message.id !== tempId));
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setSendError("Network error while sending the message");
     }
+  };
+
+  const handleCreateNote = async (text: string) => {
+    if (!conversation) return;
+    const res = await fetch(
+      `/api/inbox/conversations/${encodeURIComponent(conversation.id)}/notes`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      },
+    );
+    if (!res.ok) {
+      throw new Error("Failed to save note");
+    }
+    const json = (await res.json()) as { note: NoteItem };
+    setNotes((prev) => [...prev, json.note]);
   };
 
   const handleStatusButton = async () => {
@@ -306,6 +364,11 @@ export function ChatThread({
   const assigneeLabel = assignedMember?.user.name?.trim()
     || (conversation.assigned_user_id ? "Assigned" : "Unassigned");
   const assigneeValue = conversation.assigned_user_id ?? UNASSIGNED_VALUE;
+
+  const threadItems: ThreadItem[] = [
+    ...messages.map((m) => ({ kind: "message" as const, createdAt: m.created_at, data: m })),
+    ...notes.map((n) => ({ kind: "note" as const, createdAt: n.created_at, data: n })),
+  ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
@@ -481,7 +544,7 @@ export function ChatThread({
             <TriangleAlert className="mt-0.5 size-4 shrink-0" />
             <span>{error}</span>
           </div>
-        ) : messages.length === 0 ? (
+        ) : messages.length === 0 && notes.length === 0 ? (
           <div className="flex flex-1 items-center justify-center py-12">
             <div className="text-center">
               <MessageCircle className="mx-auto size-9 text-slate-300" />
@@ -494,14 +557,45 @@ export function ChatThread({
         ) : (
           <div className="flex flex-col gap-3">
             <AnimatePresence initial={false}>
-              {messages.map((msg, index) => {
-                const isOutbound = msg.sender === "user";
-                const previous = messages[index - 1];
-                const showDayDivider = !previous || dayKey(previous.created_at) !== dayKey(msg.created_at);
+              {threadItems.map((item, index) => {
+                if (item.kind === "note") {
+                  return (
+                    <motion.div
+                      key={`note-${item.data.id}`}
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{
+                        opacity: 1,
+                        y: 0,
+                        transition: { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
+                      }}
+                    >
+                      <NoteCard
+                        note={item.data}
+                        canDelete={item.data.user_id === currentUserId}
+                        onDelete={async () => {
+                          const res = await fetch(
+                            `/api/inbox/notes/${item.data.id}`,
+                            { method: "DELETE" },
+                          );
+                          if (res.ok) {
+                            setNotes((prev) => prev.filter((n) => n.id !== item.data.id));
+                          }
+                        }}
+                      />
+                    </motion.div>
+                  );
+                }
+
+                const isOutbound = item.data.sender === "user";
+                const previous = threadItems
+                  .slice(0, index)
+                  .reverse()
+                  .find((t) => t.kind === "message")?.data;
+                const showDayDivider = !previous || dayKey(previous.created_at) !== dayKey(item.data.created_at);
 
                 return (
                   <motion.div
-                    key={msg.id}
+                    key={item.data.id}
                     initial={{ opacity: 0, y: 6 }}
                     animate={{
                       opacity: 1,
@@ -513,7 +607,7 @@ export function ChatThread({
                       <div className="relative my-4 flex items-center justify-center">
                         <div className="absolute inset-x-0 top-1/2 border-t border-[#ececf1]" />
                         <span className="relative bg-white px-3 text-[12px] font-medium text-slate-400">
-                          {formatMessageDayLabel(msg.created_at)}
+                          {formatMessageDayLabel(item.data.created_at)}
                         </span>
                       </div>
                     )}
@@ -534,7 +628,7 @@ export function ChatThread({
                       )}
 
                       <div className="max-w-[78%] min-w-0">
-                        {msg.text && (
+                        {item.data.text && (
                           <div
                             className={cn(
                               "rounded-[18px] px-4 py-2.5 text-[14px] leading-6",
@@ -543,13 +637,13 @@ export function ChatThread({
                                 : "rounded-bl-md bg-[#f3f4f6] text-slate-700",
                             )}
                           >
-                            <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                            <p className="whitespace-pre-wrap break-words">{item.data.text}</p>
                           </div>
                         )}
 
-                        {msg.attachments && msg.attachments.length > 0 && (
+                        {item.data.attachments && item.data.attachments.length > 0 && (
                           <div className="mt-2 space-y-2">
-                            {msg.attachments.map((attachment, attachmentIndex) => {
+                            {item.data.attachments.map((attachment, attachmentIndex) => {
                               if (attachment.type.startsWith("image/")) {
                                 return (
                                   <a
@@ -590,7 +684,7 @@ export function ChatThread({
                             isOutbound ? "text-right" : "text-left",
                           )}
                         >
-                          {formatMessageTime(msg.created_at)}
+                          {formatMessageTime(item.data.created_at)}
                         </p>
                       </div>
                     </div>
@@ -623,6 +717,7 @@ export function ChatThread({
 
       <MessageComposer
         onSend={handleSend}
+        onCreateNote={handleCreateNote}
         disabled={isArchived}
         platformLabel={platformLabel}
       />

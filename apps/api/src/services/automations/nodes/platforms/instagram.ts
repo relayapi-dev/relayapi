@@ -23,6 +23,7 @@ import { decryptToken } from "../../../../lib/crypto";
 import { fetchWithTimeout } from "../../../../lib/fetch-timeout";
 import { findScopedContactChannel } from "../../contact-channel";
 import { applyMergeTags } from "../../merge-tags";
+import { resolveEnrollmentTrigger } from "../../resolve-trigger";
 import type {
 	NodeExecutionContext,
 	NodeExecutionResult,
@@ -44,7 +45,8 @@ interface InstagramSendCtx {
 async function loadDmContext(
 	ctx: NodeExecutionContext,
 ): Promise<InstagramSendCtx | NodeExecutionResult> {
-	const accountId = ctx.snapshot.trigger.account_id;
+	const trigger = resolveEnrollmentTrigger(ctx.snapshot, ctx.enrollment.trigger_id);
+	const accountId = trigger.account_id;
 	if (!accountId) return { kind: "fail", error: "automation has no social account bound" };
 	if (!ctx.enrollment.contact_id)
 		return { kind: "fail", error: "enrollment has no contact_id" };
@@ -88,7 +90,8 @@ async function loadDmContext(
 async function loadTokenOnly(
 	ctx: NodeExecutionContext,
 ): Promise<{ accessToken: string } | NodeExecutionResult> {
-	const accountId = ctx.snapshot.trigger.account_id;
+	const trigger = resolveEnrollmentTrigger(ctx.snapshot, ctx.enrollment.trigger_id);
+	const accountId = trigger.account_id;
 	if (!accountId) return { kind: "fail", error: "automation has no social account bound" };
 	const account = await ctx.db.query.socialAccounts.findFirst({
 		where: eq(socialAccounts.id, accountId),

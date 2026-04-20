@@ -4,6 +4,7 @@ import {
 	automationEnrollments,
 	automationNodes,
 	automationRunLogs,
+	automationTriggers,
 	automationVersions,
 	automations,
 	createDb,
@@ -241,6 +242,7 @@ type SerializedAutomation = z.infer<typeof AutomationResponse>;
 
 function serializeAutomation(
 	a: typeof automations.$inferSelect,
+	triggers: (typeof automationTriggers.$inferSelect)[],
 ): SerializedAutomation {
 	return {
 		id: a.id,
@@ -250,10 +252,18 @@ function serializeAutomation(
 		description: a.description ?? null,
 		status: a.status as SerializedAutomation["status"],
 		channel: a.channel as SerializedAutomation["channel"],
-		trigger_type: a.triggerType as SerializedAutomation["trigger_type"],
-		trigger_config: a.triggerConfig,
-		trigger_filters: a.triggerFilters,
-		social_account_id: a.socialAccountId,
+		triggers: triggers
+			.slice()
+			.sort((x, y) => x.orderIndex - y.orderIndex)
+			.map((t) => ({
+				id: t.id,
+				type: t.type,
+				account_id: t.socialAccountId,
+				config: t.config,
+				filters: t.filters,
+				label: t.label,
+				order_index: t.orderIndex,
+			})),
 		entry_node_id: a.entryNodeId,
 		version: a.version,
 		published_version: a.publishedVersion,
@@ -370,26 +380,46 @@ app.openapi(createAutomation, async (c) => {
 		// Workspace-level enforcement deferred to middleware.
 	}
 
-	// 1. Insert automation header
-	const [auto] = await db
-		.insert(automations)
-		.values({
-			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
-			name: body.name,
-			description: body.description,
-			status: body.status,
-			channel: body.channel as never,
-			triggerType: body.trigger.type as never,
-			triggerConfig: body.trigger.config ?? {},
-			triggerFilters: body.trigger.filters ?? {},
-			socialAccountId: body.trigger.account_id ?? null,
-			exitOnReply: body.exit_on_reply,
-			allowReentry: body.allow_reentry,
-			reentryCooldownMin: body.reentry_cooldown_min,
-			createdBy: c.get("keyId"),
-		})
-		.returning();
+	// 1. Insert automation header + per-trigger rows in a single transaction so
+	// a failure after the automation row has been created doesn't leave a header
+	// without any triggers attached.
+	const created = await db.transaction(async (tx) => {
+		const [auto] = await tx
+			.insert(automations)
+			.values({
+				organizationId: orgId,
+				workspaceId: body.workspace_id ?? null,
+				name: body.name,
+				description: body.description,
+				status: body.status,
+				channel: body.channel as never,
+				exitOnReply: body.exit_on_reply,
+				allowReentry: body.allow_reentry,
+				reentryCooldownMin: body.reentry_cooldown_min,
+				createdBy: c.get("keyId"),
+			})
+			.returning();
+		if (!auto) throw new Error("automation insert failed");
+
+		const triggerRows = await tx
+			.insert(automationTriggers)
+			.values(
+				body.triggers.map((t, idx) => ({
+					automationId: auto.id,
+					type: t.type as never,
+					config: t.config ?? {},
+					filters: t.filters ?? {},
+					socialAccountId: t.account_id ?? null,
+					label: t.label ?? `Trigger #${idx + 1}`,
+					orderIndex: t.order_index ?? idx,
+				})),
+			)
+			.returning();
+
+		return { auto, triggerRows };
+	});
+
+	const auto = created.auto;
 
 	if (!auto) {
 		return c.json(
@@ -489,8 +519,21 @@ app.openapi(listAutomations, async (c) => {
 	if (workspace_id) conditions.push(eq(automations.workspaceId, workspace_id));
 	if (status) conditions.push(eq(automations.status, status));
 	if (channel) conditions.push(eq(automations.channel, channel as never));
-	if (trigger_type)
-		conditions.push(eq(automations.triggerType, trigger_type as never));
+	if (trigger_type) {
+		const ids = await db
+			.selectDistinct({ id: automationTriggers.automationId })
+			.from(automationTriggers)
+			.where(eq(automationTriggers.type, trigger_type as never));
+		if (ids.length === 0) {
+			return c.json({ data: [], next_cursor: null, has_more: false });
+		}
+		conditions.push(
+			inArray(
+				automations.id,
+				ids.map((r) => r.id),
+			),
+		);
+	}
 
 	if (cursor) {
 		const cursorRow = await db
@@ -513,7 +556,27 @@ app.openapi(listAutomations, async (c) => {
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
-	const items = rows.slice(0, limit).map(serializeAutomation);
+	const autos = rows.slice(0, limit);
+
+	// Batch-fetch triggers for all returned automations so the serializer can
+	// project them without an N+1 per-automation query.
+	const automationIds = autos.map((a) => a.id);
+	const allTriggers = automationIds.length
+		? await db
+				.select()
+				.from(automationTriggers)
+				.where(inArray(automationTriggers.automationId, automationIds))
+		: [];
+	const byAutomation = new Map<string, typeof allTriggers>();
+	for (const t of allTriggers) {
+		const list = byAutomation.get(t.automationId) ?? [];
+		list.push(t);
+		byAutomation.set(t.automationId, list);
+	}
+
+	const items = autos.map((a) =>
+		serializeAutomation(a, byAutomation.get(a.id) ?? []),
+	);
 	const nextCursor = hasMore ? (rows[limit - 1]?.id ?? null) : null;
 
 	return c.json(
@@ -747,14 +810,6 @@ app.openapi(updateAutomation, async (c) => {
 		updates.allowReentry = body.allow_reentry;
 	if (body.reentry_cooldown_min !== undefined)
 		updates.reentryCooldownMin = body.reentry_cooldown_min;
-	if (body.trigger) {
-		updates.triggerType = body.trigger.type as never;
-		updates.triggerConfig = body.trigger.config ?? {};
-		updates.triggerFilters = body.trigger.filters ?? {};
-		if (body.trigger.account_id !== undefined) {
-			updates.socialAccountId = body.trigger.account_id ?? null;
-		}
-	}
 	updates.updatedAt = new Date();
 
 	// Replace the graph first so publishVersion (below) captures the new draft.
@@ -767,14 +822,32 @@ app.openapi(updateAutomation, async (c) => {
 		await replaceEdgesOnly(db, id, body.edges);
 	}
 
-	// Persist the metadata update next, then publish — otherwise a PATCH that
-	// activates + changes trigger/channel/etc. in the same request would
-	// publish the stale pre-PATCH row.
-	const [updated] = await db
-		.update(automations)
-		.set(updates)
-		.where(eq(automations.id, id))
-		.returning();
+	// Persist the metadata update + per-trigger reconciliation in a single
+	// transaction so a failure in the trigger write doesn't leave the
+	// automation row updated but still pointing at the old trigger set.
+	await db.transaction(async (tx) => {
+		await tx.update(automations).set(updates).where(eq(automations.id, id));
+
+		if (body.triggers) {
+			await tx
+				.delete(automationTriggers)
+				.where(eq(automationTriggers.automationId, id));
+			if (body.triggers.length > 0) {
+				await tx.insert(automationTriggers).values(
+					body.triggers.map((t, idx) => ({
+						...(t.id ? { id: t.id } : {}),
+						automationId: id,
+						type: t.type as never,
+						config: t.config ?? {},
+						filters: t.filters ?? {},
+						socialAccountId: t.account_id ?? null,
+						label: t.label ?? `Trigger #${idx + 1}`,
+						orderIndex: t.order_index ?? idx,
+					})),
+				);
+			}
+		}
+	});
 
 	if (willActivate) {
 		await publishVersion(db, id);
@@ -855,7 +928,11 @@ for (const [name, action, status] of [
 			.where(eq(automations.id, id))
 			.returning();
 
-		return c.json(serializeAutomation(updated!), 200);
+		const triggers = await db
+			.select()
+			.from(automationTriggers)
+			.where(eq(automationTriggers.automationId, id));
+		return c.json(serializeAutomation(updated!, triggers), 200);
 	});
 }
 
@@ -919,7 +996,11 @@ app.openapi(publishAutomation, async (c) => {
 	const updated = await db.query.automations.findFirst({
 		where: eq(automations.id, id),
 	});
-	return c.json(serializeAutomation(updated!), 200);
+	const triggers = await db
+		.select()
+		.from(automationTriggers)
+		.where(eq(automationTriggers.automationId, id));
+	return c.json(serializeAutomation(updated!, triggers), 200);
 });
 
 // --- Manual enrollment ---
@@ -1171,18 +1252,28 @@ app.openapi(simulateRoute, async (c) => {
 			.select()
 			.from(automationEdges)
 			.where(eq(automationEdges.automationId, id));
+		const snapshotTriggers = await db
+			.select()
+			.from(automationTriggers)
+			.where(eq(automationTriggers.automationId, id));
 		const idToKey = new Map(nodes.map((n) => [n.id, n.key]));
 		snapshot = {
 			automation_id: id,
 			version: auto.version,
 			name: auto.name,
 			channel: auto.channel,
-			trigger: {
-				type: auto.triggerType,
-				account_id: auto.socialAccountId ?? undefined,
-				config: (auto.triggerConfig as Record<string, unknown>) ?? {},
-				filters: (auto.triggerFilters as Record<string, unknown>) ?? {},
-			},
+			triggers: snapshotTriggers
+				.slice()
+				.sort((a, b) => a.orderIndex - b.orderIndex)
+				.map((t) => ({
+					id: t.id,
+					type: t.type,
+					account_id: t.socialAccountId ?? undefined,
+					config: (t.config as Record<string, unknown>) ?? {},
+					filters: (t.filters as Record<string, unknown>) ?? {},
+					label: t.label,
+					order_index: t.orderIndex,
+				})),
 			entry_node_key: "trigger",
 			nodes: nodes.map((n) => ({
 				id: n.id,
@@ -1548,10 +1639,15 @@ async function loadGraphResponse(
 		.from(automationEdges)
 		.where(eq(automationEdges.automationId, automationId));
 
+	const triggers = await db
+		.select()
+		.from(automationTriggers)
+		.where(eq(automationTriggers.automationId, automationId));
+
 	const idToKey = new Map(nodes.map((n) => [n.id, n.key]));
 
 	return {
-		...serializeAutomation(auto),
+		...serializeAutomation(auto, triggers),
 		nodes: nodes.map((n) => ({
 			id: n.id,
 			key: n.key,
@@ -1593,6 +1689,10 @@ export async function publishVersion(
 		.select()
 		.from(automationEdges)
 		.where(eq(automationEdges.automationId, automationId));
+	const snapshotTriggers = await db
+		.select()
+		.from(automationTriggers)
+		.where(eq(automationTriggers.automationId, automationId));
 
 	const idToKey = new Map(nodes.map((n) => [n.id, n.key]));
 
@@ -1601,12 +1701,18 @@ export async function publishVersion(
 		version: auto.version,
 		name: auto.name,
 		channel: auto.channel,
-		trigger: {
-			type: auto.triggerType,
-			account_id: auto.socialAccountId ?? undefined,
-			config: (auto.triggerConfig as Record<string, unknown>) ?? {},
-			filters: (auto.triggerFilters as Record<string, unknown>) ?? {},
-		},
+		triggers: snapshotTriggers
+			.slice()
+			.sort((a, b) => a.orderIndex - b.orderIndex)
+			.map((t) => ({
+				id: t.id,
+				type: t.type,
+				account_id: t.socialAccountId ?? undefined,
+				config: (t.config as Record<string, unknown>) ?? {},
+				filters: (t.filters as Record<string, unknown>) ?? {},
+				label: t.label,
+				order_index: t.orderIndex,
+			})),
 		entry_node_key: "trigger",
 		nodes: nodes.map((n) => ({
 			id: n.id,

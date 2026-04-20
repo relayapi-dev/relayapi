@@ -22,18 +22,24 @@ export type AutomationQueueMessage =
 			trigger_payload: Record<string, unknown>;
 	  };
 
+/** A single trigger captured inside an automation snapshot. */
+export interface AutomationSnapshotTrigger {
+	id: string;
+	type: string;
+	account_id?: string;
+	config: Record<string, unknown>;
+	filters: Record<string, unknown>;
+	label: string;
+	order_index: number;
+}
+
 /** Shape of a published automation version snapshot. */
 export interface AutomationSnapshot {
 	automation_id: string;
 	version: number;
 	name: string;
 	channel: string;
-	trigger: {
-		type: string;
-		account_id?: string;
-		config: Record<string, unknown>;
-		filters: Record<string, unknown>;
-	};
+	triggers: AutomationSnapshotTrigger[];
 	entry_node_key: string;
 	nodes: Array<{
 		id: string;
@@ -60,6 +66,7 @@ export interface NodeExecutionContext {
 		organization_id: string;
 		automation_id: string;
 		automation_version: number;
+		trigger_id: string | null;
 		contact_id: string | null;
 		conversation_id: string | null;
 		current_node_id: string | null;

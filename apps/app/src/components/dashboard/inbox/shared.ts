@@ -53,6 +53,21 @@ export interface MessageItem {
   attachments?: Array<{ type: string; url: string }>;
 }
 
+export interface NoteItem {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  author_name: string | null;
+  author_email: string | null;
+  text: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ThreadItem =
+  | { kind: "message"; createdAt: string; data: MessageItem }
+  | { kind: "note"; createdAt: string; data: NoteItem };
+
 export interface InboxOrganizationMember {
   id: string;
   user: {

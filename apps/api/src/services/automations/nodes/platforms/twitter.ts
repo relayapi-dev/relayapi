@@ -16,6 +16,7 @@ import { decryptToken } from "../../../../lib/crypto";
 import { fetchWithTimeout } from "../../../../lib/fetch-timeout";
 import { findScopedContactChannel } from "../../contact-channel";
 import { applyMergeTags } from "../../merge-tags";
+import { resolveEnrollmentTrigger } from "../../resolve-trigger";
 import type {
 	NodeExecutionContext,
 	NodeExecutionResult,
@@ -33,7 +34,8 @@ interface TwitterCtx {
 async function loadCtx(
 	ctx: NodeExecutionContext,
 ): Promise<TwitterCtx | NodeExecutionResult> {
-	const accountId = ctx.snapshot.trigger.account_id;
+	const trigger = resolveEnrollmentTrigger(ctx.snapshot, ctx.enrollment.trigger_id);
+	const accountId = trigger.account_id;
 	if (!accountId) return { kind: "fail", error: "automation has no social account bound" };
 	const account = await ctx.db.query.socialAccounts.findFirst({
 		where: eq(socialAccounts.id, accountId),
@@ -51,7 +53,8 @@ async function loadCtx(
 async function recipientFromContact(
 	ctx: NodeExecutionContext,
 ): Promise<string | null> {
-	const accountId = ctx.snapshot.trigger.account_id;
+	const trigger = resolveEnrollmentTrigger(ctx.snapshot, ctx.enrollment.trigger_id);
+	const accountId = trigger.account_id;
 	if (!ctx.enrollment.contact_id || !accountId) return null;
 	const chan = await findScopedContactChannel(ctx.db, {
 		contactId: ctx.enrollment.contact_id,

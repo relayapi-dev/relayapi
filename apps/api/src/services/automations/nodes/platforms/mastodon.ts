@@ -18,6 +18,7 @@ import { decryptToken } from "../../../../lib/crypto";
 import { fetchWithTimeout } from "../../../../lib/fetch-timeout";
 import { findScopedContactChannel } from "../../contact-channel";
 import { applyMergeTags } from "../../merge-tags";
+import { resolveEnrollmentTrigger } from "../../resolve-trigger";
 import type {
 	NodeExecutionContext,
 	NodeExecutionResult,
@@ -33,7 +34,8 @@ interface MastoCtx {
 async function loadCtx(
 	ctx: NodeExecutionContext,
 ): Promise<MastoCtx | NodeExecutionResult> {
-	const accountId = ctx.snapshot.trigger.account_id;
+	const trigger = resolveEnrollmentTrigger(ctx.snapshot, ctx.enrollment.trigger_id);
+	const accountId = trigger.account_id;
 	if (!accountId) return { kind: "fail", error: "automation has no social account bound" };
 	const account = await ctx.db.query.socialAccounts.findFirst({
 		where: eq(socialAccounts.id, accountId),
@@ -129,10 +131,11 @@ export const mastodonSendDmHandler: NodeHandler = async (ctx) => {
 	if (isFailResult(setup)) return setup;
 	if (!ctx.enrollment.contact_id)
 		return { kind: "fail", error: "enrollment has no contact_id" };
+	const trigger = resolveEnrollmentTrigger(ctx.snapshot, ctx.enrollment.trigger_id);
 	const chan = await findScopedContactChannel(ctx.db, {
 		contactId: ctx.enrollment.contact_id,
 		platform: "mastodon",
-		socialAccountId: ctx.snapshot.trigger.account_id!,
+		socialAccountId: trigger.account_id!,
 	});
 	if (!chan)
 		return {

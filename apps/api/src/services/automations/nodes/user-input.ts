@@ -4,6 +4,7 @@ import { decryptToken } from "../../../lib/crypto";
 import { sendMessage } from "../../message-sender";
 import { findScopedContactChannel } from "../contact-channel";
 import { applyMergeTags } from "../merge-tags";
+import { resolveEnrollmentTrigger } from "../resolve-trigger";
 import type { NodeExecutionContext, NodeHandler } from "../types";
 
 /**
@@ -55,7 +56,8 @@ export async function sendInputPrompt(
 	template: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
 	const channel = ctx.snapshot.channel;
-	const accountId = ctx.snapshot.trigger.account_id;
+	const trigger = resolveEnrollmentTrigger(ctx.snapshot, ctx.enrollment.trigger_id);
+	const accountId = trigger.account_id;
 	if (!accountId) {
 		return { ok: false, error: "automation has no social account bound" };
 	}

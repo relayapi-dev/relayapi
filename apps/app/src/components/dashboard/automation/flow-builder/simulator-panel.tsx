@@ -101,9 +101,12 @@ export function SimulatorPanel({
 	onClose,
 	onHighlightPath,
 }: Props) {
-	const triggerDef = useMemo(
-		() => schema.triggers.find((t) => t.type === automation.trigger_type),
-		[schema, automation.trigger_type],
+	const triggerDefs = useMemo(
+		() =>
+			automation.triggers
+				.map((t) => schema.triggers.find((s) => s.type === t.type))
+				.filter((def): def is NonNullable<typeof def> => def !== undefined),
+		[schema, automation.triggers],
 	);
 	const branchKeys = useMemo(() => branchingNodes(automation, schema), [automation, schema]);
 
@@ -281,17 +284,21 @@ export function SimulatorPanel({
 
 			<ScrollArea className="flex-1">
 				<div className="px-3 py-3 space-y-3">
-				{triggerDef && (
-					<div className="rounded-md border border-border/60 bg-card/50 px-2 py-1.5">
+				{triggerDefs.length > 0 && (
+					<div className="rounded-md border border-border/60 bg-card/50 px-2 py-1.5 space-y-1">
 						<div className="text-[10px] font-medium text-muted-foreground">
-							Trigger
+							{triggerDefs.length === 1 ? "Trigger" : "Triggers"}
 						</div>
-						<div className="text-[11px] font-mono mt-0.5">{triggerDef.type}</div>
-						{triggerDef.description && (
-							<p className="text-[10px] text-muted-foreground/80 mt-0.5">
-								{triggerDef.description}
-							</p>
-						)}
+						{triggerDefs.map((def) => (
+							<div key={def.type} className="space-y-0.5">
+								<div className="text-[11px] font-mono">{def.type}</div>
+								{def.description && (
+									<p className="text-[10px] text-muted-foreground/80">
+										{def.description}
+									</p>
+								)}
+							</div>
+						))}
 					</div>
 				)}
 

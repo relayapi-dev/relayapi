@@ -1,6 +1,7 @@
 import { z } from "@hono/zod-openapi";
 import {
 	AutomationCreateSpec,
+	type AutomationTriggerType,
 	CommentToDmTemplateInput,
 	FollowToDmTemplateInput,
 	GiveawayTemplateInput,
@@ -43,16 +44,20 @@ export function buildCommentToDmTemplate(
 		name: input.name,
 		workspace_id: input.workspace_id,
 		channel: "instagram",
-		trigger: {
-			type: "instagram_comment",
-			account_id: input.account_id,
-			config: {
-				keywords: input.keywords,
-				match_mode: input.match_mode,
-				post_id: input.post_id ?? null,
+		triggers: [
+			{
+				type: "instagram_comment",
+				account_id: input.account_id,
+				config: {
+					keywords: input.keywords,
+					match_mode: input.match_mode,
+					post_id: input.post_id ?? null,
+				},
+				filters: {},
+				label: "Trigger #1",
+				order_index: 0,
 			},
-			filters: {},
-		},
+		],
 		nodes: [
 			buildTextMessageNode("send_dm", input.dm_message),
 			...(input.public_reply
@@ -85,19 +90,23 @@ export function buildWelcomeDmTemplate(
 		whatsapp: "whatsapp_message",
 	} as const satisfies Record<
 		z.input<typeof WelcomeDmTemplateInput>["channel"],
-		MaterializedTemplateSpec["trigger"]["type"]
+		AutomationTriggerType
 	>;
 
 	return parseTemplateSpec({
 		name: input.name,
 		workspace_id: input.workspace_id,
 		channel: input.channel,
-		trigger: {
-			type: triggerTypeByChannel[input.channel],
-			account_id: input.account_id,
-			config: {},
-			filters: {},
-		},
+		triggers: [
+			{
+				type: triggerTypeByChannel[input.channel],
+				account_id: input.account_id,
+				config: {},
+				filters: {},
+				label: "Trigger #1",
+				order_index: 0,
+			},
+		],
 		nodes: [buildTextMessageNode("welcome", input.welcome_message)],
 		edges: [{ from: "trigger", to: "welcome" }],
 	});
@@ -116,22 +125,26 @@ export function buildKeywordReplyTemplate(
 		reddit: "reddit_dm",
 	} as const satisfies Record<
 		z.input<typeof KeywordReplyTemplateInput>["channel"],
-		MaterializedTemplateSpec["trigger"]["type"]
+		AutomationTriggerType
 	>;
 
 	return parseTemplateSpec({
 		name: input.name,
 		workspace_id: input.workspace_id,
 		channel: input.channel,
-		trigger: {
-			type: triggerTypeByChannel[input.channel],
-			account_id: input.account_id,
-			config: {
-				keywords: input.keywords,
-				match_mode: input.match_mode,
+		triggers: [
+			{
+				type: triggerTypeByChannel[input.channel],
+				account_id: input.account_id,
+				config: {
+					keywords: input.keywords,
+					match_mode: input.match_mode,
+				},
+				filters: {},
+				label: "Trigger #1",
+				order_index: 0,
 			},
-			filters: {},
-		},
+		],
 		nodes: [buildTextMessageNode("reply", input.reply_message)],
 		edges: [{ from: "trigger", to: "reply" }],
 	});
@@ -145,12 +158,16 @@ export function buildFollowToDmTemplate(
 		name: input.name,
 		workspace_id: input.workspace_id,
 		channel: "instagram",
-		trigger: {
-			type: "manual",
-			account_id: input.account_id,
-			config: {},
-			filters: {},
-		},
+		triggers: [
+			{
+				type: "manual",
+				account_id: input.account_id,
+				config: {},
+				filters: {},
+				label: "Trigger #1",
+				order_index: 0,
+			},
+		],
 		nodes: [buildTextMessageNode("welcome", input.welcome_message)],
 		edges: [{ from: "trigger", to: "welcome" }],
 	});
@@ -172,16 +189,20 @@ export function buildGiveawayTemplate(
 		name: input.name,
 		workspace_id: input.workspace_id,
 		channel: input.channel,
-		trigger: {
-			type: input.channel === "facebook" ? "facebook_comment" : "instagram_comment",
-			account_id: input.account_id,
-			config: {
-				keywords: input.entry_keywords,
-				match_mode: "contains",
-				post_id: input.post_id ?? null,
+		triggers: [
+			{
+				type: input.channel === "facebook" ? "facebook_comment" : "instagram_comment",
+				account_id: input.account_id,
+				config: {
+					keywords: input.entry_keywords,
+					match_mode: "contains",
+					post_id: input.post_id ?? null,
+				},
+				filters: {},
+				label: "Trigger #1",
+				order_index: 0,
 			},
-			filters: {},
-		},
+		],
 		nodes: [
 			{
 				type: "tag_add" as const,

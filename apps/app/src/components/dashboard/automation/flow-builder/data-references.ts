@@ -145,7 +145,7 @@ function nodeDerivedRefs(automation: Pick<AutomationDetail, "nodes">): DataRefer
 }
 
 export function buildDataReferenceGroups(
-	automation: Pick<AutomationDetail, "trigger_type" | "nodes">,
+	automation: Pick<AutomationDetail, "triggers" | "nodes">,
 ): DataReferenceGroup[] {
 	const groups: DataReferenceGroup[] = [
 		{
@@ -163,7 +163,14 @@ export function buildDataReferenceGroups(
 		},
 	];
 
-	const triggerGroup = triggerRefs(automation.trigger_type);
+	// Union refs across all triggers — event-bound refs depend on the trigger
+	// category (comment/dm/etc), and a multi-trigger automation can legitimately
+	// surface any of those fields depending on which trigger fired the run.
+	const triggerGroupRefs: DataReference[] = [];
+	for (const trigger of automation.triggers) {
+		triggerGroupRefs.push(...triggerRefs(trigger.type));
+	}
+	const triggerGroup = dedupeRefs(triggerGroupRefs);
 	if (triggerGroup.length > 0) {
 		groups.push({
 			key: "trigger",

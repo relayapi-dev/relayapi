@@ -40,7 +40,7 @@ function mkSnapshot(
 		version: 1,
 		name: "test",
 		channel: "instagram",
-		trigger: { type: "instagram_comment", config: {}, filters: {} },
+		triggers: [{ id: "trig_test", type: "instagram_comment", config: {}, filters: {}, label: "Comment #1", order_index: 0 }],
 		entry_node_key: "trigger",
 		nodes,
 		edges,
@@ -245,7 +245,7 @@ describe("AutomationCreateSpec — Instagram send nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "instagram",
-			trigger: { type: "instagram_comment" },
+			triggers: [{ type: "instagram_comment" }],
 			nodes: [
 				{
 					type: "instagram_send_buttons",
@@ -266,7 +266,7 @@ describe("AutomationCreateSpec — Instagram send nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "instagram",
-			trigger: { type: "instagram_comment" },
+			triggers: [{ type: "instagram_comment" }],
 			nodes: [
 				{
 					type: "instagram_send_buttons",
@@ -287,7 +287,7 @@ describe("AutomationCreateSpec — Instagram send nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "instagram",
-			trigger: { type: "instagram_comment" },
+			triggers: [{ type: "instagram_comment" }],
 			nodes: [
 				{
 					type: "instagram_send_quick_replies",
@@ -309,7 +309,7 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "whatsapp",
-			trigger: { type: "whatsapp_message" },
+			triggers: [{ type: "whatsapp_message" }],
 			nodes: [
 				{ type: "whatsapp_send_interactive", key: "send", text: "Hi" },
 			],
@@ -321,7 +321,7 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "whatsapp",
-			trigger: { type: "whatsapp_message" },
+			triggers: [{ type: "whatsapp_message" }],
 			nodes: [
 				{
 					type: "whatsapp_send_interactive",
@@ -341,7 +341,7 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "reddit",
-			trigger: { type: "reddit_new_post" },
+			triggers: [{ type: "reddit_new_post" }],
 			nodes: [
 				{ type: "reddit_submit_post", key: "post", subreddit: "test", title: "hi" },
 			],
@@ -353,7 +353,7 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "telegram",
-			trigger: { type: "telegram_message" },
+			triggers: [{ type: "telegram_message" }],
 			nodes: [
 				{
 					type: "telegram_send_keyboard",
@@ -373,7 +373,7 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "experiment",
 			channel: "instagram",
-			trigger: { type: "instagram_comment" },
+			triggers: [{ type: "instagram_comment" }],
 			nodes: [
 				{
 					type: "split_test",
@@ -393,7 +393,7 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "beehiiv",
-			trigger: { type: "beehiiv_subscription_created" },
+			triggers: [{ type: "beehiiv_subscription_created" }],
 			nodes: [
 				{ type: "beehiiv_add_subscriber", key: "add", email: "not-an-email" },
 			],
@@ -405,7 +405,7 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "telegram",
-			trigger: { type: "telegram_message" },
+			triggers: [{ type: "telegram_message" }],
 			nodes: [
 				{
 					type: "telegram_send_poll",
@@ -422,7 +422,7 @@ describe("AutomationCreateSpec — tightened platform nodes", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "pinterest",
-			trigger: { type: "manual" },
+			triggers: [{ type: "manual" }],
 			nodes: [
 				{
 					type: "pinterest_create_pin",
@@ -494,7 +494,7 @@ describe("AutomationCreateSpec — Audit 3 gates", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "instagram",
-			trigger: { type: "instagram_dm" },
+			triggers: [{ type: "instagram_dm" }],
 			nodes: [
 				{
 					type: "user_input_text",
@@ -510,7 +510,7 @@ describe("AutomationCreateSpec — Audit 3 gates", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "instagram",
-			trigger: { type: "instagram_dm" },
+			triggers: [{ type: "instagram_dm" }],
 			nodes: [
 				{
 					type: "user_input_text",
@@ -527,7 +527,7 @@ describe("AutomationCreateSpec — Audit 3 gates", () => {
 		const result = AutomationCreateSpec.safeParse({
 			name: "t",
 			channel: "linkedin",
-			trigger: { type: "linkedin_comment" },
+			triggers: [{ type: "linkedin_comment" }],
 			nodes: [
 				{
 					type: "linkedin_reply_to_comment",
@@ -844,7 +844,7 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 	const mkBody = (type: string) => ({
 		name: "t",
 		channel: "instagram" as const,
-		trigger: { type: "instagram_comment" },
+		triggers: [{ type: "instagram_comment" }],
 		nodes: [
 			{ type, key: "stub" },
 			{ type: "end", key: "e" },
@@ -861,7 +861,7 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 			AutomationCreateSpec.safeParse({
 				name: "t",
 				channel: "instagram" as const,
-				trigger: { type: "instagram_comment" },
+				triggers: [{ type: "instagram_comment" }],
 				nodes: [
 					{
 						type: "split_test",
@@ -883,7 +883,7 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 			AutomationCreateSpec.safeParse({
 				name: "t",
 				channel: "instagram" as const,
-				trigger: { type: "instagram_comment" },
+				triggers: [{ type: "instagram_comment" }],
 				nodes: [
 					{
 						type: "webhook_out",
@@ -907,7 +907,7 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 			AutomationCreateSpec.safeParse({
 				name: "t",
 				channel: "instagram" as const,
-				trigger: { type: "instagram_comment" },
+				triggers: [{ type: "instagram_comment" }],
 				nodes: [
 					{
 						type: "subscription_add",
@@ -926,7 +926,7 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 			AutomationCreateSpec.safeParse({
 				name: "t",
 				channel: "instagram" as const,
-				trigger: { type: "instagram_comment" },
+				triggers: [{ type: "instagram_comment" }],
 				nodes: [
 					{
 						type: "conversation_status",
@@ -945,7 +945,7 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 			AutomationCreateSpec.safeParse({
 				name: "t",
 				channel: "instagram" as const,
-				trigger: { type: "manual" },
+				triggers: [{ type: "manual" }],
 				nodes: [
 					{
 						type: "message_text",
@@ -966,7 +966,7 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 			AutomationCreateSpec.safeParse({
 				name: "t",
 				channel: "instagram" as const,
-				trigger: { type: "instagram_comment" },
+				triggers: [{ type: "instagram_comment" }],
 				nodes: [
 					{
 						type: "notify_admin",
@@ -987,7 +987,7 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 			AutomationCreateSpec.safeParse({
 				name: "assign",
 				channel: "instagram" as const,
-				trigger: { type: "instagram_comment" },
+				triggers: [{ type: "instagram_comment" }],
 				nodes: [
 					{
 						type: "conversation_assign",
@@ -1004,7 +1004,7 @@ describe("AutomationCreateSpec — stubbed node types are rejected", () => {
 			AutomationCreateSpec.safeParse({
 				name: "segment flow",
 				channel: "instagram" as const,
-				trigger: { type: "instagram_comment" },
+				triggers: [{ type: "instagram_comment" }],
 				nodes: [
 					{ type: "segment_add", key: "join_vip", segment_id: "seg_vip" },
 					{ type: "segment_remove", key: "leave_trial", segment_id: "seg_trial" },
@@ -1131,9 +1131,11 @@ describe("template builders", () => {
 			const reparsed = AutomationCreateSpec.parse(template);
 			expect(reparsed.status).toBe("draft");
 			expect(template.edges.length).toBeGreaterThan(0);
-			expect(template.trigger.type === "manual" || publishedTriggerTypes.has(template.trigger.type)).toBe(
-				true,
-			);
+			const firstTrigger = template.triggers[0];
+			expect(
+				firstTrigger !== undefined &&
+				(firstTrigger.type === "manual" || publishedTriggerTypes.has(firstTrigger.type))
+			).toBe(true);
 
 			for (const node of template.nodes) {
 				expect(publishedNodeTypes.has(node.type)).toBe(true);

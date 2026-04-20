@@ -26,6 +26,7 @@ import {
 	platformColors,
 	platformLabels,
 } from "@/lib/platform-maps";
+import { uploadMedia } from "@/lib/upload-media";
 import { cn } from "@/lib/utils";
 import { ChannelSelector } from "./new-post/channel-selector";
 import { ChannelEditor } from "./new-post/channel-editor";
@@ -515,50 +516,13 @@ export function NewPostDialog({
 
 		setUploading(true);
 		try {
-			let fileUrl: string | null = null;
-			try {
-				const presignRes = await fetch("/api/media/presign", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						filename: file.name,
-						content_type: file.type,
-					}),
-				});
-				if (presignRes.ok) {
-					const { upload_url, url } = await presignRes.json();
-					const uploadRes = await fetch(upload_url, {
-						method: "PUT",
-						headers: { "Content-Type": file.type },
-						body: file,
-					});
-					if (uploadRes.ok) fileUrl = url;
-				}
-			} catch {
-				// Presign not available — fall through
-			}
-
-			if (!fileUrl) {
-				const res = await fetch(
-					`/api/media/upload?filename=${encodeURIComponent(file.name)}`,
-					{
-						method: "POST",
-						headers: { "Content-Type": file.type },
-						body: file,
-					},
-				);
-				if (!res.ok) {
-					const err = await res.json().catch(() => null);
-					throw new Error(err?.error?.message || "Failed to upload file");
-				}
-				const data = await res.json();
-				fileUrl = data.url;
-			}
+			const uploaded = await uploadMedia(file);
+			const fileUrl = uploaded.url;
 
 			const mediaType = inferMediaType(file.name);
 			const previewUrl = URL.createObjectURL(file);
 			const item = {
-				url: fileUrl!,
+				url: fileUrl,
 				previewUrl,
 				...(mediaType && { type: mediaType }),
 			};
