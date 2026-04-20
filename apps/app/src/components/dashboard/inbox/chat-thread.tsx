@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   Archive,
   ArrowDown,
+  Check,
   ChevronDown,
   ExternalLink,
   Loader2,
@@ -29,6 +30,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { MessageComposer } from "./message-composer";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const platformInboxUrls: Record<string, string> = {
   instagram: "https://www.instagram.com/direct/inbox/",
@@ -357,16 +359,19 @@ export function ChatThread({
                     <DropdownMenuRadioGroup value={assigneeValue} onValueChange={(value) => void handleAssignmentSelect(value)}>
                       <DropdownMenuRadioItem
                         value={UNASSIGNED_VALUE}
-                        className="gap-3 rounded-md px-2 py-2"
+                        className="gap-3 rounded-md px-2 py-2 [&>span:first-child]:hidden"
                         disabled={assignmentPending}
                       >
                         <div className="flex size-7 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f8fafc] text-[11px] font-semibold text-slate-500">
                           U
                         </div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="truncate text-[13px] font-medium text-slate-700">Unassigned</p>
                           <p className="truncate text-[11px] text-slate-400">No owner</p>
                         </div>
+                        {assigneeValue === UNASSIGNED_VALUE && (
+                          <Check className="size-4 shrink-0 text-slate-500" />
+                        )}
                       </DropdownMenuRadioItem>
                       {members.map((member) => {
                         const memberLabel = member.user.name?.trim() || member.user.email;
@@ -375,7 +380,7 @@ export function ChatThread({
                           <DropdownMenuRadioItem
                             key={member.user.id}
                             value={member.user.id}
-                            className="gap-3 rounded-md px-2 py-2"
+                            className="gap-3 rounded-md px-2 py-2 [&>span:first-child]:hidden"
                             disabled={assignmentPending}
                           >
                             {member.user.image ? (
@@ -389,10 +394,13 @@ export function ChatThread({
                                 {memberLabel.charAt(0).toUpperCase()}
                               </div>
                             )}
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex-1">
                               <p className="truncate text-[13px] font-medium text-slate-700">{memberLabel}</p>
                               <p className="truncate text-[11px] text-slate-400">{member.user.email}</p>
                             </div>
+                            {assigneeValue === member.user.id && (
+                              <Check className="size-4 shrink-0 text-slate-500" />
+                            )}
                           </DropdownMenuRadioItem>
                         );
                       })}
@@ -455,13 +463,17 @@ export function ChatThread({
         </div>
       )}
 
-      <div
-        ref={scrollContainerRef}
-        onScroll={handleScroll}
-        className="relative flex-1 overflow-y-auto bg-white px-4 py-5 sm:px-6"
+      <ScrollArea
+        viewportRef={scrollContainerRef}
+        viewportProps={{
+          onScroll: handleScroll,
+          className: "[&>div]:!block [&>div]:min-h-full",
+        }}
+        className="relative flex-1 bg-white"
       >
+        <div className="flex min-h-full flex-col px-4 py-5 sm:px-6">
         {loading ? (
-          <div className="flex h-full items-center justify-center py-12">
+          <div className="flex flex-1 items-center justify-center py-12">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : error ? (
@@ -470,7 +482,7 @@ export function ChatThread({
             <span>{error}</span>
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center py-12">
+          <div className="flex flex-1 items-center justify-center py-12">
             <div className="text-center">
               <MessageCircle className="mx-auto size-9 text-slate-300" />
               <p className="mt-3 text-sm font-medium text-slate-700">No messages yet</p>
@@ -600,7 +612,8 @@ export function ChatThread({
             <ArrowDown className="size-4" />
           </button>
         )}
-      </div>
+        </div>
+      </ScrollArea>
 
       {sendError && (
         <div className="border-t border-[#f2d2d2] bg-[#fff7f7] px-4 py-2 text-sm text-[#b14242]">

@@ -11,6 +11,7 @@ import {
   platformLabels,
 } from "./shared";
 import { LoadMore } from "@/components/ui/load-more";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 export function ConversationList({
   conversations,
@@ -31,7 +32,7 @@ export function ConversationList({
 }) {
   return (
     <div className="flex h-full flex-col bg-white">
-      <div className="flex-1 overflow-y-auto">
+      <ScrollArea className="flex-1">
         {loading ? (
           <div className="flex h-full items-center justify-center py-12">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -149,7 +150,7 @@ export function ConversationList({
             </div>
           </div>
         )}
-      </div>
+      </ScrollArea>
     </div>
   );
 }
