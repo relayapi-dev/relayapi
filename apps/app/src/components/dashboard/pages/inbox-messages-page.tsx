@@ -46,6 +46,7 @@ type SidebarItem = {
   label: string;
   count: number;
   icon: ComponentType<{ className?: string }>;
+  accentCount?: boolean;
 };
 
 const statusOptions = [
@@ -96,7 +97,7 @@ function ToolbarSelect({
       <SelectTrigger
         size="sm"
         className={cn(
-          "h-9 min-w-[7.5rem] rounded-xl border-[#d9dee8] bg-white px-3 text-[13px] font-medium text-slate-600 shadow-none hover:bg-[#f8f9fc]",
+          "h-8 min-w-[7.5rem] rounded-md border-[#d8dce5] bg-white px-3 text-[12px] font-medium text-slate-600 shadow-none hover:bg-[#f8f9fc]",
           className,
         )}
       >
@@ -125,9 +126,9 @@ function SidebarSection({
   onSelect: (key: SidebarFilterKey) => void;
 }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
       {title && (
-        <div className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+        <div className="px-4 pb-1 pt-3 text-[11px] font-medium text-slate-400">
           {title}
         </div>
       )}
@@ -139,18 +140,14 @@ function SidebarSection({
             type="button"
             onClick={() => onSelect(item.key)}
             className={cn(
-              "flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-left transition-colors",
-              isActive ? "bg-[#e9edf6] text-slate-900" : "text-slate-500 hover:bg-[#f1f4f9] hover:text-slate-800",
+              "flex w-full items-center gap-3 rounded-md px-4 py-2 text-left transition-colors",
+              isActive ? "bg-[#eceef2] text-slate-900" : "text-slate-500 hover:bg-[#f5f6f8] hover:text-slate-800",
             )}
           >
-            <item.icon className="size-4 shrink-0" />
-            <span className="flex-1 text-[14px] font-medium">{item.label}</span>
-            <span
-              className={cn(
-                "min-w-6 rounded-full px-2 py-0.5 text-center text-[11px] font-semibold",
-                isActive ? "bg-white text-slate-700" : "bg-[#eef2f7] text-slate-500",
-              )}
-            >
+            <item.icon className="size-3.5 shrink-0" />
+            <span className="flex-1 text-[13px] font-medium">{item.label}</span>
+            <span className="flex items-center gap-1 text-[12px] font-medium text-slate-400">
+              {item.accentCount && item.count > 0 && <span className="size-1.5 rounded-full bg-[#2d71f8]" />}
               {item.count}
             </span>
           </button>
@@ -321,7 +318,7 @@ export function InboxMessagesPage() {
       {
         items: [
           { key: "all" as const, label: "All chats", count: all, icon: Inbox },
-          { key: "unassigned" as const, label: "Unassigned", count: unassigned, icon: TriangleAlert },
+          { key: "unassigned" as const, label: "Unassigned", count: unassigned, icon: TriangleAlert, accentCount: true },
           { key: "assigned" as const, label: "Assigned to me", count: assigned, icon: UserRound },
           { key: "reminders" as const, label: "Reminders", count: 0, icon: AlarmClockCheck },
         ],
@@ -362,21 +359,21 @@ export function InboxMessagesPage() {
   }
 
   return (
-    <div className="flex min-h-[calc(100dvh-3.25rem)] flex-col bg-[#f5f6fa] text-slate-900 md:h-full md:min-h-0">
-      <div className="border-b border-[#e7e9ef] bg-white px-4 py-3 md:px-6">
+    <div className="flex min-h-[calc(100dvh-3.25rem)] flex-col bg-[#fbfbfc] text-slate-900 md:h-full md:min-h-0">
+      <div className="border-b border-[#e7e9ef] bg-[#fbfbfc] px-4 py-2.5 md:px-6">
         <div className="flex flex-wrap items-center gap-3">
           <div className="min-w-0 flex-1 md:flex-none">
-            <h1 className="text-[16px] font-semibold text-slate-900">Inbox</h1>
+            <h1 className="text-[17px] font-semibold text-slate-900">Inbox</h1>
           </div>
 
-          <div className="relative min-w-[14rem] flex-1 md:max-w-[24rem]">
+          <div className="relative min-w-[14rem] flex-1 md:max-w-[20rem]">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search through Inbox conversations"
-              className="h-10 w-full rounded-xl border border-[#d9dee8] bg-[#fbfcff] pl-10 pr-4 text-[14px] text-slate-700 outline-none transition focus:border-[#bfd3ff] focus:ring-2 focus:ring-[#dbe8ff] placeholder:text-slate-400"
+              className="h-8 w-full rounded-md border border-[#d8dce5] bg-white pl-10 pr-4 text-[13px] text-slate-700 outline-none transition focus:border-[#bfd3ff] focus:ring-2 focus:ring-[#dbe8ff] placeholder:text-slate-400"
             />
           </div>
 
@@ -386,16 +383,16 @@ export function InboxMessagesPage() {
             </div>
             <button
               type="button"
-              className="inline-flex size-10 items-center justify-center rounded-xl border border-[#d9dee8] bg-white text-slate-500 transition-colors hover:bg-[#f8f9fc] hover:text-slate-800"
+              className="inline-flex size-8 items-center justify-center rounded-md border border-[#d8dce5] bg-white text-slate-500 transition-colors hover:bg-[#f8f9fc] hover:text-slate-800"
               title="Inbox settings"
             >
-              <Settings2 className="size-4" />
+              <Settings2 className="size-3.5" />
             </button>
           </div>
         </div>
       </div>
 
-      <div className="border-b border-[#e7e9ef] bg-white px-4 py-3 md:hidden">
+      <div className="border-b border-[#e7e9ef] bg-white px-4 py-2.5 md:hidden">
         <div className="flex gap-2 overflow-x-auto pb-1">
           {sidebarSections.flatMap((section) => section.items).map((item) => (
             <button
@@ -403,15 +400,15 @@ export function InboxMessagesPage() {
               type="button"
               onClick={() => setSidebarFilter(item.key)}
               className={cn(
-                "inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors",
+                "inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap transition-colors",
                 sidebarFilter === item.key
-                  ? "bg-[#2d71f8] text-white"
-                  : "bg-[#eef2f7] text-slate-600",
+                  ? "bg-[#eceef2] text-slate-900"
+                  : "bg-white text-slate-600 border border-[#d8dce5]",
               )}
             >
               <item.icon className="size-4" />
               {item.label}
-              <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px]">
+              <span className="text-[11px] text-slate-400">
                 {item.count}
               </span>
             </button>
@@ -436,7 +433,7 @@ export function InboxMessagesPage() {
             type="button"
             onClick={() => setOnlyUnread((current) => !current)}
             className={cn(
-              "inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-[13px] font-medium transition-colors",
+              "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition-colors",
               onlyUnread
                 ? "border-[#bfd3ff] bg-[#eef5ff] text-[#2d71f8]"
                 : "border-[#d9dee8] bg-white text-slate-600 hover:bg-[#f8f9fc]",
@@ -462,7 +459,7 @@ export function InboxMessagesPage() {
 
           <button
             type="button"
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-[#d9dee8] bg-white px-3 text-[13px] font-medium text-slate-600 transition-colors hover:bg-[#f8f9fc]"
+            className="inline-flex h-8 items-center gap-2 rounded-md border border-[#d9dee8] bg-white px-3 text-[12px] font-medium text-slate-600 transition-colors hover:bg-[#f8f9fc]"
           >
             <Filter className="size-4" />
             Filter
@@ -475,7 +472,7 @@ export function InboxMessagesPage() {
       </div>
 
       <div className="hidden min-h-0 flex-1 md:flex">
-        <aside className="flex w-[236px] shrink-0 flex-col border-r border-[#e7e9ef] bg-[#fbfbfd] px-3 py-4">
+        <aside className="flex w-[232px] shrink-0 flex-col border-r border-[#e7e9ef] bg-[#f7f7f8] px-3 py-3">
           <div className="space-y-4">
             {sidebarSections.map((section) => (
               <SidebarSection
@@ -490,7 +487,7 @@ export function InboxMessagesPage() {
         </aside>
 
         <div className="flex min-w-0 flex-1">
-          <div className="w-[360px] shrink-0 border-r border-[#e7e9ef]">
+          <div className="w-[300px] shrink-0 border-r border-[#e7e9ef] bg-white">
             <ConversationList
               conversations={visibleConversations}
               selectedId={selectedConversationId}

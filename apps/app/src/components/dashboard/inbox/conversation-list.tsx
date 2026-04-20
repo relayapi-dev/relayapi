@@ -55,6 +55,7 @@ export function ConversationList({
                 const isSelected = selectedId === conv.id;
                 const isUnread = (conv.unread_count ?? 0) > 0;
                 const preview = conv.last_message_text?.trim() || "No messages yet";
+                const statusLabel = conv.assigned_user_id ? "Assigned" : "Unassigned";
 
                 return (
                   <motion.button
@@ -65,8 +66,8 @@ export function ConversationList({
                     animate={newItemEnter.animate}
                     onClick={() => onSelect(conv.id)}
                     className={cn(
-                      "w-full border-b border-[#eef0f5] px-4 py-3.5 text-left transition-colors",
-                      isSelected ? "bg-[#f3f5fb]" : "hover:bg-[#f8f9fc]",
+                      "w-full border-b border-[#ececf1] px-3.5 py-3 text-left transition-colors",
+                      isSelected ? "bg-[#f3f4f6]" : "hover:bg-[#fafafb]",
                     )}
                   >
                     <div className="flex items-start gap-3">
@@ -75,10 +76,10 @@ export function ConversationList({
                           <img
                             src={conv.participant_avatar}
                             alt={displayName}
-                            className="size-11 rounded-full border border-[#e5e7eb] object-cover"
+                            className="size-10 rounded-full border border-[#e5e7eb] object-cover"
                           />
                         ) : (
-                          <div className="flex size-11 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f4f6fa] text-sm font-semibold text-slate-500">
+                          <div className="flex size-10 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f4f6fa] text-sm font-semibold text-slate-500">
                             {displayName.charAt(0).toUpperCase()}
                           </div>
                         )}
@@ -97,7 +98,7 @@ export function ConversationList({
                           <div className="min-w-0">
                             <p
                               className={cn(
-                                "truncate text-[14px] leading-5 text-slate-900",
+                                "truncate text-[13px] leading-5 text-slate-900",
                                 isUnread ? "font-semibold" : "font-medium",
                               )}
                             >
@@ -107,7 +108,7 @@ export function ConversationList({
                               {preview}
                             </p>
                           </div>
-                          <div className="flex shrink-0 items-center gap-2">
+                          <div className="flex shrink-0 items-center gap-1.5">
                             {isUnread && <span className="size-2 rounded-full bg-[#2d71f8]" />}
                             <span
                               className={cn(
@@ -120,17 +121,15 @@ export function ConversationList({
                           </div>
                         </div>
 
-                        <div className="mt-2 flex items-center gap-2 text-[11px]">
-                          <span className="rounded-full bg-[#f3f5fa] px-2 py-0.5 font-medium text-slate-500">
-                            {getPlatformDisplayName(conv.platform)}
-                          </span>
-                          {!conv.assigned_user_id && (
-                            <span className="font-medium text-[#2d71f8]">Unassigned</span>
-                          )}
-                          {isUnread && (
-                            <span className="rounded-full bg-[#e8f0ff] px-2 py-0.5 font-semibold text-[#2d71f8]">
-                              {conv.unread_count}
-                            </span>
+                        <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+                          <span>{statusLabel}</span>
+                          <span className="size-1 rounded-full bg-[#d0d5dd]" />
+                          <span>{getPlatformDisplayName(conv.platform)}</span>
+                          {isUnread && (conv.unread_count ?? 0) > 1 && (
+                            <>
+                              <span className="size-1 rounded-full bg-[#d0d5dd]" />
+                              <span className="font-medium text-[#2d71f8]">{conv.unread_count} unread</span>
+                            </>
                           )}
                         </div>
                       </div>
@@ -140,7 +139,7 @@ export function ConversationList({
               })}
             </AnimatePresence>
 
-            <div className="border-t border-[#eef0f5] p-3">
+            <div className="border-t border-[#ececf1] p-3">
               <LoadMore
                 hasMore={hasMore}
                 loading={loadingMore}

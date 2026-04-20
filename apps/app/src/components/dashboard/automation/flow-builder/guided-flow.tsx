@@ -1,31 +1,26 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
-	ArrowRight,
 	Bot,
 	Clock3,
 	CornerDownRight,
-	Facebook,
 	GitBranch,
 	Globe,
-	Instagram,
 	Keyboard,
 	MessageSquare,
 	MoreHorizontal,
 	Plus,
 	RefreshCw,
 	Send,
-	Sparkles,
 	StopCircle,
 	Tag,
+	Zap,
 	ZoomIn,
 	ZoomOut,
 } from "lucide-react";
 import {
-	Background,
 	BaseEdge,
 	EdgeLabelRenderer,
 	Handle,
-	MarkerType,
 	Panel,
 	Position,
 	ReactFlow,
@@ -39,6 +34,7 @@ import {
 	type XYPosition,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { platformIcons } from "@/lib/platform-icons";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -86,7 +82,6 @@ const CATEGORY_LABEL: Record<string, string> = {
 };
 
 const TRIGGER_ID = "trigger";
-const NODE_WIDTH = 320;
 const LAYER_GAP = 410;
 const ROW_GAP = 190;
 
@@ -132,6 +127,8 @@ const NODE_OPERATION_OVERRIDES: Record<string, string> = {
 const TRIGGER_OPERATION_OVERRIDES: Record<string, string> = {
 	instagram_comment: "User comments on your Post or Reel",
 	instagram_dm: "User sends a message",
+	instagram_story_reply: "User replies to your Story",
+	instagram_story_mention: "User mentions your Story",
 	facebook_comment: "User comments on your Post",
 	facebook_dm: "User sends a message",
 	whatsapp_message: "User sends a WhatsApp message",
@@ -181,6 +178,7 @@ interface FlowEdgeData {
 	parentKey: string;
 	readOnly?: boolean;
 	schema: AutomationSchema;
+	showInsertControl: boolean;
 }
 
 interface Props {
@@ -208,11 +206,15 @@ function presentLabel(value: string): string {
 	return value === "next" ? "Next Step" : titleize(value);
 }
 
-function describeNodePresentation(nodeType: string, category: string) {
+function describeNodePresentation(
+	nodeType: string,
+	category: string,
+	automationChannel: string,
+) {
 	const [prefix, ...rest] = nodeType.split("_");
 	if (NODE_OPERATION_OVERRIDES[nodeType]) {
 		const app = nodeType.startsWith("message_")
-			? "Messaging"
+			? (PLATFORM_LABELS[automationChannel] ?? titleize(automationChannel))
 			: nodeType.startsWith("user_input_")
 				? "Input"
 				: (CATEGORY_LABEL[category] ?? titleize(category));
@@ -262,7 +264,7 @@ function nodeSummary(spec: AutomationNodeSpec): string | undefined {
 }
 
 function fallbackSummary(nodeType: string): string {
-	if (nodeType.startsWith("message_")) return "Add a message";
+	if (nodeType.startsWith("message_")) return "Add a text";
 	if (nodeType === "condition") return "Set the branching rules";
 	if (nodeType === "smart_delay") return "Wait before continuing";
 	if (nodeType === "http_request") return "Configure the request";
@@ -356,17 +358,29 @@ function resolveNodePosition(
 	return autoPositions.get(key) ?? { x: 0, y: 0 };
 }
 
-function platformIcon(channel: string) {
-	switch (channel) {
-		case "instagram":
-			return Instagram;
-		case "facebook":
-			return Facebook;
-		case "ai":
-			return Sparkles;
-		default:
-			return MessageSquare;
-	}
+function platformIconBubble(channel: string) {
+	const palette =
+		channel === "instagram"
+			? "bg-[linear-gradient(135deg,#ffd776_0%,#f74a5c_48%,#7d3cff_100%)]"
+			: channel === "facebook"
+				? "bg-[#1877f2]"
+				: channel === "whatsapp"
+					? "bg-[#25d366]"
+					: channel === "telegram"
+						? "bg-[#27a7e7]"
+						: "bg-[#7c8ca5]";
+	return (
+		<div
+			className={cn(
+				"flex size-7 items-center justify-center rounded-full text-white shadow-[0_2px_8px_rgba(15,23,42,0.15)]",
+				palette,
+			)}
+		>
+			<div className="scale-[0.8]">
+				{platformIcons[channel] ?? <MessageSquare className="size-3.5" />}
+			</div>
+		</div>
+	);
 }
 
 function categoryIcon(nodeType: string, category: string) {
@@ -391,27 +405,27 @@ function categoryIcon(nodeType: string, category: string) {
 function cardShellClass({
 	hasError,
 	highlighted,
+	kind,
 	selected,
 }: {
 	hasError: boolean;
 	highlighted: boolean;
+	kind: "step" | "trigger";
 	selected: boolean;
 }) {
 	return cn(
-		"relative w-[320px] overflow-hidden rounded-[22px] border bg-white shadow-[0_14px_36px_rgba(15,23,42,0.08)] transition-all duration-200",
-		selected && "border-emerald-400 shadow-[0_20px_44px_rgba(16,185,129,0.18)]",
-		highlighted && "ring-2 ring-sky-300/70",
-		hasError && "border-amber-400 ring-2 ring-amber-200/80",
-		!selected &&
-			!hasError &&
-			"border-slate-200 hover:border-slate-300 hover:shadow-[0_16px_40px_rgba(15,23,42,0.11)]",
-	);
-}
-
-function handleClass(position: "source" | "target") {
-	return cn(
-		"!size-3 !border-2 !border-slate-300 !bg-white !shadow-sm",
-		position === "source" ? "!right-[-7px]" : "!left-[-7px]",
+		"group relative overflow-visible rounded-[22px] border bg-white shadow-[0_2px_10px_rgba(34,44,66,0.08)] transition-all duration-150",
+		kind === "trigger"
+			? "w-[390px] border-[#e6e9ef]"
+			: "w-[346px] border-[#e6e9ef]",
+		kind === "step" &&
+			selected &&
+			"border-[#63d26f] shadow-[0_0_0_1px_rgba(99,210,111,0.45),0_3px_12px_rgba(34,44,66,0.1)]",
+		kind === "trigger" &&
+			selected &&
+			"border-[#cfd6e3] shadow-[0_3px_12px_rgba(34,44,66,0.1)]",
+		highlighted && "ring-1 ring-[#a7d8ff]",
+		hasError && "border-[#f4af4d] shadow-[0_0_0_1px_rgba(244,175,77,0.28)]",
 	);
 }
 
@@ -497,6 +511,7 @@ function AddStepMenu({
 										const presentation = describeNodePresentation(
 											node.type,
 											node.category,
+											automationChannel,
 										);
 										return (
 											<button
@@ -532,16 +547,26 @@ function AddStepMenu({
 	);
 }
 
+function triggerListLabel(triggerType: string) {
+	const base = triggerType
+		.replace(/^instagram_/, "")
+		.replace(/^facebook_/, "")
+		.replace(/^whatsapp_/, "")
+		.replace(/^telegram_/, "");
+	const normalized = titleize(base);
+	if (normalized === "Dm") return "Message #1";
+	if (normalized === "Story Reply") return "Story Reply #1";
+	if (normalized === "Story Mention") return "Story Mention #1";
+	if (normalized === "Comment") return "Comment Reply #1";
+	return `${normalized} #1`;
+}
+
 function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
-	const Icon = platformIcon(data.automation.channel);
 	const outputLabels = resolveSourceOutputLabels(
 		TRIGGER_ID,
 		new Map(),
 		new Map(),
 		data.triggerDef,
-	);
-	const hasNext = outputLabels.some((label) =>
-		data.connectedOutputs.includes(label),
 	);
 	const summary =
 		TRIGGER_OPERATION_OVERRIDES[data.automation.trigger_type] ??
@@ -551,6 +576,7 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 				"",
 			),
 		);
+	const triggerLabel = triggerListLabel(data.automation.trigger_type);
 
 	return (
 		<div
@@ -558,79 +584,51 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 				selected,
 				highlighted: data.highlighted,
 				hasError: data.hasError,
+				kind: "trigger",
 			})}
 		>
 			<Handle
 				type="source"
 				position={Position.Right}
-				className={handleClass("source")}
+				className="!size-[16px] !border-[3px] !border-white !bg-[#95a3bb] !shadow-[0_1px_4px_rgba(34,44,66,0.18)]"
+				style={{ right: -9, top: "90%" }}
 				isConnectable={false}
 			/>
 			<button
 				type="button"
 				onClick={() => data.onSelect(TRIGGER_ID)}
-				className="nodrag block w-full px-4 py-4 text-left"
+				className="nodrag block w-full px-5 py-4 text-left"
 			>
-				<div className="flex items-start justify-between gap-3">
-					<div className="flex items-start gap-3">
-						<div className="flex size-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
-							<Icon className="size-4" />
-						</div>
+				<div className="flex items-center gap-2 text-[17px] font-semibold text-[#353a44]">
+					<LightningBolt className="size-[18px] text-[#353a44]" />
+					<span>When...</span>
+				</div>
+
+				<div className="mt-4 rounded-[16px] bg-[#f4f5f8] px-4 py-3">
+					<div className="flex items-center gap-3">
+						{platformIconBubble(data.automation.channel)}
 						<div className="min-w-0">
-							<div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-								When...
-							</div>
-							<div className="mt-1 text-lg font-semibold leading-none text-slate-900">
+							<div className="truncate text-[17px] font-semibold leading-5 text-[#404552]">
 								{summary}
 							</div>
-							<div className="mt-2 text-sm text-slate-500">
-								Starts the automation when this trigger fires.
+							<div className="mt-1 text-[13px] leading-4 text-[#7e8695]">
+								{triggerLabel}
 							</div>
 						</div>
 					</div>
-					<div className="flex items-center gap-1">
-						<span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-							{PLATFORM_LABELS[data.automation.channel] ??
-								titleize(data.automation.channel)}
-						</span>
-						{data.hasError && (
-							<span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700">
-								Error
-							</span>
-						)}
-					</div>
 				</div>
 
-				<div className="mt-4 rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-4">
-					<div className="text-sm font-medium text-slate-700">
-						{presentLabel(data.automation.trigger_type)}
-					</div>
-					<div className="mt-1 text-xs text-slate-500">
-						Click to edit the trigger configuration and filters.
-					</div>
-				</div>
+				<button
+					type="button"
+					onClick={(event) => {
+						event.stopPropagation();
+						data.onSelect(TRIGGER_ID);
+					}}
+					className="mt-6 flex h-[54px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[17px] font-semibold text-[#4680ff] transition hover:border-[#bfc6d3] hover:bg-[#fafbfc]"
+				>
+					+ New Trigger
+				</button>
 			</button>
-
-			<div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
-				<div className="text-[11px] font-medium text-slate-400">
-					{hasNext ? "Then" : "Add the first step"}
-				</div>
-				{!data.readOnly && !hasNext ? (
-					<AddStepMenu
-						automationChannel={data.automationChannel}
-						label={outputLabels[0] ?? "next"}
-						onInsert={data.onInsertAfter}
-						parentKey={TRIGGER_ID}
-						schema={data.schema}
-						tone="footer"
-					/>
-				) : (
-					<div className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
-						<span>Next Step</span>
-						<ArrowRight className="size-3.5" />
-					</div>
-				)}
-			</div>
 		</div>
 	);
 }
@@ -638,9 +636,21 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 	const category = data.def?.category ?? "ops";
 	const Icon = categoryIcon(data.node.type, category);
-	const presentation = describeNodePresentation(data.node.type, category);
+	const presentation = describeNodePresentation(
+		data.node.type,
+		category,
+		data.automationChannel,
+	);
 	const summary = nodeSummary(data.node) ?? fallbackSummary(data.node.type);
 	const outputs = resolveNodeOutputLabels(data.node, data.def);
+	const hasNext = outputs.some((label) =>
+		data.connectedOutputs.includes(label),
+	);
+	const isMessageNode = data.node.type.startsWith("message_");
+	const preview =
+		isMessageNode && summary === fallbackSummary(data.node.type)
+			? "Add a text"
+			: summary;
 
 	return (
 		<div
@@ -648,123 +658,96 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 				selected,
 				highlighted: data.highlighted,
 				hasError: data.hasError,
+				kind: "step",
 			})}
 		>
 			<Handle
 				type="target"
 				position={Position.Left}
-				className={handleClass("target")}
+				className="!pointer-events-none !size-3 !border-0 !bg-transparent !opacity-0"
+				style={{ left: -6, top: 28 }}
 				isConnectable={false}
 			/>
 			<Handle
 				type="source"
 				position={Position.Right}
-				className={handleClass("source")}
+				className="!size-[15px] !border-[2px] !border-[#98a6bd] !bg-white !shadow-[0_1px_4px_rgba(34,44,66,0.12)]"
+				style={{ right: -8, top: "86%" }}
 				isConnectable={false}
 			/>
 
 			<button
 				type="button"
 				onClick={() => data.onSelect(data.node.key)}
-				className="nodrag block w-full px-4 py-4 pr-12 text-left"
+				className="nodrag block w-full px-5 py-4 pr-12 text-left"
 			>
-				<div className="flex items-start justify-between gap-3">
-					<div className="flex items-start gap-3">
-						<div className="flex size-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
-							<Icon className="size-4" />
-						</div>
-						<div className="min-w-0">
-							<div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-								{presentation.app}
-							</div>
-							<div className="mt-1 text-lg font-semibold leading-none text-slate-900">
-								{presentation.operation}
-							</div>
-							<div className="mt-2 text-xs text-slate-500">
-								{presentLabel(data.node.type)}
-							</div>
-						</div>
-					</div>
-					{data.hasError && (
-						<span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700">
-							Error
-						</span>
-					)}
-				</div>
-
-				<div className="mt-4 rounded-[18px] border border-slate-200 bg-slate-50 px-4 py-4">
-					<div className="line-clamp-3 text-sm leading-6 text-slate-700">
-						{summary}
-					</div>
-				</div>
-			</button>
-
-			<div className="flex min-h-12 items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
-				{outputs.length <= 1 ? (
-					<>
-						<div className="text-[11px] font-medium text-slate-400">Next</div>
-						{outputs.length === 1 &&
-						data.connectedOutputs.includes(outputs[0]!) ? (
-							<div className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
-								<span>{presentLabel(outputs[0]!)}</span>
-								<ArrowRight className="size-3.5" />
-							</div>
-						) : data.readOnly || outputs.length === 0 ? (
-							<div className="text-[11px] font-medium text-slate-400">
-								No next step
-							</div>
+				<div className="flex items-start gap-3">
+					<div className="mt-1 shrink-0">
+						{isMessageNode ? (
+							platformIconBubble(data.automationChannel)
 						) : (
+							<div className="flex size-7 items-center justify-center rounded-full bg-[#eef1f5] text-[#7b8598]">
+								<Icon className="size-3.5" />
+							</div>
+						)}
+					</div>
+					<div className="min-w-0">
+						<div className="text-[13px] leading-4 text-[#8b92a0]">
+							{presentation.app}
+						</div>
+						<div className="mt-1 text-[17px] font-semibold leading-5 text-[#404552]">
+							{presentation.operation}
+						</div>
+					</div>
+				</div>
+
+				<div className="mt-4 rounded-[16px] bg-[#f4f5f8] px-4 py-3">
+					<div className="line-clamp-3 min-h-[26px] text-[16px] leading-[26px] text-[#404552]">
+						{preview}
+					</div>
+				</div>
+
+				<div className="mt-4 flex items-center justify-between text-[13px] text-[#6f7786]">
+					<div className="flex flex-wrap gap-2">
+						{data.hasError && (
+							<span className="rounded-full bg-[#fff2dc] px-2 py-0.5 text-[11px] font-semibold text-[#b36a00]">
+								Error
+							</span>
+						)}
+						{outputs.length > 1 &&
+							outputs.map((label) => (
+								<span
+									key={label}
+									className="rounded-full bg-[#f4f5f8] px-2 py-0.5 text-[11px] text-[#7e8695]"
+								>
+									{presentLabel(label)}
+								</span>
+							))}
+					</div>
+					<div className="flex items-center gap-2">
+						{selected && !data.readOnly && !hasNext ? (
 							<AddStepMenu
 								automationChannel={data.automationChannel}
 								label={outputs[0] ?? "next"}
 								onInsert={data.onInsertAfter}
 								parentKey={data.node.key}
 								schema={data.schema}
-								tone="footer"
+								tone="ghost"
 							/>
-						)}
-					</>
-				) : (
-					<div className="flex w-full flex-wrap gap-2">
-						{outputs.map((label) =>
-							data.connectedOutputs.includes(label) ? (
-								<span
-									key={label}
-									className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-500"
-								>
-									{presentLabel(label)}
-								</span>
-							) : data.readOnly ? (
-								<span
-									key={label}
-									className="rounded-full border border-dashed border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-400"
-								>
-									{presentLabel(label)}
-								</span>
-							) : (
-								<AddStepMenu
-									key={label}
-									automationChannel={data.automationChannel}
-									label={label}
-									onInsert={data.onInsertAfter}
-									parentKey={data.node.key}
-									schema={data.schema}
-									tone="footer"
-								/>
-							),
-						)}
+						) : null}
+						<span>Next Step</span>
 					</div>
-				)}
-			</div>
+				</div>
+			</button>
 
 			{!data.readOnly && (
-				<div className="absolute right-3 top-3">
+				<div className="absolute right-3 top-3 opacity-0 transition group-hover:opacity-100">
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
 							<button
 								type="button"
 								onClick={(event) => event.stopPropagation()}
-								className="nodrag rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+								className="nodrag rounded-md p-1 text-[#98a0ae] transition hover:bg-[#f3f5f8] hover:text-[#5f6775]"
 								aria-label="Step actions"
 							>
 								<MoreHorizontal className="size-4" />
@@ -791,6 +774,7 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 function AutomationFlowEdge({
 	data,
 	markerEnd,
+	source,
 	sourcePosition,
 	sourceX,
 	sourceY,
@@ -805,50 +789,63 @@ function AutomationFlowEdge({
 		targetX,
 		targetY,
 		targetPosition,
-		borderRadius: 28,
-		offset: 32,
+		borderRadius: 26,
+		offset: 28,
 	});
-	const showLabel = data?.label && data.label !== "next";
+	const showBranchLabel =
+		data?.label && data.label !== "next" && source !== TRIGGER_ID;
+	const showThenLabel = source === TRIGGER_ID && data?.label === "next";
 	if (!data) {
 		return (
 			<BaseEdge
 				path={path}
 				markerEnd={markerEnd}
-				style={{ stroke: "#94a3b8", strokeWidth: 2.25 }}
+				style={{ stroke: "#9aa7bd", strokeWidth: 2.2 }}
 			/>
 		);
 	}
 
 	return (
 		<>
-			<BaseEdge
-				path={path}
-				markerEnd={markerEnd}
-				style={{ stroke: "#94a3b8", strokeWidth: 2.25 }}
-			/>
+			<BaseEdge path={path} style={{ stroke: "#9aa7bd", strokeWidth: 2.2 }} />
 			<EdgeLabelRenderer>
-				<div
-					className="nodrag nopan absolute flex items-center gap-1.5"
-					style={{
-						transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-					}}
-				>
-					{showLabel ? (
-						<span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 shadow-sm">
-							{presentLabel(data.label)}
-						</span>
+				<>
+					{showThenLabel ? (
+						<div
+							className="pointer-events-none absolute text-[13px] font-medium text-[#6f7786]"
+							style={{
+								transform: `translate(-100%, -50%) translate(${sourceX - 10}px, ${sourceY + 2}px)`,
+							}}
+						>
+							Then
+						</div>
 					) : null}
-					{!data.readOnly && (
-						<AddStepMenu
-							automationChannel={data.automationChannel}
-							label={data.label}
-							onInsert={data.onInsertAfter}
-							parentKey={data.parentKey}
-							schema={data.schema}
-							tone="edge"
-						/>
-					)}
-				</div>
+					{showBranchLabel || data.showInsertControl ? (
+						<div
+							className="nodrag nopan absolute flex items-center gap-2"
+							style={{
+								transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+							}}
+						>
+							{showBranchLabel ? (
+								<span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598] shadow-[0_1px_4px_rgba(34,44,66,0.08)]">
+									{presentLabel(data.label)}
+								</span>
+							) : null}
+							{data.showInsertControl ? (
+								<AddStepMenu
+									automationChannel={data.automationChannel}
+									className="h-7 w-7 rounded-full border border-[#d7dce6] bg-white p-0 text-[#7b8598] shadow-[0_1px_4px_rgba(34,44,66,0.08)]"
+									label={data.label}
+									onInsert={data.onInsertAfter}
+									parentKey={data.parentKey}
+									schema={data.schema}
+									tone="edge"
+								/>
+							) : null}
+						</div>
+					) : null}
+				</>
 			</EdgeLabelRenderer>
 		</>
 	);
@@ -1017,16 +1014,22 @@ function GuidedFlowCanvas({
 				parentKey: edge.from,
 				readOnly,
 				schema,
-			},
-			markerEnd: {
-				type: MarkerType.ArrowClosed,
-				color: "#94a3b8",
-				height: 18,
-				width: 18,
+				showInsertControl:
+					!readOnly &&
+					(selectedKey === edge.from ||
+						selectedKey === edge.to ||
+						selectedKey === TRIGGER_ID),
 			},
 			selectable: false,
 		}));
-	}, [automation.channel, automation.edges, onInsertAfter, readOnly, schema]);
+	}, [
+		automation.channel,
+		automation.edges,
+		onInsertAfter,
+		readOnly,
+		schema,
+		selectedKey,
+	]);
 
 	useEffect(() => {
 		const signature = `${flowNodes.length}:${flowEdges.length}`;
@@ -1059,15 +1062,8 @@ function GuidedFlowCanvas({
 				nodesConnectable={false}
 				nodesDraggable={!readOnly}
 				selectNodesOnDrag={false}
-				defaultEdgeOptions={{
-					markerEnd: {
-						type: MarkerType.ArrowClosed,
-						color: "#94a3b8",
-					},
-				}}
-				className="bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.9),transparent_34%)]"
+				className="bg-transparent"
 			>
-				<Background color="#e2e8f0" gap={24} size={1} />
 				<FlowCanvasControls />
 			</ReactFlow>
 		</div>

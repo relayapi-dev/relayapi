@@ -122,7 +122,9 @@ export function DashboardShell({
 								/>
 								<main
 									className="flex-1 overflow-y-auto"
-									style={{ scrollbarGutter: "stable" }}
+									style={{
+										scrollbarGutter: fullBleed ? undefined : "stable",
+									}}
 								>
 									<div
 										className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-background/85 px-4 backdrop-blur md:hidden"
