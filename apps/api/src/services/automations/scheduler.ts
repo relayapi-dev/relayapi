@@ -12,6 +12,21 @@ const BATCH_SIZE = 200;
 // Reclaim on the next sweep.
 const STALE_PROCESSING_MS = 5 * 60 * 1000; // 5 minutes
 
+async function scheduledTicksHasClaimedAt(
+	db: ReturnType<typeof createDb>,
+): Promise<boolean> {
+	const rows = (await db.execute(sql`
+		SELECT 1 AS has_claimed_at
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'automation_scheduled_ticks'
+		  AND column_name = 'claimed_at'
+		LIMIT 1
+	`)) as unknown as Array<{ has_claimed_at: 1 }>;
+
+	return rows.length > 0;
+}
+
 /**
  * Cron-triggered sweep: find enrollments whose delay has elapsed and re-enqueue them.
  * Claims only BATCH_SIZE rows per run so rows in excess of the batch stay `pending`
@@ -20,28 +35,47 @@ const STALE_PROCESSING_MS = 5 * 60 * 1000; // 5 minutes
 export async function processAutomationSchedule(env: Env): Promise<number> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const now = new Date();
-
-	// Reclaim ticks stuck in `processing` past the stale threshold. We filter on
-	// `claimedAt` (the moment we flipped the row into `processing`), NOT on
-	// `runAt` which is the scheduled execution time. A long-delay tick may have
-	// a `runAt` far in the past but a fresh `claimedAt` — using `runAt` would
-	// re-queue it while the original worker is still running it, causing
-	// duplicate advances for the same enrollment. Rows missing `claimedAt`
-	// (pre-migration data) are also rescued so they don't sit forever.
+	const hasClaimedAt = await scheduledTicksHasClaimedAt(db);
 	const staleCutoff = new Date(Date.now() - STALE_PROCESSING_MS);
-	await db
-		.update(automationScheduledTicks)
-		.set({
-			status: "pending",
-			claimedAt: null,
-			attempts: sql`${automationScheduledTicks.attempts} + 1`,
-		})
-		.where(
-			and(
-				eq(automationScheduledTicks.status, "processing"),
-				sql`(${automationScheduledTicks.claimedAt} IS NULL OR ${automationScheduledTicks.claimedAt} <= ${staleCutoff})`,
-			),
+
+	if (hasClaimedAt) {
+		// Reclaim ticks stuck in `processing` past the stale threshold. We filter on
+		// `claimedAt` (the moment we flipped the row into `processing`), NOT on
+		// `runAt` which is the scheduled execution time. A long-delay tick may have
+		// a `runAt` far in the past but a fresh `claimedAt` — using `runAt` would
+		// re-queue it while the original worker is still running it, causing
+		// duplicate advances for the same enrollment. Rows missing `claimedAt`
+		// (pre-migration data) are also rescued so they don't sit forever.
+		await db
+			.update(automationScheduledTicks)
+			.set({
+				status: "pending",
+				claimedAt: null,
+				attempts: sql`${automationScheduledTicks.attempts} + 1`,
+			})
+			.where(
+				and(
+					eq(automationScheduledTicks.status, "processing"),
+					sql`(${automationScheduledTicks.claimedAt} IS NULL OR ${automationScheduledTicks.claimedAt} <= ${staleCutoff})`,
+				),
+			);
+	} else {
+		console.warn(
+			"[scheduler] automation_scheduled_ticks.claimed_at is missing; using legacy stale-tick reclaim. Run DB migrations.",
 		);
+		await db
+			.update(automationScheduledTicks)
+			.set({
+				status: "pending",
+				attempts: sql`${automationScheduledTicks.attempts} + 1`,
+			})
+			.where(
+				and(
+					eq(automationScheduledTicks.status, "processing"),
+					lte(automationScheduledTicks.runAt, staleCutoff),
+				),
+			);
+	}
 
 	// Select a batch of due tick IDs first, then claim only those.
 	const dueRows = await db
@@ -61,7 +95,11 @@ export async function processAutomationSchedule(env: Env): Promise<number> {
 	const dueIds = dueRows.map((r) => r.id);
 	const claimed = await db
 		.update(automationScheduledTicks)
-		.set({ status: "processing", claimedAt: new Date() })
+		.set(
+			hasClaimedAt
+				? { status: "processing", claimedAt: new Date() }
+				: { status: "processing" },
+		)
 		.where(
 			and(
 				inArray(automationScheduledTicks.id, dueIds),
@@ -89,11 +127,18 @@ export async function processAutomationSchedule(env: Env): Promise<number> {
 		} catch {
 			await db
 				.update(automationScheduledTicks)
-				.set({
-					status: "pending",
-					claimedAt: null,
-					attempts: sql`${automationScheduledTicks.attempts} + 1`,
-				})
+				.set(
+					hasClaimedAt
+						? {
+								status: "pending",
+								claimedAt: null,
+								attempts: sql`${automationScheduledTicks.attempts} + 1`,
+							}
+						: {
+								status: "pending",
+								attempts: sql`${automationScheduledTicks.attempts} + 1`,
+							},
+				)
 				.where(eq(automationScheduledTicks.id, tick.id));
 		}
 	}

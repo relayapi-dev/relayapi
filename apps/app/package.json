@@ -46,6 +46,7 @@
     "radix-ui": "^1.4.3",
     "react": "^19",
     "react-dom": "^19",
+    "reactflow": "^11.11.4",
     "resend": "^6.10.0",
     "simple-icons": "^16.13.0",
     "stripe": "^20.4.1",

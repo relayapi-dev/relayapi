@@ -452,18 +452,39 @@ export function AutomationDetailPage({ automationId }: Props) {
 			}
 		}
 		const published = await publishAutomation.mutate();
-		if (published) {
-			setBanner({ type: "success", message: "Published" });
-			refetchAutomation();
-		} else if (publishAutomation.error) {
-			setBanner({ type: "error", message: publishAutomation.error });
+		if (!published) {
+			if (publishAutomation.error) {
+				setBanner({ type: "error", message: publishAutomation.error });
+			}
+			return;
 		}
+
+		if (draft.status === "draft") {
+			const resumed = await resumeAutomation.mutate();
+			if (!resumed) {
+				setBanner({
+					type: "error",
+					message:
+						resumeAutomation.error ??
+						"Published, but activation failed. Use Resume to activate it.",
+				});
+				refetchAutomation();
+				return;
+			}
+			setBanner({ type: "success", message: "Published and activated" });
+			refetchAutomation();
+			return;
+		}
+
+		setBanner({ type: "success", message: "Published" });
+		refetchAutomation();
 	}, [
 		draft,
 		dirty,
 		schema,
 		patchAutomation,
 		publishAutomation,
+		resumeAutomation,
 		refetchAutomation,
 		buildPatchBody,
 	]);
@@ -541,6 +562,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const isActive = draft.status === "active";
 	const isPaused = draft.status === "paused";
 	const isArchived = draft.status === "archived";
+	const publishFlowLoading =
+		publishAutomation.loading ||
+		(draft.status === "draft" && resumeAutomation.loading);
 
 	return (
 		<div className="flex flex-col -mx-5 sm:-mx-8 md:-mx-10 -mt-4 md:-mt-8 h-[calc(100dvh-1rem)] md:h-screen border-t border-border">
@@ -672,12 +696,12 @@ export function AutomationDetailPage({ automationId }: Props) {
 								onClick={publishAndActivate}
 								disabled={
 									!canPublish ||
-									publishAutomation.loading ||
+									publishFlowLoading ||
 									patchAutomation.loading
 								}
 								className="h-7 text-xs gap-1.5"
 							>
-								{publishAutomation.loading ? (
+								{publishFlowLoading ? (
 									<Loader2 className="size-3.5 animate-spin" />
 								) : (
 									<Upload className="size-3.5" />
