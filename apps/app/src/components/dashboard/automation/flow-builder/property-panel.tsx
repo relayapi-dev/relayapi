@@ -1270,12 +1270,16 @@ function NodeGuidance({
 		node.type === "message_text" ||
 		node.type === "message_media" ||
 		node.type === "message_file";
+	const commentReplyHint = node.type === "instagram_reply_to_comment";
 
-	if (!recipientHint && node.type !== "condition" && outputs.length <= 1) {
+	if (
+		!recipientHint &&
+		!commentReplyHint &&
+		node.type !== "condition" &&
+		outputs.length <= 1
+	) {
 		return null;
 	}
-
-	const commentReplyHint = node.type === "instagram_reply_to_comment";
 
 	return (
 		<div className="space-y-2">
