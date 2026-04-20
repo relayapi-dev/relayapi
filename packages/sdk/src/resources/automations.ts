@@ -116,7 +116,9 @@ export class Automations extends APIResource {
 	 * Manually enroll a contact into an active, published automation. Used for
 	 * `manual` and `external_api` triggers, or for operator-driven replay. The
 	 * automation's re-entry rules still apply — attempting to re-enrol a contact
-	 * that is already active (or within the cooldown) returns 409.
+	 * that is already active (or within the cooldown) returns 409. When an
+	 * automation has multiple triggers, pass `trigger_id` to choose the trigger
+	 * context/account to enroll against.
 	 */
 	enroll(
 		id: string,
@@ -434,6 +436,7 @@ export interface AutomationListSamplesParams {
 }
 
 export interface AutomationEnrollParams {
+	trigger_id?: string;
 	contact_id?: string;
 	conversation_id?: string;
 	payload?: Record<string, unknown>;
@@ -499,6 +502,7 @@ export interface AutomationEnrollmentResponse {
 	id: string;
 	automation_id: string;
 	automation_version: number;
+	trigger_id: string | null;
 	contact_id: string | null;
 	conversation_id: string | null;
 	current_node_id: string | null;
@@ -539,6 +543,7 @@ export interface AutomationRunListResponse {
 export interface AutomationSampleResponse {
 	enrollment_id: string;
 	automation_version: number;
+	trigger_id: string | null;
 	contact_id: string | null;
 	conversation_id: string | null;
 	status: AutomationEnrollmentStatus;

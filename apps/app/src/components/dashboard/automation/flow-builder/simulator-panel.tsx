@@ -34,6 +34,7 @@ interface SampleResult {
 	data: Array<{
 		enrollment_id: string;
 		automation_version: number;
+		trigger_id: string | null;
 		contact_id: string | null;
 		conversation_id: string | null;
 		status: string;
@@ -68,6 +69,12 @@ function branchingNodes(
 			labels: resolveNodeOutputLabels(node, schemaByType.get(node.type) ?? null),
 		}))
 		.filter((node) => node.labels.length > 1);
+}
+
+function describeTrigger(
+	trigger: AutomationDetail["triggers"][number],
+): string {
+	return `${trigger.label} · ${trigger.type.replace(/_/g, " ")}`;
 }
 
 // For each terminated.kind, a user-readable label + color.
@@ -115,6 +122,7 @@ export function SimulatorPanel({
 	const [loading, setLoading] = useState(false);
 	const [result, setResult] = useState<SimulateResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [liveTestTriggerId, setLiveTestTriggerId] = useState("");
 	const [liveTestContactId, setLiveTestContactId] = useState("");
 	const [liveTestConversationId, setLiveTestConversationId] = useState("");
 	const [liveTestPayload, setLiveTestPayload] = useState("{}");
@@ -156,6 +164,20 @@ export function SimulatorPanel({
 			cancelled = true;
 		};
 	}, [automation.id]);
+
+	useEffect(() => {
+		setLiveTestTriggerId((current) => {
+			if (
+				current &&
+				automation.triggers.some((trigger) => trigger.id === current)
+			) {
+				return current;
+			}
+			return automation.triggers.length === 1
+				? automation.triggers[0]!.id
+				: "";
+		});
+	}, [automation.triggers]);
 
 	const setChoice = (key: string, value: string) => {
 		setBranchChoices((prev) => {
@@ -207,6 +229,18 @@ export function SimulatorPanel({
 		setLiveTestError(null);
 		setLiveTestResult(null);
 
+		const selectedTriggerId =
+			liveTestTriggerId || (automation.triggers.length === 1
+				? automation.triggers[0]!.id
+				: "");
+		if (!selectedTriggerId) {
+			setLiveTestError(
+				"Choose which trigger context to use for this live test.",
+			);
+			setLiveTestLoading(false);
+			return;
+		}
+
 		let parsedPayload: Record<string, unknown> | undefined;
 		try {
 			const trimmed = liveTestPayload.trim();
@@ -231,6 +265,7 @@ export function SimulatorPanel({
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
+					trigger_id: selectedTriggerId,
 					contact_id: liveTestContactId.trim() || undefined,
 					conversation_id: liveTestConversationId.trim() || undefined,
 					payload: parsedPayload,
@@ -250,6 +285,12 @@ export function SimulatorPanel({
 	};
 
 	const applySample = (sample: SampleResult["data"][number]) => {
+		if (
+			sample.trigger_id &&
+			automation.triggers.some((trigger) => trigger.id === sample.trigger_id)
+		) {
+			setLiveTestTriggerId(sample.trigger_id);
+		}
 		setLiveTestContactId(sample.contact_id ?? "");
 		setLiveTestConversationId(sample.conversation_id ?? "");
 		try {
@@ -510,6 +551,31 @@ export function SimulatorPanel({
 								))}
 							</div>
 						)}
+					</div>
+
+					<div>
+						<label className="text-[10px] font-medium text-muted-foreground block mb-1">
+							Trigger context
+						</label>
+						<select
+							value={liveTestTriggerId}
+							onChange={(e) => setLiveTestTriggerId(e.target.value)}
+							className={INPUT_CLS}
+						>
+							<option value="">
+								{automation.triggers.length > 1
+									? "Choose trigger"
+									: "Use the automation trigger"}
+							</option>
+							{automation.triggers.map((trigger) => (
+								<option key={trigger.id} value={trigger.id}>
+									{describeTrigger(trigger)}
+								</option>
+							))}
+						</select>
+						<p className="text-[10px] text-muted-foreground/70 mt-0.5">
+							Selects the trigger/account context used for this enrollment.
+						</p>
 					</div>
 
 					<div>

@@ -5,17 +5,32 @@ interface Props {
   type: string;
   filename: string;
   progress?: number;
+  error?: string;
   onRemove: () => void;
 }
 
-export function ComposerAttachmentChip({ url, type, filename, progress, onRemove }: Props) {
+export function ComposerAttachmentChip({
+  url,
+  type,
+  filename,
+  progress,
+  error,
+  onRemove,
+}: Props) {
   const isImage = type.startsWith("image/");
   const isVideo = type.startsWith("video/");
   const isAudio = type.startsWith("audio/");
   const uploading = typeof progress === "number" && progress < 100;
 
   return (
-    <div className="group relative inline-flex h-14 items-center gap-2 rounded-md border border-[#e5e7eb] bg-[#f8fafc] px-2">
+    <div
+      className={`group relative inline-flex h-14 items-center gap-2 rounded-md border px-2 ${
+        error
+          ? "border-[#efb4b4] bg-[#fff7f7]"
+          : "border-[#e5e7eb] bg-[#f8fafc]"
+      }`}
+      title={error || filename}
+    >
       {isImage ? (
         <img src={url} alt={filename} className="h-10 w-10 rounded object-cover" />
       ) : isVideo ? (
@@ -27,10 +42,16 @@ export function ComposerAttachmentChip({ url, type, filename, progress, onRemove
           <FileIcon className="size-4 text-slate-500" />
         </div>
       )}
-      <span className="max-w-[10rem] truncate text-xs text-slate-600">{filename}</span>
-      {uploading && (
+      <span className={`max-w-[10rem] truncate text-xs ${error ? "text-[#b14242]" : "text-slate-600"}`}>
+        {filename}
+      </span>
+      {error ? (
+        <div className="absolute inset-0 flex items-center justify-center rounded-md bg-white/80 text-[11px] font-medium text-[#b14242]">
+          Failed
+        </div>
+      ) : uploading && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-white/70 text-[11px] font-medium text-slate-600">
-          {progress}%
+          Uploading...
         </div>
       )}
       <button

@@ -10,6 +10,10 @@ import { createDb } from "@relayapi/db";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Env } from "../../types";
 import { matchesTriggerFilters } from "./filter-eval";
+import {
+	selectDirectEnrollmentTrigger,
+	withStoredEnrollmentTriggerId,
+} from "./resolve-trigger";
 
 /**
  * Queries candidate automations and enrolls matches into AUTOMATION_QUEUE.
@@ -158,7 +162,7 @@ export async function matchAndEnroll(
 				organizationId: auto.organizationId,
 				contactId: input.contact_id ?? null,
 				conversationId: input.conversation_id ?? null,
-				state: input.payload,
+				state: withStoredEnrollmentTriggerId(input.payload, trigger.id),
 				status: "active",
 			})
 			.returning({ id: automationEnrollments.id });
@@ -213,6 +217,7 @@ export async function enrollDirectly(
 	input: {
 		organization_id: string;
 		automation_id: string;
+		trigger_id?: string | null;
 		contact_id?: string | null;
 		conversation_id?: string | null;
 		payload?: Record<string, unknown>;
@@ -226,6 +231,8 @@ export async function enrollDirectly(
 				| "not_active"
 				| "not_published"
 				| "reentry_blocked"
+				| "invalid_trigger"
+				| "ambiguous_trigger"
 				| "queue_failed";
 	  }
 > {
@@ -241,6 +248,29 @@ export async function enrollDirectly(
 	if (auto.status !== "active") return { ok: false, reason: "not_active" };
 	if (auto.publishedVersion === null)
 		return { ok: false, reason: "not_published" };
+
+	const triggers = await db
+		.select({
+			id: automationTriggers.id,
+			type: automationTriggers.type,
+			order_index: automationTriggers.orderIndex,
+		})
+		.from(automationTriggers)
+		.where(eq(automationTriggers.automationId, auto.id));
+
+	const selectedTrigger = selectDirectEnrollmentTrigger(
+		triggers,
+		input.trigger_id,
+	);
+	if (!selectedTrigger.ok) {
+		return {
+			ok: false,
+			reason:
+				selectedTrigger.reason === "no_triggers"
+					? "not_published"
+					: selectedTrigger.reason,
+		};
+	}
 
 	// Re-entry guard — mirrors matchAndEnroll so manual and trigger-driven
 	// enrollments share the same cooldown semantics.
@@ -278,10 +308,14 @@ export async function enrollDirectly(
 		.values({
 			automationId: auto.id,
 			automationVersion: auto.publishedVersion,
+			triggerId: selectedTrigger.trigger.id,
 			organizationId: auto.organizationId,
 			contactId: input.contact_id ?? null,
 			conversationId: input.conversation_id ?? null,
-			state: input.payload ?? {},
+			state: withStoredEnrollmentTriggerId(
+				input.payload ?? {},
+				selectedTrigger.trigger.id,
+			),
 			status: "active",
 		})
 		.returning({ id: automationEnrollments.id });

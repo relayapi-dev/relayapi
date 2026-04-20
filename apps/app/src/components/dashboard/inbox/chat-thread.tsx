@@ -719,6 +719,7 @@ export function ChatThread({
         onSend={handleSend}
         onCreateNote={handleCreateNote}
         disabled={isArchived}
+        platform={conversation.platform}
         platformLabel={platformLabel}
       />
     </div>

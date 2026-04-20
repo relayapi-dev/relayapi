@@ -11,6 +11,7 @@ import type { Env } from "../../types";
 import { getNodeHandler } from "./nodes";
 import { sendInputPrompt } from "./nodes/user-input";
 import { validateInput } from "./nodes/user-input-validation";
+import { getEnrollmentTriggerId } from "./resolve-trigger";
 import type {
 	AutomationSnapshot,
 	NodeExecutionContext,
@@ -62,6 +63,7 @@ export async function advanceEnrollment(
 		: snapshot.entry_node_key;
 	let state: Record<string, unknown> =
 		(enrollment.state as Record<string, unknown>) ?? {};
+	const triggerId = getEnrollmentTriggerId(enrollment.triggerId, state);
 	let resumeLabel = opts?.resumeLabel;
 
 	// Resume path: advance past the waiting node without re-executing it.
@@ -108,7 +110,7 @@ export async function advanceEnrollment(
 				organization_id: enrollment.organizationId,
 				automation_id: enrollment.automationId,
 				automation_version: enrollment.automationVersion,
-				trigger_id: enrollment.triggerId,
+				trigger_id: triggerId,
 				contact_id: enrollment.contactId,
 				conversation_id: enrollment.conversationId,
 				current_node_id: node.id,
@@ -409,7 +411,7 @@ export async function resumeFromInput(
 						organization_id: enrollment.organizationId,
 						automation_id: enrollment.automationId,
 						automation_version: enrollment.automationVersion,
-						trigger_id: enrollment.triggerId,
+						trigger_id: getEnrollmentTriggerId(enrollment.triggerId, state),
 						contact_id: enrollment.contactId,
 						conversation_id: enrollment.conversationId,
 						current_node_id: enrollment.currentNodeId,

@@ -9,7 +9,7 @@ import {
 	automations,
 	createDb,
 } from "@relayapi/db";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { automationError, suggest } from "../lib/automation-errors";
 import {
 	applyWorkspaceScope,
@@ -37,6 +37,10 @@ import {
 	PUBLISHED_AUTOMATION_TRIGGER_MANIFEST,
 	AUTOMATION_TEMPLATE_MANIFEST,
 } from "../services/automations/manifest";
+import {
+	ENROLLMENT_TRIGGER_STATE_KEY,
+	getEnrollmentTriggerId,
+} from "../services/automations/resolve-trigger";
 import { simulateAutomation } from "../services/automations/simulator";
 import { enrollDirectly } from "../services/automations/trigger-matcher";
 import type { AutomationSnapshot } from "../services/automations/types";
@@ -830,6 +834,18 @@ app.openapi(updateAutomation, async (c) => {
 
 		if (body.triggers) {
 			await tx
+				.update(automationEnrollments)
+				.set({
+					state: sql`jsonb_set(coalesce(${automationEnrollments.state}, '{}'::jsonb), ARRAY[${ENROLLMENT_TRIGGER_STATE_KEY}]::text[], to_jsonb(${automationEnrollments.triggerId}), true)`,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(automationEnrollments.automationId, id),
+						isNotNull(automationEnrollments.triggerId),
+					),
+				);
+			await tx
 				.delete(automationTriggers)
 				.where(eq(automationTriggers.automationId, id));
 			if (body.triggers.length > 0) {
@@ -1073,6 +1089,7 @@ app.openapi(enrollAutomation, async (c) => {
 	const result = await enrollDirectly(c.env, {
 		organization_id: orgId,
 		automation_id: id,
+		trigger_id: body.trigger_id ?? null,
 		contact_id: body.contact_id ?? null,
 		conversation_id: body.conversation_id ?? null,
 		payload: body.payload,
@@ -1110,6 +1127,24 @@ app.openapi(enrollAutomation, async (c) => {
 					"Contact has an active enrollment or is within the re-entry cooldown window",
 				),
 				409,
+			);
+		}
+		if (result.reason === "invalid_trigger") {
+			return c.json(
+				automationError(
+					"invalid_trigger",
+					"trigger_id does not belong to this automation",
+				),
+				400,
+			);
+		}
+		if (result.reason === "ambiguous_trigger") {
+			return c.json(
+				automationError(
+					"ambiguous_trigger",
+					"Automation has multiple triggers. Pass trigger_id to choose which trigger context to enroll against.",
+				),
+				400,
 			);
 		}
 		return c.json(
@@ -1395,6 +1430,7 @@ app.openapi(listEnrollments, async (c) => {
 		id: r.id,
 		automation_id: r.automationId,
 		automation_version: r.automationVersion,
+		trigger_id: getEnrollmentTriggerId(r.triggerId, r.state),
 		contact_id: r.contactId,
 		conversation_id: r.conversationId,
 		current_node_id: r.currentNodeId,
@@ -1487,6 +1523,7 @@ app.openapi(listSamples, async (c) => {
 			data: rows.map((row) => ({
 				enrollment_id: row.id,
 				automation_version: row.automationVersion,
+				trigger_id: getEnrollmentTriggerId(row.triggerId, row.state),
 				contact_id: row.contactId,
 				conversation_id: row.conversationId,
 				status: row.status,

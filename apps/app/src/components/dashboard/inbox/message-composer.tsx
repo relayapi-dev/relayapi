@@ -21,6 +21,7 @@ export function MessageComposer({
   onSend,
   onCreateNote,
   disabled,
+  platform,
   platformLabel,
 }: {
   onSend: (payload: {
@@ -29,6 +30,7 @@ export function MessageComposer({
   }) => Promise<void>;
   onCreateNote: (text: string) => Promise<void>;
   disabled?: boolean;
+  platform: string;
   platformLabel: string;
 }) {
   const [text, setText] = useState("");
@@ -39,6 +41,7 @@ export function MessageComposer({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blobUrlsRef = useRef<Set<string>>(new Set());
+  const singleAttachmentMode = platform === "whatsapp";
   const shortcutLabel =
     typeof navigator !== "undefined" && navigator.platform?.includes("Mac")
       ? "Cmd"
@@ -77,9 +80,24 @@ export function MessageComposer({
     });
   };
 
+  const revokeBlobUrl = (url: string) => {
+    if (!url.startsWith("blob:")) return;
+    URL.revokeObjectURL(url);
+    blobUrlsRef.current.delete(url);
+  };
+
+  const clearAttachmentPreviews = (items: PendingAttachment[]) => {
+    for (const item of items) {
+      revokeBlobUrl(item.url);
+    }
+  };
+
   const handleFilesPicked = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    const list = Array.from(files);
+    if (!files || files.length === 0 || disabled) return;
+    const list = singleAttachmentMode
+      ? Array.from(files).slice(0, 1)
+      : Array.from(files);
+    if (list.length === 0) return;
     const placeholders: PendingAttachment[] = list.map((file) => ({
       id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       url: URL.createObjectURL(file),
@@ -90,7 +108,13 @@ export function MessageComposer({
     for (const placeholder of placeholders) {
       blobUrlsRef.current.add(placeholder.url);
     }
-    setAttachments((prev) => [...prev, ...placeholders]);
+    setAttachments((prev) => {
+      if (!singleAttachmentMode) {
+        return [...prev, ...placeholders];
+      }
+      clearAttachmentPreviews(prev);
+      return placeholders;
+    });
 
     await Promise.all(
       list.map(async (file, i) => {
@@ -127,9 +151,8 @@ export function MessageComposer({
 
   const removeAttachment = (id: string) => {
     const target = attachments.find((x) => x.id === id);
-    if (target && target.url.startsWith("blob:")) {
-      URL.revokeObjectURL(target.url);
-      blobUrlsRef.current.delete(target.url);
+    if (target) {
+      revokeBlobUrl(target.url);
     }
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
@@ -148,15 +171,17 @@ export function MessageComposer({
       }
       return;
     }
+    const hasBlockedAttachments = attachments.some((a) => a.uploading || a.error);
     const uploaded = attachments.filter((a) => !a.uploading && !a.error);
-    if ((!text.trim() && uploaded.length === 0) || sending || disabled) return;
+    if ((!text.trim() && uploaded.length === 0) || hasBlockedAttachments || sending || disabled) return;
     const message = text.trim();
     const toSend = uploaded.map(({ url, type }) => ({ url, type }));
     setText("");
-    setAttachments([]);
     setSending(true);
     try {
       await onSend({ text: message, attachments: toSend });
+      clearAttachmentPreviews(attachments);
+      setAttachments([]);
     } finally {
       setSending(false);
       textareaRef.current?.focus();
@@ -204,7 +229,7 @@ export function MessageComposer({
         ref={imageInputRef}
         type="file"
         accept="image/*,video/*"
-        multiple
+        multiple={!singleAttachmentMode}
         hidden
         onChange={(e) => {
           void handleFilesPicked(e.target.files);
@@ -214,7 +239,7 @@ export function MessageComposer({
       <input
         ref={fileInputRef}
         type="file"
-        multiple
+        multiple={!singleAttachmentMode}
         hidden
         onChange={(e) => {
           void handleFilesPicked(e.target.files);
@@ -231,6 +256,7 @@ export function MessageComposer({
               type={a.type}
               filename={a.filename}
               progress={a.uploading ? 50 : undefined}
+              error={a.error}
               onRemove={() => removeAttachment(a.id)}
             />
           ))}
@@ -278,6 +304,11 @@ export function MessageComposer({
         </div>
 
         <div className="flex items-center gap-3">
+          {mode === "reply" && singleAttachmentMode && (
+            <span className="hidden text-[11px] text-slate-400 md:inline">
+              WhatsApp supports one attachment per message
+            </span>
+          )}
           <span className="hidden text-[11px] text-slate-400 sm:inline">
             {shortcutLabel}+Enter to send
           </span>
@@ -287,7 +318,10 @@ export function MessageComposer({
             disabled={
               mode === "note"
                 ? !text.trim() || sending || disabled
-                : (!text.trim() && attachments.filter((a) => !a.uploading && !a.error).length === 0) || sending || disabled
+                : (!text.trim() && attachments.filter((a) => !a.uploading && !a.error).length === 0)
+                  || attachments.some((a) => a.uploading || a.error)
+                  || sending
+                  || disabled
             }
             className={cn(
               "inline-flex h-9 items-center gap-2 rounded-md px-4 text-sm font-semibold transition-colors",
@@ -295,7 +329,9 @@ export function MessageComposer({
                 ? text.trim() && !disabled
                   ? "bg-[#d4a72c] text-white hover:bg-[#b88e1f]"
                   : "bg-[#f3e4a8] text-white"
-                : (text.trim() || attachments.some((a) => !a.uploading && !a.error)) && !disabled
+                : (text.trim() || attachments.some((a) => !a.uploading && !a.error))
+                  && !attachments.some((a) => a.uploading || a.error)
+                  && !disabled
                   ? "bg-[#2d71f8] text-white hover:bg-[#195fe7]"
                   : "bg-[#d9e7ff] text-white",
             )}

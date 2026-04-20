@@ -203,7 +203,7 @@ export function AutomationPage() {
                 <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
                   <th className="px-4 py-2.5 text-left">Name</th>
                   <th className="px-4 py-2.5 text-left hidden md:table-cell">Channel</th>
-                  <th className="px-4 py-2.5 text-left hidden lg:table-cell">Trigger</th>
+                  <th className="px-4 py-2.5 text-left hidden lg:table-cell">Triggers</th>
                   <th className="px-4 py-2.5 text-left">Status</th>
                   <th className="px-4 py-2.5 text-right hidden md:table-cell">Enrolled</th>
                   <th className="px-4 py-2.5 text-right hidden md:table-cell">Completed</th>

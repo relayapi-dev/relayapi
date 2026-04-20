@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 
 interface EnrollmentRow {
 	id: string;
+	trigger_id: string | null;
 	contact_id: string | null;
 	conversation_id: string | null;
 	state: unknown;
@@ -296,6 +297,7 @@ export function RunHistoryPanel({
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
+					trigger_id: selectedEnrollment.trigger_id ?? undefined,
 					contact_id: selectedEnrollment.contact_id ?? undefined,
 					conversation_id: selectedEnrollment.conversation_id ?? undefined,
 					payload: replayPayload,
@@ -387,6 +389,9 @@ export function RunHistoryPanel({
 						</div>
 						<div className="text-[10px] text-muted-foreground">
 							Contact: {selectedEnrollment.contact_id ?? "—"}
+						</div>
+						<div className="text-[10px] text-muted-foreground">
+							Trigger: {selectedEnrollment.trigger_id ?? "—"}
 						</div>
 						<div className="text-[10px] text-muted-foreground">
 							Conversation: {selectedEnrollment.conversation_id ?? "—"}

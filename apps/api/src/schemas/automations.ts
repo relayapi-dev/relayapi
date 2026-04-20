@@ -1858,6 +1858,7 @@ export const AutomationEnrollmentResponse = z.object({
 	id: z.string(),
 	automation_id: z.string(),
 	automation_version: z.number().int(),
+	trigger_id: z.string().nullable(),
 	contact_id: z.string().nullable(),
 	conversation_id: z.string().nullable(),
 	current_node_id: z.string().nullable(),
@@ -1873,6 +1874,7 @@ export const AutomationEnrollmentResponse = z.object({
 export const AutomationSampleResponse = z.object({
 	enrollment_id: z.string(),
 	automation_version: z.number().int(),
+	trigger_id: z.string().nullable(),
 	contact_id: z.string().nullable(),
 	conversation_id: z.string().nullable(),
 	status: AutomationEnrollmentStatusEnum,
@@ -1973,6 +1975,12 @@ export const GiveawayTemplateInput = z.object({
 // ---------------------------------------------------------------------------
 
 export const AutomationEnrollRequest = z.object({
+	trigger_id: z
+		.string()
+		.optional()
+		.describe(
+			"Trigger to enroll against. Required when the automation has multiple triggers and you need a specific trigger/account context.",
+		),
 	contact_id: z
 		.string()
 		.optional()

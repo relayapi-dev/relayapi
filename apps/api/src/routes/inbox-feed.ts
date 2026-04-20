@@ -2,6 +2,10 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { inboxConversationNotes, inboxConversations, inboxMessages, member, user as userTable } from "@relayapi/db";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
+import {
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+} from "../lib/workspace-scope";
 import { ErrorResponse } from "../schemas/common";
 import {
 	BulkActionBody,
@@ -780,22 +784,32 @@ app.openapi(sendMessageRoute, async (c) => {
 
 				c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "inbox.message.sent", conversation_id: conversationId }));
 				return c.json({ success: true, message_id: lastMessageId }, 200);
-			}
-			case "whatsapp": {
-				// Look up the conversation to get the recipient phone number
-				const [conv] = await db
-					.select()
-					.from(inboxConversations)
-					.where(
-						and(
+				}
+				case "whatsapp": {
+					if (attachments && attachments.length > 1) {
+						return c.json(
+							{
+								success: false,
+								error: "WhatsApp supports only one attachment per message",
+							},
+							200,
+						);
+					}
+
+					// Look up the conversation to get the recipient phone number
+					const [conv] = await db
+						.select()
+						.from(inboxConversations)
+						.where(
+							and(
 							eq(inboxConversations.id, conversationId),
 							eq(inboxConversations.organizationId, orgId),
 						),
-					)
-					.limit(1);
+						)
+						.limit(1);
 
-				if (!conv?.platformConversationId) {
-					return c.json({ success: false }, 200);
+					if (!conv?.platformConversationId) {
+						return c.json({ success: false }, 200);
 				}
 
 				const recipientPhone = conv.platformConversationId;
@@ -1439,6 +1453,10 @@ const listNotesRoute = createRoute({
 			description: "List of notes",
 			content: { "application/json": { schema: ListInboxNotesResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -1456,7 +1474,10 @@ app.openapi(listNotesRoute, async (c) => {
 	const { id: conversationId } = c.req.valid("param");
 
 	const [conv] = await db
-		.select({ id: inboxConversations.id })
+		.select({
+			id: inboxConversations.id,
+			workspaceId: inboxConversations.workspaceId,
+		})
 		.from(inboxConversations)
 		.where(
 			and(
@@ -1471,6 +1492,10 @@ app.openapi(listNotesRoute, async (c) => {
 			{ error: { code: "NOT_FOUND", message: "Conversation not found" } } as never,
 			404 as never,
 		);
+	}
+
+	if (isWorkspaceScopeDenied(c, conv.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY as never, 403 as never);
 	}
 
 	const rows = await db
@@ -1530,6 +1555,10 @@ const createNoteRoute = createRoute({
 			description: "Created note",
 			content: { "application/json": { schema: InboxNoteResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		400: {
 			description: "Bad request",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -1551,6 +1580,31 @@ app.openapi(createNoteRoute, async (c) => {
 	const { id: conversationId } = c.req.valid("param");
 	const body = c.req.valid("json");
 
+	const [conv] = await db
+		.select({
+			id: inboxConversations.id,
+			workspaceId: inboxConversations.workspaceId,
+		})
+		.from(inboxConversations)
+		.where(
+			and(
+				eq(inboxConversations.id, conversationId),
+				eq(inboxConversations.organizationId, orgId),
+			),
+		)
+		.limit(1);
+
+	if (!conv) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Conversation not found" } } as never,
+			404 as never,
+		);
+	}
+
+	if (isWorkspaceScopeDenied(c, conv.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY as never, 403 as never);
+	}
+
 	// Verify the acting user belongs to the org
 	const orgMember = await db.query.member.findFirst({
 		where: and(
@@ -1567,24 +1621,6 @@ app.openapi(createNoteRoute, async (c) => {
 				},
 			} as never,
 			400 as never,
-		);
-	}
-
-	const [conv] = await db
-		.select({ id: inboxConversations.id })
-		.from(inboxConversations)
-		.where(
-			and(
-				eq(inboxConversations.id, conversationId),
-				eq(inboxConversations.organizationId, orgId),
-			),
-		)
-		.limit(1);
-
-	if (!conv) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Conversation not found" } } as never,
-			404 as never,
 		);
 	}
 
@@ -1663,7 +1699,7 @@ const updateNoteRoute = createRoute({
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		403: {
-			description: "Forbidden",
+			description: "Workspace access denied or forbidden",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
@@ -1678,6 +1714,33 @@ app.openapi(updateNoteRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { noteId } = c.req.valid("param");
 	const body = c.req.valid("json");
+
+	const [existing] = await db
+		.select({
+			id: inboxConversationNotes.id,
+			organizationId: inboxConversationNotes.organizationId,
+			userId: inboxConversationNotes.userId,
+			conversationId: inboxConversationNotes.conversationId,
+			workspaceId: inboxConversations.workspaceId,
+		})
+		.from(inboxConversationNotes)
+		.innerJoin(
+			inboxConversations,
+			eq(inboxConversations.id, inboxConversationNotes.conversationId),
+		)
+		.where(eq(inboxConversationNotes.id, noteId))
+		.limit(1);
+
+	if (!existing || existing.organizationId !== orgId) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Note not found" } } as never,
+			404 as never,
+		);
+	}
+
+	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY as never, 403 as never);
+	}
 
 	// Verify the acting user belongs to the org
 	const orgMember = await db.query.member.findFirst({
@@ -1695,19 +1758,6 @@ app.openapi(updateNoteRoute, async (c) => {
 				},
 			} as never,
 			400 as never,
-		);
-	}
-
-	const [existing] = await db
-		.select()
-		.from(inboxConversationNotes)
-		.where(eq(inboxConversationNotes.id, noteId))
-		.limit(1);
-
-	if (!existing || existing.organizationId !== orgId) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Note not found" } } as never,
-			404 as never,
 		);
 	}
 
@@ -1784,7 +1834,7 @@ const deleteNoteRoute = createRoute({
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		403: {
-			description: "Forbidden",
+			description: "Workspace access denied or forbidden",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
@@ -1799,6 +1849,32 @@ app.openapi(deleteNoteRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { noteId } = c.req.valid("param");
 	const { user_id: actingUserId } = c.req.valid("query");
+
+	const [existing] = await db
+		.select({
+			id: inboxConversationNotes.id,
+			organizationId: inboxConversationNotes.organizationId,
+			userId: inboxConversationNotes.userId,
+			workspaceId: inboxConversations.workspaceId,
+		})
+		.from(inboxConversationNotes)
+		.innerJoin(
+			inboxConversations,
+			eq(inboxConversations.id, inboxConversationNotes.conversationId),
+		)
+		.where(eq(inboxConversationNotes.id, noteId))
+		.limit(1);
+
+	if (!existing || existing.organizationId !== orgId) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Note not found" } } as never,
+			404 as never,
+		);
+	}
+
+	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY as never, 403 as never);
+	}
 
 	const orgMember = await db.query.member.findFirst({
 		where: and(
@@ -1815,19 +1891,6 @@ app.openapi(deleteNoteRoute, async (c) => {
 				},
 			} as never,
 			400 as never,
-		);
-	}
-
-	const [existing] = await db
-		.select()
-		.from(inboxConversationNotes)
-		.where(eq(inboxConversationNotes.id, noteId))
-		.limit(1);
-
-	if (!existing || existing.organizationId !== orgId) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Note not found" } } as never,
-			404 as never,
 		);
 	}
 
