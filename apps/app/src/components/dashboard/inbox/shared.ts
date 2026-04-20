@@ -53,6 +53,18 @@ export interface MessageItem {
   attachments?: Array<{ type: string; url: string }>;
 }
 
+export interface InboxOrganizationMember {
+  id: string;
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    image: string | null;
+  };
+  role: string;
+  createdAt: string;
+}
+
 export interface PostWithComments {
   id: string;
   platform: string;

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   Archive,
   ArrowDown,
+  ChevronDown,
   ExternalLink,
   Loader2,
   MessageCircle,
@@ -11,13 +12,22 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { ConversationItem, MessageItem } from "./shared";
+import type { ConversationItem, InboxOrganizationMember, MessageItem } from "./shared";
 import {
   formatMessageDayLabel,
   formatMessageTime,
   getConversationDisplayName,
   getPlatformDisplayName,
 } from "./shared";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { MessageComposer } from "./message-composer";
 
 const platformInboxUrls: Record<string, string> = {
@@ -29,6 +39,8 @@ const platformInboxUrls: Record<string, string> = {
   linkedin: "https://www.linkedin.com/messaging/",
   threads: "https://www.threads.net/",
 };
+
+const UNASSIGNED_VALUE = "__unassigned";
 
 function normalizeAttachments(value: unknown): Array<{ type: string; url: string }> {
   if (!Array.isArray(value)) return [];
@@ -87,16 +99,24 @@ function EmptyThreadState() {
 
 export function ChatThread({
   conversation,
+  members,
+  membersLoading = false,
   onMessageSent,
+  onAssignmentChange,
   onStatusChange,
 }: {
   conversation: ConversationItem | null;
+  members: InboxOrganizationMember[];
+  membersLoading?: boolean;
   onMessageSent?: () => void;
+  onAssignmentChange?: (assignedUserId: string | null) => Promise<void>;
   onStatusChange?: (nextStatus: "open" | "archived") => Promise<void>;
 }) {
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
+  const [assignmentPending, setAssignmentPending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [statusPending, setStatusPending] = useState(false);
@@ -137,6 +157,11 @@ export function ChatThread({
     return () => {
       cancelled = true;
     };
+  }, [conversation?.id]);
+
+  useEffect(() => {
+    setAssignmentError(null);
+    setAssignmentPending(false);
   }, [conversation?.id]);
 
   useEffect(() => {
@@ -241,6 +266,28 @@ export function ChatThread({
     }
   };
 
+  const handleAssignmentSelect = async (value: string) => {
+    if (!conversation || !onAssignmentChange || assignmentPending) return;
+
+    const nextAssignedUserId = value === UNASSIGNED_VALUE ? null : value;
+    if ((conversation.assigned_user_id ?? null) === nextAssignedUserId) return;
+
+    setAssignmentPending(true);
+    setAssignmentError(null);
+
+    try {
+      await onAssignmentChange(nextAssignedUserId);
+    } catch (assignmentError) {
+      setAssignmentError(
+        assignmentError instanceof Error
+          ? assignmentError.message
+          : "Failed to update assignee",
+      );
+    } finally {
+      setAssignmentPending(false);
+    }
+  };
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -253,6 +300,10 @@ export function ChatThread({
   const platformLabel = getPlatformDisplayName(conversation.platform);
   const platformUrl = platformInboxUrls[conversation.platform?.toLowerCase() || ""];
   const isArchived = conversation.status === "archived";
+  const assignedMember = members.find((member) => member.user.id === conversation.assigned_user_id);
+  const assigneeLabel = assignedMember?.user.name?.trim()
+    || (conversation.assigned_user_id ? "Assigned" : "Unassigned");
+  const assigneeValue = conversation.assigned_user_id ?? UNASSIGNED_VALUE;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
@@ -273,9 +324,82 @@ export function ChatThread({
 
             <div className="min-w-0">
               <p className="truncate text-[14px] font-semibold text-slate-900">{displayName}</p>
-              <p className="truncate text-[12px] text-slate-500">
-                {conversation.assigned_user_id ? "Assigned" : "Unassigned"}
-              </p>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    disabled={assignmentPending}
+                    className="inline-flex max-w-full items-center gap-1 rounded-sm text-[12px] text-slate-500 outline-none transition-colors hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    <span className="truncate">{assigneeLabel}</span>
+                    {assignmentPending ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <ChevronDown className="size-3.5" />
+                    )}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="start"
+                  sideOffset={8}
+                  className="w-[17rem] border-[#d9dee8] bg-white p-1.5"
+                >
+                  <DropdownMenuLabel className="px-2 py-1 text-[11px] font-medium text-slate-400">
+                    Assign chat
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator className="bg-[#ececf1]" />
+                  {membersLoading ? (
+                    <div className="flex items-center gap-2 px-2 py-2 text-[13px] text-slate-500">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      Loading team members
+                    </div>
+                  ) : (
+                    <DropdownMenuRadioGroup value={assigneeValue} onValueChange={(value) => void handleAssignmentSelect(value)}>
+                      <DropdownMenuRadioItem
+                        value={UNASSIGNED_VALUE}
+                        className="gap-3 rounded-md px-2 py-2"
+                        disabled={assignmentPending}
+                      >
+                        <div className="flex size-7 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f8fafc] text-[11px] font-semibold text-slate-500">
+                          U
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-[13px] font-medium text-slate-700">Unassigned</p>
+                          <p className="truncate text-[11px] text-slate-400">No owner</p>
+                        </div>
+                      </DropdownMenuRadioItem>
+                      {members.map((member) => {
+                        const memberLabel = member.user.name?.trim() || member.user.email;
+
+                        return (
+                          <DropdownMenuRadioItem
+                            key={member.user.id}
+                            value={member.user.id}
+                            className="gap-3 rounded-md px-2 py-2"
+                            disabled={assignmentPending}
+                          >
+                            {member.user.image ? (
+                              <img
+                                src={member.user.image}
+                                alt={memberLabel}
+                                className="size-7 rounded-full border border-[#e5e7eb] object-cover"
+                              />
+                            ) : (
+                              <div className="flex size-7 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f8fafc] text-[11px] font-semibold text-slate-500">
+                                {memberLabel.charAt(0).toUpperCase()}
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <p className="truncate text-[13px] font-medium text-slate-700">{memberLabel}</p>
+                              <p className="truncate text-[11px] text-slate-400">{member.user.email}</p>
+                            </div>
+                          </DropdownMenuRadioItem>
+                        );
+                      })}
+                    </DropdownMenuRadioGroup>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
@@ -314,7 +438,7 @@ export function ChatThread({
             {platformLabel}
           </span>
           <div className="flex items-center gap-3 text-[12px] text-slate-400">
-            <span>{conversation.assigned_user_id ? "Assigned" : "Unassigned"}</span>
+            <span>{assigneeLabel}</span>
             {(conversation.unread_count ?? 0) > 0 && (
               <span className="font-medium text-[#2d71f8]">{conversation.unread_count} unread</span>
             )}
@@ -324,6 +448,12 @@ export function ChatThread({
           </div>
         </div>
       </div>
+
+      {assignmentError && (
+        <div className="border-b border-[#f2d2d2] bg-[#fff7f7] px-4 py-2 text-sm text-[#b14242]">
+          {assignmentError}
+        </div>
+      )}
 
       <div
         ref={scrollContainerRef}

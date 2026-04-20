@@ -17,6 +17,7 @@ import { usePaginatedApi } from "@/hooks/use-api";
 import { useUsage } from "@/hooks/use-usage";
 import { useFilter, useFilterQuery } from "@/components/dashboard/filter-context";
 import { useUser } from "@/components/dashboard/user-context";
+import { organization } from "@/lib/auth-client";
 import { WorkspaceSearchCombobox } from "@/components/dashboard/workspace-search-combobox";
 import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
 import {
@@ -33,7 +34,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
-import type { ConversationItem } from "@/components/dashboard/inbox/shared";
+import type { ConversationItem, InboxOrganizationMember } from "@/components/dashboard/inbox/shared";
 import { ConversationList } from "@/components/dashboard/inbox/conversation-list";
 import { ChatThread } from "@/components/dashboard/inbox/chat-thread";
 import { getConversationDisplayName, getPlatformDisplayName } from "@/components/dashboard/inbox/shared";
@@ -228,6 +229,8 @@ export function InboxMessagesPage() {
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
   const [platformFilter, setPlatformFilter] = useState("all");
   const [onlyUnread, setOnlyUnread] = useState(false);
+  const [members, setMembers] = useState<InboxOrganizationMember[]>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
 
   const { usage } = useUsage();
   const isPro = usage?.plan === "pro";
@@ -288,6 +291,37 @@ export function InboxMessagesPage() {
   }, [conversations, sidebarFilter, user?.id, onlyUnread, normalizedSearch, sortOrder]);
 
   const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId) || null;
+
+  useEffect(() => {
+    if (!isPro) return;
+
+    let cancelled = false;
+    setMembersLoading(true);
+
+    (async () => {
+      try {
+        const result = await organization.listMembers();
+        if (cancelled) return;
+
+        const raw = result.data;
+        const list = Array.isArray(raw)
+          ? raw
+          : Array.isArray((raw as { members?: unknown })?.members)
+            ? (raw as { members: unknown[] }).members
+            : [];
+
+        setMembers(list as InboxOrganizationMember[]);
+      } catch {
+        if (!cancelled) setMembers([]);
+      } finally {
+        if (!cancelled) setMembersLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPro]);
 
   useEffect(() => {
     if (selectedConversationId || loading || visibleConversations.length === 0) return;
@@ -351,6 +385,39 @@ export function InboxMessagesPage() {
       setMobileView("list");
     }
   }, [activeStatus, selectedConversationId, setConversations]);
+
+  const handleConversationAssignmentChange = useCallback(async (nextAssignedUserId: string | null) => {
+    if (!selectedConversationId || !selectedConversation) return;
+
+    const res = await fetch(`/api/inbox/conversations/${encodeURIComponent(selectedConversationId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assigned_user_id: nextAssignedUserId }),
+    });
+    const json = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      throw new Error(json?.error?.message || "Failed to assign conversation");
+    }
+
+    const updatedConversation: ConversationItem = {
+      ...selectedConversation,
+      assigned_user_id: nextAssignedUserId,
+    };
+
+    setConversations((prev) =>
+      prev.map((conversation) =>
+        conversation.id === selectedConversationId
+          ? { ...conversation, assigned_user_id: nextAssignedUserId }
+          : conversation,
+      ),
+    );
+
+    if (!matchesSidebarFilter(updatedConversation, sidebarFilter, user?.id)) {
+      setSelectedConversationId(null);
+      setMobileView("list");
+    }
+  }, [selectedConversationId, selectedConversation, setConversations, sidebarFilter, user?.id]);
 
   const platformOptions = useMemo(() => {
     const options = Array.from(
@@ -560,7 +627,10 @@ export function InboxMessagesPage() {
             <div className="min-w-0 flex-1">
               <ChatThread
                 conversation={selectedConversation}
+                members={members}
+                membersLoading={membersLoading}
                 onMessageSent={handleMessageSent}
+                onAssignmentChange={handleConversationAssignmentChange}
                 onStatusChange={handleConversationStatusChange}
               />
             </div>
@@ -659,7 +729,10 @@ export function InboxMessagesPage() {
             <div className="min-h-0 flex-1">
               <ChatThread
                 conversation={selectedConversation}
+                members={members}
+                membersLoading={membersLoading}
                 onMessageSent={handleMessageSent}
+                onAssignmentChange={handleConversationAssignmentChange}
                 onStatusChange={handleConversationStatusChange}
               />
             </div>
