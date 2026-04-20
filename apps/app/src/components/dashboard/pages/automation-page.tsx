@@ -31,12 +31,22 @@ const fadeUp = {
   visible: { opacity: 1, y: 0, transition: { duration: 0.15, ease: [0.32, 0.72, 0, 1] as const } },
 };
 
+interface AutomationTrigger {
+  id: string;
+  type: string;
+  account_id: string | null;
+  config: unknown;
+  filters: unknown;
+  label: string;
+  order_index: number;
+}
+
 interface AutomationResponse {
   id: string;
   name: string;
   status: "draft" | "active" | "paused" | "archived";
   channel: string;
-  trigger_type: string;
+  triggers: AutomationTrigger[];
   total_enrolled: number;
   total_completed: number;
   created_at: string;
@@ -63,8 +73,10 @@ function formatDate(dateStr: string) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function humanTrigger(t: string): string {
-  return t.replace(/_/g, " ");
+function humanTrigger(triggers: AutomationTrigger[]): string {
+  if (!triggers || triggers.length === 0) return "—";
+  if (triggers.length === 1) return triggers[0]!.type.replace(/_/g, " ");
+  return `${triggers.length} triggers`;
 }
 
 export function AutomationPage() {
@@ -217,7 +229,7 @@ export function AutomationPage() {
                       {a.channel}
                     </td>
                     <td className="px-4 py-3 text-xs text-muted-foreground hidden lg:table-cell">
-                      {humanTrigger(a.trigger_type)}
+                      {humanTrigger(a.triggers)}
                     </td>
                     <td className="px-4 py-3">{statusBadge(a.status)}</td>
                     <td className="px-4 py-3 text-xs text-muted-foreground text-right hidden md:table-cell">
