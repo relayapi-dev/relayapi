@@ -9,7 +9,6 @@ import {
   Inbox,
   Lock,
   Search,
-  Settings2,
   TriangleAlert,
   UserRound,
   Users,
@@ -439,15 +438,6 @@ export function InboxMessagesPage() {
             />
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="inline-flex size-8 items-center justify-center rounded-md border border-[#d8dce5] bg-white text-slate-500 transition-colors hover:bg-[#f8f9fc] hover:text-slate-800"
-              title="Inbox settings"
-            >
-              <Settings2 className="size-3.5" />
-            </button>
-          </div>
         </div>
       </div>
 
