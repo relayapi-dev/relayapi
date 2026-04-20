@@ -331,24 +331,34 @@ export function AutomationDetailPage({ automationId }: Props) {
 		[history, bumpEdit],
 	);
 
-	const addTriggerRow = useCallback(() => {
-		setDraft((prev) => {
-			if (!prev) return prev;
-			const rows = triggerDisplayRows(prev);
-			const nextRows = [
-				...rows,
-				defaultTriggerLabel(prev.trigger_type, rows.length + 1),
-			];
-			const next = {
-				...prev,
-				trigger_config: withTriggerDisplayRows(prev.trigger_config, nextRows),
-			};
-			history.push({ nodes: next.nodes, edges: next.edges });
-			return next;
-		});
-		setDirty(true);
-		bumpEdit();
-	}, [history, bumpEdit]);
+	const addTriggerRow = useCallback(
+		(triggerType?: string) => {
+			setDraft((prev) => {
+				if (!prev) return prev;
+				const typeChanged =
+					typeof triggerType === "string" && triggerType !== prev.trigger_type;
+				const nextTriggerType = typeChanged ? triggerType : prev.trigger_type;
+				const rows = typeChanged ? [] : triggerDisplayRows(prev);
+				const nextRows = [
+					...rows,
+					defaultTriggerLabel(nextTriggerType, rows.length + 1),
+				];
+				const next = {
+					...prev,
+					trigger_type: nextTriggerType,
+					trigger_config: withTriggerDisplayRows(
+						typeChanged ? undefined : prev.trigger_config,
+						nextRows,
+					),
+				};
+				history.push({ nodes: next.nodes, edges: next.edges });
+				return next;
+			});
+			setDirty(true);
+			bumpEdit();
+		},
+		[history, bumpEdit],
+	);
 
 	const deleteEdge = useCallback(
 		(edgeIndex: number) => {

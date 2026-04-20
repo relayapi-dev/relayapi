@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
 	Bot,
 	Clock3,
@@ -27,6 +28,7 @@ import {
 	ReactFlow,
 	ReactFlowProvider,
 	getBezierPath,
+	useNodesState,
 	useReactFlow,
 	type Edge,
 	type EdgeProps,
@@ -84,8 +86,8 @@ const CATEGORY_LABEL: Record<string, string> = {
 };
 
 const TRIGGER_ID = "trigger";
-const LAYER_GAP = 410;
-const ROW_GAP = 190;
+const LAYER_GAP = 560;
+const ROW_GAP = 220;
 
 const PLATFORM_LABELS: Record<string, string> = {
 	instagram: "Instagram",
@@ -140,6 +142,20 @@ const TRIGGER_OPERATION_OVERRIDES: Record<string, string> = {
 	external_api: "External API event",
 };
 
+const TRIGGER_CATEGORY_LABELS: Record<string, string> = {
+	instagram_comment: "Post or Reel Comments",
+	instagram_dm: "Instagram Message",
+	instagram_story_reply: "Story Reply",
+	instagram_story_mention: "Story Mention",
+	facebook_comment: "Post Comments",
+	facebook_dm: "Facebook Message",
+	whatsapp_message: "WhatsApp Message",
+	telegram_message: "Telegram Message",
+	sms_received: "SMS Received",
+	manual: "Manual",
+	external_api: "External API",
+};
+
 interface ChildLink {
 	label: string;
 	order: number;
@@ -152,7 +168,7 @@ interface SharedNodeData {
 	highlighted: boolean;
 	readOnly?: boolean;
 	schema: AutomationSchema;
-	onAddTriggerRow: () => void;
+	onAddTriggerRow: (triggerType?: string) => void;
 	onDeleteNode: (key: string) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
 	onSelect: (key: string | null) => void;
@@ -191,7 +207,7 @@ interface Props {
 	highlightKeys: Set<string>;
 	selectedKey: string | null;
 	onMoveNode?: (key: string, position: XYPosition) => void;
-	onAddTriggerRow: () => void;
+	onAddTriggerRow: (triggerType?: string) => void;
 	onSelect: (key: string | null) => void;
 	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
 	onDeleteEdge: (edgeIndex: number) => void;
@@ -205,6 +221,101 @@ function titleize(value: string): string {
 		.filter(Boolean)
 		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
 		.join(" ");
+}
+
+interface TriggerTypePickerProps {
+	automationChannel: string;
+	children: ReactNode;
+	onPick: (triggerType: string) => void;
+	schema: AutomationSchema;
+}
+
+export function TriggerTypePicker({
+	automationChannel,
+	children,
+	onPick,
+	schema,
+}: TriggerTypePickerProps) {
+	const [open, setOpen] = useState(false);
+	const triggers = useMemo(
+		() =>
+			schema.triggers
+				.filter((t) => t.channel === automationChannel)
+				.sort((a, b) => a.type.localeCompare(b.type)),
+		[automationChannel, schema.triggers],
+	);
+
+	const channelLabel =
+		PLATFORM_LABELS[automationChannel] ?? titleize(automationChannel);
+
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>{children}</PopoverTrigger>
+			<PopoverContent
+				align="center"
+				sideOffset={8}
+				className="w-[360px] p-0"
+			>
+				<div className="border-b border-border px-4 py-3">
+					<div className="text-[13px] font-semibold text-foreground">
+						Start automation when…
+					</div>
+					<div className="mt-0.5 text-[11px] text-muted-foreground">
+						Specific {channelLabel} event that starts your automation.
+					</div>
+				</div>
+				<div className="max-h-[420px] overflow-y-auto p-2">
+					{triggers.length === 0 ? (
+						<div className="px-3 py-4 text-center text-[12px] text-muted-foreground">
+							No triggers available for {channelLabel}.
+						</div>
+					) : (
+						triggers.map((trigger) => {
+							const summary =
+								TRIGGER_OPERATION_OVERRIDES[trigger.type] ??
+								titleize(
+									trigger.type.replace(
+										new RegExp(`^${automationChannel}_`),
+										"",
+									),
+								);
+							const category =
+								TRIGGER_CATEGORY_LABELS[trigger.type] ??
+								titleize(
+									trigger.type.replace(
+										new RegExp(`^${automationChannel}_`),
+										"",
+									),
+								);
+							return (
+								<button
+									key={trigger.type}
+									type="button"
+									onClick={() => {
+										onPick(trigger.type);
+										setOpen(false);
+									}}
+									className="flex w-full items-start gap-3 rounded-xl px-2.5 py-2.5 text-left transition hover:bg-accent"
+								>
+									<div className="mt-0.5 shrink-0">
+										{platformIconBubble(trigger.channel)}
+									</div>
+									<div className="min-w-0 flex-1">
+										<div className="text-[12px] font-medium text-muted-foreground">
+											{category}
+										</div>
+										<div className="mt-0.5 text-[14px] font-semibold text-foreground">
+											{summary}
+										</div>
+									</div>
+								</button>
+							);
+						})
+					)}
+				</div>
+			</PopoverContent>
+		</Popover>
+	);
 }
 
 function presentLabel(value: string): string {
@@ -635,17 +746,22 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 					</div>
 				)}
 
-				<button
-					type="button"
-					onClick={(event) => {
-						event.stopPropagation();
-						data.onAddTriggerRow();
+				<TriggerTypePicker
+					automationChannel={channel}
+					onPick={(triggerType) => {
+						data.onAddTriggerRow(triggerType);
 						data.onSelect(TRIGGER_ID);
 					}}
-					className="nodrag mt-4 flex h-[48px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[15px] font-semibold text-[#4680ff] transition hover:border-[#4680ff] hover:bg-[#f4f8ff]"
+					schema={data.schema}
 				>
-					+ New Trigger
-				</button>
+					<button
+						type="button"
+						onClick={(event) => event.stopPropagation()}
+						className="nodrag mt-4 flex h-[48px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[15px] font-semibold text-[#4680ff] transition hover:border-[#4680ff] hover:bg-[#f4f8ff]"
+					>
+						+ New Trigger
+					</button>
+				</TriggerTypePicker>
 
 				<div className="mt-3 flex justify-end text-[13px] font-medium text-[#6f7786]">
 					Then
@@ -669,6 +785,12 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 		data.connectedOutputs.includes(label),
 	);
 	const isMessageNode = data.node.type.startsWith("message_");
+	const nodePlatformPrefix = data.node.type.split("_")[0] ?? "";
+	const nodePlatform = PLATFORM_LABELS[nodePlatformPrefix]
+		? nodePlatformPrefix
+		: null;
+	const isPlatformNode = isMessageNode || nodePlatform !== null;
+	const iconChannel = nodePlatform ?? data.automationChannel;
 	const preview =
 		isMessageNode && summary === fallbackSummary(data.node.type)
 			? "Add a text"
@@ -718,8 +840,8 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 			<div className="block w-full px-5 py-4 pr-12 text-left">
 				<div className="flex items-start gap-3">
 					<div className="mt-1 shrink-0">
-						{isMessageNode ? (
-							platformIconBubble(data.automationChannel)
+						{isPlatformNode ? (
+							platformIconBubble(iconChannel)
 						) : (
 							<div className="flex size-7 items-center justify-center rounded-full bg-[#eef1f5] text-[#7b8598]">
 								<Icon className="size-3.5" />
@@ -1119,6 +1241,15 @@ function GuidedFlowCanvas({
 		schema,
 	]);
 
+	const [rfNodes, setRfNodes, onNodesChange] =
+		useNodesState<FlowCardData>(flowNodes);
+	const draggingRef = useRef(false);
+
+	useEffect(() => {
+		if (draggingRef.current) return;
+		setRfNodes(flowNodes);
+	}, [flowNodes, setRfNodes]);
+
 	useEffect(() => {
 		const signature = `${flowNodes.length}:${flowEdges.length}`;
 		if (fitSignatureRef.current === signature) return;
@@ -1132,12 +1263,17 @@ function GuidedFlowCanvas({
 	return (
 		<div className="h-full bg-[#f5f6fa]">
 			<ReactFlow
-				nodes={flowNodes}
+				nodes={rfNodes}
 				edges={flowEdges}
+				onNodesChange={onNodesChange}
 				nodeTypes={nodeTypes}
 				edgeTypes={edgeTypes}
 				onNodeClick={(_, node) => onSelect(node.id)}
+				onNodeDragStart={() => {
+					draggingRef.current = true;
+				}}
 				onNodeDragStop={(_, node) => {
+					draggingRef.current = false;
 					if (!onMoveNode) return;
 					onMoveNode(node.id, node.position);
 				}}

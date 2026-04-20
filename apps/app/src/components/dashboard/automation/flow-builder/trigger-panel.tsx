@@ -18,6 +18,7 @@ import {
 	triggerDisplayRows,
 	withTriggerDisplayRows,
 } from "./trigger-ui";
+import { TriggerTypePicker } from "./guided-flow";
 
 const PANEL_WIDTH_CLS = "w-[360px] xl:w-[392px]";
 
@@ -292,21 +293,32 @@ export function TriggerPanel({
 						</div>
 
 						{!readOnly && (
-							<button
-								type="button"
-								onClick={() =>
+							<TriggerTypePicker
+								automationChannel={automation.channel}
+								schema={schema}
+								onPick={(pickedType) => {
+									if (pickedType !== automation.trigger_type) {
+										onChange({
+											trigger_type: pickedType,
+											trigger_config: withTriggerDisplayRows(undefined, [
+												defaultTriggerLabel(pickedType, 1),
+											]),
+										});
+										return;
+									}
 									setDisplayRows([
 										...displayRows,
-										defaultTriggerLabel(
-											automation.trigger_type,
-											displayRows.length + 1,
-										),
-									])
-								}
-								className="mt-4 flex h-11 w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[16px] font-medium text-[#4680ff] transition hover:border-[#bfc6d3] hover:bg-[#fafbfc]"
+										defaultTriggerLabel(pickedType, displayRows.length + 1),
+									]);
+								}}
 							>
-								+ New Trigger
-							</button>
+								<button
+									type="button"
+									className="mt-4 flex h-11 w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[16px] font-medium text-[#4680ff] transition hover:border-[#bfc6d3] hover:bg-[#fafbfc]"
+								>
+									+ New Trigger
+								</button>
+							</TriggerTypePicker>
 						)}
 					</div>
 

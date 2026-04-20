@@ -426,14 +426,6 @@ export function PropertyPanel({
 											className="min-h-[108px] w-full resize-y border-0 bg-transparent px-4 py-4 text-[14px] leading-6 text-[#353a44] outline-none placeholder:text-[#9aa3b2]"
 											placeholder="Enter your text..."
 										/>
-										<div className="border-t border-dashed border-[#d9dde6] px-4 py-3 text-center text-[13px] font-medium text-[#7e8695]">
-											+ Add Button
-										</div>
-									</div>
-									<div className="mt-4 flex">
-										<div className="rounded-full border border-dashed border-[#d9dde6] px-4 py-2 text-[13px] font-medium text-[#7e8695]">
-											+ Add Quick Reply
-										</div>
 									</div>
 								</div>
 							) : null}
