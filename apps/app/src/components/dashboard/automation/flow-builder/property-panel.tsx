@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, Pencil, Plus, Trash2 } from "lucide-react";
+import { ChevronLeft, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useApi } from "@/hooks/use-api";
@@ -372,12 +372,9 @@ export function PropertyPanel({
 						<ChevronLeft className="size-4" />
 					</button>
 					<div className="min-w-0 flex-1">
-						<div className="flex items-center gap-2">
-							<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
-								{title}
-							</h3>
-							<Pencil className="size-3.5 shrink-0 text-[#7e8695]" />
-						</div>
+						<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
+							{title}
+						</h3>
 						<p className="mt-1 text-[12px] text-[#6f7786]">
 							{nodeDef?.description ?? "Configure this step"}
 						</p>

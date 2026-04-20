@@ -26,7 +26,7 @@ import {
 	Position,
 	ReactFlow,
 	ReactFlowProvider,
-	getSmoothStepPath,
+	getBezierPath,
 	useReactFlow,
 	type Edge,
 	type EdgeProps,
@@ -557,73 +557,83 @@ function AddStepMenu({
 }
 
 function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
+	const triggerType = data.automation.trigger_type ?? "";
+	const channel = data.automation.channel ?? "";
 	const summary =
-		TRIGGER_OPERATION_OVERRIDES[data.automation.trigger_type] ??
-		titleize(
-			data.automation.trigger_type.replace(
-				new RegExp(`^${data.automation.channel}_`),
-				"",
-			),
-		);
+		TRIGGER_OPERATION_OVERRIDES[triggerType] ??
+		(triggerType
+			? titleize(
+					channel ? triggerType.replace(new RegExp(`^${channel}_`), "") : triggerType,
+				)
+			: "Configure trigger");
 	const rows = triggerDisplayRows(data.automation);
 
 	return (
 		<div
-			className={cardShellClass({
-				selected,
-				highlighted: data.highlighted,
-				hasError: data.hasError,
-				kind: "trigger",
-			})}
+			className={cn(
+				cardShellClass({
+					selected,
+					highlighted: data.highlighted,
+					hasError: data.hasError,
+					kind: "trigger",
+				}),
+				"cursor-grab active:cursor-grabbing",
+			)}
+			onClick={(event) => {
+				if ((event.target as HTMLElement).closest("button,input,a,[role=button]")) {
+					return;
+				}
+				data.onSelect(TRIGGER_ID);
+			}}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					data.onSelect(TRIGGER_ID);
+				}
+			}}
+			role="button"
+			tabIndex={0}
 		>
 			<Handle
 				type="source"
 				position={Position.Right}
-				className="!size-[16px] !border-[3px] !border-white !bg-[#95a3bb] !shadow-[0_1px_4px_rgba(34,44,66,0.18)]"
-				style={{ right: -9, top: "calc(100% - 24px)" }}
+				className="!size-[14px] !border-[3px] !border-white !bg-[#5f6b7f] !shadow-[0_1px_4px_rgba(34,44,66,0.18)]"
+				style={{ right: -8, top: "calc(100% - 22px)" }}
 				isConnectable={false}
 			/>
-			<div
-				role="button"
-				tabIndex={0}
-				onClick={() => data.onSelect(TRIGGER_ID)}
-				onKeyDown={(event) => {
-					if (event.key === "Enter" || event.key === " ") {
-						event.preventDefault();
-						data.onSelect(TRIGGER_ID);
-					}
-				}}
-				className="nodrag block w-full cursor-pointer px-5 py-4 text-left"
-			>
-				<div className="flex items-center gap-2 text-[17px] font-semibold text-[#353a44]">
-					<Zap className="size-[18px] text-[#353a44]" />
+			<div className="block w-full px-5 py-4 text-left">
+				<div className="flex items-center gap-2 text-[18px] font-bold tracking-tight text-[#1f2633]">
+					<Zap className="size-[18px] text-[#1f2633]" />
 					<span>When...</span>
 				</div>
 
-				<div className="mt-4 space-y-4">
-					{rows.map((rowLabel, index) => (
-						<div
-							key={`${rowLabel}-${index}`}
-							className="rounded-[16px] bg-[#f5f5f5] px-4 py-3"
-						>
-							<div className="flex items-center gap-3">
-								{platformIconBubble(data.automation.channel)}
-								<div className="min-w-0">
-									<div className="truncate text-[17px] font-semibold leading-5 text-[#404552]">
-										{summary}
-									</div>
-									<div className="mt-1 text-[13px] leading-4 text-[#7e8695]">
-										{rowLabel ||
-											defaultTriggerLabel(
-												data.automation.trigger_type,
-												index + 1,
-											)}
+				{rows.length > 0 ? (
+					<div className="mt-4 space-y-3">
+						{rows.map((rowLabel, index) => (
+							<div
+								key={`${rowLabel}-${index}`}
+								className="rounded-[16px] bg-[#f4f5f8] px-4 py-3"
+							>
+								<div className="flex items-center gap-3">
+									{platformIconBubble(channel)}
+									<div className="min-w-0">
+										<div className="truncate text-[13px] font-medium leading-4 text-[#8b92a0]">
+											{rowLabel ||
+												defaultTriggerLabel(triggerType, index + 1)}
+										</div>
+										<div className="mt-0.5 text-[15px] font-semibold leading-5 text-[#404552]">
+											{summary}
+										</div>
 									</div>
 								</div>
 							</div>
-						</div>
-					))}
-				</div>
+						))}
+					</div>
+				) : (
+					<div className="mt-4 rounded-[16px] border border-dashed border-[#d9dde6] bg-white px-4 py-5 text-center text-[13px] text-[#7e8695]">
+						No triggers yet — add one below.
+					</div>
+				)}
 
 				<button
 					type="button"
@@ -632,10 +642,14 @@ function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
 						data.onAddTriggerRow();
 						data.onSelect(TRIGGER_ID);
 					}}
-					className="mt-6 flex h-[54px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[17px] font-semibold text-[#4680ff] transition hover:border-[#bfc6d3] hover:bg-[#fafbfc]"
+					className="nodrag mt-4 flex h-[48px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[15px] font-semibold text-[#4680ff] transition hover:border-[#4680ff] hover:bg-[#f4f8ff]"
 				>
 					+ New Trigger
 				</button>
+
+				<div className="mt-3 flex justify-end text-[13px] font-medium text-[#6f7786]">
+					Then
+				</div>
 			</div>
 		</div>
 	);
@@ -662,12 +676,29 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 
 	return (
 		<div
-			className={cardShellClass({
-				selected,
-				highlighted: data.highlighted,
-				hasError: data.hasError,
-				kind: "step",
-			})}
+			className={cn(
+				cardShellClass({
+					selected,
+					highlighted: data.highlighted,
+					hasError: data.hasError,
+					kind: "step",
+				}),
+				"cursor-grab active:cursor-grabbing",
+			)}
+			onClick={(event) => {
+				if ((event.target as HTMLElement).closest("button,input,a,[role=button]")) {
+					return;
+				}
+				data.onSelect(data.node.key);
+			}}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					data.onSelect(data.node.key);
+				}
+			}}
+			role="button"
+			tabIndex={0}
 		>
 			<Handle
 				type="target"
@@ -679,16 +710,12 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 			<Handle
 				type="source"
 				position={Position.Right}
-				className="!size-[15px] !border-[2px] !border-[#98a6bd] !bg-white !shadow-[0_1px_4px_rgba(34,44,66,0.12)]"
-				style={{ right: -8, top: "86%" }}
+				className="!size-[14px] !border-[2px] !border-[#98a6bd] !bg-white !shadow-[0_1px_4px_rgba(34,44,66,0.12)]"
+				style={{ right: -7, top: "86%" }}
 				isConnectable={false}
 			/>
 
-			<button
-				type="button"
-				onClick={() => data.onSelect(data.node.key)}
-				className="nodrag block w-full px-5 py-4 pr-12 text-left"
-			>
+			<div className="block w-full px-5 py-4 pr-12 text-left">
 				<div className="flex items-start gap-3">
 					<div className="mt-1 shrink-0">
 						{isMessageNode ? (
@@ -709,8 +736,8 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 					</div>
 				</div>
 
-				<div className="mt-4 rounded-[16px] bg-[#f5f5f5] px-4 py-3">
-					<div className="line-clamp-3 min-h-[26px] text-[16px] leading-[26px] text-[#404552]">
+				<div className="mt-4 rounded-[16px] bg-[#f4f5f8] px-4 py-3">
+					<div className="line-clamp-3 min-h-[26px] text-[15px] leading-[22px] text-[#404552]">
 						{preview}
 					</div>
 				</div>
@@ -746,7 +773,7 @@ function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
 						<span>Next Step</span>
 					</div>
 				</div>
-			</button>
+			</div>
 
 			{!data.readOnly && (
 				<div className="absolute right-3 top-3 opacity-0 transition group-hover:opacity-100">
@@ -791,19 +818,43 @@ function AutomationFlowEdge({
 	targetY,
 }: EdgeProps<FlowEdgeData>) {
 	const [hovered, setHovered] = useState(false);
-	const [path, labelX, labelY] = getSmoothStepPath({
+	const leaveTimerRef = useRef<number | null>(null);
+	const handleEnter = () => {
+		if (leaveTimerRef.current !== null) {
+			window.clearTimeout(leaveTimerRef.current);
+			leaveTimerRef.current = null;
+		}
+		setHovered(true);
+	};
+	const handleLeave = () => {
+		if (leaveTimerRef.current !== null) {
+			window.clearTimeout(leaveTimerRef.current);
+		}
+		leaveTimerRef.current = window.setTimeout(() => {
+			setHovered(false);
+			leaveTimerRef.current = null;
+		}, 160);
+	};
+	useEffect(
+		() => () => {
+			if (leaveTimerRef.current !== null) {
+				window.clearTimeout(leaveTimerRef.current);
+			}
+		},
+		[],
+	);
+
+	const [path, labelX, labelY] = getBezierPath({
 		sourceX,
 		sourceY,
 		sourcePosition,
 		targetX,
 		targetY,
 		targetPosition,
-		borderRadius: 26,
-		offset: 28,
+		curvature: 0.4,
 	});
 	const showBranchLabel =
 		data?.label && data.label !== "next" && source !== TRIGGER_ID;
-	const showThenLabel = source === TRIGGER_ID && data?.label === "next";
 	const stroke = hovered ? "#4680ff" : "#9aa7bd";
 	if (!data) {
 		return (
@@ -830,23 +881,13 @@ function AutomationFlowEdge({
 				d={path}
 				fill="none"
 				stroke="transparent"
-				strokeWidth={18}
+				strokeWidth={40}
 				style={{ pointerEvents: "stroke" }}
-				onMouseEnter={() => setHovered(true)}
-				onMouseLeave={() => setHovered(false)}
+				onMouseEnter={handleEnter}
+				onMouseLeave={handleLeave}
 			/>
 			<EdgeLabelRenderer>
 				<>
-					{showThenLabel ? (
-						<div
-							className="pointer-events-none absolute text-[13px] font-medium text-[#6f7786]"
-							style={{
-								transform: `translate(-100%, -50%) translate(${sourceX - 10}px, ${sourceY + 2}px)`,
-							}}
-						>
-							Then
-						</div>
-					) : null}
 					{showBranchLabel ? (
 						<div
 							className="pointer-events-none absolute"
@@ -863,13 +904,15 @@ function AutomationFlowEdge({
 						<div
 							className={cn(
 								"nodrag nopan absolute flex items-center gap-1 rounded-xl border border-[#e5e9f1] bg-white p-1 shadow-[0_8px_20px_rgba(34,44,66,0.12)] transition-opacity duration-150",
-								hovered ? "opacity-100" : "opacity-0",
+								hovered
+									? "pointer-events-auto opacity-100"
+									: "pointer-events-none opacity-0",
 							)}
 							style={{
 								transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
 							}}
-							onMouseEnter={() => setHovered(true)}
-							onMouseLeave={() => setHovered(false)}
+							onMouseEnter={handleEnter}
+							onMouseLeave={handleLeave}
 						>
 							<button
 								type="button"
@@ -999,6 +1042,7 @@ function GuidedFlowCanvas({
 		];
 
 		for (const node of automation.nodes) {
+			if (node.key === TRIGGER_ID) continue;
 			nodes.push({
 				id: node.key,
 				type: "stepCard",

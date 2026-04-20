@@ -672,8 +672,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 		(draft.status === "draft" && resumeAutomation.loading);
 
 	return (
-		<div className="flex min-h-full flex-col border-t border-border bg-[#f5f6fa]">
-			<header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
+		<div className="flex h-full min-h-0 flex-col overflow-hidden border-t border-border bg-[#f5f6fa]">
+			<header className="z-20 flex shrink-0 items-center justify-between gap-4 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
 				<div className="flex items-center gap-3 min-w-0">
 					<a
 						href="/app/automation"

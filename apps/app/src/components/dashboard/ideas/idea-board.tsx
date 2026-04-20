@@ -26,6 +26,7 @@ import { GroupCreateInline } from "./group-create-inline";
 interface IdeaBoardProps {
 	groups: IdeaGroup[];
 	ideasByGroup: Map<string, Idea[]>;
+	ideasLoading?: boolean;
 	onMoveIdea: (
 		ideaId: string,
 		groupId: string,
@@ -37,6 +38,15 @@ interface IdeaBoardProps {
 	onCreateGroup: (name: string, color: string) => void;
 	onClickIdea: (idea: Idea) => void;
 	onNewIdea: (groupId: string | null) => void;
+}
+
+function IdeaCardSkeleton() {
+	return (
+		<div className="rounded-md border border-border bg-background p-3">
+			<div className="h-3 w-4/5 rounded bg-muted animate-pulse" />
+			<div className="h-3 w-2/5 rounded bg-muted animate-pulse mt-2" />
+		</div>
+	);
 }
 
 // Prefix constants to distinguish column DnD ids from card DnD ids
@@ -83,6 +93,7 @@ function SortableCard({ idea, onClick }: SortableCardProps) {
 interface SortableColumnProps {
 	group: IdeaGroup;
 	ideas: Idea[];
+	showSkeletons?: boolean;
 	onRename: (name: string) => void;
 	onDelete: () => void;
 	onClickIdea: (idea: Idea) => void;
@@ -92,6 +103,7 @@ interface SortableColumnProps {
 function SortableColumn({
 	group,
 	ideas,
+	showSkeletons,
 	onRename,
 	onDelete,
 	onClickIdea,
@@ -139,6 +151,12 @@ function SortableColumn({
 						/>
 					))}
 				</SortableContext>
+				{showSkeletons && ideas.length === 0 && (
+					<>
+						<IdeaCardSkeleton />
+						<IdeaCardSkeleton />
+					</>
+				)}
 			</IdeaColumn>
 		</div>
 	);
@@ -147,6 +165,7 @@ function SortableColumn({
 export function IdeaBoard({
 	groups,
 	ideasByGroup,
+	ideasLoading,
 	onMoveIdea,
 	onReorderGroups,
 	onRenameGroup,
@@ -378,6 +397,7 @@ export function IdeaBoard({
 								key={group.id}
 								group={group}
 								ideas={ideas}
+								showSkeletons={ideasLoading}
 								onRename={(name) => onRenameGroup(group.id, name)}
 								onDelete={() => onDeleteGroup(group.id)}
 								onClickIdea={onClickIdea}

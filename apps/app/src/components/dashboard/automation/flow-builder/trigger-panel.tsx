@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { ChevronLeft, Pencil, Tag, X, Zap } from "lucide-react";
+import { ChevronLeft, Tag, X, Zap } from "lucide-react";
 import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { platformIcons } from "@/lib/platform-icons";
@@ -220,12 +220,9 @@ export function TriggerPanel({
 						<ChevronLeft className="size-4" />
 					</button>
 					<div className="min-w-0 flex-1">
-						<div className="flex items-center gap-2">
-							<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
-								When...
-							</h3>
-							<Pencil className="size-3.5 shrink-0 text-[#7e8695]" />
-						</div>
+						<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
+							When...
+						</h3>
 						<p className="mt-1 text-[12px] text-[#6f7786]">
 							Configure what starts this automation.
 						</p>

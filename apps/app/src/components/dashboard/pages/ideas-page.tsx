@@ -255,7 +255,10 @@ export function IdeasPage() {
 	}, [updateScrollFades, sortedGroups.length]);
 
 	const loading = groupsLoading || ideasLoading;
-	const loadingInitial = loading && groups.length === 0;
+	const loadingInitial =
+		(groupsLoading && groups.length === 0) ||
+		(ideasLoading && ideas.length === 0 && groups.length === 0);
+	const ideasInitialLoading = ideasLoading && ideas.length === 0;
 	const error = groupsError || ideasError;
 
 	const handleCreateGroup = async (name: string, color: string) => {
@@ -613,6 +616,7 @@ export function IdeasPage() {
 						<IdeaBoard
 							groups={sortedGroups}
 							ideasByGroup={ideasByGroup}
+							ideasLoading={ideasInitialLoading}
 							onMoveIdea={handleMoveIdea}
 							onReorderGroups={handleReorderGroups}
 							onRenameGroup={handleRenameGroup}
