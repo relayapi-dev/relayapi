@@ -1,35 +1,116 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import { motion, AnimatePresence } from "motion/react";
-import { Loader2, MessageCircle, ArrowDown, FileText } from "lucide-react";
+import {
+  Archive,
+  ArrowDown,
+  ExternalLink,
+  Loader2,
+  MessageCircle,
+  RotateCcw,
+  TriangleAlert,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ConversationItem, MessageItem } from "./shared";
-import { formatTimeAgo, getConversationDisplayName, platformLabels } from "./shared";
+import {
+  formatMessageDayLabel,
+  formatMessageTime,
+  getConversationDisplayName,
+  getPlatformDisplayName,
+} from "./shared";
 import { MessageComposer } from "./message-composer";
+
+const platformInboxUrls: Record<string, string> = {
+  instagram: "https://www.instagram.com/direct/inbox/",
+  facebook: "https://www.facebook.com/messages/",
+  twitter: "https://x.com/messages",
+  whatsapp: "https://web.whatsapp.com/",
+  telegram: "https://web.telegram.org/",
+  linkedin: "https://www.linkedin.com/messaging/",
+  threads: "https://www.threads.net/",
+};
+
+function normalizeAttachments(value: unknown): Array<{ type: string; url: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const rawType = "type" in item ? item.type : null;
+    const rawUrl = "url" in item ? item.url : null;
+    return typeof rawType === "string" && typeof rawUrl === "string"
+      ? [{ type: rawType, url: rawUrl }]
+      : [];
+  });
+}
+
+function mapApiMessage(message: any): MessageItem {
+  return {
+    id: message.id,
+    sender: message.direction === "outbound" ? "user" : "participant",
+    author_name: message.author_name ?? null,
+    text: message.text ?? "",
+    attachments: normalizeAttachments(message.attachments),
+    created_at: message.created_at,
+  };
+}
+
+function dayKey(dateStr: string) {
+  const date = new Date(dateStr);
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function EmptyThreadState() {
+  return (
+    <div className="flex h-full items-center justify-center bg-[#f7f8fc] px-6">
+      <div className="max-w-sm text-center">
+        <div className="relative mx-auto mb-8 h-32 w-32">
+          <div className="absolute left-3 top-11 h-11 w-11 rounded-full bg-[#64ddee]" />
+          <div className="absolute left-10 top-5 h-16 w-16 rounded-full bg-[#b12a67]" />
+          <div className="absolute right-7 top-[4.5rem] h-10 w-10 rounded-full bg-[#cc34d9]" />
+          <div className="absolute right-0 top-10 h-4 w-14 rounded-full bg-[#64ddee]" />
+          <div className="absolute right-0 top-[4.75rem] h-4 w-14 rounded-full bg-[#64ddee]" />
+          <div className="absolute right-0 top-28 h-4 w-14 rounded-full bg-[#64ddee]" />
+          <div className="absolute left-12 top-12 h-8 w-8 bg-[#64ddee]" />
+          <div className="absolute left-20 top-20 h-8 w-8 bg-[#64ddee]" />
+          <div className="absolute left-20 top-12 h-8 w-8 bg-[#b12a67]" />
+          <div className="absolute left-12 top-20 h-8 w-8 bg-[#b12a67]" />
+        </div>
+        <h3 className="text-[28px] font-semibold tracking-tight text-slate-800">Inbox</h3>
+        <p className="mt-3 text-[15px] leading-6 text-slate-500">
+          Select a conversation to view the full thread and reply from one place.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export function ChatThread({
   conversation,
   onMessageSent,
+  onStatusChange,
 }: {
   conversation: ConversationItem | null;
   onMessageSent?: () => void;
+  onStatusChange?: (nextStatus: "open" | "archived") => Promise<void>;
 }) {
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [statusPending, setStatusPending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Fetch messages when conversation changes
   useEffect(() => {
     if (!conversation) {
       setMessages([]);
       return;
     }
+
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setSendError(null);
 
     (async () => {
       try {
@@ -41,16 +122,7 @@ export function ChatThread({
         }
         const json = await res.json();
         if (!cancelled) {
-          // The new /conversations/{id} endpoint returns { conversation, messages }
-          // Map messages to the MessageItem format
-          const msgs = (json.messages || json.data || []).map((m: any) => ({
-            id: m.id,
-            sender: m.direction === "outbound" ? "user" : "participant",
-            text: m.text ?? "",
-            attachments: m.attachments,
-            created_at: m.created_at,
-          }));
-          setMessages(msgs);
+          setMessages((json.messages || json.data || []).map(mapApiMessage));
         }
       } catch {
         if (!cancelled) setError("Network error");
@@ -59,71 +131,68 @@ export function ChatThread({
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [conversation?.id]);
 
-  // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (messages.length > 0 && !loading) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages.length, loading]);
 
-  // Listen for incoming messages via WebSocket
   const fetchMessagesSilently = useCallback(async () => {
     if (!conversation) return;
+
     try {
       const res = await fetch(`/api/inbox/conversations/${encodeURIComponent(conversation.id)}`, {
         signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok) return;
+
       const json = await res.json();
-      const rawMsgs = json.messages || json.data || [];
-      const fresh = rawMsgs.map((m: any) => ({
-        id: m.id,
-        sender: m.direction === "outbound" ? "user" : "participant",
-        text: m.text ?? "",
-        attachments: m.attachments,
-        created_at: m.created_at,
-      })) as MessageItem[];
+      const fresh = (json.messages || json.data || []).map(mapApiMessage) as MessageItem[];
+
       setMessages((prev) => {
-        const existingIds = new Set(prev.map((m) => m.id));
-        const newMsgs = fresh.filter((m) => !existingIds.has(m.id) && !m.id.startsWith("temp-"));
-        if (newMsgs.length === 0) return prev;
-        return [...prev, ...newMsgs];
+        const existingIds = new Set(prev.map((message) => message.id));
+        const newMessages = fresh.filter(
+          (message) => !existingIds.has(message.id) && !message.id.startsWith("temp-"),
+        );
+        if (newMessages.length === 0) return prev;
+        return [...prev, ...newMessages];
       });
-    } catch { /* silent */ }
+    } catch {
+      // Silent background refresh.
+    }
   }, [conversation?.id]);
 
   useRealtimeUpdates(useCallback((event) => {
     if (
-      event.type === "inbox.message.received" &&
-      event.conversation_id === conversation?.id
+      event.type === "inbox.message.received"
+      && event.conversation_id === conversation?.id
     ) {
-      fetchMessagesSilently();
+      void fetchMessagesSilently();
     }
   }, [conversation?.id, fetchMessagesSilently]));
 
-  // Track scroll position for "scroll to bottom" button
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setShowScrollButton(distanceFromBottom > 100);
+    setShowScrollButton(distanceFromBottom > 120);
   }, []);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
 
   const handleSend = async (text: string) => {
     if (!conversation) return;
 
-    // Optimistic insert
+    setSendError(null);
+
     const tempId = `temp-${Date.now()}`;
     const optimisticMsg: MessageItem = {
       id: tempId,
       sender: "user",
+      author_name: "You",
       text,
       created_at: new Date().toISOString(),
     };
@@ -137,160 +206,288 @@ export function ChatThread({
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) {
-        // Remove optimistic message on failure
-        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        setMessages((prev) => prev.filter((message) => message.id !== tempId));
+        setSendError(json?.error?.message || json?.error || "Failed to send message");
         return;
       }
-      // Replace optimistic message with real one
+
       setMessages((prev) =>
-        prev.map((m) => m.id === tempId ? { ...m, id: json.message_id || tempId } : m)
+        prev.map((message) =>
+          message.id === tempId
+            ? { ...message, id: json.message_id || tempId }
+            : message,
+        ),
       );
       onMessageSent?.();
     } catch {
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setMessages((prev) => prev.filter((message) => message.id !== tempId));
+      setSendError("Network error while sending the message");
     }
   };
 
-  // Empty state
+  const handleStatusButton = async () => {
+    if (!conversation || !onStatusChange || statusPending) return;
+    const nextStatus = conversation.status === "archived" ? "open" : "archived";
+    setStatusPending(true);
+    try {
+      await onStatusChange(nextStatus);
+    } finally {
+      setStatusPending(false);
+    }
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
   if (!conversation) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <MessageCircle className="size-10 text-muted-foreground/20 mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground">Select a conversation</p>
-          <p className="text-xs text-muted-foreground mt-1">Choose a conversation from the left to start messaging</p>
-        </div>
-      </div>
-    );
+    return <EmptyThreadState />;
   }
 
   const displayName = getConversationDisplayName(conversation);
+  const platformLabel = getPlatformDisplayName(conversation.platform);
+  const platformUrl = platformInboxUrls[conversation.platform?.toLowerCase() || ""];
+  const isArchived = conversation.status === "archived";
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Chat header */}
-      <div className="flex items-center gap-3 px-4 h-14 border-b border-border shrink-0">
-        {conversation.participant_avatar ? (
-          <img
-            src={conversation.participant_avatar}
-            alt={displayName}
-            className="size-8 rounded-full border border-border object-cover"
-          />
-        ) : (
-          <div className="size-8 rounded-full border border-border bg-muted flex items-center justify-center text-xs font-medium text-muted-foreground">
-            {displayName.charAt(0).toUpperCase()}
+    <div className="flex h-full min-h-0 flex-col bg-white">
+      <div className="border-b border-[#e7e9ef] bg-white">
+        <div className="flex min-h-16 items-center justify-between gap-4 px-5 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            {conversation.participant_avatar ? (
+              <img
+                src={conversation.participant_avatar}
+                alt={displayName}
+                className="size-11 rounded-full border border-[#e5e7eb] object-cover"
+              />
+            ) : (
+              <div className="flex size-11 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f4f6fa] text-sm font-semibold text-slate-500">
+                {displayName.charAt(0).toUpperCase()}
+              </div>
+            )}
+
+            <div className="min-w-0">
+              <p className="truncate text-[15px] font-semibold text-slate-900">{displayName}</p>
+              <p className="truncate text-[12px] text-slate-500">
+                {conversation.assigned_user_id ? "Assigned" : "Unassigned"}
+              </p>
+            </div>
           </div>
-        )}
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate">{displayName}</p>
-          <p className="text-[11px] text-muted-foreground capitalize">
-            {platformLabels[conversation.platform?.toLowerCase()] || conversation.platform}
-          </p>
+
+          <div className="flex items-center gap-2">
+            {platformUrl && (
+              <a
+                href={platformUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex size-9 items-center justify-center rounded-full border border-[#d9dee8] bg-white text-slate-500 transition-colors hover:bg-[#f8f9fc] hover:text-slate-800"
+                title={`Open ${platformLabel}`}
+              >
+                <ExternalLink className="size-4" />
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleStatusButton()}
+              disabled={statusPending || !onStatusChange}
+              className="inline-flex size-9 items-center justify-center rounded-full border border-[#d9dee8] bg-white text-slate-500 transition-colors hover:bg-[#f8f9fc] hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              title={isArchived ? "Restore conversation" : "Archive conversation"}
+            >
+              {statusPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : isArchived ? (
+                <RotateCcw className="size-4" />
+              ) : (
+                <Archive className="size-4" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-[#eef0f5] px-5 py-2.5 text-[12px]">
+          <span className="rounded-full border border-[#d9dee8] bg-white px-3 py-1 font-medium text-slate-600">
+            {platformLabel}
+          </span>
+          <span
+            className={cn(
+              "rounded-full px-3 py-1 font-medium",
+              conversation.assigned_user_id
+                ? "bg-[#eef5ff] text-[#2d71f8]"
+                : "bg-[#fff4e8] text-[#c97713]",
+            )}
+          >
+            {conversation.assigned_user_id ? "Assigned" : "Unassigned"}
+          </span>
+          {(conversation.unread_count ?? 0) > 0 && (
+            <span className="rounded-full bg-[#eef5ff] px-3 py-1 font-semibold text-[#2d71f8]">
+              {conversation.unread_count} unread
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Messages area */}
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-3 relative"
+        className="relative flex-1 overflow-y-auto bg-[#f7f8fc] px-4 py-5 sm:px-6"
       >
         {loading ? (
-          <div className="flex items-center justify-center py-12">
+          <div className="flex h-full items-center justify-center py-12">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : error ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive text-center">
-            {error}
+          <div className="mx-auto flex max-w-xl items-start gap-3 rounded-2xl border border-[#f2c0c0] bg-[#fff6f6] px-4 py-3 text-sm text-[#b14242]">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>{error}</span>
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex items-center justify-center py-12">
-            <p className="text-xs text-muted-foreground">No messages in this conversation yet</p>
+          <div className="flex h-full items-center justify-center py-12">
+            <div className="rounded-3xl border border-dashed border-[#d7dde7] bg-white/70 px-8 py-10 text-center">
+              <MessageCircle className="mx-auto size-9 text-slate-300" />
+              <p className="mt-3 text-sm font-medium text-slate-700">No messages yet</p>
+              <p className="mt-1 text-xs text-slate-500">
+                When this contact replies, the thread will appear here.
+              </p>
+            </div>
           </div>
         ) : (
-          <>
+          <div className="mx-auto flex max-w-4xl flex-col gap-4">
             <AnimatePresence initial={false}>
-            {messages.map((msg) => {
-              const isOutbound = msg.sender === "user";
-              return (
-                <motion.div
-                  key={msg.id}
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0, transition: { duration: 0.1, ease: [0.32, 0.72, 0, 1] } }}
-                  className={cn("flex", isOutbound ? "justify-end" : "justify-start")}
-                >
-                  <div className={cn("max-w-[75%] space-y-1")}>
-                    {msg.text && (
-                      <div
-                        className={cn(
-                          "rounded-2xl px-3.5 py-2 text-sm",
-                          isOutbound
-                            ? "bg-primary text-primary-foreground rounded-br-md"
-                            : "bg-muted rounded-bl-md"
+              {messages.map((msg, index) => {
+                const isOutbound = msg.sender === "user";
+                const previous = messages[index - 1];
+                const showDayDivider = !previous || dayKey(previous.created_at) !== dayKey(msg.created_at);
+
+                return (
+                  <motion.div
+                    key={msg.id}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{
+                      opacity: 1,
+                      y: 0,
+                      transition: { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
+                    }}
+                  >
+                    {showDayDivider && (
+                      <div className="my-2 flex justify-center">
+                        <span className="rounded-full border border-[#e4e8f0] bg-white px-3 py-1 text-[11px] font-medium text-slate-500 shadow-sm">
+                          {formatMessageDayLabel(msg.created_at)}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className={cn("flex gap-3", isOutbound ? "justify-end" : "justify-start")}>
+                      {!isOutbound && (
+                        conversation.participant_avatar ? (
+                          <img
+                            src={conversation.participant_avatar}
+                            alt={displayName}
+                            className="mt-1 size-8 shrink-0 rounded-full border border-[#e5e7eb] object-cover"
+                          />
+                        ) : (
+                          <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full border border-[#e5e7eb] bg-white text-[11px] font-semibold text-slate-500">
+                            {displayName.charAt(0).toUpperCase()}
+                          </div>
+                        )
+                      )}
+
+                      <div className={cn("max-w-[78%] min-w-0", isOutbound && "items-end")}>
+                        {!isOutbound && (
+                          <p className="mb-1 px-1 text-[12px] font-medium text-slate-500">
+                            {msg.author_name || displayName}
+                          </p>
                         )}
-                      >
-                        <p className="whitespace-pre-wrap break-words">{msg.text}</p>
-                      </div>
-                    )}
 
-                    {/* Attachments */}
-                    {msg.attachments && msg.attachments.length > 0 && (
-                      <div className="space-y-1">
-                        {msg.attachments.map((att, i) => {
-                          if (att.type.startsWith("image/")) {
-                            return (
-                              <a key={i} href={att.url} target="_blank" rel="noopener noreferrer">
-                                <img src={att.url} alt="" className="max-w-[200px] rounded-lg border border-border" />
-                              </a>
-                            );
-                          }
-                          return (
-                            <a
-                              key={i}
-                              href={att.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-accent/30 transition-colors"
-                            >
-                              <FileText className="size-3" />
-                              Attachment
-                            </a>
-                          );
-                        })}
-                      </div>
-                    )}
+                        {msg.text && (
+                          <div
+                            className={cn(
+                              "rounded-[20px] px-4 py-3 text-[14px] leading-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
+                              isOutbound
+                                ? "rounded-br-md border border-[#d7e4ff] bg-[#edf4ff] text-[#27364d]"
+                                : "rounded-bl-md border border-[#e4e8f0] bg-white text-slate-700",
+                            )}
+                          >
+                            <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                          </div>
+                        )}
 
-                    <p className={cn(
-                      "text-[10px] text-muted-foreground",
-                      isOutbound ? "text-right" : "text-left"
-                    )}>
-                      {formatTimeAgo(msg.created_at)}
-                    </p>
-                  </div>
-                </motion.div>
-              );
-            })}
+                        {msg.attachments && msg.attachments.length > 0 && (
+                          <div className="mt-2 space-y-2">
+                            {msg.attachments.map((attachment, attachmentIndex) => {
+                              if (attachment.type.startsWith("image/")) {
+                                return (
+                                  <a
+                                    key={attachmentIndex}
+                                    href={attachment.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block overflow-hidden rounded-2xl border border-[#dde3ee] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)]"
+                                  >
+                                    <img
+                                      src={attachment.url}
+                                      alt=""
+                                      className="max-h-64 w-full object-cover"
+                                    />
+                                  </a>
+                                );
+                              }
+
+                              return (
+                                <a
+                                  key={attachmentIndex}
+                                  href={attachment.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-2 rounded-full border border-[#d9dee8] bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:bg-[#f8f9fc]"
+                                >
+                                  <ExternalLink className="size-3" />
+                                  Attachment
+                                </a>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <p
+                          className={cn(
+                            "mt-1 px-1 text-[11px] text-slate-400",
+                            isOutbound ? "text-right" : "text-left",
+                          )}
+                        >
+                          {formatMessageTime(msg.created_at)}
+                        </p>
+                      </div>
+                    </div>
+                  </motion.div>
+                );
+              })}
             </AnimatePresence>
+
             <div ref={messagesEndRef} />
-          </>
+          </div>
         )}
 
-        {/* Scroll to bottom button */}
         {showScrollButton && (
           <button
+            type="button"
             onClick={scrollToBottom}
-            className="sticky bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-background border border-border shadow-sm p-2 hover:bg-accent transition-colors"
+            className="sticky bottom-4 left-1/2 flex -translate-x-1/2 items-center justify-center rounded-full border border-[#d9dee8] bg-white p-2 text-slate-500 shadow-md transition-colors hover:bg-[#f8f9fc]"
           >
-            <ArrowDown className="size-4 text-muted-foreground" />
+            <ArrowDown className="size-4" />
           </button>
         )}
       </div>
 
-      {/* Composer */}
+      {sendError && (
+        <div className="border-t border-[#f2d2d2] bg-[#fff7f7] px-4 py-2 text-sm text-[#b14242]">
+          {sendError}
+        </div>
+      )}
+
       <MessageComposer
-        conversationId={conversation.id}
-        accountId={conversation.account_id}
         onSend={handleSend}
+        disabled={isArchived}
+        platformLabel={platformLabel}
       />
     </div>
   );

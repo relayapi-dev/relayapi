@@ -16,12 +16,19 @@ const StreakToastContainer = lazy(() =>
 	import("./streak-toast").then((m) => ({ default: m.StreakToastContainer })),
 );
 
-const fullHeightPages = new Set(["inbox-comments", "inbox-messages", "posts", "automation", "ideas"]);
+const fullHeightPages = new Set([
+	"inbox-comments",
+	"inbox-messages",
+	"posts",
+	"automation",
+	"ideas",
+]);
 
 export function DashboardShell({
 	adminOnly = false,
 	children,
 	currentPage,
+	fullBleed = false,
 	initialAccountId = null,
 	isImpersonating = false,
 	initialWorkspaceId = null,
@@ -32,6 +39,7 @@ export function DashboardShell({
 	adminOnly?: boolean;
 	children: ReactNode;
 	currentPage: string;
+	fullBleed?: boolean;
 	initialAccountId?: string | null;
 	initialWorkspaceId?: string | null;
 	isImpersonating?: boolean;
@@ -91,9 +99,7 @@ export function DashboardShell({
 						<div className="flex h-screen flex-col bg-background">
 							{isImpersonating && (
 								<div className="flex items-center justify-center gap-3 bg-amber-500 px-4 py-1.5 text-xs font-medium text-black">
-									<span>
-										Impersonating {user?.name || user?.email}
-									</span>
+									<span>Impersonating {user?.name || user?.email}</span>
 									<button
 										type="button"
 										onClick={handleStopImpersonating}
@@ -135,9 +141,13 @@ export function DashboardShell({
 										</button>
 									</div>
 									<div
-										className={`mx-auto max-w-7xl px-5 pt-4 sm:px-8 md:px-10 md:pt-8 ${
-											fullHeightPages.has(currentPage) ? "pb-0" : "pb-16"
-										}`}
+										className={
+											fullBleed
+												? "min-h-full px-0 pt-0 md:h-full"
+												: `mx-auto max-w-7xl px-5 pt-4 sm:px-8 md:px-10 md:pt-8 ${
+														fullHeightPages.has(currentPage) ? "pb-0" : "pb-16"
+													}`
+										}
 									>
 										<DashboardPageGuard
 											requiresApiKey={requiresApiKey}

@@ -34,16 +34,20 @@ export interface ConversationItem {
   } | null;
   contact_id?: string | null;
   status: "open" | "archived" | "snoozed";
+  assigned_user_id?: string | null;
   unread_count?: number;
   message_count?: number;
   last_message_text?: string | null;
   last_message_at?: string | null;
+  labels?: string[];
+  priority?: "low" | "normal" | "high" | "urgent";
   updated_at: string;
 }
 
 export interface MessageItem {
   id: string;
   sender: "user" | "participant";
+  author_name?: string | null;
   text: string;
   created_at: string;
   attachments?: Array<{ type: string; url: string }>;
@@ -94,6 +98,21 @@ export const platformLabels: Record<string, string> = {
   threads: "TH",
 };
 
+export const platformNames: Record<string, string> = {
+  twitter: "X",
+  instagram: "Instagram",
+  linkedin: "LinkedIn",
+  facebook: "Facebook",
+  youtube: "YouTube",
+  tiktok: "TikTok",
+  googlebusiness: "Google Business",
+  threads: "Threads",
+  whatsapp: "WhatsApp",
+  telegram: "Telegram",
+  discord: "Discord",
+  sms: "SMS",
+};
+
 export const commentCapabilities: Record<string, { hide: boolean; like: boolean; privateReply: boolean }> = {
   facebook: { hide: true, like: true, privateReply: true },
   instagram: { hide: true, like: false, privateReply: false },
@@ -138,6 +157,40 @@ export function formatTimeAgo(dateStr: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+export function formatMessageTime(dateStr: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(dateStr));
+}
+
+export function formatMessageDayLabel(dateStr: string): string {
+  const date = new Date(dateStr);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+
+  const sameDay = (left: Date, right: Date) =>
+    left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate();
+
+  if (sameDay(date, today)) return "Today";
+  if (sameDay(date, yesterday)) return "Yesterday";
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
+  }).format(date);
+}
+
+export function getPlatformDisplayName(platform?: string | null): string {
+  if (!platform) return "Unknown";
+  const key = platform.toLowerCase();
+  return platformNames[key] || platform;
 }
 
 export function getConversationDisplayName(conversation: Pick<ConversationItem, "platform" | "participant_name" | "participant_metadata">): string {

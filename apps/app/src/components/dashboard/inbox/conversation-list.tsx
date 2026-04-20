@@ -1,9 +1,15 @@
-import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Search, Loader2 } from "lucide-react";
+import { Loader2, MessageSquareText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ConversationItem } from "./shared";
-import { newItemEnter, formatTimeAgo, getConversationDisplayName, platformColors, platformLabels } from "./shared";
+import {
+  newItemEnter,
+  formatTimeAgo,
+  getConversationDisplayName,
+  getPlatformDisplayName,
+  platformColors,
+  platformLabels,
+} from "./shared";
 import { LoadMore } from "@/components/ui/load-more";
 
 export function ConversationList({
@@ -23,120 +29,124 @@ export function ConversationList({
   loadingMore: boolean;
   onLoadMore: () => void;
 }) {
-  const [search, setSearch] = useState("");
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return conversations;
-    const q = search.toLowerCase();
-    return conversations.filter((c) =>
-      getConversationDisplayName(c).toLowerCase().includes(q) ||
-      c.participant_name?.toLowerCase().includes(q) ||
-      c.last_message_text?.toLowerCase().includes(q)
-    );
-  }, [conversations, search]);
-
   return (
-    <div className="flex flex-col h-full">
-      {/* Search */}
-      <div className="px-3 h-14 flex items-center border-b border-border shrink-0">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search conversations..."
-            className="w-full h-8 rounded-md border border-border bg-transparent pl-8 pr-3 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-          />
-        </div>
-      </div>
-
-      {/* Conversation list */}
+    <div className="flex h-full flex-col bg-white">
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex items-center justify-center py-12">
+          <div className="flex h-full items-center justify-center py-12">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
-        ) : filtered.length === 0 ? (
-          <div className="px-3 py-8 text-center">
-            <p className="text-xs text-muted-foreground">
-              {search ? "No conversations match your search" : "No conversations yet"}
+        ) : conversations.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+            <div className="mb-3 flex size-11 items-center justify-center rounded-full bg-[#eef2f9] text-[#94a3b8]">
+              <MessageSquareText className="size-5" />
+            </div>
+            <p className="text-sm font-medium text-slate-700">No chats found</p>
+            <p className="mt-1 max-w-[15rem] text-xs text-slate-500">
+              Messages matching the current inbox view will appear here.
             </p>
           </div>
         ) : (
           <div>
             <AnimatePresence initial={false}>
-            {filtered.map((conv) => {
-              const platform = conv.platform?.toLowerCase() || "";
-              const displayName = getConversationDisplayName(conv);
-              const isSelected = selectedId === conv.id;
-              const isUnread = (conv.unread_count ?? 0) > 0;
-              return (
-                <motion.button
-                  key={conv.id}
-                  layout
-                  transition={{ layout: { duration: 0.1 } }}
-                  initial={newItemEnter.initial}
-                  animate={newItemEnter.animate}
-                  onClick={() => onSelect(conv.id)}
-                  className={cn(
-                    "w-full text-left flex items-start gap-2.5 px-3 py-3 transition-colors border-b border-border/50",
-                    isSelected ? "bg-primary/5" : "hover:bg-accent/30",
-                  )}
-                >
-                  {/* Avatar with platform badge */}
-                  <div className="relative shrink-0">
-                    {conv.participant_avatar ? (
-                      <img
-                        src={conv.participant_avatar}
-                        alt={displayName}
-                        className="size-10 rounded-full border border-border object-cover"
-                      />
-                    ) : (
-                      <div className="size-10 rounded-full border border-border bg-muted flex items-center justify-center text-sm font-medium text-muted-foreground">
-                        {displayName.charAt(0).toUpperCase()}
-                      </div>
-                    )}
-                    <div
-                      className={cn(
-                        "absolute -bottom-0.5 -right-0.5 size-4 rounded-full flex items-center justify-center text-[7px] font-bold text-white border-2 border-background",
-                        platformColors[platform] || "bg-neutral-700"
-                      )}
-                    >
-                      {(platformLabels[platform] || platform.slice(0, 1)).charAt(0)}
-                    </div>
-                  </div>
+              {conversations.map((conv) => {
+                const platform = conv.platform?.toLowerCase() || "";
+                const displayName = getConversationDisplayName(conv);
+                const isSelected = selectedId === conv.id;
+                const isUnread = (conv.unread_count ?? 0) > 0;
+                const preview = conv.last_message_text?.trim() || "No messages yet";
 
-                  {/* Content */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className={cn("text-sm truncate", isUnread ? "font-semibold" : "font-medium")}>
-                        {displayName}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground whitespace-nowrap shrink-0">
-                        {formatTimeAgo(conv.updated_at)}
-                      </span>
+                return (
+                  <motion.button
+                    key={conv.id}
+                    layout
+                    transition={{ layout: { duration: 0.1 } }}
+                    initial={newItemEnter.initial}
+                    animate={newItemEnter.animate}
+                    onClick={() => onSelect(conv.id)}
+                    className={cn(
+                      "w-full border-b border-[#eef0f5] px-4 py-3.5 text-left transition-colors",
+                      isSelected ? "bg-[#f3f5fb]" : "hover:bg-[#f8f9fc]",
+                    )}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="relative shrink-0">
+                        {conv.participant_avatar ? (
+                          <img
+                            src={conv.participant_avatar}
+                            alt={displayName}
+                            className="size-11 rounded-full border border-[#e5e7eb] object-cover"
+                          />
+                        ) : (
+                          <div className="flex size-11 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f4f6fa] text-sm font-semibold text-slate-500">
+                            {displayName.charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <div
+                          className={cn(
+                            "absolute -bottom-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full border-2 border-white text-[8px] font-bold text-white",
+                            platformColors[platform] || "bg-slate-700",
+                          )}
+                        >
+                          {(platformLabels[platform] || platform.slice(0, 1)).charAt(0)}
+                        </div>
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p
+                              className={cn(
+                                "truncate text-[14px] leading-5 text-slate-900",
+                                isUnread ? "font-semibold" : "font-medium",
+                              )}
+                            >
+                              {displayName}
+                            </p>
+                            <p className="truncate text-[12px] text-slate-500">
+                              {preview}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {isUnread && <span className="size-2 rounded-full bg-[#2d71f8]" />}
+                            <span
+                              className={cn(
+                                "text-[11px] font-medium",
+                                isUnread ? "text-[#2d71f8]" : "text-slate-400",
+                              )}
+                            >
+                              {formatTimeAgo(conv.updated_at)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="mt-2 flex items-center gap-2 text-[11px]">
+                          <span className="rounded-full bg-[#f3f5fa] px-2 py-0.5 font-medium text-slate-500">
+                            {getPlatformDisplayName(conv.platform)}
+                          </span>
+                          {!conv.assigned_user_id && (
+                            <span className="font-medium text-[#2d71f8]">Unassigned</span>
+                          )}
+                          {isUnread && (
+                            <span className="rounded-full bg-[#e8f0ff] px-2 py-0.5 font-semibold text-[#2d71f8]">
+                              {conv.unread_count}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <p className={cn(
-                        "text-xs truncate flex-1",
-                        isUnread ? "text-foreground/80" : "text-muted-foreground"
-                      )}>
-                        {conv.last_message_text || "No messages"}
-                      </p>
-                      {isUnread && (
-                        <span className="shrink-0 flex items-center justify-center size-4 rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
-                          {conv.unread_count}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </motion.button>
-              );
-            })}
+                  </motion.button>
+                );
+              })}
             </AnimatePresence>
-            <div className="p-2">
-              <LoadMore hasMore={hasMore} loading={loadingMore} onLoadMore={onLoadMore} count={filtered.length} />
+
+            <div className="border-t border-[#eef0f5] p-3">
+              <LoadMore
+                hasMore={hasMore}
+                loading={loadingMore}
+                onLoadMore={onLoadMore}
+                count={conversations.length}
+              />
             </div>
           </div>
         )}

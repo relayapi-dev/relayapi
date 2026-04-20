@@ -231,7 +231,25 @@ export function AutomationDetailPage({ automationId }: Props) {
 				if (!prev) return prev;
 				const existing = new Set(prev.nodes.map((n) => n.key));
 				const key = generateUniqueKey(nodeType, existing);
-				const newNode: AutomationNodeSpec = { type: nodeType, key };
+				const parentNode = prev.nodes.find((n) => n.key === parentKey);
+				const baseX =
+					typeof parentNode?.canvas_x === "number"
+						? parentNode.canvas_x
+						: parentKey === "trigger"
+							? 0
+							: undefined;
+				const baseY =
+					typeof parentNode?.canvas_y === "number"
+						? parentNode.canvas_y
+						: parentKey === "trigger"
+							? 0
+							: undefined;
+				const newNode: AutomationNodeSpec = {
+					type: nodeType,
+					key,
+					...(typeof baseX === "number" ? { canvas_x: baseX + 380 } : {}),
+					...(typeof baseY === "number" ? { canvas_y: baseY } : {}),
+				};
 				// If an edge from parent with this label already exists, splice
 				// the new node in: parent → new → oldTarget. Otherwise append.
 				const existingEdge = prev.edges.find(
@@ -253,6 +271,35 @@ export function AutomationDetailPage({ automationId }: Props) {
 				history.push({ nodes: next.nodes, edges: next.edges });
 				return next;
 			});
+			setDirty(true);
+			bumpEdit();
+		},
+		[history, bumpEdit],
+	);
+
+	const moveNode = useCallback(
+		(key: string, position: { x: number; y: number }) => {
+			let changed = false;
+			setDraft((prev) => {
+				if (!prev) return prev;
+				const current = prev.nodes.find((node) => node.key === key);
+				if (!current) return prev;
+				if (
+					current.canvas_x === position.x &&
+					current.canvas_y === position.y
+				) {
+					return prev;
+				}
+				const nodes = prev.nodes.map((node) =>
+					node.key === key
+						? { ...node, canvas_x: position.x, canvas_y: position.y }
+						: node,
+				);
+				history.push({ nodes, edges: prev.edges });
+				changed = true;
+				return { ...prev, nodes };
+			});
+			if (!changed) return;
 			setDirty(true);
 			bumpEdit();
 		},
@@ -567,8 +614,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 		(draft.status === "draft" && resumeAutomation.loading);
 
 	return (
-		<div className="flex flex-col -mx-5 sm:-mx-8 md:-mx-10 -mt-4 md:-mt-8 h-[calc(100dvh-1rem)] md:h-screen border-t border-border">
-			<header className="flex items-center justify-between gap-4 px-4 py-2 border-b border-border">
+		<div className="flex min-h-full flex-col border-t border-border bg-[#f5f6fa]">
+			<header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
 				<div className="flex items-center gap-3 min-w-0">
 					<a
 						href="/app/automation"
@@ -695,9 +742,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 								size="sm"
 								onClick={publishAndActivate}
 								disabled={
-									!canPublish ||
-									publishFlowLoading ||
-									patchAutomation.loading
+									!canPublish || publishFlowLoading || patchAutomation.loading
 								}
 								className="h-7 text-xs gap-1.5"
 							>
@@ -749,7 +794,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 				</div>
 			)}
 
-			<div className="flex-1 flex min-h-0">
+			<div className="flex min-h-0 flex-1">
 				<div className="flex-1 min-w-0">
 					<GuidedFlow
 						automation={draft}
@@ -757,9 +802,14 @@ export function AutomationDetailPage({ automationId }: Props) {
 						errorKeys={errorKeys}
 						highlightKeys={highlightKeys}
 						selectedKey={selectedNodeKey}
+						onMoveNode={moveNode}
 						onSelect={(key) => {
 							setSelectedNodeKey(key);
-							if (key) setRightPanel("property");
+							if (key) {
+								setRightPanel("property");
+							} else if (rightPanel === "property") {
+								setRightPanel(null);
+							}
 						}}
 						onInsertAfter={insertAfter}
 						onDeleteNode={deleteNode}
@@ -804,14 +854,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 						}}
 						existingKeys={existingKeys}
 					/>
-				) : (
-					<div className="w-80 border-l border-border bg-card/30 flex items-center justify-center p-6">
-						<p className="text-xs text-muted-foreground text-center">
-							Select a step to configure it, or open the Simulator / Run history
-							panel.
-						</p>
-					</div>
-				)}
+				) : null}
 			</div>
 		</div>
 	);

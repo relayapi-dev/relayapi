@@ -16,6 +16,9 @@ export interface DashboardRouteAppProps<PageProps extends object> {
 
 export function createDashboardRouteApp<PageProps extends object>(
 	PageComponent: ComponentType<PageProps>,
+	options?: {
+		fullBleed?: boolean;
+	},
 ) {
 	function DashboardRouteApp({
 		adminOnly = false,
@@ -38,6 +41,7 @@ export function createDashboardRouteApp<PageProps extends object>(
 				adminOnly={adminOnly}
 				initialWorkspaceId={initialWorkspaceId}
 				initialAccountId={initialAccountId}
+				fullBleed={options?.fullBleed}
 			>
 				<PageComponent {...((pageProps || {}) as PageProps)} />
 			</DashboardShell>
