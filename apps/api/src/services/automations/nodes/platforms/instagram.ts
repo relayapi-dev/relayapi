@@ -16,8 +16,8 @@
  *   https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/sender-actions
  */
 
-import { contactChannels, contacts, socialAccounts } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { contacts, socialAccounts } from "@relayapi/db";
+import { eq } from "drizzle-orm";
 import { GRAPH_BASE } from "../../../../config/api-versions";
 import { decryptToken } from "../../../../lib/crypto";
 import { fetchWithTimeout } from "../../../../lib/fetch-timeout";

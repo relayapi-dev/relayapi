@@ -13,10 +13,11 @@
  *   Auth: Bearer {api_key}
  */
 
-import { contactChannels, socialAccounts } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { socialAccounts } from "@relayapi/db";
+import { eq } from "drizzle-orm";
 import { decryptToken } from "../../../../lib/crypto";
 import { fetchWithTimeout } from "../../../../lib/fetch-timeout";
+import { findScopedContactChannel } from "../../contact-channel";
 import { applyMergeTags } from "../../merge-tags";
 import type {
 	NodeExecutionContext,
@@ -45,13 +46,16 @@ async function loadCtx(
 	});
 	if (!account?.accessToken)
 		return { kind: "fail", error: "sms account not found or missing token" };
-	const chan = await ctx.db.query.contactChannels.findFirst({
-		where: and(
-			eq(contactChannels.contactId, ctx.enrollment.contact_id),
-			eq(contactChannels.platform, "sms"),
-		),
+	const chan = await findScopedContactChannel(ctx.db, {
+		contactId: ctx.enrollment.contact_id,
+		platform: "sms",
+		socialAccountId: accountId,
 	});
-	if (!chan) return { kind: "fail", error: "contact has no sms phone number" };
+	if (!chan)
+		return {
+			kind: "fail",
+			error: "contact has no sms phone number for this account",
+		};
 	const meta = (account.metadata as Record<string, unknown> | null) ?? {};
 	const provider = (meta.provider as "twilio" | "telnyx" | undefined) ?? "twilio";
 	const fromPhone =

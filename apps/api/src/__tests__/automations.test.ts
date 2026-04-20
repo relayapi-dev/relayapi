@@ -25,6 +25,7 @@ import {
 	buildStoryReplyTemplate,
 	buildWelcomeDmTemplate,
 } from "../services/automations/template-builders";
+import { findScopedContactChannel } from "../services/automations/contact-channel";
 
 // ---------------------------------------------------------------------------
 // simulateAutomation — static graph traversal
@@ -167,6 +168,55 @@ describe("simulateAutomation", () => {
 		const snap = mkSnapshot([], []);
 		const result = simulateAutomation(snap);
 		expect(result.terminated.kind).toBe("unknown_node");
+	});
+});
+
+describe("findScopedContactChannel", () => {
+	it("scopes the lookup by contact, platform, and social account", async () => {
+		const calls: Array<{ where: unknown }> = [];
+		const db = {
+			query: {
+				contactChannels: {
+					findFirst: async (args: { where: unknown }) => {
+						calls.push(args);
+						return { id: "cc_123", identifier: "igsid_123" };
+					},
+				},
+			},
+		} as any;
+
+		const row = await findScopedContactChannel(db, {
+			contactId: "ct_123",
+			platform: "instagram",
+			socialAccountId: "acc_123",
+		});
+
+		expect(row?.identifier).toBe("igsid_123");
+		expect(calls).toHaveLength(1);
+
+		const names: string[] = [];
+		const walk = (node: unknown): void => {
+			if (!node) return;
+			if (Array.isArray(node)) {
+				for (const child of node) walk(child);
+				return;
+			}
+			if (typeof node !== "object") return;
+			if ("name" in node && typeof node.name === "string") {
+				names.push(node.name);
+			}
+			if ("queryChunks" in node && Array.isArray(node.queryChunks)) {
+				walk(node.queryChunks);
+			}
+			if ("value" in node) {
+				walk(node.value);
+			}
+		};
+
+		walk(calls[0]?.where);
+		expect(names).toContain("contact_id");
+		expect(names).toContain("platform");
+		expect(names).toContain("social_account_id");
 	});
 });
 

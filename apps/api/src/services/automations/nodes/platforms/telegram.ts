@@ -13,10 +13,11 @@
  * The recipient chat_id is stored as `contactChannels.identifier` for platform='telegram'.
  */
 
-import { contactChannels, contacts, socialAccounts } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { contacts, socialAccounts } from "@relayapi/db";
+import { eq } from "drizzle-orm";
 import { decryptToken } from "../../../../lib/crypto";
 import { fetchWithTimeout } from "../../../../lib/fetch-timeout";
+import { findScopedContactChannel } from "../../contact-channel";
 import { applyMergeTags } from "../../merge-tags";
 import type {
 	NodeExecutionContext,
@@ -45,14 +46,16 @@ async function loadCtx(
 	if (!account?.accessToken)
 		return { kind: "fail", error: "telegram account not found or missing token" };
 
-	const chan = await ctx.db.query.contactChannels.findFirst({
-		where: and(
-			eq(contactChannels.contactId, ctx.enrollment.contact_id),
-			eq(contactChannels.platform, "telegram"),
-		),
+	const chan = await findScopedContactChannel(ctx.db, {
+		contactId: ctx.enrollment.contact_id,
+		platform: "telegram",
+		socialAccountId: accountId,
 	});
 	if (!chan)
-		return { kind: "fail", error: "contact has no telegram chat_id" };
+		return {
+			kind: "fail",
+			error: "contact has no telegram chat_id for this account",
+		};
 
 	const contact = await ctx.db.query.contacts.findFirst({
 		where: eq(contacts.id, ctx.enrollment.contact_id),

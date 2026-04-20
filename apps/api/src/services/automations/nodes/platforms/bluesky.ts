@@ -14,10 +14,11 @@
  * `platformAccountId` stores the DID of the account.
  */
 
-import { contactChannels, socialAccounts } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { socialAccounts } from "@relayapi/db";
+import { eq } from "drizzle-orm";
 import { decryptToken } from "../../../../lib/crypto";
 import { fetchWithTimeout } from "../../../../lib/fetch-timeout";
+import { findScopedContactChannel } from "../../contact-channel";
 import { applyMergeTags } from "../../merge-tags";
 import type {
 	NodeExecutionContext,
@@ -151,13 +152,16 @@ export const blueskySendDmHandler: NodeHandler = async (ctx) => {
 	if (isFailResult(setup)) return setup;
 	if (!ctx.enrollment.contact_id)
 		return { kind: "fail", error: "enrollment has no contact_id" };
-	const chan = await ctx.db.query.contactChannels.findFirst({
-		where: and(
-			eq(contactChannels.contactId, ctx.enrollment.contact_id),
-			eq(contactChannels.platform, "bluesky"),
-		),
+	const chan = await findScopedContactChannel(ctx.db, {
+		contactId: ctx.enrollment.contact_id,
+		platform: "bluesky",
+		socialAccountId: ctx.snapshot.trigger.account_id!,
 	});
-	if (!chan) return { kind: "fail", error: "contact has no bluesky DID" };
+	if (!chan)
+		return {
+			kind: "fail",
+			error: "contact has no bluesky DID for this account",
+		};
 
 	// Chat API requires a convoId. First get/create the conversation with the recipient DID.
 	const getConvoRes = await fetchWithTimeout(

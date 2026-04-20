@@ -1,5 +1,5 @@
-import { contactChannels, contacts, socialAccounts } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { contacts, socialAccounts } from "@relayapi/db";
+import { eq } from "drizzle-orm";
 import { decryptToken } from "../../../lib/crypto";
 import { sendMessage } from "../../message-sender";
 import { findScopedContactChannel } from "../contact-channel";
