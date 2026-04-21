@@ -1,695 +1,320 @@
+// Automation detail page (Plan 2 — Unit B5; Plan 3 — Unit C1/C2, Task R5/S6).
+//
+// Wires the new port-driven `<GuidedFlow>` canvas against the new
+// `AutomationResponse` shape. The graph lives in `useGraphStore`;
+// autosave fires from inside `<GuidedFlow>` via the
+// `/api/automations/{id}/graph` proxy. This page owns metadata (name /
+// description / status), the entrypoint panel on the left, and the property
+// panel on the right.
+//
+// Tabs:
+//   - Canvas  → the GuidedFlow port-driven canvas
+//   - Runs    → <RunInspector> — two-column layout (list + detail). Deep-links
+//               via ?tab=runs&run_id=X. "Show on canvas" switches the tab
+//               back to Canvas and selects the target node.
+//   - Insights → <InsightsPanel> (migrated to /v1/automations/{id}/insights)
+//
+// Simulator + bindings stay accessible from the toolbar as side panels;
+// both have been migrated to the new API contracts (Unit C1).
+//
+// PropertyPanel still consumes the legacy `AutomationDetail` shape; we build
+// a minimal legacy view inline for that single call site until PropertyPanel
+// is ported in a later unit.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+	Archive,
 	ArrowLeft,
+	FlaskConical,
+	Link2,
 	Loader2,
 	Pause,
 	Play,
 	PlayCircle,
-	AlertTriangle,
-	Save,
-	Upload,
-	Archive,
-	Undo2,
 	Redo2,
-	History,
-	FlaskConical,
+	Undo2,
+	Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useApi, useMutation } from "@/hooks/use-api";
 import { cn } from "@/lib/utils";
 import { GuidedFlow } from "@/components/dashboard/automation/flow-builder/guided-flow";
 import { PropertyPanel } from "@/components/dashboard/automation/flow-builder/property-panel";
-import { TriggerPanel } from "@/components/dashboard/automation/flow-builder/trigger-panel";
 import { SimulatorPanel } from "@/components/dashboard/automation/flow-builder/simulator-panel";
-import { RunHistoryPanel } from "@/components/dashboard/automation/flow-builder/run-history-panel";
+import { RunInspector } from "@/components/dashboard/automation/run-inspector";
+import { BindingsPanel } from "@/components/dashboard/automation/flow-builder/bindings-panel";
+import { InsightsPanel } from "@/components/dashboard/automation/flow-builder/insights-panel";
+import { EntrypointPanel } from "@/components/dashboard/automation/flow-builder/entrypoint-panel";
+import { useAutomationCatalog } from "@/components/dashboard/automation/flow-builder/use-catalog";
 import {
-	useHistory,
-	useHistoryKeyboardShortcuts,
-	type GraphSnapshot,
-} from "@/components/dashboard/automation/flow-builder/use-history";
-import { useAutosave } from "@/components/dashboard/automation/flow-builder/use-autosave";
-import {
-	validateGraph,
-	type ValidationIssue,
-} from "@/components/dashboard/automation/flow-builder/validation";
-import {
-	makeLocalTriggerId,
-	triggerCanvasPosition,
-	withTriggerCanvasPosition,
-} from "@/components/dashboard/automation/flow-builder/trigger-ui";
+	EMPTY_GRAPH,
+	useGraphStore,
+} from "@/components/dashboard/automation/flow-builder/use-graph-store";
+import type { AutomationGraph } from "@/components/dashboard/automation/flow-builder/graph-types";
 import type {
 	AutomationDetail,
-	AutomationEdgeSpec,
 	AutomationNodeSpec,
-	AutomationSchema,
-	AutomationTriggerSpec,
 } from "@/components/dashboard/automation/flow-builder/types";
+
+// ---------------------------------------------------------------------------
+// API response typing — aligned with SDK AutomationResponse
+// ---------------------------------------------------------------------------
+
+interface ApiValidationError {
+	node_key?: string;
+	port_key?: string;
+	edge_index?: number;
+	code: string;
+	message: string;
+}
+
+interface ApiAutomationResponse {
+	id: string;
+	organization_id: string;
+	workspace_id: string | null;
+	name: string;
+	description: string | null;
+	channel: string;
+	status: "draft" | "active" | "paused" | "archived";
+	graph: AutomationGraph;
+	created_from_template: string | null;
+	template_config: Record<string, unknown> | null;
+	total_enrolled: number;
+	total_completed: number;
+	total_exited: number;
+	total_failed: number;
+	last_validated_at: string | null;
+	validation_errors: ApiValidationError[] | null;
+	created_by: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
 
 interface Props {
 	automationId: string;
 }
 
-// The API returns graph nodes as { id, key, type, config: {...}, canvas_x, canvas_y, notes }
-// and edges as { id, from_node_key, to_node_key, label, order, condition_expr }. Triggers are
-// returned as an array of { id, type, account_id, config, filters, label, order_index }.
-// The frontend model uses flat node fields (spread config at top level) and { from, to } on edges.
-// We normalize on read so the builder never sees the wrapped/renamed API shape.
-interface ApiAutomationNode {
-	id: string;
-	key: string;
-	type: string;
-	config: Record<string, unknown> | null;
-	canvas_x: number | null;
-	canvas_y: number | null;
-	notes: string | null;
-}
+type TabKey = "canvas" | "runs" | "insights";
+type SidePanel = "property" | "simulator" | "bindings";
 
-interface ApiAutomationEdge {
-	id: string;
-	from_node_key: string;
-	to_node_key: string;
-	label: string;
-	order: number;
-	condition_expr?: unknown;
-}
+// ---------------------------------------------------------------------------
+// Minimal legacy-shape helper for PropertyPanel (not yet ported to the new
+// AutomationResponse). Builds a transient AutomationDetail just for that one
+// call site — no state, no persistence.
+// ---------------------------------------------------------------------------
 
-interface ApiAutomationTrigger {
-	id: string;
-	type: string;
-	account_id: string | null;
-	config: Record<string, unknown>;
-	filters: Record<string, unknown>;
-	label: string;
-	order_index: number;
-}
-
-interface ApiAutomationDetail
-	extends Omit<AutomationDetail, "nodes" | "edges" | "triggers"> {
-	nodes: ApiAutomationNode[];
-	edges: ApiAutomationEdge[];
-	triggers: ApiAutomationTrigger[];
-}
-
-function normalizeAutomation(api: ApiAutomationDetail): AutomationDetail {
+function buildPropertyPanelAutomation(
+	automation: ApiAutomationResponse,
+	graph: AutomationGraph,
+): AutomationDetail {
+	const nodes: AutomationNodeSpec[] = graph.nodes.map((n) => ({
+		type: n.kind,
+		key: n.key,
+		notes: (n.ui_state?.notes as string | undefined) ?? undefined,
+		canvas_x: n.canvas_x,
+		canvas_y: n.canvas_y,
+		...(n.config ?? {}),
+	}));
+	const edges = graph.edges.map((e) => ({
+		from: e.from_node,
+		to: e.to_node,
+		label: e.from_port,
+		order: e.order_index,
+	}));
 	return {
-		...api,
-		triggers: [...api.triggers].sort((a, b) => a.order_index - b.order_index),
-		nodes: api.nodes.map<AutomationNodeSpec>((n) => ({
-			type: n.type,
-			key: n.key,
-			notes: n.notes ?? undefined,
-			canvas_x: n.canvas_x ?? undefined,
-			canvas_y: n.canvas_y ?? undefined,
-			...(n.config ?? {}),
-		})),
-		edges: api.edges.map<AutomationEdgeSpec>((e) => ({
-			from: e.from_node_key,
-			to: e.to_node_key,
-			label: e.label,
-			order: e.order,
-			condition_expr: e.condition_expr,
-		})),
+		id: automation.id,
+		name: automation.name,
+		description: automation.description,
+		channel: automation.channel,
+		status: automation.status,
+		triggers: [],
+		nodes,
+		edges,
+		workspace_id: automation.workspace_id,
+		published_version: null,
+		draft_version: null,
+		created_at: automation.created_at,
+		updated_at: automation.updated_at,
 	};
 }
 
-function generateUniqueKey(type: string, existing: Set<string>): string {
-	const base = type.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-	let candidate = base;
-	let i = 2;
-	while (existing.has(candidate)) {
-		candidate = `${base}_${i}`;
-		i += 1;
-	}
-	return candidate;
-}
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
 export function AutomationDetailPage({ automationId }: Props) {
 	const automationPath = `automations/${automationId}`;
 
 	const {
-		data: fetched,
+		data: automation,
 		loading: loadingAutomation,
 		error: automationError,
 		refetch: refetchAutomation,
-	} = useApi<ApiAutomationDetail>(automationPath);
+	} = useApi<ApiAutomationResponse>(automationPath);
 
-	const { data: schema, loading: loadingSchema } =
-		useApi<AutomationSchema>("automations/schema");
+	const catalog = useAutomationCatalog();
 
-	const [draft, setDraft] = useState<AutomationDetail | null>(null);
-	const [dirty, setDirty] = useState(false);
-	// Also mirror `dirty` into a ref so the refetch-reset effect below can
-	// read the current value without re-running when dirty toggles.
-	const dirtyRef = useRef(false);
+	// ---- Graph store -------------------------------------------------------
+
+	const graphStore = useGraphStore(EMPTY_GRAPH);
+	const lastHydratedSignature = useRef<string | null>(null);
+
+	// Hydrate the graph store on first load / on each refetch, but skip
+	// re-hydration while the user has unsaved local edits so a background
+	// refetch can't clobber their in-progress draft.
 	useEffect(() => {
-		dirtyRef.current = dirty;
-	}, [dirty]);
-	// Monotonic counter that bumps on every local edit. Used by useAutosave
-	// to re-arm its debounce timer from the latest edit, and by silentSave
-	// to detect whether the draft changed while a save was in flight. Mirrored
-	// into a ref so async save callbacks can read the *current* value instead
-	// of a stale closure snapshot.
-	const [editVersion, setEditVersion] = useState(0);
-	const editVersionRef = useRef(0);
-	const bumpEdit = useCallback(() => {
-		setEditVersion((v) => {
-			const next = v + 1;
-			editVersionRef.current = next;
-			return next;
-		});
-	}, []);
-	const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null);
-	const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(
-		null,
+		if (!automation) return;
+		if (graphStore.dirty) return;
+		const signature = `${automation.id}:${automation.updated_at}`;
+		if (lastHydratedSignature.current === signature) return;
+		lastHydratedSignature.current = signature;
+		graphStore.setGraph(automation.graph ?? EMPTY_GRAPH);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [automation?.id, automation?.updated_at, graphStore.dirty]);
+
+	// ---- Local UI state ----------------------------------------------------
+
+	const [tab, setTab] = useState<TabKey>(() => {
+		if (typeof window === "undefined") return "canvas";
+		try {
+			const q = new URL(window.location.href).searchParams.get("tab");
+			if (q === "runs" || q === "insights" || q === "canvas") return q;
+		} catch {}
+		return "canvas";
+	});
+	// Mirror `tab` into the URL via history.replaceState so deep-linking
+	// (?tab=runs&run_id=X) survives refreshes without polluting the back stack.
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+		try {
+			const url = new URL(window.location.href);
+			if (tab === "canvas") url.searchParams.delete("tab");
+			else url.searchParams.set("tab", tab);
+			if (tab !== "runs") url.searchParams.delete("run_id");
+			const qs = url.searchParams.toString();
+			const next = `${url.pathname}${qs ? `?${qs}` : ""}${url.hash}`;
+			window.history.replaceState(window.history.state, "", next);
+		} catch {}
+	}, [tab]);
+
+	const handleShowRunOnCanvas = useCallback(
+		(nodeKey: string) => {
+			setTab("canvas");
+			graphStore.setSelection([nodeKey]);
+		},
+		[graphStore],
 	);
-	const [rightPanel, setRightPanel] = useState<
-		"property" | "simulator" | "history" | null
-	>(null);
-	const [highlightKeys, setHighlightKeys] = useState<Set<string>>(
-		() => new Set(),
-	);
+
+	const [sidePanel, setSidePanel] = useState<SidePanel>("property");
 	const [banner, setBanner] = useState<{
 		type: "error" | "success";
 		message: string;
 	} | null>(null);
-	const handleHighlightPath = useCallback((keys: string[]) => {
-		setHighlightKeys(new Set(keys));
-	}, []);
 
-	const restoreSnapshot = useCallback(
-		(snap: GraphSnapshot) => {
-			setDraft((prev) =>
-				prev ? { ...prev, nodes: snap.nodes, edges: snap.edges } : prev,
-			);
-			setDirty(true);
-			bumpEdit();
-		},
-		[bumpEdit],
-	);
+	// ---- Status transitions ------------------------------------------------
 
-	const history = useHistory(restoreSnapshot);
-	useHistoryKeyboardShortcuts(history.undo, history.redo);
-
-	useEffect(() => {
-		if (!fetched) return;
-		// If the user has unsaved local edits, don't let a background refetch
-		// clobber them. We only adopt the server snapshot on first load and on
-		// explicit refetches (publish / pause / resume / archive), which all
-		// happen when the draft is already clean.
-		if (dirtyRef.current) return;
-		const normalized = normalizeAutomation(fetched);
-		setDraft(normalized);
-		setDirty(false);
-		setSelectedNodeKey(null);
-		setSelectedTriggerId(null);
-		setHighlightKeys(new Set());
-		history.reset({ nodes: normalized.nodes, edges: normalized.edges });
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [fetched]);
-
-	const patchAutomation = useMutation<AutomationDetail>(
-		automationPath,
-		"PATCH",
-	);
-	const publishAutomation = useMutation<AutomationDetail>(
-		`${automationPath}/publish`,
+	const activateAutomation = useMutation<ApiAutomationResponse>(
+		`${automationPath}/activate`,
 		"POST",
 	);
-	const pauseAutomation = useMutation<AutomationDetail>(
+	const pauseAutomation = useMutation<ApiAutomationResponse>(
 		`${automationPath}/pause`,
 		"POST",
 	);
-	const resumeAutomation = useMutation<AutomationDetail>(
+	const resumeAutomation = useMutation<ApiAutomationResponse>(
 		`${automationPath}/resume`,
 		"POST",
 	);
-	const archiveAutomation = useMutation<AutomationDetail>(
+	const archiveAutomation = useMutation<ApiAutomationResponse>(
 		`${automationPath}/archive`,
 		"POST",
 	);
-
-	const schemaNodesByType = useMemo(
-		() => new Map((schema?.nodes ?? []).map((n) => [n.type, n])),
-		[schema],
+	const unarchiveAutomation = useMutation<ApiAutomationResponse>(
+		`${automationPath}/unarchive`,
+		"POST",
+	);
+	const updateAutomation = useMutation<ApiAutomationResponse>(
+		automationPath,
+		"PATCH",
 	);
 
-	const issues: ValidationIssue[] = useMemo(() => {
-		if (!draft || !schema) return [];
-		return validateGraph(draft, schema);
-	}, [draft, schema]);
-
-	const errorKeys = useMemo(() => {
-		const set = new Set<string>();
-		for (const i of issues) {
-			if (i.severity === "error" && i.nodeKey) set.add(i.nodeKey);
-		}
-		return set;
-	}, [issues]);
-
-	const canPublish = issues.every((i) => i.severity !== "error");
-
-	const insertAfter = useCallback(
-		(parentKey: string, label: string, nodeType: string) => {
-			setDraft((prev) => {
-				if (!prev) return prev;
-				const existing = new Set(prev.nodes.map((n) => n.key));
-				const key = generateUniqueKey(nodeType, existing);
-				const parentNode = prev.nodes.find((n) => n.key === parentKey);
-				const triggerPosition =
-					parentKey === "trigger" ? triggerCanvasPosition(prev.triggers) : null;
-				const baseX =
-					typeof parentNode?.canvas_x === "number"
-						? parentNode.canvas_x
-						: typeof triggerPosition?.x === "number"
-							? triggerPosition.x
-							: undefined;
-				const baseY =
-					typeof parentNode?.canvas_y === "number"
-						? parentNode.canvas_y
-						: typeof triggerPosition?.y === "number"
-							? triggerPosition.y
-							: undefined;
-				const newNode: AutomationNodeSpec = {
-					type: nodeType,
-					key,
-					...(typeof baseX === "number" ? { canvas_x: baseX + 380 } : {}),
-					...(typeof baseY === "number" ? { canvas_y: baseY } : {}),
-				};
-				// If an edge from parent with this label already exists, splice
-				// the new node in: parent → new → oldTarget. Otherwise append.
-				const existingEdge = prev.edges.find(
-					(e) => e.from === parentKey && (e.label ?? "next") === label,
-				);
-				const newEdges = existingEdge
-					? [
-							...prev.edges.map((e) =>
-								e === existingEdge ? { ...e, to: key } : e,
-							),
-							{ from: key, to: existingEdge.to, label: "next" },
-						]
-					: [...prev.edges, { from: parentKey, to: key, label }];
-				const next = {
-					...prev,
-					nodes: [...prev.nodes, newNode],
-					edges: newEdges,
-				};
-				history.push({ nodes: next.nodes, edges: next.edges });
-				return next;
-			});
-			setDirty(true);
-			bumpEdit();
-		},
-		[history, bumpEdit],
-	);
-
-	const moveNode = useCallback(
-		(key: string, position: { x: number; y: number }) => {
-			let changed = false;
-			setDraft((prev) => {
-				if (!prev) return prev;
-				if (key === "trigger") {
-					const current = triggerCanvasPosition(prev.triggers);
-					if (current?.x === position.x && current?.y === position.y) {
-						return prev;
-					}
-					// Store canvas position on the first trigger's config (it's cosmetic
-					// UI state shared across all triggers on the canvas).
-					const first = prev.triggers[0];
-					if (!first) return prev;
-					const triggers = prev.triggers.map((t, idx) =>
-						idx === 0
-							? {
-									...t,
-									config: withTriggerCanvasPosition(t.config, {
-										x: position.x,
-										y: position.y,
-									}),
-								}
-							: t,
-					);
-					const next = { ...prev, triggers };
-					history.push({ nodes: next.nodes, edges: next.edges });
-					changed = true;
-					return next;
-				}
-				const current = prev.nodes.find((node) => node.key === key);
-				if (!current) return prev;
-				if (
-					current.canvas_x === position.x &&
-					current.canvas_y === position.y
-				) {
-					return prev;
-				}
-				const nodes = prev.nodes.map((node) =>
-					node.key === key
-						? { ...node, canvas_x: position.x, canvas_y: position.y }
-						: node,
-				);
-				history.push({ nodes, edges: prev.edges });
-				changed = true;
-				return { ...prev, nodes };
-			});
-			if (!changed) return;
-			setDirty(true);
-			bumpEdit();
-		},
-		[history, bumpEdit],
-	);
-
-	const addTrigger = useCallback(
-		(triggerType: string) => {
-			let createdId: string | null = null;
-			setDraft((prev) => {
-				if (!prev) return prev;
-				const orderIndex = prev.triggers.length;
-				const localId = makeLocalTriggerId();
-				createdId = localId;
-				const newTrigger: AutomationTriggerSpec = {
-					id: localId,
-					type: triggerType,
-					account_id: null,
-					config: {},
-					filters: {},
-					label: `Trigger #${orderIndex + 1}`,
-					order_index: orderIndex,
-				};
-				const next = { ...prev, triggers: [...prev.triggers, newTrigger] };
-				history.push({ nodes: next.nodes, edges: next.edges });
-				return next;
-			});
-			setDirty(true);
-			bumpEdit();
-			if (createdId) setSelectedTriggerId(createdId);
-		},
-		[history, bumpEdit],
-	);
-
-	const updateTrigger = useCallback(
-		(triggerId: string, patch: Partial<AutomationTriggerSpec>) => {
-			setDraft((prev) => {
-				if (!prev) return prev;
-				const triggers = prev.triggers.map((t) =>
-					t.id === triggerId ? { ...t, ...patch } : t,
-				);
-				const next = { ...prev, triggers };
-				history.push({ nodes: next.nodes, edges: next.edges });
-				return next;
-			});
-			setDirty(true);
-			bumpEdit();
-		},
-		[history, bumpEdit],
-	);
-
-	const removeTrigger = useCallback(
-		(triggerId: string) => {
-			setDraft((prev) => {
-				if (!prev) return prev;
-				if (prev.triggers.length <= 1) return prev; // keep at least one
-				const triggers = prev.triggers
-					.filter((t) => t.id !== triggerId)
-					.map((t, idx) => ({ ...t, order_index: idx }));
-				const next = { ...prev, triggers };
-				history.push({ nodes: next.nodes, edges: next.edges });
-				return next;
-			});
-			setSelectedTriggerId((prev) => (prev === triggerId ? null : prev));
-			setDirty(true);
-			bumpEdit();
-		},
-		[history, bumpEdit],
-	);
-
-	const deleteEdge = useCallback(
-		(edgeIndex: number) => {
-			setDraft((prev) => {
-				if (!prev || !prev.edges[edgeIndex]) return prev;
-				const edges = prev.edges.filter((_, index) => index !== edgeIndex);
-				history.push({ nodes: prev.nodes, edges });
-				return { ...prev, edges };
-			});
-			setDirty(true);
-			bumpEdit();
-		},
-		[history, bumpEdit],
-	);
-
-	const deleteNode = useCallback(
-		(key: string) => {
-			setDraft((prev) => {
-				if (!prev) return prev;
-				const incomingEdges = prev.edges.filter((e) => e.to === key);
-				const outgoingEdges = prev.edges.filter((e) => e.from === key);
-				const nodes = prev.nodes.filter((n) => n.key !== key);
-				let edges = prev.edges.filter((e) => e.from !== key && e.to !== key);
-				// Rewire the chain only when the deleted node sits on a linear
-				// path (exactly one in, exactly one out). Branching or fan-in
-				// topologies would need user intent to resolve, so we just drop
-				// the incident edges in those cases.
-				if (incomingEdges.length === 1 && outgoingEdges.length === 1) {
-					const [incoming] = incomingEdges;
-					const [outgoing] = outgoingEdges;
-					edges = [
-						...edges,
-						{
-							from: incoming!.from,
-							to: outgoing!.to,
-							label: incoming!.label,
-							order: incoming!.order,
-							condition_expr: incoming!.condition_expr,
-						},
-					];
-				}
-				history.push({ nodes, edges });
-				return { ...prev, nodes, edges };
-			});
-			setSelectedNodeKey((prev) => (prev === key ? null : prev));
-			setDirty(true);
-			bumpEdit();
-		},
-		[history, bumpEdit],
-	);
-
-	const updateSelectedNode = useCallback(
-		(patch: Partial<AutomationNodeSpec>) => {
-			setDraft((prev) => {
-				if (!prev || !selectedNodeKey) return prev;
-				const nodes = prev.nodes.map((n) =>
-					n.key === selectedNodeKey ? { ...n, ...patch } : n,
-				);
-				let edges = prev.edges;
-				if (patch.key && patch.key !== selectedNodeKey) {
-					edges = prev.edges.map((e) => ({
-						...e,
-						from: e.from === selectedNodeKey ? (patch.key as string) : e.from,
-						to: e.to === selectedNodeKey ? (patch.key as string) : e.to,
-					}));
-				}
-				history.push({ nodes, edges });
-				return { ...prev, nodes, edges };
-			});
-			if (patch.key) setSelectedNodeKey(patch.key as string);
-			setDirty(true);
-			bumpEdit();
-		},
-		[selectedNodeKey, history, bumpEdit],
-	);
-
-	const deleteSelectedNode = useCallback(() => {
-		if (!selectedNodeKey || selectedNodeKey === "trigger") return;
-		deleteNode(selectedNodeKey);
-	}, [selectedNodeKey, deleteNode]);
-
-	const buildPatchBody = useCallback(
-		(d: AutomationDetail) => ({
-			nodes: d.nodes,
-			edges: d.edges,
-			name: d.name,
-			description: d.description,
-			triggers: d.triggers.map((t) => ({
-				id: t.id.startsWith("local_") ? undefined : t.id,
-				type: t.type,
-				account_id: t.account_id,
-				config: t.config,
-				filters: t.filters,
-				label: t.label,
-				order_index: t.order_index,
-			})),
-		}),
-		[],
-	);
-
-	const saveDraft = useCallback(async () => {
-		if (!draft) return;
+	const handleActivate = useCallback(async () => {
 		setBanner(null);
-		// Capture the editVersion at send-time. `editVersionRef.current` reflects
-		// the live value (incl. edits made after this callback was created), so
-		// the post-save comparison correctly detects whether the user kept
-		// editing while the request was in flight.
-		const versionAtStart = editVersionRef.current;
-		const result = await patchAutomation.mutate(buildPatchBody(draft));
-		if (result) {
-			// Only clear `dirty` if no newer edits happened. We do NOT refetch
-			// on save — the PATCH response is the authoritative new server state
-			// and re-adopting it via the useEffect would wipe edits made while
-			// the save was in flight.
-			if (editVersionRef.current === versionAtStart) {
-				setDirty(false);
-			}
-			setBanner({ type: "success", message: "Draft saved" });
-		} else if (patchAutomation.error) {
-			setBanner({ type: "error", message: patchAutomation.error });
-		}
-	}, [draft, patchAutomation, buildPatchBody]);
-
-	const silentSave = useCallback(async () => {
-		if (!draft) return;
-		const versionAtStart = editVersionRef.current;
-		const result = await patchAutomation.mutate(buildPatchBody(draft));
-		if (result && editVersionRef.current === versionAtStart) {
-			setDirty(false);
-		}
-	}, [draft, patchAutomation, buildPatchBody]);
-
-	useAutosave({
-		version: editVersion,
-		dirty,
-		onSave: silentSave,
-		enabled: !!draft && draft.status !== "archived",
-	});
-
-	// Warn before unloading / navigating away with unsaved changes.
-	useEffect(() => {
-		if (!dirty) return;
-		const onBeforeUnload = (e: BeforeUnloadEvent) => {
-			e.preventDefault();
-			e.returnValue = "";
-		};
-		window.addEventListener("beforeunload", onBeforeUnload);
-		return () => window.removeEventListener("beforeunload", onBeforeUnload);
-	}, [dirty]);
-
-	const publishAndActivate = useCallback(async () => {
-		if (!draft) return;
-		// Re-run validation fresh right before publishing. The `canPublish`
-		// gate is based on React-rendered state; this ensures we never send
-		// a publish request for an invalid graph even if the render is stale.
-		const freshIssues = schema ? validateGraph(draft, schema) : [];
-		const blocking = freshIssues.filter((i) => i.severity === "error");
-		if (blocking.length > 0) {
-			setBanner({
-				type: "error",
-				message: `Fix ${blocking.length} validation error${blocking.length === 1 ? "" : "s"} before publishing`,
-			});
-			return;
-		}
-		setBanner(null);
-		if (dirty) {
-			const versionAtStart = editVersionRef.current;
-			const saved = await patchAutomation.mutate(buildPatchBody(draft));
-			if (!saved) {
-				setBanner({
-					type: "error",
-					message: patchAutomation.error ?? "Save failed",
-				});
-				return;
-			}
-			if (editVersionRef.current === versionAtStart) {
-				setDirty(false);
-			} else {
-				// User edited during the save. The server has v1 of their edits;
-				// local state has v2. Abort the publish so we don't publish a
-				// server snapshot that's behind the user's current draft.
-				setBanner({
-					type: "error",
-					message: "Draft changed during save — review + publish again",
-				});
-				return;
-			}
-		}
-		const published = await publishAutomation.mutate();
-		if (!published) {
-			if (publishAutomation.error) {
-				setBanner({ type: "error", message: publishAutomation.error });
-			}
-			return;
-		}
-
-		if (draft.status === "draft") {
-			const resumed = await resumeAutomation.mutate();
-			if (!resumed) {
-				setBanner({
-					type: "error",
-					message:
-						resumeAutomation.error ??
-						"Published, but activation failed. Use Resume to activate it.",
-				});
-				refetchAutomation();
-				return;
-			}
-			setBanner({ type: "success", message: "Published and activated" });
+		const res = await activateAutomation.mutate();
+		if (res) {
 			refetchAutomation();
+			setBanner({ type: "success", message: "Activated" });
+		} else if (activateAutomation.error) {
+			setBanner({ type: "error", message: activateAutomation.error });
+		}
+	}, [activateAutomation, refetchAutomation]);
+
+	const handlePauseResume = useCallback(async () => {
+		if (!automation) return;
+		setBanner(null);
+		const m = automation.status === "active" ? pauseAutomation : resumeAutomation;
+		const res = await m.mutate();
+		if (res) refetchAutomation();
+		else if (m.error) setBanner({ type: "error", message: m.error });
+	}, [automation, pauseAutomation, resumeAutomation, refetchAutomation]);
+
+	const handleArchive = useCallback(async () => {
+		if (!automation) return;
+		setBanner(null);
+		if (automation.status === "archived") {
+			const res = await unarchiveAutomation.mutate();
+			if (res) refetchAutomation();
+			else if (unarchiveAutomation.error)
+				setBanner({ type: "error", message: unarchiveAutomation.error });
 			return;
 		}
-
-		setBanner({ type: "success", message: "Published" });
-		refetchAutomation();
-	}, [
-		draft,
-		dirty,
-		schema,
-		patchAutomation,
-		publishAutomation,
-		resumeAutomation,
-		refetchAutomation,
-		buildPatchBody,
-	]);
-
-	const togglePause = useCallback(async () => {
-		if (!draft) return;
-		setBanner(null);
-		const m = draft.status === "active" ? pauseAutomation : resumeAutomation;
-		const result = await m.mutate();
-		if (result) {
-			refetchAutomation();
-		} else if (m.error) {
-			setBanner({ type: "error", message: m.error });
-		}
-	}, [draft, pauseAutomation, resumeAutomation, refetchAutomation]);
-
-	const archive = useCallback(async () => {
 		if (
 			!confirm(
 				"Archive this automation? It will stop processing new enrollments.",
 			)
-		) {
+		)
 			return;
-		}
-		setBanner(null);
-		const result = await archiveAutomation.mutate();
-		if (result) {
+		const res = await archiveAutomation.mutate();
+		if (res) {
 			window.location.href = "/app/automation";
 		} else if (archiveAutomation.error) {
 			setBanner({ type: "error", message: archiveAutomation.error });
 		}
-	}, [archiveAutomation]);
+	}, [automation, archiveAutomation, unarchiveAutomation, refetchAutomation]);
 
+	// ---- Name editing (debounced PATCH) -----------------------------------
+
+	const [nameDraft, setNameDraft] = useState<string>("");
+	useEffect(() => {
+		setNameDraft(automation?.name ?? "");
+	}, [automation?.name]);
+
+	const commitName = useCallback(() => {
+		if (!automation) return;
+		if (nameDraft.trim() === "" || nameDraft === automation.name) return;
+		void updateAutomation.mutate({ name: nameDraft.trim() });
+	}, [automation, nameDraft, updateAutomation]);
+
+	// ---- Selection → sidepanel dispatch -----------------------------------
+
+	const selection = graphStore.selection;
 	const selectedNode = useMemo(() => {
-		if (!draft || !selectedNodeKey) return null;
-		return draft.nodes.find((n) => n.key === selectedNodeKey) ?? null;
-	}, [draft, selectedNodeKey]);
+		if (selection.length !== 1) return null;
+		return graphStore.graph.nodes.find((n) => n.key === selection[0]) ?? null;
+	}, [graphStore.graph.nodes, selection]);
 
-	const selectedNodeDef = selectedNode
-		? (schemaNodesByType.get(selectedNode.type) ?? null)
-		: null;
+	// When the user selects a node, the right panel should show property editor.
+	useEffect(() => {
+		if (selection.length > 0) setSidePanel("property");
+	}, [selection.length]);
 
-	const existingKeys = useMemo(
-		() => (draft ? draft.nodes.map((n) => n.key) : []),
-		[draft],
-	);
+	// ---- Render ------------------------------------------------------------
 
-	const loading = loadingAutomation || loadingSchema;
-
+	const loading = loadingAutomation;
 	if (loading) {
 		return (
 			<div className="flex items-center justify-center py-20">
@@ -698,9 +323,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 		);
 	}
 
-	if (automationError || !draft || !schema) {
+	if (automationError || !automation) {
 		return (
-			<div className="space-y-4">
+			<div className="space-y-4 p-4">
 				<a
 					href="/app/automation"
 					className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
@@ -715,60 +340,91 @@ export function AutomationDetailPage({ automationId }: Props) {
 		);
 	}
 
-	const isActive = draft.status === "active";
-	const isPaused = draft.status === "paused";
-	const isArchived = draft.status === "archived";
-	const publishFlowLoading =
-		publishAutomation.loading ||
-		(draft.status === "draft" && resumeAutomation.loading);
+	const isActive = automation.status === "active";
+	const isPaused = automation.status === "paused";
+	const isArchived = automation.status === "archived";
+	const isDraft = automation.status === "draft";
+	const readOnly = isArchived;
 
-	const triggerSummaryLabel =
-		draft.triggers.length === 0
-			? "no triggers"
-			: draft.triggers.length === 1
-				? draft.triggers[0]!.type.replace(/_/g, " ")
-				: `${draft.triggers.length} triggers`;
+	const validationErrors = automation.validation_errors ?? [];
+	const hasValidationErrors = validationErrors.length > 0;
 
 	return (
 		<div className="flex h-full min-h-0 flex-col overflow-hidden border-t border-border bg-[#f5f6fa]">
+			{/* ===== Header ===== */}
 			<header className="z-20 flex shrink-0 items-center justify-between gap-4 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
-				<div className="flex items-center gap-3 min-w-0">
+				<div className="flex min-w-0 items-center gap-3">
 					<a
 						href="/app/automation"
-						className="text-muted-foreground hover:text-foreground shrink-0"
+						className="shrink-0 text-muted-foreground hover:text-foreground"
+						aria-label="Back"
 					>
 						<ArrowLeft className="size-4" />
 					</a>
 					<div className="min-w-0">
 						<input
 							type="text"
-							value={draft.name}
-							onChange={(e) => {
-								setDraft({ ...draft, name: e.target.value });
-								setDirty(true);
-								bumpEdit();
+							value={nameDraft}
+							disabled={readOnly}
+							onChange={(e) => setNameDraft(e.target.value)}
+							onBlur={commitName}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") {
+									e.currentTarget.blur();
+								}
 							}}
-							className="text-sm font-medium bg-transparent outline-none focus:ring-1 focus:ring-ring rounded px-1 -ml-1 truncate max-w-[340px]"
+							className="max-w-[340px] -ml-1 truncate rounded bg-transparent px-1 text-sm font-medium outline-none focus:ring-1 focus:ring-ring"
 						/>
 						<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-							<StatusBadge status={draft.status} />
+							<StatusBadge status={automation.status} />
 							<span>·</span>
-							<span className="capitalize">{draft.channel}</span>
-							<span>·</span>
-							<span>{triggerSummaryLabel}</span>
-							{dirty && <span className="text-amber-400">· unsaved</span>}
+							<span className="capitalize">{automation.channel}</span>
+							{automation.created_from_template && (
+								<>
+									<span>·</span>
+									<span className="rounded-full bg-[#eef2ff] px-1.5 py-0.5 text-[9px] font-medium text-[#4338ca]">
+										{automation.created_from_template}
+									</span>
+								</>
+							)}
+							{graphStore.dirty && (
+								<>
+									<span>·</span>
+									<span className="text-amber-500">unsaved</span>
+								</>
+							)}
 						</div>
 					</div>
 				</div>
 
-				<div className="flex items-center gap-1.5 shrink-0">
-					{!isArchived && (
+				{/* ===== Tabs ===== */}
+				<div className="flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5">
+					<TabButton
+						active={tab === "canvas"}
+						onClick={() => setTab("canvas")}
+						label="Canvas"
+					/>
+					<TabButton
+						active={tab === "runs"}
+						onClick={() => setTab("runs")}
+						label="Runs"
+					/>
+					<TabButton
+						active={tab === "insights"}
+						onClick={() => setTab("insights")}
+						label="Insights"
+					/>
+				</div>
+
+				{/* ===== Toolbar ===== */}
+				<div className="flex shrink-0 items-center gap-1.5">
+					{!readOnly && (
 						<>
 							<Button
 								variant="ghost"
 								size="sm"
-								onClick={() => history.undo()}
-								disabled={!history.canUndo}
+								onClick={() => graphStore.undo()}
+								disabled={graphStore.history.past.length === 0}
 								title="Undo (⌘Z)"
 								className="h-7 w-7 p-0"
 							>
@@ -777,24 +433,24 @@ export function AutomationDetailPage({ automationId }: Props) {
 							<Button
 								variant="ghost"
 								size="sm"
-								onClick={() => history.redo()}
-								disabled={!history.canRedo}
+								onClick={() => graphStore.redo()}
+								disabled={graphStore.history.future.length === 0}
 								title="Redo (⌘⇧Z)"
 								className="h-7 w-7 p-0"
 							>
 								<Redo2 className="size-3.5" />
 							</Button>
-							<div className="w-px h-4 bg-border mx-0.5" />
+							<div className="mx-0.5 h-4 w-px bg-border" />
 							<Button
 								variant="ghost"
 								size="sm"
 								onClick={() =>
-									setRightPanel(rightPanel === "simulator" ? null : "simulator")
+									setSidePanel(sidePanel === "simulator" ? "property" : "simulator")
 								}
 								title="Simulator"
 								className={cn(
 									"h-7 w-7 p-0",
-									rightPanel === "simulator" && "bg-accent/40",
+									sidePanel === "simulator" && "bg-accent/40",
 								)}
 							>
 								<FlaskConical className="size-3.5" />
@@ -803,73 +459,61 @@ export function AutomationDetailPage({ automationId }: Props) {
 								variant="ghost"
 								size="sm"
 								onClick={() =>
-									setRightPanel(rightPanel === "history" ? null : "history")
+									setSidePanel(sidePanel === "bindings" ? "property" : "bindings")
 								}
-								title="Run history"
+								title="Bindings"
 								className={cn(
 									"h-7 w-7 p-0",
-									rightPanel === "history" && "bg-accent/40",
+									sidePanel === "bindings" && "bg-accent/40",
 								)}
 							>
-								<History className="size-3.5" />
+								<Link2 className="size-3.5" />
 							</Button>
-							<div className="w-px h-4 bg-border mx-0.5" />
-							<Button
-								variant="ghost"
-								size="sm"
-								onClick={archive}
-								disabled={archiveAutomation.loading}
-								className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-destructive"
-							>
-								<Archive className="size-3.5" />
-							</Button>
-							<div className="w-px h-4 bg-border mx-0.5" />
-							<Button
-								variant="ghost"
-								size="sm"
-								onClick={saveDraft}
-								disabled={!dirty || patchAutomation.loading}
-								className="h-7 text-xs gap-1.5"
-							>
-								{patchAutomation.loading ? (
-									<Loader2 className="size-3.5 animate-spin" />
-								) : (
-									<Save className="size-3.5" />
-								)}
-								Save
-							</Button>
-							{(isActive || isPaused) && (
-								<Button
-									variant="ghost"
-									size="sm"
-									onClick={togglePause}
-									disabled={pauseAutomation.loading || resumeAutomation.loading}
-									className="h-7 text-xs gap-1.5"
-								>
-									{isActive ? (
-										<Pause className="size-3.5" />
-									) : (
-										<Play className="size-3.5" />
-									)}
-									{isActive ? "Pause" : "Resume"}
-								</Button>
-							)}
-							<Button
-								size="sm"
-								onClick={publishAndActivate}
-								disabled={
-									!canPublish || publishFlowLoading || patchAutomation.loading
-								}
-								className="h-7 text-xs gap-1.5"
-							>
-								{publishFlowLoading ? (
-									<Loader2 className="size-3.5 animate-spin" />
-								) : (
-									<Upload className="size-3.5" />
-								)}
-								{isActive ? "Publish new version" : "Publish"}
-							</Button>
+							<div className="mx-0.5 h-4 w-px bg-border" />
 						</>
+					)}
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={handleArchive}
+						disabled={archiveAutomation.loading || unarchiveAutomation.loading}
+						className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-destructive"
+						title={isArchived ? "Unarchive" : "Archive"}
+					>
+						<Archive className="size-3.5" />
+					</Button>
+					{!readOnly && (isActive || isPaused) && (
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={handlePauseResume}
+							disabled={pauseAutomation.loading || resumeAutomation.loading}
+							className="h-7 gap-1.5 text-xs"
+						>
+							{isActive ? (
+								<Pause className="size-3.5" />
+							) : (
+								<Play className="size-3.5" />
+							)}
+							{isActive ? "Pause" : "Resume"}
+						</Button>
+					)}
+					{isDraft && !readOnly && (
+						<Button
+							size="sm"
+							onClick={handleActivate}
+							disabled={
+								activateAutomation.loading || hasValidationErrors
+							}
+							className="h-7 gap-1.5 text-xs"
+						>
+							{activateAutomation.loading ? (
+								<Loader2 className="size-3.5 animate-spin" />
+							) : (
+								<Upload className="size-3.5" />
+							)}
+							Activate
+						</Button>
 					)}
 				</div>
 			</header>
@@ -877,131 +521,244 @@ export function AutomationDetailPage({ automationId }: Props) {
 			{banner && (
 				<div
 					className={cn(
-						"px-4 py-2 text-xs border-b",
+						"border-b px-4 py-2 text-xs",
 						banner.type === "error"
-							? "bg-destructive/10 border-destructive/30 text-destructive"
-							: "bg-emerald-500/10 border-emerald-500/30 text-emerald-400",
+							? "border-destructive/30 bg-destructive/10 text-destructive"
+							: "border-emerald-500/30 bg-emerald-500/10 text-emerald-500",
 					)}
 				>
 					{banner.message}
 				</div>
 			)}
 
-			{issues.filter((i) => i.severity === "error").length > 0 && (
-				<div className="px-4 py-2 text-xs bg-amber-500/10 border-b border-amber-500/30 text-amber-400 flex items-start gap-2">
-					<AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
-					<div className="space-y-0.5">
-						<div className="font-medium">
-							{issues.filter((i) => i.severity === "error").length} validation{" "}
-							{issues.filter((i) => i.severity === "error").length === 1
-								? "error"
-								: "errors"}{" "}
-							prevent publishing
-						</div>
-						<ul className="space-y-0.5 text-amber-400/80">
-							{issues
-								.filter((i) => i.severity === "error")
-								.slice(0, 4)
-								.map((i, idx) => (
-									<li key={idx}>· {i.message}</li>
-								))}
-						</ul>
+			{hasValidationErrors && (
+				<div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-600">
+					<div className="font-medium">
+						Automation paused due to validation errors
 					</div>
+					<ul className="mt-0.5 space-y-0.5 text-amber-600/80">
+						{validationErrors.slice(0, 4).map((err, idx) => (
+							<li key={idx}>· {err.message}</li>
+						))}
+						{validationErrors.length > 4 && (
+							<li>… and {validationErrors.length - 4} more</li>
+						)}
+					</ul>
 				</div>
 			)}
 
 			<div className="flex min-h-0 flex-1">
-				<div className="flex-1 min-w-0">
-					<GuidedFlow
-						automation={draft}
-						schema={schema}
-						errorKeys={errorKeys}
-						highlightKeys={highlightKeys}
-						selectedKey={selectedNodeKey}
-						onMoveNode={moveNode}
-						onAddTrigger={addTrigger}
-						onSelectTrigger={(triggerId) => {
-							setSelectedNodeKey("trigger");
-							setSelectedTriggerId(triggerId);
-							setRightPanel("property");
-						}}
-						onSelect={(key) => {
-							setSelectedNodeKey(key);
-							if (key === "trigger") {
-								setSelectedTriggerId(null); // entering list mode
-								setRightPanel("property");
-							} else if (key) {
-								setRightPanel("property");
-							} else if (rightPanel === "property") {
-								setRightPanel(null);
-							}
-						}}
-						onInsertAfter={insertAfter}
-						onDeleteEdge={deleteEdge}
-						onDeleteNode={deleteNode}
-						readOnly={isArchived}
+				{/* ===== Left: Entrypoints ===== */}
+				{tab === "canvas" && (
+					<EntrypointPanel
+						automationId={automation.id}
+						channel={automation.channel}
+						readOnly={readOnly}
+						onEntrypointChange={refetchAutomation}
 					/>
+				)}
+
+				{/* ===== Middle: Tab content ===== */}
+				<div className="flex min-w-0 flex-1">
+					{tab === "canvas" && (
+						<GuidedFlow
+							automationId={automation.id}
+							channel={automation.channel}
+							graphStore={graphStore}
+							catalog={catalog.data}
+							readOnly={readOnly}
+							automationStatus={automation.status}
+						/>
+					)}
+					{tab === "runs" && (
+						<RunInspector
+							automationId={automation.id}
+							onShowOnCanvas={handleShowRunOnCanvas}
+							onClosePanel={() => setTab("canvas")}
+						/>
+					)}
+					{tab === "insights" && (
+						<div className="flex flex-1">
+							<div className="flex flex-1 items-start justify-center p-6">
+								<div className="max-w-xl text-sm text-muted-foreground">
+									Totals and outcomes over the last 30 days.
+								</div>
+							</div>
+							<InsightsPanel
+								automationId={automation.id}
+								onClose={() => setTab("canvas")}
+							/>
+						</div>
+					)}
 				</div>
-				{rightPanel === "simulator" ? (
-					<SimulatorPanel
-						automation={draft}
-						schema={schema}
-						onClose={() => setRightPanel(null)}
-						onHighlightPath={handleHighlightPath}
-					/>
-				) : rightPanel === "history" ? (
-					<RunHistoryPanel
-						automationId={draft.id}
-						onClose={() => setRightPanel(null)}
-						onHighlightPath={handleHighlightPath}
-					/>
-				) : selectedNodeKey === "trigger" ? (
-					<TriggerPanel
-						automation={draft}
-						schema={schema}
-						selectedTriggerId={selectedTriggerId}
-						onSelectTrigger={setSelectedTriggerId}
-						onAddTrigger={addTrigger}
-						onUpdateTrigger={updateTrigger}
-						onRemoveTrigger={removeTrigger}
-						onClose={() => {
-							setSelectedNodeKey(null);
-							setSelectedTriggerId(null);
-							setRightPanel(null);
-						}}
-						readOnly={isArchived}
-					/>
-				) : selectedNode ? (
-					<PropertyPanel
-						automation={draft}
-						node={selectedNode}
-						nodeDef={selectedNodeDef}
-						automationChannel={draft.channel}
-						onChange={updateSelectedNode}
-						onDelete={deleteSelectedNode}
-						onClose={() => {
-							setSelectedNodeKey(null);
-							setRightPanel(null);
-						}}
-						existingKeys={existingKeys}
-					/>
-				) : null}
+
+				{/* ===== Right: Property/Simulator/Bindings panel ===== */}
+				{tab === "canvas" && (
+					<>
+						{sidePanel === "simulator" ? (
+							<SimulatorPanel
+								automationId={automation.id}
+								graph={graphStore.graph}
+								onClose={() => setSidePanel("property")}
+							/>
+						) : sidePanel === "bindings" ? (
+							<BindingsPanel
+								automationId={automation.id}
+								onClose={() => setSidePanel("property")}
+							/>
+						) : selectedNode ? (
+							<PropertyPanel
+								automation={buildPropertyPanelAutomation(
+									automation,
+									graphStore.graph,
+								)}
+								node={{
+									type: selectedNode.kind,
+									key: selectedNode.key,
+									notes: (selectedNode.ui_state?.notes as string | undefined) ?? undefined,
+									canvas_x: selectedNode.canvas_x,
+									canvas_y: selectedNode.canvas_y,
+									...(selectedNode.config ?? {}),
+								}}
+								nodeDef={null}
+								automationChannel={automation.channel}
+								onChange={(patch) => {
+									// Split graph-reserved fields (key / canvas_x / canvas_y /
+									// type / notes) from the rest, which we treat as config.
+									const {
+										key: patchKey,
+										notes: patchNotes,
+										canvas_x: _cx,
+										canvas_y: _cy,
+										type: _type,
+										...rest
+									} = patch;
+									const restChanges =
+										rest && typeof rest === "object" && Object.keys(rest).length > 0;
+									if (restChanges) {
+										const nextConfig = {
+											...(selectedNode.config ?? {}),
+											...(rest as Record<string, unknown>),
+										};
+										graphStore.updateNodeConfig(selectedNode.key, nextConfig);
+									}
+									if (typeof patchNotes === "string") {
+										const nodes = graphStore.graph.nodes.map((n) =>
+											n.key === selectedNode.key
+												? {
+														...n,
+														ui_state: {
+															...(n.ui_state ?? {}),
+															notes: patchNotes,
+														},
+													}
+												: n,
+										);
+										graphStore.setGraph({ ...graphStore.graph, nodes });
+									}
+									if (typeof patchKey === "string" && patchKey !== selectedNode.key) {
+										// Key rename requires a setGraph to also fix up edges.
+										const renamed = graphStore.graph.nodes.map((n) =>
+											n.key === selectedNode.key ? { ...n, key: patchKey } : n,
+										);
+										const renamedEdges = graphStore.graph.edges.map((e) => ({
+											...e,
+											from_node:
+												e.from_node === selectedNode.key ? patchKey : e.from_node,
+											to_node: e.to_node === selectedNode.key ? patchKey : e.to_node,
+										}));
+										graphStore.setGraph({
+											...graphStore.graph,
+											nodes: renamed,
+											edges: renamedEdges,
+											root_node_key:
+												graphStore.graph.root_node_key === selectedNode.key
+													? patchKey
+													: graphStore.graph.root_node_key,
+										});
+										graphStore.setSelection([patchKey]);
+									}
+								}}
+								onDelete={() => {
+									if (selectedNode.key === graphStore.graph.root_node_key) {
+										setBanner({
+											type: "error",
+											message: "Cannot delete the root node",
+										});
+										return;
+									}
+									graphStore.removeNodes([selectedNode.key]);
+								}}
+								onClose={() => graphStore.setSelection([])}
+								existingKeys={graphStore.graph.nodes.map((n) => n.key)}
+							/>
+						) : (
+							<EmptyRightPanel />
+						)}
+					</>
+				)}
 			</div>
 		</div>
 	);
 }
 
-function StatusBadge({ status }: { status: AutomationDetail["status"] }) {
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function TabButton({
+	active,
+	onClick,
+	label,
+}: {
+	active: boolean;
+	onClick: () => void;
+	label: string;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className={cn(
+				"rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+				active
+					? "bg-white text-foreground shadow-sm"
+					: "text-muted-foreground hover:text-foreground",
+			)}
+		>
+			{label}
+		</button>
+	);
+}
+
+function EmptyRightPanel() {
+	return (
+		<div className="flex w-[360px] items-center justify-center border-l border-[#e6e9ef] bg-white p-8 xl:w-[392px]">
+			<p className="text-center text-sm text-[#7e8695]">
+				Select a node to edit its properties
+			</p>
+		</div>
+	);
+}
+
+function StatusBadge({
+	status,
+}: {
+	status: "draft" | "active" | "paused" | "archived";
+}) {
 	const map: Record<string, { label: string; classes: string }> = {
-		draft: { label: "Draft", classes: "text-neutral-400" },
-		active: { label: "Active", classes: "text-emerald-400" },
-		paused: { label: "Paused", classes: "text-amber-400" },
+		draft: { label: "Draft", classes: "text-neutral-500" },
+		active: { label: "Active", classes: "text-emerald-600" },
+		paused: { label: "Paused", classes: "text-amber-500" },
 		archived: { label: "Archived", classes: "text-neutral-500" },
 	};
 	const cfg = map[status] ?? map.draft!;
 	return (
 		<span
-			className={cn("inline-flex items-center gap-1 font-medium", cfg.classes)}
+			className={cn(
+				"inline-flex items-center gap-1 font-medium",
+				cfg.classes,
+			)}
 		>
 			{status === "active" && <PlayCircle className="size-2.5" />}
 			{cfg.label}

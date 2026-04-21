@@ -1,29 +1,48 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, Plus, Trash2 } from "lucide-react";
+// Property panel dispatcher (Plan 2 — Unit B3, Task M1).
+//
+// Thin wrapper that selects the right editor for the node kind:
+//   - `message`       → MessageComposer (Unit B3, Phase N)
+//   - `action_group`  → ActionEditor (stub — full impl in Unit B4)
+//   - everything else → GenericFieldForm (schema-driven FieldRow, legacy)
+//
+// The panel is still driven from the pre-rewrite `AutomationDetail` shape
+// used by `automation-detail-page.tsx` (Phase P will port that page to the
+// graph store). The dispatcher therefore still accepts the legacy
+// `AutomationNodeSpec` type on `node` — but when the node's `type` is
+// `"message"` (the new unified kind) we present the composer, synthesizing
+// the graph-style `{ kind, config }` shape the composer expects.
+
+import { ChevronLeft, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useApi } from "@/hooks/use-api";
 import { platformIcons } from "@/lib/platform-icons";
 import { cn } from "@/lib/utils";
-import {
-	buildDataReferenceGroups,
-	type DataReferenceGroup,
-} from "./data-references";
-import { FilterGroupEditor, type FilterGroup } from "./filter-group-editor";
+import { ActionEditor } from "./action-editor";
 import { INPUT_CLS } from "./field-styles";
-import { resolveNodeOutputLabels } from "./output-labels";
+import { GenericFieldForm } from "./generic-field-form";
+import { MessageComposer } from "./message-composer";
+import type { MessageConfig } from "./message-composer/types";
 import type {
 	AutomationDetail,
 	AutomationNodeSpec,
 	SchemaNodeDef,
 } from "./types";
 
+// Re-export parseFieldsSchema / FieldRow so existing callers keep working
+// while the builder migrates off them (they still live in the extracted
+// generic-field-form module).
+export { FieldRow, parseFieldsSchema } from "./generic-field-form";
+export type { FieldDef } from "./generic-field-form";
+
 const PANEL_WIDTH_CLS = "w-[360px] xl:w-[392px]";
 
 const PANEL_TITLE_OVERRIDES: Record<string, string> = {
+	message: "Message",
 	message_text: "Send Message",
 	message_media: "Send Media",
 	message_file: "Send File",
+	action_group: "Actions",
 	smart_delay: "Delay",
 	condition: "Condition",
 	randomizer: "Randomizer",
@@ -45,7 +64,7 @@ function titleize(value: string): string {
 }
 
 function panelHeaderTone(nodeType: string) {
-	if (nodeType.startsWith("message_")) {
+	if (nodeType === "message" || nodeType.startsWith("message_")) {
 		return {
 			bar: "bg-[#edd5f5]",
 			badge: "text-[#8f5bb3]",
@@ -75,159 +94,9 @@ function panelDisplayTitle(
 	);
 }
 
-type PrimitiveArrayKind = "string" | "number" | "boolean";
-
-interface ObjectArrayField {
-	name: string;
-	type: "string" | "number" | "boolean";
-	required: boolean;
-	enumValues?: string[];
-}
-
-interface ArraySpec {
-	/** Leaf item shape. `object` = fixed-shape rows. */
-	itemKind: PrimitiveArrayKind | "object" | "unknown";
-	itemFields?: ObjectArrayField[];
-	minItems?: number;
-	maxItems?: number;
-}
-
-export interface FieldDef {
-	name: string;
-	type:
-		| "string"
-		| "number"
-		| "boolean"
-		| "textarea"
-		| "enum"
-		| "object"
-		| "array";
-	required: boolean;
-	description?: string;
-	enumValues?: string[];
-	array?: ArraySpec;
-}
-
-export function parseFieldsSchema(fieldsSchema: unknown): FieldDef[] {
-	if (!fieldsSchema || typeof fieldsSchema !== "object") return [];
-	const schema = fieldsSchema as {
-		properties?: Record<string, unknown>;
-		required?: unknown;
-	};
-	if (!schema.properties) return [];
-	const required = new Set(
-		Array.isArray(schema.required)
-			? schema.required.filter((v): v is string => typeof v === "string")
-			: [],
-	);
-
-	const out: FieldDef[] = [];
-	for (const [name, raw] of Object.entries(schema.properties)) {
-		const prop = (raw ?? {}) as {
-			type?: string | string[];
-			enum?: unknown[];
-			description?: string;
-			format?: string;
-			items?: unknown;
-			minItems?: number;
-			maxItems?: number;
-		};
-		let type: FieldDef["type"] = "string";
-		const t = Array.isArray(prop.type) ? prop.type[0] : prop.type;
-		if (t === "number" || t === "integer") type = "number";
-		else if (t === "boolean") type = "boolean";
-		else if (t === "array") type = "array";
-		else if (t === "object") type = "object";
-		else if (prop.enum && Array.isArray(prop.enum)) type = "enum";
-		else if (
-			prop.format === "textarea" ||
-			name === "text" ||
-			name === "prompt" ||
-			name === "body"
-		)
-			type = "textarea";
-
-		const field: FieldDef = {
-			name,
-			type,
-			required: required.has(name),
-			description: prop.description,
-			enumValues: Array.isArray(prop.enum)
-				? prop.enum.filter((v): v is string => typeof v === "string")
-				: undefined,
-		};
-
-		if (type === "array") field.array = parseArraySpec(prop.items, prop);
-		out.push(field);
-	}
-	return out;
-}
-
-function parseArraySpec(
-	items: unknown,
-	parent: { minItems?: number; maxItems?: number },
-): ArraySpec {
-	const spec: ArraySpec = {
-		itemKind: "unknown",
-		minItems: parent.minItems,
-		maxItems: parent.maxItems,
-	};
-	if (!items || typeof items !== "object") return spec;
-	const it = items as {
-		type?: string | string[];
-		properties?: Record<string, unknown>;
-		required?: unknown;
-	};
-	const t = Array.isArray(it.type) ? it.type[0] : it.type;
-	if (t === "string") spec.itemKind = "string";
-	else if (t === "number" || t === "integer") spec.itemKind = "number";
-	else if (t === "boolean") spec.itemKind = "boolean";
-	else if (t === "object") {
-		spec.itemKind = "object";
-		const req = new Set(
-			Array.isArray(it.required)
-				? it.required.filter((v): v is string => typeof v === "string")
-				: [],
-		);
-		spec.itemFields = [];
-		for (const [fname, fraw] of Object.entries(it.properties ?? {})) {
-			const fp = (fraw ?? {}) as { type?: string | string[]; enum?: unknown[] };
-			const ft = Array.isArray(fp.type) ? fp.type[0] : fp.type;
-			let kind: ObjectArrayField["type"] = "string";
-			if (ft === "number" || ft === "integer") kind = "number";
-			else if (ft === "boolean") kind = "boolean";
-			spec.itemFields.push({
-				name: fname,
-				type: kind,
-				required: req.has(fname),
-				enumValues: Array.isArray(fp.enum)
-					? fp.enum.filter((v): v is string => typeof v === "string")
-					: undefined,
-			});
-		}
-	}
-	return spec;
-}
-
-function defaultArrayItem(spec: ArraySpec): unknown {
-	switch (spec.itemKind) {
-		case "string":
-			return "";
-		case "number":
-			return 0;
-		case "boolean":
-			return false;
-		case "object": {
-			const o: Record<string, unknown> = {};
-			for (const f of spec.itemFields ?? []) {
-				o[f.name] = f.type === "number" ? 0 : f.type === "boolean" ? false : "";
-			}
-			return o;
-		}
-		default:
-			return null;
-	}
-}
+// ---------------------------------------------------------------------------
+// Props (unchanged from pre-rewrite — automation-detail-page still drives us)
+// ---------------------------------------------------------------------------
 
 interface Props {
 	automation: AutomationDetail;
@@ -240,6 +109,10 @@ interface Props {
 	existingKeys: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Panel
+// ---------------------------------------------------------------------------
+
 export function PropertyPanel({
 	automation,
 	node,
@@ -250,34 +123,6 @@ export function PropertyPanel({
 	onClose,
 	existingKeys,
 }: Props) {
-	const fields = useMemo(
-		() => (nodeDef ? parseFieldsSchema(nodeDef.fields_schema) : []),
-		[nodeDef],
-	);
-	const primaryComposerField = useMemo(
-		() =>
-			fields.find((field) => ["text", "prompt", "body"].includes(field.name)) ??
-			null,
-		[fields],
-	);
-	const detailFields = useMemo(
-		() => fields.filter((field) => field.name !== primaryComposerField?.name),
-		[fields, primaryComposerField],
-	);
-	const dataReferences = useMemo(
-		() => buildDataReferenceGroups(automation),
-		[automation],
-	);
-	const outputs = node ? resolveNodeOutputLabels(node, nodeDef) : [];
-	const showGuidanceCard = node
-		? node.type === "message_text" ||
-			node.type === "message_media" ||
-			node.type === "message_file" ||
-			node.type === "instagram_reply_to_comment" ||
-			node.type === "condition" ||
-			outputs.length > 1
-		: false;
-
 	const [localKey, setLocalKey] = useState(node?.key ?? "");
 	useEffect(() => {
 		setLocalKey(node?.key ?? "");
@@ -304,7 +149,153 @@ export function PropertyPanel({
 	const title = panelDisplayTitle(node, nodeDef);
 	const headerTone = panelHeaderTone(node.type);
 	const platformIcon = platformIcons[automationChannel];
-	const technicalFields = (
+
+	// Kind-specific editor dispatch.
+	const editor = renderEditor({
+		node,
+		nodeDef,
+		automation,
+		automationChannel,
+		onChange,
+	});
+
+	return (
+		<div
+			className={cn(
+				PANEL_WIDTH_CLS,
+				"flex flex-col overflow-hidden border-l border-[#e6e9ef] bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.03)]",
+			)}
+		>
+			<PanelHeader
+				headerTone={headerTone}
+				title={title}
+				description={nodeDef?.description ?? "Configure this step"}
+				onClose={onClose}
+			/>
+
+			<ScrollArea className="flex-1 bg-[#fbfcfe]">
+				<div className="space-y-5 px-4 py-5">
+					{node.type === "message" || node.type.startsWith("message_") ? (
+						<ChannelWindowBanner
+							iconBg={headerTone.iconBg}
+							badge={headerTone.badge}
+							platformIcon={platformIcon}
+						/>
+					) : null}
+
+					{editor}
+
+					<PanelFooter
+						node={node}
+						localKey={localKey}
+						onLocalKeyChange={setLocalKey}
+						keyIsValid={keyIsValid}
+						existingKeys={existingKeys}
+						onChange={onChange}
+					/>
+				</div>
+			</ScrollArea>
+
+			<div className="border-t border-[#e6e9ef] bg-white px-4 py-3">
+				<Button
+					variant="ghost"
+					onClick={onDelete}
+					className="h-10 w-full gap-2 rounded-xl text-[13px] font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
+				>
+					<Trash2 className="size-4" />
+					Delete step
+				</Button>
+			</div>
+		</div>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function PanelHeader({
+	headerTone,
+	title,
+	description,
+	onClose,
+}: {
+	headerTone: ReturnType<typeof panelHeaderTone>;
+	title: string;
+	description: string;
+	onClose: () => void;
+}) {
+	return (
+		<div className={cn("border-b border-[#e6e9ef] px-4 py-4", headerTone.bar)}>
+			<div className="flex items-center gap-3">
+				<button
+					type="button"
+					onClick={onClose}
+					className="rounded-full p-1 text-[#6f7786] transition hover:bg-white/70 hover:text-[#353a44]"
+					aria-label="Close editor"
+				>
+					<ChevronLeft className="size-4" />
+				</button>
+				<div className="min-w-0 flex-1">
+					<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
+						{title}
+					</h3>
+					<p className="mt-1 text-[12px] text-[#6f7786]">{description}</p>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function ChannelWindowBanner({
+	iconBg,
+	badge,
+	platformIcon,
+}: {
+	iconBg: string;
+	badge: string;
+	platformIcon: React.ReactNode;
+}) {
+	return (
+		<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
+			<div className="flex items-center gap-3">
+				<div
+					className={cn(
+						"flex size-10 items-center justify-center rounded-full",
+						iconBg,
+					)}
+				>
+					<div className={cn("scale-[0.9]", badge)}>{platformIcon}</div>
+				</div>
+				<div>
+					<div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#8b92a0]">
+						Message Window
+					</div>
+					<div className="mt-1 text-[14px] font-medium text-[#4680ff]">
+						Send within 24 hour window
+					</div>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function PanelFooter({
+	node,
+	localKey,
+	onLocalKeyChange,
+	keyIsValid,
+	existingKeys,
+	onChange,
+}: {
+	node: AutomationNodeSpec;
+	localKey: string;
+	onLocalKeyChange: (next: string) => void;
+	keyIsValid: boolean;
+	existingKeys: string[];
+	onChange: (patch: Partial<AutomationNodeSpec>) => void;
+}) {
+	return (
 		<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
 			<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
 				Technical
@@ -317,12 +308,12 @@ export function PropertyPanel({
 					<input
 						type="text"
 						value={localKey}
-						onChange={(e) => setLocalKey(e.target.value)}
+						onChange={(e) => onLocalKeyChange(e.target.value)}
 						onBlur={() => {
 							if (keyIsValid && localKey !== node.key) {
 								onChange({ key: localKey });
 							} else {
-								setLocalKey(node.key);
+								onLocalKeyChange(node.key);
 							}
 						}}
 						className={INPUT_CLS}
@@ -351,1336 +342,95 @@ export function PropertyPanel({
 			</div>
 		</div>
 	);
-
-	return (
-		<div
-			className={cn(
-				PANEL_WIDTH_CLS,
-				"flex flex-col overflow-hidden border-l border-[#e6e9ef] bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.03)]",
-			)}
-		>
-			<div
-				className={cn("border-b border-[#e6e9ef] px-4 py-4", headerTone.bar)}
-			>
-				<div className="flex items-center gap-3">
-					<button
-						type="button"
-						onClick={onClose}
-						className="rounded-full p-1 text-[#6f7786] transition hover:bg-white/70 hover:text-[#353a44]"
-						aria-label="Close editor"
-					>
-						<ChevronLeft className="size-4" />
-					</button>
-					<div className="min-w-0 flex-1">
-						<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
-							{title}
-						</h3>
-						<p className="mt-1 text-[12px] text-[#6f7786]">
-							{nodeDef?.description ?? "Configure this step"}
-						</p>
-					</div>
-				</div>
-			</div>
-
-			<ScrollArea className="flex-1 bg-[#fbfcfe]">
-				<div className="space-y-5 px-4 py-5">
-					{node.type.startsWith("message_") ? (
-						<>
-							<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
-								<div className="flex items-center gap-3">
-									<div
-										className={cn(
-											"flex size-10 items-center justify-center rounded-full",
-											headerTone.iconBg,
-										)}
-									>
-										<div className={cn("scale-[0.9]", headerTone.badge)}>
-											{platformIcon}
-										</div>
-									</div>
-									<div>
-										<div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#8b92a0]">
-											Message Window
-										</div>
-										<div className="mt-1 text-[14px] font-medium text-[#4680ff]">
-											Send within 24 hour window
-										</div>
-									</div>
-								</div>
-							</div>
-
-							{primaryComposerField ? (
-								<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
-									<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
-										Message
-									</div>
-									<div className="mt-4 overflow-hidden rounded-[18px] bg-[#f5f5f5]">
-										<textarea
-											value={(node[primaryComposerField.name] as string) ?? ""}
-											onChange={(event) =>
-												onChange({
-													[primaryComposerField.name]: event.target.value,
-												})
-											}
-											rows={5}
-											className="min-h-[108px] w-full resize-y border-0 bg-transparent px-4 py-4 text-[14px] leading-6 text-[#353a44] outline-none placeholder:text-[#9aa3b2]"
-											placeholder="Enter your text..."
-										/>
-									</div>
-								</div>
-							) : null}
-
-							<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
-								<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
-									Step Settings
-								</div>
-								<div className="mt-4 space-y-4">
-									<NodeGuidance
-										node={node}
-										nodeDef={nodeDef}
-										automationChannel={automationChannel}
-									/>
-									{detailFields.length === 0 ? (
-										<p className="text-[13px] text-[#7e8695]">
-											This step has no additional settings.
-										</p>
-									) : (
-										detailFields.map((f) => (
-											<FieldRow
-												key={f.name}
-												node={node}
-												field={f}
-												value={node[f.name]}
-												automationChannel={automationChannel}
-												dataReferences={dataReferences}
-												onChange={(v) => onChange({ [f.name]: v })}
-											/>
-										))
-									)}
-								</div>
-							</div>
-
-							{technicalFields}
-						</>
-					) : (
-						<>
-							{showGuidanceCard ? (
-								<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
-									<NodeGuidance
-										node={node}
-										nodeDef={nodeDef}
-										automationChannel={automationChannel}
-									/>
-								</div>
-							) : null}
-							<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
-								<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
-									Settings
-								</div>
-								<div className="mt-4 space-y-4">
-									{fields.length === 0 ? (
-										<p className="text-[13px] text-[#7e8695]">
-											This node type has no additional configuration.
-										</p>
-									) : (
-										fields.map((f) => (
-											<FieldRow
-												key={f.name}
-												node={node}
-												field={f}
-												value={node[f.name]}
-												automationChannel={automationChannel}
-												dataReferences={dataReferences}
-												onChange={(v) => onChange({ [f.name]: v })}
-											/>
-										))
-									)}
-								</div>
-							</div>
-							{technicalFields}
-						</>
-					)}
-				</div>
-			</ScrollArea>
-
-			<div className="border-t border-[#e6e9ef] bg-white px-4 py-3">
-				<Button
-					variant="ghost"
-					onClick={onDelete}
-					className="h-10 w-full gap-2 rounded-xl text-[13px] font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
-				>
-					<Trash2 className="size-4" />
-					Delete step
-				</Button>
-			</div>
-		</div>
-	);
 }
 
-export function FieldRow({
+// ---------------------------------------------------------------------------
+// Editor dispatch
+// ---------------------------------------------------------------------------
+
+function renderEditor({
 	node,
-	field,
-	value,
+	nodeDef,
+	automation,
 	automationChannel,
-	dataReferences,
 	onChange,
 }: {
-	node?: AutomationNodeSpec | null;
-	field: FieldDef;
-	value: unknown;
-	automationChannel?: string;
-	dataReferences?: DataReferenceGroup[];
-	onChange: (v: unknown) => void;
+	node: AutomationNodeSpec;
+	nodeDef: SchemaNodeDef | null;
+	automation: AutomationDetail;
+	automationChannel: string;
+	onChange: (patch: Partial<AutomationNodeSpec>) => void;
 }) {
-	const refs = dataReferences ?? [];
-	const label = (
-		<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
-			{field.name.replace(/_/g, " ")}
-			{field.required && <span className="text-destructive ml-0.5">*</span>}
-		</label>
-	);
-	const hint = field.description ? (
-		<p className="mt-1 text-[11px] text-[#7e8695]">{field.description}</p>
-	) : null;
-
-	if (
-		node?.type === "condition" &&
-		field.name === "if" &&
-		field.type === "object"
-	) {
+	if (node.type === "message") {
+		// Graph-store style `message` node: its config lives flat on the
+		// AutomationNodeSpec (since detail-page normalises config into spread
+		// fields). Synthesize `{ kind, config }` for the composer and lift
+		// changes back onto the flat fields the detail page persists.
+		const composerNode = {
+			key: node.key,
+			kind: "message",
+			config: extractFlatConfig(node),
+		};
+		const handleConfigChange = (next: MessageConfig) => {
+			// Emit as a patch replacing the message-composer-managed keys while
+			// preserving any other flat fields the detail page may own.
+			const patch: Partial<AutomationNodeSpec> = {
+				blocks: next.blocks,
+				quick_replies: next.quick_replies,
+				wait_for_reply: next.wait_for_reply,
+				no_response_timeout_min: next.no_response_timeout_min,
+				typing_indicator_seconds: next.typing_indicator_seconds,
+			};
+			onChange(patch);
+		};
 		return (
-			<div className="space-y-2">
-				<div>
-					{label}
-					<p className="text-[10px] text-muted-foreground/70">
-						Build a structured rule group. This is not JavaScript. Matching
-						contacts follow the{" "}
-						<span className="font-medium text-foreground">yes</span> path;
-						others follow{" "}
-						<span className="font-medium text-foreground">no</span>.
-					</p>
-				</div>
-				<FilterGroupEditor
-					value={value as FilterGroup | undefined}
-					onChange={(next) => onChange(next)}
-					labels={{
-						all: {
-							label: "All rules must match",
-							helper: "The yes path is taken only if every rule matches.",
-						},
-						any: {
-							label: "Any rule can match",
-							helper:
-								"At least one of these rules can make the condition pass.",
-						},
-						none: {
-							label: "None of these may match",
-							helper: "If any of these rules match, the condition goes to no.",
-						},
-					}}
-				/>
-				{hint}
-			</div>
-		);
-	}
-
-	if (node?.type === "webhook_out" && field.name === "endpoint_id") {
-		return (
-			<WebhookEndpointField
-				label={label}
-				hint={hint}
-				value={value}
-				onChange={onChange}
+			<MessageComposer
+				node={composerNode}
+				channel={automationChannel}
+				onChange={handleConfigChange}
 			/>
 		);
 	}
 
-	if (
-		node &&
-		((node.type === "field_set" && field.name === "value") ||
-			(node.type === "http_request" && field.name === "body") ||
-			(node.type === "webhook_out" && field.name === "payload"))
-	) {
+	if (node.type === "action_group") {
+		const config = extractFlatConfig(node);
 		return (
-			<DynamicValueField
-				label={label}
-				hint={hint}
-				value={value}
-				onChange={onChange}
-				dataReferences={refs}
-			/>
-		);
-	}
-
-	if (node?.type === "message_text" && field.name === "recipient_identifier") {
-		const recipientMode =
-			(node.recipient_mode as string | undefined) ?? "enrolled_contact";
-		if (recipientMode !== "custom_identifier") {
-			return (
-				<InheritedValueNotice
-					label={label}
-					title={`Using enrolled contact${automationChannel ? ` on ${automationChannel}` : ""}`}
-					description={`The runtime looks up the enrolled contact's${automationChannel ? ` ${automationChannel}` : ""} identifier automatically. Switch recipient mode to custom identifier to override it.`}
-					hint={hint}
-				/>
-			);
-		}
-		return (
-			<TemplatedTextField
-				label={label}
-				hint={hint}
-				value={value}
-				onChange={onChange}
-				dataReferences={refs}
-			/>
-		);
-	}
-
-	if (
-		node?.type === "instagram_reply_to_comment" &&
-		field.name === "comment_id"
-	) {
-		return (
-			<OptionalOverrideField
-				label={label}
-				hint={hint}
-				value={value}
-				onChange={onChange}
-				dataReferences={refs}
-				defaultTitle="Using trigger comment_id"
-				defaultDescription="This step replies to the comment that enrolled the contact. The runtime reads state.comment_id from the trigger payload unless you override it here."
-				defaultToken="{{state.comment_id}}"
-				overrideLabel="Set explicit comment id"
-				resetLabel="Use trigger comment_id instead"
-			/>
-		);
-	}
-
-	if (field.type === "textarea") {
-		return (
-			<TemplatedTextField
-				label={label}
-				hint={hint}
-				value={value}
-				onChange={onChange}
-				rows={4}
-				multiline
-				dataReferences={refs}
-			/>
-		);
-	}
-
-	if (field.type === "enum") {
-		return (
-			<div>
-				{label}
-				<select
-					value={(value as string) ?? ""}
-					onChange={(e) => onChange(e.target.value || undefined)}
-					className="h-10 w-full rounded-xl border border-[#d9dde6] bg-white px-3 text-[13px] text-[#353a44] shadow-[0_1px_2px_rgba(16,24,40,0.04)] outline-none"
-				>
-					<option value="">—</option>
-					{field.enumValues?.map((v) => (
-						<option key={v} value={v}>
-							{v}
-						</option>
-					))}
-				</select>
-				{hint}
-			</div>
-		);
-	}
-
-	if (field.type === "boolean") {
-		return (
-			<label className="flex items-center gap-3 text-[13px] text-[#353a44]">
-				<input
-					type="checkbox"
-					checked={value === true}
-					onChange={(e) => onChange(e.target.checked)}
-					className="h-4 w-4 rounded border-[#cdd5e1]"
-				/>
-				<span>
-					{field.name.replace(/_/g, " ")}
-					{field.required && <span className="text-destructive ml-0.5">*</span>}
-				</span>
-			</label>
-		);
-	}
-
-	if (field.type === "number") {
-		return (
-			<div>
-				{label}
-				<input
-					type="number"
-					value={(value as number | string | undefined) ?? ""}
-					onChange={(e) =>
-						onChange(e.target.value === "" ? undefined : Number(e.target.value))
-					}
-					className={INPUT_CLS}
-				/>
-				{hint}
-			</div>
-		);
-	}
-
-	if (field.type === "object") {
-		return (
-			<TemplatedJsonField
-				label={label}
-				hint={hint}
-				value={value}
-				onChange={onChange}
-				dataReferences={refs}
-			/>
-		);
-	}
-
-	if (field.type === "array" && field.array) {
-		return (
-			<ArrayField
-				label={label}
-				hint={hint}
-				spec={field.array}
-				value={value}
-				onChange={onChange}
-				dataReferences={refs}
+			<ActionEditor
+				node={{ key: node.key, kind: "action_group", config }}
+				automationId={automation.id}
+				onChange={(nextConfig) =>
+					onChange({ actions: nextConfig.actions } as Partial<AutomationNodeSpec>)
+				}
 			/>
 		);
 	}
 
 	return (
-		<TemplatedTextField
-			label={label}
-			hint={hint}
-			value={value}
+		<GenericFieldForm
+			automation={automation}
+			node={node}
+			nodeDef={nodeDef}
+			automationChannel={automationChannel}
 			onChange={onChange}
-			dataReferences={refs}
 		/>
 	);
 }
 
-function InheritedValueNotice({
-	label,
-	title,
-	description,
-	hint,
-}: {
-	label: React.ReactNode;
-	title: string;
-	description: string;
-	hint: React.ReactNode;
-}) {
-	return (
-		<div className="space-y-2">
-			{label}
-			<div className="rounded-lg border border-border/80 bg-muted/25 px-3 py-2">
-				<div className="text-[11px] font-medium text-foreground">{title}</div>
-				<p className="mt-1 text-[10px] text-muted-foreground/80">
-					{description}
-				</p>
-			</div>
-			{hint}
-		</div>
-	);
-}
-
-function OptionalOverrideField({
-	label,
-	hint,
-	value,
-	onChange,
-	dataReferences,
-	defaultTitle,
-	defaultDescription,
-	defaultToken,
-	overrideLabel,
-	resetLabel,
-}: {
-	label: React.ReactNode;
-	hint: React.ReactNode;
-	value: unknown;
-	onChange: (v: unknown) => void;
-	dataReferences: DataReferenceGroup[];
-	defaultTitle: string;
-	defaultDescription: string;
-	defaultToken: string;
-	overrideLabel: string;
-	resetLabel: string;
-}) {
-	const hasValue = typeof value === "string" && value.trim().length > 0;
-	const [editingOverride, setEditingOverride] = useState(hasValue);
-
-	useEffect(() => {
-		if (hasValue) {
-			setEditingOverride(true);
-		}
-	}, [hasValue]);
-
-	if (!editingOverride && !hasValue) {
-		return (
-			<div className="space-y-2">
-				{label}
-				<div className="rounded-lg border border-border/80 bg-muted/25 px-3 py-2">
-					<div className="text-[11px] font-medium text-foreground">
-						{defaultTitle}
-					</div>
-					<p className="mt-1 text-[10px] text-muted-foreground/80">
-						{defaultDescription}
-					</p>
-					<div className="mt-2 inline-flex items-center rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
-						{defaultToken}
-					</div>
-					<div className="mt-2">
-						<button
-							type="button"
-							onClick={() => setEditingOverride(true)}
-							className="text-[10px] font-medium text-foreground underline-offset-2 hover:underline"
-						>
-							{overrideLabel}
-						</button>
-					</div>
-				</div>
-				{hint}
-			</div>
-		);
+// The detail page spreads node `config` into the flat spec; reverse that here
+// for editors that expect a real `config` object.
+function extractFlatConfig(node: AutomationNodeSpec): Record<string, unknown> {
+	const skip = new Set([
+		"type",
+		"key",
+		"notes",
+		"canvas_x",
+		"canvas_y",
+		"id",
+	]);
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(node)) {
+		if (skip.has(k)) continue;
+		out[k] = v;
 	}
-
-	return (
-		<div className="space-y-2">
-			<TemplatedTextField
-				label={label}
-				hint={hint}
-				value={value}
-				onChange={onChange}
-				dataReferences={dataReferences}
-			/>
-			<button
-				type="button"
-				onClick={() => {
-					setEditingOverride(false);
-					onChange(undefined);
-				}}
-				className="text-[10px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-			>
-				{resetLabel}
-			</button>
-		</div>
-	);
-}
-
-interface WebhookListResponse {
-	data: Array<{
-		id: string;
-		url: string;
-		enabled: boolean;
-	}>;
-}
-
-function WebhookEndpointField({
-	label,
-	hint,
-	value,
-	onChange,
-}: {
-	label: React.ReactNode;
-	hint: React.ReactNode;
-	value: unknown;
-	onChange: (v: unknown) => void;
-}) {
-	const { data, loading } = useApi<WebhookListResponse>("webhooks", {
-		query: { limit: 100 },
-	});
-
-	return (
-		<div>
-			{label}
-			<select
-				value={(value as string) ?? ""}
-				onChange={(e) => onChange(e.target.value || undefined)}
-				className="w-full h-7 text-xs rounded-md border border-input bg-background px-2"
-			>
-				<option value="">
-					{loading ? "Loading webhook endpoints…" : "Select a webhook endpoint"}
-				</option>
-				{(data?.data ?? []).map((endpoint) => (
-					<option key={endpoint.id} value={endpoint.id}>
-						{endpoint.url}
-						{endpoint.enabled ? "" : " (disabled)"}
-					</option>
-				))}
-			</select>
-			<p className="text-[10px] text-muted-foreground/70 mt-0.5">
-				Send this step’s event to one of your existing RelayAPI webhook
-				endpoints.
-			</p>
-			{hint}
-		</div>
-	);
-}
-
-function DynamicValueField({
-	label,
-	hint,
-	value,
-	onChange,
-	dataReferences,
-}: {
-	label: React.ReactNode;
-	hint: React.ReactNode;
-	value: unknown;
-	onChange: (v: unknown) => void;
-	dataReferences: DataReferenceGroup[];
-}) {
-	const inferredMode =
-		value !== null && value !== undefined && typeof value === "object"
-			? "json"
-			: "text";
-	const [mode, setMode] = useState<"text" | "json">(inferredMode);
-
-	useEffect(() => {
-		setMode(inferredMode);
-	}, [inferredMode]);
-
-	return (
-		<div className="space-y-2">
-			<div className="flex items-center justify-between gap-2">
-				<div className="min-w-0">{label}</div>
-				<div className="inline-flex rounded-md border border-border bg-background p-0.5">
-					<button
-						type="button"
-						onClick={() => setMode("text")}
-						className={`rounded px-2 py-1 text-[10px] font-medium ${
-							mode === "text"
-								? "bg-accent text-foreground"
-								: "text-muted-foreground"
-						}`}
-					>
-						Text
-					</button>
-					<button
-						type="button"
-						onClick={() => setMode("json")}
-						className={`rounded px-2 py-1 text-[10px] font-medium ${
-							mode === "json"
-								? "bg-accent text-foreground"
-								: "text-muted-foreground"
-						}`}
-					>
-						JSON
-					</button>
-				</div>
-			</div>
-			{mode === "text" ? (
-				<TemplatedTextField
-					label={null}
-					hint={hint}
-					value={
-						typeof value === "string"
-							? value
-							: value === undefined
-								? ""
-								: String(value)
-					}
-					onChange={(next) => onChange(next === "" ? undefined : next)}
-					rows={4}
-					multiline
-					dataReferences={dataReferences}
-					hideLabel
-				/>
-			) : (
-				<TemplatedJsonField
-					label={null}
-					hint={hint}
-					value={value}
-					onChange={onChange}
-					dataReferences={dataReferences}
-					hideLabel
-				/>
-			)}
-		</div>
-	);
-}
-
-function TemplatedTextField({
-	label,
-	hint,
-	value,
-	onChange,
-	dataReferences,
-	multiline,
-	rows = 1,
-	hideLabel = false,
-}: {
-	label: React.ReactNode;
-	hint: React.ReactNode;
-	value: unknown;
-	onChange: (v: unknown) => void;
-	dataReferences: DataReferenceGroup[];
-	multiline?: boolean;
-	rows?: number;
-	hideLabel?: boolean;
-}) {
-	const textValue = (value as string | undefined) ?? "";
-	const [mode, setMode] = useState<"static" | "dynamic">(
-		textValue.includes("{{") ? "dynamic" : "static",
-	);
-	const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
-
-	useEffect(() => {
-		setMode(textValue.includes("{{") ? "dynamic" : "static");
-	}, [textValue]);
-
-	const insertToken = (tokenValue: string) => {
-		const el = inputRef.current;
-		const start = el?.selectionStart ?? textValue.length;
-		const end = el?.selectionEnd ?? textValue.length;
-		const prefix = textValue.slice(0, start);
-		const suffix = textValue.slice(end);
-		const needsLeadingSpace = prefix.length > 0 && !/\s$/.test(prefix);
-		const insertion = `${needsLeadingSpace ? " " : ""}${tokenValue}`;
-		const next = `${prefix}${insertion}${suffix}`;
-		onChange(next);
-		requestAnimationFrame(() => {
-			const target = inputRef.current;
-			if (!target) return;
-			const caret = prefix.length + insertion.length;
-			target.focus();
-			target.setSelectionRange(caret, caret);
-		});
-	};
-
-	return (
-		<div className="space-y-2">
-			{!hideLabel && label}
-			<div className="flex items-center justify-between gap-2">
-				<p className="text-[10px] text-muted-foreground/80">
-					{mode === "dynamic"
-						? "Insert contact and state values with merge-tag tokens."
-						: "Use plain text or switch to dynamic mode to insert data."}
-				</p>
-				<div className="inline-flex rounded-md border border-border bg-background p-0.5">
-					<button
-						type="button"
-						onClick={() => setMode("static")}
-						className={`rounded px-2 py-1 text-[10px] font-medium ${
-							mode === "static"
-								? "bg-accent text-foreground"
-								: "text-muted-foreground"
-						}`}
-					>
-						Static
-					</button>
-					<button
-						type="button"
-						onClick={() => setMode("dynamic")}
-						className={`rounded px-2 py-1 text-[10px] font-medium ${
-							mode === "dynamic"
-								? "bg-accent text-foreground"
-								: "text-muted-foreground"
-						}`}
-					>
-						Dynamic
-					</button>
-				</div>
-			</div>
-			{mode === "dynamic" && (
-				<DataReferencePicker groups={dataReferences} onPick={insertToken} />
-			)}
-			{multiline ? (
-				<textarea
-					ref={inputRef as React.RefObject<HTMLTextAreaElement>}
-					value={textValue}
-					onChange={(e) => onChange(e.target.value || undefined)}
-					rows={rows}
-					className="w-full text-xs rounded-md border border-input bg-background px-2 py-1.5 resize-y"
-				/>
-			) : (
-				<input
-					ref={inputRef as React.RefObject<HTMLInputElement>}
-					type="text"
-					value={textValue}
-					onChange={(e) => onChange(e.target.value || undefined)}
-					className={INPUT_CLS}
-				/>
-			)}
-			{hint}
-		</div>
-	);
-}
-
-function TemplatedJsonField({
-	label,
-	hint,
-	value,
-	onChange,
-	dataReferences,
-	hideLabel = false,
-}: {
-	label: React.ReactNode;
-	hint: React.ReactNode;
-	value: unknown;
-	onChange: (v: unknown) => void;
-	dataReferences: DataReferenceGroup[];
-	hideLabel?: boolean;
-}) {
-	const stringify = (v: unknown) => {
-		if (v === undefined || v === null) return "";
-		try {
-			return JSON.stringify(v, null, 2);
-		} catch {
-			return String(v);
-		}
-	};
-	const [text, setText] = useState(() => stringify(value));
-	const [parseError, setParseError] = useState<string | null>(null);
-	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-	useEffect(() => {
-		setText(stringify(value));
-		setParseError(null);
-	}, [value]);
-
-	const insertToken = (tokenValue: string) => {
-		const el = textareaRef.current;
-		const start = el?.selectionStart ?? text.length;
-		const end = el?.selectionEnd ?? text.length;
-		const next = `${text.slice(0, start)}${tokenValue}${text.slice(end)}`;
-		setText(next);
-		try {
-			const parsed = JSON.parse(next);
-			setParseError(null);
-			onChange(parsed);
-		} catch (err) {
-			setParseError(err instanceof Error ? err.message : "Invalid JSON");
-		}
-		requestAnimationFrame(() => {
-			const target = textareaRef.current;
-			if (!target) return;
-			const caret = start + tokenValue.length;
-			target.focus();
-			target.setSelectionRange(caret, caret);
-		});
-	};
-
-	return (
-		<div className="space-y-2">
-			{!hideLabel && label}
-			<p className="text-[10px] text-muted-foreground/80">
-				Strings inside JSON can use merge tags like{" "}
-				<span className="font-mono">{`{{state.text}}`}</span>.
-			</p>
-			<DataReferencePicker groups={dataReferences} onPick={insertToken} />
-			<textarea
-				ref={textareaRef}
-				value={text}
-				onChange={(e) => {
-					const next = e.target.value;
-					setText(next);
-					if (next.trim() === "") {
-						setParseError(null);
-						onChange(undefined);
-						return;
-					}
-					try {
-						const parsed = JSON.parse(next);
-						setParseError(null);
-						onChange(parsed);
-					} catch (err) {
-						setParseError(err instanceof Error ? err.message : "Invalid JSON");
-					}
-				}}
-				rows={6}
-				className={`w-full text-xs font-mono rounded-md border bg-background px-2 py-1.5 resize-y ${
-					parseError ? "border-destructive" : "border-input"
-				}`}
-			/>
-			{parseError ? (
-				<p className="text-[10px] text-destructive">{parseError}</p>
-			) : (
-				<p className="text-[10px] text-muted-foreground/70">JSON payload</p>
-			)}
-			{hint}
-		</div>
-	);
-}
-
-function DataReferencePicker({
-	groups,
-	onPick,
-}: {
-	groups: DataReferenceGroup[];
-	onPick: (tokenValue: string) => void;
-}) {
-	return (
-		<div className="rounded-lg border border-border/70 bg-muted/20 px-2.5 py-2 space-y-2">
-			<div>
-				<div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-					Data
-				</div>
-				<p className="mt-0.5 text-[10px] text-muted-foreground/70">
-					Click to insert a merge tag at the cursor.
-				</p>
-			</div>
-			<div className="space-y-2">
-				{groups.map((group) => (
-					<div key={group.key} className="space-y-1">
-						<div>
-							<div className="text-[10px] font-medium text-foreground">
-								{group.label}
-							</div>
-							{group.description && (
-								<p className="text-[10px] text-muted-foreground/70">
-									{group.description}
-								</p>
-							)}
-						</div>
-						<div className="flex flex-wrap gap-1.5">
-							{group.refs.map((ref) => (
-								<button
-									key={ref.key}
-									type="button"
-									onClick={() => onPick(ref.token)}
-									className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-medium text-foreground hover:bg-accent"
-									title={ref.description ?? ref.token}
-								>
-									{ref.label}
-								</button>
-							))}
-						</div>
-					</div>
-				))}
-			</div>
-		</div>
-	);
-}
-
-function NodeGuidance({
-	node,
-	nodeDef,
-	automationChannel,
-}: {
-	node: AutomationNodeSpec;
-	nodeDef: SchemaNodeDef | null;
-	automationChannel: string;
-}) {
-	const outputs = resolveNodeOutputLabels(node, nodeDef);
-	const recipientHint =
-		node.type === "message_text" ||
-		node.type === "message_media" ||
-		node.type === "message_file";
-	const commentReplyHint = node.type === "instagram_reply_to_comment";
-
-	if (
-		!recipientHint &&
-		!commentReplyHint &&
-		node.type !== "condition" &&
-		outputs.length <= 1
-	) {
-		return null;
-	}
-
-	return (
-		<div className="space-y-2">
-			{recipientHint && (
-				<div className="rounded-[18px] border border-[#e6e9ef] bg-[#f8fafc] px-4 py-3">
-					<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
-						Recipient
-					</div>
-					<p className="mt-2 text-[13px] text-[#353a44]">
-						This step sends to the contact who entered the automation on{" "}
-						<span className="font-medium capitalize">{automationChannel}</span>.
-					</p>
-					<p className="mt-2 text-[11px] text-[#7e8695]">
-						By default the runtime resolves the contact’s channel identifier
-						automatically. Set{" "}
-						<span className="font-medium text-foreground">recipient mode</span>{" "}
-						to custom and provide a{" "}
-						<span className="font-medium text-foreground">
-							recipient identifier
-						</span>{" "}
-						to override it.
-					</p>
-				</div>
-			)}
-			{commentReplyHint && (
-				<div className="rounded-[18px] border border-[#e6e9ef] bg-[#f8fafc] px-4 py-3">
-					<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
-						Comment target
-					</div>
-					<p className="mt-2 text-[13px] text-[#353a44]">
-						By default this step replies to the comment that triggered the
-						automation.
-					</p>
-					<p className="mt-2 text-[11px] text-[#7e8695]">
-						Leave{" "}
-						<span className="font-medium text-foreground">comment id</span>{" "}
-						empty to use{" "}
-						<span className="font-mono text-foreground">{`{{state.comment_id}}`}</span>{" "}
-						from the trigger payload. Only set it when you want to override the
-						target comment explicitly.
-					</p>
-				</div>
-			)}
-			{outputs.length > 1 && (
-				<div className="rounded-[18px] border border-[#e6e9ef] bg-white px-4 py-3">
-					<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
-						Outputs
-					</div>
-					<div className="mt-2 flex flex-wrap gap-2">
-						{outputs.map((output) => (
-							<span
-								key={output}
-								className="rounded-full border border-[#d9dde6] bg-[#f8fafc] px-3 py-1 text-[11px] font-medium text-[#6f7786]"
-							>
-								{output}
-							</span>
-						))}
-					</div>
-				</div>
-			)}
-		</div>
-	);
-}
-
-/**
- * JSON-editor for object-typed fields. Tracks the raw text separately from
- * the parsed value so users can see invalid-JSON state instead of silently
- * losing edits.
- */
-function ObjectJsonField({
-	label,
-	hint,
-	value,
-	onChange,
-}: {
-	label: React.ReactNode;
-	hint: React.ReactNode;
-	value: unknown;
-	onChange: (v: unknown) => void;
-}) {
-	const stringify = (v: unknown) => {
-		if (v === undefined || v === null) return "";
-		try {
-			return JSON.stringify(v, null, 2);
-		} catch {
-			return String(v);
-		}
-	};
-	const [text, setText] = useState(() => stringify(value));
-	const [parseError, setParseError] = useState<string | null>(null);
-
-	useEffect(() => {
-		// Re-sync from props when the value changes upstream (e.g. node swap).
-		setText(stringify(value));
-		setParseError(null);
-	}, [value]);
-
-	return (
-		<div>
-			{label}
-			<textarea
-				value={text}
-				onChange={(e) => {
-					const v = e.target.value;
-					setText(v);
-					if (v.trim() === "") {
-						setParseError(null);
-						onChange(undefined);
-						return;
-					}
-					try {
-						const parsed = JSON.parse(v);
-						setParseError(null);
-						onChange(parsed);
-					} catch (err) {
-						setParseError(err instanceof Error ? err.message : "Invalid JSON");
-					}
-				}}
-				rows={5}
-				className={`w-full text-xs font-mono rounded-md border bg-background px-2 py-1.5 resize-y ${parseError ? "border-destructive" : "border-input"}`}
-			/>
-			{parseError ? (
-				<p className="text-[10px] text-destructive mt-0.5">{parseError}</p>
-			) : (
-				<p className="text-[10px] text-muted-foreground/70 mt-0.5">
-					JSON object
-				</p>
-			)}
-			{hint}
-		</div>
-	);
-}
-
-/**
- * Array-field editor. Renders structured rows for `array<string|number|boolean>`
- * and `array<object>`; falls back to JSON for anything more complex.
- */
-function ArrayField({
-	label,
-	hint,
-	spec,
-	value,
-	onChange,
-	dataReferences,
-}: {
-	label: React.ReactNode;
-	hint: React.ReactNode;
-	spec: ArraySpec;
-	value: unknown;
-	onChange: (v: unknown) => void;
-	dataReferences: DataReferenceGroup[];
-}) {
-	const arr = Array.isArray(value) ? (value as unknown[]) : [];
-	const canAdd = spec.maxItems === undefined || arr.length < spec.maxItems;
-	const canRemove = spec.minItems === undefined || arr.length > spec.minItems;
-	const [activeTarget, setActiveTarget] = useState<string | null>(null);
-	const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
-
-	const update = (next: unknown[]) =>
-		onChange(next.length === 0 ? undefined : next);
-	const hasStringTargets =
-		spec.itemKind === "string" ||
-		(spec.itemKind === "object" &&
-			(spec.itemFields ?? []).some(
-				(field) => field.type === "string" && !field.enumValues,
-			));
-
-	const setTargetValue = (target: string, nextValue: string) => {
-		const copy = [...arr];
-		if (target.startsWith("item:")) {
-			const index = Number(target.slice(5));
-			if (!Number.isNaN(index)) {
-				copy[index] = nextValue;
-			}
-		} else if (target.startsWith("field:")) {
-			const [, rawIndex, ...fieldParts] = target.split(":");
-			const index = Number(rawIndex);
-			const fieldName = fieldParts.join(":");
-			if (!Number.isNaN(index) && fieldName) {
-				const row = (copy[index] ?? {}) as Record<string, unknown>;
-				copy[index] = { ...row, [fieldName]: nextValue };
-			}
-		}
-		update(copy);
-	};
-
-	const currentTargetValue = (target: string): string => {
-		if (target.startsWith("item:")) {
-			const index = Number(target.slice(5));
-			return ((arr[index] as string | undefined) ?? "").toString();
-		}
-		if (target.startsWith("field:")) {
-			const [, rawIndex, ...fieldParts] = target.split(":");
-			const index = Number(rawIndex);
-			const fieldName = fieldParts.join(":");
-			const row = (arr[index] ?? {}) as Record<string, unknown>;
-			return ((row[fieldName] as string | undefined) ?? "").toString();
-		}
-		return "";
-	};
-
-	const insertToken = (tokenValue: string) => {
-		if (!activeTarget) return;
-		const input = inputRefs.current[activeTarget];
-		const currentValue = currentTargetValue(activeTarget);
-		const start = input?.selectionStart ?? currentValue.length;
-		const end = input?.selectionEnd ?? currentValue.length;
-		const nextValue = `${currentValue.slice(0, start)}${tokenValue}${currentValue.slice(end)}`;
-		setTargetValue(activeTarget, nextValue);
-		requestAnimationFrame(() => {
-			const target = inputRefs.current[activeTarget];
-			if (!target) return;
-			const caret = start + tokenValue.length;
-			target.focus();
-			target.setSelectionRange(caret, caret);
-		});
-	};
-
-	if (spec.itemKind === "unknown") {
-		// Unknown leaf shape — fall back to JSON editor.
-		return (
-			<ObjectJsonField
-				label={label}
-				hint={hint}
-				value={value}
-				onChange={onChange}
-			/>
-		);
-	}
-
-	return (
-		<div>
-			{label}
-			{hasStringTargets && dataReferences.length > 0 && (
-				<div className="my-2">
-					<p className="mb-1 text-[10px] text-muted-foreground/70">
-						Focus a string field, then click a token to insert dynamic data.
-					</p>
-					<DataReferencePicker groups={dataReferences} onPick={insertToken} />
-				</div>
-			)}
-			<div className="space-y-1.5">
-				{arr.map((item, i) => (
-					<div key={i} className="flex items-start gap-1.5">
-						<div className="text-[10px] text-muted-foreground pt-1.5 w-4 text-right">
-							{i + 1}.
-						</div>
-						<div className="flex-1 min-w-0">
-							{spec.itemKind === "object" && spec.itemFields ? (
-								<div className="rounded-md border border-border/60 bg-card/50 px-2 py-1.5 space-y-1">
-									{spec.itemFields.map((f) => {
-										const row = (item ?? {}) as Record<string, unknown>;
-										return (
-											<div key={f.name} className="flex items-center gap-1.5">
-												<span className="text-[10px] font-medium text-muted-foreground w-16 truncate">
-													{f.name}
-												</span>
-												{f.enumValues ? (
-													<select
-														value={(row[f.name] as string) ?? ""}
-														onChange={(e) => {
-															const copy = [...arr];
-															copy[i] = { ...row, [f.name]: e.target.value };
-															update(copy);
-														}}
-														className="flex-1 h-6 text-[11px] rounded border border-input bg-background px-1"
-													>
-														<option value="">—</option>
-														{f.enumValues.map((v) => (
-															<option key={v} value={v}>
-																{v}
-															</option>
-														))}
-													</select>
-												) : f.type === "number" ? (
-													<input
-														type="number"
-														value={
-															(row[f.name] as number | string | undefined) ?? ""
-														}
-														onChange={(e) => {
-															const copy = [...arr];
-															copy[i] = {
-																...row,
-																[f.name]:
-																	e.target.value === ""
-																		? ""
-																		: Number(e.target.value),
-															};
-															update(copy);
-														}}
-														className={INPUT_CLS + " h-6"}
-													/>
-												) : f.type === "boolean" ? (
-													<input
-														type="checkbox"
-														checked={row[f.name] === true}
-														onChange={(e) => {
-															const copy = [...arr];
-															copy[i] = { ...row, [f.name]: e.target.checked };
-															update(copy);
-														}}
-														className="h-3.5 w-3.5"
-													/>
-												) : (
-													<input
-														type="text"
-														ref={(el) => {
-															inputRefs.current[`field:${i}:${f.name}`] = el;
-														}}
-														value={(row[f.name] as string) ?? ""}
-														onFocus={() =>
-															setActiveTarget(`field:${i}:${f.name}`)
-														}
-														onChange={(e) => {
-															const copy = [...arr];
-															copy[i] = { ...row, [f.name]: e.target.value };
-															update(copy);
-														}}
-														className={INPUT_CLS + " h-6"}
-													/>
-												)}
-											</div>
-										);
-									})}
-								</div>
-							) : spec.itemKind === "number" ? (
-								<input
-									type="number"
-									value={(item as number | string | undefined) ?? ""}
-									onChange={(e) => {
-										const copy = [...arr];
-										copy[i] =
-											e.target.value === "" ? 0 : Number(e.target.value);
-										update(copy);
-									}}
-									className={INPUT_CLS}
-								/>
-							) : spec.itemKind === "boolean" ? (
-								<input
-									type="checkbox"
-									checked={item === true}
-									onChange={(e) => {
-										const copy = [...arr];
-										copy[i] = e.target.checked;
-										update(copy);
-									}}
-									className="h-4 w-4"
-								/>
-							) : (
-								<input
-									type="text"
-									ref={(el) => {
-										inputRefs.current[`item:${i}`] = el;
-									}}
-									value={(item as string) ?? ""}
-									onFocus={() => setActiveTarget(`item:${i}`)}
-									onChange={(e) => {
-										const copy = [...arr];
-										copy[i] = e.target.value;
-										update(copy);
-									}}
-									className={INPUT_CLS}
-								/>
-							)}
-						</div>
-						<button
-							type="button"
-							onClick={() => {
-								if (!canRemove) return;
-								const copy = arr.filter((_, idx) => idx !== i);
-								update(copy);
-							}}
-							disabled={!canRemove}
-							className="text-muted-foreground hover:text-destructive disabled:opacity-30 mt-1"
-							aria-label="Remove item"
-						>
-							<Trash2 className="size-3" />
-						</button>
-					</div>
-				))}
-			</div>
-			<Button
-				variant="ghost"
-				size="sm"
-				type="button"
-				onClick={() => update([...arr, defaultArrayItem(spec)])}
-				disabled={!canAdd}
-				className="mt-1.5 h-6 text-[10px] gap-1 w-full border border-dashed border-border hover:bg-accent/30"
-			>
-				<Plus className="size-3" />
-				Add item
-			</Button>
-			{hint}
-			{(spec.minItems !== undefined || spec.maxItems !== undefined) && (
-				<p className="text-[10px] text-muted-foreground/70 mt-0.5">
-					{spec.minItems !== undefined && `min ${spec.minItems}`}
-					{spec.minItems !== undefined && spec.maxItems !== undefined && ", "}
-					{spec.maxItems !== undefined && `max ${spec.maxItems}`}
-				</p>
-			)}
-		</div>
-	);
+	return out;
 }

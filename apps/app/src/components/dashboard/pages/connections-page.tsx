@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Plus, Loader2, MoreHorizontal, Link2Off, Activity, FileText, FolderOpen, Trash2, ArrowRightLeft, Search, BookOpen, CheckCircle2, XCircle, Clock, Shield, RefreshCw } from "lucide-react";
+import { Plus, Loader2, MoreHorizontal, Link2Off, Link2, Activity, FileText, FolderOpen, Trash2, ArrowRightLeft, Search, BookOpen, CheckCircle2, XCircle, Clock, Shield, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import {
@@ -428,6 +428,12 @@ export function ConnectionsPage({
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-44">
+                            {(["instagram", "facebook", "whatsapp", "telegram", "tiktok"].includes(platform)) && (
+                              <DropdownMenuItem onClick={() => { window.location.href = `/app/connections/${acc.id}?tab=default-reply`; }}>
+                                <Link2 className="size-3.5 mr-2" />
+                                Manage bindings
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem onClick={() => setHealthTarget(acc)}>
                               <Activity className="size-3.5 mr-2" />
                               Check health

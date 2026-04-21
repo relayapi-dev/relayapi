@@ -1,0 +1,18 @@
+---
+import DashboardLayout from "../../../layouts/DashboardLayout.astro";
+import { ConnectionDetailRouteApp } from "../../../components/dashboard/route-apps/connection-detail-route-app";
+import { getDashboardRouteContext } from "../../../lib/dashboard-page";
+
+const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
+const id = Astro.params.id as string;
+const initialTab = Astro.url.searchParams.get("tab") ?? undefined;
+---
+
+<DashboardLayout>
+	<ConnectionDetailRouteApp
+		client:load
+		currentPage="connections"
+		pageProps={{ accountId: id, initialTab }}
+		{...dashboard}
+	/>
+</DashboardLayout>

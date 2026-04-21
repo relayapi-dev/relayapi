@@ -17,7 +17,15 @@ import analytics from "./routes/analytics";
 import apiKeys from "./routes/api-keys";
 import aiKnowledge from "./routes/ai-knowledge";
 import automations from "./routes/automations";
-import automationTemplates from "./routes/automation-templates";
+import automationBindings from "./routes/automation-bindings";
+import automationEntrypointsRouter, {
+	automationScopedEntrypoints,
+} from "./routes/automation-entrypoints";
+import automationRunsRouter, {
+	automationScopedRuns,
+} from "./routes/automation-runs";
+import automationWebhookTrigger from "./routes/automation-webhook-trigger";
+import contactAutomationControls from "./routes/contact-automation-controls";
 import refUrls from "./routes/ref-urls";
 import segments from "./routes/segments";
 import broadcastsRouter from "./routes/broadcasts";
@@ -111,7 +119,11 @@ app.route("/connect/oauth", oauthCallback);
 // WebSocket upgrade — authenticated via short-lived ticket (before auth middleware)
 app.route("/v1/ws", websocketUpgrade);
 
-// Auth middleware for all /v1 routes (except /v1/ws which handles its own auth above)
+// Automation webhook trigger — public endpoint, HMAC-authenticated via the
+// per-entrypoint secret (no API key auth). Mounted before the auth middleware.
+app.route("/v1/webhooks/automation-trigger", automationWebhookTrigger);
+
+// Auth middleware for all /v1 routes (except /v1/ws + /v1/webhooks/automation-trigger which handle their own auth above)
 app.use("/v1/*", authMiddleware);
 
 // Request-scoped Drizzle instance — all downstream middleware and route handlers
@@ -198,7 +210,12 @@ app.route("/v1/tags", tagsRouter);
 app.route("/v1/idea-groups", ideaGroupsRouter);
 app.route("/v1/ideas", ideasRouter);
 app.route("/v1/automations", automations);
-app.route("/v1/automations/templates", automationTemplates);
+app.route("/v1/automations", automationScopedEntrypoints);
+app.route("/v1/automations", automationScopedRuns);
+app.route("/v1/automation-entrypoints", automationEntrypointsRouter);
+app.route("/v1/automation-bindings", automationBindings);
+app.route("/v1/automation-runs", automationRunsRouter);
+app.route("/v1/contacts", contactAutomationControls);
 app.route("/v1/segments", segments);
 app.route("/v1/ai-knowledge", aiKnowledge);
 app.route("/v1/ref-urls", refUrls);

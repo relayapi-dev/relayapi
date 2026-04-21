@@ -1,67 +1,301 @@
+// apps/api/src/services/automations/trigger-matcher.ts
+//
+// Runtime trigger matching for the Manychat-parity automation engine.
+// See docs/superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md
+// §6 (Entrypoints & Bindings) + §6.6 (Runtime match algorithm).
+//
+// Replaces the legacy triggers-and-enrollments matcher. The outer shape now
+// queries `automation_entrypoints` instead of `automation_triggers`, but the
+// per-kind matching semantics (keyword modes, post/asset id filters, filter
+// group evaluation) are preserved from the legacy implementation.
+
 import {
-	automationEnrollments,
+	automationContactControls,
+	automationEntrypoints,
+	automationRuns,
 	automations,
-	automationTriggers,
 	contacts,
 	customFieldDefinitions,
 	customFieldValues,
+	type Database,
 } from "@relayapi/db";
-import { createDb } from "@relayapi/db";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
-import type { Env } from "../../types";
-import { matchesTriggerFilters } from "./filter-eval";
-import {
-	selectDirectEnrollmentTrigger,
-	withStoredEnrollmentTriggerId,
-} from "./resolve-trigger";
+import { and, desc, eq, gte, isNull, or, sql } from "drizzle-orm";
+import { evaluateFilterGroup } from "./filter-eval";
+import { enrollContact } from "./runner";
+
+export type InboundEventKind =
+	| "dm_received"
+	| "comment_created"
+	| "story_reply"
+	| "story_mention"
+	| "live_comment"
+	| "share_to_dm"
+	| "follow"
+	| "ad_click"
+	| "ref_link_click"
+	| "tag_applied"
+	| "tag_removed"
+	| "field_changed"
+	| "conversion_event";
+
+export type InboundEvent = {
+	kind: InboundEventKind;
+	channel: "instagram" | "facebook" | "whatsapp" | "telegram" | "tiktok";
+	organizationId: string;
+	socialAccountId: string;
+	contactId: string;
+	conversationId: string | null;
+	// Per-kind fields
+	text?: string;
+	postId?: string;
+	adId?: string;
+	refUrlId?: string;
+	tagId?: string;
+	fieldKey?: string;
+	fieldValueBefore?: unknown;
+	fieldValueAfter?: unknown;
+	eventName?: string;
+	payload?: Record<string, unknown>;
+};
+
+export type MatchResult =
+	| {
+			matched: true;
+			entrypointId: string;
+			automationId: string;
+			runId: string;
+	  }
+	| {
+			matched: false;
+			reason:
+				| "no_candidates"
+				| "all_filtered"
+				| "reentry_blocked"
+				| "paused"
+				| "no_active_automation";
+	  };
+
+export type Db = Database;
+
+// ---------------------------------------------------------------------------
+// Specificity auto-derivation (spec §6.2)
+// ---------------------------------------------------------------------------
 
 /**
- * Queries candidate automations and enrolls matches into AUTOMATION_QUEUE.
- * Called from platform-webhooks.ts after persisting the inbound event.
+ * Derives an entrypoint's specificity score from its kind + config + filters.
+ * Writers should call this when inserting/updating entrypoint rows so the match
+ * ordering in step 7 (specificity DESC, priority ASC, created_at ASC) is
+ * consistent across producers.
+ *
+ * Values (per spec §6.2):
+ *   keyword (exact or regex), webhook_inbound              → 30
+ *   asset-filtered (comment_created/story_reply w/ ids)    → 25
+ *   filtered (filters JSONB non-null)                      → 20
+ *   account-scoped broad (social_account_id set, no filter)→ 10
+ *   catch-all (no account, no filter)                      → 0
  */
-export async function matchAndEnroll(
-	env: Env,
-	input: {
-		organization_id: string;
-		platform: string;
-		trigger_type: string;
-		account_id?: string;
-		contact_id?: string | null;
-		conversation_id?: string | null;
-		payload: Record<string, unknown>;
-	},
-): Promise<string[]> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
+export function computeSpecificity(
+	kind: string,
+	config: unknown,
+	filters: unknown,
+	socialAccountId: string | null,
+): number {
+	const cfg = (config ?? {}) as Record<string, unknown>;
+	let max = 0;
 
+	// Tier 30 — unique slug / deterministic match.
+	if (kind === "keyword") {
+		const mode = (cfg.match_mode as string | undefined) ?? "contains";
+		if (mode === "exact" || mode === "regex") max = Math.max(max, 30);
+	}
+	if (kind === "webhook_inbound" && typeof cfg.webhook_slug === "string") {
+		max = Math.max(max, 30);
+	}
+
+	// Tier 25 — asset-filtered.
+	if (kind === "comment_created") {
+		const postIds = cfg.post_ids;
+		if (Array.isArray(postIds) && postIds.length > 0) max = Math.max(max, 25);
+	}
+	if (kind === "story_reply" || kind === "story_mention") {
+		const storyIds = cfg.story_ids;
+		if (Array.isArray(storyIds) && storyIds.length > 0) max = Math.max(max, 25);
+	}
+
+	// Tier 20 — filter group non-null.
+	if (filters !== null && filters !== undefined) {
+		const filt = filters as Record<string, unknown>;
+		const hasGroup =
+			filt &&
+			((Array.isArray(filt.all) && filt.all.length > 0) ||
+				(Array.isArray(filt.any) && filt.any.length > 0) ||
+				(Array.isArray(filt.none) && filt.none.length > 0));
+		if (hasGroup) max = Math.max(max, 20);
+	}
+
+	// Tier 10 — account-scoped broad.
+	if (socialAccountId && max === 0) max = Math.max(max, 10);
+
+	// Tier 0 — catch-all (already covered by initial value).
+	return max;
+}
+
+// ---------------------------------------------------------------------------
+// Per-kind config matcher
+// ---------------------------------------------------------------------------
+
+function matchesKeywordConfig(
+	config: Record<string, unknown>,
+	text: string,
+): boolean {
+	const keywords = (config.keywords as string[] | undefined) ?? [];
+	if (keywords.length === 0) return true;
+	const mode = (config.match_mode as string | undefined) ?? "contains";
+	const caseSensitive =
+		(config.case_sensitive as boolean | undefined) ?? false;
+	const hay = caseSensitive ? text : text.toLowerCase();
+	return keywords.some((k) => {
+		const kw = caseSensitive ? k : k.toLowerCase();
+		if (mode === "exact") return hay === kw;
+		if (mode === "regex") {
+			try {
+				return new RegExp(k, caseSensitive ? "" : "i").test(text);
+			} catch {
+				return false;
+			}
+		}
+		return hay.includes(kw);
+	});
+}
+
+function matchesEntrypointConfig(
+	kind: string,
+	config: Record<string, unknown>,
+	event: InboundEvent,
+): boolean {
+	switch (kind) {
+		case "keyword":
+		case "dm_received": {
+			const text = event.text ?? "";
+			if (Array.isArray(config.keywords) && config.keywords.length > 0) {
+				return matchesKeywordConfig(config, text);
+			}
+			return true;
+		}
+		case "comment_created": {
+			const postIds = config.post_ids;
+			if (Array.isArray(postIds) && postIds.length > 0) {
+				if (!event.postId || !postIds.includes(event.postId)) return false;
+			}
+			if (Array.isArray(config.keywords) && config.keywords.length > 0) {
+				return matchesKeywordConfig(config, event.text ?? "");
+			}
+			return true;
+		}
+		case "story_reply":
+		case "story_mention": {
+			const storyIds = config.story_ids;
+			if (Array.isArray(storyIds) && storyIds.length > 0) {
+				if (!event.postId || !storyIds.includes(event.postId)) return false;
+			}
+			if (Array.isArray(config.keywords) && config.keywords.length > 0) {
+				return matchesKeywordConfig(config, event.text ?? "");
+			}
+			return true;
+		}
+		case "live_comment": {
+			if (Array.isArray(config.keywords) && config.keywords.length > 0) {
+				return matchesKeywordConfig(config, event.text ?? "");
+			}
+			return true;
+		}
+		case "ad_click": {
+			const adIds = config.ad_ids;
+			if (Array.isArray(adIds) && adIds.length > 0) {
+				if (!event.adId || !adIds.includes(event.adId)) return false;
+			}
+			return true;
+		}
+		case "ref_link_click": {
+			const ids = config.ref_url_ids;
+			if (Array.isArray(ids) && ids.length > 0) {
+				if (!event.refUrlId || !ids.includes(event.refUrlId)) return false;
+			}
+			return true;
+		}
+		case "tag_applied":
+		case "tag_removed": {
+			const tagIds = config.tag_ids;
+			if (Array.isArray(tagIds) && tagIds.length > 0) {
+				if (!event.tagId || !tagIds.includes(event.tagId)) return false;
+			}
+			return true;
+		}
+		case "field_changed": {
+			const keys = config.field_keys;
+			if (Array.isArray(keys) && keys.length > 0) {
+				if (!event.fieldKey || !keys.includes(event.fieldKey)) return false;
+			}
+			return true;
+		}
+		case "conversion_event": {
+			const events = config.event_names;
+			if (Array.isArray(events) && events.length > 0) {
+				if (!event.eventName || !events.includes(event.eventName)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		case "share_to_dm":
+		case "follow":
+			return true;
+		default:
+			// Unknown kinds match by default (graceful forward-compat)
+			return true;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// matchAndEnroll
+// ---------------------------------------------------------------------------
+
+export async function matchAndEnroll(
+	db: Db,
+	event: InboundEvent,
+	env: Record<string, unknown>,
+): Promise<MatchResult> {
+	// 1. Load candidate entrypoints — channel + kind + active.
+	//    Allow either (social_account_id IS NULL) OR (social_account_id = event.socialAccountId).
 	const rows = await db
-		.select({
-			automation: automations,
-			trigger: automationTriggers,
-		})
-		.from(automationTriggers)
-		.innerJoin(automations, eq(automationTriggers.automationId, automations.id))
+		.select({ entrypoint: automationEntrypoints, automation: automations })
+		.from(automationEntrypoints)
+		.innerJoin(automations, eq(automationEntrypoints.automationId, automations.id))
 		.where(
 			and(
-				eq(automations.organizationId, input.organization_id),
+				eq(automationEntrypoints.channel, event.channel as never),
+				eq(automationEntrypoints.kind, event.kind),
+				eq(automationEntrypoints.status, "active"),
 				eq(automations.status, "active"),
-				eq(automationTriggers.type, input.trigger_type as never),
+				eq(automations.organizationId, event.organizationId),
+				or(
+					isNull(automationEntrypoints.socialAccountId),
+					eq(automationEntrypoints.socialAccountId, event.socialAccountId),
+				),
 			),
 		);
 
-	if (rows.length === 0) return [];
+	if (rows.length === 0) {
+		return { matched: false, reason: "no_candidates" };
+	}
 
-	// Load contact context for filter evaluation (once, cached)
-	let tags: string[] = [];
-	let fields: Record<string, unknown> = {};
-	let contact: Record<string, unknown> | null = null;
-	if (input.contact_id) {
-		const row = await db.query.contacts.findFirst({
-			where: eq(contacts.id, input.contact_id),
-		});
-		if (row) {
-			contact = row as unknown as Record<string, unknown>;
-			tags = row.tags ?? [];
-		}
+	// Load contact context for filter evaluation (once).
+	const contactRow = await db.query.contacts.findFirst({
+		where: eq(contacts.id, event.contactId),
+	});
+	const tagList: string[] = contactRow?.tags ?? [];
+	const fieldsMap: Record<string, unknown> = {};
+	if (contactRow) {
 		const fieldRows = await db
 			.select({
 				slug: customFieldDefinitions.slug,
@@ -74,375 +308,166 @@ export async function matchAndEnroll(
 			)
 			.where(
 				and(
-					eq(customFieldValues.contactId, input.contact_id),
-					eq(customFieldValues.organizationId, input.organization_id),
+					eq(customFieldValues.contactId, event.contactId),
+					eq(customFieldValues.organizationId, event.organizationId),
 				),
 			);
 		for (const fr of fieldRows) {
-			if (fr.slug) fields[fr.slug] = fr.value;
+			if (fr.slug) fieldsMap[fr.slug] = fr.value;
 		}
 	}
 
-	const enrolledIds: string[] = [];
+	// 2. Per-kind config + filter evaluation.
+	type Candidate = (typeof rows)[number];
+	const survivors: Candidate[] = [];
+	for (const row of rows) {
+		const cfg = (row.entrypoint.config ?? {}) as Record<string, unknown>;
+		if (!matchesEntrypointConfig(event.kind, cfg, event)) continue;
 
-	for (const { automation: auto, trigger } of rows) {
-		// Optional account scoping uses the matched trigger
-		if (
-			input.account_id &&
-			trigger.socialAccountId &&
-			trigger.socialAccountId !== input.account_id
-		) {
-			continue;
-		}
-
-		// Trigger config matching (keywords, post_id, etc.) — delegated to trigger-specific matcher
-		if (
-			!matchTriggerConfig(
-				trigger.config as Record<string, unknown>,
-				input.payload,
-			)
-		) {
-			continue;
-		}
-
-		// Filter check (tags, segments, predicates)
-		if (
-			!matchesTriggerFilters(
-				(trigger.filters as Record<string, unknown>) ?? {},
-				{ tags, fields, contact },
-			)
-		) {
-			continue;
-		}
-
-		// Re-entry guard
-		if (input.contact_id) {
-			if (!auto.allowReentry) {
-				const existing = await db.query.automationEnrollments.findFirst({
-					where: and(
-						eq(automationEnrollments.automationId, auto.id),
-						eq(automationEnrollments.contactId, input.contact_id),
-					),
-				});
-				if (existing) continue;
-			} else if (auto.reentryCooldownMin && auto.reentryCooldownMin > 0) {
-				// Cooldown enforcement: reject if this contact was enrolled in the
-				// same automation within the last N minutes.
-				const cooldownStart = new Date(
-					Date.now() - auto.reentryCooldownMin * 60 * 1000,
-				);
-				const recent = await db
-					.select({ id: automationEnrollments.id })
-					.from(automationEnrollments)
-					.where(
-						and(
-							eq(automationEnrollments.automationId, auto.id),
-							eq(automationEnrollments.contactId, input.contact_id),
-							gte(automationEnrollments.enrolledAt, cooldownStart),
-						),
-					)
-					.orderBy(desc(automationEnrollments.enrolledAt))
-					.limit(1);
-				if (recent.length > 0) continue;
-			}
-		}
-
-		// Skip automations that have never been published — the runner cannot
-		// load a snapshot for them.
-		if (auto.publishedVersion === null) continue;
-
-		// Create enrollment
-		const version = auto.publishedVersion;
-		const [created] = await db
-			.insert(automationEnrollments)
-			.values({
-				automationId: auto.id,
-				automationVersion: version,
-				triggerId: trigger.id,
-				organizationId: auto.organizationId,
-				contactId: input.contact_id ?? null,
-				conversationId: input.conversation_id ?? null,
-				state: withStoredEnrollmentTriggerId(input.payload, trigger.id),
-				status: "active",
-			})
-			.returning({ id: automationEnrollments.id });
-
-		if (created) {
-			// Send to the queue FIRST — if enqueue fails we roll back the
-			// enrollment row and don't touch the counter. Otherwise a transient
-			// queue error would orphan the row in `active` with no worker to
-			// advance it, while the counter wrongly reported an enrollment.
-			try {
-				await env.AUTOMATION_QUEUE.send({
-					type: "advance",
-					enrollment_id: created.id,
-				});
-			} catch (err) {
-				console.error(
-					"[trigger-matcher] AUTOMATION_QUEUE.send failed; rolling back enrollment",
-					created.id,
-					err,
-				);
-				await db
-					.delete(automationEnrollments)
-					.where(eq(automationEnrollments.id, created.id));
-				continue;
-			}
-
-			await db
-				.update(automations)
-				.set({
-					totalEnrolled: sql`${automations.totalEnrolled} + 1`,
-					updatedAt: new Date(),
-				})
-				.where(eq(automations.id, auto.id));
-
-			enrolledIds.push(created.id);
-		}
-	}
-
-	return enrolledIds;
-}
-
-/**
- * Direct enrollment — skips trigger-type / config / filter matching, but still
- * enforces re-entry rules and requires the automation to be active + published.
- *
- * Called from `POST /v1/automations/:id/enroll` and from the queue consumer's
- * `enroll` branch. Returns the new enrollment id, or a string reason why the
- * enrollment was rejected.
- */
-export async function enrollDirectly(
-	env: Env,
-	input: {
-		organization_id: string;
-		automation_id: string;
-		trigger_id?: string | null;
-		contact_id?: string | null;
-		conversation_id?: string | null;
-		payload?: Record<string, unknown>;
-	},
-): Promise<
-	| { ok: true; enrollment_id: string }
-	| {
-			ok: false;
-			reason:
-				| "not_found"
-				| "not_active"
-				| "not_published"
-				| "reentry_blocked"
-				| "invalid_trigger"
-				| "ambiguous_trigger"
-				| "queue_failed";
-	  }
-> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
-	const auto = await db.query.automations.findFirst({
-		where: and(
-			eq(automations.id, input.automation_id),
-			eq(automations.organizationId, input.organization_id),
-		),
-	});
-	if (!auto) return { ok: false, reason: "not_found" };
-	if (auto.status !== "active") return { ok: false, reason: "not_active" };
-	if (auto.publishedVersion === null)
-		return { ok: false, reason: "not_published" };
-
-	const triggers = await db
-		.select({
-			id: automationTriggers.id,
-			type: automationTriggers.type,
-			order_index: automationTriggers.orderIndex,
-		})
-		.from(automationTriggers)
-		.where(eq(automationTriggers.automationId, auto.id));
-
-	const selectedTrigger = selectDirectEnrollmentTrigger(
-		triggers,
-		input.trigger_id,
-	);
-	if (!selectedTrigger.ok) {
-		return {
-			ok: false,
-			reason:
-				selectedTrigger.reason === "no_triggers"
-					? "not_published"
-					: selectedTrigger.reason,
-		};
-	}
-
-	// Re-entry guard — mirrors matchAndEnroll so manual and trigger-driven
-	// enrollments share the same cooldown semantics.
-	if (input.contact_id) {
-		if (!auto.allowReentry) {
-			const existing = await db.query.automationEnrollments.findFirst({
-				where: and(
-					eq(automationEnrollments.automationId, auto.id),
-					eq(automationEnrollments.contactId, input.contact_id),
-				),
-			});
-			if (existing) return { ok: false, reason: "reentry_blocked" };
-		} else if (auto.reentryCooldownMin && auto.reentryCooldownMin > 0) {
-			const cooldownStart = new Date(
-				Date.now() - auto.reentryCooldownMin * 60 * 1000,
+		const filters = row.entrypoint.filters as Record<string, unknown> | null;
+		if (filters) {
+			const ok = evaluateFilterGroup(
+				filters as never,
+				{
+					contact: (contactRow as Record<string, unknown> | undefined) ?? null,
+					tags: tagList,
+					fields: fieldsMap,
+					state: (event.payload as Record<string, unknown> | undefined) ?? {},
+				},
 			);
-			const recent = await db
-				.select({ id: automationEnrollments.id })
-				.from(automationEnrollments)
-				.where(
-					and(
-						eq(automationEnrollments.automationId, auto.id),
-						eq(automationEnrollments.contactId, input.contact_id),
-						gte(automationEnrollments.enrolledAt, cooldownStart),
-					),
-				)
-				.orderBy(desc(automationEnrollments.enrolledAt))
-				.limit(1);
-			if (recent.length > 0) return { ok: false, reason: "reentry_blocked" };
+			if (!ok) continue;
 		}
+		survivors.push(row);
 	}
 
-	const [created] = await db
-		.insert(automationEnrollments)
-		.values({
-			automationId: auto.id,
-			automationVersion: auto.publishedVersion,
-			triggerId: selectedTrigger.trigger.id,
-			organizationId: auto.organizationId,
-			contactId: input.contact_id ?? null,
-			conversationId: input.conversation_id ?? null,
-			state: withStoredEnrollmentTriggerId(
-				input.payload ?? {},
-				selectedTrigger.trigger.id,
-			),
-			status: "active",
+	if (survivors.length === 0) {
+		return { matched: false, reason: "all_filtered" };
+	}
+
+	// 3. Contact-level pause — any control row with automation_id=NULL or
+	//    matching automation_id, where paused_until IS NULL or in the future.
+	const pauseRows = await db
+		.select({
+			id: automationContactControls.id,
+			automationId: automationContactControls.automationId,
+			pausedUntil: automationContactControls.pausedUntil,
 		})
-		.returning({ id: automationEnrollments.id });
-
-	if (!created) return { ok: false, reason: "queue_failed" };
-
-	try {
-		await env.AUTOMATION_QUEUE.send({
-			type: "advance",
-			enrollment_id: created.id,
-		});
-	} catch (err) {
-		console.error(
-			"[trigger-matcher] AUTOMATION_QUEUE.send failed; rolling back manual enrollment",
-			created.id,
-			err,
-		);
-		await db
-			.delete(automationEnrollments)
-			.where(eq(automationEnrollments.id, created.id));
-		return { ok: false, reason: "queue_failed" };
-	}
-
-	await db
-		.update(automations)
-		.set({
-			totalEnrolled: sql`${automations.totalEnrolled} + 1`,
-			updatedAt: new Date(),
-		})
-		.where(eq(automations.id, auto.id));
-
-	return { ok: true, enrollment_id: created.id };
-}
-
-/**
- * Checks whether trigger config (e.g. keyword list, post_id) matches the incoming payload.
- * Trigger-type-specific matching is lightweight and declarative.
- */
-function matchTriggerConfig(
-	config: Record<string, unknown>,
-	payload: Record<string, unknown>,
-): boolean {
-	// Keyword match (case-insensitive, substring by default)
-	const keywords = config.keywords as string[] | undefined;
-	const text =
-		(payload.text as string | undefined) ??
-		(payload.message as string | undefined) ??
-		(payload.comment_text as string | undefined) ??
-		"";
-	const mode = (config.match_mode as string | undefined) ?? "contains";
-	if (keywords && keywords.length > 0) {
-		const lowered = text.toLowerCase();
-		const matched = keywords.some((k) => {
-			const kw = k.toLowerCase();
-			return mode === "exact" ? lowered === kw : lowered.includes(kw);
-		});
-		if (!matched) return false;
-	}
-
-	// Post-scoped automations
-	const postId = config.post_id as string | null | undefined;
-	if (postId !== undefined && postId !== null) {
-		const payloadPostId = payload.post_id as string | undefined;
-		if (payloadPostId !== postId) return false;
-	}
-
-	return true;
-}
-
-/**
- * For platforms with pending-input enrollments: check if an inbound message
- * should resume a waiting flow instead of spawning a new enrollment.
- * Returns the enrollment id to resume, or null if none.
- *
- * Scoping rules:
- *  - must be `status=waiting` with `_pending_input_field` (not a timer wait)
- *  - must match the inbound channel if the waiting node recorded one
- *  - must match the conversation_id if the waiting node recorded one, so a
- *    DM from a different channel of the same contact doesn't short-circuit
- *    a paused DM flow
- *  - most recently enrolled wait wins, so stale waits can't hijack new ones
- */
-export async function findWaitingEnrollment(
-	env: Env,
-	input: {
-		organization_id: string;
-		contact_id: string;
-		channel?: string;
-		conversation_id?: string | null;
-	},
-): Promise<string | null> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-	const rows = await db
-		.select()
-		.from(automationEnrollments)
+		.from(automationContactControls)
 		.where(
 			and(
-				eq(automationEnrollments.organizationId, input.organization_id),
-				eq(automationEnrollments.contactId, input.contact_id),
-				eq(automationEnrollments.status, "waiting"),
+				eq(automationContactControls.contactId, event.contactId),
+				or(
+					isNull(automationContactControls.pausedUntil),
+					sql`${automationContactControls.pausedUntil} > NOW()`,
+				),
 			),
-		)
-		.orderBy(desc(automationEnrollments.enrolledAt));
+		);
 
-	for (const row of rows) {
-		const state = (row.state as Record<string, unknown>) ?? {};
-		if (!state._pending_input_field) continue;
-
-		const waitingChannel = state._pending_input_channel as string | undefined;
-		if (waitingChannel && input.channel && waitingChannel !== input.channel) {
-			continue;
-		}
-
-		const waitingConvo = state._pending_input_conversation_id as
-			| string
-			| null
-			| undefined;
-		if (
-			waitingConvo !== undefined &&
-			waitingConvo !== null &&
-			input.conversation_id &&
-			waitingConvo !== input.conversation_id
-		) {
-			continue;
-		}
-
-		return row.id;
+	// A global pause blocks everything.
+	const hasGlobalPause = pauseRows.some((p) => p.automationId === null);
+	if (hasGlobalPause) {
+		return { matched: false, reason: "paused" };
 	}
-	return null;
+	const pausedAutomationIds = new Set(
+		pauseRows.map((p) => p.automationId).filter((id): id is string => !!id),
+	);
+
+	// 4. Re-entry guard — per-automation.
+	const finalists: Candidate[] = [];
+	for (const row of survivors) {
+		const auto = row.automation;
+		if (pausedAutomationIds.has(auto.id)) continue;
+
+		// Active / waiting run already exists?
+		const activeRun = await db
+			.select({ id: automationRuns.id })
+			.from(automationRuns)
+			.where(
+				and(
+					eq(automationRuns.automationId, auto.id),
+					eq(automationRuns.contactId, event.contactId),
+					or(
+						eq(automationRuns.status, "active"),
+						eq(automationRuns.status, "waiting"),
+					),
+				),
+			)
+			.limit(1);
+		if (activeRun.length > 0) continue;
+
+		const ep = row.entrypoint;
+		if (!ep.allowReentry) {
+			const priorRun = await db
+				.select({ id: automationRuns.id })
+				.from(automationRuns)
+				.where(
+					and(
+						eq(automationRuns.automationId, auto.id),
+						eq(automationRuns.contactId, event.contactId),
+					),
+				)
+				.limit(1);
+			if (priorRun.length > 0) continue;
+		} else if (ep.reentryCooldownMin && ep.reentryCooldownMin > 0) {
+			const cooldownStart = new Date(
+				Date.now() - ep.reentryCooldownMin * 60 * 1000,
+			);
+			const recent = await db
+				.select({ id: automationRuns.id })
+				.from(automationRuns)
+				.where(
+					and(
+						eq(automationRuns.automationId, auto.id),
+						eq(automationRuns.contactId, event.contactId),
+						gte(automationRuns.completedAt, cooldownStart),
+					),
+				)
+				.orderBy(desc(automationRuns.completedAt))
+				.limit(1);
+			if (recent.length > 0) continue;
+		}
+
+		finalists.push(row);
+	}
+
+	if (finalists.length === 0) {
+		return { matched: false, reason: "reentry_blocked" };
+	}
+
+	// 5. Sort by (specificity DESC, priority ASC, created_at ASC) and take first.
+	finalists.sort((a, b) => {
+		const sA = a.entrypoint.specificity;
+		const sB = b.entrypoint.specificity;
+		if (sA !== sB) return sB - sA;
+		const pA = a.entrypoint.priority;
+		const pB = b.entrypoint.priority;
+		if (pA !== pB) return pA - pB;
+		const cA = a.entrypoint.createdAt.getTime();
+		const cB = b.entrypoint.createdAt.getTime();
+		return cA - cB;
+	});
+	const picked = finalists[0]!;
+
+	// 6. Enroll via the runner.
+	try {
+		const { runId } = await enrollContact(db, {
+			automationId: picked.automation.id,
+			organizationId: event.organizationId,
+			contactId: event.contactId,
+			conversationId: event.conversationId,
+			channel: event.channel,
+			entrypointId: picked.entrypoint.id,
+			bindingId: null,
+			contextOverrides: { triggerEvent: event },
+			env,
+		});
+		return {
+			matched: true,
+			entrypointId: picked.entrypoint.id,
+			automationId: picked.automation.id,
+			runId,
+		};
+	} catch {
+		return { matched: false, reason: "no_active_automation" };
+	}
 }

@@ -74,7 +74,7 @@ The target product should cover these layers:
    - direct port connections
    - drag-to-create nodes
    - reconnect edges
-   - duplicate, copy/paste, multi-select, auto-arrange
+   - duplicate, copy/paste, stronger selection tooling, auto-arrange
 2. Message Authoring
    - one message step with ordered blocks
    - buttons and quick replies that branch the graph
@@ -654,6 +654,11 @@ Phase 2 target:
 - `list`
 - `template`
 
+Constraint note:
+
+- not every channel block should be freely composable inside the same message document
+- if RelayAPI later adds Messenger-style list blocks, treat them as constrained template/message variants rather than assuming they can be mixed arbitrarily with every other block type in one node
+
 ### Why This Model Is Better
 
 - matches Manychat's authoring model
@@ -910,7 +915,7 @@ Must-have:
 - reconnect existing edges
 - drag from handle into empty canvas to open insert menu
 - branch-specific handles on condition, randomizer, input, and message nodes
-- multi-select
+- stronger selection tooling
 - duplicate
 - copy/paste
 - auto-arrange
@@ -1092,7 +1097,7 @@ Deliverables:
 - keyboard delete
 - duplicate
 - copy/paste
-- multi-select
+- stronger selection tooling
 
 Exit criteria:
 

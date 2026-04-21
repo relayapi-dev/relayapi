@@ -1,93 +1,96 @@
-import { contacts } from "@relayapi/db";
-import { eq } from "drizzle-orm";
-import { fetchWithTimeout } from "../../../lib/fetch-timeout";
-import { resolveTemplatedValue } from "../resolve-templated-value";
+// apps/api/src/services/automations/nodes/http-request.ts
+//
+// Outbound HTTP request node. See spec §8.9.
+//
+// Resolves merge tags in URL / headers / body, performs a fetch() with a
+// configurable timeout, and routes via `success` (2xx) or `error` (non-2xx /
+// timeout / network). The response (status + headers + parsed body) is stored
+// in `ctx.context[response_key]` (default "last_http_response") so downstream
+// nodes can branch on it via the condition/filter engine.
+
+import { applyMergeTags } from "../merge-tags";
 import type { NodeHandler } from "../types";
 
-export const httpRequestHandler: NodeHandler = async (ctx) => {
-	const contact = ctx.enrollment.contact_id
-		? await ctx.db.query.contacts.findFirst({
-				where: eq(contacts.id, ctx.enrollment.contact_id),
-			})
-		: null;
-	const templateCtx = {
-		contact: (contact as Record<string, unknown> | null | undefined) ?? null,
-		state: ctx.enrollment.state,
-	};
-
-	const url = resolveTemplatedValue(
-		ctx.node.config.url,
-		templateCtx,
-	) as string | undefined;
-	if (!url) return { kind: "fail", error: "http_request missing 'url'" };
-
-	const method =
-		(resolveTemplatedValue(ctx.node.config.method, templateCtx) as string | undefined) ??
-		"POST";
-	const headers =
-		(resolveTemplatedValue(
-			ctx.node.config.headers ?? {},
-			templateCtx,
-		) as Record<string, string>) ?? {};
-	const body = resolveTemplatedValue(ctx.node.config.body, templateCtx);
-	const timeoutMs = (ctx.node.config.timeout_ms as number | undefined) ?? 10000;
-	const saveToField = ctx.node.config.save_response_to_field as
-		| string
-		| undefined;
-	const jsonPath = ctx.node.config.json_path as string | undefined;
-
-	let response: Response;
-	try {
-		response = await fetchWithTimeout(url, {
-			method,
-			headers: {
-				"Content-Type": "application/json",
-				...headers,
-			},
-			body:
-				body === undefined
-					? undefined
-					: typeof body === "string"
-						? body
-						: JSON.stringify(body),
-			timeout: timeoutMs,
-		});
-	} catch (e) {
-		return { kind: "fail", error: `http_request: ${String(e)}` };
-	}
-
-	if (!response.ok) {
-		return {
-			kind: "fail",
-			error: `http_request ${response.status}: ${await response.text().catch(() => "")}`,
-		};
-	}
-
-	let extracted: unknown = undefined;
-	if (saveToField) {
-		const text = await response.text();
-		let parsed: unknown = text;
-		try {
-			parsed = JSON.parse(text);
-		} catch {
-			// leave as text
-		}
-		extracted = jsonPath ? extractJsonPath(parsed, jsonPath) : parsed;
-	}
-
-	return {
-		kind: "next",
-		state_patch: saveToField ? { [saveToField]: extracted } : undefined,
-	};
+type HttpRequestConfig = {
+	url: string;
+	method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+	headers?: Record<string, string>;
+	body?: string;
+	timeout_ms?: number;
+	response_key?: string;
 };
 
-function extractJsonPath(obj: unknown, path: string): unknown {
-	if (path === "$" || path === "") return obj;
-	const cleaned = path.replace(/^\$\.?/, "");
-	let cur: unknown = obj;
-	for (const key of cleaned.split(".")) {
-		if (cur == null || typeof cur !== "object") return undefined;
-		cur = (cur as Record<string, unknown>)[key];
-	}
-	return cur;
+function buildMergeCtx(ctx: any) {
+	return {
+		contact: (ctx.context?.contact as Record<string, unknown> | undefined) ?? null,
+		state: ctx.context ?? {},
+	};
 }
+
+export const httpRequestHandler: NodeHandler<HttpRequestConfig> = {
+	kind: "http_request",
+	async handle(node, ctx) {
+		const cfg = (node.config ?? {}) as HttpRequestConfig;
+		const mergeCtx = buildMergeCtx(ctx);
+
+		const url = applyMergeTags(cfg.url ?? "", mergeCtx);
+		const method = cfg.method ?? "POST";
+		const headers: Record<string, string> = {};
+		for (const [k, v] of Object.entries(cfg.headers ?? {})) {
+			headers[k] = applyMergeTags(v, mergeCtx);
+		}
+		const body = cfg.body ? applyMergeTags(cfg.body, mergeCtx) : undefined;
+
+		const timeoutMs = cfg.timeout_ms ?? 15_000;
+		const responseKey = cfg.response_key ?? "last_http_response";
+
+		const abort = new AbortController();
+		const timer = setTimeout(() => abort.abort(), timeoutMs);
+
+		try {
+			const res = await fetch(url, {
+				method,
+				headers,
+				body,
+				signal: abort.signal,
+			});
+			const text = await res.text();
+			let parsed: unknown = text;
+			try {
+				parsed = JSON.parse(text);
+			} catch {
+				// keep text body as-is
+			}
+
+			const headerObj: Record<string, string> = {};
+			res.headers.forEach((value, key) => {
+				headerObj[key] = value;
+			});
+
+			ctx.context[responseKey] = {
+				status: res.status,
+				headers: headerObj,
+				body: parsed,
+			};
+
+			const viaPort = res.ok ? "success" : "error";
+			return {
+				result: "advance",
+				via_port: viaPort,
+				payload: { status: res.status, url, method },
+			};
+		} catch (err: unknown) {
+			const e = err as { name?: string; message?: string };
+			const isTimeout = e?.name === "AbortError";
+			const msg = isTimeout ? "timeout" : String(e?.message ?? err);
+			ctx.context[responseKey] = { error: msg };
+			return {
+				result: "advance",
+				via_port: "error",
+				payload: { error: msg, url, method },
+			};
+		} finally {
+			clearTimeout(timer);
+		}
+	},
+};

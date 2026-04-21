@@ -81,39 +81,69 @@ import {
 } from './resources/broadcasts';
 import {
   Automations,
-  AutomationTemplates,
   AutomationResponse,
-  AutomationNodeResponse,
-  AutomationEdgeResponse,
-  AutomationWithGraphResponse,
   AutomationListResponse,
-  AutomationEnrollmentResponse,
-  AutomationEnrollmentListResponse,
-  AutomationRunLogResponse,
-  AutomationRunListResponse,
-  AutomationSchemaResponse,
-  AutomationSimulateParams,
+  AutomationGraphUpdateResponse,
+  AutomationEnrollResponse,
   AutomationSimulateResponse,
   AutomationSimulateStep,
+  AutomationCatalogResponse,
+  AutomationInsightsResponse,
   AutomationCreateParams,
   AutomationUpdateParams,
   AutomationListParams,
-  AutomationListEnrollmentsParams,
-  AutomationTriggerInput,
-  AutomationTrigger,
-  AutomationTriggerFilters,
-  AutomationNodeSpec,
-  AutomationEdgeSpec,
+  AutomationGraphUpdateParams,
+  AutomationEnrollParams,
+  AutomationSimulateParams,
+  AutomationInsightsParams,
+  AutomationGlobalInsightsParams,
+  AutomationTemplateInput,
   AutomationChannel,
   AutomationStatus,
-  AutomationEnrollmentStatus,
-  CommentToDmTemplateParams,
-  WelcomeDmTemplateParams,
-  KeywordReplyTemplateParams,
-  FollowToDmTemplateParams,
-  StoryReplyTemplateParams,
-  GiveawayTemplateParams,
+  AutomationGraph,
+  AutomationNode,
+  AutomationEdge,
+  AutomationPort,
+  AutomationValidation,
+  ValidationError,
+  InsightsPeriod,
 } from './resources/automations';
+import {
+  AutomationEntrypoints,
+  AutomationEntrypointKind,
+  AutomationEntrypointResponse,
+  AutomationEntrypointCreateResponse,
+  AutomationEntrypointListResponse,
+  AutomationEntrypointCreateParams,
+  AutomationEntrypointUpdateParams,
+} from './resources/automation-entrypoints';
+import {
+  AutomationBindings,
+  AutomationBindingType,
+  AutomationBindingStatus,
+  AutomationBindingResponse,
+  AutomationBindingListResponse,
+  AutomationBindingListParams,
+  AutomationBindingCreateParams,
+  AutomationBindingUpdateParams,
+} from './resources/automation-bindings';
+import {
+  AutomationRuns,
+  AutomationRunStatus,
+  AutomationRunResponse,
+  AutomationRunStepResponse,
+  AutomationRunListResponse,
+  AutomationRunStepListResponse,
+  AutomationRunListParams,
+  AutomationRunStepListParams,
+} from './resources/automation-runs';
+import {
+  ContactAutomationControls,
+  ContactAutomationControlResponse,
+  ContactAutomationControlListResponse,
+  ContactAutomationPauseParams,
+  ContactAutomationResumeParams,
+} from './resources/contact-automation-controls';
 import {
   Segments,
   SegmentCreateParams,
@@ -1095,6 +1125,9 @@ export class Relay {
   autoPostRules: API.AutoPostRules = new API.AutoPostRules(this);
   broadcasts: API.Broadcasts = new API.Broadcasts(this);
   automations: API.Automations = new API.Automations(this);
+  automationEntrypoints: API.AutomationEntrypoints = new API.AutomationEntrypoints(this);
+  automationBindings: API.AutomationBindings = new API.AutomationBindings(this);
+  automationRuns: API.AutomationRuns = new API.AutomationRuns(this);
   segments: API.Segments = new API.Segments(this);
   aiKnowledge: API.AiKnowledge = new API.AiKnowledge(this);
   refUrls: API.RefUrls = new API.RefUrls(this);
@@ -1134,6 +1167,10 @@ Relay.Ads = Ads;
 Relay.AutoPostRules = AutoPostRules;
 Relay.Broadcasts = Broadcasts;
 Relay.Automations = Automations;
+Relay.AutomationEntrypoints = AutomationEntrypoints;
+Relay.AutomationBindings = AutomationBindings;
+Relay.AutomationRuns = AutomationRuns;
+Relay.ContactAutomationControls = ContactAutomationControls;
 Relay.Segments = Segments;
 Relay.AiKnowledge = AiKnowledge;
 Relay.RefUrls = RefUrls;
@@ -1228,38 +1265,72 @@ export declare namespace Relay {
 
   export {
     Automations as Automations,
-    AutomationTemplates as AutomationTemplates,
     type AutomationResponse as AutomationResponse,
-    type AutomationNodeResponse as AutomationNodeResponse,
-    type AutomationEdgeResponse as AutomationEdgeResponse,
-    type AutomationWithGraphResponse as AutomationWithGraphResponse,
     type AutomationListResponse as AutomationListResponse,
-    type AutomationEnrollmentResponse as AutomationEnrollmentResponse,
-    type AutomationEnrollmentListResponse as AutomationEnrollmentListResponse,
-    type AutomationRunLogResponse as AutomationRunLogResponse,
-    type AutomationRunListResponse as AutomationRunListResponse,
-    type AutomationSchemaResponse as AutomationSchemaResponse,
+    type AutomationGraphUpdateResponse as AutomationGraphUpdateResponse,
+    type AutomationEnrollResponse as AutomationEnrollResponse,
+    type AutomationSimulateResponse as AutomationSimulateResponse,
+    type AutomationSimulateStep as AutomationSimulateStep,
+    type AutomationCatalogResponse as AutomationCatalogResponse,
+    type AutomationInsightsResponse as AutomationInsightsResponse,
     type AutomationCreateParams as AutomationCreateParams,
     type AutomationUpdateParams as AutomationUpdateParams,
     type AutomationListParams as AutomationListParams,
-    type AutomationListEnrollmentsParams as AutomationListEnrollmentsParams,
-    type AutomationTriggerInput as AutomationTriggerInput,
-    type AutomationTrigger as AutomationTrigger,
-    type AutomationTriggerFilters as AutomationTriggerFilters,
-    type AutomationNodeSpec as AutomationNodeSpec,
-    type AutomationEdgeSpec as AutomationEdgeSpec,
+    type AutomationGraphUpdateParams as AutomationGraphUpdateParams,
+    type AutomationEnrollParams as AutomationEnrollParams,
+    type AutomationSimulateParams as AutomationSimulateParams,
+    type AutomationInsightsParams as AutomationInsightsParams,
+    type AutomationGlobalInsightsParams as AutomationGlobalInsightsParams,
+    type AutomationTemplateInput as AutomationTemplateInput,
     type AutomationChannel as AutomationChannel,
     type AutomationStatus as AutomationStatus,
-    type AutomationEnrollmentStatus as AutomationEnrollmentStatus,
-    type CommentToDmTemplateParams as CommentToDmTemplateParams,
-    type WelcomeDmTemplateParams as WelcomeDmTemplateParams,
-    type KeywordReplyTemplateParams as KeywordReplyTemplateParams,
-    type FollowToDmTemplateParams as FollowToDmTemplateParams,
-    type StoryReplyTemplateParams as StoryReplyTemplateParams,
-    type GiveawayTemplateParams as GiveawayTemplateParams,
-    type AutomationSimulateParams as AutomationSimulateParams,
-    type AutomationSimulateResponse as AutomationSimulateResponse,
-    type AutomationSimulateStep as AutomationSimulateStep,
+    type AutomationGraph as AutomationGraph,
+    type AutomationNode as AutomationNode,
+    type AutomationEdge as AutomationEdge,
+    type AutomationPort as AutomationPort,
+    type AutomationValidation as AutomationValidation,
+    type ValidationError as ValidationError,
+    type InsightsPeriod as InsightsPeriod,
+  };
+
+  export {
+    AutomationEntrypoints as AutomationEntrypoints,
+    type AutomationEntrypointKind as AutomationEntrypointKind,
+    type AutomationEntrypointResponse as AutomationEntrypointResponse,
+    type AutomationEntrypointCreateResponse as AutomationEntrypointCreateResponse,
+    type AutomationEntrypointListResponse as AutomationEntrypointListResponse,
+    type AutomationEntrypointCreateParams as AutomationEntrypointCreateParams,
+    type AutomationEntrypointUpdateParams as AutomationEntrypointUpdateParams,
+  };
+
+  export {
+    AutomationBindings as AutomationBindings,
+    type AutomationBindingType as AutomationBindingType,
+    type AutomationBindingStatus as AutomationBindingStatus,
+    type AutomationBindingResponse as AutomationBindingResponse,
+    type AutomationBindingListResponse as AutomationBindingListResponse,
+    type AutomationBindingListParams as AutomationBindingListParams,
+    type AutomationBindingCreateParams as AutomationBindingCreateParams,
+    type AutomationBindingUpdateParams as AutomationBindingUpdateParams,
+  };
+
+  export {
+    AutomationRuns as AutomationRuns,
+    type AutomationRunStatus as AutomationRunStatus,
+    type AutomationRunResponse as AutomationRunResponse,
+    type AutomationRunStepResponse as AutomationRunStepResponse,
+    type AutomationRunListResponse as AutomationRunListResponse,
+    type AutomationRunStepListResponse as AutomationRunStepListResponse,
+    type AutomationRunListParams as AutomationRunListParams,
+    type AutomationRunStepListParams as AutomationRunStepListParams,
+  };
+
+  export {
+    ContactAutomationControls as ContactAutomationControls,
+    type ContactAutomationControlResponse as ContactAutomationControlResponse,
+    type ContactAutomationControlListResponse as ContactAutomationControlListResponse,
+    type ContactAutomationPauseParams as ContactAutomationPauseParams,
+    type ContactAutomationResumeParams as ContactAutomationResumeParams,
   };
 
   export {

@@ -2484,271 +2484,9 @@ export const ideaActivity = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Automations (flow-based automation system)
-// Replaces legacy: automationRules, commentAutomations, sequences, engagementRules.
-// These legacy tables remain until Phase 3/4/6 delete their routes/SDK/UI.
+// Automations (Manychat-parity rebuild — port-based graph, v1 schema)
+// See docs/superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md
 // ---------------------------------------------------------------------------
-
-export const automationTriggerTypeEnum = pgEnum("automation_trigger_type", [
-	// --- Tier 1: Instagram ---
-	"instagram_dm",
-	"instagram_comment",
-	"instagram_story_reply",
-	"instagram_story_mention",
-	"instagram_mention",
-	"instagram_reaction",
-	"instagram_live_comment",
-	"instagram_postback",
-	"instagram_referral",
-	// --- Tier 1: Facebook Messenger + Page ---
-	"facebook_dm",
-	"facebook_comment",
-	"facebook_mention",
-	"facebook_postback",
-	"facebook_reaction",
-	"facebook_optin",
-	"facebook_feed_post",
-	// --- Tier 1: WhatsApp Cloud API ---
-	"whatsapp_message",
-	"whatsapp_keyword",
-	"whatsapp_button_click",
-	"whatsapp_list_reply",
-	"whatsapp_flow_submit",
-	"whatsapp_reaction",
-	"whatsapp_status_update",
-	// --- Tier 1: Telegram Bot API 9.6 ---
-	"telegram_message",
-	"telegram_command",
-	"telegram_channel_post",
-	"telegram_callback_query",
-	"telegram_reaction",
-	"telegram_member_joined",
-	"telegram_chat_join_request",
-	"telegram_business_message",
-	"telegram_inline_query",
-	// --- Tier 1: Discord API v10 ---
-	"discord_message",
-	"discord_dm",
-	"discord_reaction",
-	"discord_member_joined",
-	"discord_thread_created",
-	"discord_interaction",
-	// --- Tier 1: SMS (Twilio/Telnyx provider-abstracted) ---
-	"sms_received",
-	// --- Tier 1: X / Twitter ---
-	"twitter_dm",
-	"twitter_mention",
-	"twitter_reply",
-	"twitter_follow",
-	"twitter_like",
-	"twitter_retweet",
-	"twitter_quote",
-	// --- Tier 1: Bluesky (DM via poll, public via Jetstream firehose) ---
-	"bluesky_dm",
-	"bluesky_reply",
-	"bluesky_mention",
-	"bluesky_follow",
-	"bluesky_like",
-	// --- Tier 2: Threads (no DM) ---
-	"threads_reply",
-	"threads_mention",
-	"threads_publish",
-	// --- Tier 2: YouTube (polling + PubSubHubbub) ---
-	"youtube_comment",
-	"youtube_live_chat",
-	"youtube_new_video",
-	// --- Tier 2: LinkedIn (polling) ---
-	"linkedin_comment",
-	"linkedin_mention",
-	"linkedin_reaction",
-	// --- Tier 2: Mastodon (streaming) ---
-	"mastodon_mention",
-	"mastodon_reply",
-	"mastodon_boost",
-	"mastodon_follow",
-	"mastodon_favourite",
-	// --- Tier 2: Reddit (polling only) ---
-	"reddit_comment",
-	"reddit_mention",
-	"reddit_new_post",
-	"reddit_modmail",
-	"reddit_dm",
-	// --- Tier 2: Google Business Profile (Pub/Sub) ---
-	// Non-deprecated enum values only (NEW_QUESTION / UPDATED_QUESTION / NEW_ANSWER
-	// / UPDATED_ANSWER / LOSS_OF_VOICE_OF_MERCHANT are deprecated per docs).
-	"googlebusiness_new_review",
-	"googlebusiness_updated_review",
-	"googlebusiness_new_customer_media",
-	"googlebusiness_duplicate_location",
-	"googlebusiness_voice_of_merchant_updated",
-	"googlebusiness_google_update",
-	// --- Tier 3: Newsletter subscriber triggers ---
-	"beehiiv_subscription_created",
-	"beehiiv_subscription_confirmed",
-	"beehiiv_subscription_deleted",
-	"kit_subscriber_activate",
-	"kit_form_subscribe",
-	"kit_tag_add",
-	"mailchimp_subscribe",
-	"mailchimp_unsubscribe",
-	// --- Cross-platform / virtual ---
-	"scheduled_time",
-	"engagement_threshold",
-	"tag_applied",
-	"tag_removed",
-	"field_changed",
-	"external_api",
-	"manual",
-	"segment_entered",
-	"segment_left",
-]);
-
-export const automationNodeTypeEnum = pgEnum("automation_node_type", [
-	// --- Virtual root ---
-	"trigger",
-	// --- Universal content ---
-	"message_text",
-	"message_media",
-	"message_file",
-	// --- Universal input capture ---
-	"user_input_text",
-	"user_input_email",
-	"user_input_phone",
-	"user_input_number",
-	"user_input_date",
-	"user_input_choice",
-	"user_input_file",
-	// --- Universal logic ---
-	"condition",
-	"smart_delay",
-	"randomizer",
-	"split_test",
-	"goto",
-	"end",
-	"subflow_call",
-	// --- Universal AI ---
-	"ai_step",
-	"ai_agent",
-	"ai_intent_router",
-	// --- Universal contact actions ---
-	"tag_add",
-	"tag_remove",
-	"field_set",
-	"field_clear",
-	"subscription_add",
-	"subscription_remove",
-	"segment_add",
-	"segment_remove",
-	// --- Universal ops ---
-	"notify_admin",
-	"conversation_assign",
-	"conversation_status",
-	"http_request",
-	"webhook_out",
-	// --- Instagram ---
-	"instagram_send_text",
-	"instagram_send_media",
-	"instagram_send_buttons",
-	"instagram_send_quick_replies",
-	"instagram_send_generic_template",
-	"instagram_typing",
-	"instagram_mark_seen",
-	"instagram_reply_to_comment",
-	"instagram_hide_comment",
-	// --- Facebook Messenger ---
-	"facebook_send_text",
-	"facebook_send_media",
-	"facebook_send_template",
-	"facebook_send_quick_replies",
-	"facebook_send_button_template",
-	"facebook_reply_to_comment",
-	"facebook_private_reply",
-	"facebook_hide_comment",
-	"facebook_sender_action",
-	// --- WhatsApp ---
-	"whatsapp_send_text",
-	"whatsapp_send_media",
-	"whatsapp_send_template",
-	"whatsapp_send_interactive",
-	"whatsapp_send_flow",
-	"whatsapp_send_location",
-	"whatsapp_send_contacts",
-	"whatsapp_react",
-	"whatsapp_mark_read",
-	// --- Telegram ---
-	"telegram_send_text",
-	"telegram_send_media",
-	"telegram_send_media_group",
-	"telegram_send_poll",
-	"telegram_send_location",
-	"telegram_send_keyboard",
-	"telegram_edit_message",
-	"telegram_pin_message",
-	"telegram_react",
-	"telegram_set_chat_action",
-	// --- Discord ---
-	"discord_send_message",
-	"discord_send_embed",
-	"discord_send_components",
-	"discord_send_attachment",
-	"discord_react",
-	"discord_edit_message",
-	"discord_start_thread",
-	// --- SMS ---
-	"sms_send",
-	"sms_send_mms",
-	// --- X / Twitter ---
-	"twitter_send_dm",
-	"twitter_send_dm_media",
-	"twitter_reply_to_tweet",
-	"twitter_like_tweet",
-	"twitter_retweet",
-	// --- Bluesky ---
-	"bluesky_reply",
-	"bluesky_like",
-	"bluesky_repost",
-	"bluesky_send_dm",
-	// --- Threads ---
-	"threads_reply_to_post",
-	"threads_hide_reply",
-	// --- YouTube ---
-	"youtube_reply_to_comment",
-	"youtube_send_live_chat",
-	"youtube_moderate_comment",
-	// --- LinkedIn ---
-	"linkedin_reply_to_comment",
-	"linkedin_react_to_post",
-	// --- Mastodon ---
-	"mastodon_reply",
-	"mastodon_favourite",
-	"mastodon_boost",
-	"mastodon_send_dm",
-	// --- Reddit ---
-	"reddit_reply_to_comment",
-	"reddit_send_pm",
-	"reddit_reply_modmail",
-	"reddit_submit_post",
-	// --- Google Business ---
-	"googlebusiness_reply_to_review",
-	"googlebusiness_post_update",
-	// --- Beehiiv ---
-	"beehiiv_add_subscriber",
-	"beehiiv_publish_post",
-	"beehiiv_enroll_automation",
-	// --- Kit ---
-	"kit_add_subscriber",
-	"kit_add_tag",
-	"kit_send_broadcast",
-	// --- Mailchimp ---
-	"mailchimp_add_member",
-	"mailchimp_add_tag",
-	"mailchimp_send_campaign",
-	// --- Listmonk ---
-	"listmonk_add_subscriber",
-	"listmonk_send_campaign",
-	// --- Pinterest ---
-	"pinterest_create_pin",
-]);
 
 export const automationStatusEnum = pgEnum("automation_status", [
 	"draft",
@@ -2757,303 +2495,336 @@ export const automationStatusEnum = pgEnum("automation_status", [
 	"archived",
 ]);
 
-export const automationEnrollmentStatusEnum = pgEnum(
-	"automation_enrollment_status",
-	["active", "waiting", "completed", "exited", "failed"],
-);
-
 export const automationChannelEnum = pgEnum("automation_channel", [
 	"instagram",
 	"facebook",
 	"whatsapp",
 	"telegram",
-	"discord",
-	"sms",
-	"twitter",
-	"bluesky",
-	"threads",
-	"youtube",
-	"linkedin",
-	"mastodon",
-	"reddit",
-	"googlebusiness",
-	"beehiiv",
-	"kit",
-	"mailchimp",
-	"listmonk",
-	"pinterest",
-	"multi",
+	"tiktok",
 ]);
 
-// ---------------------------------------------------------------------------
-// Automation graph tables
-// ---------------------------------------------------------------------------
+export const automationBindingTypeEnum = pgEnum("automation_binding_type", [
+	"default_reply",
+	"welcome_message",
+	"conversation_starter",
+	"main_menu",
+	"ice_breaker",
+]);
+
+export const automationRunStatusEnum = pgEnum("automation_run_status", [
+	"active",
+	"waiting",
+	"completed",
+	"exited",
+	"failed",
+]);
 
 export const automations = pgTable(
 	"automations",
 	{
 		id: text("id")
 			.primaryKey()
-			.$defaultFn(() => generateId("aut_")),
+			.$defaultFn(() => generateId("auto_")),
 		organizationId: text("organization_id")
 			.notNull()
-			.references(() => organization.id),
+			.references(() => organization.id, { onDelete: "cascade" }),
 		workspaceId: text("workspace_id").references(() => workspaces.id, {
 			onDelete: "set null",
 		}),
 		name: text("name").notNull(),
 		description: text("description"),
-		status: automationStatusEnum("status").notNull().default("draft"),
 		channel: automationChannelEnum("channel").notNull(),
-		entryNodeId: text("entry_node_id"),
-		version: integer("version").notNull().default(1),
-		publishedVersion: integer("published_version"),
-		exitOnReply: boolean("exit_on_reply").notNull().default(true),
-		allowReentry: boolean("allow_reentry").notNull().default(false),
-		reentryCooldownMin: integer("reentry_cooldown_min"),
+		status: automationStatusEnum("status").notNull().default("draft"),
+		graph: jsonb("graph")
+			.notNull()
+			.default(
+				sql`'{"schema_version":1,"root_node_key":null,"nodes":[],"edges":[]}'::jsonb`,
+			),
+		createdFromTemplate: text("created_from_template"),
+		templateConfig: jsonb("template_config"),
 		totalEnrolled: integer("total_enrolled").notNull().default(0),
 		totalCompleted: integer("total_completed").notNull().default(0),
 		totalExited: integer("total_exited").notNull().default(0),
-		createdBy: text("created_by"),
+		totalFailed: integer("total_failed").notNull().default(0),
+		lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }),
+		validationErrors: jsonb("validation_errors"),
+		createdBy: text("created_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
 		createdAt: timestamp("created_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
+			.notNull()
+			.defaultNow(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
+			.notNull()
+			.defaultNow(),
 	},
 	(table) => [
-		index("automations_org_idx").on(table.organizationId),
-		index("automations_workspace_idx").on(table.workspaceId),
-		index("automations_active_idx").on(table.organizationId, table.status),
+		index("idx_automations_org_status").on(table.organizationId, table.status),
+		index("idx_automations_org_workspace").on(
+			table.organizationId,
+			table.workspaceId,
+		),
+		index("idx_automations_template")
+			.on(table.createdFromTemplate)
+			.where(sql`${table.createdFromTemplate} IS NOT NULL`),
+		index("idx_automations_graph_gin").using("gin", table.graph),
 	],
 );
 
-export const automationTriggers = pgTable(
-	"automation_triggers",
+export const automationEntrypoints = pgTable(
+	"automation_entrypoints",
 	{
 		id: text("id")
 			.primaryKey()
-			.$defaultFn(() => generateId("atrg_")),
+			.$defaultFn(() => generateId("aep_")),
 		automationId: text("automation_id")
 			.notNull()
 			.references(() => automations.id, { onDelete: "cascade" }),
-		type: automationTriggerTypeEnum("type").notNull(),
-		config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
-		filters: jsonb("filters").notNull().default(sql`'{}'::jsonb`),
+		channel: automationChannelEnum("channel").notNull(),
+		kind: text("kind").notNull(),
+		status: text("status").notNull().default("active"),
 		socialAccountId: text("social_account_id").references(
 			() => socialAccounts.id,
 			{ onDelete: "set null" },
 		),
-		label: text("label").notNull(),
-		orderIndex: integer("order_index").notNull().default(0),
-		createdAt: timestamp("created_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
-		updatedAt: timestamp("updated_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
-	},
-	(table) => [
-		index("automation_triggers_automation_idx").on(table.automationId),
-		index("automation_triggers_matcher_idx").on(table.type),
-		index("automation_triggers_account_idx").on(table.socialAccountId),
-	],
-);
-
-export const automationNodes = pgTable(
-	"automation_nodes",
-	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => generateId("atnd_")),
-		automationId: text("automation_id")
-			.notNull()
-			.references(() => automations.id, { onDelete: "cascade" }),
-		key: text("key").notNull(), // human-chosen string, unique per automation — what AI and SDK use to reference this node
-		type: automationNodeTypeEnum("type").notNull(),
 		config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
-		canvasX: real("canvas_x"),
-		canvasY: real("canvas_y"),
-		notes: text("notes"),
+		filters: jsonb("filters"),
+		allowReentry: boolean("allow_reentry").notNull().default(true),
+		reentryCooldownMin: integer("reentry_cooldown_min").notNull().default(60),
+		priority: integer("priority").notNull().default(100),
+		specificity: integer("specificity").notNull().default(0),
 		createdAt: timestamp("created_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
+			.notNull()
+			.defaultNow(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
+			.notNull()
+			.defaultNow(),
 	},
 	(table) => [
-		uniqueIndex("automation_nodes_automation_key_idx").on(
-			table.automationId,
-			table.key,
+		index("idx_automation_entrypoints_automation").on(table.automationId),
+		index("idx_automation_entrypoints_match").on(
+			table.channel,
+			table.kind,
+			table.status,
 		),
-		index("automation_nodes_automation_idx").on(table.automationId),
-	],
-);
-
-export const automationEdges = pgTable(
-	"automation_edges",
-	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => generateId("atedg_")),
-		automationId: text("automation_id")
-			.notNull()
-			.references(() => automations.id, { onDelete: "cascade" }),
-		fromNodeId: text("from_node_id")
-			.notNull()
-			.references(() => automationNodes.id, { onDelete: "cascade" }),
-		toNodeId: text("to_node_id")
-			.notNull()
-			.references(() => automationNodes.id, { onDelete: "cascade" }),
-		label: text("label").notNull().default("next"), // 'next' | 'yes' | 'no' | 'branch_1'..'branch_N' | 'timeout' | 'captured' | 'no_match'
-		order: integer("edge_order").notNull().default(0),
-		conditionExpr: jsonb("condition_expr"),
-	},
-	(table) => [
-		uniqueIndex("automation_edges_uniq_idx").on(
-			table.automationId,
-			table.fromNodeId,
-			table.label,
-			table.order,
-		),
-		index("automation_edges_automation_idx").on(table.automationId),
-		index("automation_edges_from_idx").on(table.fromNodeId),
-	],
-);
-
-export const automationVersions = pgTable(
-	"automation_versions",
-	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => generateId("atv_")),
-		automationId: text("automation_id")
-			.notNull()
-			.references(() => automations.id, { onDelete: "cascade" }),
-		version: integer("version").notNull(),
-		snapshot: jsonb("snapshot").notNull(), // full nodes+edges+trigger at publish time
-		publishedAt: timestamp("published_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
-		publishedBy: text("published_by"),
-	},
-	(table) => [
-		uniqueIndex("automation_versions_auto_version_idx").on(
-			table.automationId,
-			table.version,
+		index("idx_automation_entrypoints_account_match").on(
+			table.socialAccountId,
+			table.kind,
+			table.status,
 		),
 	],
 );
 
-export const automationEnrollments = pgTable(
-	"automation_enrollments",
+export const automationBindings = pgTable(
+	"automation_bindings",
 	{
 		id: text("id")
 			.primaryKey()
-			.$defaultFn(() => generateId("aten_")),
-		automationId: text("automation_id")
-			.notNull()
-			.references(() => automations.id, { onDelete: "cascade" }),
-		automationVersion: integer("automation_version").notNull(),
-		triggerId: text("trigger_id").references(() => automationTriggers.id, {
-			onDelete: "set null",
-		}),
+			.$defaultFn(() => generateId("abnd_")),
 		organizationId: text("organization_id")
 			.notNull()
-			.references(() => organization.id),
-		contactId: text("contact_id"),
-		conversationId: text("conversation_id"),
-		currentNodeId: text("current_node_id"),
-		state: jsonb("state").notNull().default(sql`'{}'::jsonb`), // captured inputs, randomizer seeds, field sets
-		status: automationEnrollmentStatusEnum("status")
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "set null",
+		}),
+		socialAccountId: text("social_account_id")
 			.notNull()
-			.default("active"),
-		nextRunAt: timestamp("next_run_at", { withTimezone: true }),
-		enrolledAt: timestamp("enrolled_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
-		completedAt: timestamp("completed_at", { withTimezone: true }),
-		exitedAt: timestamp("exited_at", { withTimezone: true }),
-		exitReason: text("exit_reason"),
+			.references(() => socialAccounts.id, { onDelete: "cascade" }),
+		channel: automationChannelEnum("channel").notNull(),
+		bindingType: automationBindingTypeEnum("binding_type").notNull(),
+		automationId: text("automation_id")
+			.notNull()
+			.references(() => automations.id, { onDelete: "cascade" }),
+		config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
+		status: text("status").notNull().default("active"),
+		lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+		syncError: text("sync_error"),
 		createdAt: timestamp("created_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
+			.notNull()
+			.defaultNow(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
+			.notNull()
+			.defaultNow(),
 	},
 	(table) => [
-		index("automation_enrollments_scheduler_idx").on(
-			table.status,
-			table.nextRunAt,
+		uniqueIndex("automation_bindings_social_account_binding_type_uniq").on(
+			table.socialAccountId,
+			table.bindingType,
 		),
-		index("automation_enrollments_automation_idx").on(table.automationId),
-		index("automation_enrollments_contact_idx").on(table.contactId),
-		index("automation_enrollments_org_idx").on(table.organizationId),
-		index("automation_enrollments_waiting_contact_idx").on(
+		index("idx_automation_bindings_lookup").on(
+			table.socialAccountId,
+			table.bindingType,
+			table.status,
+		),
+		index("idx_automation_bindings_automation").on(table.automationId),
+	],
+);
+
+export const automationRuns = pgTable(
+	"automation_runs",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("arun_")),
+		automationId: text("automation_id")
+			.notNull()
+			.references(() => automations.id, { onDelete: "cascade" }),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		entrypointId: text("entrypoint_id").references(
+			() => automationEntrypoints.id,
+			{ onDelete: "set null" },
+		),
+		bindingId: text("binding_id").references(() => automationBindings.id, {
+			onDelete: "set null",
+		}),
+		contactId: text("contact_id")
+			.notNull()
+			.references(() => contacts.id, { onDelete: "cascade" }),
+		conversationId: text("conversation_id").references(
+			() => inboxConversations.id,
+			{ onDelete: "set null" },
+		),
+		status: automationRunStatusEnum("status").notNull().default("active"),
+		currentNodeKey: text("current_node_key"),
+		currentPortKey: text("current_port_key"),
+		context: jsonb("context").notNull().default(sql`'{}'::jsonb`),
+		waitingUntil: timestamp("waiting_until", { withTimezone: true }),
+		waitingFor: text("waiting_for"),
+		exitReason: text("exit_reason"),
+		startedAt: timestamp("started_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		index("idx_automation_runs_auto_status").on(
+			table.automationId,
+			table.status,
+		),
+		index("idx_automation_runs_contact_auto").on(
 			table.contactId,
-			table.status,
+			table.automationId,
 		),
-		index("automation_enrollments_trigger_idx").on(table.triggerId),
+		index("idx_automation_runs_sweeper").on(table.status, table.waitingUntil),
+		index("idx_automation_runs_org_started").on(
+			table.organizationId,
+			sql`${table.startedAt} DESC`,
+		),
+		uniqueIndex("idx_automation_runs_active_uniq")
+			.on(table.contactId, table.automationId)
+			.where(sql`"status" IN ('active', 'waiting')`),
 	],
 );
 
-export const automationRunLogs = pgTable(
-	"automation_run_logs",
+// NOTE: automation_step_runs is partitioned by range on executed_at in Postgres;
+// Drizzle doesn't natively represent partitions but the parent table is queried
+// transparently. Monthly partitions (2026-04 .. 2026-07) are created in the
+// handwritten migration 0032_automation_tables.sql — add future partitions via
+// additional SQL migrations as time progresses.
+export const automationStepRuns = pgTable(
+	"automation_step_runs",
 	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => generateId("atrl_")),
-		enrollmentId: text("enrollment_id")
-			.notNull()
-			.references(() => automationEnrollments.id, { onDelete: "cascade" }),
-		nodeId: text("node_id"),
-		nodeType: automationNodeTypeEnum("node_type"),
-		executedAt: timestamp("executed_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
-		outcome: text("outcome").notNull(), // ok | skipped | failed | timeout | branch_taken
-		branchLabel: text("branch_label"),
-		durationMs: integer("duration_ms"),
-		error: text("error"),
+		id: bigserial("id", { mode: "bigint" }).notNull(),
+		runId: text("run_id").notNull(),
+		automationId: text("automation_id").notNull(),
+		nodeKey: text("node_key").notNull(),
+		nodeKind: text("node_kind").notNull(),
+		enteredViaPortKey: text("entered_via_port_key"),
+		exitedViaPortKey: text("exited_via_port_key"),
+		outcome: text("outcome").notNull(),
+		durationMs: integer("duration_ms").notNull().default(0),
 		payload: jsonb("payload"),
+		error: jsonb("error"),
+		executedAt: timestamp("executed_at", { withTimezone: true }).notNull(),
 	},
 	(table) => [
-		index("automation_run_logs_enrollment_idx").on(
-			table.enrollmentId,
-			table.executedAt,
+		primaryKey({ columns: [table.id, table.executedAt] }),
+		index("idx_step_runs_run_time").on(
+			table.runId,
+			sql`${table.executedAt} DESC`,
 		),
+		index("idx_step_runs_auto_time").on(table.automationId, table.executedAt),
+		index("idx_step_runs_node_time").on(table.nodeKey, table.executedAt),
+		index("idx_step_runs_executed_brin").using("brin", table.executedAt),
 	],
 );
 
-export const automationScheduledTicks = pgTable(
-	"automation_scheduled_ticks",
+export const automationScheduledJobs = pgTable(
+	"automation_scheduled_jobs",
 	{
 		id: text("id")
 			.primaryKey()
-			.$defaultFn(() => generateId("att_")),
-		enrollmentId: text("enrollment_id")
-			.notNull()
-			.references(() => automationEnrollments.id, { onDelete: "cascade" }),
+			.$defaultFn(() => generateId("asj_")),
+		runId: text("run_id").references(() => automationRuns.id, {
+			onDelete: "cascade",
+		}),
+		jobType: text("job_type").notNull(),
+		automationId: text("automation_id").references(() => automations.id, {
+			onDelete: "cascade",
+		}),
+		entrypointId: text("entrypoint_id").references(
+			() => automationEntrypoints.id,
+			{ onDelete: "cascade" },
+		),
 		runAt: timestamp("run_at", { withTimezone: true }).notNull(),
+		status: text("status").notNull().default("pending"),
 		attempts: integer("attempts").notNull().default(0),
-		status: text("status").notNull().default("pending"), // pending | processing | done | failed
-		// Set every time the row is transitioned into `processing`. The scheduler's
-		// stale-tick sweep uses this (not `runAt`) to detect claims that have been
-		// held too long — a long-delay tick has an old `runAt` but was only just
-		// claimed, so filtering on `runAt` would falsely re-queue it.
 		claimedAt: timestamp("claimed_at", { withTimezone: true }),
+		payload: jsonb("payload"),
+		error: text("error"),
 		createdAt: timestamp("created_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
+			.notNull()
+			.defaultNow(),
 	},
 	(table) => [
-		index("automation_scheduled_ticks_run_at_idx").on(
-			table.status,
-			table.runAt,
-		),
+		index("idx_scheduled_jobs_sweep").on(table.status, table.runAt),
+		index("idx_scheduled_jobs_run").on(table.runId),
+	],
+);
+
+export const automationContactControls = pgTable(
+	"automation_contact_controls",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("acc_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		contactId: text("contact_id")
+			.notNull()
+			.references(() => contacts.id, { onDelete: "cascade" }),
+		automationId: text("automation_id").references(() => automations.id, {
+			onDelete: "cascade",
+		}),
+		pauseReason: text("pause_reason"),
+		pausedUntil: timestamp("paused_until", { withTimezone: true }),
+		pausedByUserId: text("paused_by_user_id").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("idx_contact_controls_per_auto")
+			.on(table.contactId, table.automationId)
+			.where(sql`"automation_id" IS NOT NULL`),
+		uniqueIndex("idx_contact_controls_global")
+			.on(table.contactId)
+			.where(sql`"automation_id" IS NULL`),
+		index("idx_contact_controls_contact").on(table.contactId),
+		index("idx_contact_controls_expiry")
+			.on(table.pausedUntil)
+			.where(sql`${table.pausedUntil} IS NOT NULL`),
 	],
 );
 

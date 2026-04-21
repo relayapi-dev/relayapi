@@ -204,6 +204,41 @@
       "when": 1776681441378,
       "tag": "0028_damp_morbius",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1776699076633,
+      "tag": "0029_acoustic_terrax",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1776700000000,
+      "tag": "0030_drop_legacy_automations",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1776700100000,
+      "tag": "0031_automation_enums",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1776700200000,
+      "tag": "0032_automation_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1776700300000,
+      "tag": "0033_reconcile_adjacent_tables",
+      "breakpoints": true
     }
   ]
 }

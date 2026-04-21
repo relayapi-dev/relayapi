@@ -1,500 +1,153 @@
+// apps/api/src/routes/automations.ts
+//
+// Automation CRUD + lifecycle + graph + enroll + simulate routes for the
+// Manychat-parity engine. See spec §9.1 + §7 for the endpoint surface.
+
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	automationEdges,
-	automationEnrollments,
-	automationNodes,
-	automationRunLogs,
-	automationTriggers,
-	automationVersions,
+	automationEntrypoints,
+	automationRuns,
 	automations,
-	createDb,
 } from "@relayapi/db";
-import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
-import { automationError, suggest } from "../lib/automation-errors";
+import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import {
 	applyWorkspaceScope,
+	assertWorkspaceScope,
 	isWorkspaceScopeDenied,
-	WORKSPACE_ACCESS_DENIED_BODY,
 } from "../lib/workspace-scope";
-import {
-	AutomationCreateSpec,
-	AutomationEnrollmentResponse,
-	AutomationSampleListResponse,
-	AutomationEnrollRequest,
-	AutomationEnrollResponse,
-	AutomationListResponse,
-	AutomationResponse,
-	AutomationRunLogResponse,
-	AutomationSchemaResponse,
-	AutomationSimulateRequest,
-	AutomationSimulateResponse,
-	AutomationUpdateSpec,
-	AutomationWithGraphResponse,
-} from "../schemas/automations";
-import {
-	assertAutomationManifestIntegrity,
-	PUBLISHED_AUTOMATION_NODE_MANIFEST,
-	PUBLISHED_AUTOMATION_TRIGGER_MANIFEST,
-	AUTOMATION_TEMPLATE_MANIFEST,
-} from "../services/automations/manifest";
-import {
-	ENROLLMENT_TRIGGER_STATE_KEY,
-	getEnrollmentTriggerId,
-} from "../services/automations/resolve-trigger";
-import { simulateAutomation } from "../services/automations/simulator";
-import { enrollDirectly } from "../services/automations/trigger-matcher";
-import type { AutomationSnapshot } from "../services/automations/types";
 import { ErrorResponse, PaginationParams } from "../schemas/common";
+import { GraphSchema } from "../schemas/automation-graph";
+import {
+	AutomationChannelSchema,
+	AutomationCreateSchema,
+	AutomationEnrollSchema,
+	AutomationGraphUpdateSchema,
+	AutomationResponseSchema,
+	AutomationSimulateSchema,
+	AutomationStatusSchema,
+	AutomationUpdateSchema,
+	AutomationValidationSchema,
+} from "../schemas/automations";
+import { enrollContact } from "../services/automations/runner";
+import { simulate } from "../services/automations/simulator";
+import {
+	buildGraphFromTemplate,
+	type TemplateKind,
+} from "../services/automations/templates";
+import { computeSpecificity } from "../services/automations/trigger-matcher";
+import { validateGraph } from "../services/automations/validator";
 import type { Env, Variables } from "../types";
+import {
+	AUTOMATION_CATALOG,
+	AUTOMATION_CATALOG_ETAG,
+	AUTOMATION_CATALOG_JSON,
+} from "./_automation-catalog";
+import {
+	aggregateInsights,
+	AutomationInsightsQuery,
+	GlobalInsightsQuery,
+	InsightsResponseSchema,
+} from "./_automation-insights";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
-const IdParams = z.object({ id: z.string() });
-const ListQuery = PaginationParams.extend({
-	workspace_id: z.string().optional(),
-	status: z.enum(["draft", "active", "paused", "archived"]).optional(),
-	channel: z.string().optional(),
-	trigger_type: z.string().optional(),
-});
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-async function hasUserNodes(
-	db: ReturnType<typeof createDb>,
-	automationId: string,
-): Promise<boolean> {
-	return (await countUserNodes(db, automationId)) > 0;
-}
+type AutomationRow = typeof automations.$inferSelect;
+type AutomationResponse = z.infer<typeof AutomationResponseSchema>;
 
-async function countUserNodes(
-	db: ReturnType<typeof createDb>,
-	automationId: string,
-): Promise<number> {
-	const rows = await db
-		.select({ count: sql<number>`count(*)::int` })
-		.from(automationNodes)
-		.where(
-			and(
-				eq(automationNodes.automationId, automationId),
-				sql`${automationNodes.key} != 'trigger'`,
-			),
-		);
-	return rows[0]?.count ?? 0;
-}
-
-/**
- * Replaces an automation's non-trigger nodes and all edges with the supplied
- * set. The virtual `trigger` node is preserved so `entry_node_id` stays valid.
- * Cascading FKs on automation_edges delete edges tied to removed nodes; the
- * bulk edge delete cleans up the rest (including old trigger → ... edges).
- */
-async function replaceAutomationGraph(
-	db: ReturnType<typeof createDb>,
-	automationId: string,
-	newNodes: Array<{
-		key: string;
-		type: string;
-		notes?: string;
-		canvas_x?: number;
-		canvas_y?: number;
-		[field: string]: unknown;
-	}>,
-	newEdges: Array<{
-		from: string;
-		to: string;
-		label?: string;
-		order?: number;
-		condition_expr?: unknown;
-	}>,
-): Promise<void> {
-	// Delete all edges first so we can drop nodes without FK-cascade side effects.
-	await db
-		.delete(automationEdges)
-		.where(eq(automationEdges.automationId, automationId));
-	// Drop non-trigger nodes. The trigger node is kept so entry_node_id stays
-	// pointed at a real row.
-	await db
-		.delete(automationNodes)
-		.where(
-			and(
-				eq(automationNodes.automationId, automationId),
-				sql`${automationNodes.key} != 'trigger'`,
-			),
-		);
-
-	const triggerNode = await db.query.automationNodes.findFirst({
-		where: and(
-			eq(automationNodes.automationId, automationId),
-			eq(automationNodes.key, "trigger"),
-		),
-	});
-	if (!triggerNode) {
-		// Shouldn't happen — create guarantees a trigger node — but self-heal
-		// rather than 500 the request.
-		const [created] = await db
-			.insert(automationNodes)
-			.values({
-				automationId,
-				key: "trigger",
-				type: "trigger" as never,
-				config: {},
-			})
-			.returning();
-		if (!created) throw new Error("failed to re-create trigger node");
-		await db
-			.update(automations)
-			.set({ entryNodeId: created.id })
-			.where(eq(automations.id, automationId));
-	}
-
-	const inserted = newNodes.length
-		? await db
-				.insert(automationNodes)
-				.values(
-					newNodes.map((n) => ({
-						automationId,
-						key: n.key,
-						type: n.type as never,
-						config: extractNodeConfig(n),
-						canvasX: n.canvas_x,
-						canvasY: n.canvas_y,
-						notes: n.notes,
-					})),
-				)
-				.returning()
-		: [];
-
-	const triggerId =
-		triggerNode?.id ??
-		(
-			await db.query.automationNodes.findFirst({
-				where: and(
-					eq(automationNodes.automationId, automationId),
-					eq(automationNodes.key, "trigger"),
-				),
-			})
-		)?.id;
-	if (!triggerId) throw new Error("trigger node missing after replace");
-
-	const keyToId = new Map<string, string>([
-		["trigger", triggerId],
-		...inserted.map((n) => [n.key, n.id] as [string, string]),
-	]);
-
-	if (newEdges.length) {
-		await db.insert(automationEdges).values(
-			newEdges.map((e) => ({
-				automationId,
-				fromNodeId: keyToId.get(e.from)!,
-				toNodeId: keyToId.get(e.to)!,
-				label: e.label ?? "next",
-				order: e.order ?? 0,
-				conditionExpr: e.condition_expr ?? null,
-			})),
-		);
-	}
-}
-
-/**
- * Replace only the edge set (node list unchanged). Used when PATCH sends
- * `edges` but omits `nodes`.
- */
-async function replaceEdgesOnly(
-	db: ReturnType<typeof createDb>,
-	automationId: string,
-	newEdges: Array<{
-		from: string;
-		to: string;
-		label?: string;
-		order?: number;
-		condition_expr?: unknown;
-	}>,
-): Promise<void> {
-	const existingNodes = await db
-		.select()
-		.from(automationNodes)
-		.where(eq(automationNodes.automationId, automationId));
-	const keyToId = new Map(existingNodes.map((n) => [n.key, n.id]));
-
-	await db
-		.delete(automationEdges)
-		.where(eq(automationEdges.automationId, automationId));
-
-	if (!newEdges.length) return;
-
-	for (const e of newEdges) {
-		if (!keyToId.has(e.from) || !keyToId.has(e.to)) {
-			throw new Error(
-				`edge references unknown node: from='${e.from}' to='${e.to}'`,
-			);
-		}
-	}
-
-	await db.insert(automationEdges).values(
-		newEdges.map((e) => ({
-			automationId,
-			fromNodeId: keyToId.get(e.from)!,
-			toNodeId: keyToId.get(e.to)!,
-			label: e.label ?? "next",
-			order: e.order ?? 0,
-			conditionExpr: e.condition_expr ?? null,
-		})),
-	);
-}
-
-// --- Serializers ---
-
-type SerializedAutomation = z.infer<typeof AutomationResponse>;
-
-function serializeAutomation(
-	a: typeof automations.$inferSelect,
-	triggers: (typeof automationTriggers.$inferSelect)[],
-): SerializedAutomation {
+function serializeAutomation(row: AutomationRow): AutomationResponse {
 	return {
-		id: a.id,
-		organization_id: a.organizationId,
-		workspace_id: a.workspaceId,
-		name: a.name,
-		description: a.description ?? null,
-		status: a.status as SerializedAutomation["status"],
-		channel: a.channel as SerializedAutomation["channel"],
-		triggers: triggers
-			.slice()
-			.sort((x, y) => x.orderIndex - y.orderIndex)
-			.map((t) => ({
-				id: t.id,
-				type: t.type,
-				account_id: t.socialAccountId,
-				config: t.config,
-				filters: t.filters,
-				label: t.label,
-				order_index: t.orderIndex,
-			})),
-		entry_node_id: a.entryNodeId,
-		version: a.version,
-		published_version: a.publishedVersion,
-		exit_on_reply: a.exitOnReply,
-		allow_reentry: a.allowReentry,
-		reentry_cooldown_min: a.reentryCooldownMin,
-		total_enrolled: a.totalEnrolled,
-		total_completed: a.totalCompleted,
-		total_exited: a.totalExited,
-		created_at: a.createdAt.toISOString(),
-		updated_at: a.updatedAt.toISOString(),
+		id: row.id,
+		organization_id: row.organizationId,
+		workspace_id: row.workspaceId,
+		name: row.name,
+		description: row.description,
+		channel: row.channel as AutomationResponse["channel"],
+		status: row.status as AutomationResponse["status"],
+		graph: (row.graph ?? {
+			schema_version: 1,
+			root_node_key: null,
+			nodes: [],
+			edges: [],
+		}) as AutomationResponse["graph"],
+		created_from_template: row.createdFromTemplate,
+		template_config:
+			(row.templateConfig as Record<string, unknown> | null) ?? null,
+		total_enrolled: row.totalEnrolled,
+		total_completed: row.totalCompleted,
+		total_exited: row.totalExited,
+		total_failed: row.totalFailed,
+		last_validated_at: row.lastValidatedAt?.toISOString() ?? null,
+		validation_errors:
+			(row.validationErrors as AutomationResponse["validation_errors"]) ?? null,
+		created_by: row.createdBy,
+		created_at: row.createdAt.toISOString(),
+		updated_at: row.updatedAt.toISOString(),
 	};
 }
 
-// --- Create ---
+function notFound(c: any) {
+	return c.json(
+		{ error: { code: "NOT_FOUND", message: "Automation not found" } },
+		404,
+	);
+}
 
-const createAutomation = createRoute({
-	operationId: "createAutomation",
-	method: "post",
-	path: "/",
-	tags: ["Automations"],
-	summary: "Create an automation (single-blob spec)",
-	security: [{ Bearer: [] }],
-	request: {
-		body: { content: { "application/json": { schema: AutomationCreateSpec } } },
-	},
-	responses: {
-		201: {
-			description: "Created",
-			content: { "application/json": { schema: AutomationWithGraphResponse } },
-		},
-		400: {
-			description: "Validation error",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		500: {
-			description: "Server error",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
+// ---------------------------------------------------------------------------
+// Route schemas
+// ---------------------------------------------------------------------------
+
+const IdParams = z.object({ id: z.string() });
+
+const ListQuery = PaginationParams.extend({
+	workspace_id: z.string().optional(),
+	status: AutomationStatusSchema.optional(),
+	channel: AutomationChannelSchema.optional(),
+	created_from_template: z.string().optional(),
+	q: z.string().optional().describe("Name substring match"),
 });
 
-app.openapi(createAutomation, async (c) => {
-	const body = c.req.valid("json");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-
-	// An empty node list is only valid for drafts. Publishing (status=active)
-	// requires at least one user node so the snapshot has something to execute.
-	if (body.status === "active" && body.nodes.length === 0) {
-		return c.json(
-			automationError(
-				"empty_automation",
-				"Active automations must have at least one node",
-				{ path: "nodes" },
-			),
-			400,
-		);
-	}
-
-	// Validate node keys are unique + edges reference known keys
-	const keys = new Set<string>();
-	for (const n of body.nodes) {
-		if (keys.has(n.key)) {
-			return c.json(
-				automationError(
-					"duplicate_node_key",
-					`Node key '${n.key}' appears more than once`,
-					{ path: `nodes[].key`, details: { key: n.key } },
-				),
-				400,
-			);
-		}
-		keys.add(n.key);
-	}
-
-	const allKeys = new Set([...keys, "trigger"]);
-	for (let i = 0; i < body.edges.length; i++) {
-		const e = body.edges[i]!;
-		if (!allKeys.has(e.from)) {
-			return c.json(
-				automationError(
-					"unknown_node_reference",
-					`Edge ${i} references unknown node '${e.from}'`,
-					{
-						path: `edges[${i}].from`,
-						suggestion: suggest(e.from, Array.from(allKeys)),
-					},
-				),
-				400,
-			);
-		}
-		if (!allKeys.has(e.to)) {
-			return c.json(
-				automationError(
-					"unknown_node_reference",
-					`Edge ${i} references unknown node '${e.to}'`,
-					{
-						path: `edges[${i}].to`,
-						suggestion: suggest(e.to, Array.from(allKeys)),
-					},
-				),
-				400,
-			);
-		}
-	}
-
-	// Optional workspace scope check
-	if (body.workspace_id) {
-		// Workspace-level enforcement deferred to middleware.
-	}
-
-	// 1. Insert automation header + per-trigger rows in a single transaction so
-	// a failure after the automation row has been created doesn't leave a header
-	// without any triggers attached.
-	const created = await db.transaction(async (tx) => {
-		const [auto] = await tx
-			.insert(automations)
-			.values({
-				organizationId: orgId,
-				workspaceId: body.workspace_id ?? null,
-				name: body.name,
-				description: body.description,
-				status: body.status,
-				channel: body.channel as never,
-				exitOnReply: body.exit_on_reply,
-				allowReentry: body.allow_reentry,
-				reentryCooldownMin: body.reentry_cooldown_min,
-				createdBy: c.get("keyId"),
-			})
-			.returning();
-		if (!auto) throw new Error("automation insert failed");
-
-		const triggerRows = await tx
-			.insert(automationTriggers)
-			.values(
-				body.triggers.map((t, idx) => ({
-					automationId: auto.id,
-					type: t.type as never,
-					config: t.config ?? {},
-					filters: t.filters ?? {},
-					socialAccountId: t.account_id ?? null,
-					label: t.label ?? `Trigger #${idx + 1}`,
-					orderIndex: t.order_index ?? idx,
-				})),
-			)
-			.returning();
-
-		return { auto, triggerRows };
-	});
-
-	const auto = created.auto;
-
-	if (!auto) {
-		return c.json(
-			automationError("create_failed", "Failed to create automation"),
-			500,
-		);
-	}
-
-	// 2. Insert a virtual 'trigger' node as the entry point
-	const [triggerNode] = await db
-		.insert(automationNodes)
-		.values({
-			automationId: auto.id,
-			key: "trigger",
-			type: "trigger" as never,
-			config: {},
-		})
-		.returning();
-
-	// 3. Insert user nodes (skip when draft has none — PG can't insert 0 rows)
-	const insertedNodes = body.nodes.length
-		? await db
-				.insert(automationNodes)
-				.values(
-					body.nodes.map((n) => ({
-						automationId: auto.id,
-						key: n.key,
-						type: n.type as never,
-						config: extractNodeConfig(n),
-						canvasX: n.canvas_x,
-						canvasY: n.canvas_y,
-						notes: n.notes,
-					})),
-				)
-				.returning()
-		: [];
-
-	const keyToId = new Map<string, string>([
-		["trigger", triggerNode!.id],
-		...insertedNodes.map((n) => [n.key, n.id] as [string, string]),
-	]);
-
-	// 4. Insert edges
-	if (body.edges.length > 0) {
-		await db.insert(automationEdges).values(
-			body.edges.map((e) => ({
-				automationId: auto.id,
-				fromNodeId: keyToId.get(e.from)!,
-				toNodeId: keyToId.get(e.to)!,
-				label: e.label ?? "next",
-				order: e.order ?? 0,
-				conditionExpr: e.condition_expr ?? null,
-			})),
-		);
-	}
-
-	// 5. Set entry node
-	await db
-		.update(automations)
-		.set({ entryNodeId: triggerNode!.id })
-		.where(eq(automations.id, auto.id));
-
-	// 6. If created active, snapshot version 1
-	if (body.status === "active") {
-		await publishVersion(db, auto.id);
-	}
-
-	return c.json(await loadGraphResponse(db, auto.id), 201);
+const ListResponse = z.object({
+	data: z.array(AutomationResponseSchema),
+	next_cursor: z.string().nullable(),
+	has_more: z.boolean(),
 });
 
-// --- List ---
+const GraphUpdateResponse = z.object({
+	graph: GraphSchema,
+	validation: AutomationValidationSchema,
+	automation: z.object({
+		status: AutomationStatusSchema,
+		validation_errors: z
+			.array(z.any())
+			.nullable()
+			.describe("Fatal validation errors that forced the automation to pause."),
+	}),
+});
+
+const EnrollResponse = z.object({ run_id: z.string() });
+
+const SimulateResponseSchema = z.object({
+	steps: z.array(
+		z.object({
+			node_key: z.string(),
+			node_kind: z.string(),
+			entered_via_port_key: z.string().nullable(),
+			exited_via_port_key: z.string().nullable(),
+			outcome: z.enum(["advance", "wait_input", "wait_delay", "end", "fail"]),
+			payload: z.any().optional(),
+		}),
+	),
+	ended_at_node: z.string().nullable(),
+	exit_reason: z.string(),
+});
+
+// ---------------------------------------------------------------------------
+// G1 — CRUD
+// ---------------------------------------------------------------------------
 
 const listAutomations = createRoute({
 	operationId: "listAutomations",
@@ -506,48 +159,48 @@ const listAutomations = createRoute({
 	request: { query: ListQuery },
 	responses: {
 		200: {
-			description: "List",
-			content: { "application/json": { schema: AutomationListResponse } },
+			description: "Automation list",
+			content: { "application/json": { schema: ListResponse } },
 		},
 	},
 });
 
 app.openapi(listAutomations, async (c) => {
-	const { workspace_id, status, channel, trigger_type, cursor, limit } =
-		c.req.valid("query");
-	const db = c.get("db");
 	const orgId = c.get("orgId");
+	const db = c.get("db");
+	const query = c.req.valid("query");
 
 	const conditions = [eq(automations.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, automations.workspaceId);
-	if (workspace_id) conditions.push(eq(automations.workspaceId, workspace_id));
-	if (status) conditions.push(eq(automations.status, status));
-	if (channel) conditions.push(eq(automations.channel, channel as never));
-	if (trigger_type) {
-		const ids = await db
-			.selectDistinct({ id: automationTriggers.automationId })
-			.from(automationTriggers)
-			.where(eq(automationTriggers.type, trigger_type as never));
-		if (ids.length === 0) {
-			return c.json({ data: [], next_cursor: null, has_more: false });
-		}
+
+	if (query.workspace_id) {
+		conditions.push(eq(automations.workspaceId, query.workspace_id));
+	}
+	if (query.status) {
+		conditions.push(eq(automations.status, query.status));
+	}
+	if (query.channel) {
+		conditions.push(eq(automations.channel, query.channel));
+	}
+	if (query.created_from_template) {
 		conditions.push(
-			inArray(
-				automations.id,
-				ids.map((r) => r.id),
-			),
+			eq(automations.createdFromTemplate, query.created_from_template),
 		);
 	}
+	if (query.q) {
+		const escaped = query.q.replace(/[%_\\]/g, "\\$&");
+		conditions.push(ilike(automations.name, `%${escaped}%`));
+	}
 
-	if (cursor) {
-		const cursorRow = await db
+	if (query.cursor) {
+		const [cursorRow] = await db
 			.select({ createdAt: automations.createdAt })
 			.from(automations)
-			.where(eq(automations.id, cursor))
+			.where(eq(automations.id, query.cursor))
 			.limit(1);
-		if (cursorRow[0]) {
+		if (cursorRow) {
 			conditions.push(
-				sql`(${automations.createdAt}, ${automations.id}) < (${cursorRow[0].createdAt}, ${cursor})`,
+				sql`(${automations.createdAt} < ${cursorRow.createdAt} OR (${automations.createdAt} = ${cursorRow.createdAt} AND ${automations.id} < ${query.cursor}))`,
 			);
 		}
 	}
@@ -557,98 +210,162 @@ app.openapi(listAutomations, async (c) => {
 		.from(automations)
 		.where(and(...conditions))
 		.orderBy(desc(automations.createdAt), desc(automations.id))
-		.limit(limit + 1);
+		.limit(query.limit + 1);
 
-	const hasMore = rows.length > limit;
-	const autos = rows.slice(0, limit);
-
-	// Batch-fetch triggers for all returned automations so the serializer can
-	// project them without an N+1 per-automation query.
-	const automationIds = autos.map((a) => a.id);
-	const allTriggers = automationIds.length
-		? await db
-				.select()
-				.from(automationTriggers)
-				.where(inArray(automationTriggers.automationId, automationIds))
-		: [];
-	const byAutomation = new Map<string, typeof allTriggers>();
-	for (const t of allTriggers) {
-		const list = byAutomation.get(t.automationId) ?? [];
-		list.push(t);
-		byAutomation.set(t.automationId, list);
-	}
-
-	const items = autos.map((a) =>
-		serializeAutomation(a, byAutomation.get(a.id) ?? []),
-	);
-	const nextCursor = hasMore ? (rows[limit - 1]?.id ?? null) : null;
+	const hasMore = rows.length > query.limit;
+	const data = rows.slice(0, query.limit);
 
 	return c.json(
-		{ data: items, next_cursor: nextCursor, has_more: hasMore },
+		{
+			data: data.map(serializeAutomation),
+			next_cursor:
+				hasMore && data.length > 0 ? (data[data.length - 1]?.id ?? null) : null,
+			has_more: hasMore,
+		},
 		200,
 	);
 });
 
-// --- Schema introspection (for MCP / AI agents) ---
-//
-// Registered BEFORE the `/{id}` routes so Hono matches the literal path
-// before the parameterised one — otherwise `schema` is treated as an
-// automation id and the lookup returns 404.
-
-const getSchema = createRoute({
-	operationId: "getAutomationSchema",
-	method: "get",
-	path: "/schema",
+const createAutomation = createRoute({
+	operationId: "createAutomation",
+	method: "post",
+	path: "/",
 	tags: ["Automations"],
-	summary: "Get the full catalog of triggers, nodes, and templates",
+	summary: "Create an automation (optionally expanding a template)",
 	security: [{ Bearer: [] }],
+	request: {
+		body: {
+			content: { "application/json": { schema: AutomationCreateSchema } },
+		},
+	},
 	responses: {
-		200: {
-			description: "Catalog",
-			content: { "application/json": { schema: AutomationSchemaResponse } },
+		201: {
+			description: "Created",
+			content: { "application/json": { schema: AutomationResponseSchema } },
+		},
+		400: {
+			description: "Validation error",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
 
-app.openapi(getSchema, async (c) => {
-	assertAutomationManifestIntegrity();
-	return c.json(
-		{
-			triggers: PUBLISHED_AUTOMATION_TRIGGER_MANIFEST,
-			nodes: PUBLISHED_AUTOMATION_NODE_MANIFEST,
-			templates: AUTOMATION_TEMPLATE_MANIFEST,
-			merge_tags: [
-				"first_name",
-				"last_name",
-				"full_name",
-				"email",
-				"phone",
-				"contact.*",
-				"state.*",
-			],
-		},
-		200,
-	);
-});
+app.openapi(createAutomation, async (c) => {
+	const orgId = c.get("orgId");
+	const db = c.get("db");
+	const body = c.req.valid("json");
 
-// --- Get (with graph) ---
+	let name = body.name;
+	const description = body.description ?? null;
+	let graph: any = {
+		schema_version: 1,
+		root_node_key: null,
+		nodes: [],
+		edges: [],
+	};
+	let createdFromTemplate: string | null = null;
+	let templateConfig: Record<string, unknown> | null = null;
+	type EntrypointRow = {
+		kind: string;
+		config: Record<string, unknown>;
+		socialAccountId?: string | null;
+		filters?: Record<string, unknown> | null;
+		allowReentry?: boolean;
+		reentryCooldownMin?: number;
+		priority?: number;
+	};
+	let entrypoints: EntrypointRow[] = [];
+
+	if (body.template) {
+		let built;
+		try {
+			built = buildGraphFromTemplate({
+				kind: body.template.kind as TemplateKind,
+				channel: body.channel,
+				config: body.template.config ?? {},
+			});
+		} catch (err) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_TEMPLATE",
+						message:
+							err instanceof Error
+								? err.message
+								: `unknown template kind: ${body.template.kind}`,
+					},
+				},
+				400,
+			);
+		}
+		graph = built.graph;
+		if (!body.name || body.name === "") name = built.name;
+		createdFromTemplate = body.template.kind;
+		templateConfig = body.template.config ?? {};
+		entrypoints = built.entrypoints;
+	}
+
+	const [inserted] = await db
+		.insert(automations)
+		.values({
+			organizationId: orgId,
+			workspaceId: body.workspace_id ?? null,
+			name,
+			description,
+			channel: body.channel,
+			status: "draft",
+			graph,
+			createdFromTemplate,
+			templateConfig,
+			createdBy: c.get("keyId"),
+		})
+		.returning();
+	if (!inserted) {
+		return c.json(
+			{
+				error: { code: "INTERNAL_ERROR", message: "failed to create automation" },
+			},
+			400,
+		);
+	}
+
+	if (entrypoints.length > 0) {
+		await db.insert(automationEntrypoints).values(
+			entrypoints.map((ep) => ({
+				automationId: inserted.id,
+				channel: body.channel,
+				kind: ep.kind,
+				socialAccountId: ep.socialAccountId ?? null,
+				config: ep.config ?? {},
+				filters: ep.filters ?? null,
+				allowReentry: ep.allowReentry ?? true,
+				reentryCooldownMin: ep.reentryCooldownMin ?? 60,
+				priority: ep.priority ?? 100,
+				specificity: computeSpecificity(
+					ep.kind,
+					ep.config ?? {},
+					ep.filters ?? null,
+					ep.socialAccountId ?? null,
+				),
+			})),
+		);
+	}
+
+	return c.json(serializeAutomation(inserted), 201);
+});
 
 const getAutomation = createRoute({
 	operationId: "getAutomation",
 	method: "get",
 	path: "/{id}",
 	tags: ["Automations"],
-	summary: "Get automation with nodes + edges",
+	summary: "Get an automation with its full graph",
 	security: [{ Bearer: [] }],
 	request: { params: IdParams },
 	responses: {
 		200: {
 			description: "Automation",
-			content: { "application/json": { schema: AutomationWithGraphResponse } },
-		},
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
+			content: { "application/json": { schema: AutomationResponseSchema } },
 		},
 		404: {
 			description: "Not found",
@@ -658,51 +375,38 @@ const getAutomation = createRoute({
 });
 
 app.openapi(getAutomation, async (c) => {
-	const { id } = c.req.valid("param");
-	const db = c.get("db");
 	const orgId = c.get("orgId");
+	const db = c.get("db");
+	const { id } = c.req.valid("param");
 
-	const row = await db.query.automations.findFirst({
-		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
-	});
-	if (!row) {
-		return c.json(
-			{ error: { code: "not_found", message: "Automation not found" } },
-			404,
-		);
-	}
-	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
-
-	return c.json(await loadGraphResponse(db, id), 200);
+	const [row] = await db
+		.select()
+		.from(automations)
+		.where(and(eq(automations.id, id), eq(automations.organizationId, orgId)))
+		.limit(1);
+	if (!row) return notFound(c);
+	const denied = assertWorkspaceScope(c, row.workspaceId);
+	if (denied) return denied;
+	return c.json(serializeAutomation(row), 200);
 });
-
-// --- Update metadata ---
 
 const updateAutomation = createRoute({
 	operationId: "updateAutomation",
 	method: "patch",
 	path: "/{id}",
 	tags: ["Automations"],
-	summary: "Update automation metadata + graph",
+	summary: "Update automation metadata (name, description)",
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParams,
-		body: { content: { "application/json": { schema: AutomationUpdateSpec } } },
+		body: {
+			content: { "application/json": { schema: AutomationUpdateSchema } },
+		},
 	},
 	responses: {
 		200: {
-			description: "Updated (includes full graph)",
-			content: { "application/json": { schema: AutomationWithGraphResponse } },
-		},
-		400: {
-			description: "Validation error",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
+			description: "Updated",
+			content: { "application/json": { schema: AutomationResponseSchema } },
 		},
 		404: {
 			description: "Not found",
@@ -712,466 +416,45 @@ const updateAutomation = createRoute({
 });
 
 app.openapi(updateAutomation, async (c) => {
+	const orgId = c.get("orgId");
+	const db = c.get("db");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
 
-	const row = await db.query.automations.findFirst({
-		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
-	});
-	if (!row) {
-		return c.json(
-			{ error: { code: "not_found", message: "Automation not found" } },
-			404,
-		);
-	}
-	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
-
-	// Validate the graph replacement up-front — node keys unique, edges reference
-	// known keys — so we never partially apply before discovering an error.
-	if (body.nodes) {
-		const keys = new Set<string>();
-		for (const n of body.nodes) {
-			if (keys.has(n.key)) {
-				return c.json(
-					automationError(
-						"duplicate_node_key",
-						`Node key '${n.key}' appears more than once`,
-						{ path: "nodes[].key", details: { key: n.key } },
-					),
-					400,
-				);
-			}
-			keys.add(n.key);
-		}
-		const allKeys = new Set([...keys, "trigger"]);
-		const edges = body.edges ?? [];
-		for (let i = 0; i < edges.length; i++) {
-			const e = edges[i]!;
-			if (!allKeys.has(e.from)) {
-				return c.json(
-					automationError(
-						"unknown_node_reference",
-						`Edge ${i} references unknown node '${e.from}'`,
-						{
-							path: `edges[${i}].from`,
-							suggestion: suggest(e.from, Array.from(allKeys)),
-						},
-					),
-					400,
-				);
-			}
-			if (!allKeys.has(e.to)) {
-				return c.json(
-					automationError(
-						"unknown_node_reference",
-						`Edge ${i} references unknown node '${e.to}'`,
-						{
-							path: `edges[${i}].to`,
-							suggestion: suggest(e.to, Array.from(allKeys)),
-						},
-					),
-					400,
-				);
-			}
-		}
-	}
-
-	// Decide whether activation will need a new published snapshot, and compute
-	// the post-update user-node count so we can reject an empty activation BEFORE
-	// writing anything. The old code wrote the update first and returned 400
-	// afterwards, stranding the row as status=active / publishedVersion=null.
-	const willActivate =
-		body.status === "active" && row.publishedVersion === null;
-	if (willActivate) {
-		const finalNodeCount =
-			body.nodes !== undefined
-				? body.nodes.length
-				: await countUserNodes(db, id);
-		if (finalNodeCount === 0) {
-			return c.json(
-				automationError(
-					"empty_automation",
-					"Cannot activate an automation with no nodes",
-					{ path: "nodes" },
-				),
-				400,
-			);
-		}
-	}
-
-	const updates: Partial<typeof automations.$inferInsert> = {};
-	if (body.name !== undefined) updates.name = body.name;
-	if (body.description !== undefined) updates.description = body.description;
-	if (body.status !== undefined) updates.status = body.status;
-	if (body.channel !== undefined) updates.channel = body.channel as never;
-	if (body.exit_on_reply !== undefined)
-		updates.exitOnReply = body.exit_on_reply;
-	if (body.allow_reentry !== undefined)
-		updates.allowReentry = body.allow_reentry;
-	if (body.reentry_cooldown_min !== undefined)
-		updates.reentryCooldownMin = body.reentry_cooldown_min;
-	updates.updatedAt = new Date();
-
-	// Replace the graph first so publishVersion (below) captures the new draft.
-	// The old code ignored nodes/edges entirely — the dashboard editor
-	// autosaved node/edge edits against a PATCH that silently dropped them,
-	// which is why activation fed an old graph into the published snapshot.
-	if (body.nodes !== undefined) {
-		await replaceAutomationGraph(db, id, body.nodes, body.edges ?? []);
-	} else if (body.edges !== undefined) {
-		await replaceEdgesOnly(db, id, body.edges);
-	}
-
-	// Persist the metadata update + per-trigger reconciliation in a single
-	// transaction so a failure in the trigger write doesn't leave the
-	// automation row updated but still pointing at the old trigger set.
-	await db.transaction(async (tx) => {
-		await tx.update(automations).set(updates).where(eq(automations.id, id));
-
-		if (body.triggers) {
-			await tx
-				.update(automationEnrollments)
-				.set({
-					state: sql`jsonb_set(coalesce(${automationEnrollments.state}, '{}'::jsonb), ARRAY[${ENROLLMENT_TRIGGER_STATE_KEY}]::text[], to_jsonb(${automationEnrollments.triggerId}), true)`,
-					updatedAt: new Date(),
-				})
-				.where(
-					and(
-						eq(automationEnrollments.automationId, id),
-						isNotNull(automationEnrollments.triggerId),
-					),
-				);
-			await tx
-				.delete(automationTriggers)
-				.where(eq(automationTriggers.automationId, id));
-			if (body.triggers.length > 0) {
-				await tx.insert(automationTriggers).values(
-					body.triggers.map((t, idx) => ({
-						...(t.id ? { id: t.id } : {}),
-						automationId: id,
-						type: t.type as never,
-						config: t.config ?? {},
-						filters: t.filters ?? {},
-						socialAccountId: t.account_id ?? null,
-						label: t.label ?? `Trigger #${idx + 1}`,
-						orderIndex: t.order_index ?? idx,
-					})),
-				);
-			}
-		}
-	});
-
-	if (willActivate) {
-		await publishVersion(db, id);
-	}
-
-	return c.json(await loadGraphResponse(db, id), 200);
-});
-
-// --- Publish / pause / resume / archive ---
-
-for (const [name, action, status] of [
-	["pauseAutomation", "pause", "paused"],
-	["resumeAutomation", "resume", "active"],
-	["archiveAutomation", "archive", "archived"],
-] as const) {
-	const route = createRoute({
-		operationId: name,
-		method: "post",
-		path: `/{id}/${action}`,
-		tags: ["Automations"],
-		summary: `${action[0]!.toUpperCase()}${action.slice(1)} automation`,
-		security: [{ Bearer: [] }],
-		request: { params: IdParams },
-		responses: {
-			200: {
-				description: "Updated",
-				content: { "application/json": { schema: AutomationResponse } },
-			},
-			400: {
-				description: "Validation error",
-				content: { "application/json": { schema: ErrorResponse } },
-			},
-			403: {
-				description: "Forbidden",
-				content: { "application/json": { schema: ErrorResponse } },
-			},
-			404: {
-				description: "Not found",
-				content: { "application/json": { schema: ErrorResponse } },
-			},
-		},
-	});
-
-	app.openapi(route, async (c) => {
-		const { id } = c.req.valid("param");
-		const db = c.get("db");
-		const orgId = c.get("orgId");
-		const row = await db.query.automations.findFirst({
-			where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
-		});
-		if (!row)
-			return c.json(
-				{ error: { code: "not_found", message: "Automation not found" } },
-				404,
-			);
-		if (isWorkspaceScopeDenied(c, row.workspaceId)) {
-			return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-		}
-
-		// Ensure a published snapshot exists before the runner can enrol anyone.
-		if (status === "active" && row.publishedVersion === null) {
-			if (!(await hasUserNodes(db, id))) {
-				return c.json(
-					automationError(
-						"empty_automation",
-						"Cannot activate an automation with no nodes",
-						{ path: "nodes" },
-					),
-					400,
-				);
-			}
-			await publishVersion(db, id);
-		}
-
-		const [updated] = await db
-			.update(automations)
-			.set({ status, updatedAt: new Date() })
-			.where(eq(automations.id, id))
-			.returning();
-
-		const triggers = await db
-			.select()
-			.from(automationTriggers)
-			.where(eq(automationTriggers.automationId, id));
-		return c.json(serializeAutomation(updated!, triggers), 200);
-	});
-}
-
-const publishAutomation = createRoute({
-	operationId: "publishAutomation",
-	method: "post",
-	path: "/{id}/publish",
-	tags: ["Automations"],
-	summary: "Publish a new version of the automation",
-	security: [{ Bearer: [] }],
-	request: { params: IdParams },
-	responses: {
-		200: {
-			description: "Published",
-			content: { "application/json": { schema: AutomationResponse } },
-		},
-		400: {
-			description: "Validation error",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		404: {
-			description: "Not found",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-app.openapi(publishAutomation, async (c) => {
-	const { id } = c.req.valid("param");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-	const row = await db.query.automations.findFirst({
-		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
-	});
-	if (!row)
-		return c.json(
-			{ error: { code: "not_found", message: "Automation not found" } },
-			404,
-		);
-	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
-
-	if (!(await hasUserNodes(db, id))) {
-		return c.json(
-			automationError(
-				"empty_automation",
-				"Cannot publish an automation with no nodes",
-				{ path: "nodes" },
-			),
-			400,
-		);
-	}
-
-	await publishVersion(db, id);
-
-	const updated = await db.query.automations.findFirst({
-		where: eq(automations.id, id),
-	});
-	const triggers = await db
+	const [existing] = await db
 		.select()
-		.from(automationTriggers)
-		.where(eq(automationTriggers.automationId, id));
-	return c.json(serializeAutomation(updated!, triggers), 200);
+		.from(automations)
+		.where(and(eq(automations.id, id), eq(automations.organizationId, orgId)))
+		.limit(1);
+	if (!existing) return notFound(c);
+	const denied = assertWorkspaceScope(c, existing.workspaceId);
+	if (denied) return denied;
+
+	const patch: Partial<typeof automations.$inferInsert> = {
+		updatedAt: new Date(),
+	};
+	if (body.name !== undefined) patch.name = body.name;
+	if (body.description !== undefined) patch.description = body.description;
+
+	const [updated] = await db
+		.update(automations)
+		.set(patch)
+		.where(eq(automations.id, id))
+		.returning();
+	if (!updated) return notFound(c);
+	return c.json(serializeAutomation(updated), 200);
 });
-
-// --- Manual enrollment ---
-//
-// Creates an enrollment without going through the trigger-matcher. Intended
-// for `manual` and `external_api` triggers, but also useful for operator-driven
-// replay / backfill on any active automation. The automation must be active
-// and have a published snapshot — the runner has nothing to execute otherwise.
-
-const enrollAutomation = createRoute({
-	operationId: "enrollAutomation",
-	method: "post",
-	path: "/{id}/enroll",
-	tags: ["Automations"],
-	summary: "Manually enroll a contact into the automation",
-	security: [{ Bearer: [] }],
-	request: {
-		params: IdParams,
-		body: {
-			content: { "application/json": { schema: AutomationEnrollRequest } },
-		},
-	},
-	responses: {
-		201: {
-			description: "Enrolled",
-			content: { "application/json": { schema: AutomationEnrollResponse } },
-		},
-		400: {
-			description: "Validation error",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		404: {
-			description: "Not found",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		409: {
-			description: "Re-entry blocked",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		500: {
-			description: "Enqueue failed",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-app.openapi(enrollAutomation, async (c) => {
-	const { id } = c.req.valid("param");
-	const body = c.req.valid("json");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-
-	const row = await db.query.automations.findFirst({
-		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
-	});
-	if (!row) {
-		return c.json(
-			{ error: { code: "not_found", message: "Automation not found" } },
-			404,
-		);
-	}
-	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
-
-	const result = await enrollDirectly(c.env, {
-		organization_id: orgId,
-		automation_id: id,
-		trigger_id: body.trigger_id ?? null,
-		contact_id: body.contact_id ?? null,
-		conversation_id: body.conversation_id ?? null,
-		payload: body.payload,
-	});
-
-	if (!result.ok) {
-		if (result.reason === "not_found") {
-			return c.json(
-				{ error: { code: "not_found", message: "Automation not found" } },
-				404,
-			);
-		}
-		if (result.reason === "not_active") {
-			return c.json(
-				automationError(
-					"not_active",
-					"Automation must be active to accept enrollments",
-				),
-				400,
-			);
-		}
-		if (result.reason === "not_published") {
-			return c.json(
-				automationError(
-					"not_published",
-					"Automation has no published snapshot — publish first",
-				),
-				400,
-			);
-		}
-		if (result.reason === "reentry_blocked") {
-			return c.json(
-				automationError(
-					"reentry_blocked",
-					"Contact has an active enrollment or is within the re-entry cooldown window",
-				),
-				409,
-			);
-		}
-		if (result.reason === "invalid_trigger") {
-			return c.json(
-				automationError(
-					"invalid_trigger",
-					"trigger_id does not belong to this automation",
-				),
-				400,
-			);
-		}
-		if (result.reason === "ambiguous_trigger") {
-			return c.json(
-				automationError(
-					"ambiguous_trigger",
-					"Automation has multiple triggers. Pass trigger_id to choose which trigger context to enroll against.",
-				),
-				400,
-			);
-		}
-		return c.json(
-			automationError("enroll_failed", "Failed to enqueue enrollment"),
-			500,
-		);
-	}
-
-	return c.json({ enrollment_id: result.enrollment_id }, 201);
-});
-
-// --- Delete ---
 
 const deleteAutomation = createRoute({
 	operationId: "deleteAutomation",
 	method: "delete",
 	path: "/{id}",
 	tags: ["Automations"],
-	summary: "Delete automation",
+	summary: "Delete an automation (hard delete — cascades to entrypoints and runs)",
 	security: [{ Bearer: [] }],
 	request: { params: IdParams },
 	responses: {
 		204: { description: "Deleted" },
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -1180,48 +463,421 @@ const deleteAutomation = createRoute({
 });
 
 app.openapi(deleteAutomation, async (c) => {
-	const { id } = c.req.valid("param");
-	const db = c.get("db");
 	const orgId = c.get("orgId");
-	const row = await db.query.automations.findFirst({
-		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
-	});
-	if (!row)
-		return c.json(
-			{ error: { code: "not_found", message: "Automation not found" } },
-			404,
-		);
-	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
+	const db = c.get("db");
+	const { id } = c.req.valid("param");
+
+	const [existing] = await db
+		.select()
+		.from(automations)
+		.where(and(eq(automations.id, id), eq(automations.organizationId, orgId)))
+		.limit(1);
+	if (!existing) return notFound(c);
+	const denied = assertWorkspaceScope(c, existing.workspaceId);
+	if (denied) return denied;
 
 	await db.delete(automations).where(eq(automations.id, id));
 	return c.body(null, 204);
 });
 
-// --- Simulate (dry-run graph traversal for the dashboard Playground) ---
+// ---------------------------------------------------------------------------
+// G2 — Lifecycle + graph + enroll + simulate
+// ---------------------------------------------------------------------------
 
-const simulateRoute = createRoute({
-	operationId: "simulateAutomation",
+async function loadScopedAutomation(
+	c: any,
+	id: string,
+): Promise<AutomationRow | null> {
+	const orgId = c.get("orgId");
+	const db = c.get("db");
+	const [row] = await db
+		.select()
+		.from(automations)
+		.where(and(eq(automations.id, id), eq(automations.organizationId, orgId)))
+		.limit(1);
+	if (!row) return null;
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) return null;
+	return row;
+}
+
+function hasFatalErrors(row: AutomationRow): boolean {
+	if (row.validationErrors == null) return false;
+	const errs = row.validationErrors as Array<unknown>;
+	return Array.isArray(errs) && errs.length > 0;
+}
+
+async function setStatus(
+	c: any,
+	id: string,
+	status: "draft" | "active" | "paused" | "archived",
+): Promise<AutomationRow | null> {
+	const db = c.get("db");
+	const [updated] = await db
+		.update(automations)
+		.set({ status, updatedAt: new Date() })
+		.where(eq(automations.id, id))
+		.returning();
+	return updated ?? null;
+}
+
+async function runValidation(
+	c: any,
+	row: AutomationRow,
+): Promise<AutomationRow> {
+	const db = c.get("db");
+	const validation = validateGraph(row.graph as any);
+	const [updated] = await db
+		.update(automations)
+		.set({
+			validationErrors: validation.errors.length ? validation.errors : null,
+			lastValidatedAt: new Date(),
+			updatedAt: new Date(),
+		})
+		.where(eq(automations.id, row.id))
+		.returning();
+	return updated ?? row;
+}
+
+// Activate
+const activateAutomation = createRoute({
+	operationId: "activateAutomation",
 	method: "post",
-	path: "/{id}/simulate",
+	path: "/{id}/activate",
 	tags: ["Automations"],
-	summary: "Simulate a graph run without executing handlers or side effects",
+	summary: "Activate an automation",
+	security: [{ Bearer: [] }],
+	request: { params: IdParams },
+	responses: {
+		200: {
+			description: "Activated",
+			content: { "application/json": { schema: AutomationResponseSchema } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		422: {
+			description: "Validation failed",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(activateAutomation, async (c) => {
+	const { id } = c.req.valid("param");
+	const row = await loadScopedAutomation(c, id);
+	if (!row) return notFound(c);
+	const revalidated = await runValidation(c, row);
+	if (hasFatalErrors(revalidated)) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_GRAPH",
+					message: "Cannot activate — the graph has validation errors.",
+					details: {
+						validation_errors: revalidated.validationErrors ?? [],
+					},
+				},
+			},
+			422,
+		);
+	}
+	const updated = await setStatus(c, id, "active");
+	if (!updated) return notFound(c);
+	return c.json(serializeAutomation(updated), 200);
+});
+
+const pauseAutomation = createRoute({
+	operationId: "pauseAutomation",
+	method: "post",
+	path: "/{id}/pause",
+	tags: ["Automations"],
+	summary: "Pause an automation",
+	security: [{ Bearer: [] }],
+	request: { params: IdParams },
+	responses: {
+		200: {
+			description: "Paused",
+			content: { "application/json": { schema: AutomationResponseSchema } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(pauseAutomation, async (c) => {
+	const { id } = c.req.valid("param");
+	const row = await loadScopedAutomation(c, id);
+	if (!row) return notFound(c);
+	const updated = await setStatus(c, id, "paused");
+	if (!updated) return notFound(c);
+	return c.json(serializeAutomation(updated), 200);
+});
+
+const resumeAutomation = createRoute({
+	operationId: "resumeAutomation",
+	method: "post",
+	path: "/{id}/resume",
+	tags: ["Automations"],
+	summary: "Resume a paused automation (equivalent to activate)",
+	security: [{ Bearer: [] }],
+	request: { params: IdParams },
+	responses: {
+		200: {
+			description: "Resumed",
+			content: { "application/json": { schema: AutomationResponseSchema } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		422: {
+			description: "Validation failed",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(resumeAutomation, async (c) => {
+	const { id } = c.req.valid("param");
+	const row = await loadScopedAutomation(c, id);
+	if (!row) return notFound(c);
+	const revalidated = await runValidation(c, row);
+	if (hasFatalErrors(revalidated)) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_GRAPH",
+					message: "Cannot resume — the graph has validation errors.",
+					details: {
+						validation_errors: revalidated.validationErrors ?? [],
+					},
+				},
+			},
+			422,
+		);
+	}
+	const updated = await setStatus(c, id, "active");
+	if (!updated) return notFound(c);
+	return c.json(serializeAutomation(updated), 200);
+});
+
+const archiveAutomation = createRoute({
+	operationId: "archiveAutomation",
+	method: "post",
+	path: "/{id}/archive",
+	tags: ["Automations"],
+	summary: "Archive an automation",
+	security: [{ Bearer: [] }],
+	request: { params: IdParams },
+	responses: {
+		200: {
+			description: "Archived",
+			content: { "application/json": { schema: AutomationResponseSchema } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(archiveAutomation, async (c) => {
+	const { id } = c.req.valid("param");
+	const row = await loadScopedAutomation(c, id);
+	if (!row) return notFound(c);
+	const updated = await setStatus(c, id, "archived");
+	if (!updated) return notFound(c);
+	return c.json(serializeAutomation(updated), 200);
+});
+
+const unarchiveAutomation = createRoute({
+	operationId: "unarchiveAutomation",
+	method: "post",
+	path: "/{id}/unarchive",
+	tags: ["Automations"],
+	summary: "Unarchive an automation (returns it to paused state)",
+	security: [{ Bearer: [] }],
+	request: { params: IdParams },
+	responses: {
+		200: {
+			description: "Unarchived",
+			content: { "application/json": { schema: AutomationResponseSchema } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(unarchiveAutomation, async (c) => {
+	const { id } = c.req.valid("param");
+	const row = await loadScopedAutomation(c, id);
+	if (!row) return notFound(c);
+	const updated = await setStatus(c, id, "paused");
+	if (!updated) return notFound(c);
+	return c.json(serializeAutomation(updated), 200);
+});
+
+const replaceGraph = createRoute({
+	operationId: "replaceAutomationGraph",
+	method: "put",
+	path: "/{id}/graph",
+	tags: ["Automations"],
+	summary: "Replace the automation's graph",
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParams,
 		body: {
-			content: { "application/json": { schema: AutomationSimulateRequest } },
+			content: { "application/json": { schema: AutomationGraphUpdateSchema } },
+		},
+	},
+	responses: {
+		200: {
+			description: "Graph accepted (may still carry warnings)",
+			content: { "application/json": { schema: GraphUpdateResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		422: {
+			description: "Graph has fatal validation errors",
+			content: { "application/json": { schema: GraphUpdateResponse } },
+		},
+	},
+});
+
+app.openapi(replaceGraph, async (c) => {
+	const { id } = c.req.valid("param");
+	const body = c.req.valid("json");
+	const row = await loadScopedAutomation(c, id);
+	if (!row) return notFound(c);
+
+	const db = c.get("db");
+	const validation = validateGraph(body.graph as any);
+
+	// Force-pause if the current row is active and we've introduced fatal errors.
+	const forcePause =
+		validation.errors.length > 0 && row.status === "active";
+	const nextStatus = forcePause ? "paused" : row.status;
+
+	const [updated] = await db
+		.update(automations)
+		.set({
+			graph: validation.canonicalGraph as never,
+			validationErrors: validation.errors.length ? validation.errors : null,
+			lastValidatedAt: new Date(),
+			status: nextStatus,
+			updatedAt: new Date(),
+		})
+		.where(eq(automations.id, id))
+		.returning();
+	if (!updated) return notFound(c);
+
+	const responseBody = {
+		graph: validation.canonicalGraph,
+		validation: {
+			valid: validation.valid,
+			errors: validation.errors,
+			warnings: validation.warnings,
+		},
+		automation: {
+			status: updated.status as AutomationResponse["status"],
+			validation_errors:
+				(updated.validationErrors as AutomationResponse["validation_errors"]) ??
+				null,
+		},
+	};
+
+	if (validation.errors.length > 0) {
+		return c.json(responseBody, 422);
+	}
+	return c.json(responseBody, 200);
+});
+
+const enrollAutomation = createRoute({
+	operationId: "enrollAutomationContact",
+	method: "post",
+	path: "/{id}/enroll",
+	tags: ["Automations"],
+	summary: "Manually enroll a contact into an automation",
+	security: [{ Bearer: [] }],
+	request: {
+		params: IdParams,
+		body: {
+			content: { "application/json": { schema: AutomationEnrollSchema } },
+		},
+	},
+	responses: {
+		201: {
+			description: "Enrolled",
+			content: { "application/json": { schema: EnrollResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		422: {
+			description: "Could not enroll",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(enrollAutomation, async (c) => {
+	const { id } = c.req.valid("param");
+	const body = c.req.valid("json");
+	const row = await loadScopedAutomation(c, id);
+	if (!row) return notFound(c);
+
+	const db = c.get("db");
+	try {
+		const { runId } = await enrollContact(db, {
+			automationId: row.id,
+			organizationId: row.organizationId,
+			contactId: body.contact_id,
+			conversationId: null,
+			channel: row.channel,
+			entrypointId: body.entrypoint_id ?? null,
+			bindingId: null,
+			contextOverrides: body.context_overrides ?? {},
+			env: c.env as unknown as Record<string, unknown>,
+		});
+		return c.json({ run_id: runId }, 201);
+	} catch (err) {
+		return c.json(
+			{
+				error: {
+					code: "ENROLL_FAILED",
+					message: err instanceof Error ? err.message : String(err),
+				},
+			},
+			422,
+		);
+	}
+});
+
+const simulateAutomationRoute = createRoute({
+	operationId: "simulateAutomation",
+	method: "post",
+	path: "/{id}/simulate",
+	tags: ["Automations"],
+	summary: "Dry-run the graph without any side effects",
+	security: [{ Bearer: [] }],
+	request: {
+		params: IdParams,
+		body: {
+			content: { "application/json": { schema: AutomationSimulateSchema } },
 		},
 	},
 	responses: {
 		200: {
 			description: "Simulation result",
-			content: { "application/json": { schema: AutomationSimulateResponse } },
-		},
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
+			content: { "application/json": { schema: SimulateResponseSchema } },
 		},
 		404: {
 			description: "Not found",
@@ -1230,144 +886,82 @@ const simulateRoute = createRoute({
 	},
 });
 
-app.openapi(simulateRoute, async (c) => {
+app.openapi(simulateAutomationRoute, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
+	const row = await loadScopedAutomation(c, id);
+	if (!row) return notFound(c);
 
-	const auto = await db.query.automations.findFirst({
-		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
+	const result = await simulate({
+		graph: row.graph as any,
+		startNodeKey: body.start_node_key,
+		testContext: body.test_context,
+		branchChoices: body.branch_choices,
 	});
-	if (!auto) {
-		return c.json(
-			{ error: { code: "not_found", message: "Automation not found" } },
-			404,
-		);
-	}
-	if (isWorkspaceScopeDenied(c, auto.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
-
-	// Prefer an explicit version (error if missing), else build the live draft.
-	const requestedVersion = body.version;
-	const targetVersion = requestedVersion ?? auto.version;
-
-	let snapshot: AutomationSnapshot | null = null;
-
-	const versionRow = await db.query.automationVersions.findFirst({
-		where: and(
-			eq(automationVersions.automationId, id),
-			eq(automationVersions.version, targetVersion),
-		),
-	});
-	if (versionRow) {
-		snapshot = versionRow.snapshot as AutomationSnapshot;
-	} else if (requestedVersion !== undefined) {
-		// Caller asked for a specific version that doesn't exist — don't
-		// silently substitute the live draft; that would mislead debugging of
-		// historical snapshots.
-		return c.json(
-			{
-				error: {
-					code: "version_not_found",
-					message: `Version ${requestedVersion} not found for this automation`,
-				},
-			},
-			404,
-		);
-	} else {
-		// Build an on-the-fly snapshot from the current draft graph so callers can
-		// simulate unpublished changes.
-		const nodes = await db
-			.select()
-			.from(automationNodes)
-			.where(eq(automationNodes.automationId, id));
-		const edges = await db
-			.select()
-			.from(automationEdges)
-			.where(eq(automationEdges.automationId, id));
-		const snapshotTriggers = await db
-			.select()
-			.from(automationTriggers)
-			.where(eq(automationTriggers.automationId, id));
-		const idToKey = new Map(nodes.map((n) => [n.id, n.key]));
-		snapshot = {
-			automation_id: id,
-			version: auto.version,
-			name: auto.name,
-			channel: auto.channel,
-			triggers: snapshotTriggers
-				.slice()
-				.sort((a, b) => a.orderIndex - b.orderIndex)
-				.map((t) => ({
-					id: t.id,
-					type: t.type,
-					account_id: t.socialAccountId ?? undefined,
-					config: (t.config as Record<string, unknown>) ?? {},
-					filters: (t.filters as Record<string, unknown>) ?? {},
-					label: t.label,
-					order_index: t.orderIndex,
-				})),
-			entry_node_key: "trigger",
-			nodes: nodes.map((n) => ({
-				id: n.id,
-				key: n.key,
-				type: n.type,
-				config: (n.config as Record<string, unknown>) ?? {},
-			})),
-			edges: edges.map((e) => ({
-				id: e.id,
-				from_node_key: idToKey.get(e.fromNodeId) ?? "",
-				to_node_key: idToKey.get(e.toNodeId) ?? "",
-				label: e.label,
-				order: e.order,
-				condition_expr: e.conditionExpr ?? null,
-			})),
-		};
-	}
-
-	const result = simulateAutomation(snapshot, {
-		branch_choices: body.branch_choices,
-		max_steps: body.max_steps,
-	});
-
 	return c.json(result, 200);
 });
 
-// --- Enrollments & runs (read-only) ---
+// ---------------------------------------------------------------------------
+// G7 — Catalog (static, ETag-cached) + Insights (live SQL aggregates)
+// ---------------------------------------------------------------------------
 
-const listEnrollments = createRoute({
-	operationId: "listAutomationEnrollments",
+const CatalogResponseSchema = z
+	.object({
+		node_kinds: z.array(z.any()),
+		entrypoint_kinds: z.array(z.any()),
+		binding_types: z.array(z.any()),
+		action_types: z.array(z.any()),
+		channel_capabilities: z.record(z.string(), z.any()),
+		template_kinds: z.array(z.string()),
+	})
+	.openapi("AutomationCatalog");
+
+const catalogRoute = createRoute({
+	operationId: "getAutomationCatalog",
 	method: "get",
-	path: "/{id}/enrollments",
+	path: "/catalog",
 	tags: ["Automations"],
-	summary: "List enrollments for this automation",
+	summary: "Return the static catalog of node kinds, entrypoints, bindings, actions, and channel capabilities",
+	security: [{ Bearer: [] }],
+	responses: {
+		200: {
+			description: "Catalog",
+			content: { "application/json": { schema: CatalogResponseSchema } },
+		},
+		304: { description: "Not modified" },
+	},
+});
+
+app.openapi(catalogRoute, async (c) => {
+	// Conditional GET — serve 304 if the ETag matches.
+	const incoming = c.req.header("if-none-match");
+	if (incoming && incoming === AUTOMATION_CATALOG_ETAG) {
+		c.header("ETag", AUTOMATION_CATALOG_ETAG);
+		return c.body(null, 304);
+	}
+	c.header("ETag", AUTOMATION_CATALOG_ETAG);
+	c.header("Cache-Control", "public, max-age=300");
+	// The catalog is pre-stringified for cheap serving; but returning the
+	// parsed object keeps the response type aligned with the OpenAPI schema.
+	return c.json(AUTOMATION_CATALOG as unknown as z.infer<typeof CatalogResponseSchema>, 200);
+});
+
+// Per-automation insights.
+const insightsRoute = createRoute({
+	operationId: "getAutomationInsights",
+	method: "get",
+	path: "/{id}/insights",
+	tags: ["Automations"],
+	summary: "Aggregate run metrics scoped to a single automation",
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParams,
-		query: PaginationParams.extend({
-			status: z
-				.enum(["active", "waiting", "completed", "exited", "failed"])
-				.optional(),
-		}),
+		query: AutomationInsightsQuery,
 	},
 	responses: {
 		200: {
-			description: "Enrollments",
-			content: {
-				"application/json": {
-					schema: z.object({
-						data: z.array(AutomationEnrollmentResponse),
-						next_cursor: z.string().nullable(),
-						has_more: z.boolean(),
-					}),
-				},
-			},
-		},
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
+			description: "Insights",
+			content: { "application/json": { schema: InsightsResponseSchema } },
 		},
 		404: {
 			description: "Not found",
@@ -1376,415 +970,46 @@ const listEnrollments = createRoute({
 	},
 });
 
-app.openapi(listEnrollments, async (c) => {
+app.openapi(insightsRoute, async (c) => {
 	const { id } = c.req.valid("param");
-	const { status, cursor, limit } = c.req.valid("query");
+	const query = c.req.valid("query");
+	const row = await loadScopedAutomation(c, id);
+	if (!row) return notFound(c);
+
 	const db = c.get("db");
-	const orgId = c.get("orgId");
-
-	// Verify the automation exists + caller's workspace scope covers it.
-	const auto = await db.query.automations.findFirst({
-		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
+	const result = await aggregateInsights(db, query, {
+		orgId: c.get("orgId"),
+		automationId: id,
 	});
-	if (!auto) {
-		return c.json(
-			{ error: { code: "not_found", message: "Automation not found" } },
-			404,
-		);
-	}
-	if (isWorkspaceScopeDenied(c, auto.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
-
-	const conditions = [
-		eq(automationEnrollments.automationId, id),
-		eq(automationEnrollments.organizationId, orgId),
-	];
-	if (status) conditions.push(eq(automationEnrollments.status, status));
-
-	if (cursor) {
-		const cursorRow = await db
-			.select({ enrolledAt: automationEnrollments.enrolledAt })
-			.from(automationEnrollments)
-			.where(eq(automationEnrollments.id, cursor))
-			.limit(1);
-		if (cursorRow[0]) {
-			conditions.push(
-				sql`(${automationEnrollments.enrolledAt}, ${automationEnrollments.id}) < (${cursorRow[0].enrolledAt}, ${cursor})`,
-			);
-		}
-	}
-
-	const rows = await db
-		.select()
-		.from(automationEnrollments)
-		.where(and(...conditions))
-		.orderBy(
-			desc(automationEnrollments.enrolledAt),
-			desc(automationEnrollments.id),
-		)
-		.limit(limit + 1);
-
-	const hasMore = rows.length > limit;
-	const data = rows.slice(0, limit).map((r) => ({
-		id: r.id,
-		automation_id: r.automationId,
-		automation_version: r.automationVersion,
-		trigger_id: getEnrollmentTriggerId(r.triggerId, r.state),
-		contact_id: r.contactId,
-		conversation_id: r.conversationId,
-		current_node_id: r.currentNodeId,
-		state: r.state,
-		status: r.status,
-		next_run_at: r.nextRunAt?.toISOString() ?? null,
-		enrolled_at: r.enrolledAt.toISOString(),
-		completed_at: r.completedAt?.toISOString() ?? null,
-		exited_at: r.exitedAt?.toISOString() ?? null,
-		exit_reason: r.exitReason,
-	}));
-
-	return c.json(
-		{
-			data,
-			next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
-			has_more: hasMore,
-		},
-		200,
-	);
+	return c.json(result, 200);
 });
 
-const listSamples = createRoute({
-	operationId: "listAutomationSamples",
+// Global (org-wide, optionally rolled up by template kind) insights.
+const globalInsightsRoute = createRoute({
+	operationId: "getAutomationInsightsAll",
 	method: "get",
-	path: "/{id}/samples",
+	path: "/insights",
 	tags: ["Automations"],
-	summary: "List recent enrollment payloads as trigger samples",
+	summary: "Aggregate run metrics across the org, optionally rolled up by created_from_template",
 	security: [{ Bearer: [] }],
-	request: {
-		params: IdParams,
-		query: z.object({
-			limit: z.coerce.number().int().min(1).max(20).default(10),
-		}),
-	},
+	request: { query: GlobalInsightsQuery },
 	responses: {
 		200: {
-			description: "Recent samples",
-			content: {
-				"application/json": { schema: AutomationSampleListResponse },
-			},
-		},
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		404: {
-			description: "Not found",
-			content: { "application/json": { schema: ErrorResponse } },
+			description: "Insights",
+			content: { "application/json": { schema: InsightsResponseSchema } },
 		},
 	},
 });
 
-app.openapi(listSamples, async (c) => {
-	const { id } = c.req.valid("param");
-	const { limit } = c.req.valid("query");
+app.openapi(globalInsightsRoute, async (c) => {
+	const query = c.req.valid("query");
 	const db = c.get("db");
-	const orgId = c.get("orgId");
-
-	const auto = await db.query.automations.findFirst({
-		where: and(eq(automations.id, id), eq(automations.organizationId, orgId)),
+	const result = await aggregateInsights(db, query, {
+		orgId: c.get("orgId"),
+		createdFromTemplate: query.created_from_template,
+		workspaceId: query.workspace_id,
 	});
-	if (!auto) {
-		return c.json(
-			{ error: { code: "not_found", message: "Automation not found" } },
-			404,
-		);
-	}
-	if (isWorkspaceScopeDenied(c, auto.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
-
-	const rows = await db
-		.select()
-		.from(automationEnrollments)
-		.where(
-			and(
-				eq(automationEnrollments.automationId, id),
-				eq(automationEnrollments.organizationId, orgId),
-			),
-		)
-		.orderBy(
-			desc(automationEnrollments.enrolledAt),
-			desc(automationEnrollments.id),
-		)
-		.limit(limit);
-
-	return c.json(
-		{
-			data: rows.map((row) => ({
-				enrollment_id: row.id,
-				automation_version: row.automationVersion,
-				trigger_id: getEnrollmentTriggerId(row.triggerId, row.state),
-				contact_id: row.contactId,
-				conversation_id: row.conversationId,
-				status: row.status,
-				state: row.state,
-				enrolled_at: row.enrolledAt.toISOString(),
-			})),
-		},
-		200,
-	);
+	return c.json(result, 200);
 });
-
-const getRuns = createRoute({
-	operationId: "listAutomationRuns",
-	method: "get",
-	path: "/{id}/enrollments/{enrollmentId}/runs",
-	tags: ["Automations"],
-	summary: "Per-node execution log for an enrollment",
-	security: [{ Bearer: [] }],
-	request: {
-		params: z.object({ id: z.string(), enrollmentId: z.string() }),
-	},
-	responses: {
-		200: {
-			description: "Run logs",
-			content: {
-				"application/json": {
-					schema: z.object({ data: z.array(AutomationRunLogResponse) }),
-				},
-			},
-		},
-		403: {
-			description: "Forbidden",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		404: {
-			description: "Not found",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-app.openapi(getRuns, async (c) => {
-	const { id: automationId, enrollmentId } = c.req.valid("param");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-
-	// Verify the enrollment exists, belongs to the caller's org, and to the
-	// automation in the URL path. Without this, log data could leak across orgs.
-	const enrollment = await db.query.automationEnrollments.findFirst({
-		where: and(
-			eq(automationEnrollments.id, enrollmentId),
-			eq(automationEnrollments.automationId, automationId),
-			eq(automationEnrollments.organizationId, orgId),
-		),
-	});
-	if (!enrollment) {
-		return c.json(
-			{ error: { code: "not_found", message: "Enrollment not found" } },
-			404,
-		);
-	}
-
-	// Enforce workspace scope via the parent automation's workspace.
-	const auto = await db.query.automations.findFirst({
-		where: eq(automations.id, automationId),
-	});
-	if (auto && isWorkspaceScopeDenied(c, auto.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
-
-	const logs = await db
-		.select()
-		.from(automationRunLogs)
-		.where(eq(automationRunLogs.enrollmentId, enrollmentId))
-		.orderBy(asc(automationRunLogs.executedAt));
-
-	// Resolve node_id → node_key using the enrollment's frozen snapshot so the
-	// dashboard can highlight the executed path on the current canvas.
-	const versionRow = await db.query.automationVersions.findFirst({
-		where: and(
-			eq(automationVersions.automationId, automationId),
-			eq(automationVersions.version, enrollment.automationVersion),
-		),
-	});
-	const snap = versionRow?.snapshot as AutomationSnapshot | undefined;
-	const idToKey = new Map<string, string>(
-		snap?.nodes.map((n) => [n.id, n.key]) ?? [],
-	);
-	const idToConfig = new Map<string, Record<string, unknown>>(
-		snap?.nodes.map((n) => [n.id, n.config]) ?? [],
-	);
-
-	return c.json(
-		{
-			data: logs.map((l) => ({
-				id: l.id,
-				enrollment_id: l.enrollmentId,
-				node_id: l.nodeId,
-				node_key: l.nodeId ? (idToKey.get(l.nodeId) ?? null) : null,
-				node_type: l.nodeType,
-				node_config: l.nodeId ? (idToConfig.get(l.nodeId) ?? null) : null,
-				executed_at: l.executedAt.toISOString(),
-				outcome: l.outcome,
-				branch_label: l.branchLabel,
-				duration_ms: l.durationMs,
-				error: l.error,
-				payload: l.payload,
-			})),
-		},
-		200,
-	);
-});
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function extractNodeConfig(node: unknown): Record<string, unknown> {
-	// node is a discriminated-union member; every field except `type`, `key`, `notes`, `canvas_x`, `canvas_y` is config
-	const n = node as Record<string, unknown>;
-	const {
-		type: _t,
-		key: _k,
-		notes: _n,
-		canvas_x: _x,
-		canvas_y: _y,
-		...rest
-	} = n;
-	return rest;
-}
-
-type GraphResponse = z.infer<typeof AutomationWithGraphResponse>;
-
-async function loadGraphResponse(
-	db: ReturnType<typeof createDb>,
-	automationId: string,
-): Promise<GraphResponse> {
-	const auto = await db.query.automations.findFirst({
-		where: eq(automations.id, automationId),
-	});
-	if (!auto) throw new Error("automation not found");
-
-	const nodes = await db
-		.select()
-		.from(automationNodes)
-		.where(eq(automationNodes.automationId, automationId));
-
-	const edges = await db
-		.select()
-		.from(automationEdges)
-		.where(eq(automationEdges.automationId, automationId));
-
-	const triggers = await db
-		.select()
-		.from(automationTriggers)
-		.where(eq(automationTriggers.automationId, automationId));
-
-	const idToKey = new Map(nodes.map((n) => [n.id, n.key]));
-
-	return {
-		...serializeAutomation(auto, triggers),
-		nodes: nodes.map((n) => ({
-			id: n.id,
-			key: n.key,
-			type: n.type as GraphResponse["nodes"][number]["type"],
-			config: n.config,
-			canvas_x: n.canvasX,
-			canvas_y: n.canvasY,
-			notes: n.notes,
-		})),
-		edges: edges.map((e) => ({
-			id: e.id,
-			from_node_key: idToKey.get(e.fromNodeId) ?? "",
-			to_node_key: idToKey.get(e.toNodeId) ?? "",
-			label: e.label,
-			order: e.order,
-			condition_expr: e.conditionExpr,
-		})),
-	};
-}
-
-/**
- * Builds and persists a versioned snapshot. Called on publish and on initial
- * create-with-status=active.
- */
-export async function publishVersion(
-	db: ReturnType<typeof createDb>,
-	automationId: string,
-): Promise<number> {
-	const auto = await db.query.automations.findFirst({
-		where: eq(automations.id, automationId),
-	});
-	if (!auto) throw new Error("automation not found");
-
-	const nodes = await db
-		.select()
-		.from(automationNodes)
-		.where(eq(automationNodes.automationId, automationId));
-	const edges = await db
-		.select()
-		.from(automationEdges)
-		.where(eq(automationEdges.automationId, automationId));
-	const snapshotTriggers = await db
-		.select()
-		.from(automationTriggers)
-		.where(eq(automationTriggers.automationId, automationId));
-
-	const idToKey = new Map(nodes.map((n) => [n.id, n.key]));
-
-	const snapshot = {
-		automation_id: automationId,
-		version: auto.version,
-		name: auto.name,
-		channel: auto.channel,
-		triggers: snapshotTriggers
-			.slice()
-			.sort((a, b) => a.orderIndex - b.orderIndex)
-			.map((t) => ({
-				id: t.id,
-				type: t.type,
-				account_id: t.socialAccountId ?? undefined,
-				config: (t.config as Record<string, unknown>) ?? {},
-				filters: (t.filters as Record<string, unknown>) ?? {},
-				label: t.label,
-				order_index: t.orderIndex,
-			})),
-		entry_node_key: "trigger",
-		nodes: nodes.map((n) => ({
-			id: n.id,
-			key: n.key,
-			type: n.type,
-			config: (n.config as Record<string, unknown>) ?? {},
-		})),
-		edges: edges.map((e) => ({
-			id: e.id,
-			from_node_key: idToKey.get(e.fromNodeId) ?? "",
-			to_node_key: idToKey.get(e.toNodeId) ?? "",
-			label: e.label,
-			order: e.order,
-			condition_expr: e.conditionExpr ?? null,
-		})),
-	};
-
-	await db.insert(automationVersions).values({
-		automationId,
-		version: auto.version,
-		snapshot,
-		publishedAt: new Date(),
-	});
-
-	const [updated] = await db
-		.update(automations)
-		.set({
-			publishedVersion: auto.version,
-			version: auto.version + 1,
-			updatedAt: new Date(),
-		})
-		.where(eq(automations.id, automationId))
-		.returning({ publishedVersion: automations.publishedVersion });
-
-	return updated?.publishedVersion ?? auto.version;
-}
 
 export default app;

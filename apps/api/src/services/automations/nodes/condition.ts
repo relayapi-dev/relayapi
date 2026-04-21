@@ -1,58 +1,25 @@
-import { contacts, customFieldDefinitions, customFieldValues } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+// apps/api/src/services/automations/nodes/condition.ts
+//
+// Boolean branch. Evaluates a FilterGroup-shaped predicate tree against the
+// current run context and routes through either the `true` or `false` port.
+// Reuses the preserved filter-eval module.
 import { evaluateFilterGroup } from "../filter-eval";
 import type { NodeHandler } from "../types";
 
-export const conditionHandler: NodeHandler = async (ctx) => {
-	const group = ctx.node.config.if as {
-		all?: Array<{ field: string; op: string; value?: unknown }>;
-		any?: Array<{ field: string; op: string; value?: unknown }>;
-		none?: Array<{ field: string; op: string; value?: unknown }>;
-	};
-	if (!group) {
-		return { kind: "fail", error: "condition node missing 'if'" };
-	}
+type ConditionConfig = {
+	predicates?: any;
+};
 
-	let contact: Record<string, unknown> | null = null;
-	const fields: Record<string, unknown> = {};
-	let tags: string[] = [];
-
-	if (ctx.enrollment.contact_id) {
-		const row = await ctx.db.query.contacts.findFirst({
-			where: eq(contacts.id, ctx.enrollment.contact_id),
+export const conditionHandler: NodeHandler<ConditionConfig> = {
+	kind: "condition",
+	async handle(node, ctx) {
+		const group = node.config?.predicates ?? {};
+		const matched = evaluateFilterGroup(group, {
+			contact: ctx.context.contact ?? null,
+			state: ctx.context,
+			tags: ctx.context.tags ?? [],
+			fields: ctx.context.fields ?? {},
 		});
-		if (row) {
-			contact = row as unknown as Record<string, unknown>;
-			tags = row.tags ?? [];
-		}
-
-		const fieldRows = await ctx.db
-			.select({
-				slug: customFieldDefinitions.slug,
-				value: customFieldValues.value,
-			})
-			.from(customFieldValues)
-			.leftJoin(
-				customFieldDefinitions,
-				eq(customFieldValues.definitionId, customFieldDefinitions.id),
-			)
-			.where(
-				and(
-					eq(customFieldValues.contactId, ctx.enrollment.contact_id),
-					eq(customFieldValues.organizationId, ctx.enrollment.organization_id),
-				),
-			);
-		for (const fr of fieldRows) {
-			if (fr.slug) fields[fr.slug] = fr.value;
-		}
-	}
-
-	const matched = evaluateFilterGroup(group, {
-		contact,
-		state: ctx.enrollment.state,
-		tags,
-		fields,
-	});
-
-	return { kind: "next", label: matched ? "yes" : "no" };
+		return { result: "advance", via_port: matched ? "true" : "false" };
+	},
 };

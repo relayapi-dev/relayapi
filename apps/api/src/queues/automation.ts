@@ -1,49 +1,73 @@
-import { advanceEnrollment, resumeFromInput } from "../services/automations/runner";
-import { enrollDirectly } from "../services/automations/trigger-matcher";
-import type { AutomationQueueMessage } from "../services/automations/types";
+// apps/api/src/queues/automation.ts
+//
+// Queue consumer for the Manychat-parity automation engine. Dispatches queued
+// work to the new runtime primitives:
+//   - resume_run   → runLoop(runId)    (used by scheduler for wait_delay wake)
+//   - enroll       → enrollContact(...) (used by HTTP enroll fallback)
+//
+// The older advance/resume_from_input shapes from the legacy engine are no
+// longer produced — inbox-event-processor now resumes waiting runs inline and
+// the scheduler dispatches resume_run jobs directly. This consumer stays wired
+// up so any in-flight queue messages from pre-migration deployments don't
+// crash the worker, but new producers should prefer the direct calls.
+
+import { createDb } from "@relayapi/db";
+import { enrollContact } from "../services/automations/runner";
+import { runLoop } from "../services/automations/runner";
 import type { Env } from "../types";
+
+export type AutomationQueueMessage =
+	| {
+			type: "resume_run";
+			run_id: string;
+	  }
+	| {
+			type: "enroll";
+			organization_id: string;
+			automation_id: string;
+			contact_id: string;
+			conversation_id?: string | null;
+			channel: string;
+			entrypoint_id?: string | null;
+			context_overrides?: Record<string, unknown>;
+	  };
 
 export async function consumeAutomationQueue(
 	batch: MessageBatch<AutomationQueueMessage>,
 	env: Env,
 ): Promise<void> {
+	const db = createDb(env.HYPERDRIVE.connectionString);
+	const envAsRecord = env as unknown as Record<string, unknown>;
+
 	for (const msg of batch.messages) {
 		try {
 			const body = msg.body;
 			switch (body.type) {
-				case "advance":
-					await advanceEnrollment(env, body.enrollment_id, {
-						resumeLabel: body.resume_label,
-					});
+				case "resume_run": {
+					await runLoop(db, body.run_id, envAsRecord);
 					break;
-				case "resume_from_input":
-					await resumeFromInput(env, body.enrollment_id, body.input_value);
-					break;
+				}
 				case "enroll": {
-					// organization_id needed to scope the enroll. The message producer
-					// (currently only the HTTP enroll route) must include it.
-					const orgId = (body as { organization_id?: string }).organization_id;
-					if (!orgId) {
-						console.warn(
-							"[automation-queue] 'enroll' message missing organization_id; skipping",
-							body,
-						);
-						break;
-					}
-					const result = await enrollDirectly(env, {
-						organization_id: orgId,
-						automation_id: body.automation_id,
-						contact_id: body.contact_id,
-						payload: body.trigger_payload,
+					await enrollContact(db, {
+						automationId: body.automation_id,
+						organizationId: body.organization_id,
+						contactId: body.contact_id,
+						conversationId: body.conversation_id ?? null,
+						channel: body.channel,
+						entrypointId: body.entrypoint_id ?? null,
+						bindingId: null,
+						contextOverrides: body.context_overrides,
+						env: envAsRecord,
 					});
-					if (!result.ok) {
-						console.warn(
-							"[automation-queue] 'enroll' rejected",
-							body.automation_id,
-							result.reason,
-						);
-					}
 					break;
+				}
+				default: {
+					// Unknown message types (including legacy 'advance' /
+					// 'resume_from_input') are ack'd so they don't block the queue.
+					console.warn(
+						"[automation-queue] unknown message type; acking and skipping",
+						body,
+					);
 				}
 			}
 			msg.ack();

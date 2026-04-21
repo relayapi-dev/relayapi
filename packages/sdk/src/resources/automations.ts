@@ -1,7 +1,8 @@
-// Hand-written scaffold for the new automations API. When the OpenAPI spec is
-// regenerated via Stainless, this file will be replaced by the generated
-// equivalent. Until then, this shim matches the /v1/automations routes in
-// apps/api/src/routes/automations.ts and automation-templates.ts.
+// Hand-written scaffold for the Manychat-parity automation API (Unit 7 + 8).
+// When the OpenAPI spec is regenerated via Stainless, this file will be replaced
+// by the generated equivalent. Until then, this shim matches the routes in
+// apps/api/src/routes/automations.ts plus the mounted sub-routers (entrypoints,
+// bindings, runs, contact controls).
 
 import { APIResource } from "../core/resource";
 import { APIPromise } from "../core/api-promise";
@@ -10,25 +11,239 @@ import { RequestOptions } from "../internal/request-options";
 import { path } from "../internal/utils/path";
 
 // ---------------------------------------------------------------------------
-// Core resource
+// Core types
+// ---------------------------------------------------------------------------
+
+export type AutomationChannel =
+	| "instagram"
+	| "facebook"
+	| "whatsapp"
+	| "telegram"
+	| "tiktok";
+
+export type AutomationStatus = "draft" | "active" | "paused" | "archived";
+
+export interface ValidationError {
+	node_key?: string;
+	port_key?: string;
+	edge_index?: number;
+	code: string;
+	message: string;
+}
+
+export interface AutomationValidation {
+	valid: boolean;
+	errors: ValidationError[];
+	warnings: ValidationError[];
+}
+
+// -- Graph -----------------------------------------------------------------
+
+export interface AutomationPort {
+	key: string;
+	direction: "input" | "output";
+	role?: string;
+	label?: string;
+}
+
+export interface AutomationNode {
+	key: string;
+	kind: string;
+	title?: string;
+	canvas_x?: number;
+	canvas_y?: number;
+	config: Record<string, unknown>;
+	ports: AutomationPort[];
+	ui_state?: Record<string, unknown>;
+}
+
+export interface AutomationEdge {
+	from_node: string;
+	from_port: string;
+	to_node: string;
+	to_port: string;
+	order_index?: number;
+	metadata?: Record<string, unknown>;
+}
+
+export interface AutomationGraph {
+	schema_version: 1;
+	root_node_key: string | null;
+	nodes: AutomationNode[];
+	edges: AutomationEdge[];
+}
+
+// -- Responses -------------------------------------------------------------
+
+export interface AutomationResponse {
+	id: string;
+	organization_id: string;
+	workspace_id: string | null;
+	name: string;
+	description: string | null;
+	channel: AutomationChannel;
+	status: AutomationStatus;
+	graph: AutomationGraph;
+	created_from_template: string | null;
+	template_config: Record<string, unknown> | null;
+	total_enrolled: number;
+	total_completed: number;
+	total_exited: number;
+	total_failed: number;
+	last_validated_at: string | null;
+	validation_errors: ValidationError[] | null;
+	created_by: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface AutomationListResponse {
+	data: AutomationResponse[];
+	next_cursor: string | null;
+	has_more: boolean;
+}
+
+export interface AutomationGraphUpdateResponse {
+	graph: AutomationGraph;
+	validation: AutomationValidation;
+	automation: {
+		status: AutomationStatus;
+		validation_errors: ValidationError[] | null;
+	};
+}
+
+export interface AutomationEnrollResponse {
+	run_id: string;
+}
+
+export interface AutomationSimulateStep {
+	node_key: string;
+	node_kind: string;
+	entered_via_port_key: string | null;
+	exited_via_port_key: string | null;
+	outcome: "advance" | "wait_input" | "wait_delay" | "end" | "fail";
+	payload?: unknown;
+}
+
+export interface AutomationSimulateResponse {
+	steps: AutomationSimulateStep[];
+	ended_at_node: string | null;
+	exit_reason: string;
+}
+
+// -- Catalog ---------------------------------------------------------------
+
+export interface AutomationCatalogResponse {
+	node_kinds: Array<Record<string, unknown>>;
+	entrypoint_kinds: Array<Record<string, unknown>>;
+	binding_types: Array<Record<string, unknown>>;
+	action_types: Array<Record<string, unknown>>;
+	channel_capabilities: Record<string, unknown>;
+	template_kinds: string[];
+}
+
+// -- Insights --------------------------------------------------------------
+
+export interface AutomationInsightsResponse {
+	period: { from: string; to: string };
+	totals: {
+		enrolled: number;
+		completed: number;
+		exited: number;
+		failed: number;
+		active: number;
+		waiting: number;
+		avg_duration_ms: number;
+	};
+	exit_reasons: Array<{ reason: string; count: number }>;
+	by_entrypoint: Array<{
+		entrypoint_id: string | null;
+		kind: string | null;
+		runs: number;
+		completion_rate: number;
+	}>;
+	per_node: Array<{
+		node_key: string;
+		kind: string;
+		executions: number;
+		success_rate: number;
+		/**
+		 * Breakdown of exit-port usage for this node within the period.
+		 * Keys are `exited_via_port_key` values (e.g. `"next"`,
+		 * `"button.btn_large"`); values are counts. Empty object when the
+		 * node has no recorded exit ports in the window.
+		 */
+		per_port: Record<string, number>;
+	}>;
+}
+
+// -- Params ----------------------------------------------------------------
+
+export interface AutomationListParams {
+	cursor?: string;
+	limit?: number;
+	workspace_id?: string;
+	status?: AutomationStatus;
+	channel?: AutomationChannel;
+	created_from_template?: string;
+	q?: string;
+}
+
+export interface AutomationTemplateInput {
+	kind: string;
+	config?: Record<string, unknown>;
+}
+
+export interface AutomationCreateParams {
+	name: string;
+	description?: string;
+	channel: AutomationChannel;
+	workspace_id?: string;
+	template?: AutomationTemplateInput;
+}
+
+export interface AutomationUpdateParams {
+	name?: string;
+	description?: string;
+}
+
+export interface AutomationGraphUpdateParams {
+	graph: AutomationGraph;
+}
+
+export interface AutomationEnrollParams {
+	contact_id: string;
+	entrypoint_id?: string;
+	context_overrides?: Record<string, unknown>;
+}
+
+export interface AutomationSimulateParams {
+	start_node_key?: string;
+	test_context?: Record<string, unknown>;
+	branch_choices?: Record<string, string>;
+	execute_side_effects?: boolean;
+}
+
+export type InsightsPeriod = "24h" | "7d" | "30d" | "90d" | "custom";
+
+export interface AutomationInsightsParams {
+	period?: InsightsPeriod;
+	from?: string;
+	to?: string;
+}
+
+export interface AutomationGlobalInsightsParams extends AutomationInsightsParams {
+	created_from_template?: string;
+	workspace_id?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Resource
 // ---------------------------------------------------------------------------
 
 export class Automations extends APIResource {
-	templates: AutomationTemplates = new AutomationTemplates(this._client);
-
 	/**
-	 * Create an automation from a single-blob spec (trigger + nodes + edges).
-	 * Node keys are human-chosen strings and referenced by edges.
-	 */
-	create(
-		body: AutomationCreateParams,
-		options?: RequestOptions,
-	): APIPromise<AutomationWithGraphResponse> {
-		return this._client.post("/v1/automations", { body, ...options });
-	}
-
-	/**
-	 * List automations, filtered by status / channel / trigger_type.
+	 * List automations scoped to the authenticated org/workspace.
 	 */
 	list(
 		query: AutomationListParams | null | undefined = {},
@@ -38,26 +253,33 @@ export class Automations extends APIResource {
 	}
 
 	/**
-	 * Retrieve an automation with its full graph (nodes + edges keyed by key).
+	 * Create an automation, optionally expanding a template blueprint.
+	 */
+	create(
+		body: AutomationCreateParams,
+		options?: RequestOptions,
+	): APIPromise<AutomationResponse> {
+		return this._client.post("/v1/automations", { body, ...options });
+	}
+
+	/**
+	 * Retrieve an automation (includes the full graph).
 	 */
 	retrieve(
 		id: string,
 		options?: RequestOptions,
-	): APIPromise<AutomationWithGraphResponse> {
+	): APIPromise<AutomationResponse> {
 		return this._client.get(path`/v1/automations/${id}`, options);
 	}
 
 	/**
-	 * Update automation metadata and/or graph. `nodes` and `edges`, when
-	 * provided, fully replace the existing draft graph (the virtual `trigger`
-	 * node is preserved). If `status` transitions to "active" and no version has
-	 * been published yet, the updated graph is auto-published.
+	 * Update automation metadata (name, description).
 	 */
 	update(
 		id: string,
 		body: AutomationUpdateParams | null | undefined = {},
 		options?: RequestOptions,
-	): APIPromise<AutomationWithGraphResponse> {
+	): APIPromise<AutomationResponse> {
 		return this._client.patch(path`/v1/automations/${id}`, {
 			body,
 			...options,
@@ -65,7 +287,7 @@ export class Automations extends APIResource {
 	}
 
 	/**
-	 * Delete an automation. Enrollments are cascade-deleted.
+	 * Delete an automation (hard delete — cascades to entrypoints and runs).
 	 */
 	delete(id: string, options?: RequestOptions): APIPromise<void> {
 		return this._client.delete(path`/v1/automations/${id}`, {
@@ -74,55 +296,55 @@ export class Automations extends APIResource {
 		});
 	}
 
-	/**
-	 * Publish the current graph as a new version snapshot. In-flight enrollments
-	 * continue running against the snapshot they started on.
-	 */
-	publish(
-		id: string,
-		options?: RequestOptions,
-	): APIPromise<AutomationResponse> {
-		return this._client.post(path`/v1/automations/${id}/publish`, options);
+	// -- Lifecycle ---------------------------------------------------------
+
+	activate(id: string, options?: RequestOptions): APIPromise<AutomationResponse> {
+		return this._client.post(path`/v1/automations/${id}/activate`, options);
 	}
 
-	/**
-	 * Pause an active automation. Enrollments in progress complete on their
-	 * existing snapshot; no new enrollments are created while paused.
-	 */
 	pause(id: string, options?: RequestOptions): APIPromise<AutomationResponse> {
 		return this._client.post(path`/v1/automations/${id}/pause`, options);
 	}
 
-	/**
-	 * Resume a paused automation. Auto-publishes the current graph if no version
-	 * has ever been published.
-	 */
 	resume(id: string, options?: RequestOptions): APIPromise<AutomationResponse> {
 		return this._client.post(path`/v1/automations/${id}/resume`, options);
 	}
 
-	/**
-	 * Archive an automation. It remains queryable but will not accept new
-	 * enrollments.
-	 */
-	archive(
-		id: string,
-		options?: RequestOptions,
-	): APIPromise<AutomationResponse> {
+	archive(id: string, options?: RequestOptions): APIPromise<AutomationResponse> {
 		return this._client.post(path`/v1/automations/${id}/archive`, options);
 	}
 
+	unarchive(
+		id: string,
+		options?: RequestOptions,
+	): APIPromise<AutomationResponse> {
+		return this._client.post(path`/v1/automations/${id}/unarchive`, options);
+	}
+
+	// -- Graph + execution -------------------------------------------------
+
 	/**
-	 * Manually enroll a contact into an active, published automation. Used for
-	 * `manual` and `external_api` triggers, or for operator-driven replay. The
-	 * automation's re-entry rules still apply — attempting to re-enrol a contact
-	 * that is already active (or within the cooldown) returns 409. When an
-	 * automation has multiple triggers, pass `trigger_id` to choose the trigger
-	 * context/account to enroll against.
+	 * Replace the automation's graph. Returns the canonicalised graph plus the
+	 * validation result; a graph with fatal errors yields 422 and, for active
+	 * automations, force-pauses the automation.
+	 */
+	updateGraph(
+		id: string,
+		body: AutomationGraphUpdateParams,
+		options?: RequestOptions,
+	): APIPromise<AutomationGraphUpdateResponse> {
+		return this._client.put(path`/v1/automations/${id}/graph`, {
+			body,
+			...options,
+		});
+	}
+
+	/**
+	 * Manually enroll a contact into an active automation.
 	 */
 	enroll(
 		id: string,
-		body: AutomationEnrollParams | null | undefined = {},
+		body: AutomationEnrollParams,
 		options?: RequestOptions,
 	): APIPromise<AutomationEnrollResponse> {
 		return this._client.post(path`/v1/automations/${id}/enroll`, {
@@ -132,63 +354,7 @@ export class Automations extends APIResource {
 	}
 
 	/**
-	 * List enrollments for an automation, filtered by status.
-	 */
-	listEnrollments(
-		id: string,
-		query: AutomationListEnrollmentsParams | null | undefined = {},
-		options?: RequestOptions,
-	): APIPromise<AutomationEnrollmentListResponse> {
-		return this._client.get(path`/v1/automations/${id}/enrollments`, {
-			query,
-			...options,
-		});
-	}
-
-	/**
-	 * Fetch recent enrollment payloads that can be reused as trigger samples in
-	 * the builder and test tooling.
-	 */
-	listSamples(
-		id: string,
-		query: AutomationListSamplesParams | null | undefined = {},
-		options?: RequestOptions,
-	): APIPromise<AutomationSampleListResponse> {
-		return this._client.get(path`/v1/automations/${id}/samples`, {
-			query,
-			...options,
-		});
-	}
-
-	/**
-	 * Get the per-node execution log for a specific enrollment. The endpoint
-	 * verifies ownership against the caller's org and the automation id in the
-	 * URL — it will not return logs that belong to another enrollment.
-	 */
-	listRuns(
-		id: string,
-		enrollmentId: string,
-		options?: RequestOptions,
-	): APIPromise<AutomationRunListResponse> {
-		return this._client.get(
-			path`/v1/automations/${id}/enrollments/${enrollmentId}/runs`,
-			options,
-		);
-	}
-
-	/**
-	 * Fetch the self-describing catalog of trigger types, node types, templates,
-	 * and merge tags. Primary consumer is the MCP server so AI agents can
-	 * construct automations without guessing enum values.
-	 */
-	schema(options?: RequestOptions): APIPromise<AutomationSchemaResponse> {
-		return this._client.get("/v1/automations/schema", options);
-	}
-
-	/**
-	 * Dry-run the automation graph without executing handlers or performing any
-	 * side effects. Returns the predicted node path based on the chosen branch
-	 * labels (or sensible defaults when none are supplied).
+	 * Dry-run the graph without executing handlers or performing side effects.
 	 */
 	simulate(
 		id: string,
@@ -200,491 +366,36 @@ export class Automations extends APIResource {
 			...options,
 		});
 	}
-}
 
-// ---------------------------------------------------------------------------
-// Templates sub-resource
-// ---------------------------------------------------------------------------
+	// -- Catalog + insights ------------------------------------------------
 
-export class AutomationTemplates extends APIResource {
 	/**
-	 * Quick-create: comment keyword → DM. Optionally post a public reply on the
-	 * comment itself.
+	 * Static catalog of node kinds, entrypoint kinds, binding types, action
+	 * types, channel capabilities, and template kinds.
 	 */
-	commentToDm(
-		body: CommentToDmTemplateParams,
-		options?: RequestOptions,
-	): APIPromise<AutomationWithGraphResponse> {
-		return this._client.post("/v1/automations/templates/comment-to-dm", {
-			body,
-			...options,
-		});
+	catalog(options?: RequestOptions): APIPromise<AutomationCatalogResponse> {
+		return this._client.get("/v1/automations/catalog", options);
 	}
 
 	/**
-	 * Quick-create: welcome DM when a contact starts a conversation on the
-	 * selected channel.
+	 * Aggregate run metrics. If `id` is omitted, returns the org-wide roll-up
+	 * (optionally filtered by `created_from_template` or `workspace_id`); if an
+	 * `id` is provided, scopes the query to a single automation.
 	 */
-	welcomeDm(
-		body: WelcomeDmTemplateParams,
+	insights(
+		id: string | null | undefined,
+		query?: AutomationInsightsParams | AutomationGlobalInsightsParams,
 		options?: RequestOptions,
-	): APIPromise<AutomationWithGraphResponse> {
-		return this._client.post("/v1/automations/templates/welcome-dm", {
-			body,
+	): APIPromise<AutomationInsightsResponse> {
+		if (id) {
+			return this._client.get(path`/v1/automations/${id}/insights`, {
+				query,
+				...options,
+			});
+		}
+		return this._client.get("/v1/automations/insights", {
+			query,
 			...options,
 		});
 	}
-
-	/**
-	 * Quick-create: reply to inbound DMs matching a keyword.
-	 */
-	keywordReply(
-		body: KeywordReplyTemplateParams,
-		options?: RequestOptions,
-	): APIPromise<AutomationWithGraphResponse> {
-		return this._client.post("/v1/automations/templates/keyword-reply", {
-			body,
-			...options,
-		});
-	}
-
-	/**
-	 * Quick-create: DM new followers. Currently scaffolded with a `manual`
-	 * trigger because Instagram does not expose a follower webhook via the
-	 * public Graph API — enrol new followers manually.
-	 */
-	followToDm(
-		body: FollowToDmTemplateParams,
-		options?: RequestOptions,
-	): APIPromise<AutomationWithGraphResponse> {
-		return this._client.post("/v1/automations/templates/follow-to-dm", {
-			body,
-			...options,
-		});
-	}
-
-	/**
-	 * Quick-create: respond when a user replies to an Instagram story.
-	 * Currently unavailable until the runtime can emit story-reply enrollments.
-	 */
-	storyReply(
-		body: StoryReplyTemplateParams,
-		options?: RequestOptions,
-	): APIPromise<AutomationWithGraphResponse> {
-		return this._client.post("/v1/automations/templates/story-reply", {
-			body,
-			...options,
-		});
-	}
-
-	/**
-	 * Quick-create: giveaway. Tags the contact and sends a confirmation DM when
-	 * they comment an entry keyword.
-	 */
-	giveaway(
-		body: GiveawayTemplateParams,
-		options?: RequestOptions,
-	): APIPromise<AutomationWithGraphResponse> {
-		return this._client.post("/v1/automations/templates/giveaway", {
-			body,
-			...options,
-		});
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export type AutomationChannel =
-	| "instagram"
-	| "facebook"
-	| "whatsapp"
-	| "telegram"
-	| "discord"
-	| "sms"
-	| "twitter"
-	| "bluesky"
-	| "threads"
-	| "youtube"
-	| "linkedin"
-	| "mastodon"
-	| "reddit"
-	| "googlebusiness"
-	| "beehiiv"
-	| "kit"
-	| "mailchimp"
-	| "listmonk"
-	| "pinterest"
-	| "multi";
-
-export type AutomationStatus = "draft" | "active" | "paused" | "archived";
-
-export type AutomationEnrollmentStatus =
-	| "active"
-	| "waiting"
-	| "completed"
-	| "exited"
-	| "failed";
-
-export interface AutomationTriggerFilters {
-	tags_any?: string[];
-	tags_all?: string[];
-	tags_none?: string[];
-	segment_id?: string;
-	predicates?: {
-		all?: Array<{ field: string; op: string; value?: unknown }>;
-		any?: Array<{ field: string; op: string; value?: unknown }>;
-		none?: Array<{ field: string; op: string; value?: unknown }>;
-	};
-}
-
-export interface AutomationTriggerInput {
-	/** Server-assigned id for existing triggers; omit to create new. */
-	id?: string;
-	type: string;
-	account_id?: string | null;
-	config?: Record<string, unknown>;
-	filters?: AutomationTriggerFilters;
-	label?: string;
-	order_index?: number;
-}
-
-export interface AutomationTrigger {
-	id: string;
-	type: string;
-	account_id: string | null;
-	config: unknown;
-	filters: unknown;
-	label: string;
-	order_index: number;
-}
-
-export interface AutomationNodeSpec {
-	/**
-	 * Discriminator for the node variant. See
-	 * `AUTOMATION_NODE_TYPES` in the API for the complete list.
-	 */
-	type: string;
-	/**
-	 * Human-chosen identifier referenced by edges. Must be unique within this
-	 * automation and match `[a-zA-Z][a-zA-Z0-9_]*`.
-	 */
-	key: string;
-	notes?: string;
-	canvas_x?: number;
-	canvas_y?: number;
-	/**
-	 * All other fields are type-specific. Flat layout — do not wrap in
-	 * `{ config: {...} }`.
-	 */
-	[field: string]: unknown;
-}
-
-export interface AutomationEdgeSpec {
-	/** Source node key. Use "trigger" for the virtual entry node. */
-	from: string;
-	/** Target node key. */
-	to: string;
-	/**
-	 * Edge label. Defaults to "next". Common labels:
-	 * - `yes` / `no` for condition nodes
-	 * - `branch_1`, `branch_2`, ... for randomizer / split_test
-	 * - `captured` / `no_match` / `timeout` for user_input nodes
-	 * - `handoff` / `complete` for ai_agent
-	 */
-	label?: string;
-	order?: number;
-	condition_expr?: unknown;
-}
-
-export interface AutomationCreateParams {
-	name: string;
-	description?: string;
-	workspace_id?: string;
-	channel: AutomationChannel;
-	status?: AutomationStatus;
-	triggers: AutomationTriggerInput[];
-	nodes?: AutomationNodeSpec[];
-	edges?: AutomationEdgeSpec[];
-	exit_on_reply?: boolean;
-	allow_reentry?: boolean;
-	/** Minutes a contact must wait before being re-enrolled. Requires `allow_reentry`. */
-	reentry_cooldown_min?: number;
-}
-
-export interface AutomationUpdateParams
-	extends Partial<AutomationCreateParams> {}
-
-export interface AutomationListParams {
-	cursor?: string;
-	limit?: number;
-	workspace_id?: string;
-	status?: AutomationStatus;
-	channel?: AutomationChannel;
-	trigger_type?: string;
-}
-
-export interface AutomationListEnrollmentsParams {
-	cursor?: string;
-	limit?: number;
-	status?: AutomationEnrollmentStatus;
-}
-
-export interface AutomationListSamplesParams {
-	limit?: number;
-}
-
-export interface AutomationEnrollParams {
-	trigger_id?: string;
-	contact_id?: string;
-	conversation_id?: string;
-	payload?: Record<string, unknown>;
-}
-
-export interface AutomationEnrollResponse {
-	enrollment_id: string;
-}
-
-export interface AutomationResponse {
-	id: string;
-	organization_id: string;
-	workspace_id: string | null;
-	name: string;
-	description: string | null;
-	status: AutomationStatus;
-	channel: AutomationChannel;
-	triggers: AutomationTrigger[];
-	entry_node_id: string | null;
-	version: number;
-	published_version: number | null;
-	exit_on_reply: boolean;
-	allow_reentry: boolean;
-	reentry_cooldown_min: number | null;
-	total_enrolled: number;
-	total_completed: number;
-	total_exited: number;
-	created_at: string;
-	updated_at: string;
-}
-
-export interface AutomationNodeResponse {
-	id: string;
-	key: string;
-	type: string;
-	config: unknown;
-	canvas_x: number | null;
-	canvas_y: number | null;
-	notes: string | null;
-}
-
-export interface AutomationEdgeResponse {
-	id: string;
-	from_node_key: string;
-	to_node_key: string;
-	label: string;
-	order: number;
-	condition_expr: unknown;
-}
-
-export interface AutomationWithGraphResponse extends AutomationResponse {
-	nodes: AutomationNodeResponse[];
-	edges: AutomationEdgeResponse[];
-}
-
-export interface AutomationListResponse {
-	data: AutomationResponse[];
-	next_cursor: string | null;
-	has_more: boolean;
-}
-
-export interface AutomationEnrollmentResponse {
-	id: string;
-	automation_id: string;
-	automation_version: number;
-	trigger_id: string | null;
-	contact_id: string | null;
-	conversation_id: string | null;
-	current_node_id: string | null;
-	state: unknown;
-	status: AutomationEnrollmentStatus;
-	next_run_at: string | null;
-	enrolled_at: string;
-	completed_at: string | null;
-	exited_at: string | null;
-	exit_reason: string | null;
-}
-
-export interface AutomationEnrollmentListResponse {
-	data: AutomationEnrollmentResponse[];
-	next_cursor: string | null;
-	has_more: boolean;
-}
-
-export interface AutomationRunLogResponse {
-	id: string;
-	enrollment_id: string;
-	node_id: string | null;
-	node_key: string | null;
-	node_type: string | null;
-	node_config: Record<string, unknown> | null;
-	executed_at: string;
-	outcome: string;
-	branch_label: string | null;
-	duration_ms: number | null;
-	error: string | null;
-	payload: unknown;
-}
-
-export interface AutomationRunListResponse {
-	data: AutomationRunLogResponse[];
-}
-
-export interface AutomationSampleResponse {
-	enrollment_id: string;
-	automation_version: number;
-	trigger_id: string | null;
-	contact_id: string | null;
-	conversation_id: string | null;
-	status: AutomationEnrollmentStatus;
-	state: unknown;
-	enrolled_at: string;
-}
-
-export interface AutomationSampleListResponse {
-	data: AutomationSampleResponse[];
-}
-
-export interface AutomationSimulateParams {
-	version?: number;
-	branch_choices?: Record<string, string>;
-	max_steps?: number;
-}
-
-export interface AutomationSimulateStep {
-	node_id: string;
-	node_key: string;
-	node_type: string;
-	branch_label: string | null;
-	note: string | null;
-}
-
-export interface AutomationSimulateResponse {
-	automation_id: string;
-	version: number;
-	path: AutomationSimulateStep[];
-	terminated: {
-		kind:
-			| "complete"
-			| "exit"
-			| "step_cap"
-			| "dead_end"
-			| "cycle"
-			| "unknown_node";
-		reason?: string;
-		node_key?: string;
-	};
-}
-
-export interface AutomationSchemaResponse {
-	triggers: Array<{
-		type: string;
-		description: string;
-		channel: AutomationChannel;
-		tier: number;
-		transport: "webhook" | "polling" | "streaming";
-		config_schema: unknown;
-		output_labels: string[];
-	}>;
-	nodes: Array<{
-		type: string;
-		description: string;
-		category:
-			| "content"
-			| "input"
-			| "logic"
-			| "ai"
-			| "action"
-			| "ops"
-			| "platform_send";
-		fields_schema: unknown;
-		output_labels: string[];
-	}>;
-	templates: Array<{
-		id: string;
-		name: string;
-		description: string;
-		input_schema: unknown;
-	}>;
-	merge_tags: string[];
-}
-
-// Template params — mirror the Zod schemas in apps/api/src/schemas/automations.ts
-
-export interface CommentToDmTemplateParams {
-	name: string;
-	workspace_id?: string;
-	account_id: string;
-	post_id?: string | null;
-	keywords: string[];
-	match_mode?: "contains" | "exact";
-	dm_message: string;
-	public_reply?: string;
-	once_per_user?: boolean;
-}
-
-export interface WelcomeDmTemplateParams {
-	name: string;
-	workspace_id?: string;
-	account_id: string;
-	channel: "instagram" | "facebook" | "whatsapp";
-	welcome_message: string;
-}
-
-/**
- * Channels supported by the universal `message_text` send path. The
- * keyword-reply template is gated to this list because other channels would
- * silently fail at runtime.
- */
-export type KeywordReplyChannel =
-	| "instagram"
-	| "facebook"
-	| "whatsapp"
-	| "telegram"
-	| "twitter"
-	| "reddit";
-
-export interface KeywordReplyTemplateParams {
-	name: string;
-	workspace_id?: string;
-	account_id: string;
-	channel: KeywordReplyChannel;
-	keywords: string[];
-	match_mode?: "contains" | "exact";
-	reply_message: string;
-}
-
-export interface FollowToDmTemplateParams {
-	name: string;
-	workspace_id?: string;
-	account_id: string;
-	welcome_message: string;
-}
-
-export interface StoryReplyTemplateParams {
-	name: string;
-	workspace_id?: string;
-	account_id: string;
-	dm_message: string;
-}
-
-export interface GiveawayTemplateParams {
-	name: string;
-	workspace_id?: string;
-	account_id: string;
-	channel: "instagram" | "facebook";
-	post_id?: string;
-	entry_keywords: string[];
-	entry_tag?: string;
-	confirmation_dm: string;
 }

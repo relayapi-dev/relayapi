@@ -12,7 +12,9 @@ export const GET: APIRoute = async (ctx) => {
 			workspace_id: url.searchParams.get("workspace_id") || undefined,
 			status: (url.searchParams.get("status") as never) || undefined,
 			channel: (url.searchParams.get("channel") as never) || undefined,
-			trigger_type: url.searchParams.get("trigger_type") || undefined,
+			created_from_template:
+				url.searchParams.get("created_from_template") || undefined,
+			q: url.searchParams.get("q") || undefined,
 		});
 		return Response.json(data, { headers: { "Cache-Control": "private, max-age=30" } });
 	} catch (e) {

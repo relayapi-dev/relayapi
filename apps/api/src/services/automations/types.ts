@@ -1,91 +1,57 @@
-import type { Database } from "@relayapi/db";
-import type { Env } from "../../types";
+// apps/api/src/services/automations/types.ts
+//
+// Runtime types for the Manychat-parity automation engine.
+// See docs/superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md
+// §8 (Runtime Execution Model) for the full design.
 
-/** Queue message dispatched to AUTOMATION_QUEUE. */
-export type AutomationQueueMessage =
-	| {
-			type: "advance";
-			enrollment_id: string;
-			/**
-			 * When set, the runner skips executing the enrollment's current node and
-			 * follows the outgoing edge with this label instead. Used to resume from
-			 * wait / wait_for_input nodes without re-executing them.
-			 */
-			resume_label?: string;
-	  }
-	| { type: "resume_from_input"; enrollment_id: string; input_value: unknown }
-	| {
-			type: "enroll";
-			organization_id: string;
-			automation_id: string;
-			contact_id: string | null;
-			trigger_payload: Record<string, unknown>;
-	  };
+import type {
+	Graph,
+	GraphNode,
+	Port,
+} from "../../schemas/automation-graph";
 
-/** A single trigger captured inside an automation snapshot. */
-export interface AutomationSnapshotTrigger {
-	id: string;
-	type: string;
-	account_id?: string;
-	config: Record<string, unknown>;
-	filters: Record<string, unknown>;
-	label: string;
-	order_index: number;
-}
+export type RunStatus =
+	| "active"
+	| "waiting"
+	| "completed"
+	| "exited"
+	| "failed";
 
-/** Shape of a published automation version snapshot. */
-export interface AutomationSnapshot {
-	automation_id: string;
-	version: number;
-	name: string;
+/** Direct-messaging channels supported by the automation dispatcher. */
+export type Channel =
+	| "instagram"
+	| "facebook"
+	| "whatsapp"
+	| "telegram"
+	| "tiktok";
+
+export type RunContext = {
+	runId: string;
+	automationId: string;
+	organizationId: string;
+	contactId: string;
+	conversationId: string | null;
 	channel: string;
-	triggers: AutomationSnapshotTrigger[];
-	entry_node_key: string;
-	nodes: Array<{
-		id: string;
-		key: string;
-		type: string;
-		config: Record<string, unknown>;
-	}>;
-	edges: Array<{
-		id: string;
-		from_node_key: string;
-		to_node_key: string;
-		label: string;
-		order: number;
-		condition_expr: unknown | null;
-	}>;
+	graph: Graph;
+	context: Record<string, any>;
+	now: Date;
+	// env bindings (DB, KV, Queue, R2) are passed in as needed per call site
+	env: Record<string, any>;
+};
+
+export type HandlerResult =
+	| { result: "advance"; via_port: string; payload?: any }
+	| { result: "wait_input"; timeout_at?: Date; payload?: any }
+	| { result: "wait_delay"; resume_at: Date; payload?: any }
+	| { result: "end"; exit_reason: string; payload?: any }
+	| { result: "fail"; error: Error; payload?: any };
+
+export interface NodeHandler<TConfig = any> {
+	kind: string;
+	handle(
+		node: { key: string; kind: string; config: TConfig },
+		ctx: RunContext,
+	): Promise<HandlerResult>;
 }
 
-/** Context passed to every node handler. */
-export interface NodeExecutionContext {
-	env: Env;
-	db: Database;
-	enrollment: {
-		id: string;
-		organization_id: string;
-		automation_id: string;
-		automation_version: number;
-		trigger_id: string | null;
-		contact_id: string | null;
-		conversation_id: string | null;
-		current_node_id: string | null;
-		state: Record<string, unknown>;
-	};
-	snapshot: AutomationSnapshot;
-	node: AutomationSnapshot["nodes"][number];
-}
-
-/** Result returned by a node handler. */
-export type NodeExecutionResult =
-	| { kind: "next"; label?: string; state_patch?: Record<string, unknown> }
-	| { kind: "wait"; next_run_at: Date; state_patch?: Record<string, unknown> }
-	| { kind: "wait_for_input"; state_patch?: Record<string, unknown> }
-	| { kind: "goto"; target_node_key: string; state_patch?: Record<string, unknown> }
-	| { kind: "complete"; reason?: string; state_patch?: Record<string, unknown> }
-	| { kind: "exit"; reason: string; state_patch?: Record<string, unknown> }
-	| { kind: "fail"; error: string };
-
-export type NodeHandler = (
-	ctx: NodeExecutionContext,
-) => Promise<NodeExecutionResult>;
+export type { Graph, GraphNode, Port };

@@ -9,8 +9,12 @@ import {
   ExternalLink,
   Loader2,
   MessageCircle,
+  MoreHorizontal,
+  PauseCircle,
+  PlayCircle,
   RotateCcw,
   TriangleAlert,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ConversationItem, InboxOrganizationMember, MessageItem, NoteItem, ThreadItem } from "./shared";
@@ -23,14 +27,23 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { MessageComposer } from "./message-composer";
 import { NoteCard } from "./conversation-notes";
+import { AutomationBadge } from "./automation-badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUser } from "@/components/dashboard/user-context";
 
@@ -45,6 +58,26 @@ const platformInboxUrls: Record<string, string> = {
 };
 
 const UNASSIGNED_VALUE = "__unassigned";
+
+interface AutomationContactControlItem {
+  id: string;
+  organization_id: string;
+  contact_id: string;
+  automation_id: string | null;
+  pause_reason: string | null;
+  paused_until: string | null;
+  paused_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AutomationListRow {
+  id: string;
+  name: string;
+  channel: string;
+  status: string;
+  description?: string | null;
+}
 
 function normalizeAttachments(value: unknown): Array<{ type: string; url: string }> {
   if (!Array.isArray(value)) return [];
@@ -127,6 +160,9 @@ export function ChatThread({
   const [sendError, setSendError] = useState<string | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [statusPending, setStatusPending] = useState(false);
+  const [automationControls, setAutomationControls] = useState<AutomationContactControlItem[]>([]);
+  const [automationControlPending, setAutomationControlPending] = useState(false);
+  const [automationControlError, setAutomationControlError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -170,6 +206,53 @@ export function ChatThread({
     setAssignmentError(null);
     setAssignmentPending(false);
   }, [conversation?.id]);
+
+  useEffect(() => {
+    if (!conversation || !conversation.contact_id) {
+      setAutomationControls([]);
+      setAutomationControlError(null);
+      setAutomationControlPending(false);
+      return;
+    }
+
+    const contactId = conversation.contact_id;
+    let cancelled = false;
+    setAutomationControlError(null);
+
+    (async () => {
+      try {
+        // Plan 3 Unit C4 / V3 — migrated from the legacy
+        // `/api/automations/contact-controls?conversation_id=…` route to
+        // the contact-scoped `/api/contacts/{id}/automation-controls`
+        // proxy that the rest of the app uses. The new API returns both
+        // global pauses (automation_id = null) and per-automation pauses;
+        // we treat any pause row as "automations paused" for the inbox.
+        const res = await fetch(
+          `/api/contacts/${encodeURIComponent(contactId)}/automation-controls`,
+          { signal: AbortSignal.timeout(15_000) },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          throw new Error(err?.error?.message || `Error ${res.status}`);
+        }
+        const json = await res.json() as { data?: AutomationContactControlItem[] };
+        if (!cancelled) {
+          setAutomationControls(Array.isArray(json.data) ? json.data : []);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setAutomationControlError(
+            err instanceof Error ? err.message : "Failed to load automation state",
+          );
+          setAutomationControls([]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [conversation?.id, conversation?.contact_id]);
 
   useEffect(() => {
     if (messages.length > 0 && !loading) {
@@ -352,6 +435,148 @@ export function ChatThread({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const refreshAutomationControls = useCallback(async () => {
+    if (!conversation?.contact_id) return;
+    const res = await fetch(
+      `/api/contacts/${encodeURIComponent(conversation.contact_id)}/automation-controls`,
+      { signal: AbortSignal.timeout(15_000) },
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(err?.error?.message || `Error ${res.status}`);
+    }
+    const json = await res.json() as { data?: AutomationContactControlItem[] };
+    setAutomationControls(Array.isArray(json.data) ? json.data : []);
+  }, [conversation?.contact_id]);
+
+  const handleAutomationControlToggle = useCallback(async () => {
+    if (!conversation?.contact_id || automationControlPending) return;
+
+    setAutomationControlPending(true);
+    setAutomationControlError(null);
+
+    try {
+      // Plan 3 Unit C4 / V3 — pause/resume now flow through the
+      // contact-scoped proxies. Omitting `automation_id` targets the
+      // global pause row for this contact, which matches the inbox's
+      // "all automations" toggle semantics.
+      const paused = automationControls.length > 0;
+      const res = await fetch(
+        `/api/contacts/${encodeURIComponent(conversation.contact_id)}/${paused ? "automation-resume" : "automation-pause"}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            paused
+              ? {}
+              : { pause_reason: "Paused from inbox thread" },
+          ),
+        },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error?.message || `Error ${res.status}`);
+      }
+      await refreshAutomationControls();
+    } catch (err) {
+      setAutomationControlError(
+        err instanceof Error ? err.message : "Failed to update automation state",
+      );
+    } finally {
+      setAutomationControlPending(false);
+    }
+  }, [automationControlPending, automationControls.length, conversation?.contact_id, refreshAutomationControls]);
+
+  // --- Start-an-automation picker (Plan 3 Unit C4 / Task V2) --------------
+  const [startDialogOpen, setStartDialogOpen] = useState(false);
+  const [startAutomationsLoading, setStartAutomationsLoading] = useState(false);
+  const [startAutomations, setStartAutomations] = useState<AutomationListRow[]>([]);
+  const [startAutomationsError, setStartAutomationsError] = useState<string | null>(null);
+  const [startPendingId, setStartPendingId] = useState<string | null>(null);
+  const [enrollNotice, setEnrollNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!enrollNotice) return;
+    const id = window.setTimeout(() => setEnrollNotice(null), 3000);
+    return () => window.clearTimeout(id);
+  }, [enrollNotice]);
+
+  useEffect(() => {
+    if (!startDialogOpen || !conversation) return;
+    let cancelled = false;
+    setStartAutomationsLoading(true);
+    setStartAutomationsError(null);
+
+    (async () => {
+      try {
+        const url = new URL("/api/automations", window.location.origin);
+        url.searchParams.set("status", "active");
+        url.searchParams.set("limit", "100");
+        if (conversation.platform) {
+          url.searchParams.set("channel", conversation.platform);
+        }
+        const res = await fetch(url.toString(), {
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          throw new Error(err?.error?.message || `Error ${res.status}`);
+        }
+        const json = await res.json() as { data?: AutomationListRow[] };
+        if (!cancelled) {
+          setStartAutomations(Array.isArray(json.data) ? json.data : []);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setStartAutomationsError(
+            err instanceof Error ? err.message : "Failed to load automations",
+          );
+          setStartAutomations([]);
+        }
+      } finally {
+        if (!cancelled) setStartAutomationsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [startDialogOpen, conversation?.platform, conversation?.id]);
+
+  const handleEnrollAutomation = useCallback(
+    async (automation: AutomationListRow) => {
+      if (!conversation?.contact_id || startPendingId) return;
+      setStartPendingId(automation.id);
+      try {
+        const res = await fetch(
+          `/api/automations/${encodeURIComponent(automation.id)}/enroll`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contact_id: conversation.contact_id }),
+          },
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.error?.message || `Error ${res.status}`);
+        }
+        setEnrollNotice({
+          kind: "ok",
+          text: `Enrolled in ${automation.name}`,
+        });
+        setStartDialogOpen(false);
+      } catch (err) {
+        setEnrollNotice({
+          kind: "err",
+          text: err instanceof Error ? err.message : "Failed to enroll contact",
+        });
+      } finally {
+        setStartPendingId(null);
+      }
+    },
+    [conversation?.contact_id, startPendingId],
+  );
+
   if (!conversation) {
     return <EmptyThreadState />;
   }
@@ -360,6 +585,7 @@ export function ChatThread({
   const platformLabel = getPlatformDisplayName(conversation.platform);
   const platformUrl = platformInboxUrls[conversation.platform?.toLowerCase() || ""];
   const isArchived = conversation.status === "archived";
+  const automationsPaused = automationControls.length > 0;
   const assignedMember = members.find((member) => member.user.id === conversation.assigned_user_id);
   const assigneeLabel = assignedMember?.user.name?.trim()
     || (conversation.assigned_user_id ? "Assigned" : "Unassigned");
@@ -371,7 +597,7 @@ export function ChatThread({
   ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
+    <div className="relative flex h-full min-h-0 flex-col bg-white">
       <div className="border-b border-[#e7e9ef] bg-white">
         <div className="flex min-h-[52px] items-center justify-between gap-4 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-3">
@@ -475,6 +701,14 @@ export function ChatThread({
           </div>
 
           <div className="flex items-center gap-1">
+            {conversation.contact_id ? (
+              <div className="mr-1 hidden md:inline-flex">
+                <AutomationBadge
+                  contactId={conversation.contact_id}
+                  channel={conversation.platform}
+                />
+              </div>
+            ) : null}
             {platformUrl && (
               <a
                 href={platformUrl}
@@ -486,6 +720,52 @@ export function ChatThread({
                 <ExternalLink className="size-4" />
               </a>
             )}
+            <button
+              type="button"
+              onClick={() => void handleAutomationControlToggle()}
+              disabled={automationControlPending || !conversation.contact_id}
+              className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              title={
+                !conversation.contact_id
+                  ? "Pause / resume available once the contact is resolved"
+                  : automationsPaused
+                    ? "Resume automations for this contact"
+                    : "Pause automations for this contact"
+              }
+            >
+              {automationControlPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : automationsPaused ? (
+                <PlayCircle className="size-4" />
+              ) : (
+                <PauseCircle className="size-4" />
+              )}
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  title="More actions"
+                >
+                  <MoreHorizontal className="size-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" sideOffset={8} className="min-w-[14rem] bg-white">
+                <DropdownMenuItem
+                  disabled={!conversation.contact_id}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    if (!conversation.contact_id) return;
+                    setStartDialogOpen(true);
+                  }}
+                  className="gap-2"
+                >
+                  <Zap className="size-4" />
+                  <span>Start an automation</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <button
               type="button"
               onClick={() => void handleStatusButton()}
@@ -513,6 +793,9 @@ export function ChatThread({
             {(conversation.unread_count ?? 0) > 0 && (
               <span className="font-medium text-[#2d71f8]">{conversation.unread_count} unread</span>
             )}
+            {automationsPaused && (
+              <span className="font-medium text-amber-600">Automations paused</span>
+            )}
             {isArchived && (
               <span className="font-medium text-slate-500">Archived</span>
             )}
@@ -523,6 +806,11 @@ export function ChatThread({
       {assignmentError && (
         <div className="border-b border-[#f2d2d2] bg-[#fff7f7] px-4 py-2 text-sm text-[#b14242]">
           {assignmentError}
+        </div>
+      )}
+      {automationControlError && (
+        <div className="border-b border-[#f2d2d2] bg-[#fff7f7] px-4 py-2 text-sm text-[#b14242]">
+          {automationControlError}
         </div>
       )}
 
@@ -722,6 +1010,83 @@ export function ChatThread({
         platform={conversation.platform}
         platformLabel={platformLabel}
       />
+
+      {enrollNotice && (
+        <div
+          className={cn(
+            "pointer-events-none absolute bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg",
+            enrollNotice.kind === "ok"
+              ? "bg-slate-900 text-white"
+              : "bg-rose-600 text-white",
+          )}
+        >
+          {enrollNotice.text}
+        </div>
+      )}
+
+      <Dialog open={startDialogOpen} onOpenChange={setStartDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Start an automation</DialogTitle>
+            <DialogDescription>
+              Enroll {displayName} in an active automation for {platformLabel}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="mt-2 max-h-[22rem] overflow-auto">
+            {startAutomationsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : startAutomationsError ? (
+              <div className="rounded-md border border-[#f2c0c0] bg-[#fff6f6] px-3 py-2 text-[13px] text-[#b14242]">
+                {startAutomationsError}
+              </div>
+            ) : startAutomations.length === 0 ? (
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-6 text-center text-[13px] text-slate-500">
+                No active automations available for {platformLabel}.
+              </div>
+            ) : (
+              <ul className="divide-y divide-slate-100">
+                {startAutomations.map((automation) => {
+                  const busy = startPendingId === automation.id;
+                  return (
+                    <li key={automation.id}>
+                      <button
+                        type="button"
+                        onClick={() => void handleEnrollAutomation(automation)}
+                        disabled={busy || startPendingId !== null}
+                        className="flex w-full items-start gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-700">
+                          <Zap className="size-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[13px] font-semibold text-slate-900">
+                            {automation.name}
+                          </p>
+                          {automation.description ? (
+                            <p className="mt-0.5 line-clamp-2 text-[11px] text-slate-500">
+                              {automation.description}
+                            </p>
+                          ) : (
+                            <p className="mt-0.5 text-[11px] text-slate-400">
+                              {automation.channel}
+                            </p>
+                          )}
+                        </div>
+                        {busy ? (
+                          <Loader2 className="mt-1 size-4 shrink-0 animate-spin text-slate-400" />
+                        ) : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

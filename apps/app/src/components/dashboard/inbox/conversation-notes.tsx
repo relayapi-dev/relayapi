@@ -13,7 +13,7 @@ export function NoteCard({
 }) {
   const author = note.author_name?.trim() || note.author_email || "Teammate";
   return (
-    <div className="mx-auto flex w-full max-w-[520px] items-start gap-2 rounded-lg border border-[#f0d27f] bg-[#fff8e0] px-3 py-2">
+    <div className="ml-auto flex w-fit max-w-[78%] items-start gap-2 rounded-lg border border-[#f0d27f] bg-[#fff8e0] px-3 py-2">
       <StickyNote className="mt-0.5 size-4 shrink-0 text-[#a57f1c]" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">

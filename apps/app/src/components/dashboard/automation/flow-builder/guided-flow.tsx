@@ -1,439 +1,170 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+// Guided flow canvas (Plan 2 — Unit B2, Task L2 + L5).
+//
+// The builder's main editing surface. Port-driven handles, graph-store-backed
+// mutations, drag-to-create insert menu, clipboard + keyboard shortcuts,
+// debounced autosave.
+//
+// API surface:
+//
+//   <GuidedFlow
+//     automationId={id}
+//     channel={channel}
+//     graphStore={store}    // `useGraphStore()` instance owned by the host page
+//     catalog={catalog}     // from `useAutomationCatalog()`
+//     readOnly={false}
+//     onAutoArrange={fn?}
+//   />
+//
+// The component is intentionally prop-thin: the host page is responsible for
+// creating the graph store, loading the initial graph into it, and observing
+// `graphStore.dirty` to gate save/publish buttons. This component handles
+// every *mutation* locally (moves, adds, edge creation, duplicate, paste,
+// delete, undo/redo) and pushes them to the server via the SDK-proxy
+// `/api/automations/{id}/graph` endpoint on a 750 ms debounce.
+//
+// The old edge-label-based connection model is gone. Every edge now stores
+// `{from_node, from_port, to_node, to_port}` — React Flow's
+// `sourceHandle`/`targetHandle` line up with port keys 1:1, and node handles
+// are rendered by `port-handles.tsx` from the canonical `derivePorts()`
+// output.
+
+import {
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import {
+	Background,
+	BackgroundVariant,
+	MarkerType,
+	Panel,
+	ReactFlow,
+	ReactFlowProvider,
+	useReactFlow,
+	type Connection,
+	type Edge,
+	type EdgeChange,
+	type Node,
+	type NodeChange,
+	type NodeProps,
+	type XYPosition,
+} from "reactflow";
+import "reactflow/dist/style.css";
 import {
 	Bot,
 	Clock3,
 	CornerDownRight,
 	GitBranch,
 	Globe,
-	Keyboard,
+	LayoutGrid,
 	MessageSquare,
-	MoreHorizontal,
+	Play,
 	Plus,
 	RefreshCw,
-	Send,
+	Shuffle,
 	StopCircle,
-	Tag,
-	Trash2,
 	Zap,
 	ZoomIn,
 	ZoomOut,
 } from "lucide-react";
-import {
-	EdgeLabelRenderer,
-	Handle,
-	MarkerType,
-	Panel,
-	Position,
-	ReactFlow,
-	ReactFlowProvider,
-	getBezierPath,
-	useNodesState,
-	useReactFlow,
-	type Edge,
-	type EdgeProps,
-	type Node,
-	type NodeProps,
-	type XYPosition,
-} from "reactflow";
-import "reactflow/dist/style.css";
-import { platformIcons } from "@/lib/platform-icons";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { resolveNodeOutputLabels } from "./output-labels";
-import { triggerCanvasPosition } from "./trigger-ui";
-import type {
-	AutomationDetail,
-	AutomationNodeSpec,
-	AutomationSchema,
-	SchemaNodeDef,
-} from "./types";
+import { PortHandles } from "./port-handles";
+import { derivePorts } from "./derive-ports";
+import { InsertMenu } from "./insert-menu";
+import { validateGraph } from "./validation";
+import { useAutosave } from "./use-autosave";
+import type { UseGraphStore } from "./use-graph-store";
+import { generateNodeKey } from "./use-graph-store";
+import type { AutomationCatalog } from "./use-catalog";
+import type { AutomationEdge, AutomationNode } from "./graph-types";
+import {
+	NodeMetricBadge,
+	useNodeOverlays,
+	type NodeMetrics,
+	type OverlayPeriod,
+} from "./node-overlays";
 
-const CATEGORY_ORDER = [
-	"content",
-	"input",
-	"logic",
-	"ai",
-	"action",
-	"ops",
-	"platform_send",
-	"flow",
-];
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-const CATEGORY_LABEL: Record<string, string> = {
-	content: "Content",
-	input: "Input",
-	logic: "Logic",
-	ai: "AI",
-	action: "Contacts",
-	ops: "Operations",
-	platform_send: "Send",
-	flow: "Flow",
-};
-
-const TRIGGER_ID = "trigger";
-const LAYER_GAP = 560;
-const ROW_GAP = 220;
-
-const PLATFORM_LABELS: Record<string, string> = {
-	instagram: "Instagram",
-	facebook: "Facebook",
-	whatsapp: "WhatsApp",
-	telegram: "Telegram",
-	discord: "Discord",
-	sms: "SMS",
-	twitter: "X",
-	bluesky: "Bluesky",
-	threads: "Threads",
-	youtube: "YouTube",
-	linkedin: "LinkedIn",
-	mastodon: "Mastodon",
-	reddit: "Reddit",
-	googlebusiness: "Google Business",
-	beehiiv: "Beehiiv",
-	kit: "Kit",
-	mailchimp: "Mailchimp",
-	listmonk: "Listmonk",
-	pinterest: "Pinterest",
-	multi: "Workflow",
-};
-
-const NODE_OPERATION_OVERRIDES: Record<string, string> = {
-	message_text: "Send Message",
-	message_media: "Send Media",
-	message_file: "Send File",
-	condition: "Condition",
-	smart_delay: "Delay",
-	randomizer: "Randomizer",
-	http_request: "HTTP Request",
-	goto: "Go To Step",
-	end: "End Automation",
-	tag_add: "Add Tag",
-	tag_remove: "Remove Tag",
-	field_set: "Set Field",
-	field_clear: "Clear Field",
-};
-
-const TRIGGER_OPERATION_OVERRIDES: Record<string, string> = {
-	instagram_comment: "User comments on your Post or Reel",
-	instagram_dm: "User sends a message",
-	instagram_story_reply: "User replies to your Story",
-	instagram_story_mention: "User mentions your Story",
-	facebook_comment: "User comments on your Post",
-	facebook_dm: "User sends a message",
-	whatsapp_message: "User sends a WhatsApp message",
-	telegram_message: "User sends a Telegram message",
-	sms_received: "User sends an SMS",
-	manual: "Manual start",
-	external_api: "External API event",
-};
-
-const TRIGGER_CATEGORY_LABELS: Record<string, string> = {
-	instagram_comment: "Post or Reel Comments",
-	instagram_dm: "Instagram Message",
-	instagram_story_reply: "Story Reply",
-	instagram_story_mention: "Story Mention",
-	facebook_comment: "Post Comments",
-	facebook_dm: "Facebook Message",
-	whatsapp_message: "WhatsApp Message",
-	telegram_message: "Telegram Message",
-	sms_received: "SMS Received",
-	manual: "Manual",
-	external_api: "External API",
-};
-
-interface ChildLink {
-	label: string;
-	order: number;
-	target: string;
-}
-
-interface SharedNodeData {
-	automationChannel: string;
-	hasError: boolean;
-	highlighted: boolean;
+export interface GuidedFlowProps {
+	automationId: string;
+	channel: string;
+	graphStore: UseGraphStore;
+	catalog: AutomationCatalog | undefined;
 	readOnly?: boolean;
-	schema: AutomationSchema;
-	onDeleteNode: (key: string) => void;
-	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
-	onSelect: (key: string | null) => void;
+	/**
+	 * Automation lifecycle status. When `active`, the canvas fetches
+	 * per-node insights and overlays a small metric pill on each node.
+	 * Any other value (or omitted) skips the fetch and hides the pill.
+	 */
+	automationStatus?: "draft" | "active" | "paused" | "archived";
+	onAutoArrange?: () => void;
+	/**
+	 * Override the autosave endpoint. Defaults to PUTting to
+	 * `/api/automations/{id}/graph` which is the SDK proxy on the dashboard
+	 * side.
+	 */
+	onSave?: (graph: UseGraphStore["graph"]) => Promise<void>;
 }
 
-interface TriggerCardData extends SharedNodeData {
-	kind: "trigger";
-	automation: AutomationDetail;
-	connectedOutputs: string[];
-	onAddTrigger: (triggerType: string) => void;
-	onSelectTrigger: (triggerId: string) => void;
+interface NodeData {
+	node: AutomationNode;
+	catalog: AutomationCatalog | undefined;
+	channel: string;
+	readOnly: boolean;
+	metrics?: NodeMetrics;
+	overlaysEnabled: boolean;
 }
 
-interface StepCardData extends SharedNodeData {
-	kind: "step";
-	node: AutomationNodeSpec;
-	def: SchemaNodeDef | null;
-	connectedOutputs: string[];
-}
+// ---------------------------------------------------------------------------
+// Auto-arrange (preserved from pre-rewrite canvas).
+// ---------------------------------------------------------------------------
 
-type FlowCardData = TriggerCardData | StepCardData;
-
-interface FlowEdgeData {
-	automationChannel: string;
-	edgeIndex: number;
-	label: string;
-	onDeleteEdge: (edgeIndex: number) => void;
-	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
-	parentKey: string;
-	readOnly?: boolean;
-	schema: AutomationSchema;
-}
-
-interface Props {
-	automation: AutomationDetail;
-	schema: AutomationSchema;
-	errorKeys: Set<string>;
-	highlightKeys: Set<string>;
-	selectedKey: string | null;
-	onMoveNode?: (key: string, position: XYPosition) => void;
-	onAddTrigger: (triggerType: string) => void;
-	onSelectTrigger: (triggerId: string) => void;
-	onSelect: (key: string | null) => void;
-	onInsertAfter: (parentKey: string, label: string, nodeType: string) => void;
-	onDeleteEdge: (edgeIndex: number) => void;
-	onDeleteNode: (key: string) => void;
-	readOnly?: boolean;
-}
-
-function titleize(value: string): string {
-	return value
-		.split("_")
-		.filter(Boolean)
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-		.join(" ");
-}
-
-interface TriggerTypePickerProps {
-	automationChannel: string;
-	children: ReactNode;
-	onPick: (triggerType: string) => void;
-	schema: AutomationSchema;
-}
-
-export function TriggerTypePicker({
-	automationChannel,
-	children,
-	onPick,
-	schema,
-}: TriggerTypePickerProps) {
-	const [open, setOpen] = useState(false);
-	const triggers = useMemo(
-		() =>
-			schema.triggers
-				.filter((t) => t.channel === automationChannel)
-				.sort((a, b) => a.type.localeCompare(b.type)),
-		[automationChannel, schema.triggers],
-	);
-
-	const channelLabel =
-		PLATFORM_LABELS[automationChannel] ?? titleize(automationChannel);
-
-	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>{children}</PopoverTrigger>
-			<PopoverContent
-				align="center"
-				sideOffset={8}
-				className="w-[360px] p-0"
-			>
-				<div className="border-b border-border px-4 py-3">
-					<div className="text-[13px] font-semibold text-foreground">
-						Start automation when…
-					</div>
-					<div className="mt-0.5 text-[11px] text-muted-foreground">
-						Specific {channelLabel} event that starts your automation.
-					</div>
-				</div>
-				<div className="max-h-[420px] overflow-y-auto p-2">
-					{triggers.length === 0 ? (
-						<div className="px-3 py-4 text-center text-[12px] text-muted-foreground">
-							No triggers available for {channelLabel}.
-						</div>
-					) : (
-						triggers.map((trigger) => {
-							const summary =
-								TRIGGER_OPERATION_OVERRIDES[trigger.type] ??
-								titleize(
-									trigger.type.replace(
-										new RegExp(`^${automationChannel}_`),
-										"",
-									),
-								);
-							const category =
-								TRIGGER_CATEGORY_LABELS[trigger.type] ??
-								titleize(
-									trigger.type.replace(
-										new RegExp(`^${automationChannel}_`),
-										"",
-									),
-								);
-							return (
-								<button
-									key={trigger.type}
-									type="button"
-									onClick={() => {
-										onPick(trigger.type);
-										setOpen(false);
-									}}
-									className="flex w-full items-start gap-3 rounded-xl px-2.5 py-2.5 text-left transition hover:bg-accent"
-								>
-									<div className="mt-0.5 shrink-0">
-										{platformIconBubble(trigger.channel)}
-									</div>
-									<div className="min-w-0 flex-1">
-										<div className="text-[12px] font-medium text-muted-foreground">
-											{category}
-										</div>
-										<div className="mt-0.5 text-[14px] font-semibold text-foreground">
-											{summary}
-										</div>
-									</div>
-								</button>
-							);
-						})
-					)}
-				</div>
-			</PopoverContent>
-		</Popover>
-	);
-}
-
-function presentLabel(value: string): string {
-	return value === "next" ? "Next Step" : titleize(value);
-}
-
-function describeNodePresentation(
-	nodeType: string,
-	category: string,
-	automationChannel: string,
-) {
-	const [prefix, ...rest] = nodeType.split("_");
-	if (NODE_OPERATION_OVERRIDES[nodeType]) {
-		const app = nodeType.startsWith("message_")
-			? (PLATFORM_LABELS[automationChannel] ?? titleize(automationChannel))
-			: nodeType.startsWith("user_input_")
-				? "Input"
-				: (CATEGORY_LABEL[category] ?? titleize(category));
-		return { app, operation: NODE_OPERATION_OVERRIDES[nodeType]! };
-	}
-	if (prefix && PLATFORM_LABELS[prefix]) {
-		return {
-			app: PLATFORM_LABELS[prefix],
-			operation: titleize(rest.join("_") || nodeType),
-		};
-	}
-	if (nodeType.startsWith("message_")) {
-		return { app: "Messaging", operation: titleize(nodeType.slice(8)) };
-	}
-	if (nodeType.startsWith("user_input_")) {
-		return {
-			app: "Input",
-			operation: `Collect ${titleize(nodeType.slice(11))}`,
-		};
-	}
-	return {
-		app: CATEGORY_LABEL[category] ?? titleize(category),
-		operation: titleize(nodeType),
-	};
-}
-
-function nodeSummary(spec: AutomationNodeSpec): string | undefined {
-	if (spec.type === "split_test" && Array.isArray(spec.variants)) {
-		return `${spec.variants.length} variant${spec.variants.length === 1 ? "" : "s"} configured`;
-	}
-	if (spec.type === "randomizer" && Array.isArray(spec.branches)) {
-		return `${spec.branches.length} branch${spec.branches.length === 1 ? "" : "es"} configured`;
-	}
-	if (typeof spec.text === "string" && spec.text.trim()) return spec.text;
-	if (typeof spec.prompt === "string" && spec.prompt.trim()) return spec.prompt;
-	if (typeof spec.when === "string" && spec.when.trim()) return spec.when;
-	if (typeof spec.url === "string" && spec.url.trim()) return spec.url;
-	if (typeof spec.tag === "string" && spec.tag.trim()) return spec.tag;
-	if (typeof spec.field === "string" && spec.field.trim()) return spec.field;
-	if (typeof spec.target_node_key === "string" && spec.target_node_key.trim()) {
-		return `Go to ${spec.target_node_key}`;
-	}
-	if (typeof spec.duration_minutes === "number") {
-		return `${spec.duration_minutes} minute${spec.duration_minutes === 1 ? "" : "s"}`;
-	}
-	return undefined;
-}
-
-function fallbackSummary(nodeType: string): string {
-	if (nodeType.startsWith("message_")) return "Add a text";
-	if (nodeType === "condition") return "Set the branching rules";
-	if (nodeType === "smart_delay") return "Wait before continuing";
-	if (nodeType === "http_request") return "Configure the request";
-	if (nodeType === "goto") return "Choose where this flow continues";
-	if (nodeType === "end") return "Stop the automation";
-	return "Configure this step";
-}
-
-function buildChildrenByKey(
-	edges: AutomationDetail["edges"],
-): Map<string, ChildLink[]> {
-	const map = new Map<string, ChildLink[]>();
-	for (const edge of edges) {
-		const list = map.get(edge.from) ?? [];
-		list.push({
-			label: edge.label ?? "next",
-			order: edge.order ?? Number.MAX_SAFE_INTEGER,
-			target: edge.to,
-		});
-		map.set(edge.from, list);
-	}
-	for (const list of map.values()) {
-		list.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
-	}
-	return map;
-}
+const LAYER_GAP = 420;
+const ROW_GAP = 200;
 
 function computeAutoPositions(
-	automation: AutomationDetail,
-	childrenByKey: Map<string, ChildLink[]>,
+	nodes: AutomationNode[],
+	edges: AutomationEdge[],
+	rootKey: string | null,
 ): Map<string, XYPosition> {
 	const layers = new Map<number, string[]>();
-	const seen = new Set<string>([TRIGGER_ID]);
-	const queue: Array<{ depth: number; key: string }> = [
-		{ depth: 0, key: TRIGGER_ID },
-	];
+	const childrenByKey = new Map<string, string[]>();
+	for (const e of edges) {
+		const list = childrenByKey.get(e.from_node) ?? [];
+		list.push(e.to_node);
+		childrenByKey.set(e.from_node, list);
+	}
+
+	const seen = new Set<string>();
+	const queue: Array<{ depth: number; key: string }> = [];
+	if (rootKey) {
+		queue.push({ depth: 0, key: rootKey });
+		seen.add(rootKey);
+	}
 
 	while (queue.length > 0) {
 		const current = queue.shift()!;
 		const layer = layers.get(current.depth) ?? [];
 		layer.push(current.key);
 		layers.set(current.depth, layer);
-		for (const child of childrenByKey.get(current.key) ?? []) {
-			if (seen.has(child.target)) continue;
-			seen.add(child.target);
-			queue.push({ depth: current.depth + 1, key: child.target });
+		for (const childKey of childrenByKey.get(current.key) ?? []) {
+			if (seen.has(childKey)) continue;
+			seen.add(childKey);
+			queue.push({ depth: current.depth + 1, key: childKey });
 		}
 	}
 
-	const lastDepth = Math.max(...layers.keys(), 0);
+	const lastDepth = layers.size > 0 ? Math.max(...layers.keys()) : -1;
 	let orphanDepth = lastDepth + 1;
-	for (const node of automation.nodes) {
-		if (seen.has(node.key)) continue;
+	for (const n of nodes) {
+		if (seen.has(n.key)) continue;
 		const layer = layers.get(orphanDepth) ?? [];
-		layer.push(node.key);
+		layer.push(n.key);
 		layers.set(orphanDepth, layer);
 		orphanDepth += 1;
 	}
@@ -454,643 +185,153 @@ function computeAutoPositions(
 	return positions;
 }
 
-function resolveNodePosition(
-	key: string,
-	automation: AutomationDetail,
-	autoPositions: Map<string, XYPosition>,
-): XYPosition {
-	if (key === TRIGGER_ID) {
-		return (
-			triggerCanvasPosition(automation.triggers) ??
-			autoPositions.get(TRIGGER_ID) ?? { x: 0, y: 0 }
-		);
-	}
-	const node = automation.nodes.find((entry) => entry.key === key);
-	if (
-		node &&
-		typeof node.canvas_x === "number" &&
-		typeof node.canvas_y === "number"
-	) {
-		return { x: node.canvas_x, y: node.canvas_y };
-	}
-	return autoPositions.get(key) ?? { x: 0, y: 0 };
-}
+// ---------------------------------------------------------------------------
+// Toast (tiny inline implementation — no sonner dep available)
+// ---------------------------------------------------------------------------
 
-function platformIconBubble(channel: string) {
-	const palette =
-		channel === "instagram"
-			? "bg-[linear-gradient(135deg,#ffd776_0%,#f74a5c_48%,#7d3cff_100%)]"
-			: channel === "facebook"
-				? "bg-[#1877f2]"
-				: channel === "whatsapp"
-					? "bg-[#25d366]"
-					: channel === "telegram"
-						? "bg-[#27a7e7]"
-						: "bg-[#7c8ca5]";
-	return (
-		<div
-			className={cn(
-				"flex size-7 items-center justify-center rounded-full text-white shadow-[0_2px_8px_rgba(15,23,42,0.15)]",
-				palette,
-			)}
-		>
-			<div className="scale-[0.8]">
-				{platformIcons[channel] ?? <MessageSquare className="size-3.5" />}
-			</div>
-		</div>
-	);
-}
+type Toast = { id: number; message: string };
 
-function categoryIcon(nodeType: string, category: string) {
-	if (nodeType === "goto") return CornerDownRight;
-	if (nodeType === "end") return StopCircle;
-	if (nodeType === "http_request") return Globe;
-	if (
-		nodeType === "randomizer" ||
-		nodeType === "split_test" ||
-		nodeType === "condition"
-	) {
-		return GitBranch;
-	}
-	if (category === "ai") return Bot;
-	if (category === "input") return Keyboard;
-	if (category === "action") return Tag;
-	if (category === "ops") return Clock3;
-	if (category === "platform_send") return Send;
-	return MessageSquare;
-}
-
-function cardShellClass({
-	hasError,
-	highlighted,
-	kind,
-	selected,
-}: {
-	hasError: boolean;
-	highlighted: boolean;
-	kind: "step" | "trigger";
-	selected: boolean;
-}) {
-	return cn(
-		"group relative overflow-visible rounded-[22px] border bg-white shadow-[0_2px_10px_rgba(34,44,66,0.08)] transition-all duration-150",
-		kind === "trigger"
-			? "w-[390px] border-[#e6e9ef]"
-			: "w-[346px] border-[#e6e9ef]",
-		kind === "step" &&
-			selected &&
-			"border-[#4680ff] shadow-[0_0_0_1px_rgba(70,128,255,0.3),0_3px_12px_rgba(34,44,66,0.1)]",
-		kind === "trigger" &&
-			selected &&
-			"border-[#63d26f] shadow-[0_0_0_1px_rgba(99,210,111,0.3),0_3px_12px_rgba(34,44,66,0.1)]",
-		highlighted && "ring-1 ring-[#a7d8ff]",
-		hasError && "border-[#f4af4d] shadow-[0_0_0_1px_rgba(244,175,77,0.28)]",
-	);
-}
-
-function AddStepMenu({
-	automationChannel,
-	className,
-	label,
-	onInsert,
-	parentKey,
-	schema,
-	tone,
-}: {
-	automationChannel: string;
-	className?: string;
-	label: string;
-	onInsert: (parentKey: string, label: string, nodeType: string) => void;
-	parentKey: string;
-	schema: AutomationSchema;
-	tone: "edge" | "footer" | "ghost";
-}) {
-	const [open, setOpen] = useState(false);
-	const grouped = useMemo(() => {
-		const byCategory = new Map<string, SchemaNodeDef[]>();
-		for (const node of schema.nodes) {
-			if (node.type === "trigger") continue;
-			if (
-				node.category === "platform_send" &&
-				automationChannel !== "multi" &&
-				!node.type.includes(automationChannel)
-			) {
-				continue;
-			}
-			const list = byCategory.get(node.category) ?? [];
-			list.push(node);
-			byCategory.set(node.category, list);
-		}
-		for (const list of byCategory.values()) {
-			list.sort((a, b) => a.type.localeCompare(b.type));
-		}
-		return byCategory;
-	}, [automationChannel, schema]);
-
-	const triggerClassName = cn(
-		"nodrag nopan",
-		tone === "edge" &&
-			"inline-flex size-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-slate-300 hover:text-slate-800",
-		tone === "footer" &&
-			"inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:bg-white hover:text-slate-900",
-		tone === "ghost" &&
-			"inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 transition hover:text-slate-900",
-		className,
-	);
-
-	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
-				<button type="button" className={triggerClassName}>
-					<Plus className={cn("size-3.5", tone === "ghost" && "size-3")} />
-					{tone === "footer" && <span>{presentLabel(label)}</span>}
-					{tone === "ghost" && <span>Add Step</span>}
-				</button>
-			</PopoverTrigger>
-			<PopoverContent
-				align="center"
-				sideOffset={8}
-				className="w-72 max-h-96 overflow-y-auto p-0"
-			>
-				<div className="border-b border-border px-3 py-2">
-					<div className="text-xs font-semibold text-foreground">Add step</div>
-					<div className="mt-0.5 text-[11px] text-muted-foreground">
-						Attach to {presentLabel(label)}
-					</div>
-				</div>
-				<div className="p-2">
-					{CATEGORY_ORDER.filter((category) => grouped.has(category)).map(
-						(category) => (
-							<div key={category} className="mb-2 last:mb-0">
-								<div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-									{CATEGORY_LABEL[category] ?? titleize(category)}
-								</div>
-								<div className="space-y-1">
-									{(grouped.get(category) ?? []).map((node) => {
-										const presentation = describeNodePresentation(
-											node.type,
-											node.category,
-											automationChannel,
-										);
-										return (
-											<button
-												key={node.type}
-												type="button"
-												onClick={() => {
-													onInsert(parentKey, label, node.type);
-													setOpen(false);
-												}}
-												className="flex w-full items-start justify-between rounded-xl px-2.5 py-2 text-left transition hover:bg-accent"
-											>
-												<div>
-													<div className="text-xs font-medium text-foreground">
-														{presentation.operation}
-													</div>
-													<div className="mt-0.5 text-[11px] text-muted-foreground">
-														{presentation.app}
-													</div>
-												</div>
-												<span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-													{presentLabel(node.type)}
-												</span>
-											</button>
-										);
-									})}
-								</div>
-							</div>
-						),
-					)}
-				</div>
-			</PopoverContent>
-		</Popover>
-	);
-}
-
-function TriggerFlowNode({ data, selected }: NodeProps<TriggerCardData>) {
-	const channel = data.automation.channel ?? "";
-
-	return (
-		<div
-			className={cn(
-				cardShellClass({
-					selected,
-					highlighted: data.highlighted,
-					hasError: data.hasError,
-					kind: "trigger",
-				}),
-				"cursor-grab active:cursor-grabbing",
-			)}
-			onClick={(event) => {
-				if ((event.target as HTMLElement).closest("button,input,a,[role=button]")) {
-					return;
-				}
-				data.onSelect(TRIGGER_ID);
-			}}
-			onKeyDown={(event) => {
-				if (event.key === "Enter" || event.key === " ") {
-					event.preventDefault();
-					data.onSelect(TRIGGER_ID);
-				}
-			}}
-			role="button"
-			tabIndex={0}
-		>
-			<Handle
-				type="source"
-				position={Position.Right}
-				className="!size-[14px] !border-[3px] !border-white !bg-[#5f6b7f] !shadow-[0_1px_4px_rgba(34,44,66,0.18)]"
-				style={{ right: -8, top: "calc(100% - 22px)" }}
-				isConnectable={false}
-			/>
-			<div className="block w-full px-5 py-4 text-left">
-				<div className="flex items-center gap-2 text-[18px] font-bold tracking-tight text-[#1f2633]">
-					<Zap className="size-[18px] text-[#1f2633]" />
-					<span>When...</span>
-				</div>
-
-				{data.automation.triggers.length > 0 ? (
-					<div className="mt-4 space-y-3">
-						{data.automation.triggers.map((t) => {
-							const summary =
-								TRIGGER_OPERATION_OVERRIDES[t.type] ??
-								(channel
-									? titleize(t.type.replace(new RegExp(`^${channel}_`), ""))
-									: titleize(t.type));
-							return (
-								<button
-									key={t.id}
-									type="button"
-									onClick={(event) => {
-										event.stopPropagation();
-										data.onSelectTrigger(t.id);
-									}}
-									className="nodrag flex w-full items-center gap-3 rounded-[16px] bg-[#f4f5f8] px-4 py-3 text-left transition hover:bg-[#eceef3]"
-								>
-									{platformIconBubble(channel)}
-									<div className="min-w-0 flex-1">
-										<div className="truncate text-[13px] font-medium leading-4 text-[#8b92a0]">
-											{t.label}
-										</div>
-										<div className="mt-0.5 text-[15px] font-semibold leading-5 text-[#404552]">
-											{summary}
-										</div>
-									</div>
-								</button>
-							);
-						})}
-					</div>
-				) : (
-					<div className="mt-4 rounded-[16px] border border-dashed border-[#d9dde6] bg-white px-4 py-5 text-center text-[13px] text-[#7e8695]">
-						No triggers yet — add one below.
-					</div>
-				)}
-
-				<TriggerTypePicker
-					automationChannel={channel}
-					onPick={(triggerType) => data.onAddTrigger(triggerType)}
-					schema={data.schema}
+function useTinyToast() {
+	const [toasts, setToasts] = useState<Toast[]>([]);
+	const push = useCallback((message: string) => {
+		const id = Date.now() + Math.random();
+		setToasts((prev) => [...prev, { id, message }]);
+		window.setTimeout(() => {
+			setToasts((prev) => prev.filter((t) => t.id !== id));
+		}, 3000);
+	}, []);
+	const view = (
+		<div className="pointer-events-none absolute bottom-5 left-1/2 z-50 flex -translate-x-1/2 flex-col items-center gap-2">
+			{toasts.map((t) => (
+				<div
+					key={t.id}
+					className="pointer-events-auto rounded-lg bg-slate-900 px-3 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_24px_rgba(15,23,42,0.25)]"
 				>
-					<button
-						type="button"
-						onClick={(event) => event.stopPropagation()}
-						className="nodrag mt-4 flex h-[48px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[15px] font-semibold text-[#4680ff] transition hover:border-[#4680ff] hover:bg-[#f4f8ff]"
-					>
-						+ New Trigger
-					</button>
-				</TriggerTypePicker>
-
-				<div className="mt-3 flex justify-end text-[13px] font-medium text-[#6f7786]">
-					Then
+					{t.message}
 				</div>
-			</div>
+			))}
 		</div>
 	);
+	return { push, view };
 }
 
-function StepFlowNode({ data, selected }: NodeProps<StepCardData>) {
-	const category = data.def?.category ?? "ops";
-	const Icon = categoryIcon(data.node.type, category);
-	const presentation = describeNodePresentation(
-		data.node.type,
-		category,
-		data.automationChannel,
-	);
-	const summary = nodeSummary(data.node) ?? fallbackSummary(data.node.type);
-	const outputs = resolveNodeOutputLabels(data.node, data.def);
-	const hasNext = outputs.some((label) =>
-		data.connectedOutputs.includes(label),
-	);
-	const isMessageNode = data.node.type.startsWith("message_");
-	const nodePlatformPrefix = data.node.type.split("_")[0] ?? "";
-	const nodePlatform = PLATFORM_LABELS[nodePlatformPrefix]
-		? nodePlatformPrefix
-		: null;
-	const isPlatformNode = isMessageNode || nodePlatform !== null;
-	const iconChannel = nodePlatform ?? data.automationChannel;
-	const preview =
-		isMessageNode && summary === fallbackSummary(data.node.type)
-			? "Add a text"
-			: summary;
+// ---------------------------------------------------------------------------
+// Node rendering
+// ---------------------------------------------------------------------------
+
+const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+	message: MessageSquare,
+	input: Play,
+	delay: Clock3,
+	condition: GitBranch,
+	randomizer: Shuffle,
+	action_group: Zap,
+	http_request: Globe,
+	start_automation: CornerDownRight,
+	goto: CornerDownRight,
+	end: StopCircle,
+};
+
+function CanvasNode({ data, selected }: NodeProps<NodeData>) {
+	const node = data.node;
+	const Icon = KIND_ICON[node.kind] ?? Bot;
+	const title =
+		node.title ??
+		data.catalog?.node_kinds.find((k) => k.kind === node.kind)?.label ??
+		node.kind;
+	const description =
+		data.catalog?.node_kinds.find((k) => k.kind === node.kind)?.description ?? "";
+
+	// Derive ports client-side so new button/quick-reply entries show up as
+	// handles without waiting for a round-trip.
+	const ports = useMemo(() => {
+		if (node.ports && node.ports.length > 0) return node.ports;
+		return derivePorts(node);
+	}, [node]);
+
+	const outputCount = ports.filter((p) => p.direction === "output").length;
+	// Pad the right side so port labels don't clip the card content.
+	const minHeight = Math.max(96, 60 + outputCount * 22);
 
 	return (
 		<div
 			className={cn(
-				cardShellClass({
-					selected,
-					highlighted: data.highlighted,
-					hasError: data.hasError,
-					kind: "step",
-				}),
-				"cursor-grab active:cursor-grabbing",
+				"relative w-[280px] rounded-2xl border bg-white pr-10 shadow-[0_2px_8px_rgba(34,44,66,0.08)] transition-all",
+				selected
+					? "border-[#4680ff] shadow-[0_0_0_2px_rgba(70,128,255,0.18)]"
+					: "border-slate-200",
 			)}
-			onClick={(event) => {
-				if ((event.target as HTMLElement).closest("button,input,a,[role=button]")) {
-					return;
-				}
-				data.onSelect(data.node.key);
-			}}
-			onKeyDown={(event) => {
-				if (event.key === "Enter" || event.key === " ") {
-					event.preventDefault();
-					data.onSelect(data.node.key);
-				}
-			}}
-			role="button"
-			tabIndex={0}
+			style={{ minHeight }}
 		>
-			<Handle
-				type="target"
-				position={Position.Left}
-				className="!pointer-events-none !size-3 !border-0 !bg-transparent !opacity-0"
-				style={{ left: -6, top: 40 }}
-				isConnectable={false}
-			/>
-			<Handle
-				type="source"
-				position={Position.Right}
-				className="!size-[14px] !border-[2px] !border-[#98a6bd] !bg-white !shadow-[0_1px_4px_rgba(34,44,66,0.12)]"
-				style={{ right: -7, top: "86%" }}
-				isConnectable={false}
-			/>
+			<PortHandles ports={ports} isConnectable={!data.readOnly} />
 
-			<div className="block w-full px-5 py-4 pr-12 text-left">
-				<div className="flex items-start gap-3">
-					<div className="mt-1 shrink-0">
-						{isPlatformNode ? (
-							platformIconBubble(iconChannel)
-						) : (
-							<div className="flex size-7 items-center justify-center rounded-full bg-[#eef1f5] text-[#7b8598]">
-								<Icon className="size-3.5" />
-							</div>
-						)}
-					</div>
-					<div className="min-w-0">
-						<div className="text-[13px] leading-4 text-[#8b92a0]">
-							{presentation.app}
-						</div>
-						<div className="mt-1 text-[17px] font-semibold leading-5 text-[#404552]">
-							{presentation.operation}
-						</div>
-					</div>
+			{data.overlaysEnabled ? (
+				<NodeMetricBadge metrics={data.metrics} />
+			) : null}
+
+			<div className="flex items-start gap-3 px-4 py-3">
+				<div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+					<Icon className="size-4" />
 				</div>
-
-				<div className="mt-4 rounded-[16px] bg-[#f4f5f8] px-4 py-3">
-					<div className="line-clamp-3 min-h-[26px] text-[15px] leading-[22px] text-[#404552]">
-						{preview}
+				<div className="min-w-0 flex-1">
+					<div className="truncate text-[13px] font-semibold text-slate-900">
+						{title}
 					</div>
-				</div>
-
-				<div className="mt-4 flex items-center justify-between text-[13px] text-[#6f7786]">
-					<div className="flex flex-wrap gap-2">
-						{data.hasError && (
-							<span className="rounded-full bg-[#fff2dc] px-2 py-0.5 text-[11px] font-semibold text-[#b36a00]">
-								Error
-							</span>
-						)}
-						{outputs.length > 1 &&
-							outputs.map((label) => (
-								<span
-									key={label}
-									className="rounded-full bg-[#f4f5f8] px-2 py-0.5 text-[11px] text-[#7e8695]"
-								>
-									{presentLabel(label)}
-								</span>
-							))}
-					</div>
-					<div className="flex items-center gap-2">
-						{selected && !data.readOnly && !hasNext ? (
-							<AddStepMenu
-								automationChannel={data.automationChannel}
-								label={outputs[0] ?? "next"}
-								onInsert={data.onInsertAfter}
-								parentKey={data.node.key}
-								schema={data.schema}
-								tone="ghost"
-							/>
-						) : null}
-						<span>Next Step</span>
-					</div>
+					{description ? (
+						<div className="mt-0.5 truncate text-[11px] text-slate-500">
+							{description}
+						</div>
+					) : null}
 				</div>
 			</div>
-
-			{!data.readOnly && (
-				<div className="absolute right-3 top-3 opacity-0 transition group-hover:opacity-100">
-					<DropdownMenu>
-						<DropdownMenuTrigger asChild>
-							<button
-								type="button"
-								onClick={(event) => event.stopPropagation()}
-								className="nodrag rounded-md p-1 text-[#98a0ae] transition hover:bg-[#f3f5f8] hover:text-[#5f6775]"
-								aria-label="Step actions"
-							>
-								<MoreHorizontal className="size-4" />
-							</button>
-						</DropdownMenuTrigger>
-						<DropdownMenuContent align="end" className="w-40">
-							<DropdownMenuItem
-								onClick={(event) => {
-									event.stopPropagation();
-									data.onDeleteNode(data.node.key);
-								}}
-								className="text-destructive focus:text-destructive"
-							>
-								Delete step
-							</DropdownMenuItem>
-						</DropdownMenuContent>
-					</DropdownMenu>
-				</div>
-			)}
 		</div>
 	);
 }
 
-function AutomationFlowEdge({
-	data,
-	markerEnd,
-	source,
-	sourcePosition,
-	sourceX,
-	sourceY,
-	targetPosition,
-	targetX,
-	targetY,
-}: EdgeProps<FlowEdgeData>) {
-	const [hovered, setHovered] = useState(false);
-	const leaveTimerRef = useRef<number | null>(null);
-	const handleEnter = () => {
-		if (leaveTimerRef.current !== null) {
-			window.clearTimeout(leaveTimerRef.current);
-			leaveTimerRef.current = null;
-		}
-		setHovered(true);
-	};
-	const handleLeave = () => {
-		if (leaveTimerRef.current !== null) {
-			window.clearTimeout(leaveTimerRef.current);
-		}
-		leaveTimerRef.current = window.setTimeout(() => {
-			setHovered(false);
-			leaveTimerRef.current = null;
-		}, 160);
-	};
-	useEffect(
-		() => () => {
-			if (leaveTimerRef.current !== null) {
-				window.clearTimeout(leaveTimerRef.current);
-			}
-		},
-		[],
-	);
+const nodeTypes = { canvas: CanvasNode };
 
-	const [path, labelX, labelY] = getBezierPath({
-		sourceX,
-		sourceY,
-		sourcePosition,
-		targetX,
-		targetY,
-		targetPosition,
-		curvature: 0.4,
-	});
-	const showBranchLabel =
-		data?.label && data.label !== "next" && source !== TRIGGER_ID;
-	const stroke = hovered ? "#4680ff" : "#9aa7bd";
-	if (!data) {
-		return (
-			<path
-				d={path}
-				fill="none"
-				stroke="#9aa7bd"
-				strokeWidth={2.2}
-				markerEnd={markerEnd}
-			/>
-		);
-	}
+// ---------------------------------------------------------------------------
+// Canvas controls
+// ---------------------------------------------------------------------------
 
-	return (
-		<>
-			<path
-				d={path}
-				fill="none"
-				stroke={stroke}
-				strokeWidth={2.2}
-				markerEnd={markerEnd}
-			/>
-			<path
-				d={path}
-				fill="none"
-				stroke="transparent"
-				strokeWidth={40}
-				style={{ pointerEvents: "stroke" }}
-				onMouseEnter={handleEnter}
-				onMouseLeave={handleLeave}
-			/>
-			<EdgeLabelRenderer>
-				<>
-					{showBranchLabel ? (
-						<div
-							className="pointer-events-none absolute"
-							style={{
-								transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY - 24}px)`,
-							}}
-						>
-							<span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598] shadow-[0_1px_4px_rgba(34,44,66,0.08)]">
-								{presentLabel(data.label)}
-							</span>
-						</div>
-					) : null}
-					{!data.readOnly ? (
-						<div
-							className={cn(
-								"nodrag nopan absolute flex items-center gap-1 rounded-xl border border-[#e5e9f1] bg-white p-1 shadow-[0_8px_20px_rgba(34,44,66,0.12)] transition-opacity duration-150",
-								hovered
-									? "pointer-events-auto opacity-100"
-									: "pointer-events-none opacity-0",
-							)}
-							style={{
-								transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-							}}
-							onMouseEnter={handleEnter}
-							onMouseLeave={handleLeave}
-						>
-							<button
-								type="button"
-								onClick={() => data.onDeleteEdge(data.edgeIndex)}
-								className="flex size-7 items-center justify-center rounded-lg text-[#f26a4b] transition hover:bg-[#fff4ef]"
-								aria-label="Delete connection"
-							>
-								<Trash2 className="size-3.5" />
-							</button>
-							<AddStepMenu
-								automationChannel={data.automationChannel}
-								className="rounded-lg border-0 shadow-none hover:bg-[#f5f7fb]"
-								label={data.label}
-								onInsert={data.onInsertAfter}
-								parentKey={data.parentKey}
-								schema={data.schema}
-								tone="edge"
-							/>
-						</div>
-					) : null}
-				</>
-			</EdgeLabelRenderer>
-		</>
-	);
-}
-
-const nodeTypes = {
-	stepCard: memo(StepFlowNode),
-	triggerCard: memo(TriggerFlowNode),
-};
-
-const edgeTypes = {
-	automation: memo(AutomationFlowEdge),
-};
-
-function FlowCanvasControls() {
-	const reactFlow = useReactFlow();
-
+function CanvasControls({
+	onAutoArrange,
+}: {
+	onAutoArrange?: () => void;
+}) {
+	const rf = useReactFlow();
 	return (
 		<Panel position="top-right" className="!right-4 !top-1/2 !-translate-y-1/2">
 			<div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_14px_32px_rgba(15,23,42,0.08)]">
 				<button
 					type="button"
-					onClick={() => reactFlow.zoomIn({ duration: 180 })}
-					className="flex size-11 items-center justify-center border-b border-slate-200 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+					onClick={() => rf.zoomIn({ duration: 180 })}
+					className="flex size-11 items-center justify-center border-b border-slate-200 text-slate-600 hover:bg-slate-50"
 					aria-label="Zoom in"
 				>
 					<ZoomIn className="size-4" />
 				</button>
 				<button
 					type="button"
-					onClick={() => reactFlow.zoomOut({ duration: 180 })}
-					className="flex size-11 items-center justify-center border-b border-slate-200 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+					onClick={() => rf.zoomOut({ duration: 180 })}
+					className="flex size-11 items-center justify-center border-b border-slate-200 text-slate-600 hover:bg-slate-50"
 					aria-label="Zoom out"
 				>
 					<ZoomOut className="size-4" />
 				</button>
 				<button
 					type="button"
-					onClick={() => reactFlow.fitView({ duration: 220, padding: 0.18 })}
-					className="flex size-11 items-center justify-center text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+					onClick={onAutoArrange}
+					disabled={!onAutoArrange}
+					className="flex size-11 items-center justify-center border-b border-slate-200 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+					aria-label="Auto arrange"
+				>
+					<LayoutGrid className="size-4" />
+				</button>
+				<button
+					type="button"
+					onClick={() => rf.fitView({ duration: 220, padding: 0.18 })}
+					className="flex size-11 items-center justify-center text-slate-600 hover:bg-slate-50"
 					aria-label="Fit view"
 				>
 					<RefreshCw className="size-4" />
@@ -1100,205 +341,864 @@ function FlowCanvasControls() {
 	);
 }
 
-function GuidedFlowCanvas({
-	automation,
-	errorKeys,
-	onAddTrigger,
-	onSelectTrigger,
-	onDeleteEdge,
-	highlightKeys,
-	onDeleteNode,
-	onInsertAfter,
-	onMoveNode,
-	onSelect,
-	readOnly,
-	schema,
-	selectedKey,
-}: Props) {
-	const reactFlow = useReactFlow();
-	const fitSignatureRef = useRef<string | null>(null);
+// ---------------------------------------------------------------------------
+// Default autosave: PUT to the dashboard's SDK proxy.
+// ---------------------------------------------------------------------------
 
-	const schemaByType = useMemo(
-		() => new Map(schema.nodes.map((node) => [node.type, node])),
-		[schema.nodes],
-	);
-	const childrenByKey = useMemo(
-		() => buildChildrenByKey(automation.edges),
-		[automation.edges],
-	);
-	const autoPositions = useMemo(
-		() => computeAutoPositions(automation, childrenByKey),
-		[automation, childrenByKey],
-	);
-
-	const flowNodes = useMemo<Node<FlowCardData>[]>(() => {
-		const nodes: Node<FlowCardData>[] = [
-			{
-				id: TRIGGER_ID,
-				type: "triggerCard",
-				position: resolveNodePosition(TRIGGER_ID, automation, autoPositions),
-				data: {
-					kind: "trigger",
-					automation,
-					automationChannel: automation.channel,
-					connectedOutputs: (childrenByKey.get(TRIGGER_ID) ?? []).map(
-						(entry) => entry.label,
-					),
-					hasError: errorKeys.has(TRIGGER_ID),
-					highlighted: highlightKeys.has(TRIGGER_ID),
-					onAddTrigger,
-					onSelectTrigger,
-					onDeleteNode,
-					onInsertAfter,
-					onSelect,
-					readOnly,
-					schema,
-				},
-				draggable: !readOnly,
-				selected: selectedKey === TRIGGER_ID,
-				selectable: true,
-			},
-		];
-
-		for (const node of automation.nodes) {
-			if (node.key === TRIGGER_ID) continue;
-			nodes.push({
-				id: node.key,
-				type: "stepCard",
-				position: resolveNodePosition(node.key, automation, autoPositions),
-				data: {
-					kind: "step",
-					automationChannel: automation.channel,
-					connectedOutputs: (childrenByKey.get(node.key) ?? []).map(
-						(entry) => entry.label,
-					),
-					def: schemaByType.get(node.type) ?? null,
-					hasError: errorKeys.has(node.key),
-					highlighted: highlightKeys.has(node.key),
-					node,
-					onDeleteNode,
-					onInsertAfter,
-					onSelect,
-					readOnly,
-					schema,
-				},
-				draggable: !readOnly,
-				selected: selectedKey === node.key,
-				selectable: true,
-			});
+async function defaultSave(
+	automationId: string,
+	graph: UseGraphStore["graph"],
+): Promise<void> {
+	const res = await fetch(`/api/automations/${automationId}/graph`, {
+		method: "PUT",
+		credentials: "same-origin",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ graph }),
+	});
+	if (!res.ok) {
+		let message = `Failed to save graph (HTTP ${res.status})`;
+		try {
+			const body = (await res.json()) as { error?: { message?: string } };
+			if (body?.error?.message) message = body.error.message;
+		} catch {
+			// non-JSON
 		}
+		throw new Error(message);
+	}
+}
 
-		return nodes;
+// ---------------------------------------------------------------------------
+// Main canvas
+// ---------------------------------------------------------------------------
+
+function isCycleWithoutPauseForEdge(
+	nodes: AutomationNode[],
+	edges: AutomationEdge[],
+	candidate: AutomationEdge,
+): boolean {
+	// Light-weight check: would adding `candidate` close a loop that contains
+	// no input/delay/goto node? We replay server-style cycle detection.
+	const adj = new Map<string, string[]>();
+	for (const e of edges.concat([candidate])) {
+		if (!adj.has(e.from_node)) adj.set(e.from_node, []);
+		adj.get(e.from_node)!.push(e.to_node);
+	}
+	const byKey = new Map(nodes.map((n) => [n.key, n]));
+	const PAUSE = new Set(["input", "delay", "goto"]);
+	const color = new Map<string, 0 | 1 | 2>();
+	const stack: string[] = [];
+	let foundBad = false;
+	const dfs = (u: string): void => {
+		if (foundBad) return;
+		color.set(u, 1);
+		stack.push(u);
+		for (const v of adj.get(u) ?? []) {
+			const c = color.get(v) ?? 0;
+			if (c === 1) {
+				const idx = stack.indexOf(v);
+				if (idx >= 0) {
+					const cycle = stack.slice(idx);
+					const hasPause = cycle.some((k) => {
+						const n = byKey.get(k);
+						return n ? PAUSE.has(n.kind) : false;
+					});
+					if (!hasPause) {
+						foundBad = true;
+						return;
+					}
+				}
+			} else if (c === 0) dfs(v);
+		}
+		stack.pop();
+		color.set(u, 2);
+	};
+	for (const n of nodes) {
+		if ((color.get(n.key) ?? 0) === 0) dfs(n.key);
+		if (foundBad) break;
+	}
+	return foundBad;
+}
+
+const OVERLAY_PERIOD_KEY = "relay.automation.overlay-period";
+const OVERLAY_PERIODS: OverlayPeriod[] = ["24h", "7d", "30d", "90d"];
+
+function loadOverlayPeriod(): OverlayPeriod {
+	if (typeof window === "undefined") return "7d";
+	try {
+		const stored = window.localStorage.getItem(OVERLAY_PERIOD_KEY);
+		if (stored && (OVERLAY_PERIODS as string[]).includes(stored)) {
+			return stored as OverlayPeriod;
+		}
+	} catch {
+		// Private mode / storage disabled — fall through to default.
+	}
+	return "7d";
+}
+
+function persistOverlayPeriod(period: OverlayPeriod): void {
+	if (typeof window === "undefined") return;
+	try {
+		window.localStorage.setItem(OVERLAY_PERIOD_KEY, period);
+	} catch {
+		// Ignore.
+	}
+}
+
+function CanvasInner({
+	automationId,
+	channel,
+	graphStore,
+	catalog,
+	readOnly = false,
+	automationStatus,
+	onAutoArrange,
+	onSave,
+}: GuidedFlowProps) {
+	const rf = useReactFlow();
+	const wrapperRef = useRef<HTMLDivElement | null>(null);
+	const fitSignatureRef = useRef<string | null>(null);
+	const connectStartRef = useRef<{ nodeKey: string; portKey: string } | null>(
+		null,
+	);
+	const lastPasteOffset = useRef<number>(0);
+	const toast = useTinyToast();
+
+	// Overlay controls — only active when the flow is live. Period persists
+	// across reloads so the ops team can stay in their preferred window.
+	const overlaysEnabled = automationStatus === "active";
+	const [overlayPeriod, setOverlayPeriod] = useState<OverlayPeriod>(() =>
+		loadOverlayPeriod(),
+	);
+	const handleOverlayPeriodChange = useCallback((next: OverlayPeriod) => {
+		setOverlayPeriod(next);
+		persistOverlayPeriod(next);
+	}, []);
+	const overlay = useNodeOverlays(automationId, overlayPeriod, overlaysEnabled);
+
+	const [insertMenu, setInsertMenu] = useState<
+		| null
+		| {
+				screen: { x: number; y: number };
+				flow: { x: number; y: number };
+				sourcePort?: { nodeKey: string; portKey: string };
+		  }
+	>(null);
+
+	const { graph, selection } = graphStore;
+
+	// Auto-arrange positions — computed once per graph change; used only as a
+	// fallback when a node has no stored canvas position (e.g. just inserted
+	// by the menu with a cursor-space coordinate).
+	const autoPositions = useMemo(
+		() => computeAutoPositions(graph.nodes, graph.edges, graph.root_node_key),
+		[graph],
+	);
+
+	// --- React Flow data ---------------------------------------------------
+
+	const rfNodes = useMemo<Node<NodeData>[]>(() => {
+		return graph.nodes.map((node) => {
+			const fallback = autoPositions.get(node.key);
+			return {
+				id: node.key,
+				type: "canvas",
+				position: {
+					x: node.canvas_x ?? fallback?.x ?? 0,
+					y: node.canvas_y ?? fallback?.y ?? 0,
+				},
+				data: {
+					node,
+					catalog,
+					channel,
+					readOnly,
+					metrics: overlaysEnabled ? overlay.data.get(node.key) : undefined,
+					overlaysEnabled,
+				},
+				selected: selection.includes(node.key),
+				selectable: true,
+				draggable: !readOnly,
+			};
+		});
 	}, [
 		autoPositions,
-		automation,
-		childrenByKey,
-		errorKeys,
-		highlightKeys,
-		onDeleteNode,
-		onAddTrigger,
-		onSelectTrigger,
-		onInsertAfter,
-		onSelect,
+		catalog,
+		channel,
+		graph.nodes,
+		overlay.data,
+		overlaysEnabled,
 		readOnly,
-		schema,
-		schemaByType,
-		selectedKey,
+		selection,
 	]);
 
-	const flowEdges = useMemo<Edge<FlowEdgeData>[]>(() => {
-		return automation.edges.map((edge, index) => ({
-			id: `${edge.from}:${edge.label ?? "next"}:${edge.to}:${index}`,
-			source: edge.from,
-			target: edge.to,
-			type: "automation",
-			data: {
-				automationChannel: automation.channel,
-				edgeIndex: index,
-				label: edge.label ?? "next",
-				onDeleteEdge,
-				onInsertAfter,
-				parentKey: edge.from,
-				readOnly,
-				schema,
-			},
+	const rfEdges = useMemo<Edge[]>(() => {
+		return graph.edges.map((e, index) => ({
+			id: `${e.from_node}.${e.from_port}→${e.to_node}.${e.to_port}`,
+			source: e.from_node,
+			sourceHandle: e.from_port,
+			target: e.to_node,
+			targetHandle: e.to_port,
+			type: "default",
+			data: { edgeIndex: index },
 			markerEnd: {
 				type: MarkerType.ArrowClosed,
 				width: 18,
 				height: 18,
 				color: "#9aa7bd",
 			},
-			selectable: false,
+			style: { stroke: "#9aa7bd", strokeWidth: 2 },
 		}));
-	}, [
-		automation.channel,
-		automation.edges,
-		onDeleteEdge,
-		onInsertAfter,
-		readOnly,
-		schema,
-	]);
+	}, [graph.edges]);
 
-	const [rfNodes, setRfNodes, onNodesChange] =
-		useNodesState<FlowCardData>(flowNodes);
-	const draggingRef = useRef(false);
+	// --- Fit view on initial mount / big graph changes ---------------------
 
 	useEffect(() => {
-		if (draggingRef.current) return;
-		setRfNodes(flowNodes);
-	}, [flowNodes, setRfNodes]);
-
-	useEffect(() => {
-		const signature = `${flowNodes.length}:${flowEdges.length}`;
+		const signature = `${rfNodes.length}:${rfEdges.length}`;
 		if (fitSignatureRef.current === signature) return;
 		fitSignatureRef.current = signature;
 		const frame = requestAnimationFrame(() => {
-			reactFlow.fitView({ duration: 260, padding: 0.18 });
+			rf.fitView({ duration: 260, padding: 0.18 });
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [flowEdges.length, flowNodes.length, reactFlow]);
+	}, [rfEdges.length, rfNodes.length, rf]);
+
+	// --- Validation ping on every graph change -----------------------------
+
+	useEffect(() => {
+		const result = validateGraph(graph);
+		graphStore.setValidation(result.errors, result.warnings);
+	}, [graph, graphStore]);
+
+	// --- Autosave ----------------------------------------------------------
+
+	// Monotonically increasing save token so the autosave hook only triggers
+	// on *content* change, not every re-render.
+	const saveVersion = useMemo(
+		() => `${graph.nodes.length}:${graph.edges.length}:${JSON.stringify(graph)}`.length,
+		[graph],
+	);
+
+	const doSave = useCallback(async () => {
+		if (readOnly) return;
+		try {
+			if (onSave) {
+				await onSave(graph);
+			} else {
+				await defaultSave(automationId, graph);
+			}
+			graphStore.markSaved();
+		} catch (err) {
+			toast.push(
+				err instanceof Error ? err.message : "Failed to save automation",
+			);
+		}
+	}, [automationId, graph, graphStore, onSave, readOnly, toast]);
+
+	useAutosave({
+		version: saveVersion,
+		dirty: graphStore.dirty,
+		onSave: doSave,
+		debounceMs: 750,
+		enabled: !readOnly,
+	});
+
+	// --- React Flow event handlers -----------------------------------------
+
+	const onNodesChange = useCallback(
+		(changes: NodeChange[]) => {
+			for (const change of changes) {
+				if (change.type === "position" && change.position && !change.dragging) {
+					// Commit position on drag stop only (avoids history spam per pixel).
+					graphStore.moveNode(change.id, {
+						x: change.position.x,
+						y: change.position.y,
+					});
+				} else if (change.type === "select") {
+					// React Flow's internal selection — translate to store selection.
+					// We coalesce multiple select events at the end of the changes
+					// array into a single setSelection dispatch.
+				} else if (change.type === "remove") {
+					if (graph.root_node_key === change.id) {
+						toast.push("Cannot delete the root node");
+						continue;
+					}
+					graphStore.removeNodes([change.id]);
+				}
+			}
+			// Apply selection changes in a single pass.
+			const selectEvents = changes.filter(
+				(c): c is Extract<NodeChange, { type: "select" }> =>
+					c.type === "select",
+			);
+			if (selectEvents.length > 0) {
+				const next = new Set(selection);
+				for (const ev of selectEvents) {
+					if (ev.selected) next.add(ev.id);
+					else next.delete(ev.id);
+				}
+				graphStore.setSelection(Array.from(next));
+			}
+		},
+		[graph.root_node_key, graphStore, selection, toast],
+	);
+
+	const onEdgesChange = useCallback(
+		(changes: EdgeChange[]) => {
+			for (const change of changes) {
+				if (change.type === "remove") {
+					// `change.id` format matches rfEdges.id
+					const idx = graph.edges.findIndex(
+						(e, i) =>
+							`${e.from_node}.${e.from_port}→${e.to_node}.${e.to_port}` ===
+							change.id,
+					);
+					if (idx >= 0) graphStore.removeEdge(idx);
+				}
+			}
+		},
+		[graph.edges, graphStore],
+	);
+
+	const onConnect = useCallback(
+		(connection: Connection) => {
+			if (readOnly) return;
+			connectStartRef.current = null;
+			setInsertMenu(null);
+
+			const { source, sourceHandle, target, targetHandle } = connection;
+			if (!source || !sourceHandle || !target || !targetHandle) return;
+
+			const fromNode = graph.nodes.find((n) => n.key === source);
+			const toNode = graph.nodes.find((n) => n.key === target);
+			if (!fromNode || !toNode) {
+				toast.push("Connection failed: unknown node");
+				return;
+			}
+
+			const fromPorts = derivePorts(fromNode);
+			const toPorts = derivePorts(toNode);
+			const fromPort = fromPorts.find(
+				(p) => p.key === sourceHandle && p.direction === "output",
+			);
+			const toPort = toPorts.find(
+				(p) => p.key === targetHandle && p.direction === "input",
+			);
+			if (!fromPort) {
+				toast.push(`Source port "${sourceHandle}" is not an output`);
+				return;
+			}
+			if (!toPort) {
+				toast.push(`Target port "${targetHandle}" is not an input`);
+				return;
+			}
+			if (source === target && toNode.kind !== "goto") {
+				toast.push("Self-loops are only allowed via a Go To node");
+				return;
+			}
+
+			// Second connection on the same source port replaces the first.
+			const existingIdx = graph.edges.findIndex(
+				(e) => e.from_node === source && e.from_port === sourceHandle,
+			);
+
+			const candidate: AutomationEdge = {
+				from_node: source,
+				from_port: sourceHandle,
+				to_node: target,
+				to_port: targetHandle,
+			};
+
+			// Cycle guard.
+			const stripped =
+				existingIdx >= 0
+					? graph.edges.filter((_, i) => i !== existingIdx)
+					: graph.edges;
+			if (isCycleWithoutPauseForEdge(graph.nodes, stripped, candidate)) {
+				toast.push("Connection would create a loop without a pause point");
+				return;
+			}
+
+			if (existingIdx >= 0) {
+				graphStore.reconnectEdge(existingIdx, {
+					to_node: target,
+					to_port: targetHandle,
+				});
+			} else {
+				graphStore.addEdge(source, sourceHandle, target, targetHandle);
+			}
+		},
+		[graph.edges, graph.nodes, graphStore, readOnly, toast],
+	);
+
+	const onConnectStart = useCallback(
+		(
+			_e: unknown,
+			params: { nodeId: string | null; handleId: string | null },
+		) => {
+			if (readOnly || !params.nodeId || !params.handleId) {
+				connectStartRef.current = null;
+				return;
+			}
+			connectStartRef.current = {
+				nodeKey: params.nodeId,
+				portKey: params.handleId,
+			};
+		},
+		[readOnly],
+	);
+
+	const onConnectEnd = useCallback(
+		(event: MouseEvent | TouchEvent) => {
+			if (readOnly || !connectStartRef.current) return;
+			const target = event.target as HTMLElement | null;
+			if (target?.closest(".react-flow__handle")) {
+				// User landed on a valid handle — React Flow will fire onConnect.
+				connectStartRef.current = null;
+				return;
+			}
+			const bounds = wrapperRef.current?.getBoundingClientRect();
+			if (!bounds) {
+				connectStartRef.current = null;
+				return;
+			}
+			const pointer =
+				"changedTouches" in event
+					? event.changedTouches[0]
+					: (event as MouseEvent);
+			if (!pointer) {
+				connectStartRef.current = null;
+				return;
+			}
+			const flow = rf.screenToFlowPosition({
+				x: pointer.clientX,
+				y: pointer.clientY,
+			});
+			setInsertMenu({
+				screen: {
+					x: pointer.clientX - bounds.left,
+					y: pointer.clientY - bounds.top,
+				},
+				flow,
+				sourcePort: connectStartRef.current,
+			});
+			connectStartRef.current = null;
+		},
+		[readOnly, rf],
+	);
+
+	// --- Insert menu commit ------------------------------------------------
+
+	const handleInsert = useCallback(
+		(
+			kind: string,
+			position: { x: number; y: number },
+			connect?: { sourceNodeKey: string; sourcePortKey: string },
+		) => {
+			if (readOnly) return;
+			const newKey = graphStore.addNode(kind, position, connect);
+			graphStore.setSelection([newKey]);
+		},
+		[graphStore, readOnly],
+	);
+
+	// --- Auto-arrange ------------------------------------------------------
+
+	const handleAutoArrange = useCallback(() => {
+		if (readOnly) return;
+		const positions = computeAutoPositions(
+			graph.nodes,
+			graph.edges,
+			graph.root_node_key,
+		);
+		for (const [key, pos] of positions) {
+			graphStore.moveNode(key, pos);
+		}
+		requestAnimationFrame(() => {
+			rf.fitView({ duration: 220, padding: 0.18 });
+		});
+		onAutoArrange?.();
+	}, [graph, graphStore, onAutoArrange, readOnly, rf]);
+
+	// --- Keyboard shortcuts (Task L5) --------------------------------------
+
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+
+		const isEditable = (el: EventTarget | null): boolean => {
+			if (!(el instanceof HTMLElement)) return false;
+			if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return true;
+			if (el.isContentEditable) return true;
+			return false;
+		};
+
+		const handler = async (e: KeyboardEvent) => {
+			if (isEditable(e.target)) return;
+			const mod = e.metaKey || e.ctrlKey;
+
+			// Cmd+K or "/" opens the insert menu at viewport centre.
+			if ((mod && e.key.toLowerCase() === "k") || (!mod && e.key === "/")) {
+				if (readOnly) return;
+				e.preventDefault();
+				const bounds = wrapperRef.current?.getBoundingClientRect();
+				if (!bounds) return;
+				const screenCenter = {
+					x: bounds.width / 2,
+					y: bounds.height / 2,
+				};
+				const flowCenter = rf.screenToFlowPosition({
+					x: bounds.left + screenCenter.x,
+					y: bounds.top + screenCenter.y,
+				});
+				setInsertMenu({
+					screen: { x: screenCenter.x - 160, y: screenCenter.y - 20 },
+					flow: flowCenter,
+				});
+				return;
+			}
+
+			// Delete / Backspace removes selected nodes.
+			if ((e.key === "Delete" || e.key === "Backspace") && !mod) {
+				if (readOnly) return;
+				if (selection.length === 0) return;
+				e.preventDefault();
+				const deletable = selection.filter(
+					(k) => k !== graph.root_node_key,
+				);
+				if (deletable.length !== selection.length) {
+					toast.push("Root node cannot be deleted");
+				}
+				if (deletable.length > 0) graphStore.removeNodes(deletable);
+				return;
+			}
+
+			// Duplicate (Cmd+D).
+			if (mod && e.key.toLowerCase() === "d" && !e.shiftKey) {
+				if (readOnly || selection.length === 0) return;
+				e.preventDefault();
+				duplicateSelection();
+				return;
+			}
+
+			// Copy (Cmd+C).
+			if (mod && e.key.toLowerCase() === "c" && !e.shiftKey) {
+				if (selection.length === 0) return;
+				e.preventDefault();
+				await copySelection();
+				return;
+			}
+
+			// Paste (Cmd+V).
+			if (mod && e.key.toLowerCase() === "v" && !e.shiftKey) {
+				if (readOnly) return;
+				e.preventDefault();
+				await pasteClipboard();
+				return;
+			}
+
+			// Undo / Redo.
+			if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) {
+				if (readOnly) return;
+				e.preventDefault();
+				graphStore.undo();
+				return;
+			}
+			if (
+				(mod && e.key.toLowerCase() === "z" && e.shiftKey) ||
+				(mod && e.key.toLowerCase() === "y")
+			) {
+				if (readOnly) return;
+				e.preventDefault();
+				graphStore.redo();
+				return;
+			}
+
+			// Force save (Cmd+S).
+			if (mod && e.key.toLowerCase() === "s") {
+				if (readOnly) return;
+				e.preventDefault();
+				void doSave();
+				return;
+			}
+
+			// Frame selection (F).
+			if (!mod && (e.key === "f" || e.key === "F")) {
+				if (selection.length === 0) {
+					rf.fitView({ duration: 220, padding: 0.18 });
+					return;
+				}
+				e.preventDefault();
+				const selectedNodes = rf.getNodes().filter((n) => selection.includes(n.id));
+				rf.fitView({
+					duration: 220,
+					padding: 0.25,
+					nodes: selectedNodes,
+				});
+				return;
+			}
+
+			// Reset zoom (0).
+			if (!mod && e.key === "0") {
+				e.preventDefault();
+				rf.zoomTo(1, { duration: 160 });
+				return;
+			}
+		};
+
+		window.addEventListener("keydown", handler);
+		return () => window.removeEventListener("keydown", handler);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [
+		graph.root_node_key,
+		graphStore,
+		readOnly,
+		rf,
+		selection,
+		toast,
+		doSave,
+	]);
+
+	// --- Clipboard helpers -------------------------------------------------
+
+	const copySelection = useCallback(async () => {
+		const selected = new Set(selection);
+		const nodes = graph.nodes.filter((n) => selected.has(n.key));
+		const edges = graph.edges.filter(
+			(e) => selected.has(e.from_node) && selected.has(e.to_node),
+		);
+		const payload = {
+			schema_version: 1,
+			nodes,
+			edges,
+		};
+		try {
+			await navigator.clipboard.writeText(JSON.stringify(payload));
+			toast.push(`Copied ${nodes.length} node${nodes.length === 1 ? "" : "s"}`);
+		} catch {
+			toast.push("Clipboard write blocked");
+		}
+	}, [graph.edges, graph.nodes, selection, toast]);
+
+	const pasteClipboard = useCallback(async () => {
+		let text: string;
+		try {
+			text = await navigator.clipboard.readText();
+		} catch {
+			toast.push("Clipboard read blocked");
+			return;
+		}
+		let payload: {
+			schema_version?: number;
+			nodes?: AutomationNode[];
+			edges?: AutomationEdge[];
+		};
+		try {
+			payload = JSON.parse(text);
+		} catch {
+			toast.push("Clipboard is not a valid node payload");
+			return;
+		}
+		if (!payload?.nodes || !Array.isArray(payload.nodes)) {
+			toast.push("Clipboard has no nodes");
+			return;
+		}
+
+		const keyMap = new Map<string, string>();
+		lastPasteOffset.current += 40;
+		const offset = lastPasteOffset.current;
+
+		for (const node of payload.nodes) {
+			keyMap.set(node.key, generateNodeKey());
+		}
+
+		// Rewrite nodes with fresh keys + offset.
+		const newNodes: AutomationNode[] = payload.nodes.map((n) => ({
+			...n,
+			key: keyMap.get(n.key)!,
+			canvas_x: (n.canvas_x ?? 0) + offset,
+			canvas_y: (n.canvas_y ?? 0) + offset,
+		}));
+
+		const newEdges: AutomationEdge[] = (payload.edges ?? [])
+			.map((e) => {
+				const from = keyMap.get(e.from_node);
+				const to = keyMap.get(e.to_node);
+				if (!from || !to) return null;
+				return { ...e, from_node: from, to_node: to };
+			})
+			.filter((e): e is AutomationEdge => e !== null);
+
+		// We need to apply these as a SET_GRAPH so the history entry contains
+		// the before-state intact. Build the merged graph and set it.
+		graphStore.setGraph({
+			...graph,
+			nodes: graph.nodes.concat(newNodes),
+			edges: graph.edges.concat(newEdges),
+		});
+		graphStore.setSelection(newNodes.map((n) => n.key));
+		toast.push(
+			`Pasted ${newNodes.length} node${newNodes.length === 1 ? "" : "s"}`,
+		);
+	}, [graph, graphStore, toast]);
+
+	const duplicateSelection = useCallback(() => {
+		if (selection.length === 0) return;
+		const selected = new Set(selection);
+		const nodes = graph.nodes.filter((n) => selected.has(n.key));
+		const edges = graph.edges.filter(
+			(e) => selected.has(e.from_node) && selected.has(e.to_node),
+		);
+		const keyMap = new Map<string, string>();
+		for (const n of nodes) keyMap.set(n.key, generateNodeKey());
+
+		const newNodes: AutomationNode[] = nodes.map((n) => ({
+			...n,
+			key: keyMap.get(n.key)!,
+			canvas_x: (n.canvas_x ?? 0) + 40,
+			canvas_y: (n.canvas_y ?? 0) + 40,
+		}));
+		const newEdges: AutomationEdge[] = edges
+			.map((e) => {
+				const from = keyMap.get(e.from_node);
+				const to = keyMap.get(e.to_node);
+				if (!from || !to) return null;
+				return { ...e, from_node: from, to_node: to };
+			})
+			.filter((e): e is AutomationEdge => e !== null);
+
+		graphStore.setGraph({
+			...graph,
+			nodes: graph.nodes.concat(newNodes),
+			edges: graph.edges.concat(newEdges),
+		});
+		graphStore.setSelection(newNodes.map((n) => n.key));
+	}, [graph, graphStore, selection]);
+
+	// --- Render ------------------------------------------------------------
 
 	return (
-		<div className="h-full bg-[#f5f6fa]">
+		<div ref={wrapperRef} className="relative h-full bg-[#f5f6fa]">
 			<ReactFlow
 				nodes={rfNodes}
-				edges={flowEdges}
-				onNodesChange={onNodesChange}
+				edges={rfEdges}
 				nodeTypes={nodeTypes}
-				edgeTypes={edgeTypes}
-				onNodeClick={(_, node) => onSelect(node.id)}
-				onNodeDragStart={() => {
-					draggingRef.current = true;
+				onNodesChange={onNodesChange}
+				onEdgesChange={onEdgesChange}
+				onConnect={onConnect}
+				onConnectStart={onConnectStart}
+				onConnectEnd={onConnectEnd}
+				onPaneClick={() => {
+					setInsertMenu(null);
+					graphStore.setSelection([]);
 				}}
-				onNodeDragStop={(_, node) => {
-					draggingRef.current = false;
-					if (!onMoveNode) return;
-					onMoveNode(node.id, node.position);
-				}}
-				onPaneClick={() => onSelect(null)}
 				proOptions={{ hideAttribution: true }}
 				fitView
 				fitViewOptions={{ padding: 0.18 }}
-				defaultEdgeOptions={{
-					type: "automation",
-				}}
-				maxZoom={1.6}
-				minZoom={0.3}
-				nodesConnectable={false}
+				edgesUpdatable={!readOnly}
+				nodesConnectable={!readOnly}
 				nodesDraggable={!readOnly}
-				selectNodesOnDrag={false}
+				selectionOnDrag
+				multiSelectionKeyCode={["Meta", "Shift"]}
+				deleteKeyCode={null} // we handle delete ourselves to surface the root-node toast
+				minZoom={0.2}
+				maxZoom={1.8}
 				className="bg-transparent"
 			>
-				<FlowCanvasControls />
+				<Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="#dfe2ea" />
+				<CanvasControls
+					onAutoArrange={readOnly ? undefined : handleAutoArrange}
+				/>
+				{!readOnly ? (
+					<Panel position="top-left" className="!left-4 !top-4">
+						<button
+							type="button"
+							className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+							onClick={() => {
+								const bounds = wrapperRef.current?.getBoundingClientRect();
+								if (!bounds) return;
+								const screen = {
+									x: bounds.width / 2 - 160,
+									y: 80,
+								};
+								const flow = rf.screenToFlowPosition({
+									x: bounds.left + bounds.width / 2,
+									y: bounds.top + 80,
+								});
+								setInsertMenu({ screen, flow });
+							}}
+						>
+							<Plus className="size-3.5" />
+							Add node
+						</button>
+					</Panel>
+				) : null}
+				{overlaysEnabled ? (
+					<Panel
+						position="top-left"
+						className={cn("!left-4", readOnly ? "!top-4" : "!top-14")}
+					>
+						<div
+							className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-1 py-1 text-[11px] shadow-sm"
+							role="tablist"
+							aria-label="Metric overlay period"
+						>
+							{OVERLAY_PERIODS.map((p) => (
+								<button
+									key={p}
+									type="button"
+									role="tab"
+									aria-selected={overlayPeriod === p}
+									onClick={() => handleOverlayPeriodChange(p)}
+									className={cn(
+										"rounded-full px-2.5 py-0.5 font-medium transition-colors",
+										overlayPeriod === p
+											? "bg-slate-900 text-white"
+											: "text-slate-500 hover:bg-slate-100",
+									)}
+								>
+									{p}
+								</button>
+							))}
+							{overlay.loading ? (
+								<span className="ml-1 text-[10px] text-slate-400">…</span>
+							) : overlay.error ? (
+								<span
+									className="ml-1 text-[10px] text-rose-500"
+									title={overlay.error.message}
+								>
+									!
+								</span>
+							) : null}
+						</div>
+					</Panel>
+				) : null}
 			</ReactFlow>
+			{insertMenu && !readOnly ? (
+				<InsertMenu
+					open={true}
+					position={insertMenu.screen}
+					channel={channel}
+					catalog={catalog}
+					sourcePort={insertMenu.sourcePort}
+					targetPosition={insertMenu.flow}
+					onClose={() => setInsertMenu(null)}
+					onInsert={handleInsert}
+				/>
+			) : null}
+			{toast.view}
 		</div>
 	);
 }
 
-export function GuidedFlow(props: Props) {
+export function GuidedFlow(props: GuidedFlowProps) {
 	return (
 		<ReactFlowProvider>
-			<GuidedFlowCanvas {...props} />
+			<CanvasInner {...props} />
 		</ReactFlowProvider>
 	);
 }
+
+// Re-export canvas helpers so tests / other builders can reuse them. Not part
+// of the public API.
+export const __test__ = {
+	computeAutoPositions,
+	isCycleWithoutPauseForEdge,
+};

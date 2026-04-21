@@ -1,541 +1,553 @@
+// apps/api/src/services/automations/runner.ts
+//
+// Execution loop for the Manychat-parity automation engine.
+// See docs/superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md
+// §8.3 for the step-by-step semantics this file implements.
+//
+// Per-iteration behavior:
+//   1. pause check (automation_contact_controls)
+//   2. re-read graph from automations.graph
+//   3. locate current node (graph_changed exit if missing)
+//   4. dispatch handler
+//   5. write automation_step_runs row
+//   6. apply HandlerResult (advance / wait_input / wait_delay / end / fail)
+// plus: optimistic updated_at concurrency, 200-visit infinite-loop cap.
+
 import {
-	automationEnrollments,
-	automationRunLogs,
-	automationScheduledTicks,
-	automationVersions,
+	automationContactControls,
+	automationRuns,
+	automationScheduledJobs,
+	automationStepRuns,
 	automations,
+	createDb,
+	type Database,
 } from "@relayapi/db";
-import { createDb } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
-import type { Env } from "../../types";
-import { getNodeHandler } from "./nodes";
-import { sendInputPrompt } from "./nodes/user-input";
-import { validateInput } from "./nodes/user-input-validation";
-import { getEnrollmentTriggerId } from "./resolve-trigger";
-import type {
-	AutomationSnapshot,
-	NodeExecutionContext,
-	NodeExecutionResult,
-} from "./types";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
+import type { Graph, GraphEdge, GraphNode } from "../../schemas/automation-graph";
+import { getHandler } from "./manifest";
+import type { HandlerResult, RunContext, RunStatus } from "./types";
 
-const MAX_STEPS_PER_TICK = 25; // hard cap on synchronous chain length before re-enqueueing
+const MAX_VISITS_PER_LOOP = 200;
 
-/**
- * Runs an enrollment forward until it completes, waits, or hits the step cap.
- * Called from the AUTOMATION_QUEUE consumer.
- *
- * @param opts.resumeLabel — when set, the runner treats the enrollment's
- *   current node as already-executed (it was a wait/wait_for_input node) and
- *   follows the outgoing edge with this label. This prevents smart_delay and
- *   user_input nodes from re-executing themselves on resume.
- */
-export async function advanceEnrollment(
-	env: Env,
-	enrollmentId: string,
-	opts?: { resumeLabel?: string },
-): Promise<void> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
+export type Db = Database;
 
-	const enrollment = await db.query.automationEnrollments.findFirst({
-		where: eq(automationEnrollments.id, enrollmentId),
-	});
-	if (!enrollment) return;
-	if (
-		enrollment.status === "completed" ||
-		enrollment.status === "exited" ||
-		enrollment.status === "failed"
-	) {
-		return;
-	}
+export type RunLoopOptions = {
+	/**
+	 * Override the infinite-loop guard (default 200). Tests use a lower value
+	 * to exercise the cap without making 200+ DB round-trips.
+	 */
+	maxVisits?: number;
+};
 
-	const snapshot = await loadSnapshot(
-		db,
-		enrollment.automationId,
-		enrollment.automationVersion,
-	);
-	if (!snapshot) {
-		await markFailed(db, enrollment.id, "automation version not found");
-		return;
-	}
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
-	let currentNodeKey = enrollment.currentNodeId
-		? nodeKeyById(snapshot, enrollment.currentNodeId)
-		: snapshot.entry_node_key;
-	let state: Record<string, unknown> =
-		(enrollment.state as Record<string, unknown>) ?? {};
-	const triggerId = getEnrollmentTriggerId(enrollment.triggerId, state);
-	let resumeLabel = opts?.resumeLabel;
+export async function runLoop(
+	db: Db,
+	runId: string,
+	env: Record<string, any>,
+	options: RunLoopOptions = {},
+): Promise<{ status: RunStatus; exit_reason: string | null }> {
+	const maxVisits = options.maxVisits ?? MAX_VISITS_PER_LOOP;
+	let visits = 0;
 
-	// Resume path: advance past the waiting node without re-executing it.
-	if (resumeLabel) {
-		const nextKey = resolveNextNodeKey(snapshot, currentNodeKey, resumeLabel);
-		if (!nextKey) {
-			await db
-				.update(automationEnrollments)
-				.set({
-					status: "completed",
-					completedAt: new Date(),
-					state,
-					updatedAt: new Date(),
-				})
-				.where(eq(automationEnrollments.id, enrollment.id));
-			await db
-				.update(automations)
-				.set({ totalCompleted: sqlIncrement(1) as never })
-				.where(eq(automations.id, enrollment.automationId));
-			return;
+	while (visits < maxVisits) {
+		visits += 1;
+
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		if (!run) {
+			return { status: "failed", exit_reason: "run_not_found" };
 		}
-		currentNodeKey = nextKey;
-		resumeLabel = undefined;
-	}
-
-	for (let step = 0; step < MAX_STEPS_PER_TICK; step++) {
-		const node = snapshot.nodes.find((n) => n.key === currentNodeKey);
-		if (!node) {
-			await markFailed(
-				db,
-				enrollment.id,
-				`node '${currentNodeKey}' not in snapshot`,
-			);
-			return;
+		if (
+			run.status === "completed" ||
+			run.status === "exited" ||
+			run.status === "failed"
+		) {
+			return { status: run.status as RunStatus, exit_reason: run.exitReason };
 		}
 
-		const handler = getNodeHandler(node.type);
-		const startedAt = Date.now();
-		const ctx: NodeExecutionContext = {
-			env,
+		// 1. Pause check — (contact, automation) or global (contact, NULL).
+		const paused = await findActivePause(
 			db,
-			enrollment: {
-				id: enrollment.id,
-				organization_id: enrollment.organizationId,
-				automation_id: enrollment.automationId,
-				automation_version: enrollment.automationVersion,
-				trigger_id: triggerId,
-				contact_id: enrollment.contactId,
-				conversation_id: enrollment.conversationId,
-				current_node_id: node.id,
-				state,
-			},
-			snapshot,
-			node,
-		};
-		const stateBefore = cloneJson(state);
-
-		let result: NodeExecutionResult;
-		try {
-			result = await handler(ctx);
-		} catch (e) {
-			result = { kind: "fail", error: String(e) };
-		}
-		const duration = Date.now() - startedAt;
-
-		state = {
-			...state,
-			...(result.kind !== "fail" ? (result.state_patch ?? {}) : {}),
-		};
-		const stateAfter = cloneJson(state);
-
-		const label = result.kind === "next" ? (result.label ?? "next") : null;
-		const nextKey =
-			result.kind === "goto"
-				? result.target_node_key
-				: result.kind === "next"
-					? resolveNextNodeKey(snapshot, currentNodeKey, label ?? "next")
-					: null;
-		const logPayload: Record<string, unknown> = {
-			result_kind: result.kind,
-			node_config: cloneJson(node.config),
-			state_before: stateBefore,
-			state_patch:
-				result.kind === "fail" ? null : cloneJson(result.state_patch ?? null),
-			state_after: stateAfter,
-		};
-		if (result.kind === "next") {
-			logPayload.output_label = label;
-			logPayload.next_node_key = nextKey;
-		}
-		if (result.kind === "goto") {
-			logPayload.target_node_key = result.target_node_key;
-		}
-		if (result.kind === "wait") {
-			logPayload.next_run_at = result.next_run_at.toISOString();
-		}
-		if (result.kind === "complete" && result.reason) {
-			logPayload.reason = result.reason;
-		}
-		if (result.kind === "exit") {
-			logPayload.reason = result.reason;
-		}
-		if (result.kind === "fail") {
-			logPayload.error = result.error;
-		}
-
-		await db.insert(automationRunLogs).values({
-			enrollmentId: enrollment.id,
-			nodeId: node.id,
-			nodeType: node.type as never,
-			executedAt: new Date(),
-			outcome: outcomeFromResult(result),
-			branchLabel: result.kind === "next" ? (result.label ?? "next") : null,
-			durationMs: duration,
-			error: result.kind === "fail" ? result.error : null,
-			payload: logPayload,
-		});
-
-		if (result.kind === "fail") {
-			await markFailed(db, enrollment.id, result.error);
-			return;
-		}
-
-		if (result.kind === "complete") {
-			await db
-				.update(automationEnrollments)
-				.set({
-					status: "completed",
-					completedAt: new Date(),
-					state,
-					currentNodeId: node.id,
-					updatedAt: new Date(),
-				})
-				.where(eq(automationEnrollments.id, enrollment.id));
-			await db
-				.update(automations)
-				.set({ totalCompleted: sqlIncrement(1) as never })
-				.where(eq(automations.id, enrollment.automationId));
-			return;
-		}
-
-		if (result.kind === "exit") {
-			await db
-				.update(automationEnrollments)
-				.set({
-					status: "exited",
-					exitedAt: new Date(),
-					exitReason: result.reason,
-					state,
-					currentNodeId: node.id,
-					updatedAt: new Date(),
-				})
-				.where(eq(automationEnrollments.id, enrollment.id));
-			await db
-				.update(automations)
-				.set({ totalExited: sqlIncrementExited(1) as never })
-				.where(eq(automations.id, enrollment.automationId));
-			return;
-		}
-
-		if (result.kind === "wait") {
-			await db
-				.update(automationEnrollments)
-				.set({
-					status: "waiting",
-					nextRunAt: result.next_run_at,
-					state,
-					currentNodeId: node.id,
-					updatedAt: new Date(),
-				})
-				.where(eq(automationEnrollments.id, enrollment.id));
-			await db.insert(automationScheduledTicks).values({
-				enrollmentId: enrollment.id,
-				runAt: result.next_run_at,
-			});
-			return;
-		}
-
-		if (result.kind === "wait_for_input") {
-			await db
-				.update(automationEnrollments)
-				.set({
-					status: "waiting",
-					state,
-					currentNodeId: node.id,
-					updatedAt: new Date(),
-				})
-				.where(eq(automationEnrollments.id, enrollment.id));
-			return;
-		}
-
-		if (!nextKey) {
-			// Graph terminates implicitly (no outgoing edge). This counts as a
-			// successful completion — increment totalCompleted just like an
-			// explicit `complete` result.
-			await db
-				.update(automationEnrollments)
-				.set({
-					status: "completed",
-					completedAt: new Date(),
-					state,
-					currentNodeId: node.id,
-					updatedAt: new Date(),
-				})
-				.where(eq(automationEnrollments.id, enrollment.id));
-			await db
-				.update(automations)
-				.set({ totalCompleted: sqlIncrement(1) as never })
-				.where(eq(automations.id, enrollment.automationId));
-			return;
-		}
-
-		currentNodeKey = nextKey;
-	}
-
-	// Hit step cap — re-enqueue for next tick. The enrollment row is updated
-	// first so the next worker resumes from the right node. If the queue send
-	// fails, insert a scheduled tick so the cron sweep rescues the enrollment
-	// instead of letting it sit `active` with no worker scheduled.
-	await db
-		.update(automationEnrollments)
-		.set({
-			state,
-			currentNodeId:
-				snapshot.nodes.find((n) => n.key === currentNodeKey)?.id ?? null,
-			updatedAt: new Date(),
-		})
-		.where(eq(automationEnrollments.id, enrollment.id));
-	try {
-		await env.AUTOMATION_QUEUE.send({
-			type: "advance",
-			enrollment_id: enrollment.id,
-		});
-	} catch (err) {
-		console.error(
-			"[runner] step-cap requeue failed, scheduling recovery tick for",
-			enrollment.id,
-			err,
+			run.organizationId,
+			run.contactId,
+			run.automationId,
 		);
-		// Schedule a tick ~10s out so the cron sweep reclaims the enrollment.
-		await db.insert(automationScheduledTicks).values({
-			enrollmentId: enrollment.id,
-			runAt: new Date(Date.now() + 10_000),
-		});
-	}
-}
-
-/**
- * Called when inbound message / file arrives for a contact parked at a
- * user_input_* node. Validates the input against the node's subtype + config:
- *
- *   - valid        → save to `save_to_field`, clear markers, resume via `captured`
- *   - invalid + attempts remaining → increment `_pending_input_attempts`,
- *     re-send `retry_prompt` (if configured), keep parked as `waiting`
- *   - invalid + attempts exhausted → clear markers, resume via `no_match`
- */
-export async function resumeFromInput(
-	env: Env,
-	enrollmentId: string,
-	inputValue: unknown,
-	fileMeta?: { mime_type?: string; size_bytes?: number },
-): Promise<void> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-	const enrollment = await db.query.automationEnrollments.findFirst({
-		where: eq(automationEnrollments.id, enrollmentId),
-	});
-	if (!enrollment || enrollment.status !== "waiting") return;
-
-	const state = (enrollment.state as Record<string, unknown>) ?? {};
-	const fieldKey = state._pending_input_field as string | undefined;
-	const nodeType = state._pending_input_node_type as string | undefined;
-	const attemptsSoFar =
-		(state._pending_input_attempts as number | undefined) ?? 0;
-
-	// Load the snapshot so we can look up the node's config for validation
-	// and re-send the retry_prompt on invalid attempts.
-	const snapshot = await loadSnapshot(
-		db,
-		enrollment.automationId,
-		enrollment.automationVersion,
-	);
-	const nodeId = enrollment.currentNodeId;
-	const node = snapshot?.nodes.find((n) => n.id === nodeId);
-
-	// If we can't locate the node (snapshot drift) or the type isn't a
-	// user_input_* (upgrade path), fall back to the old behavior: save + resume.
-	if (!node || !nodeType || !nodeType.startsWith("user_input_")) {
-		if (fieldKey) state[fieldKey] = inputValue;
-		delete state._pending_input_field;
-		delete state._pending_input_node_key;
-		delete state._pending_input_node_type;
-		delete state._pending_input_timeout_at;
-		delete state._pending_input_channel;
-		delete state._pending_input_conversation_id;
-		delete state._pending_input_attempts;
-		await db
-			.update(automationEnrollments)
-			.set({ status: "active", state, updatedAt: new Date() })
-			.where(eq(automationEnrollments.id, enrollmentId));
-		await advanceEnrollment(env, enrollmentId, { resumeLabel: "captured" });
-		return;
-	}
-
-	const verdict = validateInput(
-		nodeType,
-		node.config,
-		inputValue,
-		attemptsSoFar,
-		fileMeta,
-	);
-
-	if (verdict.kind === "ok") {
-		if (fieldKey) state[fieldKey] = verdict.value;
-		delete state._pending_input_field;
-		delete state._pending_input_node_key;
-		delete state._pending_input_node_type;
-		delete state._pending_input_timeout_at;
-		delete state._pending_input_channel;
-		delete state._pending_input_conversation_id;
-		delete state._pending_input_attempts;
-		await db
-			.update(automationEnrollments)
-			.set({ status: "active", state, updatedAt: new Date() })
-			.where(eq(automationEnrollments.id, enrollmentId));
-		await advanceEnrollment(env, enrollmentId, { resumeLabel: "captured" });
-		return;
-	}
-
-	if (verdict.kind === "retry") {
-		// Bump attempts and (optionally) re-send the retry prompt. Keep the
-		// enrollment parked in `waiting` with markers intact so the next
-		// inbound message comes back through here.
-		state._pending_input_attempts = attemptsSoFar + 1;
-		state._last_input_validation_reason = verdict.reason;
-
-		const retryPrompt = node.config.retry_prompt as string | undefined;
-		if (retryPrompt) {
-			await sendInputPrompt(
-				{
-					env,
-					db,
-					snapshot: snapshot as AutomationSnapshot,
-					enrollment: {
-						id: enrollment.id,
-						organization_id: enrollment.organizationId,
-						automation_id: enrollment.automationId,
-						automation_version: enrollment.automationVersion,
-						trigger_id: getEnrollmentTriggerId(enrollment.triggerId, state),
-						contact_id: enrollment.contactId,
-						conversation_id: enrollment.conversationId,
-						current_node_id: enrollment.currentNodeId,
-						state,
-					},
-				},
-				retryPrompt,
-			);
+		if (paused) {
+			const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+				status: "waiting",
+				waitingFor: "external_event",
+				waitingUntil: null,
+			});
+			if (!ok) return { status: "waiting", exit_reason: null };
+			return { status: "waiting", exit_reason: null };
 		}
 
-		await db
-			.update(automationEnrollments)
-			.set({ state, updatedAt: new Date() })
-			.where(eq(automationEnrollments.id, enrollmentId));
-		// Stay in waiting status — no advance.
-		return;
+		// 2. Load graph fresh on every iteration so edits take effect immediately.
+		const auto = await db.query.automations.findFirst({
+			where: eq(automations.id, run.automationId),
+		});
+		if (!auto) {
+			await exitRun(
+				db,
+				run.id,
+				run.updatedAt,
+				"exited",
+				"automation_deleted",
+			);
+			return { status: "exited", exit_reason: "automation_deleted" };
+		}
+		const graph = (auto.graph ?? {
+			schema_version: 1,
+			root_node_key: null,
+			nodes: [],
+			edges: [],
+		}) as Graph;
+
+		// 3. Locate current node.
+		const currentKey = run.currentNodeKey;
+		if (!currentKey) {
+			await exitRun(db, run.id, run.updatedAt, "completed", "completed");
+			await incrementCounter(db, run.automationId, "total_completed");
+			return { status: "completed", exit_reason: "completed" };
+		}
+		const node = graph.nodes.find((n) => n.key === currentKey);
+		if (!node) {
+			await writeStepRun(db, {
+				runId: run.id,
+				automationId: run.automationId,
+				nodeKey: currentKey,
+				nodeKind: "unknown",
+				enteredViaPortKey: run.currentPortKey,
+				exitedViaPortKey: null,
+				outcome: "graph_changed",
+				durationMs: 0,
+				payload: { reason: "current_node_missing" },
+				error: null,
+			});
+			await exitRun(db, run.id, run.updatedAt, "exited", "graph_changed");
+			return { status: "exited", exit_reason: "graph_changed" };
+		}
+
+		// 4. Dispatch handler.
+		const handler = getHandler(node.kind);
+		const ctx: RunContext = {
+			runId: run.id,
+			automationId: run.automationId,
+			organizationId: run.organizationId,
+			contactId: run.contactId,
+			conversationId: run.conversationId,
+			channel: auto.channel,
+			graph,
+			context: (run.context as Record<string, any>) ?? {},
+			now: new Date(),
+			env,
+		};
+		const startedAt = Date.now();
+		let result: HandlerResult;
+		if (!handler) {
+			result = {
+				result: "fail",
+				error: new Error(`no handler registered for kind "${node.kind}"`),
+			};
+		} else {
+			try {
+				result = await handler.handle(
+					{ key: node.key, kind: node.kind, config: node.config },
+					ctx,
+				);
+			} catch (err) {
+				result = {
+					result: "fail",
+					error: err instanceof Error ? err : new Error(String(err)),
+				};
+			}
+		}
+		const durationMs = Date.now() - startedAt;
+
+		// 5. Write step_run row.
+		const stepOutcome = stepOutcomeFromResult(result);
+		const exitedPort =
+			result.result === "advance" ? result.via_port : null;
+		await writeStepRun(db, {
+			runId: run.id,
+			automationId: run.automationId,
+			nodeKey: node.key,
+			nodeKind: node.kind,
+			enteredViaPortKey: run.currentPortKey,
+			exitedViaPortKey: exitedPort,
+			outcome: stepOutcome,
+			durationMs,
+			payload:
+				result.result === "fail" ? null : (result.payload ?? null),
+			error:
+				result.result === "fail"
+					? { message: result.error.message, stack: result.error.stack }
+					: null,
+		});
+
+		// 6. Handle result.
+		if (result.result === "end") {
+			const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+				status: "completed",
+				exitReason: result.exit_reason,
+				completedAt: new Date(),
+				context: ctx.context,
+			});
+			if (ok) await incrementCounter(db, run.automationId, "total_completed");
+			return { status: "completed", exit_reason: result.exit_reason };
+		}
+
+		if (result.result === "fail") {
+			// Try the `error` output port if there's an edge from it.
+			const errorEdge = graph.edges.find(
+				(e) => e.from_node === node.key && e.from_port === "error",
+			);
+			if (errorEdge) {
+				const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+					currentNodeKey: errorEdge.to_node,
+					currentPortKey: errorEdge.to_port,
+					context: ctx.context,
+				});
+				if (!ok) return { status: "active", exit_reason: null };
+				continue;
+			}
+			const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+				status: "failed",
+				exitReason: "handler_failure",
+				completedAt: new Date(),
+				context: ctx.context,
+			});
+			if (ok) await incrementCounter(db, run.automationId, "total_failed");
+			return { status: "failed", exit_reason: "handler_failure" };
+		}
+
+		if (result.result === "wait_input") {
+			const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+				status: "waiting",
+				waitingFor: "input",
+				waitingUntil: result.timeout_at ?? null,
+				context: ctx.context,
+			});
+			if (ok && result.timeout_at) {
+				await db.insert(automationScheduledJobs).values({
+					runId: run.id,
+					jobType: "input_timeout",
+					automationId: run.automationId,
+					runAt: result.timeout_at,
+					payload: result.payload ?? null,
+				});
+			}
+			return { status: "waiting", exit_reason: null };
+		}
+
+		if (result.result === "wait_delay") {
+			const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+				status: "waiting",
+				waitingFor: "delay",
+				waitingUntil: result.resume_at,
+				context: ctx.context,
+			});
+			if (ok) {
+				await db.insert(automationScheduledJobs).values({
+					runId: run.id,
+					jobType: "resume_run",
+					automationId: run.automationId,
+					runAt: result.resume_at,
+					payload: result.payload ?? null,
+				});
+			}
+			return { status: "waiting", exit_reason: null };
+		}
+
+		// result.result === "advance"
+		// Special _goto signal: jump straight to target_node_key, no edge lookup.
+		if (result.via_port === "_goto") {
+			const target = (result.payload as { target_node_key?: string } | null)
+				?.target_node_key;
+			if (!target) {
+				await exitRun(db, run.id, run.updatedAt, "failed", "goto_missing_target");
+				await incrementCounter(db, run.automationId, "total_failed");
+				return { status: "failed", exit_reason: "goto_missing_target" };
+			}
+			const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+				currentNodeKey: target,
+				currentPortKey: null,
+				context: ctx.context,
+			});
+			if (!ok) return { status: "active", exit_reason: null };
+			continue;
+		}
+
+		const edge = findOutgoingEdge(graph, node.key, result.via_port);
+		if (!edge) {
+			// No outgoing edge → treat as graceful completion (operator choice).
+			const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+				status: "completed",
+				exitReason: "completed",
+				completedAt: new Date(),
+				context: ctx.context,
+			});
+			if (ok) await incrementCounter(db, run.automationId, "total_completed");
+			return { status: "completed", exit_reason: "completed" };
+		}
+
+		const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+			currentNodeKey: edge.to_node,
+			currentPortKey: edge.to_port,
+			context: ctx.context,
+		});
+		if (!ok) return { status: "active", exit_reason: null };
+		// loop
 	}
 
-	// verdict.kind === "fail" — attempts exhausted. Clear markers and fall
-	// through to the `no_match` branch.
-	state._last_input_validation_reason = verdict.reason;
-	delete state._pending_input_field;
-	delete state._pending_input_node_key;
-	delete state._pending_input_node_type;
-	delete state._pending_input_timeout_at;
-	delete state._pending_input_channel;
-	delete state._pending_input_conversation_id;
-	delete state._pending_input_attempts;
+	// Infinite-loop cap.
+	const runAtCap = await db.query.automationRuns.findFirst({
+		where: eq(automationRuns.id, runId),
+	});
+	if (runAtCap) {
+		const ok = await updateRunOptimistic(db, runId, runAtCap.updatedAt, {
+			status: "failed",
+			exitReason: "infinite_loop_cap",
+			completedAt: new Date(),
+		});
+		if (ok) await incrementCounter(db, runAtCap.automationId, "total_failed");
+	}
+	return { status: "failed", exit_reason: "infinite_loop_cap" };
+}
+
+export async function enrollContact(
+	db: Db,
+	args: {
+		automationId: string;
+		organizationId: string;
+		contactId: string;
+		conversationId: string | null;
+		channel: string;
+		entrypointId: string | null;
+		bindingId: string | null;
+		contextOverrides?: Record<string, any>;
+		env: Record<string, any>;
+		runLoopOptions?: RunLoopOptions;
+	},
+): Promise<{ runId: string }> {
+	const auto = await db.query.automations.findFirst({
+		where: eq(automations.id, args.automationId),
+	});
+	if (!auto) throw new Error(`automation ${args.automationId} not found`);
+	const graph = (auto.graph ?? {
+		schema_version: 1,
+		root_node_key: null,
+		nodes: [],
+		edges: [],
+	}) as Graph;
+	const rootKey = graph.root_node_key;
+
+	const [inserted] = await db
+		.insert(automationRuns)
+		.values({
+			automationId: args.automationId,
+			organizationId: args.organizationId,
+			entrypointId: args.entrypointId,
+			bindingId: args.bindingId,
+			contactId: args.contactId,
+			conversationId: args.conversationId,
+			status: "active",
+			currentNodeKey: rootKey,
+			currentPortKey: null,
+			context: args.contextOverrides ?? {},
+		})
+		.returning();
+
+	if (!inserted) throw new Error("failed to create automation run");
 
 	await db
-		.update(automationEnrollments)
-		.set({ status: "active", state, updatedAt: new Date() })
-		.where(eq(automationEnrollments.id, enrollmentId));
-	await advanceEnrollment(env, enrollmentId, { resumeLabel: "no_match" });
+		.update(automations)
+		.set({ totalEnrolled: sql`${automations.totalEnrolled} + 1` })
+		.where(eq(automations.id, args.automationId));
+
+	await runLoop(db, inserted.id, args.env, args.runLoopOptions);
+	return { runId: inserted.id };
 }
 
-async function loadSnapshot(
-	db: ReturnType<typeof createDb>,
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function findActivePause(
+	db: Db,
+	organizationId: string,
+	contactId: string,
 	automationId: string,
-	version: number,
-): Promise<AutomationSnapshot | null> {
-	const row = await db.query.automationVersions.findFirst({
-		where: and(
-			eq(automationVersions.automationId, automationId),
-			eq(automationVersions.version, version),
-		),
-	});
-	if (!row) return null;
-	return row.snapshot as AutomationSnapshot;
+): Promise<boolean> {
+	const rows = await db
+		.select({ id: automationContactControls.id })
+		.from(automationContactControls)
+		.where(
+			and(
+				eq(automationContactControls.organizationId, organizationId),
+				eq(automationContactControls.contactId, contactId),
+				or(
+					eq(automationContactControls.automationId, automationId),
+					isNull(automationContactControls.automationId),
+				),
+				or(
+					isNull(automationContactControls.pausedUntil),
+					sql`${automationContactControls.pausedUntil} > NOW()`,
+				),
+			),
+		)
+		.limit(1);
+	return rows.length > 0;
 }
 
-function nodeKeyById(snapshot: AutomationSnapshot, nodeId: string): string {
+function findOutgoingEdge(
+	graph: Graph,
+	fromNode: string,
+	fromPort: string,
+): GraphEdge | null {
 	return (
-		snapshot.nodes.find((n) => n.id === nodeId)?.key ?? snapshot.entry_node_key
+		graph.edges.find(
+			(e) => e.from_node === fromNode && e.from_port === fromPort,
+		) ?? null
 	);
 }
 
-function resolveNextNodeKey(
-	snapshot: AutomationSnapshot,
-	fromKey: string,
-	label: string,
-): string | null {
-	const candidates = snapshot.edges
-		.filter((e) => e.from_node_key === fromKey && e.label === label)
-		.sort((a, b) => a.order - b.order);
-	const first = candidates[0];
-	if (first) return first.to_node_key;
-
-	// Fallback to 'next' if the specific label isn't present
-	if (label !== "next") {
-		const fallback = snapshot.edges
-			.filter((e) => e.from_node_key === fromKey && e.label === "next")
-			.sort((a, b) => a.order - b.order);
-		const fallbackFirst = fallback[0];
-		if (fallbackFirst) return fallbackFirst.to_node_key;
-	}
-
-	return null;
-}
-
-async function markFailed(
-	db: ReturnType<typeof createDb>,
-	enrollmentId: string,
-	error: string,
-): Promise<void> {
-	await db
-		.update(automationEnrollments)
-		.set({
-			status: "failed",
-			exitReason: error.slice(0, 500),
-			updatedAt: new Date(),
-		})
-		.where(eq(automationEnrollments.id, enrollmentId));
-}
-
-function outcomeFromResult(result: NodeExecutionResult): string {
-	switch (result.kind) {
-		case "next":
+function stepOutcomeFromResult(result: HandlerResult): string {
+	switch (result.result) {
+		case "advance":
 			return "ok";
-		case "wait":
-			return "wait";
-		case "wait_for_input":
-			return "wait_for_input";
-		case "goto":
-			return "goto";
-		case "complete":
-			return "complete";
-		case "exit":
-			return "exit";
+		case "wait_input":
+			return "wait_input";
+		case "wait_delay":
+			return "wait_delay";
+		case "end":
+			return "end";
 		case "fail":
 			return "failed";
 	}
 }
 
-function cloneJson<T>(value: T): T {
-	return JSON.parse(JSON.stringify(value ?? null)) as T;
+type RunUpdate = Partial<{
+	status: RunStatus;
+	currentNodeKey: string | null;
+	currentPortKey: string | null;
+	context: Record<string, any>;
+	waitingFor: string | null;
+	waitingUntil: Date | null;
+	exitReason: string | null;
+	completedAt: Date | null;
+}>;
+
+/**
+ * Applies a run update guarded by the prior updated_at value. Returns true iff
+ * the update hit a row (i.e. this worker still owned the run). A false return
+ * means another worker took over; callers should exit the loop gracefully.
+ */
+async function updateRunOptimistic(
+	db: Db,
+	runId: string,
+	priorUpdatedAt: Date,
+	patch: RunUpdate,
+): Promise<boolean> {
+	const setPayload: Record<string, any> = { updatedAt: new Date() };
+	if (patch.status !== undefined) setPayload.status = patch.status;
+	if (patch.currentNodeKey !== undefined)
+		setPayload.currentNodeKey = patch.currentNodeKey;
+	if (patch.currentPortKey !== undefined)
+		setPayload.currentPortKey = patch.currentPortKey;
+	if (patch.context !== undefined) setPayload.context = patch.context;
+	if (patch.waitingFor !== undefined)
+		setPayload.waitingFor = patch.waitingFor;
+	if (patch.waitingUntil !== undefined)
+		setPayload.waitingUntil = patch.waitingUntil;
+	if (patch.exitReason !== undefined) setPayload.exitReason = patch.exitReason;
+	if (patch.completedAt !== undefined)
+		setPayload.completedAt = patch.completedAt;
+
+	// Compare at millisecond precision. Postgres stores timestamps with
+	// microsecond resolution, but JS Dates only carry milliseconds; a naive
+	// `eq(updatedAt, priorUpdatedAt)` filter would never match because the
+	// serialized bound parameter loses the sub-ms digits.
+	const rows = await db
+		.update(automationRuns)
+		.set(setPayload)
+		.where(
+			and(
+				eq(automationRuns.id, runId),
+				sql`date_trunc('milliseconds', ${automationRuns.updatedAt}) = date_trunc('milliseconds', ${priorUpdatedAt.toISOString()}::timestamptz)`,
+			),
+		)
+		.returning({ id: automationRuns.id });
+	return rows.length > 0;
 }
 
-// Helpers to increment a counter in an update. Drizzle doesn't have a clean
-// `+1` helper, so we use raw SQL templates for the counter update paths.
-import { sql as drizzleSql } from "drizzle-orm";
-function sqlIncrement(amount: number) {
-	return drizzleSql`total_completed + ${amount}`;
+async function exitRun(
+	db: Db,
+	runId: string,
+	priorUpdatedAt: Date,
+	status: Extract<RunStatus, "completed" | "exited" | "failed">,
+	exitReason: string,
+): Promise<void> {
+	await updateRunOptimistic(db, runId, priorUpdatedAt, {
+		status,
+		exitReason,
+		completedAt: new Date(),
+	});
 }
-function sqlIncrementExited(amount: number) {
-	return drizzleSql`total_exited + ${amount}`;
+
+async function incrementCounter(
+	db: Db,
+	automationId: string,
+	column: "total_completed" | "total_failed" | "total_exited",
+): Promise<void> {
+	const colExpr =
+		column === "total_completed"
+			? sql`${automations.totalCompleted} + 1`
+			: column === "total_failed"
+				? sql`${automations.totalFailed} + 1`
+				: sql`${automations.totalExited} + 1`;
+	const set =
+		column === "total_completed"
+			? { totalCompleted: colExpr }
+			: column === "total_failed"
+				? { totalFailed: colExpr }
+				: { totalExited: colExpr };
+	await db
+		.update(automations)
+		.set(set as never)
+		.where(eq(automations.id, automationId));
+}
+
+async function writeStepRun(
+	db: Db,
+	row: {
+		runId: string;
+		automationId: string;
+		nodeKey: string;
+		nodeKind: string;
+		enteredViaPortKey: string | null;
+		exitedViaPortKey: string | null;
+		outcome: string;
+		durationMs: number;
+		payload: unknown;
+		error: unknown;
+	},
+): Promise<void> {
+	await db.insert(automationStepRuns).values({
+		runId: row.runId,
+		automationId: row.automationId,
+		nodeKey: row.nodeKey,
+		nodeKind: row.nodeKind,
+		enteredViaPortKey: row.enteredViaPortKey,
+		exitedViaPortKey: row.exitedViaPortKey,
+		outcome: row.outcome,
+		durationMs: row.durationMs,
+		payload: row.payload ?? null,
+		error: row.error ?? null,
+		executedAt: new Date(),
+	});
 }

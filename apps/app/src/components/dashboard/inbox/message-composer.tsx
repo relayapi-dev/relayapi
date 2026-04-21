@@ -272,7 +272,7 @@ export function MessageComposer({
         rows={3}
         disabled={disabled}
         className={cn(
-          "min-h-[96px] w-full resize-none px-4 py-3 text-[14px] leading-6 outline-none placeholder:text-slate-400 disabled:opacity-50 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          "block min-h-[96px] w-full resize-none px-4 py-3 text-[14px] leading-6 outline-none placeholder:text-slate-400 disabled:opacity-50 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           mode === "note" ? "bg-[#fff8e0] text-[#5d4511]" : "bg-white text-slate-700",
         )}
       />

@@ -1,216 +1,253 @@
+// apps/api/src/services/automations/scheduler.ts
+//
+// Cron-driven job processor for automation_scheduled_jobs (spec §8.7).
+// Supports job_types: resume_run, input_timeout, scheduled_trigger,
+// webhook_reception_failure. Uses row-level locking (FOR UPDATE SKIP LOCKED)
+// to allow multiple workers to share the queue safely.
+
 import {
-	automationEnrollments,
-	automationScheduledTicks,
+	automationRuns,
+	automationScheduledJobs,
+	createDb,
+	type Database,
 } from "@relayapi/db";
-import { createDb } from "@relayapi/db";
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Env } from "../../types";
+import { runLoop } from "./runner";
 
-const BATCH_SIZE = 200;
-// A tick whose `claimedAt` is older than this has been held in `processing`
-// too long and is almost certainly the victim of a worker dying mid-send.
-// Reclaim on the next sweep.
-const STALE_PROCESSING_MS = 5 * 60 * 1000; // 5 minutes
+type Db = Database;
 
-async function scheduledTicksHasClaimedAt(
-	db: ReturnType<typeof createDb>,
-): Promise<boolean> {
-	const rows = (await db.execute(sql`
-		SELECT 1 AS has_claimed_at
-		FROM information_schema.columns
-		WHERE table_schema = 'public'
-		  AND table_name = 'automation_scheduled_ticks'
-		  AND column_name = 'claimed_at'
-		LIMIT 1
-	`)) as unknown as Array<{ has_claimed_at: 1 }>;
+const DEFAULT_BATCH_SIZE = 50;
+const DEFAULT_STALE_TIMEOUT_MINUTES = 5;
 
-	return rows.length > 0;
-}
+export type ProcessScheduledJobsOptions = {
+	batchSize?: number;
+	staleTimeoutMinutes?: number;
+};
+
+export type ProcessScheduledJobsResult = {
+	processed: number;
+	failed: number;
+};
 
 /**
- * Cron-triggered sweep: find enrollments whose delay has elapsed and re-enqueue them.
- * Claims only BATCH_SIZE rows per run so rows in excess of the batch stay `pending`
- * and are picked up by the next tick rather than stranded in `processing`.
+ * Main entry: reclaim stale rows, claim a batch of due rows, then dispatch
+ * each by `job_type`.
+ */
+export async function processScheduledJobs(
+	db: Db,
+	env: Record<string, unknown>,
+	opts: ProcessScheduledJobsOptions = {},
+): Promise<ProcessScheduledJobsResult> {
+	const batchSize = opts.batchSize ?? DEFAULT_BATCH_SIZE;
+	const staleMin = opts.staleTimeoutMinutes ?? DEFAULT_STALE_TIMEOUT_MINUTES;
+
+	// 1. Reclaim stale 'processing' rows.
+	await db.execute(sql`
+		UPDATE automation_scheduled_jobs
+		   SET status = 'pending',
+		       attempts = attempts + 1,
+		       claimed_at = NULL
+		 WHERE status = 'processing'
+		   AND claimed_at < NOW() - make_interval(mins => ${staleMin})
+	`);
+
+	// 2. Batch-claim pending rows whose run_at is due.
+	//    FOR UPDATE SKIP LOCKED lets multiple workers share the queue.
+	const claimed = (await db.execute(sql`
+		WITH claimed AS (
+			SELECT id
+			  FROM automation_scheduled_jobs
+			 WHERE status = 'pending'
+			   AND run_at <= NOW()
+			 ORDER BY run_at ASC
+			 LIMIT ${batchSize}
+			 FOR UPDATE SKIP LOCKED
+		)
+		UPDATE automation_scheduled_jobs j
+		   SET status = 'processing',
+		       claimed_at = NOW()
+		  FROM claimed
+		 WHERE j.id = claimed.id
+		RETURNING j.id, j.run_id, j.job_type, j.automation_id, j.entrypoint_id, j.payload
+	`)) as unknown as Array<{
+		id: string;
+		run_id: string | null;
+		job_type: string;
+		automation_id: string | null;
+		entrypoint_id: string | null;
+		payload: unknown;
+	}>;
+
+	let processed = 0;
+	let failed = 0;
+
+	for (const job of claimed) {
+		try {
+			const outcome = await dispatchJob(db, env, job);
+			if (outcome === "done") {
+				processed++;
+				await db
+					.update(automationScheduledJobs)
+					.set({ status: "done" })
+					.where(eq(automationScheduledJobs.id, job.id));
+			} else {
+				failed++;
+				await db
+					.update(automationScheduledJobs)
+					.set({ status: "failed", error: outcome.error })
+					.where(eq(automationScheduledJobs.id, job.id));
+			}
+		} catch (err) {
+			failed++;
+			await db
+				.update(automationScheduledJobs)
+				.set({
+					status: "failed",
+					error: err instanceof Error ? err.message : String(err),
+				})
+				.where(eq(automationScheduledJobs.id, job.id));
+		}
+	}
+
+	return { processed, failed };
+}
+
+type DispatchOutcome = "done" | { failed: true; error: string };
+
+async function dispatchJob(
+	db: Db,
+	env: Record<string, unknown>,
+	job: {
+		id: string;
+		run_id: string | null;
+		job_type: string;
+		automation_id: string | null;
+		entrypoint_id: string | null;
+		payload: unknown;
+	},
+): Promise<DispatchOutcome> {
+	switch (job.job_type) {
+		case "resume_run": {
+			if (!job.run_id) return { failed: true, error: "missing run_id" };
+			const result = await runLoop(db, job.run_id, env);
+			if (result.status === "failed") {
+				return {
+					failed: true,
+					error: `runLoop exit_reason=${result.exit_reason ?? "unknown"}`,
+				};
+			}
+			return "done";
+		}
+
+		case "input_timeout": {
+			if (!job.run_id) return { failed: true, error: "missing run_id" };
+			const run = await db.query.automationRuns.findFirst({
+				where: eq(automationRuns.id, job.run_id),
+			});
+			if (!run) return "done"; // run gone — nothing to do
+			if (run.status !== "waiting" || run.waitingFor !== "input") {
+				// Someone else already moved the run forward — no-op.
+				return "done";
+			}
+			if (run.waitingUntil && run.waitingUntil > new Date()) {
+				// Wait window extended — not our turn.
+				return "done";
+			}
+			// Try to advance via the `timeout` port from the current node.
+			const auto = await db.query.automations.findFirst({
+				where: (t, { eq }) => eq(t.id, run.automationId),
+			});
+			const graph = (auto?.graph ?? { edges: [] }) as {
+				edges?: Array<{
+					from_node: string;
+					from_port: string;
+					to_node: string;
+					to_port: string;
+				}>;
+			};
+			const edges = graph.edges ?? [];
+			const timeoutEdge = run.currentNodeKey
+				? edges.find(
+						(e) =>
+							e.from_node === run.currentNodeKey && e.from_port === "timeout",
+					)
+				: undefined;
+			if (timeoutEdge) {
+				await db
+					.update(automationRuns)
+					.set({
+						status: "active",
+						currentNodeKey: timeoutEdge.to_node,
+						currentPortKey: timeoutEdge.to_port,
+						waitingFor: null,
+						waitingUntil: null,
+						updatedAt: new Date(),
+					})
+					.where(eq(automationRuns.id, run.id));
+				await runLoop(db, run.id, env);
+			} else {
+				await db
+					.update(automationRuns)
+					.set({
+						status: "exited",
+						exitReason: "input_timeout",
+						completedAt: new Date(),
+						waitingFor: null,
+						waitingUntil: null,
+						updatedAt: new Date(),
+					})
+					.where(eq(automationRuns.id, run.id));
+			}
+			return "done";
+		}
+
+		case "scheduled_trigger": {
+			// v1: if the entrypoint config carries a static contact list, enroll
+			// them. Dynamic contact enumeration (segment-based scheduled runs) is
+			// deferred. Without an entrypoint_id we can't act.
+			if (!job.entrypoint_id) return "done";
+			// TODO: expand this once the scheduled-trigger UI lands. For now we
+			// treat the job as a no-op and let the entrypoint's config carry its
+			// own enrollment metadata in a future handler.
+			return "done";
+		}
+
+		case "webhook_reception_failure": {
+			// Audit-only record; mark done so it doesn't retry.
+			return "done";
+		}
+
+		default:
+			return { failed: true, error: `unknown job_type: ${job.job_type}` };
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cron entry points — called by scheduled/index.ts every minute
+// ---------------------------------------------------------------------------
+
+/**
+ * Legacy entry-point name kept for scheduled/index.ts. Wraps processScheduledJobs.
  */
 export async function processAutomationSchedule(env: Env): Promise<number> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const now = new Date();
-	const hasClaimedAt = await scheduledTicksHasClaimedAt(db);
-	const staleCutoff = new Date(Date.now() - STALE_PROCESSING_MS);
-
-	if (hasClaimedAt) {
-		// Reclaim ticks stuck in `processing` past the stale threshold. We filter on
-		// `claimedAt` (the moment we flipped the row into `processing`), NOT on
-		// `runAt` which is the scheduled execution time. A long-delay tick may have
-		// a `runAt` far in the past but a fresh `claimedAt` — using `runAt` would
-		// re-queue it while the original worker is still running it, causing
-		// duplicate advances for the same enrollment. Rows missing `claimedAt`
-		// (pre-migration data) are also rescued so they don't sit forever.
-		await db
-			.update(automationScheduledTicks)
-			.set({
-				status: "pending",
-				claimedAt: null,
-				attempts: sql`${automationScheduledTicks.attempts} + 1`,
-			})
-			.where(
-				and(
-					eq(automationScheduledTicks.status, "processing"),
-					sql`(${automationScheduledTicks.claimedAt} IS NULL OR ${automationScheduledTicks.claimedAt} <= ${staleCutoff})`,
-				),
-			);
-	} else {
-		console.warn(
-			"[scheduler] automation_scheduled_ticks.claimed_at is missing; using legacy stale-tick reclaim. Run DB migrations.",
-		);
-		await db
-			.update(automationScheduledTicks)
-			.set({
-				status: "pending",
-				attempts: sql`${automationScheduledTicks.attempts} + 1`,
-			})
-			.where(
-				and(
-					eq(automationScheduledTicks.status, "processing"),
-					lte(automationScheduledTicks.runAt, staleCutoff),
-				),
-			);
-	}
-
-	// Select a batch of due tick IDs first, then claim only those.
-	const dueRows = await db
-		.select({ id: automationScheduledTicks.id })
-		.from(automationScheduledTicks)
-		.where(
-			and(
-				eq(automationScheduledTicks.status, "pending"),
-				lte(automationScheduledTicks.runAt, now),
-			),
-		)
-		.orderBy(asc(automationScheduledTicks.runAt))
-		.limit(BATCH_SIZE);
-
-	if (dueRows.length === 0) return 0;
-
-	const dueIds = dueRows.map((r) => r.id);
-	const claimed = await db
-		.update(automationScheduledTicks)
-		.set(
-			hasClaimedAt
-				? { status: "processing", claimedAt: new Date() }
-				: { status: "processing" },
-		)
-		.where(
-			and(
-				inArray(automationScheduledTicks.id, dueIds),
-				eq(automationScheduledTicks.status, "pending"),
-			),
-		)
-		.returning({
-			id: automationScheduledTicks.id,
-			enrollmentId: automationScheduledTicks.enrollmentId,
-		});
-
-	let enqueued = 0;
-	for (const tick of claimed) {
-		try {
-			await env.AUTOMATION_QUEUE.send({
-				type: "advance",
-				enrollment_id: tick.enrollmentId,
-				resume_label: "next",
-			});
-			await db
-				.update(automationScheduledTicks)
-				.set({ status: "done" })
-				.where(eq(automationScheduledTicks.id, tick.id));
-			enqueued++;
-		} catch {
-			await db
-				.update(automationScheduledTicks)
-				.set(
-					hasClaimedAt
-						? {
-								status: "pending",
-								claimedAt: null,
-								attempts: sql`${automationScheduledTicks.attempts} + 1`,
-							}
-						: {
-								status: "pending",
-								attempts: sql`${automationScheduledTicks.attempts} + 1`,
-							},
-				)
-				.where(eq(automationScheduledTicks.id, tick.id));
-		}
-	}
-
-	return enqueued;
+	const { processed } = await processScheduledJobs(
+		db,
+		env as unknown as Record<string, unknown>,
+	);
+	return processed;
 }
 
 /**
- * Timeout sweep: enrollments that have been waiting on user input past their
- * `_pending_input_timeout_at` mark should be advanced with a 'timeout' branch.
+ * Input-timeout sweeps now flow through automation_scheduled_jobs with
+ * job_type='input_timeout', enqueued by the runner when a wait_input node
+ * sets a timeout_at. This function is preserved as a no-op for cron wiring
+ * compatibility; callers should migrate to processScheduledJobs directly.
  */
 export async function processAutomationInputTimeouts(
-	env: Env,
+	_env: Env,
 ): Promise<number> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-	const now = new Date().toISOString();
-
-	const rows = (await db.execute(sql`
-		SELECT id FROM automation_enrollments
-		WHERE status = 'waiting'
-		  AND state ? '_pending_input_timeout_at'
-		  AND (state ->> '_pending_input_timeout_at') <= ${now}
-		ORDER BY (state ->> '_pending_input_timeout_at') ASC
-		LIMIT ${BATCH_SIZE}
-	`)) as unknown as Array<{ id: string }>;
-
-	let count = 0;
-	for (const row of rows) {
-		// Load the current row so we can restore on queue-send failure. Without
-		// this, a transient queue failure would strand the enrollment in
-		// `active` with the `_pending_input_*` markers already cleared, so no
-		// future sweep could reclaim it.
-		const current = await db.query.automationEnrollments.findFirst({
-			where: eq(automationEnrollments.id, row.id),
-		});
-		if (!current) continue;
-		const originalState = current.state;
-
-		// Claim the row by clearing the markers + flipping to active. This
-		// prevents a concurrent sweep tick from re-claiming while the queue
-		// send is in flight.
-		await db
-			.update(automationEnrollments)
-			.set({
-				state: sql`(${automationEnrollments.state}::jsonb
-					- '_pending_input_field'
-					- '_pending_input_node_key'
-					- '_pending_input_timeout_at')`,
-				status: "active",
-				updatedAt: new Date(),
-			})
-			.where(eq(automationEnrollments.id, row.id));
-
-		try {
-			await env.AUTOMATION_QUEUE.send({
-				type: "advance",
-				enrollment_id: row.id,
-				resume_label: "timeout",
-			});
-			count++;
-		} catch (err) {
-			console.error("[scheduler] timeout enqueue failed for", row.id, err);
-			// Restore waiting state + original markers so the next sweep retries.
-			await db
-				.update(automationEnrollments)
-				.set({
-					state: originalState,
-					status: "waiting",
-					updatedAt: new Date(),
-				})
-				.where(eq(automationEnrollments.id, row.id));
-		}
-	}
-	return count;
+	// Handled inside processScheduledJobs via job_type=input_timeout.
+	return 0;
 }

@@ -1,24 +1,26 @@
 import {
+	automationRuns,
 	createDb,
 	inboxConversations,
 	inboxMessages,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, or, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { maybeDecrypt } from "../lib/crypto";
+import { notifyRealtime } from "../lib/notify-post-update";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
-import { upsertConversation, insertMessage } from "./inbox-persistence";
-import { dispatchWebhookEvent } from "./webhook-delivery";
-import { notifyRealtime } from "../lib/notify-post-update";
-import { subscribeYouTubeChannel } from "./webhook-subscription";
-import { ensureContactForAuthor } from "./contact-linker";
-import {
-	findWaitingEnrollment,
-	matchAndEnroll,
+import { matchAndEnrollOrBinding } from "./automations/binding-router";
+import { runLoop } from "./automations/runner";
+import type {
+	InboundEvent,
+	InboundEventKind,
 } from "./automations/trigger-matcher";
-import { resumeFromInput } from "./automations/runner";
+import { ensureContactForAuthor } from "./contact-linker";
+import { insertMessage, upsertConversation } from "./inbox-persistence";
+import { dispatchWebhookEvent } from "./webhook-delivery";
+import { subscribeYouTubeChannel } from "./webhook-subscription";
 
 // ---------------------------------------------------------------------------
 // Normalized event structure
@@ -34,6 +36,8 @@ interface NormalizedInboxEvent {
 	/** Conversation partner (customer) — defaults to author for inbound, set explicitly for outbound echoes */
 	participant?: { name: string; id: string; avatar_url?: string };
 	text?: string;
+	interactive_payload?: string;
+	interactive_kind?: "postback" | "button_click" | "list_reply" | "flow_submit";
 	/**
 	 * Structured file payload for inbound media messages (WhatsApp image/video/
 	 * document/audio, Telegram photo/document, Twilio MMS, etc.). Used by the
@@ -178,7 +182,9 @@ async function fetchFacebookParticipantProfile(
 			profile_pic?: string | null;
 		};
 		const fallbackName = [profile.first_name, profile.last_name]
-			.filter((part): part is string => typeof part === "string" && part.length > 0)
+			.filter(
+				(part): part is string => typeof part === "string" && part.length > 0,
+			)
 			.join(" ");
 		const displayName = profile.name ?? (fallbackName || null);
 
@@ -238,7 +244,10 @@ export async function processInboxEvent(
 	}
 
 	// Handle WhatsApp status updates separately
-	if (message.type === "whatsapp_webhook" && message.event_type === "statuses") {
+	if (
+		message.type === "whatsapp_webhook" &&
+		message.event_type === "statuses"
+	) {
 		const db = sharedDb ?? createDb(env.HYPERDRIVE.connectionString);
 		await processWhatsAppStatuses(message, env, db);
 		return;
@@ -254,8 +263,8 @@ export async function processInboxEvent(
 
 	for (const event of events) {
 		// 1. Store in DB (best-effort — webhook dispatch still happens if DB fails)
-		let conversation: Awaited<ReturnType<typeof upsertConversation>> | null = null;
-		let messageId: string | null = null;
+		let conversation: Awaited<ReturnType<typeof upsertConversation>> | null =
+			null;
 		const direction = event.direction ?? "inbound";
 		const conversationPartner = event.participant ?? event.author;
 		// Look up social account (workspace + token for enrichment)
@@ -294,7 +303,6 @@ export async function processInboxEvent(
 					direction,
 					createdAt: new Date(event.created_at),
 				});
-				messageId = message?.id ?? null;
 			}
 		} catch (err) {
 			console.error("[inbox-processor] DB storage failed:", err);
@@ -303,7 +311,9 @@ export async function processInboxEvent(
 		// 1b. Meta participant profile enrichment — Instagram/Messenger webhooks
 		// carry the participant's scoped ID, but not their display name/avatar.
 		// Fetch and persist the profile data so the inbox shows the real person.
-		const existingParticipantMetadata = asRecord(conversation?.participantMetadata);
+		const existingParticipantMetadata = asRecord(
+			conversation?.participantMetadata,
+		);
 		const existingInstagramProfile = asRecord(
 			existingParticipantMetadata?.instagramProfile,
 		);
@@ -312,8 +322,10 @@ export async function processInboxEvent(
 		);
 		const participantId = conversationPartner?.id ?? null;
 		const needsIdentityRefresh =
-			isMissingParticipantIdentity(conversation?.participantName, participantId) ||
-			!conversation?.participantAvatar;
+			isMissingParticipantIdentity(
+				conversation?.participantName,
+				participantId,
+			) || !conversation?.participantAvatar;
 
 		if (
 			conversation &&
@@ -351,8 +363,8 @@ export async function processInboxEvent(
 								? "instagramProfile"
 								: "facebookProfile"]: {
 								...(event.platform === "instagram"
-									? existingInstagramProfile ?? {}
-									: existingFacebookProfile ?? {}),
+									? (existingInstagramProfile ?? {})
+									: (existingFacebookProfile ?? {})),
 								...profile.metadata,
 							},
 						},
@@ -409,14 +421,20 @@ export async function processInboxEvent(
 		// echoes never trigger automations. Contact resolution mirrors the inbox
 		// participant auto-linker so conditions / merge-tags see a real contact.
 		if (direction === "inbound") {
-			await dispatchAutomationMatch(event, db, env);
+			await dispatchAutomationMatch(event, db, env, {
+				workspace_id: sa?.workspaceId ?? null,
+				is_conversation_start:
+					event.type === "message" && (conversation?.messageCount ?? 0) === 0,
+			});
 		}
 
 		// 3. Dispatch outbound webhook
 		const webhookEvent =
-			event.type === "comment" ? "comment.received"
-			: direction === "outbound" ? "message.sent"
-			: "message.received";
+			event.type === "comment"
+				? "comment.received"
+				: direction === "outbound"
+					? "message.sent"
+					: "message.received";
 		await dispatchWebhookEvent(env, db, event.organization_id, webhookEvent, {
 			id: event.platform_event_id,
 			type: event.type,
@@ -431,14 +449,29 @@ export async function processInboxEvent(
 		});
 
 		// 4. Push real-time update to connected dashboard clients
-		const realtimeEvent = event.type === "comment"
-			? { type: "inbox.comment.received" as const, post_id: event.post_id, platform: event.platform }
-			: direction === "outbound"
-			? { type: "inbox.message.sent" as const, conversation_id: conversation?.id ?? event.conversation_id, platform: event.platform }
-			: { type: "inbox.message.received" as const, conversation_id: conversation?.id ?? event.conversation_id, platform: event.platform };
-		await notifyRealtime(env, event.organization_id, realtimeEvent).catch((err) => {
-			console.error("[inbox-processor] notifyRealtime failed:", err);
-		});
+		const realtimeEvent =
+			event.type === "comment"
+				? {
+						type: "inbox.comment.received" as const,
+						post_id: event.post_id,
+						platform: event.platform,
+					}
+				: direction === "outbound"
+					? {
+							type: "inbox.message.sent" as const,
+							conversation_id: conversation?.id ?? event.conversation_id,
+							platform: event.platform,
+						}
+					: {
+							type: "inbox.message.received" as const,
+							conversation_id: conversation?.id ?? event.conversation_id,
+							platform: event.platform,
+						};
+		await notifyRealtime(env, event.organization_id, realtimeEvent).catch(
+			(err) => {
+				console.error("[inbox-processor] notifyRealtime failed:", err);
+			},
+		);
 	}
 }
 
@@ -447,51 +480,36 @@ export async function processInboxEvent(
 // ---------------------------------------------------------------------------
 
 /**
- * Derives the automation trigger_type from the inbox event. Returns null if
- * the platform doesn't surface inbound-event triggers today (e.g. YouTube
- * PubSub events that don't map to message/comment semantics).
- *
- * The inbox normalizer currently produces only `"comment" | "message"`. Richer
- * trigger types (mention, story_reply, reaction, button_click, command) require
- * expanding the normalizer first; those paths stay on the stub for now.
+ * Channels supported by the Manychat-parity automation engine. Inbound events
+ * from SMS, YouTube, Reddit, LinkedIn, etc. are stored + webhook-dispatched
+ * but do not flow into automations in v1.
  */
-function deriveTriggerType(
-	platform: string,
-	type: NormalizedInboxEvent["type"],
-): string | null {
-	if (type === "comment") {
-		// instagram_comment, facebook_comment, youtube_comment, reddit_comment,
-		// linkedin_comment all follow `<platform>_comment`.
-		return `${platform}_comment`;
-	}
-	switch (platform) {
-		case "instagram":
-		case "facebook":
-		case "discord":
-		case "twitter":
-		case "bluesky":
-			return `${platform}_dm`;
-		case "whatsapp":
-		case "telegram":
-			return `${platform}_message`;
-		case "sms":
-			return "sms_received";
-		case "reddit":
-			return "reddit_dm";
-		case "mastodon":
-			// Mastodon "DMs" are mentions with direct visibility.
-			return "mastodon_mention";
-		case "threads":
-			return "threads_reply";
-		default:
-			return null;
-	}
+const AUTOMATION_CHANNELS = new Set([
+	"instagram",
+	"facebook",
+	"whatsapp",
+	"telegram",
+	"tiktok",
+]);
+
+/**
+ * Maps a normalized inbox event to an InboundEventKind understood by the
+ * entrypoint matcher. Returns null for event shapes the new engine doesn't
+ * route (e.g. postback without text, live-comment events — those paths are
+ * deferred to later units).
+ */
+function deriveInboundEventKind(
+	event: NormalizedInboxEvent,
+): InboundEventKind | null {
+	if (event.type === "comment") return "comment_created";
+	if (event.type === "message") return "dm_received";
+	return null;
 }
 
 /**
- * Matches the inbound event against active automations and enrols candidates.
- * Waiting enrollments (`user_input` nodes pending) take precedence — inbound
- * text is fed back into the paused flow instead of starting a fresh one.
+ * Matches the inbound event against active automations and enrolls candidates.
+ * Waiting runs (a `user_input` node pending input) take precedence — inbound
+ * text is fed into the paused run instead of starting a fresh one.
  *
  * Best-effort: automation failures never block inbox processing.
  */
@@ -499,10 +517,15 @@ async function dispatchAutomationMatch(
 	event: NormalizedInboxEvent,
 	db: ReturnType<typeof createDb>,
 	env: Env,
+	_meta?: {
+		workspace_id?: string | null;
+		is_conversation_start?: boolean;
+	},
 ): Promise<void> {
 	try {
-		const triggerType = deriveTriggerType(event.platform, event.type);
-		if (!triggerType) return;
+		if (!AUTOMATION_CHANNELS.has(event.platform)) return;
+		const kind = deriveInboundEventKind(event);
+		if (!kind) return;
 
 		const authorId = event.author?.id ?? event.participant?.id ?? null;
 		let contactId: string | null = null;
@@ -522,60 +545,128 @@ async function dispatchAutomationMatch(
 				event.author?.name ?? null,
 			);
 		}
+		if (!contactId) return;
 
-		// Resume a waiting user_input flow before firing new triggers.
+		const envAsRecord = env as unknown as Record<string, unknown>;
+
+		// Resume a waiting user_input run before firing new triggers.
 		//
 		// Only inbound MESSAGES should satisfy a user_input wait — a comment
 		// on a post must never be captured as input to a DM flow. The waiting
-		// enrollment's recorded channel / conversation also has to match, so
-		// a message on platform B doesn't resume a flow paused on platform A
-		// for the same contact.
-		if (contactId && event.type === "message") {
-			const pending = await findWaitingEnrollment(env, {
-				organization_id: event.organization_id,
-				contact_id: contactId,
-				channel: event.platform,
-				conversation_id: event.conversation_id ?? null,
-			});
-			if (pending) {
-				// If the inbound event carries a structured attachment (image,
-				// document, audio), pass it as the captured value along with the
-				// {mime_type, size_bytes} meta so `user_input_file` can enforce
-				// its accepted_mime_types / max_size_mb. Text-only inputs still
-				// go through as a plain string.
-				if (event.attachment) {
-					await resumeFromInput(env, pending, event.attachment, {
-						mime_type: event.attachment.mime_type,
-						size_bytes: event.attachment.size_bytes,
-					});
-				} else {
-					await resumeFromInput(env, pending, event.text ?? "");
-				}
-				return;
-			}
+		// run's conversation also has to match, so a message on conversation B
+		// doesn't resume a flow paused on conversation A for the same contact.
+		if (event.type === "message") {
+			const resumed = await resumeWaitingRunForInput(
+				db,
+				env,
+				envAsRecord,
+				contactId,
+				event,
+			);
+			if (resumed) return;
 		}
 
-		await matchAndEnroll(env, {
-			organization_id: event.organization_id,
-			platform: event.platform,
-			trigger_type: triggerType,
-			account_id: event.account_id,
-			contact_id: contactId,
-			conversation_id: event.conversation_id ?? null,
+		const inboundEvent: InboundEvent = {
+			kind,
+			channel: event.platform as InboundEvent["channel"],
+			organizationId: event.organization_id,
+			socialAccountId: event.account_id,
+			contactId,
+			conversationId: event.conversation_id ?? null,
+			text: event.text,
+			postId: event.post_id,
 			payload: {
-				text: event.text ?? "",
 				post_id: event.post_id,
 				parent_id: event.parent_id,
-				comment_id: event.type === "comment" ? event.platform_event_id : undefined,
+				comment_id:
+					event.type === "comment" ? event.platform_event_id : undefined,
 				message_id:
 					event.type === "message" ? event.platform_event_id : undefined,
+				interactive_payload: event.interactive_payload,
+				interactive_kind: event.interactive_kind,
+				attachment: event.attachment,
 				author: event.author,
 				created_at: event.created_at,
 			},
-		});
+		};
+
+		await matchAndEnrollOrBinding(db, inboundEvent, envAsRecord);
 	} catch (err) {
 		console.error("[inbox-processor] automation dispatch failed:", err);
 	}
+}
+
+/**
+ * Look for an active `waiting` run on this (contact, conversation, channel).
+ * If found, merge the inbound message into run.context and kick runLoop so the
+ * input handler's captured value can flow through the rest of the graph.
+ * Returns true iff a run was resumed.
+ */
+async function resumeWaitingRunForInput(
+	db: ReturnType<typeof createDb>,
+	_env: Env,
+	envAsRecord: Record<string, unknown>,
+	contactId: string,
+	event: NormalizedInboxEvent,
+): Promise<boolean> {
+	const conversationId = event.conversation_id ?? null;
+	const waitingRuns = await db
+		.select({
+			id: automationRuns.id,
+			context: automationRuns.context,
+			conversationId: automationRuns.conversationId,
+			updatedAt: automationRuns.updatedAt,
+		})
+		.from(automationRuns)
+		.where(
+			and(
+				eq(automationRuns.organizationId, event.organization_id),
+				eq(automationRuns.contactId, contactId),
+				eq(automationRuns.status, "waiting"),
+				eq(automationRuns.waitingFor, "input"),
+				or(
+					conversationId
+						? eq(automationRuns.conversationId, conversationId)
+						: undefined,
+					// If the run was enrolled without a conversation (e.g. follow event),
+					// still allow the first inbound DM to resume it.
+					sql`${automationRuns.conversationId} IS NULL`,
+				),
+			),
+		)
+		.orderBy(desc(automationRuns.updatedAt))
+		.limit(1);
+
+	const waiting = waitingRuns[0];
+	if (!waiting) return false;
+
+	const priorContext = (waiting.context as Record<string, unknown>) ?? {};
+	const inputValue = event.attachment ?? event.text ?? "";
+	const newContext: Record<string, unknown> = {
+		...priorContext,
+		inbound_message_text: event.text ?? "",
+		inbound_message_id: event.platform_event_id,
+		inbound_attachment: event.attachment,
+		inbound_interactive_payload: event.interactive_payload,
+		inbound_interactive_kind: event.interactive_kind,
+		last_input_value: inputValue,
+		last_input_mime_type: event.attachment?.mime_type,
+		last_input_size_bytes: event.attachment?.size_bytes,
+	};
+
+	await db
+		.update(automationRuns)
+		.set({
+			status: "active",
+			context: newContext,
+			waitingFor: null,
+			waitingUntil: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(automationRuns.id, waiting.id));
+
+	await runLoop(db, waiting.id, envAsRecord);
+	return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -658,7 +749,9 @@ function normalizeFacebookEvent(
 	// Messenger events (DMs) — same echo handling as Instagram
 	if (event_type === "messages") {
 		const msg = payload as FacebookMessagingPayload;
-		const isEcho = !!(msg.message as any)?.is_echo || msg.sender.id === message.platform_account_id;
+		const isEcho =
+			!!(msg.message as any)?.is_echo ||
+			msg.sender.id === message.platform_account_id;
 		if (isEcho) return [];
 		const text = msg.message?.text ?? msg.postback?.title;
 		const eventId = msg.message?.mid ?? `postback_${msg.timestamp}`;
@@ -674,6 +767,8 @@ function normalizeFacebookEvent(
 				conversation_id: customerId,
 				author: { name: customerId, id: customerId },
 				text,
+				interactive_payload: msg.postback?.payload,
+				interactive_kind: msg.postback?.payload ? "postback" : undefined,
 				created_at: new Date(msg.timestamp).toISOString(),
 				raw: payload,
 			},
@@ -698,6 +793,8 @@ function normalizeFacebookEvent(
 				author: { name: "You", id: msg.sender.id },
 				participant: { name: customerId, id: customerId },
 				text,
+				interactive_payload: msg.postback?.payload,
+				interactive_kind: msg.postback?.payload ? "postback" : undefined,
 				created_at: new Date(msg.timestamp).toISOString(),
 				direction: "outbound",
 				raw: payload,
@@ -755,7 +852,9 @@ function normalizeInstagramEvent(
 	// Always use the CUSTOMER's ID as conversation_id.
 	if (event_type === "messages") {
 		const msg = payload as FacebookMessagingPayload;
-		const isEcho = !!(msg.message as any)?.is_echo || msg.sender.id === message.platform_account_id;
+		const isEcho =
+			!!(msg.message as any)?.is_echo ||
+			msg.sender.id === message.platform_account_id;
 		// Skip echoes — outbound messages are already stored by the sendMessage handler
 		if (isEcho) return [];
 		const text = msg.message?.text ?? msg.postback?.title;
@@ -773,6 +872,8 @@ function normalizeInstagramEvent(
 				conversation_id: customerId,
 				author: { name: customerId, id: customerId },
 				text,
+				interactive_payload: msg.postback?.payload,
+				interactive_kind: msg.postback?.payload ? "postback" : undefined,
 				created_at: new Date(msg.timestamp).toISOString(),
 				raw: payload,
 			},
@@ -798,6 +899,8 @@ function normalizeInstagramEvent(
 				author: { name: "You", id: msg.sender.id },
 				participant: { name: customerId, id: customerId },
 				text,
+				interactive_payload: msg.postback?.payload,
+				interactive_kind: msg.postback?.payload ? "postback" : undefined,
 				created_at: new Date(msg.timestamp).toISOString(),
 				direction: "outbound",
 				raw: payload,
@@ -840,11 +943,25 @@ interface WhatsAppWebhookValue {
 		text?: { body: string };
 		image?: { id: string; mime_type: string; sha256: string; caption?: string };
 		video?: { id: string; mime_type: string; sha256: string; caption?: string };
-		document?: { id: string; filename: string; mime_type: string; sha256: string; caption?: string };
+		document?: {
+			id: string;
+			filename: string;
+			mime_type: string;
+			sha256: string;
+			caption?: string;
+		};
 		audio?: { id: string; mime_type: string; sha256: string };
 		sticker?: { id: string; mime_type: string; sha256: string };
-		location?: { latitude: number; longitude: number; name?: string; address?: string };
-		contacts?: Array<{ name: { formatted_name: string }; phones?: Array<{ phone: string }> }>;
+		location?: {
+			latitude: number;
+			longitude: number;
+			name?: string;
+			address?: string;
+		};
+		contacts?: Array<{
+			name: { formatted_name: string };
+			phones?: Array<{ phone: string }>;
+		}>;
 		interactive?: { type: string; [key: string]: unknown };
 		button?: { text: string; payload: string };
 		reaction?: { message_id: string; emoji: string };
@@ -869,7 +986,10 @@ function extractWhatsAppMessageText(msg: WhatsAppMessage): string | undefined {
 		case "video":
 			return msg.video?.caption || "[Video]";
 		case "document":
-			return msg.document?.caption || `[Document: ${msg.document?.filename ?? "file"}]`;
+			return (
+				msg.document?.caption ||
+				`[Document: ${msg.document?.filename ?? "file"}]`
+			);
 		case "audio":
 			return "[Audio message]";
 		case "sticker":
@@ -885,10 +1005,56 @@ function extractWhatsAppMessageText(msg: WhatsAppMessage): string | undefined {
 		case "button":
 			return msg.button?.text ?? "[Button response]";
 		case "reaction":
-			return msg.reaction?.emoji ? `Reacted with ${msg.reaction.emoji}` : "[Reaction]";
+			return msg.reaction?.emoji
+				? `Reacted with ${msg.reaction.emoji}`
+				: "[Reaction]";
 		default:
 			return `[${msg.type}]`;
 	}
+}
+
+function extractWhatsAppInteractivePayload(msg: WhatsAppMessage): {
+	payload?: string;
+	kind?: NormalizedInboxEvent["interactive_kind"];
+} {
+	if (msg.button?.payload) {
+		return {
+			payload: msg.button.payload,
+			kind: "button_click",
+		};
+	}
+	if (msg.interactive?.type === "button_reply") {
+		const reply = (
+			msg.interactive as { button_reply?: { id?: string; title?: string } }
+		).button_reply;
+		return {
+			payload: reply?.id ?? reply?.title,
+			kind: "button_click",
+		};
+	}
+	if (msg.interactive?.type === "list_reply") {
+		const reply = (
+			msg.interactive as { list_reply?: { id?: string; title?: string } }
+		).list_reply;
+		return {
+			payload: reply?.id ?? reply?.title,
+			kind: "list_reply",
+		};
+	}
+	if (msg.interactive?.type === "nfm_reply") {
+		const reply = (
+			msg.interactive as {
+				nfm_reply?: { response_json?: unknown };
+			}
+		).nfm_reply;
+		return {
+			payload: reply?.response_json
+				? JSON.stringify(reply.response_json)
+				: undefined,
+			kind: "flow_submit",
+		};
+	}
+	return {};
 }
 
 /**
@@ -941,6 +1107,7 @@ function normalizeWhatsAppEvent(
 	const contact = value.contacts?.[0];
 
 	for (const msg of value.messages) {
+		const interactive = extractWhatsAppInteractivePayload(msg);
 		events.push({
 			type: "message",
 			platform: "whatsapp",
@@ -952,6 +1119,8 @@ function normalizeWhatsAppEvent(
 				id: msg.from,
 			},
 			text: extractWhatsAppMessageText(msg),
+			interactive_payload: interactive.payload,
+			interactive_kind: interactive.kind,
 			attachment: extractWhatsAppAttachment(msg),
 			conversation_id: msg.from,
 			created_at: new Date(Number(msg.timestamp) * 1000).toISOString(),
@@ -982,7 +1151,10 @@ async function processWhatsAppStatuses(
 				)`,
 			})
 			.where(eq(inboxMessages.platformMessageId, status.id))
-			.returning({ id: inboxMessages.id, conversationId: inboxMessages.conversationId });
+			.returning({
+				id: inboxMessages.id,
+				conversationId: inboxMessages.conversationId,
+			});
 
 		if (updated) {
 			// Dispatch webhook event
@@ -1019,7 +1191,12 @@ interface TelegramUpdatePayload {
 		date: number;
 		text?: string;
 		caption?: string;
-		photo?: Array<{ file_id: string; file_size?: number; width: number; height: number }>;
+		photo?: Array<{
+			file_id: string;
+			file_size?: number;
+			width: number;
+			height: number;
+		}>;
 		document?: {
 			file_id: string;
 			file_name?: string;
@@ -1029,6 +1206,23 @@ interface TelegramUpdatePayload {
 		audio?: { file_id: string; mime_type?: string; file_size?: number };
 		voice?: { file_id: string; mime_type?: string; file_size?: number };
 		video?: { file_id: string; mime_type?: string; file_size?: number };
+	};
+	callback_query?: {
+		id: string;
+		from: {
+			id: number;
+			first_name: string;
+			last_name?: string;
+			username?: string;
+		};
+		message?: {
+			message_id: number;
+			chat: { id: number; type: string };
+			date?: number;
+			text?: string;
+			caption?: string;
+		};
+		data?: string;
 	};
 }
 
@@ -1082,6 +1276,34 @@ function normalizeTelegramEvent(
 	message: InboxQueueMessage,
 ): NormalizedInboxEvent[] {
 	const payload = message.payload as TelegramUpdatePayload;
+
+	if (payload.callback_query) {
+		const query = payload.callback_query;
+		const authorName = [query.from.first_name, query.from.last_name]
+			.filter(Boolean)
+			.join(" ");
+		return [
+			{
+				type: "message",
+				platform: "telegram",
+				account_id: message.account_id,
+				organization_id: message.organization_id,
+				platform_event_id: `callback_${query.id}`,
+				author: {
+					name: authorName,
+					id: String(query.from.id),
+				},
+				text: query.data ?? query.message?.text ?? query.message?.caption,
+				interactive_payload: query.data,
+				interactive_kind: query.data ? "button_click" : undefined,
+				conversation_id: String(query.message?.chat.id ?? query.from.id),
+				created_at: new Date(
+					(query.message?.date ?? Math.floor(Date.now() / 1000)) * 1000,
+				).toISOString(),
+				raw: message.payload,
+			},
+		];
+	}
 
 	if (!payload.message) return [];
 
@@ -1137,9 +1359,7 @@ function extractTwilioMmsAttachment(
 	};
 }
 
-function normalizeSmsEvent(
-	message: InboxQueueMessage,
-): NormalizedInboxEvent[] {
+function normalizeSmsEvent(message: InboxQueueMessage): NormalizedInboxEvent[] {
 	const payload = message.payload as TwilioSmsPayload;
 
 	if (!payload.MessageSid) return [];

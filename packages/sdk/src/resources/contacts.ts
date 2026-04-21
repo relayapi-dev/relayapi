@@ -5,8 +5,11 @@ import { APIPromise } from '../core/api-promise';
 import { buildHeaders } from '../internal/headers';
 import { RequestOptions } from '../internal/request-options';
 import { path } from '../internal/utils/path';
+import { ContactAutomationControls } from './contact-automation-controls';
 
 export class Contacts extends APIResource {
+  automationControls: ContactAutomationControls = new ContactAutomationControls(this._client);
+
   /**
    * Create a contact
    */
