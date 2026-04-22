@@ -1,6 +1,6 @@
-// Automation detail page (Plan 2 — Unit B5; Plan 3 — Unit C1/C2, Task R5/S6).
+// Automation detail page.
 //
-// Wires the new port-driven `<GuidedFlow>` canvas against the new
+// Wires the port-driven `<GuidedFlow>` canvas against the
 // `AutomationResponse` shape. The graph lives in `useGraphStore`;
 // autosave fires from inside `<GuidedFlow>` via the
 // `/api/automations/{id}/graph` proxy. This page owns metadata (name /
@@ -14,12 +14,7 @@
 //               back to Canvas and selects the target node.
 //   - Insights → <InsightsPanel> (migrated to /v1/automations/{id}/insights)
 //
-// Simulator + bindings stay accessible from the toolbar as side panels;
-// both have been migrated to the new API contracts (Unit C1).
-//
-// PropertyPanel still consumes the legacy `AutomationDetail` shape; we build
-// a minimal legacy view inline for that single call site until PropertyPanel
-// is ported in a later unit.
+// Simulator + bindings stay accessible from the toolbar as side panels.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -51,10 +46,6 @@ import {
 	useGraphStore,
 } from "@/components/dashboard/automation/flow-builder/use-graph-store";
 import type { AutomationGraph } from "@/components/dashboard/automation/flow-builder/graph-types";
-import type {
-	AutomationDetail,
-	AutomationNodeSpec,
-} from "@/components/dashboard/automation/flow-builder/types";
 
 // ---------------------------------------------------------------------------
 // API response typing — aligned with SDK AutomationResponse
@@ -100,47 +91,6 @@ interface Props {
 
 type TabKey = "canvas" | "runs" | "insights";
 type SidePanel = "property" | "simulator" | "bindings";
-
-// ---------------------------------------------------------------------------
-// Minimal legacy-shape helper for PropertyPanel (not yet ported to the new
-// AutomationResponse). Builds a transient AutomationDetail just for that one
-// call site — no state, no persistence.
-// ---------------------------------------------------------------------------
-
-function buildPropertyPanelAutomation(
-	automation: ApiAutomationResponse,
-	graph: AutomationGraph,
-): AutomationDetail {
-	const nodes: AutomationNodeSpec[] = graph.nodes.map((n) => ({
-		type: n.kind,
-		key: n.key,
-		notes: (n.ui_state?.notes as string | undefined) ?? undefined,
-		canvas_x: n.canvas_x,
-		canvas_y: n.canvas_y,
-		...(n.config ?? {}),
-	}));
-	const edges = graph.edges.map((e) => ({
-		from: e.from_node,
-		to: e.to_node,
-		label: e.from_port,
-		order: e.order_index,
-	}));
-	return {
-		id: automation.id,
-		name: automation.name,
-		description: automation.description,
-		channel: automation.channel,
-		status: automation.status,
-		triggers: [],
-		nodes,
-		edges,
-		workspace_id: automation.workspace_id,
-		published_version: null,
-		draft_version: null,
-		created_at: automation.created_at,
-		updated_at: automation.updated_at,
-	};
-}
 
 // ---------------------------------------------------------------------------
 // Page
@@ -608,55 +558,35 @@ export function AutomationDetailPage({ automationId }: Props) {
 							/>
 						) : selectedNode ? (
 							<PropertyPanel
-								automation={buildPropertyPanelAutomation(
-									automation,
-									graphStore.graph,
-								)}
+								automationId={automation.id}
 								node={{
-									type: selectedNode.kind,
 									key: selectedNode.key,
+									kind: selectedNode.kind,
 									notes: (selectedNode.ui_state?.notes as string | undefined) ?? undefined,
-									canvas_x: selectedNode.canvas_x,
-									canvas_y: selectedNode.canvas_y,
-									...(selectedNode.config ?? {}),
+									config: selectedNode.config ?? {},
 								}}
-								nodeDef={null}
 								automationChannel={automation.channel}
 								onChange={(patch) => {
-									// Split graph-reserved fields (key / canvas_x / canvas_y /
-									// type / notes) from the rest, which we treat as config.
-									const {
-										key: patchKey,
-										notes: patchNotes,
-										canvas_x: _cx,
-										canvas_y: _cy,
-										type: _type,
-										...rest
-									} = patch;
-									const restChanges =
-										rest && typeof rest === "object" && Object.keys(rest).length > 0;
-									if (restChanges) {
-										const nextConfig = {
-											...(selectedNode.config ?? {}),
-											...(rest as Record<string, unknown>),
-										};
-										graphStore.updateNodeConfig(selectedNode.key, nextConfig);
+									if (patch.config) {
+										graphStore.updateNodeConfig(selectedNode.key, patch.config);
 									}
-									if (typeof patchNotes === "string") {
+									if (typeof patch.notes === "string") {
+										const notes = patch.notes;
 										const nodes = graphStore.graph.nodes.map((n) =>
 											n.key === selectedNode.key
 												? {
 														...n,
 														ui_state: {
 															...(n.ui_state ?? {}),
-															notes: patchNotes,
+															notes,
 														},
 													}
 												: n,
 										);
 										graphStore.setGraph({ ...graphStore.graph, nodes });
 									}
-									if (typeof patchKey === "string" && patchKey !== selectedNode.key) {
+									if (typeof patch.key === "string" && patch.key !== selectedNode.key) {
+										const patchKey = patch.key;
 										// Key rename requires a setGraph to also fix up edges.
 										const renamed = graphStore.graph.nodes.map((n) =>
 											n.key === selectedNode.key ? { ...n, key: patchKey } : n,

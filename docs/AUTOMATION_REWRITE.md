@@ -1,5 +1,7 @@
 # Automation System Rewrite — Implementation Plan & Status
 
+> **DEPRECATED — historical planning artifact.** This document captures the earlier label-based automation rewrite that shipped in April 2026. It is superseded by the Manychat-parity rebuild. The current source of truth is [`docs/superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md`](./superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md). The schemas, node enum, and edge model described here no longer match the shipped system. Kept for reference only — do not implement from this document.
+
 **Goal**: Replace `sequences` / `commentAutomations` / `engagementRules` / `automationRules` with a unified flow-based "automations" engine. No backwards compatibility (no production users yet).
 
 **Last updated**: 2026-04-17

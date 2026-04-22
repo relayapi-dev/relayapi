@@ -1,5 +1,7 @@
 # Multi-Trigger Automations Implementation Plan
 
+> **DEPRECATED — historical planning artifact.** This document is superseded by the Manychat-parity automation rebuild. The current source of truth is [`docs/superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md`](./superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md). Concepts here (`automation_triggers` table, label-based edges, the ~90-value node enum) no longer describe the shipped system. Kept for reference only — do not implement from this document.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the 1:1 `automation ↔ trigger` model with a 1:N model so a single automation can fire on multiple distinct triggers (different types, different configs, different filters, different accounts) — matching ManyChat's UX.

@@ -1,0 +1,200 @@
+---
+title: Runs
+description: How an automation executes — run lifecycle, per-node step logs, pausing a contact, and stopping a run.
+icon: Activity
+---
+
+A **run** is one contact's journey through one automation. The runner creates a row in `automation_runs` when an entrypoint (or binding) enrolls a contact, executes the graph node-by-node, and appends one row to `automation_step_runs` per node visit.
+
+## Lifecycle
+
+```
+           created
+              │
+              ▼
+        ┌─ active ─┐───────┐
+        │          │       │
+        ▼          ▼       │
+     waiting   completed   │
+        │      exited      │
+        │      failed      │
+        └──────────────────┘
+```
+
+- **created** — the row is being written.
+- **active** — the runner is executing nodes synchronously.
+- **waiting** — parked on an `input` node, a `delay`, or an external event (contact pause).
+- **completed** — reached an `end` node or ran out of outgoing edges.
+- **exited** — intentional early termination (graph edit, pause, admin stop, reentry skip).
+- **failed** — handler crashed or the infinite-loop cap tripped.
+
+## Run shape
+
+```json
+{
+  "id": "arun_...",
+  "automation_id": "auto_...",
+  "organization_id": "org_...",
+  "entrypoint_id": "aep_...",
+  "binding_id": null,
+  "contact_id": "ct_...",
+  "conversation_id": "cnv_...",
+  "status": "waiting",
+  "current_node_key": "ask_email",
+  "current_port_key": null,
+  "context": {
+    "email": "alice@example.com",
+    "order_id": "1234"
+  },
+  "waiting_until": "2026-04-20T12:34:56Z",
+  "waiting_for": "input",
+  "exit_reason": null,
+  "started_at": "2026-04-20T12:30:00Z",
+  "completed_at": null,
+  "updated_at": "2026-04-20T12:34:56Z"
+}
+```
+
+`context` accumulates values across the run — captured `input` replies, `http_request` responses, `randomizer` sticky variants, button payloads, and webhook payload mappings. It's what `{{context.<key>}}` merge tags resolve against.
+
+## Exit reasons
+
+`exit_reason` is a free-text column; the runtime produces these values:
+
+| Reason | Meaning |
+|---|---|
+| `completed` | Reached an `end` node or ran out of edges |
+| `graph_changed` | Current node was deleted while the run was waiting |
+| `node_removed` | Node disappeared between visits |
+| `contact_paused` | Contact has a matching pause row in `automation_contact_controls` |
+| `reentry_cooldown` | Skipped at enrollment due to active-run or cooldown window |
+| `input_timeout` | `input` node's `timeout_min` elapsed |
+| `admin_stopped` | Explicitly stopped via `POST /v1/automation-runs/{id}/stop` |
+| `handler_failure` | Node handler threw (no `error` port wired to recover) |
+| `infinite_loop_cap` | 200 node visits in a single execution iteration (cycle without a pause point) |
+
+## Step runs
+
+Every node visit writes a row to `automation_step_runs` — append-only, never updated. Table is partitioned monthly on `executed_at` and retained forever in v1.
+
+```json
+{
+  "id": 1421,
+  "run_id": "arun_...",
+  "automation_id": "auto_...",
+  "node_key": "greet",
+  "node_kind": "message",
+  "entered_via_port_key": null,
+  "exited_via_port_key": "button.btn_large",
+  "outcome": "success",
+  "duration_ms": 182,
+  "payload": { "message_id": "m_...", "rendered_text": "Hi Alice! What size?" },
+  "error": null,
+  "executed_at": "2026-04-20T12:30:12Z"
+}
+```
+
+`outcome` values: `success`, `failed`, `skipped`, `waiting`.
+
+## Endpoints
+
+### Run inspection
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/automations/{id}/runs` | List runs. Filters: `status`, `contact_id`, `started_after`, `started_before` |
+| `GET` | `/v1/automation-runs/{id}` | Retrieve one run |
+| `GET` | `/v1/automation-runs/{id}/steps` | Step-run timeline for a run |
+| `POST` | `/v1/automation-runs/{id}/stop` | Force-exit a run (`exit_reason = "admin_stopped"`) |
+
+### Manual enrollment
+
+Enroll a contact into an automation outside of normal entrypoint matching — useful for dashboard test runs, a segmentation workflow, or programmatically starting a flow from your backend.
+
+```bash
+POST /v1/automations/{id}/enroll
+{
+  "contact_id": "ct_abc123",
+  "entrypoint_id": "aep_...",              // optional — attributes the run to an entrypoint
+  "context_overrides": { "source": "api" } // seeds run.context
+}
+```
+
+Returns the full run row with `status = "active"`. Contact-pause and reentry rules still apply (manual enrollment is **not** a bypass).
+
+### Simulation (dry-run)
+
+`POST /v1/automations/{id}/simulate` executes the graph without side effects — nothing is sent, no webhooks fire, no DB mutations. Useful for the builder's "Run simulator" button and for automated tests.
+
+```bash
+POST /v1/automations/{id}/simulate
+{
+  "start_node_key": "greet",               // optional — defaults to root_node_key
+  "test_context": { "order_total": 42 },   // seeds run.context
+  "branch_choices": { "greet": "button.btn_large" },  // force-take a port at each branching node
+  "execute_side_effects": false
+}
+```
+
+Response is a transcript of the steps that would run, with resolved merge tags and the port choices taken.
+
+## Contact pause / resume
+
+A contact can be paused globally (all automations) or per-automation. While paused, the runner will:
+
+- **Skip** enrollment when a matching pause row exists at match time.
+- **Park** an in-flight run as `waiting` (`waiting_for = "external_event"`) when it next visits a node — resume happens when the pause row is deleted or expires.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/contacts/{id}/automation-controls` | List all pause rows for a contact |
+| `POST` | `/v1/contacts/{id}/automation-pause` | Create a pause row |
+| `POST` | `/v1/contacts/{id}/automation-resume` | Delete a pause row |
+
+### Pausing
+
+```bash
+POST /v1/contacts/ct_abc123/automation-pause
+{
+  "automation_id": "auto_...",     // omit for global pause across all flows
+  "pause_reason": "manual_takeover",
+  "paused_until": "2026-05-01T00:00:00Z"   // optional — null = until explicitly resumed
+}
+```
+
+Common `pause_reason` values: `manual_takeover`, `user_reply`, `operator_paused`. Free-text — your own codes are fine.
+
+### Resuming
+
+```bash
+POST /v1/contacts/ct_abc123/automation-resume
+{ "automation_id": "auto_..." }   // omit for global resume
+```
+
+## Graph-change safety
+
+Because edits are instantly live (there is no draft-published split), an in-flight run can find its `current_node_key` missing after a graph edit. The runner handles this cleanly:
+
+- If `current_node_key` doesn't exist → exit `graph_changed`.
+- If `current_port_key` doesn't exist on the node → exit `graph_changed`.
+- If an edge points to a nonexistent `to_node` → treated as `completed` (path ended — not a failure).
+
+The save-time validator auto-pauses an automation whose graph is invalid, which keeps this failure mode rare in practice.
+
+## Concurrency
+
+- **At most one active run per `(contact, automation)`** — enforced by a partial unique index. Near-simultaneous events cannot double-enroll.
+- **Step-run writes are append-only** — no updates or deletes.
+- **Run state updates are optimistic** via `updated_at`: a worker that reads a stale run will see zero rows affected on write and exit gracefully — no lost updates, no duplicate side effects.
+
+## Debugging cheatsheet
+
+| Symptom | Where to look |
+|---|---|
+| Never enrolled | Is the automation `active`? Does an entrypoint on the right channel + kind match the event? Do filters pass? Is the contact globally paused? |
+| Stuck waiting | `status = "waiting"` + `waiting_until` in the past — check `automation_scheduled_jobs` for pending jobs; the scheduler claims up to 200 per tick every 15s |
+| Handler error | `automation_step_runs.outcome = "failed"` with populated `error` JSONB. Common causes: social account missing a token, custom field slug not defined, HTTP request timeout |
+| Re-entry blocked | Contact has an active run or completed within `reentry_cooldown_min` — either disable the block, shorten the cooldown, or wait |
+| Run exits `graph_changed` | Operator edited the graph while a run was parked. Re-enroll the contact if desired |

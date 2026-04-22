@@ -1,249 +1,312 @@
 ---
 title: Triggers
-description: The complete catalog of automation trigger types, grouped by platform tier.
+description: Entrypoints that start a run, bindings that attach a flow to a channel surface, and the webhook entrypoint for external systems.
 icon: Zap
 ---
 
-## Trigger Model
+An automation reacts to two kinds of inputs:
 
-Every automation has exactly one `trigger`. When an event arrives that matches the trigger type + its config + its filters, the trigger matcher creates an enrollment and queues the graph to run.
+- **Entrypoints** — per-flow triggers. Each flow can have many. An event on the channel is matched against all active entrypoints for that channel and the most specific one enrolls the contact.
+- **Bindings** — per-account attachments. One flow gets bound to a channel surface (default reply, welcome message, main menu, etc.). Bindings fire when no entrypoint matches, filling in the "otherwise" slot.
 
-A trigger spec has four parts:
+Entrypoints live under an automation and are managed in the flow builder. Bindings live under a social account and are managed in the account detail page.
+
+## Entrypoints
+
+### The 16 kinds
+
+| Kind | IG | FB | WA | TG | TikTok |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `dm_received` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `keyword` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `comment_created` | ✓ | ✓ | — | — | ✓ |
+| `story_reply` | ✓ | ✓ | — | — | — |
+| `story_mention` | ✓ | ✓ | — | — | — |
+| `live_comment` | ✓ | ✓ | — | — | ✓ |
+| `ad_click` | ✓ | ✓ | — | — | — |
+| `ref_link_click` | ✓ | ✓ | — | — | — |
+| `share_to_dm` | ✓ | — | — | — | — |
+| `follow` | ✓ | — | — | — | ✓ |
+| `schedule` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `field_changed` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `tag_applied` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `tag_removed` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `conversion_event` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `webhook_inbound` | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+### Shape
 
 ```json
 {
-  "type": "instagram_comment",
-  "account_id": "acc_abc123",
-  "config": { "keywords": ["info", "link"], "match_mode": "contains", "post_id": null },
-  "filters": { "tags_none": ["blocked"], "segment_id": "seg_vip" }
+  "id": "aep_...",
+  "automation_id": "auto_...",
+  "channel": "instagram",
+  "kind": "keyword",
+  "status": "active",
+  "social_account_id": "acc_...",          // null = all accounts for the channel
+  "config": { "keywords": ["pizza"], "match_mode": "contains", "case_sensitive": false },
+  "filters": { "all": [{ "field": "contact.tags", "op": "contains", "value": "vip" }] },
+  "allow_reentry": true,
+  "reentry_cooldown_min": 60,
+  "priority": 100,
+  "specificity": 30
 }
 ```
 
-- **type** — one of the values listed below.
-- **account_id** — scopes the trigger to a specific social account (optional for virtual triggers like `scheduled_time`).
-- **config** — trigger-type-specific matching (keyword list, post scope, cron, threshold, ref URL slug).
-- **filters** — contact-side gates: tag includes/excludes, segment membership, custom-field predicates.
+Fields:
 
-## Tier 1 — Full Conversational (DM + comment + reply)
+- **kind** — one of the 16 above.
+- **channel** — must match the parent automation's channel.
+- **social_account_id** — scopes the entrypoint to a specific account; leave null for all accounts on the channel.
+- **config** — kind-specific (see below).
+- **filters** — segment / tag / field predicates evaluated against the contact before enrolling.
+- **allow_reentry** (default `true`) — whether the same contact can re-enter.
+- **reentry_cooldown_min** (default `60`) — cooldown after run completion before a re-entry is allowed.
+- **priority** (default `100`, lower wins in ties).
+- **specificity** — auto-derived from the kind + config; higher wins.
 
-These platforms support both inbound DMs and public engagement events.
+### Config shapes per kind
 
-### Instagram
+```json
+// keyword
+{ "keywords": ["pizza", "order"], "match_mode": "exact | contains | regex", "case_sensitive": false }
 
-| Type | Fires on |
-| --- | --- |
-| `instagram_dm` | Direct message received |
-| `instagram_comment` | Comment on a post or reel |
-| `instagram_story_reply` | Reserved for story replies; not runtime-supported yet |
-| `instagram_story_mention` | User mentions your account in a story |
-| `instagram_mention` | User @-mentions your account in a post/comment |
-| `instagram_reaction` | Message reaction (emoji) added/removed |
-| `instagram_live_comment` | Comment during a Live broadcast |
-| `instagram_postback` | Ice-breaker / structured button postback |
-| `instagram_referral` | User arrives via an IG Ref URL |
+// comment_created
+{ "post_ids": ["17895..."], "keyword_filter": ["link"], "include_replies": false }
 
-Note: Instagram does not expose a follower webhook through the public Graph API v25, so Follow-to-DM flows must be enrolled manually.
+// schedule
+{ "cron": "0 9 * * 1", "timezone": "Europe/Rome" }
 
-### Facebook Messenger + Page
+// field_changed
+{ "field": "stage", "from": "new", "to": "qualified" }
 
-| Type | Fires on |
-| --- | --- |
-| `facebook_dm` | Messenger DM received |
-| `facebook_comment` | Comment on a Page post |
-| `facebook_mention` | Page @-mentioned |
-| `facebook_postback` | Get Started / persistent menu button |
-| `facebook_reaction` | Message reaction added/removed |
-| `facebook_optin` | Send-to-Messenger widget / Ref URL opt-in |
-| `facebook_feed_post` | New post on the Page feed (automation source for cross-posts) |
+// tag_applied / tag_removed
+{ "tag": "trial_expired" }
 
-### WhatsApp
+// ref_link_click
+{ "ref_url_id": "ref_..." }
 
-| Type | Fires on |
-| --- | --- |
-| `whatsapp_message` | Any inbound message |
-| `whatsapp_keyword` | Reserved trigger alias; use `whatsapp_message` with keyword config today |
-| `whatsapp_button_click` | User taps a button from a reply-button message |
-| `whatsapp_list_reply` | User picks from a list message |
-| `whatsapp_flow_submit` | User completes a WhatsApp Flow form (arrives as `interactive.type='nfm_reply'`) |
-| `whatsapp_reaction` | Emoji reaction to a message |
-| `whatsapp_status_update` | Delivery / read / failed receipt |
+// webhook_inbound — see dedicated section below
+```
 
-### Telegram
+### Conflict resolution
 
-| Type | Fires on |
-| --- | --- |
-| `telegram_message` | Any private chat message |
-| `telegram_command` | Bot command (`/start`, `/help`, etc.) |
-| `telegram_channel_post` | Post in a channel the bot admins |
-| `telegram_callback_query` | Inline-keyboard button press |
-| `telegram_reaction` | Message reaction added |
-| `telegram_member_joined` | New member joined a group/channel |
-| `telegram_chat_join_request` | Join request awaiting approval |
-| `telegram_business_message` | Business-account message via connected account |
-| `telegram_inline_query` | Inline query typed in another chat |
+Multiple entrypoints can match the same event. The matcher picks one with this sort:
 
-### Discord
+```
+ORDER BY specificity DESC, priority ASC, created_at ASC
+```
 
-| Type | Fires on |
-| --- | --- |
-| `discord_message` | Channel message |
-| `discord_dm` | Direct message |
-| `discord_reaction` | Reaction added |
-| `discord_member_joined` | `GUILD_MEMBER_ADD` |
-| `discord_thread_created` | `THREAD_CREATE` |
-| `discord_interaction` | Slash command / button / select menu interaction |
+Specificity is derived automatically:
 
-Discord requires the `MESSAGE_CONTENT` privileged intent (verified at 100+ servers).
+| Config | Specificity |
+|---|---|
+| `keyword` (exact or regex) | 30 |
+| `webhook_inbound` (unique slug) | 30 |
+| Asset-filtered (e.g. `comment_created` with `post_ids`) | 25 |
+| Filtered with tag/segment/field predicate | 20 |
+| Account-scoped broad (e.g. `dm_received` on account X, no filter) | 10 |
+| Catch-all (no account, no filter) | 0 |
 
-### SMS
+Use `priority` to break ties or force a specific order when two entrypoints have identical specificity.
 
-| Type | Fires on |
-| --- | --- |
-| `sms_received` | Inbound SMS/MMS via Twilio or Telnyx |
+### Re-entry
 
-### X (Twitter)
+For every incoming match, the matcher checks:
 
-| Type | Fires on |
-| --- | --- |
-| `twitter_dm` | Direct message received |
-| `twitter_mention` | @-mention |
-| `twitter_reply` | Reply to one of your tweets |
-| `twitter_follow` | New follower |
-| `twitter_like` | Like on one of your tweets |
-| `twitter_retweet` | Retweet |
-| `twitter_quote` | Quote tweet |
+1. Does this contact have an **active or waiting** run for this `(automation_id, entrypoint_id)`? → skip.
+2. Does this contact have a **completed** run within `reentry_cooldown_min` of now? → skip.
+3. Is `allow_reentry = false` and the contact has ever been enrolled? → skip.
 
-Requires Account Activity API access (Pay-per-Use or Enterprise tier).
+The cooldown clock starts at the prior run's `completed_at`.
 
-### Bluesky
+### Contact pause
 
-| Type | Fires on |
-| --- | --- |
-| `bluesky_dm` | Direct message received (poll-only via `chat.bsky.convo.getLog`) |
-| `bluesky_reply` | Reply to your post |
-| `bluesky_mention` | @-mention |
-| `bluesky_follow` | New follower |
-| `bluesky_like` | Like on your post |
+A contact can be paused per-automation or globally via `automation_contact_controls`. If any matching pause row exists (with `paused_until IS NULL` or still in the future), enrollment is skipped. See [Runs](./runs) for the contact-controls API.
 
-Public events stream via Jetstream. DMs are proxied through the central chat service and polled.
+### Endpoints
 
-## Tier 2 — Engagement Only (no DM)
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/automations/{id}/entrypoints` | List entrypoints on an automation |
+| `POST` | `/v1/automations/{id}/entrypoints` | Create |
+| `GET` | `/v1/automation-entrypoints/{id}` | Retrieve |
+| `PATCH` | `/v1/automation-entrypoints/{id}` | Update |
+| `DELETE` | `/v1/automation-entrypoints/{id}` | Remove |
+| `POST` | `/v1/automation-entrypoints/{id}/rotate-secret` | Rotate the webhook secret (for `webhook_inbound` only) |
 
-### Threads
+## Bindings
 
-| Type | Fires on |
-| --- | --- |
-| `threads_reply` | Reply to your thread |
-| `threads_mention` | @-mention |
-| `threads_publish` | Your own post is published (for cross-automations) |
+Bindings attach a flow to a "channel surface" on a specific social account. There are 5 types.
 
-Threads has no DM API as of Graph API v25.
+| Type | Channels | v1 status |
+|---|---|---|
+| `default_reply` | IG, FB, WA, TG, TikTok | **Wired live** — fires when an inbound event matches no entrypoint |
+| `welcome_message` | IG, FB, WA, TG, TikTok | **Wired live** — fires on the contact's first-ever inbound on the channel |
+| `conversation_starter` | FB only | **Stubbed** — storage + UI only; platform sync via `messenger_profile.ice_breakers` ships in v1.1 |
+| `main_menu` | FB, IG | **Stubbed** — storage + UI only; platform sync via `messenger_profile.persistent_menu` ships in v1.1 |
+| `ice_breaker` | WA only | **Stubbed** — storage + UI only; WhatsApp platform sync ships in v1.1 |
 
-### YouTube
-
-| Type | Fires on |
-| --- | --- |
-| `youtube_comment` | New comment (polling) |
-| `youtube_live_chat` | Message during a live broadcast |
-| `youtube_new_video` | New video uploaded on the channel (PubSubHubbub push) |
-
-### LinkedIn
-
-| Type | Fires on |
-| --- | --- |
-| `linkedin_comment` | Comment on a company post (polling) |
-| `linkedin_mention` | Company @-mention |
-| `linkedin_reaction` | Reaction on a post |
-
-LinkedIn has no third-party messaging API. `r_member_social` is currently closed to new apps.
-
-### Mastodon
-
-| Type | Fires on |
-| --- | --- |
-| `mastodon_mention` | @-mention in a status |
-| `mastodon_reply` | Reply to your status |
-| `mastodon_boost` | Status boosted |
-| `mastodon_follow` | New follower |
-| `mastodon_favourite` | Status favourited |
-
-Events stream via `/api/v1/streaming/user`. Rate limits vary per instance.
-
-### Reddit
-
-| Type | Fires on |
-| --- | --- |
-| `reddit_comment` | Comment in a watched subreddit |
-| `reddit_mention` | Inbox mention |
-| `reddit_new_post` | New post in a subreddit |
-| `reddit_modmail` | New modmail conversation |
-| `reddit_dm` | Direct message (Reddit "compose") |
-
-Reddit has no webhooks — everything is polled. Commercial use requires explicit Reddit approval under the Responsible Builder Policy.
-
-### Google Business Profile
-
-| Type | Fires on |
-| --- | --- |
-| `googlebusiness_new_review` | New review on the location |
-| `googlebusiness_updated_review` | Review edited |
-| `googlebusiness_new_customer_media` | Customer uploaded a photo |
-| `googlebusiness_duplicate_location` | Google flagged the location as duplicate |
-| `googlebusiness_voice_of_merchant_updated` | Verification status change |
-| `googlebusiness_google_update` | Generic Google-side profile update |
-
-Q&A triggers (`NEW_QUESTION`, `UPDATED_QUESTION`, `NEW_ANSWER`, `UPDATED_ANSWER`) are deprecated because the Q&A API was discontinued on 2025-11-03.
-
-GBP API requires contact-form approval + a third-party automation policy review.
-
-## Tier 3 — Destinations (subscriber triggers)
-
-These platforms are primarily outbound; only subscriber-created events are surfaced as triggers.
-
-| Type | Fires on |
-| --- | --- |
-| `beehiiv_subscription_created` | New Beehiiv subscription |
-| `beehiiv_subscription_confirmed` | Double opt-in confirmed |
-| `beehiiv_subscription_deleted` | Unsubscribed |
-| `kit_subscriber_activate` | Kit (ConvertKit) subscriber activated |
-| `kit_form_subscribe` | Subscribed via a specific form |
-| `kit_tag_add` | Tag applied to a subscriber |
-| `mailchimp_subscribe` | Mailchimp audience subscribe |
-| `mailchimp_unsubscribe` | Mailchimp audience unsubscribe |
-
-## Cross-Platform
-
-Triggers that are not tied to a single platform:
-
-| Type | Fires on |
-| --- | --- |
-| `scheduled_time` | Cron schedule — daily digests, weekly check-ins |
-| `engagement_threshold` | A post hits N likes / N comments / N shares (see `engagement_rules` config) |
-| `tag_applied` | Contact has a tag added |
-| `tag_removed` | Contact has a tag removed |
-| `field_changed` | Contact custom field changes value |
-| `external_api` | External system posts to `POST /v1/automations/:id/enroll` |
-| `manual` | Only enrolled manually — used for internal flows + template scaffolding |
-| `segment_entered` | Contact becomes a member of a segment |
-| `segment_left` | Contact leaves a segment |
-
-## Filters
-
-All triggers support the same filter schema:
+### Shape
 
 ```json
 {
-  "tags_any": ["vip", "trial"],
-  "tags_all": ["newsletter_opted_in"],
-  "tags_none": ["blocked", "unsubscribed"],
-  "segment_id": "seg_enterprise",
-  "predicates": {
-    "all": [
-      { "field": "fields.country", "op": "eq", "value": "IT" },
-      { "field": "fields.lifetime_value", "op": "gte", "value": 100 }
-    ]
+  "id": "abnd_...",
+  "social_account_id": "acc_...",
+  "channel": "instagram",
+  "binding_type": "default_reply",
+  "automation_id": "auto_...",
+  "config": {},
+  "status": "active",
+  "last_synced_at": null,
+  "sync_error": null
+}
+```
+
+Constraint: **one binding per `(social_account_id, binding_type)`**. Binding the same flow to multiple surfaces means creating multiple binding rows.
+
+### Config per type
+
+```json
+// default_reply / welcome_message
+{}
+// automation_id alone is sufficient
+
+// conversation_starter
+{ "starters": [{ "label": "Get started", "payload": "start" }] }  // max 4
+
+// main_menu
+{
+  "items": [
+    { "label": "Shop", "action": "url", "payload": "https://…" },
+    { "label": "Contact", "action": "postback", "payload": "contact" }
+  ]
+}
+// max 3 levels deep, supports sub_items
+
+// ice_breaker
+{ "questions": [{ "question": "How do I order?", "payload": "faq_order" }] }
+```
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/automation-bindings` | List. Filters: `social_account_id`, `binding_type`, `automation_id` |
+| `POST` | `/v1/automation-bindings` | Create |
+| `GET` | `/v1/automation-bindings/{id}` | Retrieve |
+| `PATCH` | `/v1/automation-bindings/{id}` | Update |
+| `DELETE` | `/v1/automation-bindings/{id}` | Remove |
+
+Stubbed binding types default to `status = "pending_sync"` at create time — they're stored but not yet pushed to the platform.
+
+## Runtime match algorithm
+
+On every inbound channel event, the matcher:
+
+1. Loads candidate entrypoints where `channel = X`, `kind = Y`, `status = active`, and `(social_account_id IS NULL OR social_account_id = event.account_id)`.
+2. Applies the kind-specific config matcher (keyword match, post-id match, cron window, etc.).
+3. Applies filter predicates against the contact.
+4. Skips any entrypoint blocked by re-entry rules or contact-pause.
+5. Sorts by `(specificity DESC, priority ASC, created_at ASC)`. Takes the first.
+6. Enrolls — creates an `automation_runs` row, dispatches to the runner.
+
+If step 5 yielded nothing, the matcher falls through to bindings:
+
+- **welcome_message** — fires only on the contact's first-ever inbound on this channel (checked against `inbox_messages`).
+- **default_reply** — fires otherwise, if a binding exists on `(social_account_id, "default_reply")` and is `active`.
+
+## Webhook entrypoints
+
+`webhook_inbound` entrypoints let external systems (CRMs, e-commerce stores, etc.) enroll contacts into a flow by POSTing to a unique signed URL.
+
+### Creating a webhook entrypoint
+
+```bash
+POST /v1/automations/{id}/entrypoints
+{
+  "kind": "webhook_inbound",
+  "channel": "instagram",
+  "config": {
+    "contact_lookup": {
+      "by": "email",
+      "field_path": "$.customer.email",
+      "auto_create_contact": true
+    },
+    "payload_mapping": {
+      "order_id": "$.order.id",
+      "order_total": "$.order.total"
+    }
   }
 }
 ```
 
-Filter predicates resolve against contact columns, custom fields (`fields.<slug>`), tags, and enrollment state captured earlier in a run.
+The create response includes `config.webhook_slug` and the plaintext `config.webhook_secret` **exactly once**. Store it — subsequent reads return only the slug. Rotate with:
+
+```bash
+POST /v1/automation-entrypoints/{id}/rotate-secret
+```
+
+### Contact lookup modes
+
+| `by` | Effect |
+|---|---|
+| `email` | Extract via `field_path`, match on `contacts.email` |
+| `phone` | Extract via `field_path`, match on `contacts.phone` |
+| `platform_id` | Match on a platform identifier from the channel |
+| `custom_field` | Extract via `field_path`, match on `contacts.custom_fields.<custom_field_key>` |
+| `contact_id` | Extract via `field_path`, match on `contacts.id` |
+
+Set `auto_create_contact: true` to create a new contact when the lookup misses. Otherwise the request returns `422`.
+
+`payload_mapping` extracts fields from the body into `run.context` so downstream nodes can reference `{{context.order_id}}` etc.
+
+### Receiving webhooks
+
+Public endpoint: `POST /v1/webhooks/automation-trigger/{webhook_slug}`
+
+**Signature**: the caller must compute HMAC-SHA256 over the raw request body using the plaintext secret and send it as:
+
+```
+X-Relay-Signature: sha256=<hex>
+```
+
+**Example**
+
+```bash
+BODY='{"order":{"id":"1234","total":42.00},"customer":{"email":"alice@example.com"}}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
+
+curl -X POST https://api.relayapi.dev/v1/webhooks/automation-trigger/auto-xyz123 \
+  -H "Content-Type: application/json" \
+  -H "X-Relay-Signature: sha256=$SIG" \
+  -d "$BODY"
+```
+
+**Responses**
+
+| Status | Meaning |
+|---|---|
+| `202 { run_id }` | Enrolled successfully |
+| `401` | Missing or invalid signature |
+| `404` | Unknown `webhook_slug` |
+| `422` | Contact lookup failed (`auto_create_contact` is false or required fields are missing) |
+
+The webhook endpoint is **account-agnostic** — the slug alone identifies the entrypoint, so you can use `webhook_inbound` without attaching a `social_account_id`.
+
+## Filters
+
+All entrypoints support the same filter shape, evaluated before enrollment:
+
+```json
+{
+  "all": [
+    { "field": "contact.tags", "op": "contains", "value": "vip" },
+    { "field": "contact.custom_fields.country", "op": "eq", "value": "IT" }
+  ],
+  "any": [ /* OR group */ ],
+  "none": [ /* NOT group */ ]
+}
+```
+
+Field paths: `contact.<column>`, `contact.custom_fields.<slug>`, `contact.tags`, `contact.segments`. Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `not_contains`, `in`, `not_in`, `exists`, `not_exists`.

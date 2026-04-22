@@ -1,100 +1,112 @@
 ---
 title: AI-Friendly API
-description: How the automation API is shaped for AI agents and MCP servers.
+description: How the automation API is shaped so AI agents and MCP servers can construct working flows in a single call.
 icon: Bot
 ---
 
-## Design Principles
+The automation API is designed so an AI agent — calling the REST endpoints directly or through an MCP server — can construct a working flow without guessing enum values, without round-tripping generated IDs, and without stitching together multiple calls.
 
-The API was designed so an AI agent — either through a direct Claude API call or through an MCP server — can construct a working automation in a single call, without guessing enum values and without needing to round-trip generated IDs.
+## Design principles
 
-Three principles:
+1. **One call creates the full automation.** `POST /v1/automations` with a `template` field generates the whole graph + entrypoints server-side. For custom flows, `POST` to create an empty automation and follow up with `PUT /v1/automations/{id}/graph` containing the full node/edge structure.
+2. **Human-chosen string keys instead of generated IDs.** You choose `"welcome"`, `"ask_email"`, `"send_guide"`. Edges reference those keys directly. No ID dance, no second round-trip to learn what the server assigned.
+3. **Compact node vocabulary.** 10 node kinds (not 90). A single `message` node hosts all content variants via typed `blocks`. A single `action_group` node hosts all side-effect actions. The JSON schema is small enough for an LLM to keep fully in context.
+4. **Free-text kinds, not enums.** Node `kind`, entrypoint `kind`, port `key`, action `type`, and exit reasons are all plain strings with app-level validation. Adding a kind is a code change, not a DB migration — and an AI that invents an unknown kind gets a suggestion in the 422 response rather than a cryptic enum error.
 
-1. **One call creates the full automation.** Trigger + nodes + edges ship in one POST body. No "create the flow, then loop over the nodes".
-2. **Human-chosen string keys instead of generated IDs.** The AI picks `"welcome"`, `"ask_email"`, `"send_guide"`. Edges reference those keys. No ID dance.
-3. **Discriminated union nodes with flat fields.** Each node variant declares its own fields at the top level (not wrapped in `config: {}`), so the generated JSON schema is legible and the AI produces matching output more reliably.
+## Catalog endpoint
 
-## Schema Introspection
+```bash
+GET /v1/automations/catalog
+```
 
-`GET /v1/automations/schema` returns the self-describing catalog:
+Returns the full self-describing catalog the builder and external clients use to stay in sync:
 
 ```json
 {
-  "triggers": [
+  "node_kinds": [
     {
-      "type": "instagram_comment",
-      "description": "Fires when a user comments on an Instagram post or reel",
-      "channel": "instagram",
-      "tier": 1,
-      "transport": "webhook",
-      "config_schema": { /* JSON Schema for config.* */ },
-      "output_labels": ["next"]
-    }
+      "kind": "input",
+      "description": "Prompt the contact and capture their reply into run context or a contact custom field",
+      "config_schema": { /* JSON Schema */ },
+      "port_derivation": "captured / invalid / timeout / skip"
+    },
+    { "kind": "message", "…": "…" }
   ],
-  "nodes": [
-    {
-      "type": "user_input_email",
-      "description": "Ask for email and save to a contact field",
-      "category": "input",
-      "fields_schema": { /* JSON Schema */ },
-      "output_labels": ["captured", "no_match", "timeout"]
-    }
+  "entrypoint_kinds": [
+    { "kind": "keyword", "channels": ["instagram", "facebook", "whatsapp", "telegram", "tiktok"], "config_schema": { … } },
+    { "kind": "webhook_inbound", "…": "…" }
   ],
-  "templates": [
-    {
-      "id": "comment-to-dm",
-      "name": "Comment to DM",
-      "description": "Reply to an Instagram comment + send a DM to the commenter",
-      "input_schema": { /* JSON Schema for the template input */ }
-    }
-  ],
-  "merge_tags": ["first_name", "last_name", "email", "phone", "contact.*", "state.*"]
+  "binding_types": [ … ],
+  "action_types": [ … ],
+  "channel_capabilities": { "instagram": { "buttons": true, "quick_replies": 13, "gallery": true, … } },
+  "template_kinds": [
+    { "kind": "comment_to_dm", "channels": ["instagram", "facebook"], "config_schema": { … } }
+  ]
 }
 ```
 
-An MCP client can call this once at session start, cache the result, and use it to construct valid automations without trial-and-error.
+The response is ETag-cached — agents can cache the catalog once per session and re-use it across many create/update calls. An MCP client typically fetches it at session start and treats subsequent enum validation entirely from memory.
 
-## Validation Errors with Suggestions
+## Validation errors
 
-When validation fails, the response includes a Levenshtein-distance suggestion:
+When the graph validator fails, the response is:
 
 ```json
 {
   "error": {
-    "code": "unknown_node_reference",
-    "message": "Edge 2 references unknown node 'tag_lad'",
-    "details": { "path": "edges[2].to", "suggestion": "tag_lead" }
+    "code": "validation_failed",
+    "message": "Graph has 2 errors",
+    "details": [
+      { "node_key": "ask_email", "code": "unknown_node_kind", "message": "Unknown node kind 'user_input_email'. Did you mean 'input'?" },
+      { "edge_index": 2, "code": "edge_target_missing", "message": "Edge references unknown node 'tag_lad'. Did you mean 'tag_lead'?" }
+    ]
   }
 }
 ```
 
-`unknown_node_reference`, `duplicate_node_key`, and similar schema errors all return actionable `suggestion` hints when a near-match is available.
+`unknown_node_kind`, `unknown_port_key`, `duplicate_node_key`, and `edge_target_missing` all return suggestion hints when a near-match is available. The agent retries with the corrected value rather than doing a blind second attempt.
 
-## Template Shortcuts
+If the graph is invalid, the server **still saves it** and forces `status = "paused"` — the agent can inspect the stored graph and fix it in place. Activation (`POST /v1/automations/{id}/activate`) re-runs the validator and returns `422` if errors remain.
 
-For common patterns, call a `POST /v1/automations/templates/:template_id` endpoint instead of constructing the graph. The server expands a handful of fields into a full spec. See [Templates](./templates) for the catalog.
+## Templates for one-shot flows
 
-## MCP Server
+Templates collapse the common cases to a single call. Eight template kinds ship in v1 (`blank`, `welcome_flow`, `faq_bot`, `lead_capture`, `comment_to_dm`, `story_leads`, `follower_growth`, `follow_to_dm`). An agent looking at `/v1/automations/catalog` → `template_kinds[*].config_schema` can pick the right template and fill its config in one pass. See [Templates](./templates) for the catalog and config shapes.
 
-An MCP server that wraps this API is tracked as Phase 7 of the automation rollout. It exposes tools:
+## Port-based edges
 
-- `automations.list`
-- `automations.get`
-- `automations.create`
-- `automations.create_from_template`
-- `automations.update`
-- `automations.publish`
-- `automations.pause` / `resume` / `archive`
-- `automations.list_enrollments`
-- `automations.list_runs`
-- `automations.schema`
+An AI generating a graph from scratch connects nodes via explicit `(from_node, from_port, to_node, to_port)` tuples:
 
-Until the MCP package ships, any AI agent with access to an `rlay_live_...` API key can drive the REST endpoints directly — the shape is already AI-friendly.
+```json
+{
+  "edges": [
+    { "from_node": "greet", "from_port": "button.btn_large", "to_node": "order_large", "to_port": "in" },
+    { "from_node": "ask_email", "from_port": "captured", "to_node": "tag_lead", "to_port": "in" },
+    { "from_node": "ask_email", "from_port": "timeout", "to_node": "ask_email_retry", "to_port": "in" }
+  ]
+}
+```
 
-## Tips for Prompting
+No labels to guess. Every node kind's port keys are listed in the catalog, and ports on `message` / `action_group` nodes derive deterministically from config — so an agent that sets `blocks[0].buttons[0].id = "btn_large"` knows the port will be `button.btn_large` without asking the server.
 
-When asking an AI to build an automation:
+## SDK surface
 
-- Give it the trigger type and merge tags you care about, not the full node list. Let it fetch `/schema` if it needs the catalog.
-- For one-shot flows, steer it to a template (`comment-to-dm`, `keyword-reply`, etc.) rather than a full graph.
-- Validate locally before publishing: call the endpoint with `status: "draft"` first, inspect the graph, then PATCH to `active` when satisfied.
+The TypeScript SDK at `packages/sdk/src/resources/automations.ts` mirrors the REST API exactly:
+
+- `relay.automations.*` — CRUD, lifecycle (`activate`, `pause`, `resume`, `archive`), `enroll`, `simulate`, `insights`, `catalog`
+- `relay.automationEntrypoints.*` — entrypoint CRUD + `rotateSecret`
+- `relay.automationBindings.*` — binding CRUD
+- `relay.automationRuns.*` — runs, steps, `stop`
+- `relay.contacts.automationControls.*` — contact pause/resume
+
+The full OpenAPI spec is exported via `bun run --filter api export-openapi` and served at `/openapi.json` + `/docs` on the running API.
+
+## Tips for prompting
+
+- **Prefer templates for one-shot asks.** "Make a comment-to-DM flow on this post with keyword 'info'" → single `POST /v1/automations` with `template.kind = "comment_to_dm"`.
+- **Give the agent the channel.** Channel constrains which blocks and entrypoints are valid — surfacing it upfront avoids invalid-config 422 loops.
+- **Inspect before activating.** Create with `status: "draft"`, fetch the generated graph, confirm it matches the user's intent, then `POST /v1/automations/{id}/activate`.
+- **Use `simulate` as a verifier.** `POST /v1/automations/{id}/simulate` runs the graph without side effects — the returned transcript is a cheap way for an agent to confirm its own construction before going live.
+
+## AI nodes
+
+AI-powered nodes (`ai_step`, `ai_agent`, `ai_intent_router`) are **not** available in v1. They were dropped from the Manychat-parity rebuild and are archived for a later release. If you need AI behaviour inside a flow today, use an `http_request` node to call your own LLM endpoint and branch on the response via `success` / `error`.

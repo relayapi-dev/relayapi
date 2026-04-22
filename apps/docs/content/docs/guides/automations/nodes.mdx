@@ -1,215 +1,319 @@
 ---
 title: Nodes
-description: Every node type an automation can contain — content, input capture, logic, AI, actions, ops, platform sends.
+description: The 10 node kinds an automation graph can contain — content, input capture, logic, actions, HTTP, and flow control.
 icon: Box
 ---
 
-## Node Model
+## Node model
 
-A node is a single step in the graph. It has a `type` discriminator, a human-chosen `key` used by edges, and type-specific fields at the top level (no `config: {...}` wrapper — flat for AI-friendliness).
+A node is a single step in the graph. Every node has:
+
+```
+key           string — unique within the graph; referenced by edges
+kind          string — one of the 10 kinds below
+title         optional display title
+canvas_x/y    canvas coordinates (builder-only, not used at runtime)
+config        kind-specific JSON
+ports         derived server-side from config on every save
+ui_state      optional (notes, canvas color tag)
+```
+
+You never hand-author the `ports` array. On save the server runs `derivePorts(node)` per kind and overwrites it. The builder reads the canonical ports back from the server response to draw handles.
+
+## Edges are port-based
+
+Edges connect one output port on a source node to one input port on a target node:
+
+```json
+{ "from_node": "greet", "from_port": "button.btn_large", "to_node": "order_large", "to_port": "in" }
+```
+
+There is no `label` field. Resolution is exact-match: after a handler returns `{ result: "advance", via_port: "next" }`, the runner looks for the edge where `from_node == current && from_port == "next"`. If none, the run exits with `completed` — missing edges are not an error, they are an intentional end of a branch.
+
+## The 10 node kinds
+
+### 1. `message`
+
+Composite message built from ordered **blocks**, optional branch **buttons**, and message-level **quick replies**. The single message node replaces the old per-send-kind sprawl (`message_text`, `message_media`, `instagram_send_buttons`, etc.).
+
+**Ports**
+
+| Direction | Key | When present |
+|---|---|---|
+| input | `in` | always |
+| output | `next` | always |
+| output | `button.<id>` | one per `type: "branch"` button across all blocks |
+| output | `quick_reply.<id>` | one per entry in `config.quick_replies` |
+| output | `no_response` | iff `wait_for_reply=true` and `no_response_timeout_min` is set |
+
+**Config**
 
 ```json
 {
-  "key": "ask_email",
-  "type": "user_input_email",
-  "prompt": "What's your email, {{first_name}}?",
-  "save_to_field": "email",
-  "max_attempts": 2
+  "blocks": [ /* ordered array — see block types below */ ],
+  "quick_replies": [ { "id": "qr_1", "label": "Help", "icon": "❓" } ],
+  "wait_for_reply": true,
+  "no_response_timeout_min": 60,
+  "typing_indicator_delay_sec": 1
 }
 ```
 
-Nodes are grouped by category below. `output_labels` tells you which edge labels you can attach to outgoing edges.
+`wait_for_reply` is auto-true when the message has any branch button or quick reply; it can be toggled explicitly otherwise.
 
-## Content
+**Block types** (inside `config.blocks`)
 
-Send a message on whatever channel the automation is configured for. `message_text` routes through the universal `message-sender` service and currently supports **Instagram, Facebook (Messenger), WhatsApp, Telegram, Twitter (X), and Reddit**. For other platforms (Discord, SMS, Bluesky, Threads, LinkedIn, Mastodon, YouTube, etc.), use the platform-specific send nodes listed under Platform Sends. `message_media` and `message_file` are *not* backed by the universal sender — authors must use the `*_send_media` / `*_send_attachment` node for their channel (the universal handler fails with a clear error).
+| Type | Fields |
+|---|---|
+| `text` | `text` (merge tags ok), optional `buttons: [{ id, type, label, url?, phone? }]` |
+| `image` | `media_ref`, optional `caption` |
+| `video` | `media_ref`, optional `caption` |
+| `audio` | `media_ref` |
+| `file` | `media_ref` |
+| `card` | `media_ref?`, `title`, `subtitle?`, `buttons[]` (max 3) |
+| `gallery` | `cards[]` (1–10) — carousel of cards |
+| `delay` | `seconds` (0.5–10) — in-message typing pause between blocks |
 
-### `message_text`
+**Button types**
 
-Send a plain text DM. Supports `{{...}}` merge tags.
+| Type | Effect | Creates port? |
+|---|---|---|
+| `branch` | Opens a new path in the flow | ✓ `button.<id>` |
+| `url` | Opens URL | — |
+| `call` | Opens phone dialer | — |
+| `share` | Share the message | — |
 
-```json
-{ "key": "reply", "type": "message_text", "text": "Hey {{first_name}}, thanks for reaching out!" }
-```
+**Channel capability matrix**
 
-`recipient_mode` defaults to `enrolled_contact`. Only set `recipient_mode: "custom_identifier"` when you want the step to send to a different platform identifier explicitly.
+| Feature | IG | FB | WA | TG | TikTok |
+|---|:-:|:-:|:-:|:-:|:-:|
+| Branch buttons | ✓ (3) | ✓ (3) | ✓ (3) | ✓ inline kb | ✗ |
+| Quick replies | ✓ (13) | ✓ (13) | ✗ | ✓ reply kb | ✗ |
+| Card | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Gallery (10) | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Image | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Video | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Audio | ✗ | ✓ | ✓ | ✓ | ✗ |
+| File | ✗ | ✓ | ✓ | ✓ | ✗ |
+| `delay` block | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-Output labels: `next`.
+Unsupported features inline-warn in the composer and are skipped silently at send time — they don't block save.
 
-### `message_media` / `message_file` (not supported — use platform-specific nodes)
-
-The universal handlers fail at runtime with an explicit error. Every platform's media pipeline is different (upload-then-reference vs. URL reference, mime/size caps, attachment semantics), so you must pick the platform-specific send node for your channel:
-
-| Channel | Node |
-| --- | --- |
-| Instagram | `instagram_send_media` |
-| Facebook | `facebook_send_media` |
-| WhatsApp | `whatsapp_send_media` |
-| Telegram | `telegram_send_media`, `telegram_send_media_group` |
-| Discord | `discord_send_attachment` |
-| Twitter (X) | `twitter_send_dm_media` |
-
-See the per-platform guides under **Platforms** for field shapes.
-
-## Input Capture
-
-Ask the contact for a value and save it to a custom field. The enrollment parks until the contact replies; the reply becomes `state.<save_to_field>` for downstream nodes to use.
-
-All input nodes share:
-
-```
-prompt              string (merge tags ok)
-save_to_field       custom field slug
-retry_prompt        optional — sent on invalid input
-max_attempts        1–5, default 2
-timeout_minutes     optional — exit via `timeout` edge if no reply
-```
-
-Types and their validation rules:
-
-- `user_input_text` — rejects empty; enforces `min_length` / `max_length` when set
-- `user_input_email` — RFC-5322-lite (`x@y.z`); normalizes to lowercase
-- `user_input_phone` — strips separators; accepts 7–15 digits (E.164-friendly)
-- `user_input_number` — parses with commas stripped; enforces `min` / `max`
-- `user_input_date` — matches `format` (supports `YYYY`, `MM`, `DD`; default `YYYY-MM-DD`); rejects unreal dates like `2026-13-40`; stores as ISO
-- `user_input_choice` — matches input against `choices[].value` first, then `choices[].label` (case-insensitive); stores the canonical `value`
-- `user_input_file` — enforces `accepted_mime_types` (exact or `image/*` wildcards) and `max_size_mb` (default 16). The captured value is a structured attachment `{id?, url?, filename?, mime_type?, size_bytes?}`. Note: WhatsApp webhooks do not include file size, so the `max_size_mb` check is effectively skipped for WhatsApp uploads — enforce size downstream if needed.
-
-### Retry loop
-
-When the input fails validation:
-
-1. If the enrollment has attempts remaining (`max_attempts` defaults to 2), the runner bumps an internal attempt counter, re-sends `retry_prompt` if configured, and keeps the enrollment parked as `waiting` — the next inbound message re-validates.
-2. If attempts are exhausted, the runner clears the pending-input markers and resumes the graph via the `no_match` edge. The last failure reason lands in state as `_last_input_validation_reason` for downstream nodes to reference.
-
-Output labels: `captured`, `no_match`, `timeout`.
-
-## Logic
-
-### `condition`
-
-Branch based on filter predicates evaluated against contact + state.
+**Example**
 
 ```json
 {
-  "key": "is_vip",
-  "type": "condition",
-  "if": { "any": [{ "field": "tags", "op": "contains", "value": "vip" }] }
+  "key": "greet",
+  "kind": "message",
+  "title": "Ask size",
+  "config": {
+    "blocks": [
+      {
+        "id": "b1",
+        "type": "text",
+        "text": "Hi {{contact.first_name}}! What size?",
+        "buttons": [
+          { "id": "btn_large", "type": "branch", "label": "Large" },
+          { "id": "btn_small", "type": "branch", "label": "Small" }
+        ]
+      }
+    ],
+    "quick_replies": [],
+    "wait_for_reply": true,
+    "no_response_timeout_min": 60
+  }
 }
 ```
 
-Output labels: `yes`, `no`.
+### 2. `input`
 
-### `smart_delay`
+Prompt the contact and capture their reply into `run.context` or a contact custom field.
 
-Pause the enrollment for `duration_minutes`. Optional `quiet_hours` to avoid sending during off-hours.
+**Ports**
 
-```json
-{ "key": "wait_a_day", "type": "smart_delay", "duration_minutes": 1440 }
-```
+| Direction | Key | Fires when |
+|---|---|---|
+| input | `in` | always |
+| output | `captured` | reply passed validation |
+| output | `invalid` | max retries exhausted without a valid reply |
+| output | `timeout` | no reply within `timeout_min` |
+| output | `skip` | user explicitly skipped (channel-dependent) |
 
-Output labels: `next`.
-
-### `randomizer`
-
-Split traffic across N weighted branches.
+**Config**
 
 ```json
 {
-  "key": "ab",
-  "type": "randomizer",
-  "branches": [
-    { "label": "variant_a", "weight": 1 },
-    { "label": "variant_b", "weight": 1 }
+  "prompt": "What's your email?",
+  "retry_prompt": "That didn't look like an email — try again.",
+  "input_type": "text | email | phone | number | choice | file",
+  "save_to_field": "email",           // custom field slug, optional
+  "save_to_context": "email",         // context key, optional
+  "max_attempts": 2,
+  "timeout_min": 60,
+  "choices": [                        // for input_type=choice
+    { "value": "small", "label": "Small" },
+    { "value": "large", "label": "Large" }
+  ],
+  "min": 1, "max": 100,               // for input_type=number
+  "accepted_mime_types": ["image/*"], // for input_type=file
+  "max_size_mb": 16
+}
+```
+
+### 3. `delay`
+
+Pause the run for a fixed duration. The run status flips to `waiting`; a scheduled job resumes it at `resume_at`.
+
+**Ports**: `in` → `next`
+
+**Config**
+
+```json
+{ "duration": { "value": 1, "unit": "days" } }
+```
+
+Units: `minutes`, `hours`, `days`.
+
+### 4. `condition`
+
+Branch on a predicate expression evaluated against contact fields, tags, segments, and run context.
+
+**Ports**: `in` → `true` / `false`
+
+**Config**
+
+```json
+{
+  "if": {
+    "all": [
+      { "field": "contact.tags", "op": "contains", "value": "vip" },
+      { "field": "context.order_total", "op": "gte", "value": 100 }
+    ]
+  }
+}
+```
+
+Expression shape supports `all`, `any`, and `none` groups. `field` paths: `contact.<field>`, `contact.custom_fields.<slug>`, `contact.tags`, `context.<key>`, `run.<field>`.
+
+### 5. `randomizer`
+
+Weighted random branch — useful for A/B splits.
+
+**Ports**: `in` → one `variant.<key>` per configured variant.
+
+**Config**
+
+```json
+{
+  "variants": [
+    { "key": "a", "weight": 1, "label": "Variant A" },
+    { "key": "b", "weight": 3, "label": "Variant B" }
   ]
 }
 ```
 
-Output labels: one per `branches[].label`.
+The runner caches the chosen variant in `run.context` so the same contact always resolves the same variant on re-entry.
 
-### `goto`
+### 6. `action_group`
 
-Jump to another node by key. Useful for loops or re-asking.
+Ordered bundle of side-effect actions with per-action error handling. Replaces the old one-atomic-node-per-action pattern.
 
-```json
-{ "key": "retry", "type": "goto", "target_node_key": "ask_email" }
-```
+**Ports**
 
-### `end`
+| Direction | Key | When present |
+|---|---|---|
+| input | `in` | always |
+| output | `next` | always |
+| output | `error` | iff at least one action has `on_error: "abort"` |
 
-Terminate the enrollment early. Adds a reason to the run log.
-
-## Contact Actions
-
-Mutations on the contact record. Output label: `next`.
-
-| Type | Effect |
-| --- | --- |
-| `tag_add` | Add a tag to the contact |
-| `tag_remove` | Remove a tag |
-| `field_set` | Set a custom field value (`field` = slug, `value` = any JSON) |
-| `field_clear` | Clear a custom field |
-
-## Ops
-
-### `http_request`
-
-Call an external HTTP endpoint. Optionally extract a value from the response with a JSON path and save it to state.
+**Config**
 
 ```json
 {
-  "key": "enrich",
-  "type": "http_request",
+  "actions": [
+    { "id": "a1", "type": "tag_add", "tag": "lead", "on_error": "abort" },
+    { "id": "a2", "type": "field_set", "field": "stage", "value": "new", "on_error": "abort" },
+    { "id": "a3", "type": "subscribe_list", "list_id": "sl_...", "on_error": "continue" },
+    { "id": "a4", "type": "notify_admin", "message": "New lead: {{contact.email}}", "on_error": "continue" }
+  ]
+}
+```
+
+**Action catalog**
+
+| Group | Types |
+|---|---|
+| Contact data | `tag_add`, `tag_remove`, `field_set`, `field_clear`, `segment_add`, `segment_remove` |
+| Subscriptions | `subscribe_list`, `unsubscribe_list`, `opt_in_channel`, `opt_out_channel` |
+| Conversation | `assign_conversation`, `unassign_conversation`, `conversation_open`, `conversation_close`, `conversation_snooze` |
+| External | `webhook_out` (fire-and-forget), `notify_admin`, `log_conversion_event` |
+| Automation controls | `pause_automations_for_contact`, `resume_automations_for_contact` |
+| Destructive | `delete_contact` |
+| v1.1 stub | `change_main_menu` (visible in UI, disabled until platform sync ships) |
+
+Every action has `on_error: "abort" | "continue"` (default `"abort"`). If an action with `abort` fails, the group stops and exits via `error`. Actions marked `continue` log their failure in the step-run payload and the group keeps going.
+
+### 7. `http_request`
+
+Call an external HTTP endpoint. Response is stored in `run.context[save_to_key]` for downstream nodes.
+
+**Ports**: `in` → `success` (2xx) / `error` (4xx, 5xx, network, timeout)
+
+**Config**
+
+```json
+{
   "method": "POST",
   "url": "https://crm.example.com/api/enrich",
   "headers": { "X-API-Key": "abc" },
   "body": { "email": "{{contact.email}}" },
-  "save_response_to_field": "crm_tier",
-  "json_path": "$.customer.tier"
+  "timeout_sec": 15,
+  "save_to_context": "crm_response",
+  "extract": { "crm_tier": "$.customer.tier" }
 }
 ```
 
-## Not yet supported
+### 8. `start_automation`
 
-These node types are declared in the database schema for forward compatibility but are **not** currently executable — the API rejects them at create time and the `GET /v1/automations/schema` catalog omits them. Track the [rewrite plan](https://github.com/majestico/relayapi/blob/main/docs/AUTOMATION_REWRITE.md) for status.
+Enroll the current contact in another flow. The current flow continues via `next` (fire-and-forget — the called flow runs independently).
 
-| Type | Category | Blocked on |
-| --- | --- | --- |
-| `ai_step` | AI | LLM infra |
-| `ai_agent` | AI | LLM infra + knowledge base |
-| `ai_intent_router` | AI | LLM infra |
-| `split_test` | Logic | A/B engine + goal tracking |
-| `subflow_call` | Logic | Sub-enrollment semantics |
-| `subscription_add` / `subscription_remove` | Contact Actions | Subscription list writes |
-| `segment_add` / `segment_remove` | Contact Actions | Segment membership writes |
-| `notify_admin` | Ops | Internal notifications service |
-| `conversation_assign` / `conversation_status` | Ops | Inbox conversation writes |
-| `webhook_out` | Ops | Webhook-out service |
+**Ports**: `in` → `next`
 
-## Platform Sends
+**Config**
 
-Channel-specific send nodes for when you need capabilities the universal `message_text` node doesn't cover — buttons, templates, quick replies, typing indicators, reply-to-comment, media-specific payloads, etc.
+```json
+{ "automation_id": "auto_abc123", "context_overrides": { "source": "upsell_branch" } }
+```
 
-These nodes are scaffolded now but implemented per-platform during Phase 8 of the rollout:
+### 9. `goto`
 
-- **Instagram**: `instagram_send_text`, `instagram_send_media`, `instagram_send_buttons`, `instagram_send_quick_replies`, `instagram_send_generic_template`, `instagram_typing`, `instagram_mark_seen`, `instagram_reply_to_comment`, `instagram_hide_comment`.
-- **Facebook**: `facebook_send_text`, `facebook_send_media`, `facebook_send_template`, `facebook_send_quick_replies`, `facebook_send_button_template`, `facebook_reply_to_comment`, `facebook_private_reply`, `facebook_hide_comment`, `facebook_sender_action`.
-- **WhatsApp**: `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_template`, `whatsapp_send_interactive`, `whatsapp_send_flow`, `whatsapp_send_location`, `whatsapp_send_contacts`, `whatsapp_react`, `whatsapp_mark_read`.
-- **Telegram**: `telegram_send_text`, `telegram_send_media`, `telegram_send_media_group`, `telegram_send_poll`, `telegram_send_location`, `telegram_send_keyboard`, `telegram_edit_message`, `telegram_pin_message`, `telegram_react`, `telegram_set_chat_action`.
-- **Discord**: `discord_send_message`, `discord_send_embed`, `discord_send_components`, `discord_send_attachment`, `discord_react`, `discord_edit_message`, `discord_start_thread`.
-- **SMS**: `sms_send`, `sms_send_mms`.
-- **Twitter**: `twitter_send_dm`, `twitter_send_dm_media`, `twitter_reply_to_tweet`, `twitter_like_tweet`, `twitter_retweet`.
-- **Bluesky**: `bluesky_reply`, `bluesky_like`, `bluesky_repost`, `bluesky_send_dm`.
-- **Threads**: `threads_reply_to_post`, `threads_hide_reply`.
-- **YouTube**: `youtube_reply_to_comment`, `youtube_send_live_chat`, `youtube_moderate_comment`.
-- **LinkedIn**: `linkedin_reply_to_comment`, `linkedin_react_to_post`.
-- **Mastodon**: `mastodon_reply`, `mastodon_favourite`, `mastodon_boost`, `mastodon_send_dm`.
-- **Reddit**: `reddit_reply_to_comment`, `reddit_send_pm`, `reddit_reply_modmail`, `reddit_submit_post`.
-- **Google Business**: `googlebusiness_reply_to_review`, `googlebusiness_post_update`.
-- **Beehiiv**: `beehiiv_add_subscriber`, `beehiiv_publish_post`, `beehiiv_enroll_automation`.
-- **Kit**: `kit_add_subscriber`, `kit_add_tag`, `kit_send_broadcast`.
-- **Mailchimp**: `mailchimp_add_member`, `mailchimp_add_tag`, `mailchimp_send_campaign`.
-- **Listmonk**: `listmonk_add_subscriber`, `listmonk_send_campaign`.
-- **Pinterest**: `pinterest_create_pin`.
+Jump to another node in the same graph. Useful for loops (re-ask) and shared tails.
 
-The universal `message_text` node only works on channels supported by the universal sender (**Instagram, Facebook Messenger, WhatsApp, Telegram, X/Twitter, Reddit**). For every other channel — Discord, SMS, Bluesky, Threads, LinkedIn, Mastodon, YouTube, GBP, and the newsletter destinations — use the corresponding `*_send_*` platform-specific node. Platform-specific types that aren't listed in this page or in the Phase 8 roster return a "not yet implemented" error at runtime.
+**Ports**: `in` → (no output — direct jump)
+
+**Config**
+
+```json
+{ "target_node_key": "ask_email" }
+```
+
+The graph validator forbids cycles that don't include at least one `goto` or `input` node — loops must contain a pause point to avoid infinite runs. The runtime also enforces a hard cap of 200 node visits per execution-loop iteration (exits as `failed` with `exit_reason = "infinite_loop_cap"`).
+
+### 10. `end`
+
+Terminate the run. Optional — running out of outgoing edges also ends the run naturally. Use `end` when you want an explicit `exit_reason` other than `completed`.
+
+**Ports**: `in`
+
+**Config**
+
+```json
+{ "exit_reason": "completed" }
+```
+
+## Root node constraints
+
+The graph's `root_node_key` must point at one of: `message`, `action_group`, `condition`, `http_request`, `start_automation`, or `end`. `input`, `delay`, and `goto` all require a predecessor and cannot be the entry point.
+
+## Adding a node kind
+
+Node kinds are a free-text column, not an enum — adding a new kind doesn't require a database migration. Register a handler implementing `NodeHandler<Config, Payload>` in `apps/api/src/services/automations/nodes/` and add it to the manifest. `derivePorts`, `validateConfig`, and `handle` are the three hooks the runtime calls.

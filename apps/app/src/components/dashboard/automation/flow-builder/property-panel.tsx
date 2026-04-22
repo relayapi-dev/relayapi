@@ -1,16 +1,15 @@
-// Property panel dispatcher (Plan 2 — Unit B3, Task M1).
+// Property panel dispatcher.
 //
-// Thin wrapper that selects the right editor for the node kind:
-//   - `message`       → MessageComposer (Unit B3, Phase N)
-//   - `action_group`  → ActionEditor (stub — full impl in Unit B4)
-//   - everything else → GenericFieldForm (schema-driven FieldRow, legacy)
+// Thin wrapper that selects the right editor for the selected node kind:
+//   - `message`       → MessageComposer
+//   - `action_group`  → ActionEditor
+//   - everything else → a small "no config" placeholder (delay, condition,
+//                       randomizer, input, http_request, start_automation,
+//                       goto, end all have trivial config surfaces that are
+//                       edited via the canvas node overlays today).
 //
-// The panel is still driven from the pre-rewrite `AutomationDetail` shape
-// used by `automation-detail-page.tsx` (Phase P will port that page to the
-// graph store). The dispatcher therefore still accepts the legacy
-// `AutomationNodeSpec` type on `node` — but when the node's `type` is
-// `"message"` (the new unified kind) we present the composer, synthesizing
-// the graph-style `{ kind, config }` shape the composer expects.
+// Props were slimmed down to only the fields the panel actually uses — the
+// detail page no longer needs to synthesize a legacy `AutomationDetail`.
 
 import { ChevronLeft, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -20,39 +19,35 @@ import { platformIcons } from "@/lib/platform-icons";
 import { cn } from "@/lib/utils";
 import { ActionEditor } from "./action-editor";
 import { INPUT_CLS } from "./field-styles";
-import { GenericFieldForm } from "./generic-field-form";
 import { MessageComposer } from "./message-composer";
 import type { MessageConfig } from "./message-composer/types";
-import type {
-	AutomationDetail,
-	AutomationNodeSpec,
-	SchemaNodeDef,
-} from "./types";
-
-// Re-export parseFieldsSchema / FieldRow so existing callers keep working
-// while the builder migrates off them (they still live in the extracted
-// generic-field-form module).
-export { FieldRow, parseFieldsSchema } from "./generic-field-form";
-export type { FieldDef } from "./generic-field-form";
 
 const PANEL_WIDTH_CLS = "w-[360px] xl:w-[392px]";
 
 const PANEL_TITLE_OVERRIDES: Record<string, string> = {
 	message: "Message",
-	message_text: "Send Message",
-	message_media: "Send Media",
-	message_file: "Send File",
 	action_group: "Actions",
-	smart_delay: "Delay",
+	delay: "Delay",
 	condition: "Condition",
 	randomizer: "Randomizer",
+	input: "Input",
 	http_request: "HTTP Request",
+	start_automation: "Start Automation",
 	goto: "Go To Step",
 	end: "End Automation",
-	tag_add: "Add Tag",
-	tag_remove: "Remove Tag",
-	field_set: "Set Field",
-	field_clear: "Clear Field",
+};
+
+const PANEL_DESCRIPTIONS: Record<string, string> = {
+	message: "Compose the message and interactive elements",
+	action_group: "Run a sequence of side-effect actions",
+	delay: "Pause the flow for a duration",
+	condition: "Branch on a filter-group expression",
+	randomizer: "Split traffic across weighted variants",
+	input: "Wait for a user reply and capture it",
+	http_request: "Call an external endpoint and capture the response",
+	start_automation: "Enroll the contact into another automation",
+	goto: "Jump back to an earlier node",
+	end: "Terminate the run explicitly",
 };
 
 function titleize(value: string): string {
@@ -63,15 +58,15 @@ function titleize(value: string): string {
 		.join(" ");
 }
 
-function panelHeaderTone(nodeType: string) {
-	if (nodeType === "message" || nodeType.startsWith("message_")) {
+function panelHeaderTone(nodeKind: string) {
+	if (nodeKind === "message") {
 		return {
 			bar: "bg-[#edd5f5]",
 			badge: "text-[#8f5bb3]",
 			iconBg: "bg-[#f7ecfb]",
 		};
 	}
-	if (nodeType === "condition" || nodeType === "randomizer") {
+	if (nodeKind === "condition" || nodeKind === "randomizer") {
 		return {
 			bar: "bg-[#e6f1ff]",
 			badge: "text-[#4a7ae8]",
@@ -85,25 +80,26 @@ function panelHeaderTone(nodeType: string) {
 	};
 }
 
-function panelDisplayTitle(
-	node: AutomationNodeSpec,
-	nodeDef: SchemaNodeDef | null,
-) {
-	return (
-		PANEL_TITLE_OVERRIDES[node.type] ?? titleize(nodeDef?.type ?? node.type)
-	);
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
+
+export interface PropertyPanelNode {
+	key: string;
+	kind: string;
+	notes?: string;
+	config: Record<string, unknown>;
 }
 
-// ---------------------------------------------------------------------------
-// Props (unchanged from pre-rewrite — automation-detail-page still drives us)
-// ---------------------------------------------------------------------------
-
 interface Props {
-	automation: AutomationDetail;
-	node: AutomationNodeSpec | null;
-	nodeDef: SchemaNodeDef | null;
+	automationId: string;
+	node: PropertyPanelNode | null;
 	automationChannel: string;
-	onChange: (patch: Partial<AutomationNodeSpec>) => void;
+	onChange: (patch: {
+		key?: string;
+		notes?: string;
+		config?: Record<string, unknown>;
+	}) => void;
 	onDelete: () => void;
 	onClose: () => void;
 	existingKeys: string[];
@@ -114,9 +110,8 @@ interface Props {
 // ---------------------------------------------------------------------------
 
 export function PropertyPanel({
-	automation,
+	automationId,
 	node,
-	nodeDef,
 	automationChannel,
 	onChange,
 	onDelete,
@@ -146,15 +141,15 @@ export function PropertyPanel({
 	const keyIsValid =
 		/^[a-zA-Z][a-zA-Z0-9_]*$/.test(localKey) &&
 		(localKey === node.key || !existingKeys.includes(localKey));
-	const title = panelDisplayTitle(node, nodeDef);
-	const headerTone = panelHeaderTone(node.type);
+	const title = PANEL_TITLE_OVERRIDES[node.kind] ?? titleize(node.kind);
+	const description =
+		PANEL_DESCRIPTIONS[node.kind] ?? "Configure this step";
+	const headerTone = panelHeaderTone(node.kind);
 	const platformIcon = platformIcons[automationChannel];
 
-	// Kind-specific editor dispatch.
 	const editor = renderEditor({
 		node,
-		nodeDef,
-		automation,
+		automationId,
 		automationChannel,
 		onChange,
 	});
@@ -169,13 +164,13 @@ export function PropertyPanel({
 			<PanelHeader
 				headerTone={headerTone}
 				title={title}
-				description={nodeDef?.description ?? "Configure this step"}
+				description={description}
 				onClose={onClose}
 			/>
 
 			<ScrollArea className="flex-1 bg-[#fbfcfe]">
 				<div className="space-y-5 px-4 py-5">
-					{node.type === "message" || node.type.startsWith("message_") ? (
+					{node.kind === "message" ? (
 						<ChannelWindowBanner
 							iconBg={headerTone.iconBg}
 							badge={headerTone.badge}
@@ -288,12 +283,16 @@ function PanelFooter({
 	existingKeys,
 	onChange,
 }: {
-	node: AutomationNodeSpec;
+	node: PropertyPanelNode;
 	localKey: string;
 	onLocalKeyChange: (next: string) => void;
 	keyIsValid: boolean;
 	existingKeys: string[];
-	onChange: (patch: Partial<AutomationNodeSpec>) => void;
+	onChange: (patch: {
+		key?: string;
+		notes?: string;
+		config?: Record<string, unknown>;
+	}) => void;
 }) {
 	return (
 		<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
@@ -333,7 +332,7 @@ function PanelFooter({
 					</label>
 					<input
 						type="text"
-						value={(node.notes as string) ?? ""}
+						value={node.notes ?? ""}
 						onChange={(e) => onChange({ notes: e.target.value })}
 						className={INPUT_CLS}
 						placeholder="Optional internal note"
@@ -350,38 +349,32 @@ function PanelFooter({
 
 function renderEditor({
 	node,
-	nodeDef,
-	automation,
+	automationId,
 	automationChannel,
 	onChange,
 }: {
-	node: AutomationNodeSpec;
-	nodeDef: SchemaNodeDef | null;
-	automation: AutomationDetail;
+	node: PropertyPanelNode;
+	automationId: string;
 	automationChannel: string;
-	onChange: (patch: Partial<AutomationNodeSpec>) => void;
+	onChange: (patch: { config?: Record<string, unknown> }) => void;
 }) {
-	if (node.type === "message") {
-		// Graph-store style `message` node: its config lives flat on the
-		// AutomationNodeSpec (since detail-page normalises config into spread
-		// fields). Synthesize `{ kind, config }` for the composer and lift
-		// changes back onto the flat fields the detail page persists.
+	if (node.kind === "message") {
 		const composerNode = {
 			key: node.key,
 			kind: "message",
-			config: extractFlatConfig(node),
+			config: node.config,
 		};
 		const handleConfigChange = (next: MessageConfig) => {
-			// Emit as a patch replacing the message-composer-managed keys while
-			// preserving any other flat fields the detail page may own.
-			const patch: Partial<AutomationNodeSpec> = {
-				blocks: next.blocks,
-				quick_replies: next.quick_replies,
-				wait_for_reply: next.wait_for_reply,
-				no_response_timeout_min: next.no_response_timeout_min,
-				typing_indicator_seconds: next.typing_indicator_seconds,
-			};
-			onChange(patch);
+			onChange({
+				config: {
+					...node.config,
+					blocks: next.blocks,
+					quick_replies: next.quick_replies,
+					wait_for_reply: next.wait_for_reply,
+					no_response_timeout_min: next.no_response_timeout_min,
+					typing_indicator_seconds: next.typing_indicator_seconds,
+				},
+			});
 		};
 		return (
 			<MessageComposer
@@ -392,45 +385,28 @@ function renderEditor({
 		);
 	}
 
-	if (node.type === "action_group") {
-		const config = extractFlatConfig(node);
+	if (node.kind === "action_group") {
 		return (
 			<ActionEditor
-				node={{ key: node.key, kind: "action_group", config }}
-				automationId={automation.id}
+				node={{ key: node.key, kind: "action_group", config: node.config }}
+				automationId={automationId}
 				onChange={(nextConfig) =>
-					onChange({ actions: nextConfig.actions } as Partial<AutomationNodeSpec>)
+					onChange({
+						config: { ...node.config, actions: nextConfig.actions },
+					})
 				}
 			/>
 		);
 	}
 
 	return (
-		<GenericFieldForm
-			automation={automation}
-			node={node}
-			nodeDef={nodeDef}
-			automationChannel={automationChannel}
-			onChange={onChange}
-		/>
+		<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
+			<div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
+				Settings
+			</div>
+			<p className="mt-4 text-[13px] text-[#7e8695]">
+				Edit this step directly on the canvas.
+			</p>
+		</div>
 	);
-}
-
-// The detail page spreads node `config` into the flat spec; reverse that here
-// for editors that expect a real `config` object.
-function extractFlatConfig(node: AutomationNodeSpec): Record<string, unknown> {
-	const skip = new Set([
-		"type",
-		"key",
-		"notes",
-		"canvas_x",
-		"canvas_y",
-		"id",
-	]);
-	const out: Record<string, unknown> = {};
-	for (const [k, v] of Object.entries(node)) {
-		if (skip.has(k)) continue;
-		out[k] = v;
-	}
-	return out;
 }

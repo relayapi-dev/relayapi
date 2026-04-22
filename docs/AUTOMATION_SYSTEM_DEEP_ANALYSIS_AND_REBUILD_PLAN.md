@@ -1,5 +1,7 @@
 # Automation System Deep Analysis and Rebuild Plan
 
+> **DEPRECATED — historical planning artifact.** This document is one of the audits that informed the Manychat-parity automation rebuild. The current source of truth is [`docs/superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md`](./superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md). The storage model, runner semantics, and API surface described here no longer match the shipped system. Kept for reference only — do not implement from this document.
+
 Date: 2026-04-18
 
 ## Scope

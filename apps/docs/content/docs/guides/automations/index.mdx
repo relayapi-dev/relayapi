@@ -1,109 +1,143 @@
 ---
 title: Automations
-description: Build flow-based automations that trigger on platform events and orchestrate multi-step conversations.
+description: Build visual flows that trigger on social events and orchestrate multi-step conversations across Instagram, Messenger, WhatsApp, Telegram, and TikTok.
 icon: Workflow
 ---
 
 ## Overview
 
-Automations are RelayAPI's flow-based engine for triggering actions off inbound events — comments, DMs, keywords, scheduled times, tag changes — and orchestrating multi-step graphs that can branch, delay, capture user input, call external APIs, and hand off to AI agents.
+Automations are RelayAPI's flow-based engine. A flow reacts to events on a connected social channel — comments, DMs, keywords, scheduled times, tag changes, third-party webhooks — and executes a directed graph that can send messages, capture replies, branch on conditions, mutate the contact, call external APIs, and hand control off to another flow.
 
-They replace the earlier `sequences`, `comment-automations`, and `engagement-rules` primitives with a unified graph model.
+Supported channels: **Instagram**, **Facebook Messenger**, **WhatsApp**, **Telegram**, and **TikTok DM**. Each automation is bound to exactly one channel; the builder surfaces channel-aware warnings when you use a feature that channel doesn't support.
 
-## Anatomy
+## Core concepts
 
-An automation has three parts:
+An automation has four moving parts:
 
-1. **Trigger** — the event that enrolls a contact into the graph. Examples: an Instagram comment matching a keyword, a new WhatsApp message, a scheduled time, a tag applied.
-2. **Nodes** — the building blocks the graph executes. Messages, conditions, delays, AI agents, HTTP requests, tag updates.
-3. **Edges** — directed connections between nodes, labelled so branching nodes can pick the right path (`yes`/`no`, `captured`/`no_match`, `branch_1`, etc.).
+1. **Graph** — the flow itself. Stored as a single JSONB document on the automation row (`nodes`, `edges`, `root_node_key`). Nodes have typed input and output **ports**; edges connect one node's output port to another node's input port. No label fallbacks, no implicit wiring — if a port has no outgoing edge, the run ends there.
+2. **Entrypoints** — the events that start a run. A flow can have multiple entrypoints (several keywords, a DM kind, a webhook) and the matcher picks the most specific one on each event.
+3. **Bindings** — channel-surface attachments on a social account. There are five: `default_reply`, `welcome_message`, `conversation_starter`, `main_menu`, and `ice_breaker`. Bindings run a flow when an entrypoint doesn't match.
+4. **Runs** — execution instances. One row per enrolled contact per flow, with append-only per-node logs in `automation_step_runs` for inspection.
 
-When a trigger fires, an **enrollment** is created — a row that tracks a specific contact's position in the graph. The runner advances the enrollment one node at a time, records per-node execution in `automation_run_logs`, and parks on `smart_delay` / `user_input` nodes until the next scheduled tick or inbound message.
+## Edges are port-based
+
+Every edge connects four things:
+
+```json
+{ "from_node": "greet", "from_port": "button.btn_large", "to_node": "order_large", "to_port": "in" }
+```
+
+There is no `label` field and no fallback — the port key IS the routing primitive. A message node with two branch buttons exposes `button.<id>` output ports; the runner follows the edge matching the port the handler exited through. If you don't wire a button port, pressing that button ends the run on that path. Ports are derived deterministically from node config on every save, so adding a button creates its port, deleting one removes the port and prunes orphan edges with a warning.
 
 ## Lifecycle
 
 ```
-draft → (publish) → active → (pause) → paused
-                          → (archive) → archived
+draft → active → paused → archived
 ```
 
-- **draft** — graph is editable; never enrols contacts.
-- **active** — accepts enrollments. The first time an automation goes active, the current graph is snapshotted as version 1.
-- **paused** — no new enrollments; in-flight enrollments continue on their snapshot version.
-- **archived** — read-only; enrollments stopped.
+- **draft** — initial state for newly created automations; nothing fires.
+- **active** — entrypoints and bindings match live events.
+- **paused** — no new runs start; in-flight runs keep going unless stopped.
+- **archived** — read-only; no runs start.
 
-Every publish creates an immutable snapshot in `automation_versions`. Enrollments execute against the snapshot they started on, so editing a live automation never breaks in-flight runs.
+There is **no revisions / draft-published split**. Every automation has exactly one live `graph`. Edits are instantly live. If an in-flight run's current node disappears after an edit, the run exits cleanly with `exit_reason = "graph_changed"` — it never corrupts state.
 
 ## Quickstart
 
-The shortest path to a working automation is a template — one POST, no graph construction:
-
-```bash
-# Reply to Instagram comments matching a keyword with a DM
-curl -X POST https://api.relayapi.dev/v1/automations/templates/comment-to-dm \
-  -H "Authorization: Bearer rlay_live_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Link-in-bio giveaway",
-    "account_id": "acc_abc123",
-    "keywords": ["link", "giveaway"],
-    "dm_message": "Here you go, {{first_name}}! 👉 https://example.com/signup"
-  }'
-```
-
-The template expands server-side into the full node graph as a draft automation, so you can review and publish it intentionally.
-
-See [Templates](./templates) for the complete list.
-
-## Full Spec
-
-For custom graphs, POST the full spec in a single request. Nodes are referenced by human-chosen `key` strings so edges never need a round-trip to learn generated IDs.
+The fastest path is a template. One POST creates the flow, generates the graph, and attaches an initial entrypoint:
 
 ```bash
 curl -X POST https://api.relayapi.dev/v1/automations \
   -H "Authorization: Bearer rlay_live_..." \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Welcome + ask email",
+    "name": "Link-in-bio giveaway",
     "channel": "instagram",
-    "status": "active",
-    "trigger": {
-      "type": "instagram_dm",
-      "account_id": "acc_abc123"
-    },
-    "nodes": [
-      { "key": "welcome", "type": "message_text",
-        "text": "Hey {{first_name}}! Want my free guide?" },
-      { "key": "ask_email", "type": "user_input_email",
-        "prompt": "Drop your email and I'\''ll send it over.",
-        "save_to_field": "email" },
-      { "key": "tag_lead", "type": "tag_add", "tag": "newsletter_lead" },
-      { "key": "send_link", "type": "message_text",
-        "text": "Thanks! Here it is: https://example.com/guide" }
-    ],
-    "edges": [
-      { "from": "trigger", "to": "welcome" },
-      { "from": "welcome", "to": "ask_email" },
-      { "from": "ask_email", "to": "tag_lead", "label": "captured" },
-      { "from": "ask_email", "to": "welcome", "label": "no_match" },
-      { "from": "tag_lead", "to": "send_link" }
-    ]
+    "template": {
+      "kind": "comment_to_dm",
+      "config": {
+        "post_ids": ["17895..."],
+        "keywords": ["link", "giveaway"],
+        "public_reply": "Sent!",
+        "dm_message": { "blocks": [{ "id": "b1", "type": "text", "text": "Here you go, {{contact.first_name}}!" }] },
+        "once_per_user": true
+      }
+    }
   }'
 ```
 
-## Merge Tags
+The call returns the full automation with its generated graph as a `draft`. Inspect, tweak if needed via `PUT /v1/automations/{id}/graph`, then activate with `POST /v1/automations/{id}/activate`.
 
-Message bodies support `{{...}}` substitution:
+See [Templates](./templates) for the full catalog and per-template config shapes.
 
-- `{{first_name}}`, `{{last_name}}`, `{{full_name}}`, `{{email}}`, `{{phone}}` — shortcuts for contact fields.
-- `{{contact.<field>}}` — any contact column.
-- `{{state.<field>}}` — values captured earlier in the same enrollment (e.g. user_input results, HTTP response extracts).
+## Authoring a custom graph
+
+For anything a template doesn't cover, create a blank automation and replace the graph:
+
+```bash
+# 1. Create
+POST /v1/automations
+{ "name": "Welcome + ask email", "channel": "instagram", "template": { "kind": "blank", "config": {} } }
+
+# 2. Replace graph
+PUT /v1/automations/{id}/graph
+{
+  "graph": {
+    "schema_version": 1,
+    "root_node_key": "greet",
+    "nodes": [
+      {
+        "key": "greet",
+        "kind": "message",
+        "config": {
+          "blocks": [{ "id": "b1", "type": "text", "text": "Hey {{contact.first_name}}! Want my free guide?" }],
+          "wait_for_reply": false
+        },
+        "ports": []
+      },
+      {
+        "key": "ask_email",
+        "kind": "input",
+        "config": { "prompt": "Drop your email and I'll send it over.", "input_type": "email", "save_to_field": "email" },
+        "ports": []
+      }
+    ],
+    "edges": [
+      { "from_node": "greet", "from_port": "next", "to_node": "ask_email", "to_port": "in" }
+    ]
+  }
+}
+
+# 3. Add an entrypoint
+POST /v1/automations/{id}/entrypoints
+{ "kind": "dm_received", "channel": "instagram", "social_account_id": "acc_abc123" }
+
+# 4. Activate
+POST /v1/automations/{id}/activate
+```
+
+On save, the server derives each node's `ports` array, runs the validator, and stores the canonicalized graph. Validation errors block activation and auto-pause the automation; warnings (orphan button ports, etc.) don't.
+
+## Merge tags
+
+Text blocks, button labels, input prompts, and webhook bodies all support `{{...}}` substitution:
+
+- `{{contact.first_name}}`, `{{contact.email}}`, `{{contact.phone}}`, `{{contact.custom_fields.<slug>}}`
+- `{{context.<key>}}` — values captured earlier in the same run (input replies, HTTP response extracts, webhook payload mappings)
+- `{{run.id}}`, `{{run.started_at}}`
+- `{{account.name}}`, `{{account.handle}}`
+
+Unknown paths surface as warnings at save time; unresolved tags at runtime render as an empty string.
+
+## Availability notes
+
+- **AI nodes** — dropped from v1. `ai_step`, `ai_agent`, and `ai_intent_router` are archived and will return in a later release.
+- **Stubbed bindings** — `conversation_starter`, `main_menu`, and `ice_breaker` are stored and configurable in the UI in v1 but do not yet push to the platform. Platform sync lands in v1.1.
+- **Broadcasts** are a separate system and are not part of automations.
 
 ## Related
 
-- [Triggers](./triggers) — every trigger type, grouped by platform tier.
-- [Nodes](./nodes) — every node type, with fields and output labels.
-- [Templates](./templates) — quick-create shortcuts for common flows.
-- [Edges and labels](./edges-and-labels) — how branching works.
-- [Enrollments and runs](./enrollments-and-runs) — monitoring + debugging.
-- [AI-friendly API](./ai-friendly-api) — the self-describing `GET /v1/automations/schema` endpoint for MCP and LLM agents.
+- [Nodes](./nodes) — the 10 node kinds, ports, config shapes, action catalog.
+- [Triggers](./triggers) — entrypoint kinds, bindings, conflict resolution, webhook entrypoints.
+- [Runs](./runs) — run lifecycle, step-run inspection, stopping a run.
+- [Templates](./templates) — the 8 starter templates and their config shapes.
