@@ -246,6 +246,13 @@
       "when": 1776700400000,
       "tag": "0034_automation_tiktok_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1776876870564,
+      "tag": "0035_early_songbird",
+      "breakpoints": true
     }
   ]
 }
