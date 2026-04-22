@@ -72,19 +72,25 @@ Fields:
 { "keywords": ["pizza", "order"], "match_mode": "exact | contains | regex", "case_sensitive": false }
 
 // comment_created
-{ "post_ids": ["17895..."], "keyword_filter": ["link"], "include_replies": false }
+{ "post_ids": ["17895..."], "keywords": ["link"], "include_replies": false }
+
+// story_reply
+{ "story_ids": ["17895..."], "keywords": ["promo"] }
 
 // schedule
 { "cron": "0 9 * * 1", "timezone": "Europe/Rome" }
 
 // field_changed
-{ "field": "stage", "from": "new", "to": "qualified" }
+{ "field_keys": ["stage"], "from": "new", "to": "qualified" }
 
 // tag_applied / tag_removed
-{ "tag": "trial_expired" }
+{ "tag_ids": ["trial_expired"] }
 
 // ref_link_click
-{ "ref_url_id": "ref_..." }
+{ "ref_url_ids": ["ref_..."] }
+
+// conversion_event
+{ "event_names": ["purchase"] }
 
 // webhook_inbound — see dedicated section below
 ```

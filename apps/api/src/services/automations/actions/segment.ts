@@ -12,7 +12,7 @@ type SegmentAddAction = Extract<Action, { type: "segment_add" }>;
 type SegmentRemoveAction = Extract<Action, { type: "segment_remove" }>;
 
 const segmentAdd: ActionHandler<SegmentAddAction> = async (action, ctx) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("segment_add: db binding missing");
 	await db
 		.insert(contactSegmentMemberships)
@@ -29,7 +29,7 @@ const segmentRemove: ActionHandler<SegmentRemoveAction> = async (
 	action,
 	ctx,
 ) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("segment_remove: db binding missing");
 	await db
 		.delete(contactSegmentMemberships)

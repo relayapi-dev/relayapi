@@ -222,9 +222,10 @@ describe("automation message handler", () => {
 		expect(call.platform).toBe("telegram");
 		expect(call.recipientId).toBe("tg_chat_42");
 		expect(call.text).toBe("hi alice, pick one:");
-		// Buttons are attached as a structured field (see platforms/index TODO).
-		expect((call as any).buttons?.length).toBe(2);
-		expect((call as any).buttons?.[0]?.label).toBe("yes");
+		// Buttons are a native field on SendMessageRequest (Unit RR5: Task 7).
+		expect(call.buttons?.length).toBe(2);
+		expect(call.buttons?.[0]?.label).toBe("yes");
+		expect(call.buttons?.[0]?.type).toBe("branch");
 
 		// 2. Run is parked on wait_input because the text block has branch buttons.
 		const run = await db.query.automationRuns.findFirst({

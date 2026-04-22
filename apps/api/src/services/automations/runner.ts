@@ -19,7 +19,10 @@ import {
 	automationScheduledJobs,
 	automationStepRuns,
 	automations,
+	contacts,
 	createDb,
+	customFieldDefinitions,
+	customFieldValues,
 	type Database,
 } from "@relayapi/db";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
@@ -144,7 +147,10 @@ export async function runLoop(
 			graph,
 			context: (run.context as Record<string, any>) ?? {},
 			now: new Date(),
-			env,
+			db,
+			// Mirror the db handle into env as a convenience for legacy callers
+			// that still read `env.db`, but ctx.db is the canonical source now.
+			env: { db, ...env },
 		};
 		const startedAt = Date.now();
 		let result: HandlerResult;
@@ -346,6 +352,16 @@ export async function enrollContact(
 	}) as Graph;
 	const rootKey = graph.root_node_key;
 
+	// Hydrate the run context with the contact row, inline tags, and keyed
+	// custom fields before inserting. Merge-tag resolution and condition
+	// predicates that read `{{contact.*}}` / tags / fields depend on this.
+	const initialContext = await buildInitialRunContext(
+		db,
+		args.contactId,
+		args.organizationId,
+		args.contextOverrides ?? {},
+	);
+
 	const [inserted] = await db
 		.insert(automationRuns)
 		.values({
@@ -358,7 +374,7 @@ export async function enrollContact(
 			status: "active",
 			currentNodeKey: rootKey,
 			currentPortKey: null,
-			context: args.contextOverrides ?? {},
+			context: initialContext,
 		})
 		.returning();
 
@@ -369,8 +385,75 @@ export async function enrollContact(
 		.set({ totalEnrolled: sql`${automations.totalEnrolled} + 1` })
 		.where(eq(automations.id, args.automationId));
 
-	await runLoop(db, inserted.id, args.env, args.runLoopOptions);
+	// Ensure downstream handlers invoked from runLoop can still find `db` on
+	// ctx.env if they haven't been migrated yet — but the canonical source is
+	// ctx.db, which runLoop populates directly.
+	await runLoop(
+		db,
+		inserted.id,
+		{ db, ...args.env },
+		args.runLoopOptions,
+	);
 	return { runId: inserted.id };
+}
+
+/**
+ * Build the initial `automation_runs.context` JSONB payload for a fresh
+ * enrollment. Loads the contact row, inline tag array, and keyed custom
+ * field values so merge-tag resolution and condition evaluation have access
+ * to contact state from the very first step.
+ *
+ * `overrides` win over the hydrated fields so callers can pre-seed values
+ * like `{ trigger: { post_id: ... } }` without being clobbered.
+ *
+ * NOTE: we intentionally do NOT re-hydrate on resume. v1.1 can add a refresh
+ * step if stale state becomes a problem.
+ */
+async function buildInitialRunContext(
+	db: Db,
+	contactId: string,
+	organizationId: string,
+	overrides: Record<string, any>,
+): Promise<Record<string, any>> {
+	const contact = await db.query.contacts.findFirst({
+		where: eq(contacts.id, contactId),
+	});
+
+	// Tags live inline on `contacts.tags` (text[]); no separate join table.
+	const tags = contact?.tags ?? [];
+
+	// Custom fields: keyed by `custom_field_definitions.slug` (the schema
+	// uses `slug`, not `key`). We scope by organization and inner-join to
+	// the definition to get the slug + resolve to a `{ slug: value }` map.
+	const fieldRows = await db
+		.select({
+			slug: customFieldDefinitions.slug,
+			value: customFieldValues.value,
+		})
+		.from(customFieldValues)
+		.innerJoin(
+			customFieldDefinitions,
+			eq(customFieldValues.definitionId, customFieldDefinitions.id),
+		)
+		.where(
+			and(
+				eq(customFieldValues.contactId, contactId),
+				eq(customFieldValues.organizationId, organizationId),
+			),
+		);
+	const fields: Record<string, string> = {};
+	for (const row of fieldRows) {
+		if (row.slug) fields[row.slug] = row.value;
+	}
+
+	return {
+		contact: contact ?? null,
+		tags,
+		fields,
+		// Overrides win — callers (start_automation, webhook receiver, trigger
+		// matcher) may pre-seed `trigger`/`state` keys that we must not clobber.
+		...overrides,
+	};
 }
 
 // ---------------------------------------------------------------------------

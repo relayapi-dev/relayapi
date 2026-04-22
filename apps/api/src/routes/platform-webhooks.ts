@@ -355,8 +355,46 @@ async function processFacebookWebhook(
 
 		// Handle messaging events — ONLY actual messages (following Chatwoot's pattern)
 		for (const msg of entry.messaging ?? []) {
-			// Skip non-message events: reactions, seen, referrals, etc.
-			if (!msg.message && !msg.postback) continue;
+			// Surface follow / referral events so the automation engine can fire
+			// `follow` and `ad_click` entrypoints. Reactions / read receipts are
+			// still dropped.
+			const asAny = msg as Record<string, unknown>;
+			const hasFollow = Boolean((asAny as { follow?: unknown }).follow);
+			const hasReferral = Boolean(
+				(asAny as { referral?: unknown }).referral,
+			);
+			if (!msg.message && !msg.postback) {
+				if (hasFollow) {
+					await env.INBOX_QUEUE.send({
+						type: `${platform}_webhook` as InboxQueueMessage["type"],
+						platform,
+						platform_account_id: entry.id,
+						organization_id: lookup.orgId,
+						account_id: lookup.accountId,
+						event_type: "follows",
+						payload: msg,
+						received_at: new Date().toISOString(),
+					} satisfies InboxQueueMessage);
+					continue;
+				}
+				if (hasReferral) {
+					// Standalone referral — user opens an ad CTM flow before sending
+					// any text. Meta may deliver this before the first message.
+					await env.INBOX_QUEUE.send({
+						type: `${platform}_webhook` as InboxQueueMessage["type"],
+						platform,
+						platform_account_id: entry.id,
+						organization_id: lookup.orgId,
+						account_id: lookup.accountId,
+						event_type: "referral",
+						payload: msg,
+						received_at: new Date().toISOString(),
+					} satisfies InboxQueueMessage);
+					continue;
+				}
+				// Skip non-message events: reactions, seen, etc.
+				continue;
+			}
 
 			const mid = msg.message?.mid;
 			const isEcho = !!(msg.message as any)?.is_echo;

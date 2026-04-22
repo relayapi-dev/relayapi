@@ -236,7 +236,7 @@ type ResolvedRecipient = {
 async function resolveRecipient(
 	ctx: RunContext,
 ): Promise<ResolvedRecipient | null> {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) return null;
 
 	// Look for the contact_channels row matching this contact + channel.

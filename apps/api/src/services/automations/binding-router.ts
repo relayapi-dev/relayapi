@@ -96,11 +96,15 @@ export async function routeBinding(
 	event: InboundEvent,
 	env: Record<string, unknown>,
 ): Promise<MatchResult> {
-	// Welcome message is checked first on any inbound-message-like event.
+	// Welcome message is checked first — but only on DMs (spec §6.6 step 8).
+	// Comments and story replies are intentionally excluded: a welcome flow
+	// belongs in the DM conversation thread, not under a post or ephemeral
+	// story reply surface.
+	// Bindings are account-scoped (social_account_id NOT NULL in the schema),
+	// so internal events without an account id (tag_applied, field_changed,
+	// conversion_event, ref_link_click, schedule) never match a binding.
 	const isInboundMessage =
-		event.kind === "dm_received" ||
-		event.kind === "comment_created" ||
-		event.kind === "story_reply";
+		event.kind === "dm_received" && !!event.socialAccountId;
 
 	if (isInboundMessage) {
 		const firstInbound = await isFirstInboundOnChannel(
@@ -112,7 +116,7 @@ export async function routeBinding(
 		if (firstInbound) {
 			const welcome = await findBinding(db, {
 				organizationId: event.organizationId,
-				socialAccountId: event.socialAccountId,
+				socialAccountId: event.socialAccountId as string,
 				channel: event.channel,
 				bindingType: "welcome_message",
 			});
@@ -142,8 +146,8 @@ export async function routeBinding(
 		}
 	}
 
-	// Default reply — only on DMs.
-	if (event.kind === "dm_received") {
+	// Default reply — only on DMs (always carry a social account id).
+	if (event.kind === "dm_received" && event.socialAccountId) {
 		const defaultReply = await findBinding(db, {
 			organizationId: event.organizationId,
 			socialAccountId: event.socialAccountId,

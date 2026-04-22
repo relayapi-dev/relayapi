@@ -39,10 +39,13 @@ export type InboundEventKind =
 	| "conversion_event";
 
 export type InboundEvent = {
-	kind: InboundEventKind;
+	kind: InboundEventKind | "schedule";
 	channel: "instagram" | "facebook" | "whatsapp" | "telegram" | "tiktok";
 	organizationId: string;
-	socialAccountId: string;
+	// Nullable for internal events (tag_applied/field_changed/conversion_event/
+	// ref_link_click/schedule) that don't originate from a specific social
+	// account. Platform events always populate this.
+	socialAccountId: string | null;
 	contactId: string;
 	conversationId: string | null;
 	// Per-kind fields
@@ -278,10 +281,18 @@ export async function matchAndEnroll(
 				eq(automationEntrypoints.status, "active"),
 				eq(automations.status, "active"),
 				eq(automations.organizationId, event.organizationId),
-				or(
-					isNull(automationEntrypoints.socialAccountId),
-					eq(automationEntrypoints.socialAccountId, event.socialAccountId),
-				),
+				event.socialAccountId
+					? or(
+							isNull(automationEntrypoints.socialAccountId),
+							eq(
+								automationEntrypoints.socialAccountId,
+								event.socialAccountId,
+							),
+						)
+					: // Internal events (tag_applied, field_changed, conversion_event,
+						// ref_link_click, schedule) don't originate from a specific social
+						// account — match only entrypoints that aren't account-scoped.
+						isNull(automationEntrypoints.socialAccountId),
 			),
 		);
 

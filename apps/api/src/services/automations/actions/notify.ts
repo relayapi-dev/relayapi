@@ -20,7 +20,7 @@ function buildMergeCtx(ctx: any) {
 }
 
 const notifyAdmin: ActionHandler<NotifyAdminAction> = async (action, ctx) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("notify_admin: db binding missing");
 	const mergeCtx = buildMergeCtx(ctx);
 	const title = applyMergeTags(action.title, mergeCtx);

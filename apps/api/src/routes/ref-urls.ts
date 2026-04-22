@@ -1,11 +1,13 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { refUrls } from "@relayapi/db";
+import { automations as automationsTable, contacts, refUrls } from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
 	applyWorkspaceScope,
 	isWorkspaceScopeDenied,
 	WORKSPACE_ACCESS_DENIED_BODY,
 } from "../lib/workspace-scope";
+import { emitInternalEvent } from "../services/automations/internal-events";
+import type { InboundEvent } from "../services/automations/trigger-matcher";
 import { ErrorResponse, PaginationParams } from "../schemas/common";
 import {
 	RefUrlCreateSpec,
@@ -303,6 +305,117 @@ app.openapi(deleteRefUrl, async (c) => {
 
 	await db.delete(refUrls).where(eq(refUrls.id, id));
 	return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Click tracking — records a ref-url click and fires the `ref_link_click`
+// internal event so automations can enroll the contact. The ref URL itself
+// doesn't store a redirect target in this schema; external systems call this
+// endpoint after they've already redirected the user so the automation
+// engine can react.
+// ---------------------------------------------------------------------------
+
+const ClickBody = z.object({
+	contact_id: z.string(),
+});
+
+const recordRefUrlClick = createRoute({
+	operationId: "recordRefUrlClick",
+	method: "post",
+	path: "/{id}/click",
+	tags: ["Ref URLs"],
+	summary: "Record a click on a ref URL",
+	description:
+		"Increments the click counter and, when a contact is supplied, fires a " +
+		"`ref_link_click` automation event so matching entrypoints enroll the " +
+		"contact.",
+	security: [{ Bearer: [] }],
+	request: {
+		params: IdParams,
+		body: { content: { "application/json": { schema: ClickBody } } },
+	},
+	responses: {
+		200: {
+			description: "Click recorded",
+			content: { "application/json": { schema: RefUrlResponse } },
+		},
+		403: {
+			description: "Forbidden",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(recordRefUrlClick, async (c) => {
+	const { id } = c.req.valid("param");
+	const body = c.req.valid("json");
+	const db = c.get("db");
+	const orgId = c.get("orgId");
+
+	const row = await db.query.refUrls.findFirst({
+		where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
+	});
+	if (!row)
+		return c.json(
+			{ error: { code: "not_found", message: "Ref URL not found" } },
+			404,
+		);
+	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
+
+	const [updated] = await db
+		.update(refUrls)
+		.set({ uses: sql`${refUrls.uses} + 1` })
+		.where(eq(refUrls.id, id))
+		.returning();
+
+	// Best-effort event emit. Look up the bound automation's channel (if any)
+	// so `ref_link_click` entrypoints for that channel match. If the ref URL
+	// isn't bound to an automation, fall back to "instagram" — the matcher
+	// filters on channel+kind, so a cross-channel entrypoint can still miss
+	// but we shouldn't crash here.
+	let channel: InboundEvent["channel"] = "instagram";
+	if (row.automationId) {
+		const auto = await db.query.automations.findFirst({
+			where: eq(automationsTable.id, row.automationId),
+		});
+		if (auto?.channel) channel = auto.channel as InboundEvent["channel"];
+	}
+
+	// Validate the contact belongs to the same org before emitting.
+	const contact = await db.query.contacts.findFirst({
+		where: and(
+			eq(contacts.id, body.contact_id),
+			eq(contacts.organizationId, orgId),
+		),
+	});
+	if (contact) {
+		await emitInternalEvent(
+			db,
+			{
+				kind: "ref_link_click",
+				channel,
+				organizationId: orgId,
+				socialAccountId: null,
+				contactId: body.contact_id,
+				conversationId: null,
+				refUrlId: row.id,
+				payload: {
+					source: "ref_url_click",
+					slug: row.slug,
+					ref_url_id: row.id,
+				},
+			},
+			c.env as unknown as Record<string, unknown>,
+		);
+	}
+
+	return c.json(serialize(updated!), 200);
 });
 
 export default app;

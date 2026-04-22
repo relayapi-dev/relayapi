@@ -6,14 +6,20 @@
 // to allow multiple workers to share the queue safely.
 
 import {
+	automationEntrypoints,
 	automationRuns,
 	automationScheduledJobs,
+	automations as automationsTable,
+	contactSegmentMemberships,
+	contacts,
 	createDb,
 	type Database,
 } from "@relayapi/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Env } from "../../types";
+import { matchAndEnrollOrBinding } from "./binding-router";
 import { runLoop } from "./runner";
+import type { InboundEvent } from "./trigger-matcher";
 
 type Db = Database;
 
@@ -203,14 +209,10 @@ async function dispatchJob(
 		}
 
 		case "scheduled_trigger": {
-			// v1: if the entrypoint config carries a static contact list, enroll
-			// them. Dynamic contact enumeration (segment-based scheduled runs) is
-			// deferred. Without an entrypoint_id we can't act.
-			if (!job.entrypoint_id) return "done";
-			// TODO: expand this once the scheduled-trigger UI lands. For now we
-			// treat the job as a no-op and let the entrypoint's config carry its
-			// own enrollment metadata in a future handler.
-			return "done";
+			if (!job.entrypoint_id) {
+				return { failed: true, error: "missing entrypoint_id" };
+			}
+			return await dispatchScheduledTrigger(db, env, job.entrypoint_id);
 		}
 
 		case "webhook_reception_failure": {
@@ -250,4 +252,245 @@ export async function processAutomationInputTimeouts(
 ): Promise<number> {
 	// Handled inside processScheduledJobs via job_type=input_timeout.
 	return 0;
+}
+
+// ---------------------------------------------------------------------------
+// scheduled_trigger dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Dispatches a `scheduled_trigger` job:
+ *   1. Load the entrypoint and verify it's an active `schedule` entrypoint.
+ *   2. Enumerate contacts that match the entrypoint's `filters` (tag or
+ *      segment predicates in v1). A filter IS REQUIRED — unfiltered schedule
+ *      entrypoints would enroll the entire org, which is never what the
+ *      operator wants.
+ *   3. For each matching contact, call `matchAndEnrollOrBinding` with a
+ *      synthetic `schedule` event. The matcher handles reentry / pause
+ *      semantics per-contact.
+ *   4. Parse `entrypoint.config.cron`, compute the next run time, and insert
+ *      a fresh `scheduled_trigger` job. Unsupported cron patterns mark the
+ *      current job failed with `unsupported cron pattern`.
+ */
+async function dispatchScheduledTrigger(
+	db: Db,
+	env: Record<string, unknown>,
+	entrypointId: string,
+): Promise<DispatchOutcome> {
+	const ep = await db.query.automationEntrypoints.findFirst({
+		where: eq(automationEntrypoints.id, entrypointId),
+	});
+	if (!ep) {
+		// Entrypoint deleted — job has nothing to do, succeed silently.
+		return "done";
+	}
+	if (ep.kind !== "schedule" || ep.status !== "active") {
+		return "done";
+	}
+	const auto = await db.query.automations.findFirst({
+		where: eq(automationsTable.id, ep.automationId),
+	});
+	if (!auto || auto.status !== "active") {
+		return "done";
+	}
+
+	// Require a filter — enrolling an entire org is never intended.
+	const filters = (ep.filters ?? null) as Record<string, unknown> | null;
+	const candidateIds = await enumerateContactsForScheduleFilter(
+		db,
+		auto.organizationId,
+		filters,
+	);
+	if (candidateIds === null) {
+		return {
+			failed: true,
+			error: "schedule entrypoint requires filters",
+		};
+	}
+
+	// Fire enroll-or-binding for each candidate. Failures never block the
+	// remaining contacts.
+	for (const contactId of candidateIds) {
+		const event: InboundEvent = {
+			kind: "schedule" as never,
+			channel: auto.channel as InboundEvent["channel"],
+			organizationId: auto.organizationId,
+			socialAccountId: ep.socialAccountId ?? null,
+			contactId,
+			conversationId: null,
+			payload: {
+				source: "schedule",
+				entrypoint_id: ep.id,
+				scheduled_at: new Date().toISOString(),
+			},
+		};
+		try {
+			await matchAndEnrollOrBinding(db, event, env);
+		} catch (err) {
+			console.error(
+				`[scheduler] scheduled_trigger enroll failed for contact ${contactId}:`,
+				err,
+			);
+		}
+	}
+
+	// Reschedule the next firing.
+	const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
+	const nextRun = cfg.cron ? computeNextCronRun(cfg.cron, new Date()) : null;
+	if (!nextRun) {
+		return { failed: true, error: "unsupported cron pattern" };
+	}
+	await db.insert(automationScheduledJobs).values({
+		jobType: "scheduled_trigger",
+		automationId: auto.id,
+		entrypointId: ep.id,
+		runAt: nextRun,
+		status: "pending",
+	});
+	return "done";
+}
+
+/**
+ * Returns the set of contact IDs matching the schedule entrypoint's filter
+ * block. Supported predicates in v1:
+ *   - `{ all: [{ field: "tags", op: "contains", value: "<tag>" }] }`
+ *   - `{ all: [{ field: "segment_ids", op: "contains", value: "<id>" }] }`
+ *   - `{ any: [ … ] }` — union of the above
+ *
+ * Returns `null` if the filters block is missing or contains no actionable
+ * predicate (signals "required filter not satisfied" upstream).
+ */
+async function enumerateContactsForScheduleFilter(
+	db: Db,
+	organizationId: string,
+	filters: Record<string, unknown> | null,
+): Promise<string[] | null> {
+	if (!filters) return null;
+
+	const groups: Array<unknown> = [];
+	if (Array.isArray((filters as { all?: unknown[] }).all)) {
+		for (const p of (filters as { all: unknown[] }).all) groups.push(p);
+	}
+	if (Array.isArray((filters as { any?: unknown[] }).any)) {
+		for (const p of (filters as { any: unknown[] }).any) groups.push(p);
+	}
+	if (groups.length === 0) return null;
+
+	const ids = new Set<string>();
+	let matchedAnyPredicate = false;
+	for (const raw of groups) {
+		const predicate = raw as {
+			field?: string;
+			op?: string;
+			value?: unknown;
+		};
+		if (!predicate || typeof predicate !== "object") continue;
+
+		// Tag filter.
+		if (
+			(predicate.field === "tags" || predicate.field === "tag") &&
+			typeof predicate.value === "string"
+		) {
+			matchedAnyPredicate = true;
+			const rows = await db
+				.select({ id: contacts.id })
+				.from(contacts)
+				.where(
+					and(
+						eq(contacts.organizationId, organizationId),
+						sql`${contacts.tags} @> ARRAY[${predicate.value}]::text[]`,
+					),
+				);
+			for (const r of rows) ids.add(r.id);
+			continue;
+		}
+
+		// Segment filter.
+		if (
+			(predicate.field === "segment_ids" ||
+				predicate.field === "segment" ||
+				predicate.field === "segments") &&
+			(typeof predicate.value === "string" ||
+				Array.isArray(predicate.value))
+		) {
+			matchedAnyPredicate = true;
+			const segmentIds = Array.isArray(predicate.value)
+				? (predicate.value as string[])
+				: [predicate.value as string];
+			if (segmentIds.length === 0) continue;
+			const rows = await db
+				.select({ id: contactSegmentMemberships.contactId })
+				.from(contactSegmentMemberships)
+				.where(
+					and(
+						eq(contactSegmentMemberships.organizationId, organizationId),
+						inArray(contactSegmentMemberships.segmentId, segmentIds),
+					),
+				);
+			for (const r of rows) ids.add(r.id);
+			continue;
+		}
+	}
+
+	if (!matchedAnyPredicate) return null;
+	return Array.from(ids);
+}
+
+/**
+ * Minimal cron parser. Supports the subset required by the schedule
+ * entrypoint (documented in spec §8.7):
+ *   - `M H * * *`   daily at H:M UTC
+ *   - `0 H * * *`   daily at the top of hour H UTC
+ *   - `0 * * * *`   hourly
+ *   - `*\u002FN * * * *`  every N minutes (1–59)
+ *
+ * Returns the next Date strictly greater than `from`, or `null` for any
+ * unsupported pattern.
+ */
+export function computeNextCronRun(cron: string, from: Date): Date | null {
+	const parts = cron.trim().split(/\s+/);
+	if (parts.length !== 5) return null;
+	const [mStr, hStr, dom, mon, dow] = parts;
+	if (dom !== "*" || mon !== "*" || dow !== "*") return null;
+
+	const next = new Date(from.getTime());
+	next.setUTCSeconds(0, 0);
+
+	// `*/N * * * *` — every N minutes.
+	if (hStr === "*" && /^\*\/\d+$/.test(mStr!)) {
+		const n = Number(mStr!.slice(2));
+		if (!Number.isFinite(n) || n < 1 || n > 59) return null;
+		const minutes = next.getUTCMinutes();
+		const rem = minutes % n;
+		const add = rem === 0 ? n : n - rem;
+		next.setUTCMinutes(minutes + add);
+		return next;
+	}
+
+	// `0 * * * *` — hourly.
+	if (hStr === "*" && mStr === "0") {
+		next.setUTCMinutes(0);
+		next.setUTCHours(next.getUTCHours() + 1);
+		return next;
+	}
+
+	// `M H * * *` — daily at H:M UTC.
+	const minute = Number(mStr);
+	const hour = Number(hStr);
+	if (
+		Number.isInteger(minute) &&
+		minute >= 0 &&
+		minute <= 59 &&
+		Number.isInteger(hour) &&
+		hour >= 0 &&
+		hour <= 23
+	) {
+		next.setUTCHours(hour, minute, 0, 0);
+		if (next.getTime() <= from.getTime()) {
+			next.setUTCDate(next.getUTCDate() + 1);
+		}
+		return next;
+	}
+
+	return null;
 }

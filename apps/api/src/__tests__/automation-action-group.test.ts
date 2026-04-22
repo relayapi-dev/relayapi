@@ -35,6 +35,8 @@ function makeCtx(): RunContext {
 		graph: { schema_version: 1, root_node_key: null, nodes: [], edges: [] },
 		context: {},
 		now: new Date(),
+		// Not exercised by action-group's routing logic — actions are stubbed.
+		db: null as unknown as RunContext["db"],
 		env: {},
 	};
 }

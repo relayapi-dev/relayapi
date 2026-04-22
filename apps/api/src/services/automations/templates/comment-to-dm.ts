@@ -68,7 +68,10 @@ export function buildCommentToDm(
 				kind: "comment_created",
 				config: {
 					post_ids: Array.isArray(cfg.post_ids) ? cfg.post_ids : null,
-					keyword_filter: cfg.keyword_filter,
+					// Entrypoint key is `keywords` — matcher reads config.keywords
+					// (trigger-matcher.ts:190). Template input field remains
+					// `keyword_filter` for backwards-compatible dashboard forms.
+					keywords: cfg.keyword_filter,
 					include_replies: false,
 				},
 				socialAccountId: socialAccountId ?? null,

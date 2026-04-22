@@ -309,33 +309,43 @@ describe("simulate (dry-run walker)", () => {
 					config: {},
 					ports: [
 						{ key: "in", direction: "input" },
-						{ key: "yes", direction: "output" },
-						{ key: "no", direction: "output" },
+						{ key: "true", direction: "output" },
+						{ key: "false", direction: "output" },
 					],
 				},
 				{
-					key: "yes_end",
+					key: "true_end",
 					kind: "end",
-					config: { reason: "yes" },
+					config: { reason: "true" },
 					ports: [{ key: "in", direction: "input" }],
 				},
 				{
-					key: "no_end",
+					key: "false_end",
 					kind: "end",
-					config: { reason: "no" },
+					config: { reason: "false" },
 					ports: [{ key: "in", direction: "input" }],
 				},
 			],
 			edges: [
-				{ from_node: "cond", from_port: "yes", to_node: "yes_end", to_port: "in" },
-				{ from_node: "cond", from_port: "no", to_node: "no_end", to_port: "in" },
+				{
+					from_node: "cond",
+					from_port: "true",
+					to_node: "true_end",
+					to_port: "in",
+				},
+				{
+					from_node: "cond",
+					from_port: "false",
+					to_node: "false_end",
+					to_port: "in",
+				},
 			],
 		};
 		const result = await simulate({
 			graph,
-			branchChoices: { cond: "no" },
+			branchChoices: { cond: "false" },
 		});
-		expect(result.steps.map((s) => s.node_key)).toEqual(["cond", "no_end"]);
+		expect(result.steps.map((s) => s.node_key)).toEqual(["cond", "false_end"]);
 	});
 
 	it("respects the maxVisits cap", async () => {
@@ -555,6 +565,50 @@ describe("routeBinding", () => {
 		const result = await routeBinding(db, event, {});
 		expect(result.matched).toBe(true);
 		if (result.matched) expect(result.automationId).toBe(auto.id);
+	});
+
+	it("does NOT fire welcome_message on comment_created (spec §6.6 step 8)", async () => {
+		if (!dbAvailable) return;
+
+		// Fresh social account to avoid colliding with the `dm_received` test's
+		// welcome binding on the same (account, type) unique index.
+		const [sa3] = await db
+			.insert(socialAccounts)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				platform: "telegram",
+				platformAccountId: `tg_${generateId("acc_")}`,
+				displayName: "Test TG Bot 3",
+			})
+			.returning();
+		if (!sa3) throw new Error("sa3 insert failed");
+
+		const auto = await makeAutomation("welcome-no-comment-auto");
+		const ct = await makeContact();
+		await db.insert(automationBindings).values({
+			organizationId: orgId,
+			workspaceId,
+			socialAccountId: sa3.id,
+			channel: "telegram",
+			bindingType: "welcome_message",
+			automationId: auto.id,
+			status: "active",
+		});
+
+		const event: InboundEvent = {
+			kind: "comment_created",
+			channel: "telegram",
+			organizationId: orgId,
+			socialAccountId: sa3.id,
+			contactId: ct.id,
+			conversationId: null,
+			text: "first comment",
+		};
+		const result = await routeBinding(db, event, {});
+		// A comment must not trigger a welcome_message binding — welcome is
+		// DM-only per spec §6.6 step 8.
+		expect(result.matched).toBe(false);
 	});
 
 	it("matchAndEnrollOrBinding passes through reentry_blocked", async () => {

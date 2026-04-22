@@ -12,7 +12,7 @@ import { notifyRealtime } from "../lib/notify-post-update";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
 import { matchAndEnrollOrBinding } from "./automations/binding-router";
-import { runLoop } from "./automations/runner";
+import { resumeWaitingRunOnInput } from "./automations/input-resume";
 import type {
 	InboundEvent,
 	InboundEventKind,
@@ -27,7 +27,7 @@ import { subscribeYouTubeChannel } from "./webhook-subscription";
 // ---------------------------------------------------------------------------
 
 interface NormalizedInboxEvent {
-	type: "comment" | "message";
+	type: "comment" | "message" | "follow" | "ad_click";
 	platform: string;
 	account_id: string;
 	organization_id: string;
@@ -38,6 +38,19 @@ interface NormalizedInboxEvent {
 	text?: string;
 	interactive_payload?: string;
 	interactive_kind?: "postback" | "button_click" | "list_reply" | "flow_submit";
+	/**
+	 * Discriminator hints surfaced by the platform normalizer so
+	 * `deriveInboundEventKind` can route the event to the correct entrypoint
+	 * kind. Set by the Instagram / Facebook / WhatsApp / Telegram normalizers
+	 * based on raw webhook payload markers.
+	 */
+	is_story_reply?: boolean;
+	is_story_mention?: boolean;
+	is_share_to_dm?: boolean;
+	is_live_comment?: boolean;
+	is_ad_click?: boolean;
+	ad_id?: string;
+	story_id?: string;
 	/**
 	 * Structured file payload for inbound media messages (WhatsApp image/video/
 	 * document/audio, Telegram photo/document, Twilio MMS, etc.). Used by the
@@ -276,33 +289,44 @@ export async function processInboxEvent(
 			.from(socialAccounts)
 			.where(eq(socialAccounts.id, event.account_id))
 			.limit(1);
+		// `follow` and `ad_click` events don't correspond to a message — they
+		// describe a relationship change or ad engagement. We still route them
+		// through the automation matcher (step 2) but skip inbox persistence.
+		const isPersistedEvent =
+			event.type === "comment" || event.type === "message";
 		try {
-			conversation = await upsertConversation(db, {
-				organizationId: event.organization_id,
-				workspaceId: sa?.workspaceId ?? null,
-				accountId: event.account_id,
-				platform: event.platform as any,
-				type: event.type === "comment" ? "comment_thread" : "dm",
-				platformConversationId:
-					event.post_id || event.conversation_id || event.platform_event_id,
-				participantName: conversationPartner?.name ?? null,
-				participantPlatformId: conversationPartner?.id ?? null,
-				participantAvatar:
-					conversationPartner?.avatar_url ?? event.author?.avatar_url ?? null,
-				postPlatformId: event.post_id ?? null,
-			});
-			if (conversation) {
-				const message = await insertMessage(db, {
-					conversationId: conversation.id,
+			if (isPersistedEvent) {
+				conversation = await upsertConversation(db, {
 					organizationId: event.organization_id,
-					platformMessageId: event.platform_event_id,
-					authorName: event.author?.name ?? null,
-					authorPlatformId: event.author?.id ?? null,
-					authorAvatarUrl: event.author?.avatar_url ?? null,
-					text: event.text ?? null,
-					direction,
-					createdAt: new Date(event.created_at),
+					workspaceId: sa?.workspaceId ?? null,
+					accountId: event.account_id,
+					platform: event.platform as any,
+					type: event.type === "comment" ? "comment_thread" : "dm",
+					platformConversationId:
+						event.post_id ||
+						event.conversation_id ||
+						event.platform_event_id,
+					participantName: conversationPartner?.name ?? null,
+					participantPlatformId: conversationPartner?.id ?? null,
+					participantAvatar:
+						conversationPartner?.avatar_url ??
+						event.author?.avatar_url ??
+						null,
+					postPlatformId: event.post_id ?? null,
 				});
+				if (conversation) {
+					const message = await insertMessage(db, {
+						conversationId: conversation.id,
+						organizationId: event.organization_id,
+						platformMessageId: event.platform_event_id,
+						authorName: event.author?.name ?? null,
+						authorPlatformId: event.author?.id ?? null,
+						authorAvatarUrl: event.author?.avatar_url ?? null,
+						text: event.text ?? null,
+						direction,
+						createdAt: new Date(event.created_at),
+					});
+				}
 			}
 		} catch (err) {
 			console.error("[inbox-processor] DB storage failed:", err);
@@ -428,6 +452,12 @@ export async function processInboxEvent(
 			});
 		}
 
+		// `follow` / `ad_click` events don't produce inbox rows, so the outbound
+		// webhook dispatch + realtime notify paths don't apply to them.
+		if (!isPersistedEvent) {
+			continue;
+		}
+
 		// 3. Dispatch outbound webhook
 		const webhookEvent =
 			event.type === "comment"
@@ -494,15 +524,31 @@ const AUTOMATION_CHANNELS = new Set([
 
 /**
  * Maps a normalized inbox event to an InboundEventKind understood by the
- * entrypoint matcher. Returns null for event shapes the new engine doesn't
- * route (e.g. postback without text, live-comment events — those paths are
- * deferred to later units).
+ * entrypoint matcher. The order matters: specificity beats catch-all, so
+ * story replies / mentions / share-to-DM / live comments are picked up
+ * BEFORE falling through to the generic `dm_received` / `comment_created`
+ * kinds. The matcher then performs the final keyword / post / ad id
+ * filtering per-kind.
+ *
+ * Returns null for event shapes the new engine doesn't route (outbound
+ * echoes, pure reaction/seen updates, etc.).
  */
 function deriveInboundEventKind(
 	event: NormalizedInboxEvent,
 ): InboundEventKind | null {
-	if (event.type === "comment") return "comment_created";
-	if (event.type === "message") return "dm_received";
+	if (event.type === "follow") return "follow";
+	if (event.type === "ad_click") return "ad_click";
+	if (event.type === "comment") {
+		if (event.is_live_comment) return "live_comment";
+		return "comment_created";
+	}
+	if (event.type === "message") {
+		if (event.is_story_reply) return "story_reply";
+		if (event.is_story_mention) return "story_mention";
+		if (event.is_share_to_dm) return "share_to_dm";
+		if (event.is_ad_click) return "ad_click";
+		return "dm_received";
+	}
 	return null;
 }
 
@@ -574,10 +620,16 @@ async function dispatchAutomationMatch(
 			contactId,
 			conversationId: event.conversation_id ?? null,
 			text: event.text,
-			postId: event.post_id,
+			// story_reply/story_mention match on story_id (falls back to post_id
+			// for platforms that don't distinguish the two surfaces).
+			postId:
+				event.story_id ?? event.post_id ?? undefined,
+			adId: event.ad_id,
 			payload: {
 				post_id: event.post_id,
 				parent_id: event.parent_id,
+				story_id: event.story_id,
+				ad_id: event.ad_id,
 				comment_id:
 					event.type === "comment" ? event.platform_event_id : undefined,
 				message_id:
@@ -587,6 +639,11 @@ async function dispatchAutomationMatch(
 				attachment: event.attachment,
 				author: event.author,
 				created_at: event.created_at,
+				is_story_reply: event.is_story_reply,
+				is_story_mention: event.is_story_mention,
+				is_share_to_dm: event.is_share_to_dm,
+				is_live_comment: event.is_live_comment,
+				is_ad_click: event.is_ad_click,
 			},
 		};
 
@@ -597,10 +654,14 @@ async function dispatchAutomationMatch(
 }
 
 /**
- * Look for an active `waiting` run on this (contact, conversation, channel).
- * If found, merge the inbound message into run.context and kick runLoop so the
- * input handler's captured value can flow through the rest of the graph.
- * Returns true iff a run was resumed.
+ * Look for `waiting-for-input` runs on this (contact, conversation) and hand
+ * the inbound message off to `resumeWaitingRunOnInput`, which validates it
+ * against each run's input node config and routes through the correct port
+ * (`captured` / `invalid` / `skip`) or re-prompts when retries remain.
+ *
+ * Returns true iff the inbound was consumed by (at least) one waiting run.
+ * When true, the caller must NOT also fire entrypoint matching — a reply to
+ * a pending input should never also enroll the contact in a new flow.
  */
 async function resumeWaitingRunForInput(
 	db: ReturnType<typeof createDb>,
@@ -613,8 +674,6 @@ async function resumeWaitingRunForInput(
 	const waitingRuns = await db
 		.select({
 			id: automationRuns.id,
-			context: automationRuns.context,
-			conversationId: automationRuns.conversationId,
 			updatedAt: automationRuns.updatedAt,
 		})
 		.from(automationRuns)
@@ -634,39 +693,29 @@ async function resumeWaitingRunForInput(
 				),
 			),
 		)
-		.orderBy(desc(automationRuns.updatedAt))
-		.limit(1);
+		.orderBy(desc(automationRuns.updatedAt));
 
-	const waiting = waitingRuns[0];
-	if (!waiting) return false;
+	if (waitingRuns.length === 0) return false;
 
-	const priorContext = (waiting.context as Record<string, unknown>) ?? {};
-	const inputValue = event.attachment ?? event.text ?? "";
-	const newContext: Record<string, unknown> = {
-		...priorContext,
-		inbound_message_text: event.text ?? "",
-		inbound_message_id: event.platform_event_id,
-		inbound_attachment: event.attachment,
-		inbound_interactive_payload: event.interactive_payload,
-		inbound_interactive_kind: event.interactive_kind,
-		last_input_value: inputValue,
-		last_input_mime_type: event.attachment?.mime_type,
-		last_input_size_bytes: event.attachment?.size_bytes,
-	};
+	const hasAttachment = Boolean(event.attachment);
+	const inboundText = event.text ?? "";
+	let consumed = false;
 
-	await db
-		.update(automationRuns)
-		.set({
-			status: "active",
-			context: newContext,
-			waitingFor: null,
-			waitingUntil: null,
-			updatedAt: new Date(),
-		})
-		.where(eq(automationRuns.id, waiting.id));
+	for (const waiting of waitingRuns) {
+		const outcome = await resumeWaitingRunOnInput(
+			db,
+			waiting.id,
+			inboundText,
+			hasAttachment,
+			envAsRecord,
+		);
+		// Anything other than "race" means the inbound was consumed by this run
+		// — whether it advanced, retried, or completed. Suppress entrypoint
+		// matching in all those cases.
+		if (outcome !== "race") consumed = true;
+	}
 
-	await runLoop(db, waiting.id, envAsRecord);
-	return true;
+	return consumed;
 }
 
 // ---------------------------------------------------------------------------
@@ -709,8 +758,84 @@ interface FacebookMessagingPayload {
 	sender: { id: string };
 	recipient: { id: string };
 	timestamp: number;
-	message?: { mid: string; text?: string };
+	/**
+	 * Raw Meta messaging payload. Optional fields mirror the subset the
+	 * normalizer inspects to derive story_reply / story_mention / share_to_dm /
+	 * ad_click — see Meta Messenger Platform docs for `reply_to`, `attachments`,
+	 * and `referral`.
+	 */
+	message?: {
+		mid: string;
+		text?: string;
+		reply_to?: { story?: { id?: string; url?: string }; mid?: string };
+		attachments?: Array<{
+			type?: string;
+			payload?: Record<string, unknown>;
+		}>;
+	};
 	postback?: { title: string; payload: string };
+	referral?: {
+		source?: string;
+		type?: string;
+		ref?: string;
+		ad_id?: string;
+	};
+	follow?: { is_following?: boolean };
+}
+
+/**
+ * Maps a raw Meta attachment[]/reply_to/referral payload to the flags the
+ * automation engine uses to distinguish story replies, story mentions, and
+ * share-to-DM events from ordinary DMs. Returns a partial
+ * `NormalizedInboxEvent` the caller can spread into the normalized record.
+ */
+function extractMetaMessageMarkers(msg: FacebookMessagingPayload): {
+	is_story_reply?: boolean;
+	is_story_mention?: boolean;
+	is_share_to_dm?: boolean;
+	is_ad_click?: boolean;
+	story_id?: string;
+	ad_id?: string;
+} {
+	const markers: {
+		is_story_reply?: boolean;
+		is_story_mention?: boolean;
+		is_share_to_dm?: boolean;
+		is_ad_click?: boolean;
+		story_id?: string;
+		ad_id?: string;
+	} = {};
+
+	// Story reply — Meta sends `message.reply_to.story` with the story id/url.
+	const replyStory = msg.message?.reply_to?.story;
+	if (replyStory && (replyStory.id || replyStory.url)) {
+		markers.is_story_reply = true;
+		if (replyStory.id) markers.story_id = replyStory.id;
+	}
+
+	// Attachment-driven markers: share_to_dm (type=share), story_mention
+	// (type=story_mention).
+	for (const att of msg.message?.attachments ?? []) {
+		if (att.type === "share") markers.is_share_to_dm = true;
+		if (att.type === "story_mention") {
+			markers.is_story_mention = true;
+			const storyId = (att.payload as { story_id?: string; id?: string })
+				?.story_id ?? (att.payload as { id?: string })?.id;
+			if (storyId) markers.story_id = String(storyId);
+		}
+	}
+
+	// Ad click (Click-to-Messenger referral). Docs:
+	// https://developers.facebook.com/docs/messenger-platform/discovery/ads/click-to-messenger-ads/
+	if (
+		msg.referral &&
+		(msg.referral.source === "ADS" || msg.referral.type === "OPEN_THREAD")
+	) {
+		markers.is_ad_click = true;
+		if (msg.referral.ad_id) markers.ad_id = msg.referral.ad_id;
+	}
+
+	return markers;
 }
 
 function normalizeFacebookEvent(
@@ -718,6 +843,44 @@ function normalizeFacebookEvent(
 ): NormalizedInboxEvent[] {
 	const { event_type, payload } = message;
 	const now = new Date().toISOString();
+
+	// Follow event — Messenger "follows" webhook field on a Page.
+	if (event_type === "follows") {
+		const msg = payload as FacebookMessagingPayload;
+		return [
+			{
+				type: "follow",
+				platform: "facebook",
+				account_id: message.account_id,
+				organization_id: message.organization_id,
+				platform_event_id: `follow_${msg.sender.id}_${msg.timestamp}`,
+				conversation_id: msg.sender.id,
+				author: { name: msg.sender.id, id: msg.sender.id },
+				created_at: new Date(msg.timestamp).toISOString(),
+				raw: payload,
+			},
+		];
+	}
+
+	// Standalone referral — user clicked a CTM ad before sending a DM.
+	if (event_type === "referral") {
+		const msg = payload as FacebookMessagingPayload;
+		return [
+			{
+				type: "ad_click",
+				platform: "facebook",
+				account_id: message.account_id,
+				organization_id: message.organization_id,
+				platform_event_id: `ref_${msg.sender.id}_${msg.timestamp}`,
+				conversation_id: msg.sender.id,
+				author: { name: msg.sender.id, id: msg.sender.id },
+				ad_id: msg.referral?.ad_id,
+				is_ad_click: true,
+				created_at: new Date(msg.timestamp).toISOString(),
+				raw: payload,
+			},
+		];
+	}
 
 	// Feed changes (comments on posts)
 	if (event_type === "feed") {
@@ -756,6 +919,7 @@ function normalizeFacebookEvent(
 		const text = msg.message?.text ?? msg.postback?.title;
 		const eventId = msg.message?.mid ?? `postback_${msg.timestamp}`;
 		const customerId = msg.sender.id;
+		const markers = extractMetaMessageMarkers(msg);
 
 		return [
 			{
@@ -771,6 +935,7 @@ function normalizeFacebookEvent(
 				interactive_kind: msg.postback?.payload ? "postback" : undefined,
 				created_at: new Date(msg.timestamp).toISOString(),
 				raw: payload,
+				...markers,
 			},
 		];
 	}
@@ -820,6 +985,67 @@ function normalizeInstagramEvent(
 	const { event_type, payload } = message;
 	const now = new Date().toISOString();
 
+	// Follow on Instagram — Meta delivers a `follows` webhook field.
+	if (event_type === "follows") {
+		const msg = payload as FacebookMessagingPayload;
+		return [
+			{
+				type: "follow",
+				platform: "instagram",
+				account_id: message.account_id,
+				organization_id: message.organization_id,
+				platform_event_id: `follow_${msg.sender.id}_${msg.timestamp}`,
+				conversation_id: msg.sender.id,
+				author: { name: msg.sender.id, id: msg.sender.id },
+				created_at: new Date(msg.timestamp).toISOString(),
+				raw: payload,
+			},
+		];
+	}
+
+	// Standalone ad-click referral (Instagram CTM).
+	if (event_type === "referral") {
+		const msg = payload as FacebookMessagingPayload;
+		return [
+			{
+				type: "ad_click",
+				platform: "instagram",
+				account_id: message.account_id,
+				organization_id: message.organization_id,
+				platform_event_id: `ref_${msg.sender.id}_${msg.timestamp}`,
+				conversation_id: msg.sender.id,
+				author: { name: msg.sender.id, id: msg.sender.id },
+				ad_id: msg.referral?.ad_id,
+				is_ad_click: true,
+				created_at: new Date(msg.timestamp).toISOString(),
+				raw: payload,
+			},
+		];
+	}
+
+	// "live_comments" webhook field — Instagram Live comment.
+	if (event_type === "live_comments") {
+		const value = payload as InstagramCommentValue;
+		if (!value.id) return [];
+		return [
+			{
+				type: "comment",
+				platform: "instagram",
+				account_id: message.account_id,
+				organization_id: message.organization_id,
+				platform_event_id: value.id,
+				author: value.from
+					? { name: value.from.username ?? value.from.id, id: value.from.id }
+					: undefined,
+				text: value.text,
+				post_id: value.media?.id,
+				is_live_comment: true,
+				created_at: now,
+				raw: payload,
+			},
+		];
+	}
+
 	// Comment on media
 	if (event_type === "comments") {
 		const value = payload as InstagramCommentValue;
@@ -861,6 +1087,7 @@ function normalizeInstagramEvent(
 		const eventId = msg.message?.mid ?? `postback_${msg.timestamp}`;
 		// Conversation partner is always the customer (sender for inbound)
 		const customerId = msg.sender.id;
+		const markers = extractMetaMessageMarkers(msg);
 
 		return [
 			{
@@ -876,6 +1103,7 @@ function normalizeInstagramEvent(
 				interactive_kind: msg.postback?.payload ? "postback" : undefined,
 				created_at: new Date(msg.timestamp).toISOString(),
 				raw: payload,
+				...markers,
 			},
 		];
 	}

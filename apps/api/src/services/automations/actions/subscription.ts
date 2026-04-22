@@ -30,7 +30,7 @@ const subscribeList: ActionHandler<SubscribeListAction> = async (
 	action,
 	ctx,
 ) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("subscribe_list: db binding missing");
 	const existing = await db.query.contactSubscriptions.findFirst({
 		where: and(
@@ -61,7 +61,7 @@ const unsubscribeList: ActionHandler<UnsubscribeListAction> = async (
 	action,
 	ctx,
 ) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("unsubscribe_list: db binding missing");
 	await db
 		.update(contactSubscriptions)
@@ -103,7 +103,7 @@ async function ensureOptOutDefinition(
 }
 
 const optInChannel: ActionHandler<OptInChannelAction> = async (action, ctx) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("opt_in_channel: db binding missing");
 	const definitionId = await ensureOptOutDefinition(
 		db,
@@ -125,7 +125,7 @@ const optOutChannel: ActionHandler<OptOutChannelAction> = async (
 	action,
 	ctx,
 ) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("opt_out_channel: db binding missing");
 	const definitionId = await ensureOptOutDefinition(
 		db,

@@ -137,7 +137,9 @@ export function buildStoryLeads(
 				kind: "story_reply",
 				config: {
 					story_ids: Array.isArray(cfg.story_ids) ? cfg.story_ids : null,
-					keyword_filter: cfg.keyword_filter,
+					// Entrypoint key is `keywords` — matcher reads config.keywords
+					// (trigger-matcher.ts:201).
+					keywords: cfg.keyword_filter,
 				},
 				socialAccountId: socialAccountId ?? null,
 			},

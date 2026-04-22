@@ -190,7 +190,9 @@ export function buildFollowerGrowth(
 				kind: "comment_created",
 				config: {
 					post_ids: Array.isArray(cfg.post_ids) ? cfg.post_ids : null,
-					keyword_filter: [triggerKeyword],
+					// Entrypoint key is `keywords` — matcher reads config.keywords
+					// (trigger-matcher.ts:190).
+					keywords: [triggerKeyword],
 				},
 				socialAccountId: socialAccountId ?? null,
 			},

@@ -1,8 +1,10 @@
 // apps/api/src/services/automations/nodes/input.ts
 //
 // Input capture node. Parks the run in `wait_input` state with an optional
-// timeout. Validation, retry handling, and port resolution (captured /
-// invalid / skip / timeout) live in the runner's resume path (Unit 4).
+// `timeout_at`. Validation, retry handling, and port resolution (captured /
+// invalid / skip) happen on the inbound-message resume path in
+// `input-resume.ts`; the `timeout` port is driven by the scheduler's
+// `input_timeout` job (see scheduler.ts).
 import type { NodeHandler } from "../types";
 
 type InputConfig = {

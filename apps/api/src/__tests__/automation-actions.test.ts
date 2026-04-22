@@ -88,6 +88,7 @@ function makeCtx(contactId: string): RunContext {
 		graph: { schema_version: 1, root_node_key: null, nodes: [], edges: [] },
 		context: { contact: { name: "alice" } },
 		now: new Date(),
+		db,
 		env: { db },
 	};
 }

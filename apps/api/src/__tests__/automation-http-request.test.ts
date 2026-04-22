@@ -25,6 +25,9 @@ function makeCtx(overrides: Partial<RunContext> = {}): RunContext {
 		},
 		context: {},
 		now: new Date(),
+		// http_request handler doesn't touch the DB (it calls fetch + applies
+		// merge tags), so a null handle is fine for these unit tests.
+		db: null as unknown as RunContext["db"],
 		env: {},
 		...overrides,
 	};

@@ -24,7 +24,7 @@ type ResumeContactAutomationsAction = Extract<
 const pauseContactAutomations: ActionHandler<
 	PauseContactAutomationsAction
 > = async (action, ctx) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("pause_automations_for_contact: db binding missing");
 	const automationId = action.scope === "global" ? null : ctx.automationId;
 	const pausedUntil = action.duration_min
@@ -73,7 +73,7 @@ const pauseContactAutomations: ActionHandler<
 const resumeContactAutomations: ActionHandler<
 	ResumeContactAutomationsAction
 > = async (action, ctx) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db)
 		throw new Error("resume_automations_for_contact: db binding missing");
 	const automationId = action.scope === "global" ? null : ctx.automationId;

@@ -4,6 +4,7 @@
 // See docs/superpowers/specs/2026-04-21-manychat-parity-automation-rebuild.md
 // §8 (Runtime Execution Model) for the full design.
 
+import type { Database } from "@relayapi/db";
 import type {
 	Graph,
 	GraphNode,
@@ -35,7 +36,14 @@ export type RunContext = {
 	graph: Graph;
 	context: Record<string, any>;
 	now: Date;
-	// env bindings (DB, KV, Queue, R2) are passed in as needed per call site
+	/**
+	 * DB handle for the current run. Populated by `runLoop`/`enrollContact` at
+	 * context construction — node and action handlers should always read DB
+	 * access from `ctx.db` (not `ctx.env.db`, which is no longer guaranteed to
+	 * be present).
+	 */
+	db: Database;
+	// Remaining env bindings (KV, Queue, R2, encryption keys, etc.) flow here.
 	env: Record<string, any>;
 };
 

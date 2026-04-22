@@ -13,7 +13,7 @@ import {
 	customFieldValues,
 	type Database,
 } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { maybeDecrypt } from "../../lib/crypto";
 import { enrollContact } from "./runner";
 
@@ -237,7 +237,14 @@ async function resolveContact(
 		case "custom_field": {
 			if (!cfg.custom_field_key) return null;
 			const value = extract(cfg.field_path);
+			// Guard against null/undefined — otherwise we'd match contacts whose
+			// field happens to serialize to `"null"` or similar sentinel values.
 			if (value === undefined || value === null) return null;
+			// Coerce to a string since `custom_field_values.value` is stored as
+			// text. Booleans, numbers, and other primitives are stringified the
+			// same way the dashboard / API writers do when persisting values.
+			const serialized =
+				typeof value === "string" ? value : String(value);
 			const def = await db.query.customFieldDefinitions.findFirst({
 				where: and(
 					eq(customFieldDefinitions.organizationId, organizationId),
@@ -245,25 +252,22 @@ async function resolveContact(
 				),
 			});
 			if (!def) return null;
+			// Filter by value in SQL. The (definition_id, contact_id) pair is
+			// unique so at most one row per contact can match, but because any
+			// number of contacts may share a (definition, value) tuple we order
+			// by updated_at DESC and take the most recently updated as the
+			// canonical contact. This is deterministic for v1; in practice the
+			// lookup field should be unique (e.g. `external_id`) so the
+			// "multiple matches" branch is rare and always resolves the same way.
 			const fv = await db.query.customFieldValues.findFirst({
 				where: and(
 					eq(customFieldValues.organizationId, organizationId),
 					eq(customFieldValues.definitionId, def.id),
+					eq(customFieldValues.value, serialized),
 				),
+				orderBy: [desc(customFieldValues.updatedAt)],
 			});
-			// Drizzle doesn't natively query JSONB equality generically; for v1 we
-			// compare loosely by iterating matches. A tighter implementation will
-			// push the comparison into SQL once a canonical JSONB form is agreed.
-			if (!fv) return null;
-			if (
-				typeof fv.value === "string" &&
-				typeof value === "string" &&
-				fv.value === value
-			) {
-				return fv.contactId;
-			}
-			if (fv.value === value) return fv.contactId;
-			return null;
+			return fv?.contactId ?? null;
 		}
 		default:
 			return null;

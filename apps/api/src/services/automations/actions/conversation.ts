@@ -45,7 +45,7 @@ const assignConversation: ActionHandler<AssignConversationAction> = async (
 	action,
 	ctx,
 ) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("assign_conversation: db binding missing");
 	const conversationId = await requireConversationId(ctx);
 	if (!conversationId) return; // no-op when run has no conversation
@@ -74,7 +74,7 @@ const unassignConversation: ActionHandler<UnassignConversationAction> = async (
 	_action,
 	ctx,
 ) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("unassign_conversation: db binding missing");
 	const conversationId = await requireConversationId(ctx);
 	if (!conversationId) return;
@@ -93,7 +93,7 @@ const conversationOpen: ActionHandler<ConversationOpenAction> = async (
 	_action,
 	ctx,
 ) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("conversation_open: db binding missing");
 	const conversationId = await requireConversationId(ctx);
 	if (!conversationId) return;
@@ -112,7 +112,7 @@ const conversationClose: ActionHandler<ConversationCloseAction> = async (
 	_action,
 	ctx,
 ) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("conversation_close: db binding missing");
 	const conversationId = await requireConversationId(ctx);
 	if (!conversationId) return;
@@ -131,7 +131,7 @@ const conversationSnooze: ActionHandler<ConversationSnoozeAction> = async (
 	_action,
 	ctx,
 ) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("conversation_snooze: db binding missing");
 	const conversationId = await requireConversationId(ctx);
 	if (!conversationId) return;

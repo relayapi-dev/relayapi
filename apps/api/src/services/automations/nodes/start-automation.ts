@@ -24,11 +24,11 @@ export const startAutomationHandler: NodeHandler<StartAutomationConfig> = {
 				error: new Error("start_automation missing target_automation_id"),
 			};
 		}
-		const db = ctx.env?.db;
+		const db = ctx.db;
 		if (!db) {
 			return {
 				result: "fail",
-				error: new Error("start_automation: db binding missing in ctx.env"),
+				error: new Error("start_automation: db binding missing in ctx"),
 			};
 		}
 		try {

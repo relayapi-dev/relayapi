@@ -205,3 +205,14 @@ All app-to-API calls should go through `/api/*` proxies in
   tests only; smoke-testing it is optional here.
 - Main Menu / Conversation Starter / Ice Breaker bindings persist but do
   **not** yet push to the platform. Deferred to v1.1.
+
+## Integration repair — 2026-04-22
+
+All 9 integration bugs documented in Plan 4 are fixed and covered by
+regression + real end-to-end integration tests. See
+`docs/superpowers/AUTOMATION_REBUILD_INTEGRATION_REPAIR_REPORT_2026-04-22.md`
+for per-bug status. Smoke-test scenarios (input resume, keyword DM,
+comment-to-DM, welcome binding, webhook entrypoint, scheduled trigger,
+branch routing, per-action error handling, cross-flow internal events,
+cycle protection) are all exercised by
+`apps/api/src/__tests__/automation-e2e-integration.test.ts`.

@@ -9,13 +9,16 @@ export const KeywordEntrypointConfig = z.object({
 
 export const CommentCreatedEntrypointConfig = z.object({
   post_ids: z.array(z.string()).nullable().default(null),
-  keyword_filter: z.array(z.string()).optional(),
+  // Matcher reads config.keywords (trigger-matcher.ts:190). Old key
+  // `keyword_filter` was dropped as part of the entrypoint key-drift fix.
+  keywords: z.array(z.string()).optional(),
   include_replies: z.boolean().default(true),
 });
 
 export const StoryReplyEntrypointConfig = z.object({
   story_ids: z.array(z.string()).nullable().default(null),
-  keyword_filter: z.array(z.string()).optional(),
+  // Matcher reads config.keywords (trigger-matcher.ts:201).
+  keywords: z.array(z.string()).optional(),
 });
 
 export const ScheduleEntrypointConfig = z.object({
@@ -24,17 +27,24 @@ export const ScheduleEntrypointConfig = z.object({
 });
 
 export const FieldChangedEntrypointConfig = z.object({
-  field: z.string(),
+  // Matcher reads config.field_keys (trigger-matcher.ts:235).
+  field_keys: z.array(z.string()).min(1),
   from: z.any().optional(),
   to: z.any().optional(),
 });
 
+// Note: the contacts schema stores tags as string NAMES in a text[] column on
+// `contacts.tags` (no separate tag table). The matcher reads `config.tag_ids`
+// (trigger-matcher.ts:228) and compares against `event.tagId`, which in our
+// data model is a tag NAME. The field name is kept as `tag_ids` to match the
+// matcher (the source of truth) but semantically holds tag names.
 export const TagEntrypointConfig = z.object({
-  tag: z.string(),
+  tag_ids: z.array(z.string()).min(1),
 });
 
 export const RefLinkEntrypointConfig = z.object({
-  ref_url_id: z.string(),
+  // Matcher reads config.ref_url_ids (trigger-matcher.ts:220).
+  ref_url_ids: z.array(z.string()).min(1),
 });
 
 export const WebhookInboundEntrypointConfig = z.object({
@@ -54,7 +64,8 @@ export const AdClickEntrypointConfig = z.object({
 });
 
 export const ConversionEventEntrypointConfig = z.object({
-  event_name: z.string(),
+  // Matcher reads config.event_names (trigger-matcher.ts:242).
+  event_names: z.array(z.string()).min(1),
 });
 
 // Empty config kinds

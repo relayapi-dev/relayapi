@@ -203,9 +203,12 @@ function walkNode(
 			const cfg = (node.config ?? {}) as Record<string, unknown>;
 			const predicates = cfg.predicates as Record<string, unknown> | undefined;
 			if (!predicates) {
+				// No predicates configured → fall through the `false` branch. The
+				// runtime's port keys are "true" / "false" (see ports.ts and
+				// nodes/condition.ts); the simulator must match.
 				return {
 					outcome: "advance",
-					exitPort: "no",
+					exitPort: "false",
 					payload: null,
 					reason: "advance",
 				};
@@ -218,7 +221,7 @@ function walkNode(
 			});
 			return {
 				outcome: "advance",
-				exitPort: ok ? "yes" : "no",
+				exitPort: ok ? "true" : "false",
 				payload: null,
 				reason: "advance",
 			};
@@ -233,31 +236,46 @@ function walkNode(
 					reason: "advance",
 				};
 			}
+			// The runtime stores weighted branches under `config.variants` (see
+			// nodes/randomizer.ts) and emits ports prefixed `variant.<key>`; the
+			// simulator must walk the same shape.
 			const cfg = (node.config ?? {}) as Record<string, unknown>;
-			const branches =
-				(cfg.branches as Array<{ label?: string; weight?: number }> | undefined) ??
-				[];
-			const totalWeight = branches.reduce(
-				(acc, b) => acc + (typeof b.weight === "number" ? b.weight : 1),
+			const variants =
+				(cfg.variants as
+					| Array<{ key?: string; label?: string; weight?: number }>
+					| undefined) ?? [];
+			if (variants.length === 0) {
+				return {
+					outcome: "fail",
+					exitPort: null,
+					reason: "randomizer_missing_variants",
+				};
+			}
+			const totalWeight = variants.reduce(
+				(acc, v) => acc + (typeof v.weight === "number" ? v.weight : 1),
 				0,
 			);
 			let pick = Math.random() * totalWeight;
-			for (const b of branches) {
-				const w = typeof b.weight === "number" ? b.weight : 1;
+			for (const v of variants) {
+				const w = typeof v.weight === "number" ? v.weight : 1;
 				if (pick <= w) {
+					const key = v.key ?? v.label ?? "1";
 					return {
 						outcome: "advance",
-						exitPort: b.label ?? "branch_1",
-						payload: null,
+						exitPort: `variant.${key}`,
+						payload: { variant_key: key },
 						reason: "advance",
 					};
 				}
 				pick -= w;
 			}
+			// Fallback — pick last variant.
+			const last = variants[variants.length - 1]!;
+			const key = last.key ?? last.label ?? "1";
 			return {
 				outcome: "advance",
-				exitPort: "next",
-				payload: null,
+				exitPort: `variant.${key}`,
+				payload: { variant_key: key },
 				reason: "advance",
 			};
 		}

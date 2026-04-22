@@ -415,6 +415,9 @@ function summarizeEntrypoint(ep: ApiEntrypoint): string {
 	const config = (ep.config ?? {}) as Record<string, unknown>;
 	const parts: string[] = [];
 
+	// API stores the filter under `keywords` (see apps/api
+	// .../schemas/automation-entrypoints.ts). `keyword_filter` is the legacy
+	// key kept as a read-only fallback for rows persisted before the rename.
 	const keywords = config.keywords ?? config.keyword_filter;
 	if (Array.isArray(keywords) && keywords.length > 0) {
 		parts.push(
@@ -736,9 +739,13 @@ function CommentConfig({
 		? (config.post_ids as string[])
 		: [];
 	const includeReplies = config.include_replies === true;
-	const keywordFilter = Array.isArray(config.keyword_filter)
-		? (config.keyword_filter as string[])
-		: [];
+	// Prefer the new `keywords` key but fall back to the legacy
+	// `keyword_filter` so pre-migration rows still render correctly.
+	const keywordFilter = Array.isArray(config.keywords)
+		? (config.keywords as string[])
+		: Array.isArray(config.keyword_filter)
+			? (config.keyword_filter as string[])
+			: [];
 	return (
 		<div className="rounded-[16px] border border-[#e6e9ef] bg-white p-3">
 			<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
@@ -773,7 +780,9 @@ function CommentConfig({
 							.split(",")
 							.map((s) => s.trim())
 							.filter(Boolean);
-						onChange({ keyword_filter: next });
+						// Write new canonical key `keywords`; also clear the legacy
+					// `keyword_filter` to avoid a stale-data ambiguity.
+					onChange({ keywords: next, keyword_filter: undefined });
 					}}
 					placeholder="pizza, info"
 					className={INPUT_CLS}

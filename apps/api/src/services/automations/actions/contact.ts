@@ -22,7 +22,7 @@ const deleteContact: ActionHandler<DeleteContactAction> = async (
 	if (action.confirm !== true) {
 		throw new Error("delete_contact requires confirm=true");
 	}
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("delete_contact: db binding missing");
 	await db
 		.delete(contacts)

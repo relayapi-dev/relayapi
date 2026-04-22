@@ -37,6 +37,19 @@ export class RefUrls extends APIResource {
       headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
     });
   }
+
+  /**
+   * Records a click on a ref URL and, when a contact is supplied, fires a
+   * `ref_link_click` automation event so matching entrypoints enroll the
+   * contact.
+   */
+  recordClick(
+    id: string,
+    body: RefUrlClickParams,
+    options?: RequestOptions,
+  ): APIPromise<RefUrlResponse> {
+    return this._client.post(path`/v1/ref-urls/${id}/click`, { body, ...options });
+  }
 }
 
 export interface RefUrlCreateParams {
@@ -74,4 +87,8 @@ export interface RefUrlListResponse {
   data: RefUrlResponse[];
   next_cursor: string | null;
   has_more: boolean;
+}
+
+export interface RefUrlClickParams {
+  contact_id: string;
 }

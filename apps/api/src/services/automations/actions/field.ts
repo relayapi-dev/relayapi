@@ -5,6 +5,9 @@
 // `custom_field_definitions.slug` scoped to the current organization. If the
 // definition doesn't exist, the action fails (operator must create the field
 // via the dashboard or API first).
+//
+// After a successful mutation we emit an internal `field_changed` event so
+// entrypoints listening for custom-field changes fire.
 
 import {
 	customFieldDefinitions,
@@ -13,7 +16,9 @@ import {
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
+import { emitInternalEvent } from "../internal-events";
 import { applyMergeTags } from "../merge-tags";
+import type { InboundEvent } from "../trigger-matcher";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type FieldSetAction = Extract<Action, { type: "field_set" }>;
@@ -24,6 +29,37 @@ function buildMergeCtx(ctx: any) {
 		contact:
 			(ctx.context?.contact as Record<string, unknown> | undefined) ?? null,
 		state: ctx.context ?? {},
+	};
+}
+
+function internalFieldEvent(
+	ctx: any,
+	fieldKey: string,
+	before: unknown,
+	after: unknown,
+	actionId: string,
+): InboundEvent {
+	const triggerEvent = (ctx.context as Record<string, unknown>)?.triggerEvent as
+		| { payload?: { _event_depth?: number } }
+		| undefined;
+	const depth = triggerEvent?.payload?._event_depth ?? 0;
+	return {
+		kind: "field_changed",
+		channel: (ctx.channel ?? "instagram") as InboundEvent["channel"],
+		organizationId: ctx.organizationId,
+		socialAccountId: null,
+		contactId: ctx.contactId,
+		conversationId: ctx.conversationId ?? null,
+		fieldKey,
+		fieldValueBefore: before,
+		fieldValueAfter: after,
+		payload: {
+			source: "automation",
+			automation_id: ctx.automationId,
+			run_id: ctx.runId,
+			action_id: actionId,
+			_event_depth: depth,
+		},
 	};
 }
 
@@ -42,7 +78,7 @@ async function resolveDefinitionId(
 }
 
 const fieldSet: ActionHandler<FieldSetAction> = async (action, ctx) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("field_set: db binding missing");
 	const definitionId = await resolveDefinitionId(
 		db,
@@ -59,6 +95,7 @@ const fieldSet: ActionHandler<FieldSetAction> = async (action, ctx) => {
 			eq(customFieldValues.contactId, ctx.contactId),
 		),
 	});
+	const before = existing?.value ?? null;
 	if (existing) {
 		await db
 			.update(customFieldValues)
@@ -73,10 +110,16 @@ const fieldSet: ActionHandler<FieldSetAction> = async (action, ctx) => {
 			value,
 		});
 	}
+
+	await emitInternalEvent(
+		db,
+		internalFieldEvent(ctx, action.field, before, value, action.id),
+		ctx.env,
+	);
 };
 
 const fieldClear: ActionHandler<FieldClearAction> = async (action, ctx) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("field_clear: db binding missing");
 	const definitionId = await resolveDefinitionId(
 		db,
@@ -87,6 +130,13 @@ const fieldClear: ActionHandler<FieldClearAction> = async (action, ctx) => {
 		// Treat unknown field as a no-op on clear: nothing to erase.
 		return;
 	}
+	const existing = await db.query.customFieldValues.findFirst({
+		where: and(
+			eq(customFieldValues.definitionId, definitionId),
+			eq(customFieldValues.contactId, ctx.contactId),
+		),
+	});
+	const before = existing?.value ?? null;
 	await db
 		.delete(customFieldValues)
 		.where(
@@ -95,6 +145,14 @@ const fieldClear: ActionHandler<FieldClearAction> = async (action, ctx) => {
 				eq(customFieldValues.contactId, ctx.contactId),
 			),
 		);
+
+	if (existing) {
+		await emitInternalEvent(
+			db,
+			internalFieldEvent(ctx, action.field, before, null, action.id),
+			ctx.env,
+		);
+	}
 };
 
 export const fieldHandlers: ActionRegistry = {

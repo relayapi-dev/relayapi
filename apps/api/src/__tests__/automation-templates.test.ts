@@ -127,6 +127,10 @@ describe("buildGraphFromTemplate", () => {
 		expect(ep.kind).toBe("comment_created");
 		expect(ep.socialAccountId).toBe("acc_123");
 		expect((ep.config as any).post_ids).toEqual(["post_abc"]);
+		// After the key-drift fix the emitted entrypoint uses `keywords` (the
+		// key the matcher reads); the template input is still `keyword_filter`.
+		expect((ep.config as any).keywords).toEqual(["link"]);
+		expect((ep.config as any).keyword_filter).toBeUndefined();
 	});
 
 	it("follow_to_dm emits a follow entrypoint", () => {

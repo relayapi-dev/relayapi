@@ -4,17 +4,51 @@
 // current contact. Tags are identified by name; there's no separate join
 // table in the current schema, so "create if missing" collapses to "append
 // to array if not already present".
+//
+// After a successful mutation we emit an internal `tag_applied` /
+// `tag_removed` event so entrypoints listening for tag changes fire. Cycle
+// protection sits inside `emitInternalEvent` (depth counter in payload).
 
 import { contacts } from "@relayapi/db";
 import { and, eq, sql } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
+import { emitInternalEvent } from "../internal-events";
+import type { InboundEvent } from "../trigger-matcher";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type TagAddAction = Extract<Action, { type: "tag_add" }>;
 type TagRemoveAction = Extract<Action, { type: "tag_remove" }>;
 
+function internalEventFromCtx(
+	ctx: any,
+	kind: "tag_applied" | "tag_removed",
+	tag: string,
+	actionId: string,
+	triggerEvent: unknown,
+): InboundEvent {
+	const depth =
+		(triggerEvent as { payload?: { _event_depth?: number } } | undefined)
+			?.payload?._event_depth ?? 0;
+	return {
+		kind,
+		channel: (ctx.channel ?? "instagram") as InboundEvent["channel"],
+		organizationId: ctx.organizationId,
+		socialAccountId: null,
+		contactId: ctx.contactId,
+		conversationId: ctx.conversationId ?? null,
+		tagId: tag,
+		payload: {
+			source: "automation",
+			automation_id: ctx.automationId,
+			run_id: ctx.runId,
+			action_id: actionId,
+			_event_depth: depth,
+		},
+	};
+}
+
 const tagAdd: ActionHandler<TagAddAction> = async (action, ctx) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("tag_add: db binding missing");
 	const tag = action.tag.trim();
 	if (!tag) return;
@@ -35,10 +69,23 @@ const tagAdd: ActionHandler<TagAddAction> = async (action, ctx) => {
 				eq(contacts.organizationId, ctx.organizationId),
 			),
 		);
+
+	// Best-effort internal event — never fail the primary tag mutation.
+	await emitInternalEvent(
+		db,
+		internalEventFromCtx(
+			ctx,
+			"tag_applied",
+			tag,
+			action.id,
+			(ctx.context as Record<string, unknown>)?.triggerEvent,
+		),
+		ctx.env,
+	);
 };
 
 const tagRemove: ActionHandler<TagRemoveAction> = async (action, ctx) => {
-	const db = ctx.env?.db;
+	const db = ctx.db;
 	if (!db) throw new Error("tag_remove: db binding missing");
 	const tag = action.tag.trim();
 	if (!tag) return;
@@ -54,6 +101,18 @@ const tagRemove: ActionHandler<TagRemoveAction> = async (action, ctx) => {
 				eq(contacts.organizationId, ctx.organizationId),
 			),
 		);
+
+	await emitInternalEvent(
+		db,
+		internalEventFromCtx(
+			ctx,
+			"tag_removed",
+			tag,
+			action.id,
+			(ctx.context as Record<string, unknown>)?.triggerEvent,
+		),
+		ctx.env,
+	);
 };
 
 export const tagHandlers: ActionRegistry = {

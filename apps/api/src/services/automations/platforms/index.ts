@@ -269,20 +269,22 @@ export async function dispatchAutomationMessage(
  * `message-sender.ts`. Returns null if the block has nothing to send (e.g.
  * an image block with no media_ref resolved).
  *
- * NOTE: `message-sender.ts` currently exposes a minimal `{ platform,
- * accessToken, platformAccountId, recipientId, text }` shape. Richer
- * payloads (buttons, attachments, cards, galleries, quick replies) are not
- * yet first-class in that interface. We encode them into the text for now
- * and surface structured metadata via `quick_replies` / `buttons` fields
- * on the request so a future enrichment of `SendMessageRequest` can pick
- * them up without touching this adapter. TODO(unit-5): extend
- * `SendMessageRequest` to carry native button / attachment payloads.
+ * Rich payloads (buttons, cards, galleries, attachments, quick replies) are
+ * passed through as native fields on `SendMessageRequest`. Per-platform
+ * encoding into API-specific shapes (IG button template, Telegram
+ * inline_keyboard, WhatsApp interactive buttons, etc.) happens inside
+ * `message-sender.ts`. The adapter only:
+ *   1. Picks the right `SendMessageRequest` shape per block kind.
+ *   2. Filters out platform-unsupported buttons (only `branch` / `url` on
+ *      WhatsApp, no `call` / `share` on TikTok, etc.) via
+ *      `CHANNEL_SUPPORTS_BUTTONS`.
+ *   3. Attaches quick_replies to the LAST sendable block only.
  */
 function renderBlockToRequest(
 	block: MessageBlock,
 	input: AutomationSendInput,
 	quickReplies: QuickReply[] | undefined,
-): (SendMessageRequest & { quick_replies?: QuickReply[]; buttons?: unknown }) | null {
+): SendMessageRequest | null {
 	const base = {
 		platform: input.channel,
 		accessToken: input.credentials.accessToken,
@@ -290,20 +292,24 @@ function renderBlockToRequest(
 		recipientId: input.recipient.platformContactId,
 	};
 
+	const qr =
+		quickReplies &&
+		quickReplies.length > 0 &&
+		CHANNEL_SUPPORTS_QUICK_REPLIES[input.channel]
+			? { quick_replies: quickReplies }
+			: {};
+
 	switch (block.type) {
 		case "text": {
-			const buttons = (block.buttons ?? []).filter(
-				(b) => b.type === "branch" || b.type === "url" || b.type === "call",
-			);
+			const buttons =
+				block.buttons && CHANNEL_SUPPORTS_BUTTONS[input.channel]
+					? block.buttons
+					: undefined;
 			return {
 				...base,
 				text: block.text,
-				...(buttons.length > 0 && CHANNEL_SUPPORTS_BUTTONS[input.channel]
-					? { buttons }
-					: {}),
-				...(quickReplies && quickReplies.length > 0
-					? { quick_replies: quickReplies }
-					: {}),
+				...(buttons && buttons.length > 0 ? { buttons } : {}),
+				...qr,
 			};
 		}
 
@@ -311,57 +317,53 @@ function renderBlockToRequest(
 		case "video":
 		case "audio":
 		case "file": {
-			// TODO(unit-5): resolve `media_ref` through the media service.
-			// For now we treat `media_ref` as a direct URL and surface it in
-			// the `text` field so `message-sender.ts` still has something to
-			// send. A future enrichment should move this to a native
-			// attachment payload on SendMessageRequest.
 			const url = block.media_ref;
+			if (!url) return null;
 			const caption =
-				"caption" in block && block.caption ? block.caption : "";
+				"caption" in block && block.caption ? block.caption : undefined;
 			return {
 				...base,
-				text: caption ? `${caption}\n${url}` : url,
-				...(quickReplies && quickReplies.length > 0
-					? { quick_replies: quickReplies }
-					: {}),
+				text: "",
+				attachments: [
+					{
+						type: block.type,
+						url,
+						...(caption ? { caption } : {}),
+					},
+				],
+				...qr,
 			};
 		}
 
 		case "card": {
-			const lines = [
-				block.title,
-				block.subtitle ?? "",
-				block.media_ref ?? "",
-				...(block.buttons ?? []).map((b) => `[${b.label}]`),
-			]
-				.filter((s) => s.length > 0)
-				.join("\n");
 			return {
 				...base,
-				text: lines,
-				...(block.buttons && CHANNEL_SUPPORTS_BUTTONS[input.channel]
-					? { buttons: block.buttons }
-					: {}),
-				...(quickReplies && quickReplies.length > 0
-					? { quick_replies: quickReplies }
-					: {}),
+				text: "",
+				card: {
+					title: block.title,
+					...(block.subtitle ? { subtitle: block.subtitle } : {}),
+					...(block.media_ref ? { image_url: block.media_ref } : {}),
+					...(block.buttons && CHANNEL_SUPPORTS_BUTTONS[input.channel]
+						? { buttons: block.buttons }
+						: {}),
+				},
+				...qr,
 			};
 		}
 
 		case "gallery": {
-			const cardLines = block.cards.map((c) => {
-				const parts = [c.title];
-				if (c.subtitle) parts.push(c.subtitle);
-				if (c.media_ref) parts.push(c.media_ref);
-				return parts.join(" — ");
-			});
 			return {
 				...base,
-				text: cardLines.join("\n\n"),
-				...(quickReplies && quickReplies.length > 0
-					? { quick_replies: quickReplies }
-					: {}),
+				text: "",
+				gallery: block.cards.map((c) => ({
+					title: c.title,
+					...(c.subtitle ? { subtitle: c.subtitle } : {}),
+					...(c.media_ref ? { image_url: c.media_ref } : {}),
+					...(c.buttons && CHANNEL_SUPPORTS_BUTTONS[input.channel]
+						? { buttons: c.buttons }
+						: {}),
+				})),
+				...qr,
 			};
 		}
 
