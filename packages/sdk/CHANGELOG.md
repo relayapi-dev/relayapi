@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.24.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.23.0...sdk-v0.24.0) (2026-04-22)
+
+
+### Features
+
+* add support for multiple enrollment triggers in automation system ([218f713](https://github.com/relayapi-dev/relayapi/commit/218f713935640a56c53900771824350cd48ee4b5))
+* consolidate template creation and reserve story-reply route ([9e2daff](https://github.com/relayapi-dev/relayapi/commit/9e2daff92ced6952fc412e92f878a4bb62616089))
+* enable direct enrollment and enhance automation graph update ([e86622c](https://github.com/relayapi-dev/relayapi/commit/e86622cfcd4179849343f0cc566d9259dc5f0464))
+* enforce node presence for active automations and improve type handling ([8198ae8](https://github.com/relayapi-dev/relayapi/commit/8198ae83ca0e666c30f67af1043ef4cc181a86a7))
+* enhance automation workflows with new node types and editor improvements ([5849aea](https://github.com/relayapi-dev/relayapi/commit/5849aeacc67e4920812351fa18b4d0a44c5edce6))
+* implement multi-account support and enhance automation workflows ([339d0a0](https://github.com/relayapi-dev/relayapi/commit/339d0a0e4868499de5292f92ffea1651f5413927))
+* improve code style and add detailed state logging in automations ([5746175](https://github.com/relayapi-dev/relayapi/commit/5746175c369b004a1695af0a46e8bee8a4f94c88))
+* unify automation manifest registry and enhance workflow capabilities ([56d108c](https://github.com/relayapi-dev/relayapi/commit/56d108c510df22118f2be17f685823582ea2d5de))
+
 ## [0.23.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.22.0...sdk-v0.23.0) (2026-04-17)
 
 
