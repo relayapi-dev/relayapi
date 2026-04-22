@@ -21,6 +21,20 @@ export type InputResumeOutcome =
 	| { port: "skip" }
 	| { port: "retry" };
 
+/**
+ * Attachment metadata captured from the inbound message. Populated by the
+ * per-platform normalizers (Instagram / Facebook / WhatsApp / Telegram).
+ * Platforms that only expose a URL still populate `url` — mime/size
+ * validation simply won't trigger for them in v1.
+ */
+export type AttachmentInput = {
+	id?: string;
+	url?: string;
+	filename?: string;
+	mime_type?: string;
+	size_bytes?: number;
+} | null;
+
 export type InputConfig = {
 	field?: string;
 	input_type?: "text" | "email" | "phone" | "number" | "choice" | "file";
@@ -29,6 +43,19 @@ export type InputConfig = {
 	timeout_min?: number;
 	max_retries?: number;
 	skip_allowed?: boolean;
+	/**
+	 * Only applies when `input_type === "file"`. If provided and non-empty,
+	 * the inbound attachment's `mime_type` must match one of these values
+	 * exactly (case-sensitive, matching the Meta/Twilio convention).
+	 */
+	accepted_mime_types?: string[];
+	/**
+	 * Only applies when `input_type === "file"`. If provided, the inbound
+	 * attachment's `size_bytes` must be at most this many megabytes
+	 * (1 MB == 1024 * 1024 bytes). Missing sizes are accepted — platforms
+	 * that don't surface size (e.g. Instagram media) can't be size-gated.
+	 */
+	max_size_mb?: number;
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -48,7 +75,7 @@ const PHONE_RE = /^[+]?[\d\s\-()]{7,}$/;
 export function resolveInputResume(
 	config: InputConfig,
 	inboundText: string,
-	hasAttachment: boolean,
+	attachment: AttachmentInput,
 	retryCount: number,
 ): InputResumeOutcome {
 	const trimmed = (inboundText ?? "").trim();
@@ -62,13 +89,32 @@ export function resolveInputResume(
 
 	switch (config.input_type) {
 		case "file": {
-			if (hasAttachment) {
-				return {
-					port: "captured",
-					capturedValue: trimmed.length > 0 ? trimmed : "(file)",
-				};
+			if (!attachment) {
+				return canRetry ? { port: "retry" } : { port: "invalid" };
 			}
-			return canRetry ? { port: "retry" } : { port: "invalid" };
+			// Mime-type enforcement — skip when the operator hasn't set a list.
+			if (
+				config.accepted_mime_types &&
+				config.accepted_mime_types.length > 0
+			) {
+				const mime = attachment.mime_type ?? "";
+				if (!config.accepted_mime_types.includes(mime)) {
+					return canRetry ? { port: "retry" } : { port: "invalid" };
+				}
+			}
+			// Size enforcement — only when operator AND platform both provide a
+			// number. Some platforms (e.g. Instagram media) don't expose size.
+			if (
+				config.max_size_mb &&
+				typeof attachment.size_bytes === "number" &&
+				attachment.size_bytes > config.max_size_mb * 1024 * 1024
+			) {
+				return canRetry ? { port: "retry" } : { port: "invalid" };
+			}
+			return {
+				port: "captured",
+				capturedValue: attachment,
+			};
 		}
 
 		case "choice": {
@@ -161,7 +207,7 @@ export async function resumeWaitingRunOnInput(
 	db: Database,
 	runId: string,
 	inboundText: string,
-	hasAttachment: boolean,
+	attachment: AttachmentInput,
 	env: Record<string, unknown>,
 ): Promise<"advanced" | "retried" | "completed" | "race"> {
 	const run = await db.query.automationRuns.findFirst({
@@ -198,7 +244,7 @@ export async function resumeWaitingRunOnInput(
 	const outcome = resolveInputResume(
 		config,
 		inboundText,
-		hasAttachment,
+		attachment,
 		currentRetries,
 	);
 

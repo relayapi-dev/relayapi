@@ -305,11 +305,13 @@ async function dispatchScheduledTrigger(
 	// 1. Compute and enqueue the next firing BEFORE any other work. This keeps
 	//    the schedule alive across transient enrollment failures.
 	const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
-	const nextRun = cfg.cron ? computeNextCronRun(cfg.cron, new Date()) : null;
+	const nextRun = cfg.cron
+		? computeNextCronRun(cfg.cron, new Date(), cfg.timezone)
+		: null;
 	if (!nextRun) {
 		return { failed: true, error: "unsupported cron pattern" };
 	}
-	await insertNextScheduledJobIfNotExists(db, auto.id, ep.id, nextRun);
+	await insertNextScheduledJobIfNotExists(db, ep.id, nextRun, auto.id);
 
 	// 2. Require a filter — enrolling an entire org is never intended.
 	const filters = (ep.filters ?? null) as Record<string, unknown> | null;
@@ -382,9 +384,9 @@ async function dispatchScheduledTrigger(
  */
 async function insertNextScheduledJobIfNotExists(
 	db: Db,
-	automationId: string,
 	entrypointId: string,
 	runAt: Date,
+	automationId: string,
 ): Promise<void> {
 	const windowStartIso = new Date(runAt.getTime() - 1000).toISOString();
 	const windowEndIso = new Date(runAt.getTime() + 1000).toISOString();
@@ -499,42 +501,129 @@ async function enumerateContactsForScheduleFilter(
 /**
  * Minimal cron parser. Supports the subset required by the schedule
  * entrypoint (documented in spec §8.7):
- *   - `M H * * *`   daily at H:M UTC
- *   - `0 H * * *`   daily at the top of hour H UTC
+ *   - `M H * * *`   daily at H:M in the target timezone
+ *   - `0 H * * *`   daily at the top of hour H in the target timezone
  *   - `0 * * * *`   hourly
  *   - `*\u002FN * * * *`  every N minutes (1–59)
  *
  * Returns the next Date strictly greater than `from`, or `null` for any
- * unsupported pattern.
+ * unsupported pattern. If `timezone` is undefined or `"UTC"`, all math
+ * happens in UTC (original behavior preserved). Otherwise we interpret
+ * the cron in the IANA zone and convert back to a UTC Date for storage.
  */
-export function computeNextCronRun(cron: string, from: Date): Date | null {
+export function computeNextCronRun(
+	cron: string,
+	from: Date,
+	timezone?: string,
+): Date | null {
+	const tz = timezone && timezone.length > 0 ? timezone : "UTC";
+	if (tz === "UTC") {
+		return computeNextCronRunInZone(cron, from, "UTC");
+	}
+	// Validate the zone — `Intl.DateTimeFormat` throws `RangeError` on an
+	// unknown IANA id. Catching here keeps the error surface consistent
+	// with other unsupported-cron returns (null rather than throw).
+	try {
+		new Intl.DateTimeFormat("en-US", { timeZone: tz });
+	} catch {
+		return null;
+	}
+	return computeNextCronRunInZone(cron, from, tz);
+}
+
+// ---------------------------------------------------------------------------
+// Timezone-aware cron math helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the offset, in minutes, that `tz` is AHEAD of UTC at the given
+ * UTC instant. Example: America/New_York during EDT returns -240
+ * (UTC-4h); Europe/London during BST returns +60.
+ *
+ * Implemented via `Intl.DateTimeFormat` — no external dep. We read the
+ * wall-clock Y/M/D/H/m/s in the zone, reconstruct a "naive" UTC Date
+ * from those components, and compare to the instant itself.
+ */
+function zoneOffsetMinutes(instant: Date, tz: string): number {
+	if (tz === "UTC") return 0;
+	const fmt = new Intl.DateTimeFormat("en-US", {
+		timeZone: tz,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		hour12: false,
+	});
+	const parts = fmt.formatToParts(instant);
+	const get = (type: string) =>
+		Number(parts.find((p) => p.type === type)?.value ?? "0");
+	let hour = get("hour");
+	// Intl can emit "24" for midnight under some locales; normalize to 0.
+	if (hour === 24) hour = 0;
+	const asIfUtc = Date.UTC(
+		get("year"),
+		get("month") - 1,
+		get("day"),
+		hour,
+		get("minute"),
+		get("second"),
+	);
+	return Math.round((asIfUtc - instant.getTime()) / 60000);
+}
+
+/**
+ * Compute the next cron firing given `from` (a UTC instant) and a target
+ * `tz`. The trick: we read the wall-clock time as observed in `tz` at
+ * `from`, compute the next cron boundary in that zoned wall-clock space,
+ * then convert the resulting wall-clock time back to UTC for storage.
+ *
+ * DST-correct: when the resulting wall-clock lands in a gap or overlap,
+ * we use the zone's offset at the resulting instant rather than the
+ * offset at `from`, so the stored UTC Date matches the zone's actual
+ * clock at that moment.
+ */
+function computeNextCronRunInZone(
+	cron: string,
+	from: Date,
+	tz: string,
+): Date | null {
 	const parts = cron.trim().split(/\s+/);
 	if (parts.length !== 5) return null;
 	const [mStr, hStr, dom, mon, dow] = parts;
 	if (dom !== "*" || mon !== "*" || dow !== "*") return null;
 
-	const next = new Date(from.getTime());
-	next.setUTCSeconds(0, 0);
+	// Seed with the zone-local wall-clock components of `from`, zero
+	// seconds/milliseconds for cleanliness.
+	const fromZoned = utcToZonedComponents(from, tz);
 
-	// `*/N * * * *` — every N minutes.
+	// `*/N * * * *` — every N minutes. Timezone-independent (the minute
+	// hand ticks the same in every zone), but we still round to the
+	// next boundary using the wall-clock minute to preserve intuition
+	// when the operator expects firings at ":00 / :15 / :30 / :45".
 	if (hStr === "*" && /^\*\/\d+$/.test(mStr!)) {
 		const n = Number(mStr!.slice(2));
 		if (!Number.isFinite(n) || n < 1 || n > 59) return null;
-		const minutes = next.getUTCMinutes();
+		const minutes = fromZoned.minute;
 		const rem = minutes % n;
 		const add = rem === 0 ? n : n - rem;
-		next.setUTCMinutes(minutes + add);
-		return next;
+		const next = { ...fromZoned, minute: minutes + add, second: 0 };
+		return zonedComponentsToUtc(next, tz);
 	}
 
-	// `0 * * * *` — hourly.
+	// `0 * * * *` — hourly at the top of the hour.
 	if (hStr === "*" && mStr === "0") {
-		next.setUTCMinutes(0);
-		next.setUTCHours(next.getUTCHours() + 1);
-		return next;
+		const next = {
+			...fromZoned,
+			hour: fromZoned.hour + 1,
+			minute: 0,
+			second: 0,
+		};
+		return zonedComponentsToUtc(next, tz);
 	}
 
-	// `M H * * *` — daily at H:M UTC.
+	// `M H * * *` — daily at H:M in the target timezone.
 	const minute = Number(mStr);
 	const hour = Number(hStr);
 	if (
@@ -545,12 +634,178 @@ export function computeNextCronRun(cron: string, from: Date): Date | null {
 		hour >= 0 &&
 		hour <= 23
 	) {
-		next.setUTCHours(hour, minute, 0, 0);
-		if (next.getTime() <= from.getTime()) {
-			next.setUTCDate(next.getUTCDate() + 1);
+		const candidate = {
+			...fromZoned,
+			hour,
+			minute,
+			second: 0,
+		};
+		let result = zonedComponentsToUtc(candidate, tz);
+		if (result.getTime() <= from.getTime()) {
+			// Advance one day in zone-local space. Adding 24h in UTC and
+			// re-reading the zoned components handles DST transitions
+			// cleanly (the resulting zoned H:M is the same as the target).
+			const advanced = utcToZonedComponents(
+				new Date(result.getTime() + 24 * 60 * 60 * 1000),
+				tz,
+			);
+			result = zonedComponentsToUtc(
+				{ ...advanced, hour, minute, second: 0 },
+				tz,
+			);
 		}
-		return next;
+		return result;
 	}
 
 	return null;
+}
+
+type ZonedComponents = {
+	year: number;
+	month: number;
+	day: number;
+	hour: number;
+	minute: number;
+	second: number;
+};
+
+function utcToZonedComponents(instant: Date, tz: string): ZonedComponents {
+	if (tz === "UTC") {
+		return {
+			year: instant.getUTCFullYear(),
+			month: instant.getUTCMonth() + 1,
+			day: instant.getUTCDate(),
+			hour: instant.getUTCHours(),
+			minute: instant.getUTCMinutes(),
+			second: instant.getUTCSeconds(),
+		};
+	}
+	const fmt = new Intl.DateTimeFormat("en-US", {
+		timeZone: tz,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		hour12: false,
+	});
+	const parts = fmt.formatToParts(instant);
+	const get = (type: string) =>
+		Number(parts.find((p) => p.type === type)?.value ?? "0");
+	let hour = get("hour");
+	if (hour === 24) hour = 0;
+	return {
+		year: get("year"),
+		month: get("month"),
+		day: get("day"),
+		hour,
+		minute: get("minute"),
+		second: get("second"),
+	};
+}
+
+/**
+ * Convert zone-local wall-clock components to a UTC Date. Uses a two-pass
+ * offset resolution to handle DST transitions: the offset at the target
+ * wall-clock instant may differ from the offset at the seed guess, so we
+ * re-check and correct after the first conversion.
+ */
+function zonedComponentsToUtc(c: ZonedComponents, tz: string): Date {
+	if (tz === "UTC") {
+		return new Date(
+			Date.UTC(c.year, c.month - 1, c.day, c.hour, c.minute, c.second),
+		);
+	}
+	// First pass: treat components as if they were UTC, then correct by
+	// the offset we observe at that "naive" instant.
+	const naiveUtcMs = Date.UTC(
+		c.year,
+		c.month - 1,
+		c.day,
+		c.hour,
+		c.minute,
+		c.second,
+	);
+	const firstGuess = new Date(naiveUtcMs);
+	const off1 = zoneOffsetMinutes(firstGuess, tz);
+	const correctedMs = naiveUtcMs - off1 * 60000;
+	// Second pass: in a DST transition the offset at the CORRECTED
+	// instant might differ from the offset at the first guess. One more
+	// correction converges everywhere outside the degenerate "gap" hour
+	// (where the wall-clock doesn't exist — we accept whichever side the
+	// second pass lands on).
+	const corrected = new Date(correctedMs);
+	const off2 = zoneOffsetMinutes(corrected, tz);
+	if (off2 === off1) return corrected;
+	return new Date(naiveUtcMs - off2 * 60000);
+}
+
+// ---------------------------------------------------------------------------
+// Schedule-arming helpers (used by create / update / activate handlers)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensures a `scheduled_trigger` job is queued for a single schedule
+ * entrypoint. Called from the entrypoint create / update / activate
+ * paths so cron schedules self-arm — without this, newly activated
+ * schedules would sit idle until the first cron tick that happened to
+ * inherit a pending row from the previous deployment.
+ *
+ * Returns a diagnostic tuple so callers (routes) can surface the reason
+ * to operators when arming is skipped.
+ */
+export async function armScheduleEntrypoint(
+	db: Db,
+	entrypointId: string,
+): Promise<{ queued: boolean; runAt?: Date; reason?: string }> {
+	const ep = await db.query.automationEntrypoints.findFirst({
+		where: eq(automationEntrypoints.id, entrypointId),
+	});
+	if (!ep) return { queued: false, reason: "entrypoint_not_found" };
+	if (ep.kind !== "schedule") return { queued: false, reason: "not_schedule" };
+	if (ep.status !== "active") {
+		return { queued: false, reason: "entrypoint_not_active" };
+	}
+
+	const automation = await db.query.automations.findFirst({
+		where: eq(automationsTable.id, ep.automationId),
+	});
+	if (!automation || automation.status !== "active") {
+		return { queued: false, reason: "automation_not_active" };
+	}
+
+	const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
+	if (!cfg.cron) return { queued: false, reason: "no_cron" };
+
+	const nextRun = computeNextCronRun(cfg.cron, new Date(), cfg.timezone);
+	if (!nextRun) return { queued: false, reason: "invalid_cron" };
+
+	await insertNextScheduledJobIfNotExists(db, entrypointId, nextRun, ep.automationId);
+	return { queued: true, runAt: nextRun };
+}
+
+/**
+ * Arms every active schedule entrypoint belonging to an automation.
+ * Used by the activate / resume handlers so a transition of the
+ * automation itself from paused/draft → active seeds pending jobs for
+ * its existing schedule entrypoints.
+ */
+export async function armAllScheduleEntrypointsForAutomation(
+	db: Db,
+	automationId: string,
+): Promise<{ armed: number }> {
+	const eps = await db.query.automationEntrypoints.findMany({
+		where: and(
+			eq(automationEntrypoints.automationId, automationId),
+			eq(automationEntrypoints.kind, "schedule"),
+			eq(automationEntrypoints.status, "active"),
+		),
+	});
+	let armed = 0;
+	for (const ep of eps) {
+		const result = await armScheduleEntrypoint(db, ep.id);
+		if (result.queued) armed++;
+	}
+	return { armed };
 }

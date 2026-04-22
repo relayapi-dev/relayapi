@@ -377,20 +377,23 @@ describe("Telegram encoding", () => {
 });
 
 // ---------------------------------------------------------------------------
-// TikTok — interactive fields silently dropped
+// TikTok — no longer supported; sender returns an explicit failure.
 // ---------------------------------------------------------------------------
 
 describe("TikTok DM encoding", () => {
-	it("returns success without hitting fetch even when buttons are supplied", async () => {
+	it("surfaces an explicit failure instead of silently no-op'ing", async () => {
+		// Plan 6 Unit RR11 / Task 3: TikTok was removed from the v1 automation
+		// channel list. The sender now returns `success: false` so accidental
+		// callers see the failure instead of dropping the send on the floor.
 		const { calls } = mockFetchCapture();
 		const res = await sendMessage({
 			platform: "tiktok",
 			...base,
 			text: "Hi",
-			buttons: [{ id: "a", type: "branch", label: "A" }],
 		});
-		expect(res.success).toBe(true);
-		// Stub implementation is a no-op; it must NOT have issued an HTTP call.
+		expect(res.success).toBe(false);
+		expect(res.error).toMatch(/TikTok/i);
+		// Still must not have issued a network call.
 		expect(calls).toHaveLength(0);
 	});
 });

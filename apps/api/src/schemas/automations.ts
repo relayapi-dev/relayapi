@@ -1,7 +1,7 @@
 import { z } from "@hono/zod-openapi";
 import { GraphSchema } from "./automation-graph";
 
-export const AutomationChannelSchema = z.enum(["instagram", "facebook", "whatsapp", "telegram", "tiktok"]);
+export const AutomationChannelSchema = z.enum(["instagram", "facebook", "whatsapp", "telegram"]);
 export const AutomationStatusSchema = z.enum(["draft", "active", "paused", "archived"]);
 
 export const AutomationCreateSchema = z.object({
@@ -63,6 +63,14 @@ export const AutomationResponseSchema = z.object({
 export const AutomationEnrollSchema = z.object({
   contact_id: z.string(),
   entrypoint_id: z.string().optional(),
+  /**
+   * Pin the triggering social account for this manual enrollment.
+   * Without this, a contact with `contact_channels` rows across
+   * multiple accounts on the same channel gets an unscoped run and
+   * the handler's default lookup picks the newest row (which may be
+   * the wrong account in multi-account workspaces).
+   */
+  social_account_id: z.string().optional(),
   context_overrides: z.record(z.string(), z.any()).optional(),
 });
 

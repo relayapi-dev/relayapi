@@ -49,8 +49,6 @@ function platformToChannel(platform: string): BindingChannel | null {
 			return "whatsapp";
 		case "telegram":
 			return "telegram";
-		case "tiktok":
-			return "tiktok";
 		default:
 			return null;
 	}

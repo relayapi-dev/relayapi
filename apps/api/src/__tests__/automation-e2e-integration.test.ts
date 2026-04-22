@@ -439,7 +439,7 @@ describe("11.1 lead capture flow", () => {
 			db,
 			runId,
 			"alice@example.com",
-			false,
+			null,
 			{ db, sendTransport: fakeSendTransport },
 		);
 		expect(outcome).toBe("advanced");

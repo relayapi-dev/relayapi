@@ -428,7 +428,7 @@ export function ConnectionsPage({
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-44">
-                            {(["instagram", "facebook", "whatsapp", "telegram", "tiktok"].includes(platform)) && (
+                            {(["instagram", "facebook", "whatsapp", "telegram"].includes(platform)) && (
                               <DropdownMenuItem onClick={() => { window.location.href = `/app/connections/${acc.id}?tab=default-reply`; }}>
                                 <Link2 className="size-3.5 mr-2" />
                                 Manage bindings

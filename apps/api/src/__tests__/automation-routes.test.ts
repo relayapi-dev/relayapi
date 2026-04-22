@@ -33,7 +33,10 @@ import {
 	AUTOMATION_CATALOG_ETAG,
 } from "../routes/_automation-catalog";
 import { aggregateInsights } from "../routes/_automation-insights";
-import { validateEntrypointConfig } from "../schemas/automation-entrypoints";
+import {
+	EntrypointCreateSchema,
+	validateEntrypointConfig,
+} from "../schemas/automation-entrypoints";
 import { buildBindingWarnings } from "../routes/automation-bindings";
 import { BindingConfigByType } from "../schemas/automation-bindings";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
@@ -186,11 +189,26 @@ describe("automation catalog", () => {
 		expect(AUTOMATION_CATALOG.action_types).toHaveLength(22);
 	});
 
-	it("contains channel_capabilities for all 5 channels", () => {
+	it("contains channel_capabilities for all 4 supported channels", () => {
 		const channels = Object.keys(AUTOMATION_CATALOG.channel_capabilities).sort();
 		expect(channels).toEqual(
-			["facebook", "instagram", "telegram", "tiktok", "whatsapp"].sort(),
+			["facebook", "instagram", "telegram", "whatsapp"].sort(),
 		);
+	});
+
+	it("does not advertise tiktok in any channel array", () => {
+		// TikTok was removed from the v1 automation catalog (Plan 6 Unit RR11 /
+		// Task 3). No webhook, normalizer, or real DM send ships in v1, so the
+		// catalog must not surface it anywhere.
+		for (const ep of AUTOMATION_CATALOG.entrypoint_kinds) {
+			expect(ep.channels).not.toContain("tiktok");
+		}
+		for (const b of AUTOMATION_CATALOG.binding_types) {
+			expect(b.channels).not.toContain("tiktok");
+		}
+		expect(
+			Object.keys(AUTOMATION_CATALOG.channel_capabilities),
+		).not.toContain("tiktok");
 	});
 
 	it("contains the 8 template kinds", () => {
@@ -244,6 +262,18 @@ describe("entrypoint config validation", () => {
 				null,
 			),
 		).toBe(30);
+	});
+
+	it("rejects EntrypointCreateSchema with channel=tiktok", () => {
+		// Plan 6 Unit RR11 / Task 3: the API no longer accepts tiktok as a
+		// valid automation channel. Creating an entrypoint with channel=tiktok
+		// must fail Zod validation (translated to HTTP 422 at the route).
+		const parsed = EntrypointCreateSchema.safeParse({
+			channel: "tiktok",
+			kind: "dm_received",
+			config: {},
+		});
+		expect(parsed.success).toBe(false);
 	});
 });
 

@@ -22,6 +22,7 @@ import {
 	validateEntrypointConfig,
 } from "../schemas/automation-entrypoints";
 import { ErrorResponse, PaginationParams } from "../schemas/common";
+import { armScheduleEntrypoint } from "../services/automations/scheduler";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
 import type { Env, Variables } from "../types";
 import {
@@ -52,7 +53,7 @@ function maskSecret(config: Record<string, unknown> | null): Record<string, unkn
 const EntrypointResponseSchema = z.object({
 	id: z.string(),
 	automation_id: z.string(),
-	channel: z.enum(["instagram", "facebook", "whatsapp", "telegram", "tiktok"]),
+	channel: z.enum(["instagram", "facebook", "whatsapp", "telegram"]),
 	kind: z.string(),
 	status: z.string(),
 	social_account_id: z.string().nullable(),
@@ -71,6 +72,15 @@ const EntrypointCreateResponseSchema = EntrypointResponseSchema.extend({
 		.string()
 		.optional()
 		.describe("Plaintext HMAC secret — returned only on create/rotate for webhook_inbound entrypoints."),
+	scheduling: z
+		.object({
+			queued: z.boolean(),
+			reason: z.string().optional(),
+		})
+		.optional()
+		.describe(
+			"Result of the auto-arm attempt for schedule entrypoints: queued=true means an initial scheduled_trigger job was inserted; queued=false carries a reason code (e.g. automation_not_active, invalid_cron, no_cron).",
+		),
 });
 
 function serializeEntrypoint(
@@ -330,10 +340,24 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 		);
 	}
 
+	// Self-arm a newly created schedule entrypoint so the first cron tick
+	// actually fires. Without this, the entrypoint just sits there until
+	// something else (manual test job, unrelated deploy) happens to
+	// enqueue a scheduled_trigger row.
+	let scheduling: { queued: boolean; reason?: string } | undefined;
+	if (inserted.kind === "schedule" && inserted.status === "active") {
+		const result = await armScheduleEntrypoint(db, inserted.id);
+		scheduling = {
+			queued: result.queued,
+			...(result.reason ? { reason: result.reason } : {}),
+		};
+	}
+
+	const body201 = serializeEntrypoint(inserted, {
+		revealSecret: plaintextSecret ?? undefined,
+	});
 	return c.json(
-		serializeEntrypoint(inserted, {
-			revealSecret: plaintextSecret ?? undefined,
-		}),
+		scheduling ? { ...body201, scheduling } : body201,
 		201,
 	);
 });
@@ -386,7 +410,9 @@ const updateEntrypoint = createRoute({
 	responses: {
 		200: {
 			description: "Updated",
-			content: { "application/json": { schema: EntrypointResponseSchema } },
+			content: {
+				"application/json": { schema: EntrypointCreateResponseSchema },
+			},
 		},
 		400: {
 			description: "Validation error",
@@ -475,7 +501,46 @@ app.openapi(updateEntrypoint, async (c) => {
 		.where(eq(automationEntrypoints.id, id))
 		.returning();
 	if (!updated) return notFound(c);
-	return c.json(serializeEntrypoint(updated), 200);
+
+	// Re-arm on transitions that could have introduced or changed a
+	// schedule firing:
+	//   - inactive → active (any kind — only fires when schedule)
+	//   - kind changed while active
+	//   - cron / timezone in config changed while active
+	// The `insertNextScheduledJobIfNotExists` dedupe (±1s window) absorbs
+	// double-arming, so we err on the side of arming more often.
+	const wasActive = existing.status === "active";
+	const isActive = updated.status === "active";
+	const kindChanged = existing.kind !== updated.kind;
+	const prevCfg = (existing.config ?? {}) as {
+		cron?: string;
+		timezone?: string;
+	};
+	const nextCfg = (updated.config ?? {}) as {
+		cron?: string;
+		timezone?: string;
+	};
+	const cronChanged =
+		prevCfg.cron !== nextCfg.cron || prevCfg.timezone !== nextCfg.timezone;
+	const becameActive = !wasActive && isActive;
+	const shouldRearm =
+		updated.kind === "schedule" &&
+		isActive &&
+		(becameActive || kindChanged || cronChanged);
+	let scheduling: { queued: boolean; reason?: string } | undefined;
+	if (shouldRearm) {
+		const result = await armScheduleEntrypoint(db, updated.id);
+		scheduling = {
+			queued: result.queued,
+			...(result.reason ? { reason: result.reason } : {}),
+		};
+	}
+
+	const serialized = serializeEntrypoint(updated);
+	return c.json(
+		scheduling ? { ...serialized, scheduling } : serialized,
+		200,
+	);
 });
 
 const deleteEntrypoint = createRoute({

@@ -45,8 +45,7 @@ export type SubscriptionChannel =
 	| "instagram"
 	| "facebook"
 	| "whatsapp"
-	| "telegram"
-	| "tiktok";
+	| "telegram";
 
 export type WebhookMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type WebhookAuthMode = "none" | "bearer" | "basic" | "hmac";

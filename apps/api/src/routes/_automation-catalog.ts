@@ -80,7 +80,7 @@ const ENTRYPOINT_KINDS = [
 	{
 		kind: "dm_received",
 		label: "DM Received",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 	},
 	// NOTE: a dedicated `keyword` entrypoint kind was previously exposed here.
 	// It was removed because `deriveInboundEventKind` never emits `"keyword"` —
@@ -119,7 +119,7 @@ const ENTRYPOINT_KINDS = [
 	{
 		kind: "ref_link_click",
 		label: "Ref link click",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 	},
 	{
 		kind: "share_to_dm",
@@ -129,37 +129,37 @@ const ENTRYPOINT_KINDS = [
 	{
 		kind: "follow",
 		label: "Follow",
-		channels: ["instagram", "facebook", "tiktok"],
+		channels: ["instagram", "facebook"],
 	},
 	{
 		kind: "schedule",
 		label: "Schedule",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 	},
 	{
 		kind: "field_changed",
 		label: "Field changed",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 	},
 	{
 		kind: "tag_applied",
 		label: "Tag applied",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 	},
 	{
 		kind: "tag_removed",
 		label: "Tag removed",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 	},
 	{
 		kind: "conversion_event",
 		label: "Conversion event",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 	},
 	{
 		kind: "webhook_inbound",
 		label: "Webhook inbound",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 	},
 ];
 
@@ -167,13 +167,13 @@ const BINDING_TYPES = [
 	{
 		type: "default_reply",
 		label: "Default Reply",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 		v1_status: "wired",
 	},
 	{
 		type: "welcome_message",
 		label: "Welcome Message",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 		v1_status: "wired",
 	},
 	{
@@ -340,17 +340,6 @@ const CHANNEL_CAPABILITIES: Record<string, Record<string, boolean | number>> = {
 		video: true,
 		audio: true,
 		file: true,
-		delay: true,
-	},
-	tiktok: {
-		buttons: false,
-		quick_replies: false,
-		card: false,
-		gallery: false,
-		image: true,
-		video: true,
-		audio: false,
-		file: false,
 		delay: true,
 	},
 };

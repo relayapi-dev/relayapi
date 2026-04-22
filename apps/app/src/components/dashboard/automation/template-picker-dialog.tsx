@@ -57,7 +57,7 @@ export type TemplateSlug =
 	| "faq_bot"
 	| "lead_capture";
 
-type ChannelOption = "instagram" | "facebook" | "whatsapp" | "telegram" | "tiktok";
+type ChannelOption = "instagram" | "facebook" | "whatsapp" | "telegram";
 
 interface TemplateMeta {
 	slug: TemplateSlug;
@@ -74,7 +74,7 @@ const TEMPLATES: TemplateMeta[] = [
 		name: "Blank automation",
 		description: "Start from an empty canvas.",
 		icon: FilePlus,
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 		group: "blank",
 	},
 	{
@@ -106,7 +106,7 @@ const TEMPLATES: TemplateMeta[] = [
 		name: "Follow to DM",
 		description: "DM new followers automatically.",
 		icon: UserPlus,
-		channels: ["instagram", "tiktok"],
+		channels: ["instagram"],
 		group: "quick_start",
 	},
 	{

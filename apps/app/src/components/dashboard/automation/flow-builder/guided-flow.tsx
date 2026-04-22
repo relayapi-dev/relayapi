@@ -78,7 +78,15 @@ import { useAutosave } from "./use-autosave";
 import type { UseGraphStore } from "./use-graph-store";
 import { generateNodeKey } from "./use-graph-store";
 import type { AutomationCatalog } from "./use-catalog";
-import type { AutomationEdge, AutomationNode } from "./graph-types";
+import type {
+	AutomationEdge,
+	AutomationGraph,
+	AutomationNode,
+} from "./graph-types";
+import {
+	parseGraphSaveResponse,
+	type GraphSaveResult,
+} from "./graph-save-response";
 import {
 	NodeMetricBadge,
 	useNodeOverlays,
@@ -106,9 +114,10 @@ export interface GuidedFlowProps {
 	/**
 	 * Override the autosave endpoint. Defaults to PUTting to
 	 * `/api/automations/{id}/graph` which is the SDK proxy on the dashboard
-	 * side.
+	 * side. Returns the parsed save result so the caller can decide how to
+	 * surface validation errors vs hard failures.
 	 */
-	onSave?: (graph: UseGraphStore["graph"]) => Promise<void>;
+	onSave?: (graph: UseGraphStore["graph"]) => Promise<GraphSaveResult>;
 }
 
 interface NodeData {
@@ -348,23 +357,25 @@ function CanvasControls({
 async function defaultSave(
 	automationId: string,
 	graph: UseGraphStore["graph"],
-): Promise<void> {
-	const res = await fetch(`/api/automations/${automationId}/graph`, {
-		method: "PUT",
-		credentials: "same-origin",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ graph }),
-	});
-	if (!res.ok) {
-		let message = `Failed to save graph (HTTP ${res.status})`;
-		try {
-			const body = (await res.json()) as { error?: { message?: string } };
-			if (body?.error?.message) message = body.error.message;
-		} catch {
-			// non-JSON
-		}
-		throw new Error(message);
+): Promise<GraphSaveResult> {
+	let res: Response;
+	try {
+		res = await fetch(`/api/automations/${automationId}/graph`, {
+			method: "PUT",
+			credentials: "same-origin",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ graph }),
+		});
+	} catch (err) {
+		// Network error / offline — surface as a soft error so callers can
+		// retry rather than crashing the builder.
+		return {
+			kind: "error",
+			message:
+				err instanceof Error ? err.message : "Network error while saving",
+		};
 	}
+	return parseGraphSaveResponse(res);
 }
 
 // ---------------------------------------------------------------------------
@@ -579,16 +590,65 @@ function CanvasInner({
 
 	const doSave = useCallback(async () => {
 		if (readOnly) return;
+		let result: GraphSaveResult;
 		try {
 			if (onSave) {
-				await onSave(graph);
+				result = await onSave(graph);
 			} else {
-				await defaultSave(automationId, graph);
+				result = await defaultSave(automationId, graph);
 			}
-			graphStore.markSaved();
 		} catch (err) {
 			toast.push(
 				err instanceof Error ? err.message : "Failed to save automation",
+			);
+			return;
+		}
+
+		if (result.kind === "error") {
+			toast.push(result.message);
+			return;
+		}
+
+		// Apply canonical graph + validation to the local store. The API may
+		// have normalised the graph (derived ports, ordered edges), so we
+		// overwrite the local copy with the server's version. Callers are
+		// aware of the 750ms autosave debounce — edits made between request
+		// and response are covered by the next save cycle.
+		const serverGraph = result.graph as AutomationGraph;
+		graphStore.setGraph(serverGraph);
+		graphStore.markSaved();
+
+		// Translate server validation payload → client ValidationIssue shape.
+		const mapIssue = (
+			iss: {
+				node_key?: string;
+				port_key?: string;
+				edge_index?: number;
+				code: string;
+				message: string;
+			},
+			severity: "error" | "warning",
+		) => ({
+			code: iss.code,
+			message: iss.message,
+			severity,
+			nodeKey: iss.node_key,
+			portKey: iss.port_key,
+			edgeIndex: iss.edge_index,
+		});
+		graphStore.setValidation(
+			result.validation.errors.map((e) => mapIssue(e, "error")),
+			result.validation.warnings.map((w) => mapIssue(w, "warning")),
+		);
+
+		if (result.kind === "saved_with_errors") {
+			// Server force-paused the automation (or kept it paused) because the
+			// graph has fatal errors. Surface a toast — the validation banner
+			// elsewhere in the UI picks up the error list from the store.
+			toast.push(
+				result.automation_status === "paused"
+					? "Graph saved with errors. Automation paused."
+					: "Graph saved with errors.",
 			);
 		}
 	}, [automationId, graph, graphStore, onSave, readOnly, toast]);

@@ -22,6 +22,8 @@ import {
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { Graph } from "../schemas/automation-graph";
 import {
+	armAllScheduleEntrypointsForAutomation,
+	armScheduleEntrypoint,
 	computeNextCronRun,
 	processScheduledJobs,
 } from "../services/automations/scheduler";
@@ -195,6 +197,45 @@ describe("computeNextCronRun", () => {
 		expect(computeNextCronRun("0 0 1 * 0", anchor)).toBeNull();
 		expect(computeNextCronRun("not a cron", anchor)).toBeNull();
 		expect(computeNextCronRun("0 0 * * 5", anchor)).toBeNull();
+	});
+
+	// ---------------------------------------------------------------------------
+	// Timezone support (F4)
+	// ---------------------------------------------------------------------------
+
+	it("preserves UTC behavior when timezone is 'UTC' or omitted", () => {
+		const fromUtc = new Date("2026-04-22T12:00:00.000Z");
+		const a = computeNextCronRun("0 9 * * *", fromUtc);
+		const b = computeNextCronRun("0 9 * * *", fromUtc, "UTC");
+		expect(a!.toISOString()).toBe("2026-04-23T09:00:00.000Z");
+		expect(b!.toISOString()).toBe("2026-04-23T09:00:00.000Z");
+	});
+
+	it("resolves `0 9 * * *` in America/New_York to 13:00 UTC during EDT", () => {
+		// 2026-04-22 is in DST — ET = UTC-4.
+		const from = new Date("2026-04-22T12:00:00.000Z");
+		const next = computeNextCronRun("0 9 * * *", from, "America/New_York");
+		expect(next).not.toBeNull();
+		// 9am NY on 2026-04-22 is 13:00 UTC; since that's still after `from`
+		// (12:00 UTC), it's today rather than tomorrow.
+		expect(next!.toISOString()).toBe("2026-04-22T13:00:00.000Z");
+	});
+
+	it("resolves `0 10 * * *` in Europe/London on a spring-forward day", () => {
+		// In 2026 UK DST starts at 2026-03-29 01:00 UTC (clocks jump to 02:00
+		// local). After that day, 10:00 London = 09:00 UTC. Compute from
+		// 2026-04-01T05:00:00Z → next 10:00 local = 2026-04-01T09:00:00Z.
+		const from = new Date("2026-04-01T05:00:00.000Z");
+		const next = computeNextCronRun("0 10 * * *", from, "Europe/London");
+		expect(next).not.toBeNull();
+		expect(next!.toISOString()).toBe("2026-04-01T09:00:00.000Z");
+	});
+
+	it("returns null for an unknown IANA timezone", () => {
+		const from = new Date("2026-04-22T12:00:00.000Z");
+		expect(
+			computeNextCronRun("0 9 * * *", from, "Not/A_Real_Zone"),
+		).toBeNull();
 	});
 });
 
@@ -411,4 +452,142 @@ describe("scheduled_trigger dispatch", () => {
 			expect(pending.length).toBe(1);
 		},
 	);
+});
+
+// ---------------------------------------------------------------------------
+// armScheduleEntrypoint / armAllScheduleEntrypointsForAutomation (F1)
+// ---------------------------------------------------------------------------
+
+describe("armScheduleEntrypoint (F1)", () => {
+	it("queues one pending job for a fresh active schedule entrypoint", async () => {
+		if (!dbAvailable) return;
+
+		const auto = await makeAutomation("arm-fresh");
+		const ep = await makeEntrypoint(
+			auto.id,
+			{ cron: "0 9 * * *" },
+			{ all: [{ field: "tags", op: "contains", value: "vip" }] },
+		);
+
+		const result = await armScheduleEntrypoint(db, ep.id);
+		expect(result.queued).toBe(true);
+		expect(result.runAt).toBeInstanceOf(Date);
+
+		const pending = await db
+			.select({ runAt: automationScheduledJobs.runAt })
+			.from(automationScheduledJobs)
+			.where(
+				and(
+					eq(automationScheduledJobs.entrypointId, ep.id),
+					eq(automationScheduledJobs.status, "pending"),
+					eq(automationScheduledJobs.jobType, "scheduled_trigger"),
+				),
+			);
+		expect(pending.length).toBe(1);
+		expect(pending[0]!.runAt.getTime()).toBeGreaterThan(Date.now());
+	});
+
+	it("skips arming when the entrypoint's automation is not active", async () => {
+		if (!dbAvailable) return;
+
+		const [auto] = await db
+			.insert(automations)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "arm-paused-auto",
+				channel: "instagram",
+				status: "paused",
+				graph: END_GRAPH as never,
+			})
+			.returning();
+		if (!auto) throw new Error("auto insert failed");
+
+		const ep = await makeEntrypoint(
+			auto.id,
+			{ cron: "0 9 * * *" },
+			{ all: [{ field: "tags", op: "contains", value: "vip" }] },
+		);
+
+		const result = await armScheduleEntrypoint(db, ep.id);
+		expect(result.queued).toBe(false);
+		expect(result.reason).toBe("automation_not_active");
+
+		const pending = await db
+			.select({ id: automationScheduledJobs.id })
+			.from(automationScheduledJobs)
+			.where(
+				and(
+					eq(automationScheduledJobs.entrypointId, ep.id),
+					eq(automationScheduledJobs.status, "pending"),
+				),
+			);
+		expect(pending.length).toBe(0);
+	});
+
+	it("is idempotent — arming twice doesn't double-queue", async () => {
+		if (!dbAvailable) return;
+
+		const auto = await makeAutomation("arm-idempotent");
+		const ep = await makeEntrypoint(
+			auto.id,
+			{ cron: "0 9 * * *" },
+			{ all: [{ field: "tags", op: "contains", value: "vip" }] },
+		);
+
+		await armScheduleEntrypoint(db, ep.id);
+		await armScheduleEntrypoint(db, ep.id);
+
+		const pending = await db
+			.select({ id: automationScheduledJobs.id })
+			.from(automationScheduledJobs)
+			.where(
+				and(
+					eq(automationScheduledJobs.entrypointId, ep.id),
+					eq(automationScheduledJobs.status, "pending"),
+				),
+			);
+		expect(pending.length).toBe(1);
+	});
+});
+
+describe("armAllScheduleEntrypointsForAutomation (F1)", () => {
+	it("arms every active schedule entrypoint on the automation", async () => {
+		if (!dbAvailable) return;
+
+		const auto = await makeAutomation("arm-all");
+		const ep1 = await makeEntrypoint(
+			auto.id,
+			{ cron: "0 9 * * *" },
+			{ all: [{ field: "tags", op: "contains", value: "vip" }] },
+		);
+		const ep2 = await makeEntrypoint(
+			auto.id,
+			{ cron: "0 10 * * *" },
+			{ all: [{ field: "tags", op: "contains", value: "vip" }] },
+		);
+
+		const result = await armAllScheduleEntrypointsForAutomation(
+			db,
+			auto.id,
+		);
+		expect(result.armed).toBe(2);
+
+		const pending = await db
+			.select({
+				id: automationScheduledJobs.id,
+				entrypointId: automationScheduledJobs.entrypointId,
+			})
+			.from(automationScheduledJobs)
+			.where(
+				and(
+					eq(automationScheduledJobs.automationId, auto.id),
+					eq(automationScheduledJobs.status, "pending"),
+				),
+			);
+		const arm1 = pending.find((p) => p.entrypointId === ep1.id);
+		const arm2 = pending.find((p) => p.entrypointId === ep2.id);
+		expect(arm1).toBeTruthy();
+		expect(arm2).toBeTruthy();
+	});
 });

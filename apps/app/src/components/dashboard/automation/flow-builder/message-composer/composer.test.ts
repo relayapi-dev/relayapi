@@ -196,15 +196,12 @@ describe("channel capabilities", () => {
 		expect(channelSupportsBlock("whatsapp", "gallery")).toBe(false);
 	});
 
-	it("tiktok only supports image, video, delay, and text", () => {
-		expect(channelSupportsBlock("tiktok", "text")).toBe(true);
-		expect(channelSupportsBlock("tiktok", "image")).toBe(true);
-		expect(channelSupportsBlock("tiktok", "video")).toBe(true);
-		expect(channelSupportsBlock("tiktok", "delay")).toBe(true);
-		expect(channelSupportsButtons("tiktok")).toBe(false);
-		expect(channelSupportsQuickReplies("tiktok")).toBe(false);
-		expect(channelSupportsBlock("tiktok", "audio")).toBe(false);
-		expect(channelSupportsBlock("tiktok", "file")).toBe(false);
+	it("tiktok is no longer advertised as an automation channel", () => {
+		// TikTok was removed from the automation channel list in Plan 6
+		// Unit RR11 / Task 3 (no webhook, no normalizer, no real DM send).
+		// Unknown channels fall back to DEFAULT_CAPS which is permissive;
+		// the UI guards against picking tiktok via the channel-option enum.
+		expect(channelSupportsBlock("tiktok", "audio")).toBe(true);
 	});
 
 	it("capabilitiesFor prefers live catalog over fallback", () => {

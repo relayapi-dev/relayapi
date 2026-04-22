@@ -86,6 +86,19 @@ const tagAdd: ActionHandler<TagAddAction> = async (action, ctx) => {
 
 	if (wasPresent) return;
 
+	// Mirror the DB mutation into `ctx.context.tags` so downstream condition
+	// nodes in the SAME run see the fresh tag set. Without this, a
+	// tag_add → condition(contact has tag X) → branch(true) flow always
+	// takes the false branch because ctx.context was hydrated at enroll time
+	// and the runner only re-reads it across run iterations, not within a
+	// single handler chain. Fix for Plan 6 Unit RR11 / Task 5 (F6).
+	const currentTags = Array.isArray(ctx.context.tags)
+		? (ctx.context.tags as string[])
+		: [];
+	if (!currentTags.includes(tag)) {
+		ctx.context.tags = [...currentTags, tag];
+	}
+
 	// Best-effort internal event — never fail the primary tag mutation.
 	await emitInternalEvent(
 		db,
@@ -132,6 +145,14 @@ const tagRemove: ActionHandler<TagRemoveAction> = async (action, ctx) => {
 		);
 
 	if (!wasPresent) return;
+
+	// Mirror the removal into ctx.context.tags so later condition nodes in
+	// the same run see the contact without the tag. Plan 6 Unit RR11 /
+	// Task 5 (F6).
+	const currentTags = Array.isArray(ctx.context.tags)
+		? (ctx.context.tags as string[])
+		: [];
+	ctx.context.tags = currentTags.filter((t) => t !== tag);
 
 	await emitInternalEvent(
 		db,

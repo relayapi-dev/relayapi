@@ -18,8 +18,7 @@ export type AutomationChannel =
 	| "instagram"
 	| "facebook"
 	| "whatsapp"
-	| "telegram"
-	| "tiktok";
+	| "telegram";
 
 export type AutomationStatus = "draft" | "active" | "paused" | "archived";
 
@@ -214,6 +213,13 @@ export interface AutomationGraphUpdateParams {
 export interface AutomationEnrollParams {
 	contact_id: string;
 	entrypoint_id?: string;
+	/**
+	 * Pin the triggering social account for this manual enrollment.
+	 * Required for multi-account workspaces where the contact has
+	 * channels across several accounts on the same platform — without
+	 * it, outbound sends may route through the wrong account.
+	 */
+	social_account_id?: string;
 	context_overrides?: Record<string, unknown>;
 }
 

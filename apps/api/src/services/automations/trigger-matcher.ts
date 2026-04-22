@@ -40,7 +40,7 @@ export type InboundEventKind =
 
 export type InboundEvent = {
 	kind: InboundEventKind | "schedule";
-	channel: "instagram" | "facebook" | "whatsapp" | "telegram" | "tiktok";
+	channel: "instagram" | "facebook" | "whatsapp" | "telegram";
 	organizationId: string;
 	// Nullable for internal events (tag_applied/field_changed/conversion_event/
 	// ref_link_click/schedule) that don't originate from a specific social
@@ -495,6 +495,11 @@ export async function matchAndEnroll(
 			channel: event.channel,
 			entrypointId: picked.entrypoint.id,
 			bindingId: null,
+			// Pin the account that triggered this match so outbound
+			// sends scope contact_channels to the correct account in a
+			// multi-account workspace. Internal-only events (schedule,
+			// tag_applied, field_changed, ...) may pass null.
+			socialAccountId: event.socialAccountId ?? null,
 			contextOverrides: { triggerEvent: event },
 			env,
 		});

@@ -11,9 +11,10 @@ import {
 	contactChannels,
 	customFieldDefinitions,
 	customFieldValues,
+	workspaces,
 	type Database,
 } from "@relayapi/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { maybeDecrypt } from "../../lib/crypto";
 import { enrollContact } from "./runner";
 
@@ -24,7 +25,7 @@ export type WebhookReceptionResult =
 	| { status: "bad_signature" }
 	| { status: "unknown_slug" }
 	| { status: "bad_payload"; error: string }
-	| { status: "contact_lookup_failed" }
+	| { status: "contact_lookup_failed"; reason?: string }
 	| { status: "enrollment_failed"; error: string };
 
 // ---------------------------------------------------------------------------
@@ -155,6 +156,24 @@ type ContactLookupConfig = {
 	auto_create_contact?: boolean;
 	default_workspace_id?: string;
 };
+
+/**
+ * Resolves the default workspace for an organization — the oldest workspace
+ * row. Used by `resolveContact` to populate `workspaceId` on auto-created
+ * contacts. Returns null when the org has no workspaces (caller surfaces this
+ * as `contact_lookup_failed` with reason `no_default_workspace` so operators
+ * can debug a misconfigured org).
+ */
+async function resolveDefaultWorkspaceId(
+	db: Db,
+	organizationId: string,
+): Promise<string | null> {
+	const ws = await db.query.workspaces.findFirst({
+		where: eq(workspaces.organizationId, organizationId),
+		orderBy: [asc(workspaces.createdAt)],
+	});
+	return ws?.id ?? null;
+}
 
 async function resolveContact(
 	db: Db,
@@ -358,16 +377,39 @@ export async function receiveAutomationWebhook(
 		};
 	}
 
-	// 4. Resolve contact.
+	// 4. Resolve contact. `auto_create_contact` requires a workspace to
+	// anchor the new row — resolve the org's default (oldest) workspace
+	// and inject it into the lookup config so the create path can insert.
+	// Plan 6 Unit RR11 / Task 6 (F3): previously `default_workspace_id`
+	// was never populated, so `auto_create_contact: true` silently failed.
 	const lookup =
 		(cfg.contact_lookup as ContactLookupConfig | undefined) ?? null;
 	if (!lookup) return { status: "contact_lookup_failed" };
+
+	let effectiveLookup = lookup;
+	if (lookup.auto_create_contact && !lookup.default_workspace_id) {
+		const defaultWorkspaceId = await resolveDefaultWorkspaceId(
+			db,
+			match.automation.organizationId,
+		);
+		if (!defaultWorkspaceId) {
+			// Org has no workspaces — auto-create can't pick a parent, so we
+			// surface an explicit failure reason instead of silently dropping
+			// the webhook. Operators typically hit this on a brand-new org
+			// before the first workspace is provisioned.
+			return {
+				status: "contact_lookup_failed",
+				reason: "no_default_workspace",
+			};
+		}
+		effectiveLookup = { ...lookup, default_workspace_id: defaultWorkspaceId };
+	}
 
 	const contactId = await resolveContact(
 		db,
 		match.automation.organizationId,
 		body,
-		lookup,
+		effectiveLookup,
 	);
 	if (!contactId) return { status: "contact_lookup_failed" };
 
@@ -378,7 +420,10 @@ export async function receiveAutomationWebhook(
 		contextOverrides[key] = extractByPath(body, jsonPath);
 	}
 
-	// 6. Enroll.
+	// 6. Enroll. External webhook entrypoints are account-scoped when the
+	// operator pinned `social_account_id` on the row; otherwise the run
+	// is unpinned and the handler's default contact_channels lookup
+	// applies (single-account workspaces behave as before).
 	try {
 		const { runId } = await enrollContact(db, {
 			automationId: match.automation.id,
@@ -388,6 +433,7 @@ export async function receiveAutomationWebhook(
 			channel: match.automation.channel,
 			entrypointId: match.entrypoint.id,
 			bindingId: null,
+			socialAccountId: match.entrypoint.socialAccountId ?? null,
 			contextOverrides,
 			env,
 		});

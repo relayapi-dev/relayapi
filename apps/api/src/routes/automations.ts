@@ -29,6 +29,7 @@ import {
 	AutomationValidationSchema,
 } from "../schemas/automations";
 import { enrollContact } from "../services/automations/runner";
+import { armAllScheduleEntrypointsForAutomation } from "../services/automations/scheduler";
 import { simulate } from "../services/automations/simulator";
 import {
 	buildGraphFromTemplate,
@@ -584,6 +585,11 @@ app.openapi(activateAutomation, async (c) => {
 	}
 	const updated = await setStatus(c, id, "active");
 	if (!updated) return notFound(c);
+	// Arm every schedule entrypoint belonging to this automation so
+	// activating a flow that was previously paused / draft immediately
+	// seeds the scheduled_trigger queue. Idempotent via the ±1s dedupe
+	// in insertNextScheduledJobIfNotExists.
+	await armAllScheduleEntrypointsForAutomation(c.get("db"), id);
 	return c.json(serializeAutomation(updated), 200);
 });
 
@@ -661,6 +667,9 @@ app.openapi(resumeAutomation, async (c) => {
 	}
 	const updated = await setStatus(c, id, "active");
 	if (!updated) return notFound(c);
+	// Same as activate — seed scheduled_trigger rows for schedule
+	// entrypoints so a paused automation resuming mid-day picks up.
+	await armAllScheduleEntrypointsForAutomation(c.get("db"), id);
 	return c.json(serializeAutomation(updated), 200);
 });
 
@@ -859,6 +868,7 @@ app.openapi(enrollAutomation, async (c) => {
 			channel: row.channel,
 			entrypointId: body.entrypoint_id ?? null,
 			bindingId: null,
+			socialAccountId: body.social_account_id ?? null,
 			contextOverrides: body.context_overrides ?? {},
 			env: c.env as unknown as Record<string, unknown>,
 		});

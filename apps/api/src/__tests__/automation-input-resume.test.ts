@@ -34,7 +34,7 @@ describe("resolveInputResume", () => {
 		const out = resolveInputResume(
 			{ field: "answer" },
 			"hello world",
-			false,
+			null,
 			0,
 		);
 		expect(out.port).toBe("captured");
@@ -47,7 +47,7 @@ describe("resolveInputResume", () => {
 		const out = resolveInputResume(
 			{ field: "answer", max_retries: 1 },
 			"   ",
-			false,
+			null,
 			0,
 		);
 		expect(out.port).toBe("invalid");
@@ -57,7 +57,7 @@ describe("resolveInputResume", () => {
 		const out = resolveInputResume(
 			{ field: "answer", max_retries: 3 },
 			"",
-			false,
+			null,
 			0,
 		);
 		expect(out.port).toBe("retry");
@@ -67,7 +67,7 @@ describe("resolveInputResume", () => {
 		const ok = resolveInputResume(
 			{ field: "email", input_type: "email" },
 			"alice@example.com",
-			false,
+			null,
 			0,
 		);
 		expect(ok.port).toBe("captured");
@@ -75,7 +75,7 @@ describe("resolveInputResume", () => {
 		const bad = resolveInputResume(
 			{ field: "email", input_type: "email", max_retries: 1 },
 			"not-an-email",
-			false,
+			null,
 			0,
 		);
 		expect(bad.port).toBe("invalid");
@@ -83,9 +83,9 @@ describe("resolveInputResume", () => {
 
 	it("exhausts email retries before firing `invalid`", () => {
 		const cfg = { field: "email", input_type: "email" as const, max_retries: 2 };
-		const first = resolveInputResume(cfg, "still-bad", false, 0);
+		const first = resolveInputResume(cfg, "still-bad", null, 0);
 		expect(first.port).toBe("retry");
-		const second = resolveInputResume(cfg, "still-bad", false, 1);
+		const second = resolveInputResume(cfg, "still-bad", null, 1);
 		expect(second.port).toBe("invalid");
 	});
 
@@ -93,7 +93,7 @@ describe("resolveInputResume", () => {
 		const ok = resolveInputResume(
 			{ field: "phone", input_type: "phone" },
 			"+1 (415) 555-1212",
-			false,
+			null,
 			0,
 		);
 		expect(ok.port).toBe("captured");
@@ -101,7 +101,7 @@ describe("resolveInputResume", () => {
 		const bad = resolveInputResume(
 			{ field: "phone", input_type: "phone", max_retries: 1 },
 			"abc",
-			false,
+			null,
 			0,
 		);
 		expect(bad.port).toBe("invalid");
@@ -111,7 +111,7 @@ describe("resolveInputResume", () => {
 		const out = resolveInputResume(
 			{ field: "age", input_type: "number" },
 			"42",
-			false,
+			null,
 			0,
 		);
 		expect(out.port).toBe("captured");
@@ -120,7 +120,7 @@ describe("resolveInputResume", () => {
 		const bad = resolveInputResume(
 			{ field: "age", input_type: "number", max_retries: 1 },
 			"nope",
-			false,
+			null,
 			0,
 		);
 		expect(bad.port).toBe("invalid");
@@ -135,9 +135,9 @@ describe("resolveInputResume", () => {
 				{ value: "large", label: "Large", match: ["L", "lg"] },
 			],
 		};
-		const byValue = resolveInputResume(cfg, "large", false, 0);
-		const byLabel = resolveInputResume(cfg, "Small", false, 0);
-		const byMatch = resolveInputResume(cfg, "lg", false, 0);
+		const byValue = resolveInputResume(cfg, "large", null, 0);
+		const byLabel = resolveInputResume(cfg, "Small", null, 0);
+		const byMatch = resolveInputResume(cfg, "lg", null, 0);
 		expect(byValue.port).toBe("captured");
 		expect(byLabel.port).toBe("captured");
 		expect(byMatch.port).toBe("captured");
@@ -148,35 +148,139 @@ describe("resolveInputResume", () => {
 		const miss = resolveInputResume(
 			{ ...cfg, max_retries: 1 },
 			"medium",
-			false,
+			null,
 			0,
 		);
 		expect(miss.port).toBe("invalid");
 	});
 
-	it("requires an attachment for file inputs", () => {
-		const withAttach = resolveInputResume(
+	it("captures the full attachment object for file inputs", () => {
+		const attachment = {
+			id: "media_123",
+			url: "https://example.com/file.jpg",
+			filename: "file.jpg",
+			mime_type: "image/jpeg",
+			size_bytes: 12_345,
+		};
+		const out = resolveInputResume(
 			{ field: "file", input_type: "file" },
 			"",
-			true,
+			attachment,
 			0,
 		);
-		expect(withAttach.port).toBe("captured");
+		expect(out.port).toBe("captured");
+		if (out.port === "captured") {
+			expect(out.capturedValue).toEqual(attachment);
+		}
+	});
 
-		const noAttach = resolveInputResume(
+	it("rejects a file with the wrong mime type when accepted_mime_types is set", () => {
+		const cfg = {
+			field: "file",
+			input_type: "file" as const,
+			accepted_mime_types: ["image/jpeg", "image/png"],
+			max_retries: 1,
+		};
+		const out = resolveInputResume(
+			cfg,
+			"",
+			{ mime_type: "video/mp4", size_bytes: 123 },
+			0,
+		);
+		expect(out.port).toBe("invalid");
+	});
+
+	it("retries on wrong mime type when retries remain, then goes invalid", () => {
+		const cfg = {
+			field: "file",
+			input_type: "file" as const,
+			accepted_mime_types: ["image/jpeg"],
+			max_retries: 2,
+		};
+		const first = resolveInputResume(
+			cfg,
+			"",
+			{ mime_type: "video/mp4" },
+			0,
+		);
+		expect(first.port).toBe("retry");
+		const second = resolveInputResume(
+			cfg,
+			"",
+			{ mime_type: "video/mp4" },
+			1,
+		);
+		expect(second.port).toBe("invalid");
+	});
+
+	it("rejects a file that is too large when max_size_mb is set", () => {
+		const cfg = {
+			field: "file",
+			input_type: "file" as const,
+			max_size_mb: 1,
+			max_retries: 1,
+		};
+		// 2 MB attachment > 1 MB limit
+		const out = resolveInputResume(
+			cfg,
+			"",
+			{ mime_type: "image/jpeg", size_bytes: 2_000_000 },
+			0,
+		);
+		expect(out.port).toBe("invalid");
+	});
+
+	it("accepts a file that meets both mime and size constraints", () => {
+		const cfg = {
+			field: "file",
+			input_type: "file" as const,
+			accepted_mime_types: ["image/jpeg"],
+			max_size_mb: 5,
+		};
+		const attachment = {
+			url: "https://cdn.example.com/ok.jpg",
+			mime_type: "image/jpeg",
+			size_bytes: 100_000,
+		};
+		const out = resolveInputResume(cfg, "", attachment, 0);
+		expect(out.port).toBe("captured");
+		if (out.port === "captured") {
+			expect(out.capturedValue).toEqual(attachment);
+		}
+	});
+
+	it("ignores size when attachment omits size_bytes (platform didn't supply one)", () => {
+		const cfg = {
+			field: "file",
+			input_type: "file" as const,
+			max_size_mb: 1,
+		};
+		// No size_bytes — should NOT reject; operator can't enforce what the
+		// platform doesn't surface.
+		const out = resolveInputResume(
+			cfg,
+			"",
+			{ mime_type: "image/jpeg", url: "https://example.com/a.jpg" },
+			0,
+		);
+		expect(out.port).toBe("captured");
+	});
+
+	it("goes invalid when no attachment at all (out of retries)", () => {
+		const out = resolveInputResume(
 			{ field: "file", input_type: "file", max_retries: 1 },
 			"",
-			false,
+			null,
 			0,
 		);
-		expect(noAttach.port).toBe("invalid");
+		expect(out.port).toBe("invalid");
 	});
 
 	it("respects skip_allowed keyword", () => {
 		const out = resolveInputResume(
 			{ field: "email", input_type: "email", skip_allowed: true },
 			"skip",
-			false,
+			null,
 			0,
 		);
 		expect(out.port).toBe("skip");
@@ -186,7 +290,7 @@ describe("resolveInputResume", () => {
 		const out = resolveInputResume(
 			{ field: "email", input_type: "email", max_retries: 1 },
 			"skip",
-			false,
+			null,
 			0,
 		);
 		// "skip" is not a valid email, and we're out of retries → invalid
@@ -200,10 +304,10 @@ describe("resolveInputResume", () => {
 			validation: { pattern: "^\\d{5}$" },
 			max_retries: 1,
 		};
-		const ok = resolveInputResume(cfg, "94103", false, 0);
+		const ok = resolveInputResume(cfg, "94103", null, 0);
 		expect(ok.port).toBe("captured");
 
-		const bad = resolveInputResume(cfg, "ABC", false, 0);
+		const bad = resolveInputResume(cfg, "ABC", null, 0);
 		expect(bad.port).toBe("invalid");
 	});
 
@@ -213,7 +317,7 @@ describe("resolveInputResume", () => {
 			input_type: "text" as const,
 			validation: { pattern: "[" /* invalid */ },
 		};
-		const out = resolveInputResume(cfg, "whatever", false, 0);
+		const out = resolveInputResume(cfg, "whatever", null, 0);
 		expect(out.port).toBe("captured");
 	});
 });
@@ -389,7 +493,7 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 			db,
 			runId,
 			"alice@example.com",
-			false,
+			null,
 			{},
 		);
 		expect(outcome).toBe("advanced");
@@ -437,7 +541,7 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 				db,
 				runId,
 				"not-an-email",
-				false,
+				null,
 				{},
 			);
 			expect(outcome).toBe("retried");
@@ -458,7 +562,7 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 				db,
 				runId,
 				"still-not-an-email",
-				false,
+				null,
 				{},
 			);
 			expect(outcome).toBe("advanced");
@@ -510,7 +614,7 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 			db,
 			runId,
 			"alice@example.com",
-			false,
+			null,
 			{},
 		);
 		expect(outcome).toBe("race");
@@ -574,7 +678,7 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 			db,
 			runId,
 			"not-an-email",
-			false,
+			null,
 			{},
 		);
 		expect(outcome).toBe("completed");

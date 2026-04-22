@@ -137,6 +137,22 @@ export async function runLoop(
 
 		// 4. Dispatch handler.
 		const handler = getHandler(node.kind);
+		// Reconstruct env.socialAccountId from the persisted trigger when a
+		// resume-path caller (scheduler, input-resume, interactive-resume)
+		// didn't pass it through env. Without this, a run that started
+		// under account A but then waits through an `input` node would
+		// resume with no account pinned and `resolveRecipient` would pick
+		// up the newest contact_channels row — potentially account B in a
+		// multi-account workspace.
+		const runCtxObj = (run.context as Record<string, any>) ?? {};
+		const persistedAccountId = runCtxObj._triggering_social_account_id as
+			| string
+			| null
+			| undefined;
+		const effectiveEnv: Record<string, any> = { db, ...env };
+		if (effectiveEnv.socialAccountId == null && persistedAccountId) {
+			effectiveEnv.socialAccountId = persistedAccountId;
+		}
 		const ctx: RunContext = {
 			runId: run.id,
 			automationId: run.automationId,
@@ -145,12 +161,12 @@ export async function runLoop(
 			conversationId: run.conversationId,
 			channel: auto.channel,
 			graph,
-			context: (run.context as Record<string, any>) ?? {},
+			context: runCtxObj,
 			now: new Date(),
 			db,
 			// Mirror the db handle into env as a convenience for legacy callers
 			// that still read `env.db`, but ctx.db is the canonical source now.
-			env: { db, ...env },
+			env: effectiveEnv,
 		};
 		const startedAt = Date.now();
 		let result: HandlerResult;
@@ -335,6 +351,19 @@ export async function enrollContact(
 		channel: string;
 		entrypointId: string | null;
 		bindingId: string | null;
+		/**
+		 * Triggering social account. When set, the runner pins all outbound
+		 * sends for this run to this account — critical for multi-account
+		 * workspaces where `contact_channels` can return the wrong row for
+		 * a contact who reached us through account A but also exists under
+		 * account B on the same channel.
+		 *
+		 * Persisted on `automation_runs.context._triggering_social_account_id`
+		 * so resume paths (scheduler, input-resume, interactive-resume) can
+		 * reconstruct `env.socialAccountId` even when the runLoop caller
+		 * forgot to pass it through env.
+		 */
+		socialAccountId?: string | null;
 		contextOverrides?: Record<string, any>;
 		env: Record<string, any>;
 		runLoopOptions?: RunLoopOptions;
@@ -355,12 +384,24 @@ export async function enrollContact(
 	// Hydrate the run context with the contact row, inline tags, and keyed
 	// custom fields before inserting. Merge-tag resolution and condition
 	// predicates that read `{{contact.*}}` / tags / fields depend on this.
-	const initialContext = await buildInitialRunContext(
+	const hydrated = await buildInitialRunContext(
 		db,
 		args.contactId,
 		args.organizationId,
 		args.contextOverrides ?? {},
 	);
+	const initialContext = {
+		...hydrated,
+		// Persist the triggering social account on context so later
+		// resume paths can rebuild env.socialAccountId even when the
+		// caller of runLoop didn't pass it through. Overrides win if
+		// the caller explicitly supplied this key.
+		_triggering_social_account_id:
+			(args.contextOverrides?._triggering_social_account_id as
+				| string
+				| null
+				| undefined) ?? args.socialAccountId ?? null,
+	};
 
 	const [inserted] = await db
 		.insert(automationRuns)
@@ -387,13 +428,14 @@ export async function enrollContact(
 
 	// Ensure downstream handlers invoked from runLoop can still find `db` on
 	// ctx.env if they haven't been migrated yet — but the canonical source is
-	// ctx.db, which runLoop populates directly.
-	await runLoop(
-		db,
-		inserted.id,
-		{ db, ...args.env },
-		args.runLoopOptions,
-	);
+	// ctx.db, which runLoop populates directly. Pin socialAccountId on env
+	// so `resolveRecipient` scopes `contact_channels` to the account that
+	// actually triggered this run.
+	const envForRun: Record<string, any> = { db, ...args.env };
+	if (args.socialAccountId && envForRun.socialAccountId == null) {
+		envForRun.socialAccountId = args.socialAccountId;
+	}
+	await runLoop(db, inserted.id, envForRun, args.runLoopOptions);
 	return { runId: inserted.id };
 }
 

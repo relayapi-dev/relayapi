@@ -8,8 +8,7 @@ export type BindingChannel =
 	| "instagram"
 	| "facebook"
 	| "whatsapp"
-	| "telegram"
-	| "tiktok";
+	| "telegram";
 
 export type BindingType =
 	| "default_reply"
@@ -38,14 +37,14 @@ export const BINDING_TABS: readonly BindingTabDescriptor[] = [
 		key: "default-reply",
 		bindingType: "default_reply",
 		label: "Default Reply",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 		stubbed: false,
 	},
 	{
 		key: "welcome-message",
 		bindingType: "welcome_message",
 		label: "Welcome Message",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
+		channels: ["instagram", "facebook", "whatsapp", "telegram"],
 		stubbed: false,
 	},
 	{

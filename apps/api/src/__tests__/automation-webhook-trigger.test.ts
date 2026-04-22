@@ -371,6 +371,153 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 		}
 	});
 
+	it("auto_create_contact enrolls a brand-new contact into the default workspace", async () => {
+		// Plan 6 Unit RR11 / Task 6 (F3): before the fix,
+		// `auto_create_contact: true` silently returned null because
+		// `default_workspace_id` was never injected. The receiver now resolves
+		// the org's oldest workspace and uses it to anchor the new contact.
+		if (!dbAvailable) return;
+
+		const auto = await makeAutomation("webhook-auto-create");
+		const slug = `slug-${generateId("").slice(-10)}`;
+		const secret = "auto-create-secret";
+		await db.insert(automationEntrypoints).values({
+			automationId: auto.id,
+			channel: "telegram",
+			kind: "webhook_inbound",
+			status: "active",
+			socialAccountId: null,
+			config: {
+				webhook_slug: slug,
+				webhook_secret: secret,
+				contact_lookup: {
+					by: "email",
+					field_path: "$.email",
+					auto_create_contact: true,
+				},
+			},
+			specificity: 30,
+		});
+
+		const email = `brand-new-${generateId("").slice(-8)}@example.com`;
+		const body = JSON.stringify({ email });
+		const sig = await hmacHex(secret, body);
+		const result = await receiveAutomationWebhook(
+			db,
+			{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
+			{},
+		);
+
+		expect(result.status).toBe("ok");
+		if (result.status === "ok") {
+			const run = await db.query.automationRuns.findFirst({
+				where: eq(automationRuns.id, result.runId),
+			});
+			expect(run?.contactId).toBeTruthy();
+			const created = await db.query.contacts.findFirst({
+				where: eq(contacts.id, run!.contactId),
+			});
+			expect(created).toBeTruthy();
+			expect(created?.email).toBe(email);
+			// The new row lives under the default (oldest) workspace.
+			expect(created?.workspaceId).toBe(workspaceId);
+		}
+	});
+
+	it("returns contact_lookup_failed with no_default_workspace when org has no workspace", async () => {
+		// Plan 6 Unit RR11 / Task 6 (F3): an org without any workspace row
+		// cannot auto-create a contact — there's nothing to anchor it to.
+		// The receiver must surface this as a distinct failure reason so
+		// operators can debug.
+		if (!dbAvailable) return;
+
+		// Second isolated org with NO workspace rows — we still need an
+		// automation + entrypoint for the slug lookup, but both sit directly
+		// on the org (no workspace FK).
+		const emptyOrgId = generateId("org_");
+		await db.insert(organization).values({
+			id: emptyOrgId,
+			name: "no-workspace-org",
+			slug: `no-ws-${emptyOrgId.slice(-8)}`,
+		});
+		try {
+			const [auto] = await db
+				.insert(automations)
+				.values({
+					organizationId: emptyOrgId,
+					workspaceId: null,
+					name: "no-ws-automation",
+					channel: "telegram",
+					status: "active",
+					graph: {
+						schema_version: 1,
+						root_node_key: "stop",
+						nodes: [
+							{
+								key: "stop",
+								kind: "end",
+								config: {},
+								ports: [{ key: "in", direction: "input" }],
+							},
+						],
+						edges: [],
+					} as never,
+				})
+				.returning();
+			if (!auto) throw new Error("no-ws automation insert failed");
+
+			const slug = `slug-${generateId("").slice(-10)}`;
+			const secret = "no-ws-secret";
+			await db.insert(automationEntrypoints).values({
+				automationId: auto.id,
+				channel: "telegram",
+				kind: "webhook_inbound",
+				status: "active",
+				socialAccountId: null,
+				config: {
+					webhook_slug: slug,
+					webhook_secret: secret,
+					contact_lookup: {
+						by: "email",
+						field_path: "$.email",
+						auto_create_contact: true,
+					},
+				},
+				specificity: 30,
+			});
+
+			const body = JSON.stringify({ email: "nobody@example.com" });
+			const sig = await hmacHex(secret, body);
+			const result = await receiveAutomationWebhook(
+				db,
+				{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
+				{},
+			);
+
+			expect(result.status).toBe("contact_lookup_failed");
+			if (result.status === "contact_lookup_failed") {
+				expect(result.reason).toBe("no_default_workspace");
+			}
+		} finally {
+			await db
+				.delete(automationEntrypoints)
+				.where(
+					eq(
+						automationEntrypoints.automationId,
+						(
+							await db.query.automations.findFirst({
+								where: eq(automations.organizationId, emptyOrgId),
+							})
+						)?.id ?? "",
+					),
+				);
+			await db
+				.delete(automations)
+				.where(eq(automations.organizationId, emptyOrgId));
+			await db.delete(organization).where(eq(organization.id, emptyOrgId));
+		}
+	});
+
 	it("returns contact_lookup_failed when no contact matches the value", async () => {
 		if (!dbAvailable) return;
 

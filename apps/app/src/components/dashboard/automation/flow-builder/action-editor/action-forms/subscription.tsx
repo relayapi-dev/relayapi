@@ -14,7 +14,6 @@ const CHANNELS: { key: SubscriptionChannel; label: string }[] = [
 	{ key: "facebook", label: "Facebook Messenger" },
 	{ key: "whatsapp", label: "WhatsApp" },
 	{ key: "telegram", label: "Telegram" },
-	{ key: "tiktok", label: "TikTok" },
 ];
 
 type ListActionProps = {

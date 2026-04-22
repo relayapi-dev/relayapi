@@ -23,8 +23,7 @@ export type Channel =
 	| "instagram"
 	| "facebook"
 	| "whatsapp"
-	| "telegram"
-	| "tiktok";
+	| "telegram";
 
 export type RunContext = {
 	runId: string;

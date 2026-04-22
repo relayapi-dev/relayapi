@@ -59,7 +59,7 @@ const BindingResponseSchema = z.object({
 	organization_id: z.string(),
 	workspace_id: z.string().nullable(),
 	social_account_id: z.string(),
-	channel: z.enum(["instagram", "facebook", "whatsapp", "telegram", "tiktok"]),
+	channel: z.enum(["instagram", "facebook", "whatsapp", "telegram"]),
 	binding_type: z.enum([
 		"default_reply",
 		"welcome_message",

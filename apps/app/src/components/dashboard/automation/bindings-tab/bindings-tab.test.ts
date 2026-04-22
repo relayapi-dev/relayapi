@@ -17,14 +17,6 @@ import {
 } from "./types";
 
 describe("bindingTabsForChannel", () => {
-	it("returns all 5 tabs but only Default Reply + Welcome Message for TikTok", () => {
-		const tabs = bindingTabsForChannel("tiktok");
-		expect(tabs.map((t) => t.bindingType)).toEqual([
-			"default_reply",
-			"welcome_message",
-		]);
-	});
-
 	it("returns Default Reply + Welcome Message for Telegram", () => {
 		const tabs = bindingTabsForChannel("telegram");
 		expect(tabs.map((t) => t.bindingType)).toEqual([
@@ -61,8 +53,8 @@ describe("bindingTabsForChannel", () => {
 		]);
 	});
 
-	it("excludes Main Menu from WhatsApp / Telegram / TikTok", () => {
-		for (const channel of ["whatsapp", "telegram", "tiktok"] as const) {
+	it("excludes Main Menu from WhatsApp / Telegram", () => {
+		for (const channel of ["whatsapp", "telegram"] as const) {
 			const tabs = bindingTabsForChannel(channel);
 			expect(tabs.some((t) => t.bindingType === "main_menu")).toBe(false);
 		}

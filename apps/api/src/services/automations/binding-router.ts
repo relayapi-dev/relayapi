@@ -144,6 +144,9 @@ export async function routeBinding(
 						channel: event.channel,
 						entrypointId: null,
 						bindingId: welcome.binding.id,
+						// Welcome bindings are account-scoped — event carries
+						// the account that received the inbound, pin it.
+						socialAccountId: event.socialAccountId ?? null,
 						contextOverrides: { triggerEvent: event },
 						env,
 					});
@@ -178,6 +181,10 @@ export async function routeBinding(
 					channel: event.channel,
 					entrypointId: null,
 					bindingId: defaultReply.binding.id,
+					// Default-reply bindings are also account-scoped — the
+					// reply must come from the same account the inbound
+					// landed on.
+					socialAccountId: event.socialAccountId ?? null,
 					contextOverrides: { triggerEvent: event },
 					env,
 				});

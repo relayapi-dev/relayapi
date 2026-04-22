@@ -112,7 +112,15 @@ export async function sendMessage(
 		case "reddit":
 			return sendRedditMessage(request);
 		case "tiktok":
-			return sendTikTokDM(request);
+			// TikTok DM is not a generally-available API. Automations no longer
+			// advertise tiktok as a supported channel (Plan 6 Unit RR11 / Task 3).
+			// Explicitly surface the failure so accidental callers see it instead
+			// of silently no-op'ing.
+			return {
+				success: false,
+				error:
+					"TikTok direct messaging is not supported — the public TikTok API does not expose a DM send endpoint.",
+			};
 		default:
 			return {
 				success: false,
@@ -619,21 +627,3 @@ async function sendRedditMessage(req: SendMessageRequest): Promise<SendMessageRe
 	return { success: true };
 }
 
-/**
- * TikTok Direct Messaging is not a generally-available API. For automation
- * flows we accept a text-only send and silently drop interactive features —
- * `buttons`, `quick_replies`, `card`, `gallery`, `attachments`. This keeps
- * the dispatcher from erroring on TikTok-routed messages and matches the
- * capability matrix in `automations/platforms/index.ts`.
- *
- * The function is a no-op stub that returns `success: true` with no message
- * id; real TikTok DM integration is gated behind a future unit.
- */
-async function sendTikTokDM(
-	_req: SendMessageRequest,
-): Promise<SendMessageResult> {
-	// TODO: implement real TikTok DM API when the platform exposes one publicly.
-	// For v1 we acknowledge the send without hitting any endpoint so
-	// automations routed to TikTok don't fail the whole run.
-	return { success: true };
-}

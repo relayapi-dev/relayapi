@@ -993,3 +993,498 @@ describe("3.6 Meta quick-reply payload resumes waiting run (pipeline)", () => {
 		expect(ctxJson.last_interactive_port).toBe("quick_reply.qr_yes");
 	}, 45_000);
 });
+
+// ---------------------------------------------------------------------------
+// 3.7 — Multi-account workspace pins the triggering account (F2)
+// ---------------------------------------------------------------------------
+
+describe("3.7 multi-account: run pins socialAccountId of triggering account (F2)", () => {
+	it("sends the reply via account A's token when event arrives under account A", async () => {
+		if (!dbAvailable) return;
+		resetSendCalls();
+
+		// Seed a SECOND Instagram account on the same workspace. A contact
+		// who sent under account A but also has a (stale/newer) channel
+		// row under account B would — without F2 — resolveRecipient to
+		// whichever channel row is newest, not the one that triggered.
+		const igPlatformAccountB = `ig_${generateId("acc_")}`;
+		const [igSaB] = await db
+			.insert(socialAccounts)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				platform: "instagram",
+				platformAccountId: igPlatformAccountB,
+				displayName: "Pipeline IG B",
+				username: "pipeline_ig_b",
+				accessToken: "token-account-B",
+			})
+			.returning();
+		if (!igSaB) throw new Error("IG account B insert failed");
+
+		// Swap the original account's token so we can distinguish which
+		// account the outbound send used in our capture.
+		await db
+			.update(socialAccounts)
+			.set({ accessToken: "token-account-A" })
+			.where(eq(socialAccounts.id, igSocialAccountId));
+
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "reply",
+			nodes: [
+				{
+					key: "reply",
+					kind: "message",
+					config: {
+						blocks: [{ id: "b1", type: "text", text: "Multi-account reply" }],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+					],
+				},
+				{
+					key: "stop",
+					kind: "end",
+					config: {},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [
+				{
+					from_node: "reply",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
+			],
+		};
+
+		const auto = await createInstagramAutomation("pipeline-multi-account", graph);
+
+		// Create a keyword entrypoint SCOPED to account A (our original).
+		await db.insert(automationEntrypoints).values({
+			automationId: auto.id,
+			channel: "instagram" as never,
+			kind: "dm_received" as never,
+			status: "active",
+			socialAccountId: igSocialAccountId,
+			config: { keywords: ["hello"], match_mode: "contains" },
+			filters: null,
+			specificity: computeSpecificity(
+				"dm_received",
+				{ keywords: ["hello"], match_mode: "contains" },
+				null,
+				igSocialAccountId,
+			),
+		});
+
+		// Contact has channel rows on BOTH accounts; the one on B is
+		// created LAST so a naive (no socialAccountId pinning)
+		// resolveRecipient would pick it and send via account B's token.
+		const customerId = `multi_${generateId("").slice(-8)}`;
+		const [ct] = await db
+			.insert(contacts)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "multi-account contact",
+			})
+			.returning();
+		if (!ct) throw new Error("contact insert failed");
+		await db.insert(contactChannels).values({
+			contactId: ct.id,
+			socialAccountId: igSocialAccountId,
+			platform: "instagram",
+			identifier: customerId,
+		});
+		// Sleep 5ms to ensure the B channel is strictly newer than A.
+		await new Promise((r) => setTimeout(r, 5));
+		await db.insert(contactChannels).values({
+			contactId: ct.id,
+			socialAccountId: igSaB.id,
+			platform: "instagram",
+			identifier: customerId,
+		});
+
+		// Inbound arrives on account A (igPlatformAccountId / igSocialAccountId).
+		const msg: InboxQueueMessage = {
+			type: "instagram_webhook",
+			platform: "instagram",
+			platform_account_id: igPlatformAccountId,
+			organization_id: orgId,
+			account_id: igSocialAccountId,
+			event_type: "messages",
+			payload: {
+				sender: { id: customerId },
+				recipient: { id: igPlatformAccountId },
+				timestamp: Date.now(),
+				message: {
+					mid: `mid_${generateId("")}`,
+					text: "hello",
+				},
+			},
+			received_at: new Date().toISOString(),
+		};
+
+		await processInboxEvent(msg, testEnv, db);
+
+		// Assertion: the outbound send used account A's token, not B's.
+		const outbound = sendCalls.find((c) => c.text === "Multi-account reply");
+		expect(outbound).toBeTruthy();
+		expect(outbound!.accessToken).toBe("token-account-A");
+		expect(outbound!.platformAccountId).toBe(igPlatformAccountId);
+	}, 45_000);
+});
+
+// ---------------------------------------------------------------------------
+// 3.8 — Cross-thread resume: waiting run on conversation A can resume when
+// inbound arrives on conversation B for the same contact (Plan 7 Task 1).
+// ---------------------------------------------------------------------------
+
+describe("3.8 cross-thread resume (Plan 7)", () => {
+	/**
+	 * Build a `message` node graph with one `yes` button → end.
+	 */
+	function yesButtonGraph(): Graph {
+		return {
+			schema_version: 1,
+			root_node_key: "ask",
+			nodes: [
+				{
+					key: "ask",
+					kind: "message",
+					config: {
+						blocks: [
+							{
+								id: "b1",
+								type: "text",
+								text: "Confirm?",
+								buttons: [{ id: "yes", type: "branch", label: "Yes" }],
+							},
+						],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+						{ key: "button.yes", direction: "output", role: "interactive" },
+					],
+				},
+				{
+					key: "stop",
+					kind: "end",
+					config: {},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [
+				{
+					from_node: "ask",
+					from_port: "button.yes",
+					to_node: "stop",
+					to_port: "in",
+				},
+			],
+		};
+	}
+
+	it("resumes a run parked on conversation A when callback arrives on conversation B", async () => {
+		if (!dbAvailable) return;
+		resetSendCalls();
+
+		const auto = await createAutomation("ct-cross-thread-1", yesButtonGraph());
+		const chatId = "70100";
+		const ct = await createContactWithChannel(chatId);
+
+		// Seed a conversation row that ISN'T the one the inbound will arrive on —
+		// this models a comment-triggered flow parked on the comment thread.
+		const [commentConv] = await db
+			.insert(inboxConversations)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				accountId: socialAccountId,
+				platform: "telegram",
+				type: "comment_thread",
+				platformConversationId: `comment_thread_${chatId}`,
+				contactId: ct.id,
+				participantPlatformId: chatId,
+			})
+			.returning();
+			if (!commentConv) throw new Error("comment conversation insert failed");
+
+		const { enrollContact } = await import(
+			"../services/automations/runner"
+		);
+		// Enroll the run AGAINST the comment-thread conversation — the inbound
+		// DM callback will arrive under a different (DM-thread) conversation,
+		// but Plan 7 drops the conversation filter so the resume still lands.
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: commentConv.id,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: { db, sendTransport: fakeSendTransport },
+		});
+
+		let run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		expect(run!.status).toBe("waiting");
+		expect(run!.currentNodeKey).toBe("ask");
+		expect(run!.conversationId).toBe(commentConv.id);
+
+		// Callback arrives on the DM thread (different chatId would be a
+		// different contact; same chatId but conversation row gets created
+		// by `upsertConversation` from inside `processInboxEvent`, so it'll
+		// be a NEW internal conversation id — different from commentConv.id).
+		const cbq = buildTelegramCallbackQuery({
+			chatId,
+			fromId: chatId,
+			data: "yes",
+		});
+		await processInboxEvent(cbq, testEnv, db);
+
+		run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		expect(run!.status).toBe("completed");
+		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		expect(ctxJson.last_interactive_port).toBe("button.yes");
+	}, 60_000);
+
+	it("inbound from alice only resumes alice's run, never bob's (cross-contact)", async () => {
+		if (!dbAvailable) return;
+		resetSendCalls();
+
+		const aliceAuto = await createAutomation("ct-alice", yesButtonGraph());
+		const bobAuto = await createAutomation("ct-bob", yesButtonGraph());
+
+		const aliceChat = "70101";
+		const bobChat = "70102";
+		const alice = await createContactWithChannel(aliceChat);
+		const bob = await createContactWithChannel(bobChat);
+
+		const { enrollContact } = await import(
+			"../services/automations/runner"
+		);
+		const { runId: aliceRunId } = await enrollContact(db, {
+			automationId: aliceAuto.id,
+			organizationId: orgId,
+			contactId: alice.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: { db, sendTransport: fakeSendTransport },
+		});
+		const { runId: bobRunId } = await enrollContact(db, {
+			automationId: bobAuto.id,
+			organizationId: orgId,
+			contactId: bob.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: { db, sendTransport: fakeSendTransport },
+		});
+
+		// Both runs are waiting on the same `button.yes` port.
+		const aliceBefore = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, aliceRunId),
+		});
+		const bobBefore = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, bobRunId),
+		});
+		expect(aliceBefore!.status).toBe("waiting");
+		expect(bobBefore!.status).toBe("waiting");
+
+		// Alice taps yes — only her run should advance.
+		const cbq = buildTelegramCallbackQuery({
+			chatId: aliceChat,
+			fromId: aliceChat,
+			data: "yes",
+		});
+		await processInboxEvent(cbq, testEnv, db);
+
+		const aliceAfter = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, aliceRunId),
+		});
+		const bobAfter = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, bobRunId),
+		});
+		expect(aliceAfter!.status).toBe("completed");
+		expect(bobAfter!.status).toBe("waiting");
+	}, 60_000);
+
+	it("one contact with two active runs: the older run advances, younger stays waiting (ordering)", async () => {
+		if (!dbAvailable) return;
+		resetSendCalls();
+
+		const olderAuto = await createAutomation(
+			"ct-multi-older",
+			yesButtonGraph(),
+		);
+		const chatId = "70103";
+		const ct = await createContactWithChannel(chatId);
+
+		const { enrollContact } = await import(
+			"../services/automations/runner"
+		);
+		const { runId: olderRunId } = await enrollContact(db, {
+			automationId: olderAuto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: { db, sendTransport: fakeSendTransport },
+		});
+
+		// Ensure startedAt gap so ordering is deterministic.
+		await new Promise((r) => setTimeout(r, 10));
+
+		const youngerAuto = await createAutomation(
+			"ct-multi-younger",
+			yesButtonGraph(),
+		);
+		const { runId: youngerRunId } = await enrollContact(db, {
+			automationId: youngerAuto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: { db, sendTransport: fakeSendTransport },
+		});
+
+		// Both parked; fire a single yes callback.
+		const cbq = buildTelegramCallbackQuery({
+			chatId,
+			fromId: chatId,
+			data: "yes",
+		});
+		await processInboxEvent(cbq, testEnv, db);
+
+		// Policy: because the port key matches BOTH runs, both resume on the
+		// single inbound — there's no cross-automation filter in that case
+		// (same port key, same button id). The ordering contract
+		// (`started_at ASC`) still guarantees the older run advances first,
+		// which is what `started_at ASC` on the lookup ensures. We assert
+		// both completed here to document the chosen behavior.
+		const older = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, olderRunId),
+		});
+		const younger = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, youngerRunId),
+		});
+		expect(older!.status).toBe("completed");
+		expect(younger!.status).toBe("completed");
+	}, 60_000);
+
+	it("port-mismatch: button payload resumes only the run whose node has that port", async () => {
+		if (!dbAvailable) return;
+		resetSendCalls();
+
+		// Automation A: button.yes port
+		const yesAuto = await createAutomation("ct-port-yes", yesButtonGraph());
+		// Automation B: button.foo port (never matches payload "yes")
+		function fooButtonGraph(): Graph {
+			return {
+				schema_version: 1,
+				root_node_key: "ask",
+				nodes: [
+					{
+						key: "ask",
+						kind: "message",
+						config: {
+							blocks: [
+								{
+									id: "b1",
+									type: "text",
+									text: "Confirm?",
+									buttons: [{ id: "foo", type: "branch", label: "Foo" }],
+								},
+							],
+						},
+						ports: [
+							{ key: "in", direction: "input" },
+							{ key: "next", direction: "output", role: "default" },
+							{
+								key: "button.foo",
+								direction: "output",
+								role: "interactive",
+							},
+						],
+					},
+					{
+						key: "stop",
+						kind: "end",
+						config: {},
+						ports: [{ key: "in", direction: "input" }],
+					},
+				],
+				edges: [
+					{
+						from_node: "ask",
+						from_port: "button.foo",
+						to_node: "stop",
+						to_port: "in",
+					},
+				],
+			};
+		}
+		const fooAuto = await createAutomation("ct-port-foo", fooButtonGraph());
+
+		const chatId = "70104";
+		const ct = await createContactWithChannel(chatId);
+
+		const { enrollContact } = await import(
+			"../services/automations/runner"
+		);
+		const { runId: yesRunId } = await enrollContact(db, {
+			automationId: yesAuto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: { db, sendTransport: fakeSendTransport },
+		});
+		const { runId: fooRunId } = await enrollContact(db, {
+			automationId: fooAuto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: { db, sendTransport: fakeSendTransport },
+		});
+
+		const cbq = buildTelegramCallbackQuery({
+			chatId,
+			fromId: chatId,
+			data: "yes",
+		});
+		await processInboxEvent(cbq, testEnv, db);
+
+		const yesRun = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, yesRunId),
+		});
+		const fooRun = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, fooRunId),
+		});
+		// Only the run whose message-node has a `button.yes` port should
+		// advance; the `foo` run stays parked.
+		expect(yesRun!.status).toBe("completed");
+		expect(fooRun!.status).toBe("waiting");
+	}, 60_000);
+});

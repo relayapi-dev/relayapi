@@ -65,7 +65,11 @@ app.post("/:slug", async (c) => {
 				{
 					error: {
 						code: "contact_lookup_failed",
-						message: "could not resolve contact",
+						message:
+							result.reason === "no_default_workspace"
+								? "organization has no workspace to anchor a new contact"
+								: "could not resolve contact",
+						...(result.reason ? { details: { reason: result.reason } } : {}),
 					},
 				},
 				422,

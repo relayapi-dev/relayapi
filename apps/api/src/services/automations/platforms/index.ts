@@ -35,15 +35,14 @@ export type AutomationChannel =
 	| "instagram"
 	| "facebook"
 	| "whatsapp"
-	| "telegram"
-	| "tiktok";
+	| "telegram";
 
 export type AutomationSendInput = {
 	channel: AutomationChannel;
 	socialAccountId: string;
 	recipient: {
 		contactId: string;
-		/** Platform-native contact id: IG IGSID, FB PSID, WA phone, TG chat_id, TikTok user_id */
+		/** Platform-native contact id: IG IGSID, FB PSID, WA phone, TG chat_id */
 		platformContactId: string;
 		conversationId?: string | null;
 	};
@@ -127,16 +126,6 @@ export const CHANNEL_CAPABILITIES: Record<
 		gallery: false,
 		delay: true,
 	},
-	tiktok: {
-		text: true,
-		image: true,
-		video: true,
-		audio: false,
-		file: false,
-		card: false,
-		gallery: false,
-		delay: true,
-	},
 };
 
 export const CHANNEL_SUPPORTS_BUTTONS: Record<AutomationChannel, boolean> = {
@@ -144,7 +133,6 @@ export const CHANNEL_SUPPORTS_BUTTONS: Record<AutomationChannel, boolean> = {
 	facebook: true,
 	whatsapp: true,
 	telegram: true,
-	tiktok: false,
 };
 
 export const CHANNEL_SUPPORTS_QUICK_REPLIES: Record<
@@ -155,7 +143,6 @@ export const CHANNEL_SUPPORTS_QUICK_REPLIES: Record<
 	facebook: true,
 	whatsapp: false,
 	telegram: true,
-	tiktok: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -276,7 +263,7 @@ export async function dispatchAutomationMessage(
  * `message-sender.ts`. The adapter only:
  *   1. Picks the right `SendMessageRequest` shape per block kind.
  *   2. Filters out platform-unsupported buttons (only `branch` / `url` on
- *      WhatsApp, no `call` / `share` on TikTok, etc.) via
+ *      WhatsApp, etc.) via
  *      `CHANNEL_SUPPORTS_BUTTONS`.
  *   3. Attaches quick_replies to the LAST sendable block only.
  */

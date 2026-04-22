@@ -15,23 +15,23 @@ Entrypoints live under an automation and are managed in the flow builder. Bindin
 
 ### The 15 kinds
 
-| Kind | IG | FB | WA | TG | TikTok |
-|---|:-:|:-:|:-:|:-:|:-:|
-| `dm_received` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `comment_created` | ✓ | ✓ | — | — | ✓ |
-| `story_reply` | ✓ | ✓ | — | — | — |
-| `story_mention` | ✓ | ✓ | — | — | — |
-| `live_comment` | ✓ | ✓ | — | — | ✓ |
-| `ad_click` | ✓ | ✓ | — | — | — |
-| `ref_link_click` | ✓ | ✓ | — | — | — |
-| `share_to_dm` | ✓ | — | — | — | — |
-| `follow` | ✓ | — | — | — | ✓ |
-| `schedule` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `field_changed` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `tag_applied` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `tag_removed` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `conversion_event` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `webhook_inbound` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Kind | IG | FB | WA | TG |
+|---|:-:|:-:|:-:|:-:|
+| `dm_received` | ✓ | ✓ | ✓ | ✓ |
+| `comment_created` | ✓ | ✓ | — | — |
+| `story_reply` | ✓ | ✓ | — | — |
+| `story_mention` | ✓ | ✓ | — | — |
+| `live_comment` | ✓ | ✓ | — | — |
+| `ad_click` | ✓ | ✓ | — | — |
+| `ref_link_click` | ✓ | ✓ | — | — |
+| `share_to_dm` | ✓ | — | — | — |
+| `follow` | ✓ | — | — | — |
+| `schedule` | ✓ | ✓ | ✓ | ✓ |
+| `field_changed` | ✓ | ✓ | ✓ | ✓ |
+| `tag_applied` | ✓ | ✓ | ✓ | ✓ |
+| `tag_removed` | ✓ | ✓ | ✓ | ✓ |
+| `conversion_event` | ✓ | ✓ | ✓ | ✓ |
+| `webhook_inbound` | ✓ | ✓ | ✓ | ✓ |
 
 > **Keyword matching** — there is no dedicated `keyword` kind. Use `dm_received` with a `config.keywords` array (and optional `match_mode` / `case_sensitive`) to react to specific words in an inbound DM. The matcher treats an exact- or regex-mode keyword list as specificity 30, identical to the legacy `keyword` kind.
 
@@ -151,8 +151,8 @@ Bindings attach a flow to a "channel surface" on a specific social account. Ther
 
 | Type | Channels | v1 status |
 |---|---|---|
-| `default_reply` | IG, FB, WA, TG, TikTok | **Wired live** — fires when an inbound event matches no entrypoint |
-| `welcome_message` | IG, FB, WA, TG, TikTok | **Wired live** — fires on the contact's first-ever inbound on the channel |
+| `default_reply` | IG, FB, WA, TG | **Wired live** — fires when an inbound event matches no entrypoint |
+| `welcome_message` | IG, FB, WA, TG | **Wired live** — fires on the contact's first-ever inbound on the channel |
 | `conversation_starter` | FB only | **Stubbed** — storage + UI only; platform sync via `messenger_profile.ice_breakers` ships in v1.1 |
 | `main_menu` | FB, IG | **Stubbed** — storage + UI only; platform sync via `messenger_profile.persistent_menu` ships in v1.1 |
 | `ice_breaker` | WA only | **Stubbed** — storage + UI only; WhatsApp platform sync ships in v1.1 |

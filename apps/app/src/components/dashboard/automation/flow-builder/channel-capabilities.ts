@@ -12,8 +12,7 @@ export type ChannelId =
 	| "instagram"
 	| "facebook"
 	| "whatsapp"
-	| "telegram"
-	| "tiktok";
+	| "telegram";
 
 export type BlockType =
 	| "text"
@@ -96,17 +95,6 @@ export const CHANNEL_CAPABILITIES_FALLBACK: Record<
 		file: true,
 		delay: true,
 	},
-	tiktok: {
-		buttons: false,
-		quick_replies: false,
-		card: false,
-		gallery: false,
-		image: true,
-		video: true,
-		audio: false,
-		file: false,
-		delay: true,
-	},
 };
 
 const DEFAULT_CAPS: ChannelCapabilitySet = {
@@ -178,8 +166,6 @@ export function channelDisplayName(channel: string | undefined): string {
 			return "WhatsApp";
 		case "telegram":
 			return "Telegram";
-		case "tiktok":
-			return "TikTok";
 		default:
 			return channel ?? "this channel";
 	}

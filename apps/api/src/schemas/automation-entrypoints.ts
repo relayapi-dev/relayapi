@@ -110,7 +110,7 @@ export const EntrypointKindSchema = z.enum([
 export type EntrypointKind = z.infer<typeof EntrypointKindSchema>;
 
 export const EntrypointCreateSchema = z.object({
-  channel: z.enum(["instagram", "facebook", "whatsapp", "telegram", "tiktok"]),
+  channel: z.enum(["instagram", "facebook", "whatsapp", "telegram"]),
   kind: EntrypointKindSchema,
   social_account_id: z.string().optional(),
   config: z.record(z.string(), z.any()).default({}),

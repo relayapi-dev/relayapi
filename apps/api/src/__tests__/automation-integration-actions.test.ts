@@ -280,10 +280,396 @@ describe("automation integration — ctx.db wiring + context hydration", () => {
 		expect(ctxJson.contact).toBeTruthy();
 		expect(ctxJson.contact.id).toBe(contactId);
 		expect(Array.isArray(ctxJson.tags)).toBe(true);
-		// Hydration happened BEFORE the action_group ran, so the snapshot
-		// reflects the pre-run tag set.
+		// The runner persists ctx.context after every step, so by the time
+		// the run completes the stored context reflects ALL same-run
+		// mutations including the tag_add ("qualified") and field_set
+		// ("Alice Updated") executed above. Plan 6 Unit RR11 / Task 5 (F6)
+		// wires that refresh into the tag + field action handlers.
 		expect(ctxJson.tags).toContain("lead");
+		expect(ctxJson.tags).toContain("qualified");
 		expect(ctxJson.fields).toBeTruthy();
-		expect(ctxJson.fields.first_name).toBe("Alice");
+		expect(ctxJson.fields.first_name).toBe("Alice Updated");
+	});
+
+	it("tag_add → condition(tags contains) → true branch reads freshly added tag", async () => {
+		// Plan 6 Unit RR11 / Task 5 (F6): same-run context refresh after tag
+		// mutations. Flow:
+		//   action_group [tag_add "premium"]
+		//     → condition(tags contains "premium")
+		//         → branch true: action_group [tag_add "saw_premium_branch"]
+		//           → end
+		//         → branch false: action_group [tag_add "saw_default_branch"]
+		//           → end
+		//
+		// Before the fix, tag_add wrote to the DB but not to ctx.context, so
+		// the condition always fell through to the false branch. The
+		// assertion: after the run completes, the contact has
+		// "saw_premium_branch" (not "saw_default_branch").
+		if (!dbAvailable) {
+			console.warn("skipping: DB fixture unavailable");
+			return;
+		}
+
+		// Use a fresh contact so we can assert terminal tag state without
+		// interference from earlier tests.
+		const [ct] = await db
+			.insert(contacts)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "Same-run tag refresh contact",
+				tags: [],
+			})
+			.returning();
+		if (!ct) throw new Error("contact insert failed");
+
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "grant",
+			nodes: [
+				{
+					key: "grant",
+					kind: "action_group",
+					config: {
+						actions: [
+							{
+								id: "a_grant",
+								type: "tag_add",
+								tag: "premium",
+								on_error: "abort",
+							},
+						],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+						{ key: "error", direction: "output", role: "error" },
+					],
+				},
+				{
+					key: "check",
+					kind: "condition",
+					config: {
+						predicates: {
+							all: [{ field: "tags", op: "contains", value: "premium" }],
+						},
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "true", direction: "output" },
+						{ key: "false", direction: "output" },
+					],
+				},
+				{
+					key: "on_true",
+					kind: "action_group",
+					config: {
+						actions: [
+							{
+								id: "a_true",
+								type: "tag_add",
+								tag: "saw_premium_branch",
+								on_error: "abort",
+							},
+						],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+						{ key: "error", direction: "output", role: "error" },
+					],
+				},
+				{
+					key: "on_false",
+					kind: "action_group",
+					config: {
+						actions: [
+							{
+								id: "a_false",
+								type: "tag_add",
+								tag: "saw_default_branch",
+								on_error: "abort",
+							},
+						],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+						{ key: "error", direction: "output", role: "error" },
+					],
+				},
+				{
+					key: "done",
+					kind: "end",
+					config: {},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [
+				{
+					from_node: "grant",
+					from_port: "next",
+					to_node: "check",
+					to_port: "in",
+				},
+				{
+					from_node: "check",
+					from_port: "true",
+					to_node: "on_true",
+					to_port: "in",
+				},
+				{
+					from_node: "check",
+					from_port: "false",
+					to_node: "on_false",
+					to_port: "in",
+				},
+				{
+					from_node: "on_true",
+					from_port: "next",
+					to_node: "done",
+					to_port: "in",
+				},
+				{
+					from_node: "on_false",
+					from_port: "next",
+					to_node: "done",
+					to_port: "in",
+				},
+			],
+		};
+
+		const [auto] = await db
+			.insert(automations)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "same-run-tag-refresh",
+				channel: "instagram",
+				status: "active",
+				graph: graph as never,
+			})
+			.returning();
+		if (!auto) throw new Error("automation insert failed");
+
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "instagram",
+			entrypointId: null,
+			bindingId: null,
+			env: {},
+		});
+
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		expect(run?.status).toBe("completed");
+
+		const refreshed = await db.query.contacts.findFirst({
+			where: eq(contacts.id, ct.id),
+		});
+		expect(refreshed?.tags).toContain("premium");
+		expect(refreshed?.tags).toContain("saw_premium_branch");
+		// Negative: false branch must NOT have executed.
+		expect(refreshed?.tags ?? []).not.toContain("saw_default_branch");
+	});
+
+	it("field_set → condition(field == value) → true branch reads freshly written field", async () => {
+		// Same as the tag_add test above, but for field_set. Plan 6 Unit
+		// RR11 / Task 5 (F6). Uses a custom field definition `plan` and
+		// writes "pro", then branches on `fields.plan == "pro"`.
+		if (!dbAvailable) {
+			console.warn("skipping: DB fixture unavailable");
+			return;
+		}
+
+		// Create a `plan` custom field definition (scoped to this test so it
+		// doesn't interfere with the hydration assertions above).
+		const [planDef] = await db
+			.insert(customFieldDefinitions)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "Plan",
+				slug: "plan",
+				type: "text",
+			})
+			.returning();
+		if (!planDef) throw new Error("custom field definition insert failed");
+
+		const [ct] = await db
+			.insert(contacts)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "Same-run field refresh contact",
+				tags: [],
+			})
+			.returning();
+		if (!ct) throw new Error("contact insert failed");
+
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "upgrade",
+			nodes: [
+				{
+					key: "upgrade",
+					kind: "action_group",
+					config: {
+						actions: [
+							{
+								id: "a_set_plan",
+								type: "field_set",
+								field: "plan",
+								value: "pro",
+								on_error: "abort",
+							},
+						],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+						{ key: "error", direction: "output", role: "error" },
+					],
+				},
+				{
+					key: "check",
+					kind: "condition",
+					config: {
+						predicates: {
+							all: [{ field: "fields.plan", op: "eq", value: "pro" }],
+						},
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "true", direction: "output" },
+						{ key: "false", direction: "output" },
+					],
+				},
+				{
+					key: "on_true",
+					kind: "action_group",
+					config: {
+						actions: [
+							{
+								id: "a_true",
+								type: "tag_add",
+								tag: "saw_pro_plan",
+								on_error: "abort",
+							},
+						],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+						{ key: "error", direction: "output", role: "error" },
+					],
+				},
+				{
+					key: "on_false",
+					kind: "action_group",
+					config: {
+						actions: [
+							{
+								id: "a_false",
+								type: "tag_add",
+								tag: "saw_non_pro_plan",
+								on_error: "abort",
+							},
+						],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+						{ key: "error", direction: "output", role: "error" },
+					],
+				},
+				{
+					key: "done",
+					kind: "end",
+					config: {},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [
+				{
+					from_node: "upgrade",
+					from_port: "next",
+					to_node: "check",
+					to_port: "in",
+				},
+				{
+					from_node: "check",
+					from_port: "true",
+					to_node: "on_true",
+					to_port: "in",
+				},
+				{
+					from_node: "check",
+					from_port: "false",
+					to_node: "on_false",
+					to_port: "in",
+				},
+				{
+					from_node: "on_true",
+					from_port: "next",
+					to_node: "done",
+					to_port: "in",
+				},
+				{
+					from_node: "on_false",
+					from_port: "next",
+					to_node: "done",
+					to_port: "in",
+				},
+			],
+		};
+
+		const [auto] = await db
+			.insert(automations)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "same-run-field-refresh",
+				channel: "instagram",
+				status: "active",
+				graph: graph as never,
+			})
+			.returning();
+		if (!auto) throw new Error("automation insert failed");
+
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "instagram",
+			entrypointId: null,
+			bindingId: null,
+			env: {},
+		});
+
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		expect(run?.status).toBe("completed");
+
+		const refreshed = await db.query.contacts.findFirst({
+			where: eq(contacts.id, ct.id),
+		});
+		expect(refreshed?.tags).toContain("saw_pro_plan");
+		expect(refreshed?.tags ?? []).not.toContain("saw_non_pro_plan");
+
+		// Sanity: the DB row for the custom field value was written.
+		const fv = await db.query.customFieldValues.findFirst({
+			where: and(
+				eq(customFieldValues.definitionId, planDef.id),
+				eq(customFieldValues.contactId, ct.id),
+			),
+		});
+		expect(fv?.value).toBe("pro");
 	});
 });

@@ -5,7 +5,7 @@ import {
 	inboxMessages,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { maybeDecrypt } from "../lib/crypto";
 import { notifyRealtime } from "../lib/notify-post-update";
@@ -585,7 +585,6 @@ const AUTOMATION_CHANNELS = new Set([
 	"facebook",
 	"whatsapp",
 	"telegram",
-	"tiktok",
 ]);
 
 /**
@@ -672,9 +671,17 @@ async function dispatchAutomationMatch(
 		// Resume a waiting user_input run before firing new triggers.
 		//
 		// Only inbound MESSAGES should satisfy a user_input wait — a comment
-		// on a post must never be captured as input to a DM flow. The waiting
-		// run's conversation also has to match, so a message on conversation B
-		// doesn't resume a flow paused on conversation A for the same contact.
+		// on a post must never be captured as input to a DM flow.
+		//
+		// We deliberately do NOT filter by conversation_id on the resume
+		// lookup. Comment-triggered flows park their run on the comment
+		// thread's conversation, but the button-tap that resumes them arrives
+		// on the DM-thread conversation — filtering on conversation would miss
+		// those runs. Port-key matching in interactive resume and the current
+		// input node's kind check in text resume provide the natural
+		// cross-automation filter: a button payload won't match another
+		// automation's ports, and text-input resume only advances runs whose
+		// current node is actually an `input` node.
 		//
 		// Interactive payloads (button taps, quick replies, WhatsApp button_reply,
 		// Telegram callback_query) are checked FIRST — runs parked on a
@@ -689,7 +696,6 @@ async function dispatchAutomationMatch(
 				envAsRecord,
 				contactId,
 				event,
-				meta?.internal_conversation_id ?? null,
 			);
 			if (resumed) return;
 		}
@@ -743,10 +749,25 @@ async function dispatchAutomationMatch(
 }
 
 /**
- * Look for `waiting-for-input` runs on this (contact, conversation) and hand
- * the inbound message off to `resumeWaitingRunOnInput`, which validates it
- * against each run's input node config and routes through the correct port
- * (`captured` / `invalid` / `skip`) or re-prompts when retries remain.
+ * Look for `waiting-for-input` runs on this contact and hand the inbound
+ * message off to the interactive + text resume helpers, which validate it
+ * against each run's current node (port match for interactive, input node
+ * config for text) and either advance or leave the run parked.
+ *
+ * The lookup filters by `(organization, contact, status=waiting,
+ * waiting_for=input)` ONLY — we deliberately do NOT filter by
+ * conversation_id. Comment-triggered flows park on the comment-thread
+ * conversation; the button tap resuming them arrives on the DM-thread
+ * conversation. A conversation filter here drops those resumes on the
+ * floor. Instead we rely on port-key matching (interactive) and the input
+ * node's own config validation (text) to filter cross-automation noise: a
+ * button payload that belongs to automation A's port won't match automation
+ * B's, and a text reply to a pending `input` node can only advance the one
+ * run whose input node validates it.
+ *
+ * Ordering: `started_at ASC` — the flow the contact enrolled in first gets
+ * the first shot at the reply. Deterministic and matches operator intuition
+ * ("the flow I started first should win").
  *
  * Returns true iff the inbound was consumed by (at least) one waiting run.
  * When true, the caller must NOT also fire entrypoint matching — a reply to
@@ -758,17 +779,11 @@ async function resumeWaitingRunForInput(
 	envAsRecord: Record<string, unknown>,
 	contactId: string,
 	event: NormalizedInboxEvent,
-	internalConversationId: string | null,
 ): Promise<boolean> {
-	// Prefer the internal inbox_conversations.id (the FK actually used on
-	// `automation_runs.conversation_id`). Falling back to the platform-level
-	// id keeps legacy runs enrolled via the older (buggy) path discoverable.
-	const conversationId =
-		internalConversationId ?? event.conversation_id ?? null;
 	const waitingRuns = await db
 		.select({
 			id: automationRuns.id,
-			updatedAt: automationRuns.updatedAt,
+			startedAt: automationRuns.startedAt,
 		})
 		.from(automationRuns)
 		.where(
@@ -777,21 +792,13 @@ async function resumeWaitingRunForInput(
 				eq(automationRuns.contactId, contactId),
 				eq(automationRuns.status, "waiting"),
 				eq(automationRuns.waitingFor, "input"),
-				or(
-					conversationId
-						? eq(automationRuns.conversationId, conversationId)
-						: undefined,
-					// If the run was enrolled without a conversation (e.g. follow event),
-					// still allow the first inbound DM to resume it.
-					sql`${automationRuns.conversationId} IS NULL`,
-				),
 			),
 		)
-		.orderBy(desc(automationRuns.updatedAt));
+		.orderBy(asc(automationRuns.startedAt));
 
 	if (waitingRuns.length === 0) return false;
 
-	const hasAttachment = Boolean(event.attachment);
+	const attachment = event.attachment ?? null;
 	const inboundText = event.text ?? "";
 	const interactivePayload = event.interactive_payload ?? null;
 	let consumed = false;
@@ -802,6 +809,8 @@ async function resumeWaitingRunForInput(
 		//    their `button.<id>` / `quick_reply.<id>` ports must resolve before
 		//    we treat the inbound as plain text. If the payload doesn't match a
 		//    port, `"no_match"` falls through to the text-input resume path.
+		//    `"no_match"` is also how the cross-automation filter works here —
+		//    a run waiting for a different port won't consume this inbound.
 		if (interactivePayload) {
 			const outcome = await resumeWaitingRunOnInteractive(
 				db,
@@ -818,11 +827,14 @@ async function resumeWaitingRunForInput(
 		}
 
 		// 2. Text-input resume — runs parked on an `input` node.
+		//    `resumeWaitingRunOnInput` returns "race" when the run's current
+		//    node is not an `input` node, so this naturally skips runs parked
+		//    on a message-node wait (already handled above by interactive).
 		const outcome = await resumeWaitingRunOnInput(
 			db,
 			waiting.id,
 			inboundText,
-			hasAttachment,
+			attachment,
 			envAsRecord,
 		);
 		// Anything other than "race" means the inbound was consumed by this run

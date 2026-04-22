@@ -46,11 +46,11 @@ export const UnsubscribeListAction = BaseAction.extend({
 
 export const OptInChannelAction = BaseAction.extend({
   type: z.literal("opt_in_channel"),
-  channel: z.enum(["instagram", "facebook", "whatsapp", "telegram", "tiktok"]),
+  channel: z.enum(["instagram", "facebook", "whatsapp", "telegram"]),
 });
 export const OptOutChannelAction = BaseAction.extend({
   type: z.literal("opt_out_channel"),
-  channel: z.enum(["instagram", "facebook", "whatsapp", "telegram", "tiktok"]),
+  channel: z.enum(["instagram", "facebook", "whatsapp", "telegram"]),
 });
 
 export const AssignConversationAction = BaseAction.extend({
