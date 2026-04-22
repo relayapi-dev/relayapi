@@ -22,13 +22,26 @@ export type Db = Database;
 /**
  * Returns true iff this contact has never sent an inbound message on the given
  * channel before. Used to decide welcome_message vs default_reply.
+ *
+ * When the caller passes `eventHint` we trust it — `processInboxEvent`
+ * captures the inbound count BEFORE persisting the new message, which is the
+ * only way the answer can be correct from the welcome binding's perspective.
+ * Running the DB query after `insertMessage` always returns `false` because
+ * the current inbound itself is already in the table (spec bug B2).
+ *
+ * The DB fallback survives for callers that don't have the hint (manual
+ * `/enroll`, webhook receiver, unit tests calling `matchAndEnrollOrBinding`
+ * directly). Those paths either don't care about welcome or don't race with
+ * persistence in the same way.
  */
 async function isFirstInboundOnChannel(
 	db: Db,
 	organizationId: string,
 	contactId: string,
 	channel: string,
+	eventHint?: boolean,
 ): Promise<boolean> {
+	if (typeof eventHint === "boolean") return eventHint;
 	// A conversation row is scoped per (account, channel, participant). The
 	// contact may not have a `participant_platform_id` wired to all their
 	// channels, so we join via contact.id if present and fall back to any
@@ -112,6 +125,7 @@ export async function routeBinding(
 			event.organizationId,
 			event.contactId,
 			event.channel,
+			event.isFirstInboundOnChannel,
 		);
 		if (firstInbound) {
 			const welcome = await findBinding(db, {

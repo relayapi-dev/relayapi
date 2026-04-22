@@ -859,6 +859,156 @@ describe("11.4 welcome_message binding (first inbound only)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Scenario 11.4b — Interactive button resume via resumeWaitingRunOnInteractive
+// Plan 5 / Task 1 (B1): runs parked on a `message` node with branch buttons
+// must advance via the matching `button.<id>` port. Prior to RR7 this path
+// was short-circuited by `resumeWaitingRunOnInput` and runs got stuck.
+// ---------------------------------------------------------------------------
+
+describe("11.4b interactive button resume", () => {
+	it("advances the waiting run via button.yes when payload='yes'", async () => {
+		if (!dbAvailable) return;
+		resetSendCalls();
+
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "ask",
+			nodes: [
+				{
+					key: "ask",
+					kind: "message",
+					config: {
+						blocks: [
+							{
+								id: "b1",
+								type: "text",
+								text: "Ready?",
+								buttons: [
+									{ id: "yes", type: "branch", label: "Yes" },
+									{ id: "no", type: "branch", label: "No" },
+								],
+							},
+						],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+						{
+							key: "button.yes",
+							direction: "output",
+							role: "interactive",
+						},
+						{
+							key: "button.no",
+							direction: "output",
+							role: "interactive",
+						},
+					],
+				},
+				{
+					key: "yes_reply",
+					kind: "message",
+					config: {
+						blocks: [{ id: "y1", type: "text", text: "Great — let's go!" }],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+					],
+				},
+				{
+					key: "no_reply",
+					kind: "message",
+					config: {
+						blocks: [{ id: "n1", type: "text", text: "No worries." }],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+					],
+				},
+				{
+					key: "stop",
+					kind: "end",
+					config: {},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [
+				{
+					from_node: "ask",
+					from_port: "button.yes",
+					to_node: "yes_reply",
+					to_port: "in",
+				},
+				{
+					from_node: "ask",
+					from_port: "button.no",
+					to_node: "no_reply",
+					to_port: "in",
+				},
+				{
+					from_node: "yes_reply",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
+				{
+					from_node: "no_reply",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
+			],
+		};
+
+		const auto = await createAutomation("buttons-e2e", graph, "telegram");
+		const ct = await createContactWithChannel({
+			name: "button-contact",
+			identifier: "tg_chat_buttons_1",
+		});
+
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: { db, sendTransport: fakeSendTransport },
+		});
+
+		let run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		expect(run!.status).toBe("waiting");
+		expect(run!.waitingFor).toBe("input");
+		expect(run!.currentNodeKey).toBe("ask");
+		// Only the "Ready?" prompt has been sent so far.
+		expect(sendCalls.length).toBe(1);
+
+		const { resumeWaitingRunOnInteractive } = await import(
+			"../services/automations/interactive-resume"
+		);
+		const outcome = await resumeWaitingRunOnInteractive(db, runId, "yes", {
+			db,
+			sendTransport: fakeSendTransport,
+		});
+		expect(outcome).toBe("resumed");
+
+		run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		expect(run!.status).toBe("completed");
+		// The yes-branch message should have been sent on the way to the end.
+		expect(sendCalls.some((c) => c.text === "Great — let's go!")).toBe(true);
+		// No-branch message should NOT have been sent.
+		expect(sendCalls.some((c) => c.text === "No worries.")).toBe(false);
+	}, 30_000);
+});
+
+// ---------------------------------------------------------------------------
 // Scenario 11.5 — Webhook entrypoint
 // ---------------------------------------------------------------------------
 

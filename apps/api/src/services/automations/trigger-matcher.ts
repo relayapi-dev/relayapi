@@ -59,6 +59,17 @@ export type InboundEvent = {
 	fieldValueAfter?: unknown;
 	eventName?: string;
 	payload?: Record<string, unknown>;
+	/**
+	 * Optional metadata set by `processInboxEvent` indicating whether this
+	 * inbound is the contact's first message on this channel. The
+	 * welcome_message binding router uses this to decide when to fire.
+	 *
+	 * Computed BEFORE the inbound message row is persisted (spec bug B2: the
+	 * prior DB-query path always saw ≥1 prior row because `insertMessage` ran
+	 * before the matcher). Callers that don't set this (unit tests, manual
+	 * enroll, webhook-receiver) fall back to the `binding-router`'s DB query.
+	 */
+	isFirstInboundOnChannel?: boolean;
 };
 
 export type MatchResult =

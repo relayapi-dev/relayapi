@@ -13,6 +13,7 @@ import type { InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
 import { matchAndEnrollOrBinding } from "./automations/binding-router";
 import { resumeWaitingRunOnInput } from "./automations/input-resume";
+import { resumeWaitingRunOnInteractive } from "./automations/interactive-resume";
 import type {
 	InboundEvent,
 	InboundEventKind,
@@ -294,6 +295,12 @@ export async function processInboxEvent(
 		// through the automation matcher (step 2) but skip inbox persistence.
 		const isPersistedEvent =
 			event.type === "comment" || event.type === "message";
+		// Pre-insert conversation snapshot so we can tell whether this inbound
+		// is the contact's first message on this channel BEFORE `insertMessage`
+		// mutates `messageCount`. The welcome_message binding router depends on
+		// this signal; computing it after the insert always returns `false`
+		// (spec bug B2).
+		let preInsertInboundCount: number | null = null;
 		try {
 			if (isPersistedEvent) {
 				conversation = await upsertConversation(db, {
@@ -315,7 +322,45 @@ export async function processInboxEvent(
 					postPlatformId: event.post_id ?? null,
 				});
 				if (conversation) {
-					const message = await insertMessage(db, {
+					// Inbound-only count across ALL conversations for (contact, channel).
+					// A brand new conversation_id doesn't help here — the binding-router
+					// welcome scope is "first inbound on channel ever", which spans the
+					// contact's whole history on that channel. `contactId` can be null
+					// while the conversation is still unlinked (no matching contact), in
+					// which case the count is always 0 and the welcome fires — consistent
+					// with the pre-Plan-5 behavior.
+					if (
+						direction === "inbound" &&
+						event.type === "message" &&
+						conversation.contactId
+					) {
+						const [row] = await db
+							.select({ count: sql<number>`COUNT(*)` })
+							.from(inboxMessages)
+							.innerJoin(
+								inboxConversations,
+								eq(inboxMessages.conversationId, inboxConversations.id),
+							)
+							.where(
+								and(
+									eq(
+										inboxConversations.organizationId,
+										event.organization_id,
+									),
+									eq(
+										inboxConversations.platform,
+										event.platform as never,
+									),
+									eq(
+										inboxConversations.contactId,
+										conversation.contactId,
+									),
+									eq(inboxMessages.direction, "inbound"),
+								),
+							);
+						preInsertInboundCount = Number(row?.count ?? 0);
+					}
+					await insertMessage(db, {
 						conversationId: conversation.id,
 						organizationId: event.organization_id,
 						platformMessageId: event.platform_event_id,
@@ -445,10 +490,26 @@ export async function processInboxEvent(
 		// echoes never trigger automations. Contact resolution mirrors the inbox
 		// participant auto-linker so conditions / merge-tags see a real contact.
 		if (direction === "inbound") {
+			// `is_first_inbound_on_channel` is the signal the welcome_message
+			// binding router needs — true iff this inbound is the contact's
+			// first on this channel ACROSS ALL conversations. Using the
+			// per-conversation `messageCount === 0` check (the previous
+			// heuristic) fired welcome on every brand-new conversation, which
+			// wasn't the Plan 4 / §6.6 intent. Computed pre-insert above so
+			// `insertMessage` doesn't defeat it.
+			const isFirstInboundOnChannel =
+				event.type === "message" && preInsertInboundCount === 0;
 			await dispatchAutomationMatch(event, db, env, {
 				workspace_id: sa?.workspaceId ?? null,
 				is_conversation_start:
 					event.type === "message" && (conversation?.messageCount ?? 0) === 0,
+				is_first_inbound_on_channel: isFirstInboundOnChannel,
+				// Internal DB conversation id (inbox_conversations.id). The
+				// normalized event's `conversation_id` holds the PLATFORM-level
+				// id (Telegram chat id, Meta user psid, etc.), which is NOT a
+				// valid FK for `automation_runs.conversation_id`. Without this
+				// override, the runner's `enrollContact` insert trips the FK.
+				internal_conversation_id: conversation?.id ?? null,
 			});
 		}
 
@@ -563,9 +624,17 @@ async function dispatchAutomationMatch(
 	event: NormalizedInboxEvent,
 	db: ReturnType<typeof createDb>,
 	env: Env,
-	_meta?: {
+	meta?: {
 		workspace_id?: string | null;
 		is_conversation_start?: boolean;
+		is_first_inbound_on_channel?: boolean;
+		/**
+		 * Internal `inbox_conversations.id` — the DB row key. Must be supplied
+		 * by `processInboxEvent` because `event.conversation_id` carries the
+		 * PLATFORM conversation id (Telegram chat id, Meta psid, WhatsApp
+		 * wa_id), which is not a valid FK for `automation_runs.conversation_id`.
+		 */
+		internal_conversation_id?: string | null;
 	},
 ): Promise<void> {
 	try {
@@ -601,6 +670,13 @@ async function dispatchAutomationMatch(
 		// on a post must never be captured as input to a DM flow. The waiting
 		// run's conversation also has to match, so a message on conversation B
 		// doesn't resume a flow paused on conversation A for the same contact.
+		//
+		// Interactive payloads (button taps, quick replies, WhatsApp button_reply,
+		// Telegram callback_query) are checked FIRST — runs parked on a
+		// `message` node with branch buttons / quick replies expose
+		// `button.<id>` / `quick_reply.<id>` ports that must resolve before
+		// we fall through to plain-text input resumption. See
+		// `./automations/interactive-resume.ts`.
 		if (event.type === "message") {
 			const resumed = await resumeWaitingRunForInput(
 				db,
@@ -608,6 +684,7 @@ async function dispatchAutomationMatch(
 				envAsRecord,
 				contactId,
 				event,
+				meta?.internal_conversation_id ?? null,
 			);
 			if (resumed) return;
 		}
@@ -618,13 +695,20 @@ async function dispatchAutomationMatch(
 			organizationId: event.organization_id,
 			socialAccountId: event.account_id,
 			contactId,
-			conversationId: event.conversation_id ?? null,
+			// Prefer the internal inbox conversation id when the caller passes
+			// it (production path), falling back to the platform-level id for
+			// backward compatibility with any caller that doesn't supply it
+			// (e.g. tests that never actually pass the run through the runner's
+			// FK check).
+			conversationId:
+				meta?.internal_conversation_id ?? event.conversation_id ?? null,
 			text: event.text,
 			// story_reply/story_mention match on story_id (falls back to post_id
 			// for platforms that don't distinguish the two surfaces).
 			postId:
 				event.story_id ?? event.post_id ?? undefined,
 			adId: event.ad_id,
+			isFirstInboundOnChannel: meta?.is_first_inbound_on_channel,
 			payload: {
 				post_id: event.post_id,
 				parent_id: event.parent_id,
@@ -669,8 +753,13 @@ async function resumeWaitingRunForInput(
 	envAsRecord: Record<string, unknown>,
 	contactId: string,
 	event: NormalizedInboxEvent,
+	internalConversationId: string | null,
 ): Promise<boolean> {
-	const conversationId = event.conversation_id ?? null;
+	// Prefer the internal inbox_conversations.id (the FK actually used on
+	// `automation_runs.conversation_id`). Falling back to the platform-level
+	// id keeps legacy runs enrolled via the older (buggy) path discoverable.
+	const conversationId =
+		internalConversationId ?? event.conversation_id ?? null;
 	const waitingRuns = await db
 		.select({
 			id: automationRuns.id,
@@ -699,9 +788,31 @@ async function resumeWaitingRunForInput(
 
 	const hasAttachment = Boolean(event.attachment);
 	const inboundText = event.text ?? "";
+	const interactivePayload = event.interactive_payload ?? null;
 	let consumed = false;
 
 	for (const waiting of waitingRuns) {
+		// 1. Interactive resume — button / quick-reply taps. Runs parked on a
+		//    `message` node with branch buttons or quick replies wait on input;
+		//    their `button.<id>` / `quick_reply.<id>` ports must resolve before
+		//    we treat the inbound as plain text. If the payload doesn't match a
+		//    port, `"no_match"` falls through to the text-input resume path.
+		if (interactivePayload) {
+			const outcome = await resumeWaitingRunOnInteractive(
+				db,
+				waiting.id,
+				interactivePayload,
+				envAsRecord,
+			);
+			if (outcome === "resumed") {
+				consumed = true;
+				continue;
+			}
+			if (outcome === "race") continue;
+			// "no_match" → fall through to the text-input resume below.
+		}
+
+		// 2. Text-input resume — runs parked on an `input` node.
 		const outcome = await resumeWaitingRunOnInput(
 			db,
 			waiting.id,
