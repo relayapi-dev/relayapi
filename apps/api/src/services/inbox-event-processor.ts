@@ -706,13 +706,17 @@ async function dispatchAutomationMatch(
 			organizationId: event.organization_id,
 			socialAccountId: event.account_id,
 			contactId,
-			// Prefer the internal inbox conversation id when the caller passes
-			// it (production path), falling back to the platform-level id for
-			// backward compatibility with any caller that doesn't supply it
-			// (e.g. tests that never actually pass the run through the runner's
-			// FK check).
-			conversationId:
-				meta?.internal_conversation_id ?? event.conversation_id ?? null,
+			// Use ONLY the internal `inbox_conversations.id` supplied by
+			// `processInboxEvent` (via `meta.internal_conversation_id`). Do NOT
+			// fall back to `event.conversation_id`: for non-persisted events
+			// (`follow`, standalone `ad_click`) that field carries a platform
+			// PSID/IGSID, which is not a valid FK for
+			// `automation_runs.conversation_id` and causes an FK violation —
+			// swallowed by `matchAndEnroll`'s try/catch, producing a silent
+			// "no_active_automation" miss for every follow / standalone ad_click
+			// trigger. Persisted events (`comment`, `message`) always have
+			// `internal_conversation_id` set above; non-persisted events never do.
+			conversationId: meta?.internal_conversation_id ?? null,
 			text: event.text,
 			// story_reply/story_mention match on story_id (falls back to post_id
 			// for platforms that don't distinguish the two surfaces).
@@ -780,10 +784,11 @@ async function resumeWaitingRunForInput(
 	contactId: string,
 	event: NormalizedInboxEvent,
 ): Promise<boolean> {
-	const waitingRuns = await db
+	const rows = await db
 		.select({
 			id: automationRuns.id,
 			startedAt: automationRuns.startedAt,
+			context: automationRuns.context,
 		})
 		.from(automationRuns)
 		.where(
@@ -795,6 +800,28 @@ async function resumeWaitingRunForInput(
 			),
 		)
 		.orderBy(asc(automationRuns.startedAt));
+
+	// G4: defence-in-depth for multi-account workspaces. Plan 7 dropped the
+	// conversation_id filter from the resume lookup so cross-thread resume
+	// works (e.g. comment-triggered flow parked on a comment-thread
+	// conversation but resumed by a DM-thread callback). That made it
+	// theoretically possible for an inbound arriving on account B to resume
+	// a run triggered under account A if both runs share a port key (e.g.
+	// `button.yes`). We scope application-side by
+	// `context._triggering_social_account_id`: when the event carries an
+	// account, skip runs triggered under a different account. Runs
+	// triggered without an account (null) always remain eligible so test
+	// fixtures and non-webhook enrollments keep working.
+	const waitingRuns = event.account_id
+		? rows.filter((r) => {
+				const ctx = (r.context as Record<string, unknown>) ?? {};
+				const triggeringAccount = ctx._triggering_social_account_id as
+					| string
+					| null
+					| undefined;
+				return !triggeringAccount || triggeringAccount === event.account_id;
+			})
+		: rows;
 
 	if (waitingRuns.length === 0) return false;
 
@@ -979,6 +1006,12 @@ function normalizeFacebookEvent(
 	const now = new Date().toISOString();
 
 	// Follow event — Messenger "follows" webhook field on a Page.
+	//
+	// `conversation_id` is deliberately omitted: follow events are
+	// non-persisted (no row in `inbox_conversations`) so there is no
+	// internal conversation id to attach. Writing the platform sender id
+	// here would leak into `automation_runs.conversation_id` via the
+	// automations bridge and trip the FK constraint.
 	if (event_type === "follows") {
 		const msg = payload as FacebookMessagingPayload;
 		return [
@@ -988,7 +1021,6 @@ function normalizeFacebookEvent(
 				account_id: message.account_id,
 				organization_id: message.organization_id,
 				platform_event_id: `follow_${msg.sender.id}_${msg.timestamp}`,
-				conversation_id: msg.sender.id,
 				author: { name: msg.sender.id, id: msg.sender.id },
 				created_at: new Date(msg.timestamp).toISOString(),
 				raw: payload,
@@ -997,6 +1029,11 @@ function normalizeFacebookEvent(
 	}
 
 	// Standalone referral — user clicked a CTM ad before sending a DM.
+	//
+	// `conversation_id` is deliberately omitted for the same reason as
+	// `follows` above: there's no persisted `inbox_conversations` row for
+	// a standalone referral, so exposing the platform sender id here would
+	// cause an FK violation when the automations bridge forwards it.
 	if (event_type === "referral") {
 		const msg = payload as FacebookMessagingPayload;
 		return [
@@ -1006,7 +1043,6 @@ function normalizeFacebookEvent(
 				account_id: message.account_id,
 				organization_id: message.organization_id,
 				platform_event_id: `ref_${msg.sender.id}_${msg.timestamp}`,
-				conversation_id: msg.sender.id,
 				author: { name: msg.sender.id, id: msg.sender.id },
 				ad_id: msg.referral?.ad_id,
 				is_ad_click: true,
@@ -1136,6 +1172,9 @@ function normalizeInstagramEvent(
 	const now = new Date().toISOString();
 
 	// Follow on Instagram — Meta delivers a `follows` webhook field.
+	//
+	// `conversation_id` is deliberately omitted — same FK-violation reason
+	// as the Facebook follow path above.
 	if (event_type === "follows") {
 		const msg = payload as FacebookMessagingPayload;
 		return [
@@ -1145,7 +1184,6 @@ function normalizeInstagramEvent(
 				account_id: message.account_id,
 				organization_id: message.organization_id,
 				platform_event_id: `follow_${msg.sender.id}_${msg.timestamp}`,
-				conversation_id: msg.sender.id,
 				author: { name: msg.sender.id, id: msg.sender.id },
 				created_at: new Date(msg.timestamp).toISOString(),
 				raw: payload,
@@ -1154,6 +1192,9 @@ function normalizeInstagramEvent(
 	}
 
 	// Standalone ad-click referral (Instagram CTM).
+	//
+	// `conversation_id` is deliberately omitted — same FK-violation reason
+	// as the standalone Facebook referral path above.
 	if (event_type === "referral") {
 		const msg = payload as FacebookMessagingPayload;
 		return [
@@ -1163,7 +1204,6 @@ function normalizeInstagramEvent(
 				account_id: message.account_id,
 				organization_id: message.organization_id,
 				platform_event_id: `ref_${msg.sender.id}_${msg.timestamp}`,
-				conversation_id: msg.sender.id,
 				author: { name: msg.sender.id, id: msg.sender.id },
 				ad_id: msg.referral?.ad_id,
 				is_ad_click: true,

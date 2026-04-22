@@ -67,6 +67,14 @@ export const startAutomationHandler: NodeHandler<StartAutomationConfig> = {
 				channel: ctx.channel,
 				entrypointId: cfg.entrypoint_id ?? null,
 				bindingId: null,
+				// Forward the parent's triggering account so the child's
+				// persisted `_triggering_social_account_id` is populated even
+				// when `pass_context: false`. Without this, a later resume of
+				// the child (after a delay / user_input wait) falls back to
+				// the newest `contact_channels` row — the same multi-account
+				// routing bug Plan 6 F2 fixed elsewhere.
+				socialAccountId:
+					(ctx.env?.socialAccountId as string | undefined) ?? null,
 				contextOverrides: cfg.pass_context ? ctx.context : undefined,
 				env: ctx.env,
 			});
