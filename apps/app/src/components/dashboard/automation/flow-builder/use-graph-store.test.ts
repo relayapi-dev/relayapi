@@ -283,3 +283,83 @@ describe("cloneGraph", () => {
 		expect((g.nodes[0]!.config as { foo: { bar: number } }).foo.bar).toBe(1);
 	});
 });
+
+describe("useGraphStore reducer — SET_VALIDATION", () => {
+	// Regression: the validation effect in CanvasInner fires
+	// `validateGraph(graph) → setValidation` on every render that observes a
+	// new graphStore reference. Because `validateGraph` returns fresh array /
+	// object identities, a naïve reducer would return a new state on every
+	// call, which in turn produces a new `graphStore` via `useMemo`, retriggers
+	// the effect, and pins React's render loop → React error #185.
+	//
+	// The reducer must be idempotent when the incoming issue lists are
+	// content-equal to the stored ones.
+
+	it("returns the same state reference when validation is unchanged", () => {
+		const initial = initialState(EMPTY_GRAPH);
+		const firstErrors = [
+			{
+				code: "orphan_node",
+				message: "foo",
+				severity: "error" as const,
+				nodeKey: "n1",
+			},
+		];
+		const firstWarnings: never[] = [];
+
+		const afterFirst = reducer(initial, {
+			type: "SET_VALIDATION",
+			errors: firstErrors,
+			warnings: firstWarnings,
+		});
+		expect(afterFirst).not.toBe(initial);
+		expect(afterFirst.validationErrors).toBe(firstErrors);
+
+		// Second call with fresh-but-equivalent arrays (mirroring what
+		// `validateGraph` produces each render) must short-circuit.
+		const equivalentErrors = [
+			{
+				code: "orphan_node",
+				message: "foo",
+				severity: "error" as const,
+				nodeKey: "n1",
+			},
+		];
+		const afterSecond = reducer(afterFirst, {
+			type: "SET_VALIDATION",
+			errors: equivalentErrors,
+			warnings: [],
+		});
+		expect(afterSecond).toBe(afterFirst);
+	});
+
+	it("returns a new state when any validation field changes", () => {
+		const initial = initialState(EMPTY_GRAPH);
+		const afterFirst = reducer(initial, {
+			type: "SET_VALIDATION",
+			errors: [
+				{
+					code: "orphan_node",
+					message: "foo",
+					severity: "error",
+					nodeKey: "n1",
+				},
+			],
+			warnings: [],
+		});
+		const afterSecond = reducer(afterFirst, {
+			type: "SET_VALIDATION",
+			errors: [
+				{
+					code: "orphan_node",
+					message: "foo",
+					severity: "error",
+					nodeKey: "n2", // changed
+				},
+			],
+			warnings: [],
+		});
+		expect(afterSecond).not.toBe(afterFirst);
+		expect(afterSecond.validationErrors[0]?.nodeKey).toBe("n2");
+	});
+});

@@ -119,6 +119,32 @@ function pushHistory(
 	return { past, future: [] };
 }
 
+// Cheap field-wise equality for two ValidationIssue lists. `validateGraph`
+// returns fresh array and object identities on every call, so reference
+// equality can't be used to short-circuit the SET_VALIDATION reducer.
+function validationIssuesEqual(
+	a: ValidationIssue[],
+	b: ValidationIssue[],
+): boolean {
+	if (a === b) return true;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		const x = a[i]!;
+		const y = b[i]!;
+		if (
+			x.code !== y.code ||
+			x.message !== y.message ||
+			x.severity !== y.severity ||
+			x.nodeKey !== y.nodeKey ||
+			x.portKey !== y.portKey ||
+			x.edgeIndex !== y.edgeIndex
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
 // ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
@@ -295,6 +321,20 @@ function reducer(state: GraphStoreState, action: Action): GraphStoreState {
 			return { ...state, selection: action.keys };
 
 		case "SET_VALIDATION":
+			// Idempotent — if the incoming issues are content-equal to the
+			// stored ones, return the SAME state reference. The canvas's
+			// validation effect fires `validateGraph(graph) → setValidation`
+			// on every render that picks up a new `graphStore` reference;
+			// without this guard, each call produces a new state (and thus a
+			// new `graphStore` via `useMemo`), which triggers the effect
+			// again and pins React's render loop — surfacing as React error
+			// #185 ("Maximum update depth exceeded").
+			if (
+				validationIssuesEqual(state.validationErrors, action.errors) &&
+				validationIssuesEqual(state.validationWarnings, action.warnings)
+			) {
+				return state;
+			}
 			return {
 				...state,
 				validationErrors: action.errors,

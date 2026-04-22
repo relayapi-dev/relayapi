@@ -358,6 +358,85 @@ app.openapi(createAutomation, async (c) => {
 	return c.json(serializeAutomation(inserted), 201);
 });
 
+// ---------------------------------------------------------------------------
+// G7 — Catalog (static, ETag-cached) + Global insights (live SQL aggregates)
+//
+// IMPORTANT: These routes use static path segments (`/catalog`, `/insights`)
+// that would otherwise collide with `GET /{id}` below. Hono's router matches
+// in registration order, so these MUST be registered BEFORE `/{id}` — moving
+// them later causes `/v1/automations/catalog` to hit the `/{id}` handler with
+// `id="catalog"`, fail the DB lookup, and return a spurious 404.
+// ---------------------------------------------------------------------------
+
+const CatalogResponseSchema = z
+	.object({
+		node_kinds: z.array(z.any()),
+		entrypoint_kinds: z.array(z.any()),
+		binding_types: z.array(z.any()),
+		action_types: z.array(z.any()),
+		channel_capabilities: z.record(z.string(), z.any()),
+		template_kinds: z.array(z.string()),
+	})
+	.openapi("AutomationCatalog");
+
+const catalogRoute = createRoute({
+	operationId: "getAutomationCatalog",
+	method: "get",
+	path: "/catalog",
+	tags: ["Automations"],
+	summary: "Return the static catalog of node kinds, entrypoints, bindings, actions, and channel capabilities",
+	security: [{ Bearer: [] }],
+	responses: {
+		200: {
+			description: "Catalog",
+			content: { "application/json": { schema: CatalogResponseSchema } },
+		},
+		304: { description: "Not modified" },
+	},
+});
+
+app.openapi(catalogRoute, async (c) => {
+	// Conditional GET — serve 304 if the ETag matches.
+	const incoming = c.req.header("if-none-match");
+	if (incoming && incoming === AUTOMATION_CATALOG_ETAG) {
+		c.header("ETag", AUTOMATION_CATALOG_ETAG);
+		return c.body(null, 304);
+	}
+	c.header("ETag", AUTOMATION_CATALOG_ETAG);
+	c.header("Cache-Control", "public, max-age=300");
+	// The catalog is pre-stringified for cheap serving; but returning the
+	// parsed object keeps the response type aligned with the OpenAPI schema.
+	return c.json(AUTOMATION_CATALOG as unknown as z.infer<typeof CatalogResponseSchema>, 200);
+});
+
+// Global (org-wide, optionally rolled up by template kind) insights.
+const globalInsightsRoute = createRoute({
+	operationId: "getAutomationInsightsAll",
+	method: "get",
+	path: "/insights",
+	tags: ["Automations"],
+	summary: "Aggregate run metrics across the org, optionally rolled up by created_from_template",
+	security: [{ Bearer: [] }],
+	request: { query: GlobalInsightsQuery },
+	responses: {
+		200: {
+			description: "Insights",
+			content: { "application/json": { schema: InsightsResponseSchema } },
+		},
+	},
+});
+
+app.openapi(globalInsightsRoute, async (c) => {
+	const query = c.req.valid("query");
+	const db = c.get("db");
+	const result = await aggregateInsights(db, query, {
+		orgId: c.get("orgId"),
+		createdFromTemplate: query.created_from_template,
+		workspaceId: query.workspace_id,
+	});
+	return c.json(result, 200);
+});
+
 const getAutomation = createRoute({
 	operationId: "getAutomation",
 	method: "get",
@@ -929,52 +1008,9 @@ app.openapi(simulateAutomationRoute, async (c) => {
 	return c.json(result, 200);
 });
 
-// ---------------------------------------------------------------------------
-// G7 — Catalog (static, ETag-cached) + Insights (live SQL aggregates)
-// ---------------------------------------------------------------------------
-
-const CatalogResponseSchema = z
-	.object({
-		node_kinds: z.array(z.any()),
-		entrypoint_kinds: z.array(z.any()),
-		binding_types: z.array(z.any()),
-		action_types: z.array(z.any()),
-		channel_capabilities: z.record(z.string(), z.any()),
-		template_kinds: z.array(z.string()),
-	})
-	.openapi("AutomationCatalog");
-
-const catalogRoute = createRoute({
-	operationId: "getAutomationCatalog",
-	method: "get",
-	path: "/catalog",
-	tags: ["Automations"],
-	summary: "Return the static catalog of node kinds, entrypoints, bindings, actions, and channel capabilities",
-	security: [{ Bearer: [] }],
-	responses: {
-		200: {
-			description: "Catalog",
-			content: { "application/json": { schema: CatalogResponseSchema } },
-		},
-		304: { description: "Not modified" },
-	},
-});
-
-app.openapi(catalogRoute, async (c) => {
-	// Conditional GET — serve 304 if the ETag matches.
-	const incoming = c.req.header("if-none-match");
-	if (incoming && incoming === AUTOMATION_CATALOG_ETAG) {
-		c.header("ETag", AUTOMATION_CATALOG_ETAG);
-		return c.body(null, 304);
-	}
-	c.header("ETag", AUTOMATION_CATALOG_ETAG);
-	c.header("Cache-Control", "public, max-age=300");
-	// The catalog is pre-stringified for cheap serving; but returning the
-	// parsed object keeps the response type aligned with the OpenAPI schema.
-	return c.json(AUTOMATION_CATALOG as unknown as z.infer<typeof CatalogResponseSchema>, 200);
-});
-
-// Per-automation insights.
+// Per-automation insights. `/{id}/insights` has two path segments so it
+// never collides with the single-segment `/{id}` route — registration
+// order below is fine.
 const insightsRoute = createRoute({
 	operationId: "getAutomationInsights",
 	method: "get",
@@ -1008,34 +1044,6 @@ app.openapi(insightsRoute, async (c) => {
 	const result = await aggregateInsights(db, query, {
 		orgId: c.get("orgId"),
 		automationId: id,
-	});
-	return c.json(result, 200);
-});
-
-// Global (org-wide, optionally rolled up by template kind) insights.
-const globalInsightsRoute = createRoute({
-	operationId: "getAutomationInsightsAll",
-	method: "get",
-	path: "/insights",
-	tags: ["Automations"],
-	summary: "Aggregate run metrics across the org, optionally rolled up by created_from_template",
-	security: [{ Bearer: [] }],
-	request: { query: GlobalInsightsQuery },
-	responses: {
-		200: {
-			description: "Insights",
-			content: { "application/json": { schema: InsightsResponseSchema } },
-		},
-	},
-});
-
-app.openapi(globalInsightsRoute, async (c) => {
-	const query = c.req.valid("query");
-	const db = c.get("db");
-	const result = await aggregateInsights(db, query, {
-		orgId: c.get("orgId"),
-		createdFromTemplate: query.created_from_template,
-		workspaceId: query.workspace_id,
 	});
 	return c.json(result, 200);
 });

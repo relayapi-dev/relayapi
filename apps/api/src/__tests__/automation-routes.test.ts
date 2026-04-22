@@ -232,6 +232,54 @@ describe("automation catalog", () => {
 });
 
 // ---------------------------------------------------------------------------
+// G7 — Route-order regression (pure unit, no DB)
+//
+// Previously the static `/catalog` and `/insights` routes were registered
+// AFTER the dynamic `/{id}` handler, so Hono matched `/{id}` with
+// `id="catalog"` first, ran the DB lookup, found nothing, and returned 404.
+// These tests guard against a reoccurrence by mounting the real router under
+// a stub middleware and confirming static segments win over the dynamic one.
+// ---------------------------------------------------------------------------
+
+describe("automations router registration order", () => {
+	it("routes GET /catalog to the catalog handler, not GET /{id}", async () => {
+		// Lazy import so the test file keeps its pure-unit default (no DB).
+		const { OpenAPIHono } = await import("@hono/zod-openapi");
+		const { default: automationsRouter } = await import(
+			"../routes/automations"
+		);
+
+		// biome-ignore lint/suspicious/noExplicitAny: test harness stub for context vars
+		const app: any = new OpenAPIHono();
+		app.use("*", async (c: any, next: any) => {
+			// Minimal stub context so the `/{id}` handler — if erroneously hit —
+			// would return a 404 body we can distinguish from the catalog body.
+			c.set("orgId", "org_test");
+			c.set(
+				"db",
+				{
+					select: () => ({
+						from: () => ({
+							where: () => ({ limit: async () => [] }),
+						}),
+					}),
+				},
+			);
+			c.set("apiKey", { workspaceId: null });
+			await next();
+		});
+		app.route("/v1/automations", automationsRouter);
+
+		const res = await app.request("/v1/automations/catalog");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as Record<string, unknown>;
+		// Catalog payload shape — node_kinds array is the cheapest fingerprint.
+		expect(Array.isArray(body.node_kinds)).toBe(true);
+		expect((body.node_kinds as unknown[]).length).toBeGreaterThan(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // G3 — Entrypoint config validation (pure unit, no DB)
 // ---------------------------------------------------------------------------
 
