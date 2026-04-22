@@ -1,4 +1,5 @@
 import type { MessageBlock, QuickReply } from "../../../schemas/automation-graph";
+import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
 type FollowerGrowthConfig = {
@@ -71,7 +72,7 @@ export function buildFollowerGrowth(
 		name: "Follower growth contest",
 		description:
 			"Matches contest comments on the selected posts. Confirms winners via DM.",
-		graph: {
+		graph: autoLayoutGraph({
 			schema_version: 1,
 			root_node_key: "rules",
 			nodes: [
@@ -184,7 +185,7 @@ export function buildFollowerGrowth(
 					to_port: "in",
 				},
 			],
-		},
+		}),
 		entrypoints: [
 			{
 				kind: "comment_created",

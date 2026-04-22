@@ -616,4 +616,65 @@ describe("automation create from template", () => {
 			expect(Array.isArray(built.graph.edges)).toBe(true);
 		}
 	});
+
+	it("persists a canonical graph with ports + canvas positions (integration)", async () => {
+		if (!dbAvailable) return;
+		// Mirror what the route does: build, validate, insert. The canonical
+		// graph has `ports` derived per node and `canvas_x` / `canvas_y` set
+		// by the template's auto-layout helper — these are what the dashboard
+		// needs to render handles and distinct node positions.
+		const { validateGraph } = await import(
+			"../services/automations/validator"
+		);
+
+		const built = buildGraphFromTemplate({
+			kind: "comment_to_dm",
+			channel: "instagram",
+			config: {
+				post_ids: ["post_abc"],
+				keyword_filter: ["link"],
+				dm_message: {
+					blocks: [{ id: "b1", type: "text", text: "Here!" }],
+				},
+				social_account_id: "acc_123",
+			},
+		});
+		const validation = validateGraph(built.graph);
+
+		const [row] = await db
+			.insert(automations)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "test-template-persist",
+				channel: "instagram",
+				status: "draft",
+				graph: validation.canonicalGraph as never,
+				createdFromTemplate: "comment_to_dm",
+			})
+			.returning();
+		expect(row).toBeDefined();
+
+		const [fetched] = await db
+			.select()
+			.from(automations)
+			.where(eq(automations.id, row!.id))
+			.limit(1);
+		expect(fetched).toBeDefined();
+		const g = fetched!.graph as {
+			nodes: Array<{
+				key: string;
+				ports: unknown[];
+				canvas_x?: number;
+				canvas_y?: number;
+			}>;
+		};
+		expect(g.nodes.length).toBeGreaterThan(0);
+		for (const node of g.nodes) {
+			expect(Array.isArray(node.ports)).toBe(true);
+			expect(node.ports.length).toBeGreaterThan(0);
+			expect(typeof node.canvas_x).toBe("number");
+			expect(typeof node.canvas_y).toBe("number");
+		}
+	});
 });

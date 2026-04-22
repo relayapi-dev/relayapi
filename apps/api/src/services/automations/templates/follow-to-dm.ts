@@ -1,4 +1,5 @@
 import type { MessageBlock, QuickReply } from "../../../schemas/automation-graph";
+import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
 // TODO (v1.1): the rate-limit fields below (`max_sends_per_day`,
@@ -37,7 +38,7 @@ export function buildFollowToDm(
 		name: "Follow → DM",
 		description:
 			"Sends a welcome DM to new followers and tags them for easy filtering.",
-		graph: {
+		graph: autoLayoutGraph({
 			schema_version: 1,
 			root_node_key: "welcome",
 			nodes: [
@@ -89,7 +90,7 @@ export function buildFollowToDm(
 					to_port: "in",
 				},
 			],
-		},
+		}),
 		entrypoints: [
 			{
 				kind: "follow",

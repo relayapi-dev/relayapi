@@ -1,3 +1,4 @@
+import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
 export function buildLeadCapture(
@@ -14,7 +15,7 @@ export function buildLeadCapture(
 		name: "Lead capture",
 		description:
 			"Asks a visitor for their email, tags them as a lead, and confirms.",
-		graph: {
+		graph: autoLayoutGraph({
 			schema_version: 1,
 			root_node_key: "welcome",
 			nodes: [
@@ -116,7 +117,7 @@ export function buildLeadCapture(
 					to_port: "in",
 				},
 			],
-		},
+		}),
 		entrypoints: [],
 	};
 }

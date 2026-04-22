@@ -1,3 +1,4 @@
+import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
 const DEFAULT_KEYWORDS: Array<{ label: string; keyword: string; reply: string }> = [
@@ -174,12 +175,12 @@ export function buildFaqBot(input: TemplateBuildInput): TemplateBuildOutput {
 		name: "FAQ bot",
 		description:
 			"Answers common questions from a short keyword list. Wire an entrypoint after creating.",
-		graph: {
+		graph: autoLayoutGraph({
 			schema_version: 1,
 			root_node_key: "ask",
 			nodes,
 			edges,
-		},
+		}),
 		entrypoints: [],
 	};
 }

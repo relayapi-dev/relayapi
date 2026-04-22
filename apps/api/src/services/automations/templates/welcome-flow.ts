@@ -1,3 +1,4 @@
+import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
 export function buildWelcomeFlow(
@@ -7,7 +8,7 @@ export function buildWelcomeFlow(
 		name: "Welcome flow",
 		description:
 			"Greets new contacts with a friendly message. Wire an entrypoint after creating.",
-		graph: {
+		graph: autoLayoutGraph({
 			schema_version: 1,
 			root_node_key: "welcome",
 			nodes: [
@@ -42,7 +43,7 @@ export function buildWelcomeFlow(
 					to_port: "in",
 				},
 			],
-		},
+		}),
 		entrypoints: [],
 	};
 }

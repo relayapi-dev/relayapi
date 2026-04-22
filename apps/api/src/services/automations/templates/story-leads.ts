@@ -1,4 +1,5 @@
 import type { MessageBlock, QuickReply } from "../../../schemas/automation-graph";
+import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
 type StoryLeadsConfig = {
@@ -34,7 +35,7 @@ export function buildStoryLeads(
 		name: "Story leads",
 		description:
 			"Captures leads from Instagram story replies. Tags and saves the contact field.",
-		graph: {
+		graph: autoLayoutGraph({
 			schema_version: 1,
 			root_node_key: "prompt",
 			nodes: [
@@ -131,7 +132,7 @@ export function buildStoryLeads(
 					to_port: "in",
 				},
 			],
-		},
+		}),
 		entrypoints: [
 			{
 				kind: "story_reply",

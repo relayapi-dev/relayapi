@@ -104,6 +104,77 @@ describe("buildGraphFromTemplate", () => {
 		});
 	}
 
+	// Every non-blank template must assign canvas_x / canvas_y so nodes
+	// render at distinct positions on the dashboard canvas (previously they
+	// all stacked at (0, 0) because builders didn't set positions).
+	for (const kind of Object.keys(FIXTURES) as TemplateKind[]) {
+		if (kind === "blank") continue;
+		it(`assigns canvas positions to every node for ${kind}`, () => {
+			const result = buildGraphFromTemplate({
+				kind,
+				channel: "instagram",
+				config: FIXTURES[kind],
+			});
+			expect(result.graph.nodes.length).toBeGreaterThan(0);
+			for (const node of result.graph.nodes) {
+				expect(typeof node.canvas_x).toBe("number");
+				expect(typeof node.canvas_y).toBe("number");
+			}
+		});
+
+		it(`produces non-empty ports on every node after validation for ${kind}`, () => {
+			const result = buildGraphFromTemplate({
+				kind,
+				channel: "instagram",
+				config: FIXTURES[kind],
+			});
+			const validation = validateGraph(result.graph);
+			expect(validation.canonicalGraph.nodes.length).toBeGreaterThan(0);
+			for (const node of validation.canonicalGraph.nodes) {
+				expect(Array.isArray(node.ports)).toBe(true);
+				expect(node.ports.length).toBeGreaterThan(0);
+			}
+		});
+	}
+
+	it("places the root node at (100, 100) for a non-blank template", () => {
+		const result = buildGraphFromTemplate({
+			kind: "welcome_flow",
+			channel: "instagram",
+			config: {},
+		});
+		const root = result.graph.nodes.find((n) => n.key === result.graph.root_node_key);
+		expect(root).toBeDefined();
+		expect(root!.canvas_x).toBe(100);
+		expect(root!.canvas_y).toBe(100);
+	});
+
+	// Simulates what POST /v1/automations does end-to-end: build from template,
+	// run validateGraph, persist the canonical graph. Guards against the
+	// regression where the canvas rendered empty because persisted nodes had
+	// `ports: []` and no canvas_x / canvas_y.
+	it("persistable graph for comment_to_dm has ports AND canvas positions on every node", () => {
+		const built = buildGraphFromTemplate({
+			kind: "comment_to_dm",
+			channel: "instagram",
+			config: FIXTURES.comment_to_dm,
+		});
+		const validation = validateGraph(built.graph);
+		// This is what the route INSERTs into automations.graph.
+		const persisted = validation.canonicalGraph;
+		expect(persisted.nodes.length).toBeGreaterThan(0);
+		for (const node of persisted.nodes) {
+			expect(node.ports.length).toBeGreaterThan(0);
+			expect(typeof node.canvas_x).toBe("number");
+			expect(typeof node.canvas_y).toBe("number");
+		}
+		// send_dm → depth 0, done → depth 1 (one-edge walk from root).
+		const sendDm = persisted.nodes.find((n) => n.key === "send_dm");
+		const done = persisted.nodes.find((n) => n.key === "done");
+		expect(sendDm?.canvas_x).toBe(100);
+		expect(done?.canvas_x).toBe(380);
+	});
+
 	it("blank template produces an empty graph and no entrypoints", () => {
 		const result = buildGraphFromTemplate({
 			kind: "blank",

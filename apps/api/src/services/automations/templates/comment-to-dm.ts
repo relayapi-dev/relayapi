@@ -1,4 +1,5 @@
 import type { MessageBlock, QuickReply } from "../../../schemas/automation-graph";
+import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
 type CommentToDmConfig = {
@@ -32,7 +33,7 @@ export function buildCommentToDm(
 		name: "Comment → DM",
 		description:
 			"Replies to matching comments on the selected posts with a DM.",
-		graph: {
+		graph: autoLayoutGraph({
 			schema_version: 1,
 			root_node_key: "send_dm",
 			nodes: [
@@ -62,7 +63,7 @@ export function buildCommentToDm(
 					to_port: "in",
 				},
 			],
-		},
+		}),
 		entrypoints: [
 			{
 				kind: "comment_created",

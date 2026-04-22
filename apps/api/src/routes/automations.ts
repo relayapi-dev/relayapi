@@ -299,7 +299,23 @@ app.openapi(createAutomation, async (c) => {
 				400,
 			);
 		}
-		graph = built.graph;
+		// Run the template-built graph through validateGraph so every node gets
+		// its canonical `ports` array (derived from node.kind + node.config). The
+		// template builders intentionally emit `ports: []` and let the validator
+		// fill them in — this matches what PUT /{id}/graph already does and
+		// guarantees the persisted graph renders handles on the dashboard canvas.
+		// `applyDerivedPorts` runs even when errors are present, so we always use
+		// `canonicalGraph`. A non-empty errors array here indicates a template
+		// builder bug; surface it as a stderr warning but proceed so the create
+		// isn't blocked by a stale template.
+		const validation = validateGraph(built.graph);
+		if (validation.errors.length > 0) {
+			console.warn(
+				`[automations] template "${body.template.kind}" produced graph with validation errors`,
+				validation.errors,
+			);
+		}
+		graph = validation.canonicalGraph;
 		if (!body.name || body.name === "") name = built.name;
 		createdFromTemplate = body.template.kind;
 		templateConfig = body.template.config ?? {};
