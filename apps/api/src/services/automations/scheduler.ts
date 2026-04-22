@@ -261,16 +261,24 @@ export async function processAutomationInputTimeouts(
 /**
  * Dispatches a `scheduled_trigger` job:
  *   1. Load the entrypoint and verify it's an active `schedule` entrypoint.
- *   2. Enumerate contacts that match the entrypoint's `filters` (tag or
+ *   2. Compute and enqueue the NEXT occurrence *before* running enrollment
+ *      (spec §B4 fix). Keeping this step on the failure path kept the schedule
+ *      alive even if the enrollment phase throws (DB hiccup, etc.) — previously
+ *      a single transient failure would silently kill the entire schedule.
+ *      Idempotency: we check for an existing pending `scheduled_trigger` job
+ *      with the same `entrypoint_id` and `run_at` (within a one-second clock-
+ *      drift window) before inserting, so re-running the same job twice
+ *      (e.g. after a stale-claim reclaim) doesn't double-queue.
+ *   3. Enumerate contacts that match the entrypoint's `filters` (tag or
  *      segment predicates in v1). A filter IS REQUIRED — unfiltered schedule
  *      entrypoints would enroll the entire org, which is never what the
  *      operator wants.
- *   3. For each matching contact, call `matchAndEnrollOrBinding` with a
+ *   4. For each matching contact, call `matchAndEnrollOrBinding` with a
  *      synthetic `schedule` event. The matcher handles reentry / pause
- *      semantics per-contact.
- *   4. Parse `entrypoint.config.cron`, compute the next run time, and insert
- *      a fresh `scheduled_trigger` job. Unsupported cron patterns mark the
- *      current job failed with `unsupported cron pattern`.
+ *      semantics per-contact. Individual failures are logged but never block
+ *      the remaining contacts.
+ *   5. If enrollment throws, mark the current job failed but the next-run
+ *      job stays queued, so the schedule survives.
  */
 async function dispatchScheduledTrigger(
 	db: Db,
@@ -294,13 +302,30 @@ async function dispatchScheduledTrigger(
 		return "done";
 	}
 
-	// Require a filter — enrolling an entire org is never intended.
+	// 1. Compute and enqueue the next firing BEFORE any other work. This keeps
+	//    the schedule alive across transient enrollment failures.
+	const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
+	const nextRun = cfg.cron ? computeNextCronRun(cfg.cron, new Date()) : null;
+	if (!nextRun) {
+		return { failed: true, error: "unsupported cron pattern" };
+	}
+	await insertNextScheduledJobIfNotExists(db, auto.id, ep.id, nextRun);
+
+	// 2. Require a filter — enrolling an entire org is never intended.
 	const filters = (ep.filters ?? null) as Record<string, unknown> | null;
-	const candidateIds = await enumerateContactsForScheduleFilter(
-		db,
-		auto.organizationId,
-		filters,
-	);
+	let candidateIds: string[] | null;
+	try {
+		candidateIds = await enumerateContactsForScheduleFilter(
+			db,
+			auto.organizationId,
+			filters,
+		);
+	} catch (err) {
+		return {
+			failed: true,
+			error: `schedule filter enumeration failed: ${err instanceof Error ? err.message : String(err)}`,
+		};
+	}
 	if (candidateIds === null) {
 		return {
 			failed: true,
@@ -308,46 +333,81 @@ async function dispatchScheduledTrigger(
 		};
 	}
 
-	// Fire enroll-or-binding for each candidate. Failures never block the
-	// remaining contacts.
-	for (const contactId of candidateIds) {
-		const event: InboundEvent = {
-			kind: "schedule" as never,
-			channel: auto.channel as InboundEvent["channel"],
-			organizationId: auto.organizationId,
-			socialAccountId: ep.socialAccountId ?? null,
-			contactId,
-			conversationId: null,
-			payload: {
-				source: "schedule",
-				entrypoint_id: ep.id,
-				scheduled_at: new Date().toISOString(),
-			},
-		};
-		try {
-			await matchAndEnrollOrBinding(db, event, env);
-		} catch (err) {
-			console.error(
-				`[scheduler] scheduled_trigger enroll failed for contact ${contactId}:`,
-				err,
-			);
+	// 3. Fire enroll-or-binding for each candidate. Individual contact failures
+	//    never block the remaining contacts; a catastrophic error (thrown out
+	//    of the loop itself) is caught here so the next-run job we already
+	//    queued above survives.
+	try {
+		for (const contactId of candidateIds) {
+			const event: InboundEvent = {
+				kind: "schedule" as never,
+				channel: auto.channel as InboundEvent["channel"],
+				organizationId: auto.organizationId,
+				socialAccountId: ep.socialAccountId ?? null,
+				contactId,
+				conversationId: null,
+				payload: {
+					source: "schedule",
+					entrypoint_id: ep.id,
+					scheduled_at: new Date().toISOString(),
+				},
+			};
+			try {
+				await matchAndEnrollOrBinding(db, event, env);
+			} catch (err) {
+				console.error(
+					`[scheduler] scheduled_trigger enroll failed for contact ${contactId}:`,
+					err,
+				);
+			}
 		}
+	} catch (err) {
+		// The enrollment loop itself blew up (rare — usually the inner catch
+		// absorbs per-contact errors). Mark THIS job failed, but the next-run
+		// row inserted above remains pending so the schedule continues.
+		return {
+			failed: true,
+			error: `scheduled_trigger enrollment loop failed: ${err instanceof Error ? err.message : String(err)}`,
+		};
 	}
+	return "done";
+}
 
-	// Reschedule the next firing.
-	const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
-	const nextRun = cfg.cron ? computeNextCronRun(cfg.cron, new Date()) : null;
-	if (!nextRun) {
-		return { failed: true, error: "unsupported cron pattern" };
-	}
+/**
+ * Idempotently inserts the next `scheduled_trigger` job for an entrypoint.
+ * Skips the insert if a pending row already exists for the same entrypoint
+ * within a 1-second window of `runAt` — handles the case where the same
+ * scheduled_trigger job gets processed twice (e.g. after a stale-claim
+ * reclaim) without double-queueing successors.
+ */
+async function insertNextScheduledJobIfNotExists(
+	db: Db,
+	automationId: string,
+	entrypointId: string,
+	runAt: Date,
+): Promise<void> {
+	const windowStartIso = new Date(runAt.getTime() - 1000).toISOString();
+	const windowEndIso = new Date(runAt.getTime() + 1000).toISOString();
+	// Use ISO strings so the postgres driver binds them as timestamptz — direct
+	// Date binding via drizzle's sql tag is unreliable across driver versions.
+	const existing = (await db.execute(sql`
+		SELECT id
+		  FROM automation_scheduled_jobs
+		 WHERE entrypoint_id = ${entrypointId}
+		   AND job_type = 'scheduled_trigger'
+		   AND status = 'pending'
+		   AND run_at >= ${windowStartIso}::timestamptz
+		   AND run_at <= ${windowEndIso}::timestamptz
+		 LIMIT 1
+	`)) as unknown as Array<{ id: string }>;
+	if (existing.length > 0) return;
 	await db.insert(automationScheduledJobs).values({
 		jobType: "scheduled_trigger",
-		automationId: auto.id,
-		entrypointId: ep.id,
-		runAt: nextRun,
+		automationId,
+		entrypointId,
+		runAt,
 		status: "pending",
 	});
-	return "done";
 }
 
 /**

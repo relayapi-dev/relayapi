@@ -82,11 +82,15 @@ const ENTRYPOINT_KINDS = [
 		label: "DM Received",
 		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
 	},
-	{
-		kind: "keyword",
-		label: "Keyword",
-		channels: ["instagram", "facebook", "whatsapp", "telegram", "tiktok"],
-	},
+	// NOTE: a dedicated `keyword` entrypoint kind was previously exposed here.
+	// It was removed because `deriveInboundEventKind` never emits `"keyword"` —
+	// inbound DMs always surface as `kind: "dm_received"`, so a keyword-only
+	// entrypoint could never match at runtime (trigger-matcher.ts filters rows
+	// by `eq(kind, event.kind)`). Operators now compose the same intent by
+	// creating a `dm_received` entrypoint with `config.keywords` set; the
+	// matcher's `matchesEntrypointConfig` applies keyword filtering on the
+	// dm_received branch. Spec §6.2 — a keyword-mode dm_received entrypoint
+	// still gets specificity=30 when `match_mode` is `exact` or `regex`.
 	{
 		kind: "comment_created",
 		label: "Comment created",
@@ -277,6 +281,10 @@ const ACTION_TYPES = [
 		type: "change_main_menu",
 		label: "Change main menu",
 		category: "v1_1_stubs",
+		// Blocked in the validator (spec §B10 fix) — the action handler throws
+		// unconditionally because main-menu platform sync lands in v1.1. The
+		// dashboard action picker should grey this out until sync is wired.
+		disabled: true,
 	},
 ];
 

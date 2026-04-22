@@ -281,10 +281,17 @@ function walkNode(
 		}
 
 		case "action_group": {
+			// An action_group has two output ports: `next` (success) and `error`
+			// (at least one action failed). The simulator honours an explicit
+			// `branch_choices[node.key]` to force the `error` path; otherwise it
+			// assumes success and advances via `next`. This keeps the simulator
+			// consistent with how `condition` / `randomizer` / `http_request`
+			// already respect forced branching (spec §B12 fix).
 			const cfg = (node.config ?? {}) as Record<string, unknown>;
+			const exitPort = forced === "error" ? "error" : "next";
 			return {
 				outcome: "advance",
-				exitPort: "next",
+				exitPort,
 				payload: { would_fire_actions: cfg.actions ?? [] },
 				reason: "advance",
 			};

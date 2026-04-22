@@ -38,7 +38,12 @@ interface NormalizedInboxEvent {
 	participant?: { name: string; id: string; avatar_url?: string };
 	text?: string;
 	interactive_payload?: string;
-	interactive_kind?: "postback" | "button_click" | "list_reply" | "flow_submit";
+	interactive_kind?:
+		| "postback"
+		| "button_click"
+		| "list_reply"
+		| "flow_submit"
+		| "quick_reply";
 	/**
 	 * Discriminator hints surfaced by the platform normalizer so
 	 * `deriveInboundEventKind` can route the event to the correct entrypoint
@@ -883,6 +888,12 @@ interface FacebookMessagingPayload {
 			type?: string;
 			payload?: Record<string, unknown>;
 		}>;
+		// Meta quick-reply replies arrive alongside the text with a
+		// `quick_reply.payload` — the operator-defined payload for the button
+		// the user tapped. We surface this as `interactive_payload` so the
+		// automation runtime can resume `quick_reply.<payload>` ports exactly
+		// like it does for Messenger postbacks.
+		quick_reply?: { payload?: string };
 	};
 	postback?: { title: string; payload: string };
 	referral?: {
@@ -1031,6 +1042,14 @@ function normalizeFacebookEvent(
 		const eventId = msg.message?.mid ?? `postback_${msg.timestamp}`;
 		const customerId = msg.sender.id;
 		const markers = extractMetaMessageMarkers(msg);
+		const quickReplyPayload = msg.message?.quick_reply?.payload;
+		const interactivePayload =
+			msg.postback?.payload ?? quickReplyPayload;
+		const interactiveKind = msg.postback?.payload
+			? "postback"
+			: quickReplyPayload
+				? "quick_reply"
+				: undefined;
 
 		return [
 			{
@@ -1042,8 +1061,8 @@ function normalizeFacebookEvent(
 				conversation_id: customerId,
 				author: { name: customerId, id: customerId },
 				text,
-				interactive_payload: msg.postback?.payload,
-				interactive_kind: msg.postback?.payload ? "postback" : undefined,
+				interactive_payload: interactivePayload,
+				interactive_kind: interactiveKind,
 				created_at: new Date(msg.timestamp).toISOString(),
 				raw: payload,
 				...markers,
@@ -1057,6 +1076,14 @@ function normalizeFacebookEvent(
 		const text = msg.message?.text ?? msg.postback?.title;
 		const eventId = msg.message?.mid ?? `postback_${msg.timestamp}`;
 		const customerId = msg.recipient.id;
+		const quickReplyPayload = msg.message?.quick_reply?.payload;
+		const interactivePayload =
+			msg.postback?.payload ?? quickReplyPayload;
+		const interactiveKind = msg.postback?.payload
+			? "postback"
+			: quickReplyPayload
+				? "quick_reply"
+				: undefined;
 
 		return [
 			{
@@ -1069,8 +1096,8 @@ function normalizeFacebookEvent(
 				author: { name: "You", id: msg.sender.id },
 				participant: { name: customerId, id: customerId },
 				text,
-				interactive_payload: msg.postback?.payload,
-				interactive_kind: msg.postback?.payload ? "postback" : undefined,
+				interactive_payload: interactivePayload,
+				interactive_kind: interactiveKind,
 				created_at: new Date(msg.timestamp).toISOString(),
 				direction: "outbound",
 				raw: payload,
@@ -1199,6 +1226,14 @@ function normalizeInstagramEvent(
 		// Conversation partner is always the customer (sender for inbound)
 		const customerId = msg.sender.id;
 		const markers = extractMetaMessageMarkers(msg);
+		const quickReplyPayload = msg.message?.quick_reply?.payload;
+		const interactivePayload =
+			msg.postback?.payload ?? quickReplyPayload;
+		const interactiveKind = msg.postback?.payload
+			? "postback"
+			: quickReplyPayload
+				? "quick_reply"
+				: undefined;
 
 		return [
 			{
@@ -1210,8 +1245,8 @@ function normalizeInstagramEvent(
 				conversation_id: customerId,
 				author: { name: customerId, id: customerId },
 				text,
-				interactive_payload: msg.postback?.payload,
-				interactive_kind: msg.postback?.payload ? "postback" : undefined,
+				interactive_payload: interactivePayload,
+				interactive_kind: interactiveKind,
 				created_at: new Date(msg.timestamp).toISOString(),
 				raw: payload,
 				...markers,
@@ -1226,6 +1261,14 @@ function normalizeInstagramEvent(
 		const text = msg.message?.text ?? msg.postback?.title;
 		const eventId = msg.message?.mid ?? `postback_${msg.timestamp}`;
 		const customerId = msg.recipient.id;
+		const quickReplyPayload = msg.message?.quick_reply?.payload;
+		const interactivePayload =
+			msg.postback?.payload ?? quickReplyPayload;
+		const interactiveKind = msg.postback?.payload
+			? "postback"
+			: quickReplyPayload
+				? "quick_reply"
+				: undefined;
 
 		return [
 			{
@@ -1238,8 +1281,8 @@ function normalizeInstagramEvent(
 				author: { name: "You", id: msg.sender.id },
 				participant: { name: customerId, id: customerId },
 				text,
-				interactive_payload: msg.postback?.payload,
-				interactive_kind: msg.postback?.payload ? "postback" : undefined,
+				interactive_payload: interactivePayload,
+				interactive_kind: interactiveKind,
 				created_at: new Date(msg.timestamp).toISOString(),
 				direction: "outbound",
 				raw: payload,

@@ -1,8 +1,18 @@
 import { z } from "@hono/zod-openapi";
 
+// NOTE: the dedicated `keyword` entrypoint kind was removed (spec §B3 fix).
+// The matcher filters candidate entrypoints by `eq(kind, event.kind)` and
+// `deriveInboundEventKind` never emits `"keyword"` — inbound DMs always map
+// to `dm_received`. Keyword filtering is still supported and now lives on
+// the `dm_received` config via its `keywords`/`match_mode` fields (see the
+// DmReceivedEntrypointConfig below and trigger-matcher.ts:191-198).
+
 // Per-kind configs
-export const KeywordEntrypointConfig = z.object({
-  keywords: z.array(z.string()).min(1),
+// `dm_received` accepts optional keyword filtering — the matcher treats an
+// empty `keywords` array as a catch-all inbound-DM entrypoint, and a non-empty
+// one as a keyword match (respecting `match_mode` / `case_sensitive`).
+export const DmReceivedEntrypointConfig = z.object({
+  keywords: z.array(z.string()).optional(),
   match_mode: z.enum(["exact", "contains", "regex"]).default("contains"),
   case_sensitive: z.boolean().default(false),
 });
@@ -73,8 +83,7 @@ export const EmptyEntrypointConfig = z.object({}).passthrough();
 
 // Registry
 export const EntrypointConfigByKind: Record<string, z.ZodSchema> = {
-  dm_received: EmptyEntrypointConfig,
-  keyword: KeywordEntrypointConfig,
+  dm_received: DmReceivedEntrypointConfig,
   comment_created: CommentCreatedEntrypointConfig,
   story_reply: StoryReplyEntrypointConfig,
   story_mention: EmptyEntrypointConfig,
@@ -92,7 +101,7 @@ export const EntrypointConfigByKind: Record<string, z.ZodSchema> = {
 };
 
 export const EntrypointKindSchema = z.enum([
-  "dm_received", "keyword", "comment_created", "story_reply", "story_mention",
+  "dm_received", "comment_created", "story_reply", "story_mention",
   "live_comment", "ad_click", "ref_link_click", "share_to_dm", "follow",
   "schedule", "field_changed", "tag_applied", "tag_removed", "conversion_event",
   "webhook_inbound",

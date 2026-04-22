@@ -224,15 +224,24 @@ async function resolveContact(
 			const identifier = extract(cfg.field_path);
 			if (typeof identifier !== "string") return null;
 			const platform = cfg.platform;
-			const row = await db.query.contactChannels.findFirst({
-				where: and(
-					eq(contactChannels.identifier, identifier),
-					platform
-						? eq(contactChannels.platform, platform)
-						: undefined,
-				),
-			});
-			return row?.contactId ?? null;
+			// Scope the lookup through contacts.organizationId — otherwise a
+			// platform_id collision across orgs (same FB PSID / IG user, different
+			// tenants) could return another tenant's contact.
+			const rows = await db
+				.select({ contactId: contactChannels.contactId })
+				.from(contactChannels)
+				.innerJoin(contacts, eq(contactChannels.contactId, contacts.id))
+				.where(
+					and(
+						eq(contactChannels.identifier, identifier),
+						eq(contacts.organizationId, organizationId),
+						platform
+							? eq(contactChannels.platform, platform)
+							: undefined,
+					),
+				)
+				.limit(1);
+			return rows[0]?.contactId ?? null;
 		}
 		case "custom_field": {
 			if (!cfg.custom_field_key) return null;

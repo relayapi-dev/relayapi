@@ -52,6 +52,10 @@ let orgId = "";
 let workspaceId = "";
 let socialAccountId = "";
 let tgPlatformAccountId = "";
+// Separate Meta/Instagram social account for the quick-reply tests — Meta
+// quick-replies are a FB/IG platform feature and need an IG normalizer path.
+let igSocialAccountId = "";
+let igPlatformAccountId = "";
 
 // Shared send transport used by the automation runner when message nodes
 // dispatch. We capture outbound messages so assertions can inspect them.
@@ -113,6 +117,22 @@ async function seedFixture() {
 		.returning();
 	if (!sa) throw new Error("social account insert failed");
 	socialAccountId = sa.id;
+
+	igPlatformAccountId = `ig_${generateId("acc_")}`;
+	const [igSa] = await db
+		.insert(socialAccounts)
+		.values({
+			organizationId: orgId,
+			workspaceId,
+			platform: "instagram",
+			platformAccountId: igPlatformAccountId,
+			displayName: "Pipeline IG",
+			username: "pipeline_ig",
+			accessToken: "test-token-plaintext",
+		})
+		.returning();
+	if (!igSa) throw new Error("IG social account insert failed");
+	igSocialAccountId = igSa.id;
 }
 
 async function teardownFixture() {
@@ -144,6 +164,11 @@ async function teardownFixture() {
 	await db
 		.delete(contactChannels)
 		.where(eq(contactChannels.socialAccountId, socialAccountId));
+	if (igSocialAccountId) {
+		await db
+			.delete(contactChannels)
+			.where(eq(contactChannels.socialAccountId, igSocialAccountId));
+	}
 	await db.delete(contacts).where(eq(contacts.organizationId, orgId));
 	await db
 		.delete(socialAccounts)
@@ -287,6 +312,72 @@ function buildTelegramTextMessage(params: {
 		},
 		received_at: new Date().toISOString(),
 	};
+}
+
+/**
+ * Instagram DM with a `quick_reply.payload` — the Meta normalizer must
+ * extract the payload into `interactive_payload` so the automation
+ * interactive-resume path can match `quick_reply.<payload>` ports.
+ */
+function buildInstagramQuickReplyMessage(params: {
+	customerId: string;
+	payload: string;
+	text?: string;
+}): InboxQueueMessage {
+	return {
+		type: "instagram_webhook",
+		platform: "instagram",
+		platform_account_id: igPlatformAccountId,
+		organization_id: orgId,
+		account_id: igSocialAccountId,
+		event_type: "messages",
+		payload: {
+			sender: { id: params.customerId },
+			recipient: { id: igPlatformAccountId },
+			timestamp: Date.now(),
+			message: {
+				mid: `mid_${generateId("")}`,
+				text: params.text ?? "Topic A",
+				quick_reply: { payload: params.payload },
+			},
+		},
+		received_at: new Date().toISOString(),
+	};
+}
+
+async function createIgContactWithChannel(identifier: string) {
+	const [ct] = await db
+		.insert(contacts)
+		.values({
+			organizationId: orgId,
+			workspaceId,
+			name: `ig-contact-${identifier}`,
+		})
+		.returning();
+	if (!ct) throw new Error("ig contact insert failed");
+	await db.insert(contactChannels).values({
+		contactId: ct.id,
+		socialAccountId: igSocialAccountId,
+		platform: "instagram",
+		identifier,
+	});
+	return ct;
+}
+
+async function createInstagramAutomation(name: string, graph: Graph) {
+	const [auto] = await db
+		.insert(automations)
+		.values({
+			organizationId: orgId,
+			workspaceId,
+			name,
+			channel: "instagram" as never,
+			status: "active",
+			graph: graph as never,
+		})
+		.returning();
+	if (!auto) throw new Error("instagram automation insert failed");
+	return auto;
 }
 
 /**
@@ -802,5 +893,103 @@ describe("3.5 entrypoint keyword match (pipeline regression)", () => {
 			);
 		expect(runs.length).toBe(1);
 		expect(sendCalls.some((c) => c.text === "Here's a pizza menu")).toBe(true);
+	}, 45_000);
+});
+
+// ---------------------------------------------------------------------------
+// 3.6 — Meta quick_reply.payload extraction (IG DM)
+// ---------------------------------------------------------------------------
+
+describe("3.6 Meta quick-reply payload resumes waiting run (pipeline)", () => {
+	it("advances via quick_reply.<payload> when an IG DM carries message.quick_reply.payload", async () => {
+		if (!dbAvailable) return;
+		resetSendCalls();
+
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "ask",
+			nodes: [
+				{
+					key: "ask",
+					kind: "message",
+					config: {
+						blocks: [{ id: "b1", type: "text", text: "Pick one" }],
+						quick_replies: [
+							{ id: "qr_yes", label: "Yes" },
+							{ id: "qr_no", label: "No" },
+						],
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+						{
+							key: "quick_reply.qr_yes",
+							direction: "output",
+							role: "interactive",
+						},
+						{
+							key: "quick_reply.qr_no",
+							direction: "output",
+							role: "interactive",
+						},
+					],
+				},
+				{
+					key: "stop",
+					kind: "end",
+					config: {},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [
+				{
+					from_node: "ask",
+					from_port: "quick_reply.qr_yes",
+					to_node: "stop",
+					to_port: "in",
+				},
+				{
+					from_node: "ask",
+					from_port: "quick_reply.qr_no",
+					to_node: "stop",
+					to_port: "in",
+				},
+			],
+		};
+
+		const auto = await createInstagramAutomation("pipeline-ig-qr", graph);
+		const customerId = `igcust_${generateId("").slice(-8)}`;
+		const ct = await createIgContactWithChannel(customerId);
+
+		const { enrollContact } = await import(
+			"../services/automations/runner"
+		);
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "instagram",
+			entrypointId: null,
+			bindingId: null,
+			env: { db, sendTransport: fakeSendTransport },
+		});
+
+		// Meta IG DM with `message.quick_reply.payload = "qr_yes"` — the
+		// normalizer must extract this into `interactive_payload` so the
+		// interactive-resume path matches the `quick_reply.qr_yes` port.
+		const qrMsg = buildInstagramQuickReplyMessage({
+			customerId,
+			payload: "qr_yes",
+			text: "Yes",
+		});
+		await processInboxEvent(qrMsg, testEnv, db);
+
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		expect(run!.status).toBe("completed");
+		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		expect(ctxJson.last_interactive_port).toBe("quick_reply.qr_yes");
 	}, 45_000);
 });

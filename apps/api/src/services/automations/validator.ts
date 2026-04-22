@@ -61,6 +61,37 @@ export function validateGraph(graph: Graph): ValidationResult {
     }
   }
 
+  // 2.5. v1.1-stubbed actions cannot be used yet (spec §B10 fix).
+  //
+  // `change_main_menu` depends on Meta's `messenger_profile.persistent_menu`
+  // sync, which is deferred to v1.1. The runtime handler throws if it ever
+  // fires, so we fail the automation at validation time instead — the
+  // dashboard catches the error and auto-pauses the flow rather than
+  // blowing up on first match.
+  const DISABLED_ACTION_TYPES: Record<string, string> = {
+    change_main_menu:
+      'Action "change_main_menu" requires v1.1 platform sync — not yet available',
+  };
+  for (const n of canonical.nodes) {
+    if (n.kind !== "action_group") continue;
+    const actions = Array.isArray((n.config as Record<string, unknown> | null | undefined)?.actions)
+      ? ((n.config as { actions: unknown[] }).actions as unknown[])
+      : [];
+    for (const raw of actions) {
+      if (!raw || typeof raw !== "object") continue;
+      const action = raw as { type?: unknown };
+      if (typeof action.type !== "string") continue;
+      const msg = DISABLED_ACTION_TYPES[action.type];
+      if (msg) {
+        errors.push({
+          code: "action_unavailable",
+          message: msg,
+          node_key: n.key,
+        });
+      }
+    }
+  }
+
   // 3. edge references (node + port existence)
   const nodeByKey = new Map(canonical.nodes.map((n) => [n.key, n]));
   for (let i = 0; i < canonical.edges.length; i++) {

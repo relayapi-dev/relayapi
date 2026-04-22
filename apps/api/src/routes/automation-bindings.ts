@@ -49,6 +49,11 @@ function defaultStatusFor(bindingType: string): "active" | "pending_sync" {
 	return STUBBED_TYPES.has(bindingType) ? "pending_sync" : "active";
 }
 
+const BindingWarningSchema = z.object({
+	code: z.string(),
+	message: z.string(),
+});
+
 const BindingResponseSchema = z.object({
 	id: z.string(),
 	organization_id: z.string(),
@@ -69,10 +74,34 @@ const BindingResponseSchema = z.object({
 	sync_error: z.string().nullable(),
 	created_at: z.string(),
 	updated_at: z.string(),
+	warnings: z.array(BindingWarningSchema).optional(),
 });
 
-function serializeBinding(row: BindingRow): z.infer<typeof BindingResponseSchema> {
-	return {
+/**
+ * Stubbed binding types don't actually push to the platform yet — the
+ * persistence layer accepts the config but the platform sync worker that
+ * would reconcile it into Messenger/WhatsApp UX ships in v1.1. Surface this
+ * explicitly on create/update responses so the dashboard can render a banner
+ * instead of claiming the binding is live.
+ */
+export function buildBindingWarnings(
+	bindingType: string,
+): z.infer<typeof BindingWarningSchema>[] | undefined {
+	if (!STUBBED_TYPES.has(bindingType)) return undefined;
+	return [
+		{
+			code: "binding_pending_sync",
+			message:
+				"Platform sync ships in v1.1; configuration is saved but not yet pushed to the platform.",
+		},
+	];
+}
+
+function serializeBinding(
+	row: BindingRow,
+	opts?: { includeWarnings?: boolean },
+): z.infer<typeof BindingResponseSchema> {
+	const base: z.infer<typeof BindingResponseSchema> = {
 		id: row.id,
 		organization_id: row.organizationId,
 		workspace_id: row.workspaceId ?? null,
@@ -89,6 +118,11 @@ function serializeBinding(row: BindingRow): z.infer<typeof BindingResponseSchema
 		created_at: row.createdAt.toISOString(),
 		updated_at: row.updatedAt.toISOString(),
 	};
+	if (opts?.includeWarnings) {
+		const warnings = buildBindingWarnings(row.bindingType);
+		if (warnings) base.warnings = warnings;
+	}
+	return base;
 }
 
 function notFound(c: any) {
@@ -194,7 +228,7 @@ app.openapi(listBindings, async (c) => {
 		.where(and(...conditions))
 		.orderBy(desc(automationBindings.createdAt));
 
-	return c.json({ data: rows.map(serializeBinding) }, 200);
+	return c.json({ data: rows.map((r) => serializeBinding(r)) }, 200);
 });
 
 const createBinding = createRoute({
@@ -294,7 +328,7 @@ app.openapi(createBinding, async (c) => {
 				400,
 			);
 		}
-		return c.json(serializeBinding(inserted), 201);
+		return c.json(serializeBinding(inserted, { includeWarnings: true }), 201);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (/uniq|duplicate|unique/i.test(message)) {
@@ -416,7 +450,7 @@ app.openapi(updateBinding, async (c) => {
 		.where(eq(automationBindings.id, id))
 		.returning();
 	if (!updated) return notFound(c);
-	return c.json(serializeBinding(updated), 200);
+	return c.json(serializeBinding(updated, { includeWarnings: true }), 200);
 });
 
 const deleteBinding = createRoute({

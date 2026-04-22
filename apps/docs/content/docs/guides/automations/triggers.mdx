@@ -13,12 +13,11 @@ Entrypoints live under an automation and are managed in the flow builder. Bindin
 
 ## Entrypoints
 
-### The 16 kinds
+### The 15 kinds
 
 | Kind | IG | FB | WA | TG | TikTok |
 |---|:-:|:-:|:-:|:-:|:-:|
 | `dm_received` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `keyword` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `comment_created` | ✓ | ✓ | — | — | ✓ |
 | `story_reply` | ✓ | ✓ | — | — | — |
 | `story_mention` | ✓ | ✓ | — | — | — |
@@ -34,6 +33,8 @@ Entrypoints live under an automation and are managed in the flow builder. Bindin
 | `conversion_event` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `webhook_inbound` | ✓ | ✓ | ✓ | ✓ | ✓ |
 
+> **Keyword matching** — there is no dedicated `keyword` kind. Use `dm_received` with a `config.keywords` array (and optional `match_mode` / `case_sensitive`) to react to specific words in an inbound DM. The matcher treats an exact- or regex-mode keyword list as specificity 30, identical to the legacy `keyword` kind.
+
 ### Shape
 
 ```json
@@ -41,10 +42,10 @@ Entrypoints live under an automation and are managed in the flow builder. Bindin
   "id": "aep_...",
   "automation_id": "auto_...",
   "channel": "instagram",
-  "kind": "keyword",
+  "kind": "dm_received",
   "status": "active",
   "social_account_id": "acc_...",          // null = all accounts for the channel
-  "config": { "keywords": ["pizza"], "match_mode": "contains", "case_sensitive": false },
+  "config": { "keywords": ["pizza"], "match_mode": "exact", "case_sensitive": false },
   "filters": { "all": [{ "field": "contact.tags", "op": "contains", "value": "vip" }] },
   "allow_reentry": true,
   "reentry_cooldown_min": 60,
@@ -55,7 +56,7 @@ Entrypoints live under an automation and are managed in the flow builder. Bindin
 
 Fields:
 
-- **kind** — one of the 16 above.
+- **kind** — one of the 15 above.
 - **channel** — must match the parent automation's channel.
 - **social_account_id** — scopes the entrypoint to a specific account; leave null for all accounts on the channel.
 - **config** — kind-specific (see below).
@@ -68,7 +69,10 @@ Fields:
 ### Config shapes per kind
 
 ```json
-// keyword
+// dm_received (optional keyword filtering)
+// Omit `keywords` to match any inbound DM on the channel/account. Specify
+// `keywords` with `match_mode: "exact"` or `"regex"` for a specificity=30
+// match — the canonical replacement for the retired `keyword` kind.
 { "keywords": ["pizza", "order"], "match_mode": "exact | contains | regex", "case_sensitive": false }
 
 // comment_created
@@ -107,7 +111,7 @@ Specificity is derived automatically:
 
 | Config | Specificity |
 |---|---|
-| `keyword` (exact or regex) | 30 |
+| `dm_received` with `keywords` + `match_mode: exact \| regex` | 30 |
 | `webhook_inbound` (unique slug) | 30 |
 | Asset-filtered (e.g. `comment_created` with `post_ids`) | 25 |
 | Filtered with tag/segment/field predicate | 20 |

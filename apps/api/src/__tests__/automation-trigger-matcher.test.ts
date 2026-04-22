@@ -225,6 +225,43 @@ describe("computeSpecificity", () => {
 			),
 		).toBe(0);
 	});
+
+	it("returns 30 for dm_received with exact-match keywords (§B3 replacement)", () => {
+		// Post-§B3: the retired `keyword` kind maps onto `dm_received` with a
+		// `keywords` config. Specificity must stay 30 for exact/regex modes,
+		// identical to the legacy kind — otherwise keyword triggers would lose
+		// against broader dm_received catch-alls.
+		expect(
+			computeSpecificity(
+				"dm_received",
+				{ keywords: ["hi"], match_mode: "exact" },
+				null,
+				null,
+			),
+		).toBe(30);
+		expect(
+			computeSpecificity(
+				"dm_received",
+				{ keywords: ["^hi$"], match_mode: "regex" },
+				null,
+				null,
+			),
+		).toBe(30);
+	});
+
+	it("dm_received with empty keywords (or contains mode) stays below 30", () => {
+		expect(
+			computeSpecificity("dm_received", { keywords: [] }, null, null),
+		).toBe(0);
+		expect(
+			computeSpecificity(
+				"dm_received",
+				{ keywords: ["hi"], match_mode: "contains" },
+				null,
+				null,
+			),
+		).toBe(0);
+	});
 });
 
 describe("extractByPath", () => {
@@ -390,6 +427,58 @@ describe("simulate (dry-run walker)", () => {
 		const result = await simulate({ graph });
 		expect(result.steps[0]!.outcome).toBe("wait_input");
 		expect(result.exit_reason).toBe("wait_input");
+	});
+
+	it("action_group honours branchChoices to take the `error` port (§B12)", async () => {
+		// Previously the simulator always exited via `next`, ignoring any
+		// branch_choices override. That diverged from condition/randomizer/
+		// http_request which all honour forced branches, and broke the
+		// per-action-error preview in the dashboard simulate drawer.
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "ag",
+			nodes: [
+				{
+					key: "ag",
+					kind: "action_group",
+					config: { actions: [{ type: "tag_add", params: { tag: "vip" } }] },
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output" },
+						{ key: "error", direction: "output" },
+					],
+				},
+				{
+					key: "ok",
+					kind: "end",
+					config: { reason: "ok" },
+					ports: [{ key: "in", direction: "input" }],
+				},
+				{
+					key: "err",
+					kind: "end",
+					config: { reason: "err" },
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [
+				{ from_node: "ag", from_port: "next", to_node: "ok", to_port: "in" },
+				{ from_node: "ag", from_port: "error", to_node: "err", to_port: "in" },
+			],
+		};
+
+		// Default (no branch choice) — should advance via `next`.
+		const defaultResult = await simulate({ graph });
+		expect(defaultResult.steps.map((s) => s.node_key)).toEqual(["ag", "ok"]);
+		expect(defaultResult.steps[0]!.exited_via_port_key).toBe("next");
+
+		// Forced `error` — should advance via `error`.
+		const forcedResult = await simulate({
+			graph,
+			branchChoices: { ag: "error" },
+		});
+		expect(forcedResult.steps.map((s) => s.node_key)).toEqual(["ag", "err"]);
+		expect(forcedResult.steps[0]!.exited_via_port_key).toBe("error");
 	});
 });
 

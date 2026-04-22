@@ -142,4 +142,35 @@ describe("action_group handler", () => {
 		expect(result.payload.action_results[0].ok).toBe(false);
 		expect(result.payload.action_results[0].error).toContain("unknown action");
 	});
+
+	it("webhook_out surfaces missing hmac secret through on_error routing", async () => {
+		// Import the real webhook handler into the stubbed registry so we can
+		// exercise its config-validation path. fetch is never reached because
+		// the handler throws synchronously on the missing secret.
+		const { webhookHandlers } = await import(
+			"../services/automations/actions/webhook"
+		);
+		actionRegistry.webhook_out = webhookHandlers.webhook_out!;
+
+		const result = await actionGroupHandler.handle(
+			makeNode([
+				{
+					id: "wh1",
+					type: "webhook_out",
+					url: "https://example.com/hook",
+					method: "POST",
+					auth: { mode: "hmac" },
+					on_error: "abort",
+				},
+			]),
+			makeCtx(),
+		);
+
+		expect(result.result).toBe("advance");
+		if (result.result === "advance") expect(result.via_port).toBe("error");
+		expect(result.payload.action_results[0].ok).toBe(false);
+		expect(result.payload.action_results[0].error).toContain(
+			"hmac auth requires secret",
+		);
+	});
 });

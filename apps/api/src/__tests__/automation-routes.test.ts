@@ -34,6 +34,7 @@ import {
 } from "../routes/_automation-catalog";
 import { aggregateInsights } from "../routes/_automation-insights";
 import { validateEntrypointConfig } from "../schemas/automation-entrypoints";
+import { buildBindingWarnings } from "../routes/automation-bindings";
 import { BindingConfigByType } from "../schemas/automation-bindings";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
 import {
@@ -142,8 +143,24 @@ describe("automation catalog", () => {
 		);
 	});
 
-	it("contains all 16 entrypoint kinds", () => {
-		expect(AUTOMATION_CATALOG.entrypoint_kinds).toHaveLength(16);
+	it("contains all 15 entrypoint kinds", () => {
+		// The dedicated `keyword` kind was removed (spec §B3); inbound-DM keyword
+		// filtering now lives on `dm_received` via its `config.keywords`.
+		expect(AUTOMATION_CATALOG.entrypoint_kinds).toHaveLength(15);
+	});
+
+	it("does not expose the retired `keyword` entrypoint kind", () => {
+		const kinds = AUTOMATION_CATALOG.entrypoint_kinds.map((k) => k.kind);
+		expect(kinds).not.toContain("keyword");
+		expect(kinds).toContain("dm_received");
+	});
+
+	it("marks `change_main_menu` as disabled in the action catalog", () => {
+		const a = AUTOMATION_CATALOG.action_types.find(
+			(x) => x.type === "change_main_menu",
+		);
+		expect(a).toBeDefined();
+		expect((a as Record<string, unknown>).disabled).toBe(true);
 	});
 
 	it("contains all 5 binding types with correct wired/stubbed split", () => {
@@ -201,23 +218,27 @@ describe("automation catalog", () => {
 // ---------------------------------------------------------------------------
 
 describe("entrypoint config validation", () => {
-	it("validates a keyword config", () => {
-		const parsed = validateEntrypointConfig("keyword", {
+	it("validates a dm_received config with keyword filtering", () => {
+		// Post-§B3: keyword matching lives on `dm_received` entrypoints.
+		const parsed = validateEntrypointConfig("dm_received", {
 			keywords: ["pizza"],
 			match_mode: "exact",
 		});
 		expect(parsed.success).toBe(true);
 	});
 
-	it("rejects an empty keyword list", () => {
-		const parsed = validateEntrypointConfig("keyword", { keywords: [] });
+	it("rejects the retired `keyword` kind", () => {
+		const parsed = validateEntrypointConfig("keyword", {
+			keywords: ["pizza"],
+			match_mode: "exact",
+		});
 		expect(parsed.success).toBe(false);
 	});
 
-	it("computes specificity=30 for an exact-match keyword", () => {
+	it("computes specificity=30 for an exact-match dm_received keyword entrypoint", () => {
 		expect(
 			computeSpecificity(
-				"keyword",
+				"dm_received",
 				{ keywords: ["hi"], match_mode: "exact" },
 				null,
 				null,
@@ -252,6 +273,23 @@ describe("binding config validation", () => {
 		});
 		expect(parsed.success).toBe(false);
 	});
+
+	it("attaches a `binding_pending_sync` warning only for stubbed binding types", () => {
+		// Stubbed types — these don't push to the platform yet. Warning MUST
+		// be present so the dashboard can surface a "not yet synced" banner.
+		for (const stubbed of ["main_menu", "conversation_starter", "ice_breaker"]) {
+			const w = buildBindingWarnings(stubbed);
+			expect(Array.isArray(w)).toBe(true);
+			expect(w!.length).toBe(1);
+			expect(w![0]!.code).toBe("binding_pending_sync");
+			expect(w![0]!.message).toMatch(/v1\.1/);
+		}
+
+		// Wired types — no warning; these go live immediately.
+		for (const wired of ["default_reply", "welcome_message"]) {
+			expect(buildBindingWarnings(wired)).toBeUndefined();
+		}
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -285,7 +323,7 @@ describe("insights with no runs", () => {
 // ---------------------------------------------------------------------------
 
 describe("entrypoint + binding creation (integration)", () => {
-	it("creates a keyword entrypoint with specificity=30", async () => {
+	it("creates a dm_received keyword entrypoint with specificity=30", async () => {
 		if (!dbAvailable) return;
 		const [auto] = await db
 			.insert(automations)
@@ -310,7 +348,9 @@ describe("entrypoint + binding creation (integration)", () => {
 			match_mode: "exact" as const,
 			case_sensitive: false,
 		};
-		const specificity = computeSpecificity("keyword", config, null, null);
+		// Post-§B3: keyword matching lives on `dm_received`. Specificity stays 30
+		// for `exact`/`regex` keyword configs — same as the retired `keyword` kind.
+		const specificity = computeSpecificity("dm_received", config, null, null);
 		expect(specificity).toBe(30);
 
 		const [ep] = await db
@@ -318,7 +358,7 @@ describe("entrypoint + binding creation (integration)", () => {
 			.values({
 				automationId: auto.id,
 				channel: "telegram",
-				kind: "keyword",
+				kind: "dm_received",
 				config: config as never,
 				specificity,
 			})

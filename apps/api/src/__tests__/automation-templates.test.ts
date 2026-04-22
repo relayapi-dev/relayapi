@@ -142,4 +142,23 @@ describe("buildGraphFromTemplate", () => {
 		expect(result.entrypoints).toHaveLength(1);
 		expect(result.entrypoints[0]!.kind).toBe("follow");
 	});
+
+	it("follow_to_dm does NOT persist rate-limit fields on the entrypoint config", () => {
+		// The template input accepts max_sends_per_day / cooldown_between_sends_ms
+		// / skip_if_already_messaged, but the follow-entrypoint matcher doesn't
+		// read them yet (deferred to v1.1). They must not appear on the emitted
+		// entrypoint.config or operators will think they're enforced.
+		const result = buildGraphFromTemplate({
+			kind: "follow_to_dm",
+			channel: "instagram",
+			config: FIXTURES.follow_to_dm,
+		});
+		const ep = result.entrypoints[0]!;
+		const cfg = (ep.config ?? {}) as Record<string, unknown>;
+		expect(cfg.max_sends_per_day).toBeUndefined();
+		expect(cfg.cooldown_between_sends_ms).toBeUndefined();
+		expect(cfg.skip_if_already_messaged).toBeUndefined();
+		// Only the social account scope should be carried through.
+		expect(ep.socialAccountId).toBe("acc_123");
+	});
 });

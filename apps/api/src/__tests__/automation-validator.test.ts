@@ -104,4 +104,57 @@ describe("validateGraph", () => {
     expect(r.warnings.some((w) => w.code === "port_no_outgoing_edge" && w.port_key === "false")).toBe(true);
     // ... but no error about this
   });
+
+  test("action_group with `change_main_menu` action is rejected (§B10)", () => {
+    // The v1.1-stubbed `change_main_menu` action throws unconditionally in
+    // the action handler; surfacing it at validation time lets the dashboard
+    // auto-pause the flow instead of blowing up on first match.
+    const r = validateGraph({
+      schema_version: 1,
+      root_node_key: "ag",
+      nodes: [
+        {
+          key: "ag",
+          kind: "action_group",
+          config: {
+            actions: [
+              { type: "tag_add", params: { tag: "vip" } },
+              { type: "change_main_menu", params: {} },
+            ],
+          },
+          ports: [],
+        },
+        { key: "done", kind: "end", config: {}, ports: [] },
+      ],
+      edges: [
+        { from_node: "ag", from_port: "next", to_node: "done", to_port: "in" },
+      ],
+    });
+    expect(r.valid).toBe(false);
+    expect(
+      r.errors.some(
+        (e) => e.code === "action_unavailable" && e.node_key === "ag",
+      ),
+    ).toBe(true);
+  });
+
+  test("action_group without `change_main_menu` passes the stubbed-action check", () => {
+    const r = validateGraph({
+      schema_version: 1,
+      root_node_key: "ag",
+      nodes: [
+        {
+          key: "ag",
+          kind: "action_group",
+          config: { actions: [{ type: "tag_add", params: { tag: "vip" } }] },
+          ports: [],
+        },
+        { key: "done", kind: "end", config: {}, ports: [] },
+      ],
+      edges: [
+        { from_node: "ag", from_port: "next", to_node: "done", to_port: "in" },
+      ],
+    });
+    expect(r.errors.some((e) => e.code === "action_unavailable")).toBe(false);
+  });
 });

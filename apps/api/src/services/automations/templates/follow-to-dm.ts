@@ -1,6 +1,13 @@
 import type { MessageBlock, QuickReply } from "../../../schemas/automation-graph";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
+// TODO (v1.1): the rate-limit fields below (`max_sends_per_day`,
+// `cooldown_between_sends_ms`, `skip_if_already_messaged`) are accepted from
+// the template picker UI but are NOT yet enforced by the follow-entrypoint
+// matcher. Deferred to the v1.1 rate-limiting work. For now we intentionally
+// do NOT persist them on the emitted entrypoint config — the matcher would
+// ignore them, and leaving them in the DB config makes it look like they
+// work. Strip them at build time and revisit once the matcher honours them.
 type FollowToDmConfig = {
 	social_account_id?: string;
 	dm_message?: { blocks: MessageBlock[]; quick_replies?: QuickReply[] };
@@ -86,11 +93,12 @@ export function buildFollowToDm(
 		entrypoints: [
 			{
 				kind: "follow",
-				config: {
-					max_sends_per_day: cfg.max_sends_per_day,
-					cooldown_between_sends_ms: cfg.cooldown_between_sends_ms,
-					skip_if_already_messaged: cfg.skip_if_already_messaged ?? true,
-				},
+				// The matcher only needs the social_account scope (handled via the
+				// top-level `socialAccountId`); nothing on `config` is read today.
+				// See the TODO at the top of this file — v1.1 will expose the
+				// per-day / cooldown / dedupe knobs here once the matcher wires
+				// them up.
+				config: {},
 				socialAccountId: socialAccountId ?? null,
 			},
 		],

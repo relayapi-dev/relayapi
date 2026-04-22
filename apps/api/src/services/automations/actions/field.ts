@@ -111,6 +111,11 @@ const fieldSet: ActionHandler<FieldSetAction> = async (action, ctx) => {
 		});
 	}
 
+	// Skip the internal event if the value did not actually change — prevents
+	// spurious `field_changed` re-enrollments when an action_group re-applies
+	// the same value.
+	if (before === value) return;
+
 	await emitInternalEvent(
 		db,
 		internalFieldEvent(ctx, action.field, before, value, action.id),
@@ -146,7 +151,9 @@ const fieldClear: ActionHandler<FieldClearAction> = async (action, ctx) => {
 			),
 		);
 
-	if (existing) {
+	// Only emit if there was actually a non-null prior value — deleting a row
+	// that stored `null` (or that never existed) is a no-op for listeners.
+	if (existing && before !== null) {
 		await emitInternalEvent(
 			db,
 			internalFieldEvent(ctx, action.field, before, null, action.id),

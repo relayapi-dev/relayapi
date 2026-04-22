@@ -5,6 +5,8 @@
 // invoked synchronously inside enrollContact, but we don't wait on its
 // completion state before taking the `next` port on the current run.
 
+import { automations } from "@relayapi/db";
+import { and, eq } from "drizzle-orm";
 import { enrollContact } from "../runner";
 import type { NodeHandler } from "../types";
 
@@ -31,6 +33,31 @@ export const startAutomationHandler: NodeHandler<StartAutomationConfig> = {
 				error: new Error("start_automation: db binding missing in ctx"),
 			};
 		}
+
+		// Confirm the target automation is active before enrolling. A paused /
+		// draft / archived target would otherwise silently swallow the enrollment
+		// — we'd rather the action_group's `on_error` route take over.
+		const target = await db.query.automations.findFirst({
+			where: and(
+				eq(automations.id, cfg.target_automation_id),
+				eq(automations.organizationId, ctx.organizationId),
+			),
+		});
+		if (!target) {
+			return {
+				result: "fail",
+				error: new Error(
+					`start_automation: target automation ${cfg.target_automation_id} not found`,
+				),
+			};
+		}
+		if (target.status !== "active") {
+			return {
+				result: "fail",
+				error: new Error("target automation not active"),
+			};
+		}
+
 		try {
 			const { runId: spawnedRunId } = await enrollContact(db, {
 				automationId: cfg.target_automation_id,

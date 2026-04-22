@@ -15,6 +15,7 @@ import {
 	automationEntrypoints,
 	automationRuns,
 	automations,
+	contactChannels,
 	contacts,
 	createDb,
 	customFieldDefinitions,
@@ -238,6 +239,135 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				where: eq(automationRuns.id, result.runId),
 			});
 			expect(run?.contactId).toBe(ctB.id);
+		}
+	});
+
+	it("platform_id lookup scopes to the entrypoint's org and ignores other-org contacts", async () => {
+		if (!dbAvailable) return;
+
+		// Set up a second org with its own contact sharing the same platform_id
+		// identifier as a contact in the primary org. The webhook (registered
+		// against the primary org's automation) must only ever return the
+		// primary-org contact — even though both contacts have identifier="abc123".
+		const otherOrgId = generateId("org_");
+		await db.insert(organization).values({
+			id: otherOrgId,
+			name: "other-org",
+			slug: `other-${otherOrgId.slice(-8)}`,
+		});
+		try {
+			const [otherWs] = await db
+				.insert(workspaces)
+				.values({ organizationId: otherOrgId, name: "other-ws" })
+				.returning();
+			if (!otherWs) throw new Error("other ws insert failed");
+
+			const [otherSa] = await db
+				.insert(socialAccounts)
+				.values({
+					organizationId: otherOrgId,
+					workspaceId: otherWs.id,
+					platform: "telegram",
+					platformAccountId: `tg_${generateId("acc_")}`,
+					displayName: "Other Bot",
+				})
+				.returning();
+			if (!otherSa) throw new Error("other sa insert failed");
+
+			const [primarySa] = await db
+				.insert(socialAccounts)
+				.values({
+					organizationId: orgId,
+					workspaceId,
+					platform: "telegram",
+					platformAccountId: `tg_${generateId("acc_")}`,
+					displayName: "Primary Bot",
+				})
+				.returning();
+			if (!primarySa) throw new Error("primary sa insert failed");
+
+			const primaryContact = await makeContact("primary-contact");
+			const [otherContact] = await db
+				.insert(contacts)
+				.values({
+					organizationId: otherOrgId,
+					workspaceId: otherWs.id,
+					name: "other-contact",
+				})
+				.returning();
+			if (!otherContact) throw new Error("other contact insert failed");
+
+			// Both contacts have the same platform_id identifier "abc123" but on
+			// their respective org-scoped social accounts.
+			await db.insert(contactChannels).values([
+				{
+					contactId: primaryContact.id,
+					socialAccountId: primarySa.id,
+					platform: "telegram",
+					identifier: "abc123",
+				},
+				{
+					contactId: otherContact.id,
+					socialAccountId: otherSa.id,
+					platform: "telegram",
+					identifier: "abc123",
+				},
+			]);
+
+			const auto = await makeAutomation("webhook-platform-id-scope");
+			const slug = `slug-${generateId("").slice(-10)}`;
+			const secret = "platform-id-scope-secret";
+			await db.insert(automationEntrypoints).values({
+				automationId: auto.id,
+				channel: "telegram",
+				kind: "webhook_inbound",
+				status: "active",
+				socialAccountId: null,
+				config: {
+					webhook_slug: slug,
+					webhook_secret: secret,
+					contact_lookup: {
+						by: "platform_id",
+						field_path: "$.user_id",
+						platform: "telegram",
+					},
+				},
+				specificity: 30,
+			});
+
+			const body = JSON.stringify({ user_id: "abc123" });
+			const sig = await hmacHex(secret, body);
+			const result = await receiveAutomationWebhook(
+				db,
+				{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
+				{},
+			);
+
+			expect(result.status).toBe("ok");
+			if (result.status === "ok") {
+				const run = await db.query.automationRuns.findFirst({
+					where: eq(automationRuns.id, result.runId),
+				});
+				expect(run?.contactId).toBe(primaryContact.id);
+				expect(run?.contactId).not.toBe(otherContact.id);
+			}
+		} finally {
+			// Explicit cleanup for the second org — not covered by teardownFixture.
+			// contactChannels cascade-delete from contacts / socialAccounts, so
+			// we just need to wipe contacts + socialAccounts + workspace + org.
+			await db
+				.delete(automationRuns)
+				.where(eq(automationRuns.organizationId, otherOrgId));
+			await db
+				.delete(contacts)
+				.where(eq(contacts.organizationId, otherOrgId));
+			await db
+				.delete(socialAccounts)
+				.where(eq(socialAccounts.organizationId, otherOrgId));
+			await db
+				.delete(workspaces)
+				.where(eq(workspaces.organizationId, otherOrgId));
+			await db.delete(organization).where(eq(organization.id, otherOrgId));
 		}
 	});
 

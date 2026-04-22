@@ -233,6 +233,18 @@ export async function resumeWaitingRunOnInput(
 		updatedContext.last_input_value = inboundText ?? "";
 	}
 
+	// Input node is being exited — clear this node's entry from the retry
+	// counter so replaying the flow (e.g. via a sub-flow jump) starts fresh.
+	// Preserve other nodes' counters, and drop the whole `_input_retries`
+	// key entirely if this was the last one.
+	const remaining: Record<string, number> = { ...retryMap };
+	delete remaining[node.key];
+	if (Object.keys(remaining).length > 0) {
+		updatedContext._input_retries = remaining;
+	} else {
+		delete updatedContext._input_retries;
+	}
+
 	const edge = graph.edges.find(
 		(e) => e.from_node === node.key && e.from_port === outcome.port,
 	);

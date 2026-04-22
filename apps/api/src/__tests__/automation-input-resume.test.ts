@@ -402,6 +402,12 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 		// Captured value should have landed in context under the configured field.
 		const context = (run!.context as Record<string, unknown>) ?? {};
 		expect(context.email).toBe("alice@example.com");
+		// And the retry counter for this node must be cleaned up — we just
+		// exited via `captured`, so nothing should be lingering in context.
+		const retries = context._input_retries as
+			| Record<string, number>
+			| undefined;
+		expect(retries?.ask_email).toBeUndefined();
 	});
 
 	it(

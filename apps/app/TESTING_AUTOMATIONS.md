@@ -29,7 +29,7 @@ surfaces.
 ### 2. Create-automation dialog
 
 - [ ] Click `[+ New automation]`.
-- [ ] A dialog opens with template tiles (`comment_to_dm`, `keyword_dm`,
+- [ ] A dialog opens with template tiles (`comment_to_dm`, `welcome_flow`,
       `story_leads`, `lead_capture`, etc.).
 - [ ] Click the `Comment → DM` (`comment_to_dm`) tile.
 - [ ] The dialog expands to the configuration step for that template.

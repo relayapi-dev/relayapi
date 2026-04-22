@@ -67,7 +67,13 @@ const webhookOut: ActionHandler<WebhookOutAction> = async (action, ctx) => {
 	} else if (auth.mode === "basic" && auth.username != null) {
 		const pair = `${auth.username}:${auth.password ?? ""}`;
 		headers.Authorization = `Basic ${base64(pair)}`;
-	} else if (auth.mode === "hmac" && auth.secret) {
+	} else if (auth.mode === "hmac") {
+		// Throw rather than silently sending unsigned — this surfaces a
+		// misconfigured action through the enclosing action_group's `on_error`
+		// setting instead of shipping a request the receiver will reject anyway.
+		if (!auth.secret) {
+			throw new Error("webhook_out: hmac auth requires secret");
+		}
 		const signed = body ?? "";
 		const sig = await hmacSha256Hex(auth.secret, signed);
 		headers["X-Signature"] = `sha256=${sig}`;

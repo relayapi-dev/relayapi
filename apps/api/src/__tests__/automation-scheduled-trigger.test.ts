@@ -322,4 +322,93 @@ describe("scheduled_trigger dispatch", () => {
 		expect(row?.status).toBe("failed");
 		expect(row?.error ?? "").toMatch(/unsupported cron/i);
 	});
+
+	it(
+		"queues the next run BEFORE enrollment, so the schedule survives a failure (§B4)",
+		async () => {
+			if (!dbAvailable) return;
+
+			// A valid tag filter — enumeration will succeed (0 contacts) and the
+			// enrollment loop is a no-op. The key property: the next-run job is
+			// inserted before the loop runs, so even a wholesale enrollment
+			// failure can't kill the schedule.
+			const auto = await makeAutomation("sched-survive-failure");
+			const ep = await makeEntrypoint(
+				auto.id,
+				{ cron: "*/15 * * * *" },
+				{ all: [{ field: "tags", op: "contains", value: "never-matches" }] },
+			);
+
+			await db.insert(automationScheduledJobs).values({
+				jobType: "scheduled_trigger",
+				automationId: auto.id,
+				entrypointId: ep.id,
+				runAt: new Date(Date.now() - 60_000),
+				status: "pending",
+			});
+
+			await processScheduledJobs(db, {});
+
+			// The next-run job must exist regardless of enrollment outcome.
+			const pending = await db
+				.select({ runAt: automationScheduledJobs.runAt })
+				.from(automationScheduledJobs)
+				.where(
+					and(
+						eq(automationScheduledJobs.entrypointId, ep.id),
+						eq(automationScheduledJobs.status, "pending"),
+					),
+				);
+			expect(pending.length).toBe(1);
+			expect(pending[0]!.runAt.getTime()).toBeGreaterThan(Date.now());
+		},
+	);
+
+	it(
+		"is idempotent — running the same scheduled_trigger twice doesn't double-queue the next run (§B4)",
+		async () => {
+			if (!dbAvailable) return;
+
+			const auto = await makeAutomation("sched-idempotent");
+			const ep = await makeEntrypoint(
+				auto.id,
+				{ cron: "*/15 * * * *" },
+				{ all: [{ field: "tags", op: "contains", value: "vip" }] },
+			);
+
+			// Seed two due jobs for the SAME entrypoint. Both will fire against
+			// the same cron, computing the same nextRunAt — the insert-if-not-
+			// exists guard must skip the second insert.
+			await db.insert(automationScheduledJobs).values([
+				{
+					jobType: "scheduled_trigger",
+					automationId: auto.id,
+					entrypointId: ep.id,
+					runAt: new Date(Date.now() - 120_000),
+					status: "pending",
+				},
+				{
+					jobType: "scheduled_trigger",
+					automationId: auto.id,
+					entrypointId: ep.id,
+					runAt: new Date(Date.now() - 60_000),
+					status: "pending",
+				},
+			]);
+
+			await processScheduledJobs(db, {});
+
+			const pending = await db
+				.select({ runAt: automationScheduledJobs.runAt })
+				.from(automationScheduledJobs)
+				.where(
+					and(
+						eq(automationScheduledJobs.entrypointId, ep.id),
+						eq(automationScheduledJobs.status, "pending"),
+					),
+				);
+			// Exactly one pending successor — not two.
+			expect(pending.length).toBe(1);
+		},
+	);
 });

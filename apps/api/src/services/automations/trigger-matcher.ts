@@ -118,9 +118,18 @@ export function computeSpecificity(
 	let max = 0;
 
 	// Tier 30 — unique slug / deterministic match.
-	if (kind === "keyword") {
-		const mode = (cfg.match_mode as string | undefined) ?? "contains";
-		if (mode === "exact" || mode === "regex") max = Math.max(max, 30);
+	// Historically a dedicated `keyword` kind existed; it was folded into
+	// `dm_received` (see schemas/automation-entrypoints.ts comment). We still
+	// score `kind === "keyword"` for backward compatibility with any tests or
+	// legacy data, and apply the same rule to `dm_received` entries whose
+	// config specifies exact/regex keyword matching.
+	if (kind === "keyword" || kind === "dm_received") {
+		const hasKeywords =
+			Array.isArray(cfg.keywords) && (cfg.keywords as unknown[]).length > 0;
+		if (hasKeywords) {
+			const mode = (cfg.match_mode as string | undefined) ?? "contains";
+			if (mode === "exact" || mode === "regex") max = Math.max(max, 30);
+		}
 	}
 	if (kind === "webhook_inbound" && typeof cfg.webhook_slug === "string") {
 		max = Math.max(max, 30);
@@ -188,6 +197,12 @@ function matchesEntrypointConfig(
 	event: InboundEvent,
 ): boolean {
 	switch (kind) {
+		// The dedicated `keyword` kind was removed (§B3); keyword matching now
+		// lives on `dm_received` entrypoints via their `keywords` config. The
+		// legacy `case "keyword":` branch is preserved as a safety net for any
+		// stale rows still in the DB — the runtime matcher filters by
+		// `event.kind` and `deriveInboundEventKind` never emits `"keyword"`,
+		// so this branch will never actually be hit by a live event.
 		case "keyword":
 		case "dm_received": {
 			const text = event.text ?? "";

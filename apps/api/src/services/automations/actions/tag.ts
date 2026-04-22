@@ -52,6 +52,20 @@ const tagAdd: ActionHandler<TagAddAction> = async (action, ctx) => {
 	if (!db) throw new Error("tag_add: db binding missing");
 	const tag = action.tag.trim();
 	if (!tag) return;
+
+	// Check whether the tag is already on the contact before mutating — if so
+	// this is a no-op and we must NOT emit a `tag_applied` event (which would
+	// spuriously re-fire listener automations on every repeat call).
+	const existing = await db.query.contacts.findFirst({
+		where: and(
+			eq(contacts.id, ctx.contactId),
+			eq(contacts.organizationId, ctx.organizationId),
+		),
+	});
+	const wasPresent = Array.isArray(existing?.tags)
+		? (existing!.tags as string[]).includes(tag)
+		: false;
+
 	await db
 		.update(contacts)
 		.set({
@@ -69,6 +83,8 @@ const tagAdd: ActionHandler<TagAddAction> = async (action, ctx) => {
 				eq(contacts.organizationId, ctx.organizationId),
 			),
 		);
+
+	if (wasPresent) return;
 
 	// Best-effort internal event — never fail the primary tag mutation.
 	await emitInternalEvent(
@@ -89,6 +105,19 @@ const tagRemove: ActionHandler<TagRemoveAction> = async (action, ctx) => {
 	if (!db) throw new Error("tag_remove: db binding missing");
 	const tag = action.tag.trim();
 	if (!tag) return;
+
+	// Same no-op guard as tag_add — only emit `tag_removed` if the tag was
+	// actually present before the mutation.
+	const existing = await db.query.contacts.findFirst({
+		where: and(
+			eq(contacts.id, ctx.contactId),
+			eq(contacts.organizationId, ctx.organizationId),
+		),
+	});
+	const wasPresent = Array.isArray(existing?.tags)
+		? (existing!.tags as string[]).includes(tag)
+		: false;
+
 	await db
 		.update(contacts)
 		.set({
@@ -101,6 +130,8 @@ const tagRemove: ActionHandler<TagRemoveAction> = async (action, ctx) => {
 				eq(contacts.organizationId, ctx.organizationId),
 			),
 		);
+
+	if (!wasPresent) return;
 
 	await emitInternalEvent(
 		db,

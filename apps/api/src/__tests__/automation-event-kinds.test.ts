@@ -142,6 +142,7 @@ async function makeEntrypoint(
 	kind: InboundEventKind | "schedule",
 	config: Record<string, unknown> = {},
 	socialAccountIdOverride: string | null = socialAccountId,
+	specificity = 10,
 ) {
 	const [ep] = await db
 		.insert(automationEntrypoints)
@@ -152,7 +153,7 @@ async function makeEntrypoint(
 			status: "active",
 			socialAccountId: socialAccountIdOverride,
 			config,
-			specificity: 10,
+			specificity,
 		})
 		.returning();
 	if (!ep) throw new Error("entrypoint insert failed");
@@ -382,6 +383,116 @@ describe("emitInternalEvent cycle protection", () => {
 			.from(automationRuns)
 			.where(eq(automationRuns.contactId, ct.id));
 		expect(runs.length).toBeLessThan(20);
+	});
+});
+
+describe("no-op tag/field mutations skip internal emission", () => {
+	it("does not re-enroll a tag_applied listener when tag_add is a no-op", async () => {
+		if (!dbAvailable) return;
+
+		// Target automation the listener enrolls into.
+		const listener = await makeAutomation("tag-noop-listener");
+		await makeEntrypoint(listener.id, "tag_applied", {}, null);
+
+		// Create a contact that already has the tag applied.
+		const [ct] = await db
+			.insert(contacts)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "noop-contact",
+				tags: ["lead"],
+			})
+			.returning();
+		if (!ct) throw new Error("contact insert failed");
+
+		// Re-apply the same tag via the tag_add action — this must be a no-op
+		// and NOT enqueue a `tag_applied` internal event.
+		await dispatchAction(
+			{
+				id: "reapply",
+				type: "tag_add",
+				tag: "lead",
+				on_error: "continue",
+			} as never,
+			{
+				runId: "test-run-noop",
+				automationId: listener.id,
+				organizationId: orgId,
+				contactId: ct.id,
+				conversationId: null,
+				channel: "instagram",
+				graph: EMPTY_GRAPH,
+				context: {},
+				now: new Date(),
+				db,
+				env: {},
+			},
+		);
+
+		// No new listener run was created (the pre-condition: tag already there
+		// → no emission → no enrollment).
+		const runs = await db
+			.select({ id: automationRuns.id })
+			.from(automationRuns)
+			.where(eq(automationRuns.automationId, listener.id));
+		expect(runs.length).toBe(0);
+	});
+
+	it("does emit on tag_add when the tag was NOT already present", async () => {
+		if (!dbAvailable) return;
+
+		const listener = await makeAutomation("tag-new-listener");
+		// Scope the entrypoint to only this specific tag and bump specificity
+		// so it beats any catch-all tag_applied listeners left behind by
+		// earlier tests in this file (the matcher picks the highest-specificity
+		// entrypoint, then oldest by created_at as a tiebreaker).
+		await makeEntrypoint(
+			listener.id,
+			"tag_applied",
+			{ tag_ids: ["brand-new"] },
+			null,
+			30,
+		);
+
+		const [ct] = await db
+			.insert(contacts)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "new-tag-contact",
+				tags: [],
+			})
+			.returning();
+		if (!ct) throw new Error("contact insert failed");
+
+		await dispatchAction(
+			{
+				id: "apply-fresh",
+				type: "tag_add",
+				tag: "brand-new",
+				on_error: "continue",
+			} as never,
+			{
+				runId: "test-run-fresh",
+				automationId: listener.id,
+				organizationId: orgId,
+				contactId: ct.id,
+				conversationId: null,
+				channel: "instagram",
+				graph: EMPTY_GRAPH,
+				context: {},
+				now: new Date(),
+				db,
+				env: {},
+			},
+		);
+
+		const runs = await db
+			.select({ id: automationRuns.id })
+			.from(automationRuns)
+			.where(eq(automationRuns.automationId, listener.id));
+		expect(runs.length).toBeGreaterThanOrEqual(1);
 	});
 });
 

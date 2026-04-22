@@ -386,4 +386,91 @@ describe("automation runner", () => {
 		},
 		30_000,
 	);
+
+	it("start_automation fails when the target automation is not active", async () => {
+		if (!dbAvailable) {
+			console.warn("skipping: DB fixture unavailable");
+			return;
+		}
+
+		// Target automation — start paused so start_automation should refuse it.
+		const targetGraph: Graph = {
+			schema_version: 1,
+			root_node_key: "stop",
+			nodes: [
+				{
+					key: "stop",
+					kind: "end",
+					config: {},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [],
+		};
+		const [target] = await db
+			.insert(automations)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				name: "paused-target",
+				channel: "telegram",
+				status: "paused",
+				graph: targetGraph as never,
+			})
+			.returning();
+		if (!target) throw new Error("target insert failed");
+
+		// Source automation — invokes start_automation against the paused target.
+		const sourceGraph: Graph = {
+			schema_version: 1,
+			root_node_key: "sa",
+			nodes: [
+				{
+					key: "sa",
+					kind: "start_automation",
+					config: { target_automation_id: target.id, pass_context: false },
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+					],
+				},
+				{
+					key: "stop",
+					kind: "end",
+					config: {},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [
+				{
+					from_node: "sa",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
+			],
+		};
+		const source = await createAutomation(sourceGraph);
+		const ct = await createContact();
+
+		const { runId } = await enrollContact(db, {
+			automationId: source.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: {},
+		});
+
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		// The start_automation node returns `fail` because the target isn't
+		// active. The runner treats a bare `fail` (no `error` port wired up)
+		// as a `failed` status with `handler_failure` exit_reason.
+		expect(run!.status).toBe("failed");
+		expect(run!.exitReason).toBe("handler_failure");
+	});
 });

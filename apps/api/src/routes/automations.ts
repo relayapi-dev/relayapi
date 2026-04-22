@@ -834,6 +834,21 @@ app.openapi(enrollAutomation, async (c) => {
 	const row = await loadScopedAutomation(c, id);
 	if (!row) return notFound(c);
 
+	// Manual enrollment into a paused/draft/archived automation is almost
+	// certainly a mistake — reject with a specific error code so the dashboard
+	// can surface it instead of silently creating a run that never fires.
+	if (row.status !== "active") {
+		return c.json(
+			{
+				error: {
+					code: "automation_not_active",
+					message: "Cannot enroll into a non-active automation",
+				},
+			},
+			422,
+		);
+	}
+
 	const db = c.get("db");
 	try {
 		const { runId } = await enrollContact(db, {
