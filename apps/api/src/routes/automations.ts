@@ -318,7 +318,10 @@ app.openapi(createAutomation, async (c) => {
 			graph,
 			createdFromTemplate,
 			templateConfig,
-			createdBy: c.get("keyId"),
+			// API key auth doesn't map cleanly to a user_id; createdBy is the
+			// auth.user.id FK — leave null when the request comes via an API key.
+			// The audit trail of which key created the automation is in request logs.
+			createdBy: null,
 		})
 		.returning();
 	if (!inserted) {
