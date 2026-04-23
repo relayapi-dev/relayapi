@@ -101,6 +101,11 @@ function labelFor(port: AutomationPort): string {
 	return port.key;
 }
 
+function shouldShowChip(port: AutomationPort): boolean {
+	const label = labelFor(port).trim().toLowerCase();
+	return label !== "next" && label !== "next step";
+}
+
 /**
  * Even vertical distribution for N ports. Extracted so PortHandles and node
  * rendering code (e.g. computing padding for connected-port labels) stay in
@@ -146,6 +151,7 @@ export function PortHandles({ ports, isConnectable = true }: PortHandlesProps) {
 			{outputs.map((port, index) => {
 				const style = stylesForPort(port);
 				const top = portHandleTop(index, outputs.length);
+				const showChip = shouldShowChip(port);
 				return (
 					<div
 						key={`out-${port.key}`}
@@ -164,16 +170,18 @@ export function PortHandles({ ports, isConnectable = true }: PortHandlesProps) {
 								style.dot,
 							)}
 						/>
-						<span
-							className={cn(
-								"pointer-events-none absolute top-1/2 -translate-y-1/2 translate-x-2 whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-medium",
-								style.chip,
-							)}
-							style={{ left: "100%" }}
-							data-testid={`port-chip-${port.key}`}
-						>
-							{labelFor(port)}
-						</span>
+						{showChip ? (
+							<span
+								className={cn(
+									"pointer-events-none absolute top-1/2 -translate-y-1/2 translate-x-2 whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-medium",
+									style.chip,
+								)}
+								style={{ left: "100%" }}
+								data-testid={`port-chip-${port.key}`}
+							>
+								{labelFor(port)}
+							</span>
+						) : null}
 					</div>
 				);
 			})}

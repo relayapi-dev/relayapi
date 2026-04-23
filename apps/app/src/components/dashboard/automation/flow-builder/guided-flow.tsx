@@ -29,6 +29,7 @@
 // output.
 
 import {
+	memo,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -550,7 +551,7 @@ function canvasPlatformBubble(channel: string, Icon: React.ComponentType<{ class
 	);
 }
 
-function CanvasNode({ data, selected }: NodeProps<NodeData>) {
+function CanvasNodeInner({ data, selected }: NodeProps<NodeData>) {
 	const node = data.node;
 	const Icon = KIND_ICON[node.kind] ?? Bot;
 
@@ -644,6 +645,20 @@ function CanvasNode({ data, selected }: NodeProps<NodeData>) {
 	);
 }
 
+// React Flow moves the outer node wrapper during drag; memoize the card body so
+// position-only updates don't repaint the inner DOM and flash the card.
+const CanvasNode = memo(
+	CanvasNodeInner,
+	(prev, next) =>
+		prev.selected === next.selected &&
+		prev.data.node === next.data.node &&
+		prev.data.catalog === next.data.catalog &&
+		prev.data.channel === next.data.channel &&
+		prev.data.readOnly === next.data.readOnly &&
+		prev.data.overlaysEnabled === next.data.overlaysEnabled &&
+		prev.data.metrics === next.data.metrics,
+);
+
 // ---------------------------------------------------------------------------
 // Trigger canvas node — synthetic "When..." card (plan 8).
 // Rendered at ReactFlow id TRIGGER_NODE_ID, driven by the `entrypoints` prop
@@ -703,7 +718,7 @@ function platformIconBubble(channel: string) {
 	);
 }
 
-function TriggerNode({ data, selected }: NodeProps<TriggerNodeData>) {
+function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 	const channel = data.channel;
 
 	return (
@@ -853,6 +868,21 @@ function TriggerNode({ data, selected }: NodeProps<TriggerNodeData>) {
 		</div>
 	);
 }
+
+// Same guard for the synthetic trigger card — it also gets position churn while
+// dragging, but its rendered body only needs to update when the actual data changes.
+const TriggerNode = memo(
+	TriggerNodeInner,
+	(prev, next) =>
+		prev.selected === next.selected &&
+		prev.data.channel === next.data.channel &&
+		prev.data.entrypoints === next.data.entrypoints &&
+		prev.data.availableKinds === next.data.availableKinds &&
+		prev.data.readOnly === next.data.readOnly &&
+		prev.data.onSelectCard === next.data.onSelectCard &&
+		prev.data.onSelectEntrypoint === next.data.onSelectEntrypoint &&
+		prev.data.onAddEntrypoint === next.data.onAddEntrypoint,
+);
 
 const nodeTypes = { canvas: CanvasNode, trigger: TriggerNode };
 
