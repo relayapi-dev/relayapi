@@ -33,13 +33,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { useApi, useMutation } from "@/hooks/use-api";
 import { cn } from "@/lib/utils";
-import { GuidedFlow } from "@/components/dashboard/automation/flow-builder/guided-flow";
+import {
+	GuidedFlow,
+	type AutomationEntrypoint,
+} from "@/components/dashboard/automation/flow-builder/guided-flow";
 import { PropertyPanel } from "@/components/dashboard/automation/flow-builder/property-panel";
 import { SimulatorPanel } from "@/components/dashboard/automation/flow-builder/simulator-panel";
 import { RunInspector } from "@/components/dashboard/automation/run-inspector";
 import { BindingsPanel } from "@/components/dashboard/automation/flow-builder/bindings-panel";
 import { InsightsPanel } from "@/components/dashboard/automation/flow-builder/insights-panel";
-import { EntrypointPanel } from "@/components/dashboard/automation/flow-builder/entrypoint-panel";
+import { TriggerPanel } from "@/components/dashboard/automation/flow-builder/trigger-panel";
 import { useAutomationCatalog } from "@/components/dashboard/automation/flow-builder/use-catalog";
 import {
 	EMPTY_GRAPH,
@@ -90,7 +93,7 @@ interface Props {
 }
 
 type TabKey = "canvas" | "runs" | "insights";
-type SidePanel = "property" | "simulator" | "bindings";
+type ToolbarPanel = "simulator" | "bindings";
 
 // ---------------------------------------------------------------------------
 // Page
@@ -159,11 +162,26 @@ export function AutomationDetailPage({ automationId }: Props) {
 		[graphStore],
 	);
 
-	const [sidePanel, setSidePanel] = useState<SidePanel>("property");
+	const [toolbarPanel, setToolbarPanel] = useState<ToolbarPanel | null>(null);
+	const [triggerSelected, setTriggerSelected] = useState<boolean>(false);
+	const [selectedEntrypointId, setSelectedEntrypointId] = useState<
+		string | null
+	>(null);
 	const [banner, setBanner] = useState<{
 		type: "error" | "success";
 		message: string;
 	} | null>(null);
+
+	// Entrypoints — rendered into the synthetic trigger canvas node + trigger
+	// panel. Separate fetch so the trigger card updates independently of the
+	// automation graph autosave lifecycle.
+	const {
+		data: entrypointsData,
+		refetch: refetchEntrypoints,
+	} = useApi<{ data: AutomationEntrypoint[] }>(
+		`automations/${automationId}/entrypoints`,
+	);
+	const entrypoints = entrypointsData?.data ?? [];
 
 	// ---- Status transitions ------------------------------------------------
 
@@ -257,9 +275,14 @@ export function AutomationDetailPage({ automationId }: Props) {
 		return graphStore.graph.nodes.find((n) => n.key === selection[0]) ?? null;
 	}, [graphStore.graph.nodes, selection]);
 
-	// When the user selects a node, the right panel should show property editor.
+	// When the user selects a graph node, dismiss trigger + toolbar panels so
+	// the property panel takes over the right side.
 	useEffect(() => {
-		if (selection.length > 0) setSidePanel("property");
+		if (selection.length > 0) {
+			setTriggerSelected(false);
+			setSelectedEntrypointId(null);
+			setToolbarPanel(null);
+		}
 	}, [selection.length]);
 
 	// ---- Render ------------------------------------------------------------
@@ -394,13 +417,18 @@ export function AutomationDetailPage({ automationId }: Props) {
 							<Button
 								variant="ghost"
 								size="sm"
-								onClick={() =>
-									setSidePanel(sidePanel === "simulator" ? "property" : "simulator")
-								}
+								onClick={() => {
+									setToolbarPanel((prev) =>
+										prev === "simulator" ? null : "simulator",
+									);
+									setTriggerSelected(false);
+									setSelectedEntrypointId(null);
+									graphStore.setSelection([]);
+								}}
 								title="Simulator"
 								className={cn(
 									"h-7 w-7 p-0",
-									sidePanel === "simulator" && "bg-accent/40",
+									toolbarPanel === "simulator" && "bg-accent/40",
 								)}
 							>
 								<FlaskConical className="size-3.5" />
@@ -408,13 +436,18 @@ export function AutomationDetailPage({ automationId }: Props) {
 							<Button
 								variant="ghost"
 								size="sm"
-								onClick={() =>
-									setSidePanel(sidePanel === "bindings" ? "property" : "bindings")
-								}
+								onClick={() => {
+									setToolbarPanel((prev) =>
+										prev === "bindings" ? null : "bindings",
+									);
+									setTriggerSelected(false);
+									setSelectedEntrypointId(null);
+									graphStore.setSelection([]);
+								}}
 								title="Bindings"
 								className={cn(
 									"h-7 w-7 p-0",
-									sidePanel === "bindings" && "bg-accent/40",
+									toolbarPanel === "bindings" && "bg-accent/40",
 								)}
 							>
 								<Link2 className="size-3.5" />
@@ -498,17 +531,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 			)}
 
 			<div className="flex min-h-0 flex-1">
-				{/* ===== Left: Entrypoints ===== */}
-				{tab === "canvas" && (
-					<EntrypointPanel
-						automationId={automation.id}
-						channel={automation.channel}
-						readOnly={readOnly}
-						onEntrypointChange={refetchAutomation}
-					/>
-				)}
-
-				{/* ===== Middle: Tab content ===== */}
+				{/* ===== Canvas / tab content ===== */}
 				<div className="flex min-w-0 flex-1">
 					{tab === "canvas" && (
 						<GuidedFlow
@@ -518,6 +541,57 @@ export function AutomationDetailPage({ automationId }: Props) {
 							catalog={catalog.data}
 							readOnly={readOnly}
 							automationStatus={automation.status}
+							entrypoints={entrypoints}
+							triggerSelected={triggerSelected}
+							onSelectTrigger={(entrypointId) => {
+								setTriggerSelected(true);
+								setSelectedEntrypointId(entrypointId);
+								setToolbarPanel(null);
+								graphStore.setSelection([]);
+							}}
+							onAddEntrypoint={async (kind) => {
+								try {
+									const res = await fetch(
+										`/api/automations/${automation.id}/entrypoints`,
+										{
+											method: "POST",
+											headers: { "Content-Type": "application/json" },
+											body: JSON.stringify({
+												channel: automation.channel,
+												kind,
+											}),
+										},
+									);
+									if (res.ok) {
+										const created = (await res.json()) as AutomationEntrypoint;
+										refetchEntrypoints();
+										setTriggerSelected(true);
+										setSelectedEntrypointId(created?.id ?? null);
+										setToolbarPanel(null);
+										graphStore.setSelection([]);
+									} else {
+										const body = (await res.json().catch(() => null)) as
+											| { error?: { message?: string } }
+											| null;
+										setBanner({
+											type: "error",
+											message:
+												body?.error?.message ?? "Failed to create trigger",
+										});
+									}
+								} catch (err) {
+									setBanner({
+										type: "error",
+										message:
+											err instanceof Error ? err.message : "Network error",
+									});
+								}
+							}}
+							onPaneClick={() => {
+								setTriggerSelected(false);
+								setSelectedEntrypointId(null);
+								setToolbarPanel(null);
+							}}
 						/>
 					)}
 					{tab === "runs" && (
@@ -542,91 +616,120 @@ export function AutomationDetailPage({ automationId }: Props) {
 					)}
 				</div>
 
-				{/* ===== Right: Property/Simulator/Bindings panel ===== */}
-				{tab === "canvas" && (
-					<>
-						{sidePanel === "simulator" ? (
-							<SimulatorPanel
-								automationId={automation.id}
-								graph={graphStore.graph}
-								onClose={() => setSidePanel("property")}
-							/>
-						) : sidePanel === "bindings" ? (
-							<BindingsPanel
-								automationId={automation.id}
-								onClose={() => setSidePanel("property")}
-							/>
-						) : selectedNode ? (
-							<PropertyPanel
-								automationId={automation.id}
-								node={{
-									key: selectedNode.key,
-									kind: selectedNode.kind,
-									notes: (selectedNode.ui_state?.notes as string | undefined) ?? undefined,
-									config: selectedNode.config ?? {},
-								}}
-								automationChannel={automation.channel}
-								onChange={(patch) => {
-									if (patch.config) {
-										graphStore.updateNodeConfig(selectedNode.key, patch.config);
-									}
-									if (typeof patch.notes === "string") {
-										const notes = patch.notes;
-										const nodes = graphStore.graph.nodes.map((n) =>
-											n.key === selectedNode.key
-												? {
-														...n,
-														ui_state: {
-															...(n.ui_state ?? {}),
-															notes,
-														},
-													}
-												: n,
-										);
-										graphStore.setGraph({ ...graphStore.graph, nodes });
-									}
-									if (typeof patch.key === "string" && patch.key !== selectedNode.key) {
-										const patchKey = patch.key;
-										// Key rename requires a setGraph to also fix up edges.
-										const renamed = graphStore.graph.nodes.map((n) =>
-											n.key === selectedNode.key ? { ...n, key: patchKey } : n,
-										);
-										const renamedEdges = graphStore.graph.edges.map((e) => ({
-											...e,
-											from_node:
-												e.from_node === selectedNode.key ? patchKey : e.from_node,
-											to_node: e.to_node === selectedNode.key ? patchKey : e.to_node,
-										}));
-										graphStore.setGraph({
-											...graphStore.graph,
-											nodes: renamed,
-											edges: renamedEdges,
-											root_node_key:
-												graphStore.graph.root_node_key === selectedNode.key
-													? patchKey
-													: graphStore.graph.root_node_key,
-										});
-										graphStore.setSelection([patchKey]);
-									}
-								}}
-								onDelete={() => {
-									if (selectedNode.key === graphStore.graph.root_node_key) {
-										setBanner({
-											type: "error",
-											message: "Cannot delete the root node",
-										});
-										return;
-									}
-									graphStore.removeNodes([selectedNode.key]);
-								}}
-								onClose={() => graphStore.setSelection([])}
-								existingKeys={graphStore.graph.nodes.map((n) => n.key)}
-							/>
-						) : (
-							<EmptyRightPanel />
-						)}
-					</>
+				{/* ===== Right: conditional panel ===== */}
+				{tab === "canvas" && toolbarPanel === "simulator" && (
+					<SimulatorPanel
+						automationId={automation.id}
+						graph={graphStore.graph}
+						onClose={() => setToolbarPanel(null)}
+					/>
 				)}
+				{tab === "canvas" && toolbarPanel === "bindings" && (
+					<BindingsPanel
+						automationId={automation.id}
+						onClose={() => setToolbarPanel(null)}
+					/>
+				)}
+				{tab === "canvas" &&
+					toolbarPanel === null &&
+					triggerSelected && (
+						<TriggerPanel
+							automationId={automation.id}
+							channel={automation.channel}
+							entrypoints={entrypoints}
+							selectedEntrypointId={selectedEntrypointId}
+							onSelectEntrypoint={setSelectedEntrypointId}
+							onClose={() => {
+								setTriggerSelected(false);
+								setSelectedEntrypointId(null);
+							}}
+							onEntrypointsChanged={() => {
+								refetchEntrypoints();
+								refetchAutomation();
+							}}
+							readOnly={readOnly}
+						/>
+					)}
+				{tab === "canvas" &&
+					toolbarPanel === null &&
+					!triggerSelected &&
+					selectedNode && (
+						<PropertyPanel
+							automationId={automation.id}
+							node={{
+								key: selectedNode.key,
+								kind: selectedNode.kind,
+								notes:
+									(selectedNode.ui_state?.notes as string | undefined) ??
+									undefined,
+								config: selectedNode.config ?? {},
+							}}
+							automationChannel={automation.channel}
+							onChange={(patch) => {
+								if (patch.config) {
+									graphStore.updateNodeConfig(selectedNode.key, patch.config);
+								}
+								if (typeof patch.notes === "string") {
+									const notes = patch.notes;
+									const nodes = graphStore.graph.nodes.map((n) =>
+										n.key === selectedNode.key
+											? {
+													...n,
+													ui_state: {
+														...(n.ui_state ?? {}),
+														notes,
+													},
+												}
+											: n,
+									);
+									graphStore.setGraph({ ...graphStore.graph, nodes });
+								}
+								if (
+									typeof patch.key === "string" &&
+									patch.key !== selectedNode.key
+								) {
+									const patchKey = patch.key;
+									// Key rename requires a setGraph to also fix up edges.
+									const renamed = graphStore.graph.nodes.map((n) =>
+										n.key === selectedNode.key
+											? { ...n, key: patchKey }
+											: n,
+									);
+									const renamedEdges = graphStore.graph.edges.map((e) => ({
+										...e,
+										from_node:
+											e.from_node === selectedNode.key
+												? patchKey
+												: e.from_node,
+										to_node:
+											e.to_node === selectedNode.key ? patchKey : e.to_node,
+									}));
+									graphStore.setGraph({
+										...graphStore.graph,
+										nodes: renamed,
+										edges: renamedEdges,
+										root_node_key:
+											graphStore.graph.root_node_key === selectedNode.key
+												? patchKey
+												: graphStore.graph.root_node_key,
+									});
+									graphStore.setSelection([patchKey]);
+								}
+							}}
+							onDelete={() => {
+								if (selectedNode.key === graphStore.graph.root_node_key) {
+									setBanner({
+										type: "error",
+										message: "Cannot delete the root node",
+									});
+									return;
+								}
+								graphStore.removeNodes([selectedNode.key]);
+							}}
+							onClose={() => graphStore.setSelection([])}
+							existingKeys={graphStore.graph.nodes.map((n) => n.key)}
+						/>
+					)}
 			</div>
 		</div>
 	);
@@ -658,16 +761,6 @@ function TabButton({
 		>
 			{label}
 		</button>
-	);
-}
-
-function EmptyRightPanel() {
-	return (
-		<div className="flex w-[360px] items-center justify-center border-l border-[#e6e9ef] bg-white p-8 xl:w-[392px]">
-			<p className="text-center text-sm text-[#7e8695]">
-				Select a node to edit its properties
-			</p>
-		</div>
 	);
 }
 

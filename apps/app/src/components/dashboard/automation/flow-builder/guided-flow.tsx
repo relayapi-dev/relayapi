@@ -38,8 +38,10 @@ import {
 import {
 	Background,
 	BackgroundVariant,
+	Handle,
 	MarkerType,
 	Panel,
+	Position,
 	ReactFlow,
 	ReactFlowProvider,
 	useReactFlow,
@@ -70,6 +72,13 @@ import {
 	ZoomOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { platformIcons } from "@/lib/platform-icons";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PortHandles } from "./port-handles";
 import { derivePorts } from "./derive-ports";
 import { InsertMenu } from "./insert-menu";
@@ -77,7 +86,10 @@ import { validateGraph } from "./validation";
 import { useAutosave } from "./use-autosave";
 import type { UseGraphStore } from "./use-graph-store";
 import { generateNodeKey } from "./use-graph-store";
-import type { AutomationCatalog } from "./use-catalog";
+import type {
+	AutomationCatalog,
+	CatalogEntrypointKind,
+} from "./use-catalog";
 import type {
 	AutomationEdge,
 	AutomationGraph,
@@ -97,6 +109,25 @@ import {
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+export interface AutomationEntrypoint {
+	id: string;
+	automation_id: string;
+	channel: string;
+	kind: string;
+	status: string;
+	social_account_id: string | null;
+	config: Record<string, unknown> | null;
+	filters: Record<string, unknown> | null;
+	allow_reentry: boolean;
+	reentry_cooldown_min: number;
+	priority: number;
+	specificity: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export const TRIGGER_NODE_ID = "__trigger";
 
 export interface GuidedFlowProps {
 	automationId: string;
@@ -118,6 +149,27 @@ export interface GuidedFlowProps {
 	 * surface validation errors vs hard failures.
 	 */
 	onSave?: (graph: UseGraphStore["graph"]) => Promise<GraphSaveResult>;
+	/**
+	 * Entrypoints for this automation. Rendered into the synthetic trigger
+	 * canvas node — clicking a row fires `onSelectTrigger(entrypointId)`;
+	 * clicking the card itself fires `onSelectTrigger(null)`.
+	 */
+	entrypoints?: AutomationEntrypoint[];
+	/**
+	 * Called when the trigger card or one of its entrypoint rows is clicked.
+	 * `null` means the card itself (list mode); otherwise the entrypoint id.
+	 */
+	onSelectTrigger?: (entrypointId: string | null) => void;
+	/** Called when the user picks a kind from the "+ New Trigger" dropdown. */
+	onAddEntrypoint?: (kind: string) => void;
+	/** Whether the trigger card should render as selected. */
+	triggerSelected?: boolean;
+	/**
+	 * Called whenever the user clicks empty canvas area, in addition to the
+	 * internal graph-store selection clear. Parent should use this to dismiss
+	 * any non-graph selection state (e.g. trigger panel).
+	 */
+	onPaneClick?: () => void;
 }
 
 interface NodeData {
@@ -127,6 +179,16 @@ interface NodeData {
 	readOnly: boolean;
 	metrics?: NodeMetrics;
 	overlaysEnabled: boolean;
+}
+
+interface TriggerNodeData {
+	channel: string;
+	entrypoints: AutomationEntrypoint[];
+	availableKinds: CatalogEntrypointKind[];
+	readOnly: boolean;
+	onSelectCard: () => void;
+	onSelectEntrypoint: (entrypointId: string) => void;
+	onAddEntrypoint: (kind: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +359,204 @@ function CanvasNode({ data, selected }: NodeProps<NodeData>) {
 	);
 }
 
-const nodeTypes = { canvas: CanvasNode };
+// ---------------------------------------------------------------------------
+// Trigger canvas node — synthetic "When..." card (plan 8).
+// Rendered at ReactFlow id TRIGGER_NODE_ID, driven by the `entrypoints` prop
+// on GuidedFlow. Not stored in the graph.
+// ---------------------------------------------------------------------------
+
+const ENTRYPOINT_KIND_LABELS: Record<string, string> = {
+	dm_received: "User sends a message",
+	keyword: "Keyword match",
+	comment_created: "User comments on your Post",
+	story_reply: "User replies to your Story",
+	story_mention: "User mentions your Story",
+	live_comment: "User comments on your Live",
+	ad_click: "User clicks your Ad",
+	ref_link_click: "User clicks a referral link",
+	share_to_dm: "User shares to DM",
+	follow: "User follows your account",
+	schedule: "Scheduled time",
+	field_changed: "Contact field changed",
+	tag_applied: "Tag applied to contact",
+	tag_removed: "Tag removed from contact",
+	conversion_event: "Conversion event",
+	webhook_inbound: "Inbound webhook",
+};
+
+function humanizeEntrypointKind(kind: string): string {
+	if (ENTRYPOINT_KIND_LABELS[kind]) return ENTRYPOINT_KIND_LABELS[kind];
+	return kind
+		.split("_")
+		.filter(Boolean)
+		.map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+		.join(" ");
+}
+
+function platformIconBubble(channel: string) {
+	const palette =
+		channel === "instagram"
+			? "bg-[linear-gradient(135deg,#ffd776_0%,#f74a5c_48%,#7d3cff_100%)]"
+			: channel === "facebook"
+				? "bg-[#1877f2]"
+				: channel === "whatsapp"
+					? "bg-[#25d366]"
+					: channel === "telegram"
+						? "bg-[#27a7e7]"
+						: "bg-[#7c8ca5]";
+	return (
+		<div
+			className={cn(
+				"flex size-7 items-center justify-center rounded-full text-white shadow-[0_2px_8px_rgba(15,23,42,0.15)]",
+				palette,
+			)}
+		>
+			<div className="scale-[0.8]">
+				{platformIcons[channel] ?? <MessageSquare className="size-3.5" />}
+			</div>
+		</div>
+	);
+}
+
+function TriggerNode({ data, selected }: NodeProps<TriggerNodeData>) {
+	const channel = data.channel;
+
+	return (
+		<div
+			className={cn(
+				"group relative w-[390px] overflow-visible rounded-[22px] border bg-white shadow-[0_2px_10px_rgba(34,44,66,0.08)] transition-all duration-150",
+				selected
+					? "border-[#63d26f] shadow-[0_0_0_1px_rgba(99,210,111,0.3),0_3px_12px_rgba(34,44,66,0.1)]"
+					: "border-[#e6e9ef]",
+				"cursor-grab active:cursor-grabbing",
+			)}
+			onClick={(event) => {
+				if (
+					(event.target as HTMLElement).closest(
+						"button,input,a,[role=button],[role=menuitem]",
+					)
+				) {
+					return;
+				}
+				data.onSelectCard();
+			}}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					data.onSelectCard();
+				}
+			}}
+			role="button"
+			tabIndex={0}
+		>
+			<Handle
+				type="source"
+				position={Position.Right}
+				id="out"
+				className="!size-[14px] !border-[3px] !border-white !bg-[#5f6b7f] !shadow-[0_1px_4px_rgba(34,44,66,0.18)]"
+				style={{ right: -8, top: "calc(100% - 22px)" }}
+				isConnectable={false}
+			/>
+			<div className="block w-full px-5 py-4 text-left">
+				<div className="flex items-center gap-2 text-[18px] font-bold tracking-tight text-[#1f2633]">
+					<Zap className="size-[18px] text-[#1f2633]" />
+					<span>When...</span>
+				</div>
+
+				{data.entrypoints.length > 0 ? (
+					<div className="mt-4 space-y-3">
+						{data.entrypoints.map((ep) => {
+							const summary = humanizeEntrypointKind(ep.kind);
+							const statusLabel =
+								ep.status === "active"
+									? "Active"
+									: ep.status === "paused"
+										? "Paused"
+										: ep.status;
+							return (
+								<button
+									key={ep.id}
+									type="button"
+									onClick={(event) => {
+										event.stopPropagation();
+										data.onSelectEntrypoint(ep.id);
+									}}
+									className="nodrag flex w-full items-center gap-3 rounded-[16px] bg-[#f4f5f8] px-4 py-3 text-left transition hover:bg-[#eceef3]"
+								>
+									{platformIconBubble(channel)}
+									<div className="min-w-0 flex-1">
+										<div className="truncate text-[13px] font-medium leading-4 text-[#8b92a0]">
+											{statusLabel}
+										</div>
+										<div className="mt-0.5 text-[15px] font-semibold leading-5 text-[#404552]">
+											{summary}
+										</div>
+									</div>
+								</button>
+							);
+						})}
+					</div>
+				) : (
+					<div className="mt-4 rounded-[16px] border border-dashed border-[#d9dde6] bg-white px-4 py-5 text-center text-[13px] text-[#7e8695]">
+						No triggers yet — add one below.
+					</div>
+				)}
+
+				{!data.readOnly && (
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<button
+								type="button"
+								onClick={(event) => event.stopPropagation()}
+								className="nodrag mt-4 flex h-[48px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[15px] font-semibold text-[#4680ff] transition hover:border-[#4680ff] hover:bg-[#f4f8ff]"
+								disabled={data.availableKinds.length === 0}
+								title={
+									data.availableKinds.length === 0
+										? "No entrypoint kinds available for this channel"
+										: undefined
+								}
+							>
+								+ New Trigger
+							</button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent
+							align="center"
+							sideOffset={8}
+							className="w-[320px]"
+						>
+							{data.availableKinds.map((k) => (
+								<DropdownMenuItem
+									key={k.kind}
+									onSelect={(event) => {
+										event.preventDefault();
+										data.onAddEntrypoint(k.kind);
+									}}
+								>
+									<span className="text-[13px] font-medium text-foreground">
+										{typeof k.label === "string"
+											? k.label
+											: humanizeEntrypointKind(k.kind)}
+									</span>
+								</DropdownMenuItem>
+							))}
+							{data.availableKinds.length === 0 && (
+								<div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
+									No entrypoint kinds available.
+								</div>
+							)}
+						</DropdownMenuContent>
+					</DropdownMenu>
+				)}
+
+				<div className="mt-3 flex justify-end text-[13px] font-medium text-[#6f7786]">
+					Then
+				</div>
+			</div>
+		</div>
+	);
+}
+
+const nodeTypes = { canvas: CanvasNode, trigger: TriggerNode };
 
 // ---------------------------------------------------------------------------
 // Canvas controls
@@ -464,6 +723,11 @@ function CanvasInner({
 	automationStatus,
 	onAutoArrange,
 	onSave,
+	entrypoints = [],
+	onSelectTrigger,
+	onAddEntrypoint,
+	triggerSelected = false,
+	onPaneClick,
 }: GuidedFlowProps) {
 	const rf = useReactFlow();
 	const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -497,6 +761,21 @@ function CanvasInner({
 
 	const { graph, selection } = graphStore;
 
+	// Trigger canvas node position is local state (the synthetic "__trigger"
+	// node is NOT in graph.nodes). Default places it to the left of the root.
+	const [triggerPos, setTriggerPos] = useState<XYPosition>({ x: -480, y: 0 });
+
+	// Entrypoint kinds available for this automation's channel — passed into
+	// the trigger card's "+ New Trigger" dropdown.
+	const availableKinds = useMemo(() => {
+		if (!catalog) return [] as CatalogEntrypointKind[];
+		return catalog.entrypoint_kinds.filter((k) => {
+			const channels = Array.isArray(k.channels) ? k.channels : [];
+			if (channels.length === 0) return true;
+			return channels.includes(channel);
+		});
+	}, [catalog, channel]);
+
 	// Auto-arrange positions — computed once per graph change; used only as a
 	// fallback when a node has no stored canvas position (e.g. just inserted
 	// by the menu with a cursor-space coordinate).
@@ -507,8 +786,26 @@ function CanvasInner({
 
 	// --- React Flow data ---------------------------------------------------
 
-	const rfNodes = useMemo<Node<NodeData>[]>(() => {
-		return graph.nodes.map((node) => {
+	const rfNodes = useMemo<Node[]>(() => {
+		const triggerNode: Node<TriggerNodeData> = {
+			id: TRIGGER_NODE_ID,
+			type: "trigger",
+			position: triggerPos,
+			data: {
+				channel,
+				entrypoints,
+				availableKinds,
+				readOnly,
+				onSelectCard: () => onSelectTrigger?.(null),
+				onSelectEntrypoint: (epId) => onSelectTrigger?.(epId),
+				onAddEntrypoint: (kind) => onAddEntrypoint?.(kind),
+			},
+			selected: triggerSelected,
+			selectable: true,
+			draggable: !readOnly,
+		};
+
+		const stepNodes: Node<NodeData>[] = graph.nodes.map((node) => {
 			const fallback = autoPositions.get(node.key);
 			return {
 				id: node.key,
@@ -530,19 +827,27 @@ function CanvasInner({
 				draggable: !readOnly,
 			};
 		});
+
+		return [triggerNode, ...stepNodes];
 	}, [
 		autoPositions,
+		availableKinds,
 		catalog,
 		channel,
+		entrypoints,
 		graph.nodes,
+		onAddEntrypoint,
+		onSelectTrigger,
 		overlay.data,
 		overlaysEnabled,
 		readOnly,
 		selection,
+		triggerPos,
+		triggerSelected,
 	]);
 
 	const rfEdges = useMemo<Edge[]>(() => {
-		return graph.edges.map((e, index) => ({
+		const edges: Edge[] = graph.edges.map((e, index) => ({
 			id: `${e.from_node}.${e.from_port}→${e.to_node}.${e.to_port}`,
 			source: e.from_node,
 			sourceHandle: e.from_port,
@@ -558,7 +863,28 @@ function CanvasInner({
 			},
 			style: { stroke: "#9aa7bd", strokeWidth: 2 },
 		}));
-	}, [graph.edges]);
+
+		// Synthetic trigger → root edge. Not stored anywhere; purely visual.
+		if (graph.root_node_key) {
+			edges.unshift({
+				id: `${TRIGGER_NODE_ID}→${graph.root_node_key}`,
+				source: TRIGGER_NODE_ID,
+				sourceHandle: "out",
+				target: graph.root_node_key,
+				targetHandle: "in",
+				type: "default",
+				deletable: false,
+				markerEnd: {
+					type: MarkerType.ArrowClosed,
+					width: 18,
+					height: 18,
+					color: "#9aa7bd",
+				},
+				style: { stroke: "#9aa7bd", strokeWidth: 2 },
+			});
+		}
+		return edges;
+	}, [graph.edges, graph.root_node_key]);
 
 	// --- Fit view on initial mount / big graph changes ---------------------
 
@@ -667,6 +993,15 @@ function CanvasInner({
 		(changes: NodeChange[]) => {
 			for (const change of changes) {
 				if (change.type === "position" && change.position && !change.dragging) {
+					if (change.id === TRIGGER_NODE_ID) {
+						// Persist trigger card position in component-local state. It
+						// is not part of the graph — the server never sees it.
+						setTriggerPos({
+							x: change.position.x,
+							y: change.position.y,
+						});
+						continue;
+					}
 					// Commit position on drag stop only (avoids history spam per pixel).
 					graphStore.moveNode(change.id, {
 						x: change.position.x,
@@ -677,6 +1012,10 @@ function CanvasInner({
 					// We coalesce multiple select events at the end of the changes
 					// array into a single setSelection dispatch.
 				} else if (change.type === "remove") {
+					if (change.id === TRIGGER_NODE_ID) {
+						// Trigger card is virtual; ignore delete requests.
+						continue;
+					}
 					if (graph.root_node_key === change.id) {
 						toast.push("Cannot delete the root node");
 						continue;
@@ -684,10 +1023,13 @@ function CanvasInner({
 					graphStore.removeNodes([change.id]);
 				}
 			}
-			// Apply selection changes in a single pass.
+			// Apply selection changes in a single pass. The trigger node's
+			// selection is driven by the parent (via `triggerSelected`), so we
+			// skip it here to avoid polluting the graph store's selection with
+			// synthetic ids.
 			const selectEvents = changes.filter(
 				(c): c is Extract<NodeChange, { type: "select" }> =>
-					c.type === "select",
+					c.type === "select" && c.id !== TRIGGER_NODE_ID,
 			);
 			if (selectEvents.length > 0) {
 				const next = new Set(selection);
@@ -705,6 +1047,8 @@ function CanvasInner({
 		(changes: EdgeChange[]) => {
 			for (const change of changes) {
 				if (change.type === "remove") {
+					// Synthetic trigger edge is visual-only; ignore.
+					if (change.id.startsWith(`${TRIGGER_NODE_ID}→`)) continue;
 					// `change.id` format matches rfEdges.id
 					const idx = graph.edges.findIndex(
 						(e, i) =>
@@ -726,6 +1070,12 @@ function CanvasInner({
 
 			const { source, sourceHandle, target, targetHandle } = connection;
 			if (!source || !sourceHandle || !target || !targetHandle) return;
+
+			// The synthetic trigger node is not part of the graph; ignore any
+			// attempt to route an edge through it.
+			if (source === TRIGGER_NODE_ID || target === TRIGGER_NODE_ID) {
+				return;
+			}
 
 			const fromNode = graph.nodes.find((n) => n.key === source);
 			const toNode = graph.nodes.find((n) => n.key === target);
@@ -1148,6 +1498,7 @@ function CanvasInner({
 				onPaneClick={() => {
 					setInsertMenu(null);
 					graphStore.setSelection([]);
+					onPaneClick?.();
 				}}
 				proOptions={{ hideAttribution: true }}
 				fitView
