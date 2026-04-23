@@ -1135,7 +1135,7 @@ function CanvasInner({
 	// --- Render ------------------------------------------------------------
 
 	return (
-		<div ref={wrapperRef} className="relative h-full bg-[#f5f6fa]">
+		<div ref={wrapperRef} className="relative h-full min-w-0 flex-1 bg-[#f5f6fa]">
 			<ReactFlow
 				nodes={rfNodes}
 				edges={rfEdges}
