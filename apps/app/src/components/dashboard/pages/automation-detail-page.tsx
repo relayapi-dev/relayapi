@@ -181,7 +181,16 @@ export function AutomationDetailPage({ automationId }: Props) {
 	} = useApi<{ data: AutomationEntrypoint[] }>(
 		`automations/${automationId}/entrypoints`,
 	);
-	const entrypoints = entrypointsData?.data ?? [];
+	// Stabilise the `entrypoints` reference. Without this memo we produce a
+	// new `[]` literal on every render whenever `entrypointsData` is falsy,
+	// which cascades through `GuidedFlow`'s `useMemo`-derived node list and
+	// forces React Flow to rebuild its internal graph on every render,
+	// which in turn fires controlled-selection change events that set state
+	// back into us → infinite loop when the trigger card is selected.
+	const entrypoints = useMemo(
+		() => entrypointsData?.data ?? [],
+		[entrypointsData],
+	);
 
 	// ---- Status transitions ------------------------------------------------
 
@@ -284,6 +293,83 @@ export function AutomationDetailPage({ automationId }: Props) {
 			setToolbarPanel(null);
 		}
 	}, [selection.length]);
+
+	// ---- Canvas / trigger-panel callbacks (stabilised) --------------------
+	// Inlining these in the JSX caused every parent render to ship fresh
+	// function identities into `<GuidedFlow>` / `<TriggerPanel>`, cascading
+	// into their `useMemo` trees and producing a render storm the moment the
+	// trigger card became selected. Hoisting them to `useCallback` keeps the
+	// child memo keys stable across re-renders.
+
+	const handleSelectTrigger = useCallback(
+		(entrypointId: string | null) => {
+			setTriggerSelected(true);
+			setSelectedEntrypointId(entrypointId);
+			setToolbarPanel(null);
+			// setSelection is a no-op in the reducer when the next list is
+			// content-equal to the current one, so it's safe to call even when
+			// nothing is selected.
+			graphStore.setSelection([]);
+		},
+		[graphStore],
+	);
+
+	const handleAddEntrypoint = useCallback(
+		async (kind: string) => {
+			if (!automation) return;
+			try {
+				const res = await fetch(
+					`/api/automations/${automation.id}/entrypoints`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							channel: automation.channel,
+							kind,
+						}),
+					},
+				);
+				if (res.ok) {
+					const created = (await res.json()) as AutomationEntrypoint;
+					refetchEntrypoints();
+					setTriggerSelected(true);
+					setSelectedEntrypointId(created?.id ?? null);
+					setToolbarPanel(null);
+					graphStore.setSelection([]);
+				} else {
+					const body = (await res.json().catch(() => null)) as
+						| { error?: { message?: string } }
+						| null;
+					setBanner({
+						type: "error",
+						message: body?.error?.message ?? "Failed to create trigger",
+					});
+				}
+			} catch (err) {
+				setBanner({
+					type: "error",
+					message: err instanceof Error ? err.message : "Network error",
+				});
+			}
+		},
+		[automation, graphStore, refetchEntrypoints],
+	);
+
+	const handlePaneClick = useCallback(() => {
+		setTriggerSelected(false);
+		setSelectedEntrypointId(null);
+		setToolbarPanel(null);
+	}, []);
+
+	const handleCloseTrigger = useCallback(() => {
+		setTriggerSelected(false);
+		setSelectedEntrypointId(null);
+	}, []);
+
+	const handleEntrypointsChanged = useCallback(() => {
+		refetchEntrypoints();
+		refetchAutomation();
+	}, [refetchEntrypoints, refetchAutomation]);
 
 	// ---- Render ------------------------------------------------------------
 
@@ -543,55 +629,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 							automationStatus={automation.status}
 							entrypoints={entrypoints}
 							triggerSelected={triggerSelected}
-							onSelectTrigger={(entrypointId) => {
-								setTriggerSelected(true);
-								setSelectedEntrypointId(entrypointId);
-								setToolbarPanel(null);
-								graphStore.setSelection([]);
-							}}
-							onAddEntrypoint={async (kind) => {
-								try {
-									const res = await fetch(
-										`/api/automations/${automation.id}/entrypoints`,
-										{
-											method: "POST",
-											headers: { "Content-Type": "application/json" },
-											body: JSON.stringify({
-												channel: automation.channel,
-												kind,
-											}),
-										},
-									);
-									if (res.ok) {
-										const created = (await res.json()) as AutomationEntrypoint;
-										refetchEntrypoints();
-										setTriggerSelected(true);
-										setSelectedEntrypointId(created?.id ?? null);
-										setToolbarPanel(null);
-										graphStore.setSelection([]);
-									} else {
-										const body = (await res.json().catch(() => null)) as
-											| { error?: { message?: string } }
-											| null;
-										setBanner({
-											type: "error",
-											message:
-												body?.error?.message ?? "Failed to create trigger",
-										});
-									}
-								} catch (err) {
-									setBanner({
-										type: "error",
-										message:
-											err instanceof Error ? err.message : "Network error",
-									});
-								}
-							}}
-							onPaneClick={() => {
-								setTriggerSelected(false);
-								setSelectedEntrypointId(null);
-								setToolbarPanel(null);
-							}}
+							onSelectTrigger={handleSelectTrigger}
+							onAddEntrypoint={handleAddEntrypoint}
+							onPaneClick={handlePaneClick}
 						/>
 					)}
 					{tab === "runs" && (
@@ -639,14 +679,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 							entrypoints={entrypoints}
 							selectedEntrypointId={selectedEntrypointId}
 							onSelectEntrypoint={setSelectedEntrypointId}
-							onClose={() => {
-								setTriggerSelected(false);
-								setSelectedEntrypointId(null);
-							}}
-							onEntrypointsChanged={() => {
-								refetchEntrypoints();
-								refetchAutomation();
-							}}
+							onClose={handleCloseTrigger}
+							onEntrypointsChanged={handleEntrypointsChanged}
 							readOnly={readOnly}
 						/>
 					)}

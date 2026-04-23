@@ -303,15 +303,264 @@ const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 	end: StopCircle,
 };
 
+// Manychat-style operation labels shown in bold at the top of each card.
+// Mirrors the labelling used pre-b367320 so the visual vocabulary stays
+// consistent across the rewrite.
+const NODE_OPERATION_LABELS: Record<string, string> = {
+	message: "Send Message",
+	input: "Wait for Reply",
+	delay: "Delay",
+	condition: "If / Then",
+	randomizer: "Randomizer",
+	action_group: "Actions",
+	http_request: "External Request",
+	start_automation: "Start Automation",
+	goto: "Go To",
+	end: "End",
+};
+
+const PLATFORM_LABELS: Record<string, string> = {
+	instagram: "Instagram",
+	facebook: "Facebook",
+	whatsapp: "WhatsApp",
+	telegram: "Telegram",
+	discord: "Discord",
+	sms: "SMS",
+	twitter: "X",
+	bluesky: "Bluesky",
+	threads: "Threads",
+	youtube: "YouTube",
+	linkedin: "LinkedIn",
+	tiktok: "TikTok",
+	pinterest: "Pinterest",
+	multi: "Workflow",
+};
+
+function titleize(value: string): string {
+	return value
+		.split("_")
+		.filter(Boolean)
+		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+		.join(" ");
+}
+
+function platformLabel(channel: string): string {
+	return PLATFORM_LABELS[channel] ?? titleize(channel);
+}
+
+function truncate(text: string, max: number): string {
+	if (text.length <= max) return text;
+	return `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+// Pulls a short human-readable preview out of an `AutomationNode`'s config,
+// matched to the node kind. Used as the grey inner-box body of the canvas
+// card. Returns `null` when we can't derive anything meaningful — callers
+// render a catalog-provided fallback in that case.
+function nodePreview(node: AutomationNode): string | null {
+	const kind = node.kind;
+	const config = (node.config ?? {}) as Record<string, unknown>;
+
+	if (kind === "message") {
+		const blocks = Array.isArray(config.blocks)
+			? (config.blocks as Array<Record<string, unknown>>)
+			: [];
+		if (blocks.length === 0) return null;
+		const first = blocks[0]!;
+		const blockType = typeof first.type === "string" ? first.type : "";
+		if (blockType === "text") {
+			const text = typeof first.text === "string" ? first.text.trim() : "";
+			if (text) return truncate(text, 140);
+			return "[empty text block]";
+		}
+		if (blockType === "image") return "[image]";
+		if (blockType === "video") return "[video]";
+		if (blockType === "audio") return "[audio]";
+		if (blockType === "file") return "[file]";
+		if (blockType === "card") {
+			const title = typeof first.title === "string" ? first.title.trim() : "";
+			return title ? `[card] ${truncate(title, 80)}` : "[card]";
+		}
+		if (blockType === "gallery") {
+			const cards = Array.isArray(first.cards) ? first.cards : [];
+			return `[gallery] ${cards.length} card${cards.length === 1 ? "" : "s"}`;
+		}
+		if (blockType === "delay") {
+			const seconds = typeof first.seconds === "number" ? first.seconds : 0;
+			return `[delay ${seconds}s]`;
+		}
+		return `[${blockType || "block"}]`;
+	}
+
+	if (kind === "action_group") {
+		const actions = Array.isArray(config.actions)
+			? (config.actions as Array<Record<string, unknown>>)
+			: [];
+		if (actions.length === 0) return null;
+		const summaries = actions.slice(0, 2).map((a) => {
+			const type = typeof a.type === "string" ? a.type : "action";
+			const label = typeof a.label === "string" ? a.label : "";
+			if (type === "tag_add" || type === "tag_remove") {
+				const tag = typeof a.tag === "string" ? a.tag : (label || "tag");
+				return `${type === "tag_add" ? "Add tag" : "Remove tag"}: ${tag}`;
+			}
+			if (type === "field_set" || type === "field_clear") {
+				const field = typeof a.field === "string" ? a.field : (label || "field");
+				return `${type === "field_set" ? "Set field" : "Clear field"}: ${field}`;
+			}
+			return titleize(type);
+		});
+		const more = actions.length - summaries.length;
+		const tail = more > 0 ? `, +${more} more` : "";
+		return `${summaries.join(", ")}${tail}`;
+	}
+
+	if (kind === "condition") {
+		const when = typeof config.when === "string" ? config.when.trim() : "";
+		if (when) return `If ${truncate(when, 120)}`;
+		const predicates = config.predicates;
+		if (predicates && typeof predicates === "object") {
+			return "If …";
+		}
+		return null;
+	}
+
+	if (kind === "delay") {
+		const minutes = typeof config.duration_minutes === "number"
+			? config.duration_minutes
+			: typeof config.minutes === "number"
+				? config.minutes
+				: null;
+		if (minutes !== null) {
+			if (minutes < 60) return `Wait ${minutes} min`;
+			const hours = Math.round((minutes / 60) * 10) / 10;
+			return `Wait ${hours} h`;
+		}
+		const seconds = typeof config.seconds === "number" ? config.seconds : null;
+		if (seconds !== null) return `Wait ${seconds}s`;
+		return null;
+	}
+
+	if (kind === "input") {
+		const field = typeof config.field === "string"
+			? config.field
+			: typeof config.capture_field === "string"
+				? config.capture_field
+				: "";
+		if (field) return `Capture ${field}`;
+		const prompt = typeof config.prompt === "string" ? config.prompt.trim() : "";
+		if (prompt) return truncate(prompt, 140);
+		return null;
+	}
+
+	if (kind === "http_request") {
+		const method = typeof config.method === "string"
+			? String(config.method).toUpperCase()
+			: "GET";
+		const url = typeof config.url === "string" ? config.url : "";
+		if (url) return `${method} ${truncate(url, 80)}`;
+		return null;
+	}
+
+	if (kind === "start_automation") {
+		const target = typeof config.target_automation_id === "string"
+			? config.target_automation_id
+			: typeof config.automation_id === "string"
+				? config.automation_id
+				: "";
+		if (target) return `Start ${target.slice(0, 8)}`;
+		return null;
+	}
+
+	if (kind === "goto") {
+		const target = typeof config.target_node_key === "string"
+			? config.target_node_key
+			: "";
+		if (target) return `Go to ${target}`;
+		return null;
+	}
+
+	if (kind === "randomizer") {
+		const branches = Array.isArray(config.branches) ? config.branches : [];
+		if (branches.length > 0) {
+			return `${branches.length} branch${branches.length === 1 ? "" : "es"}`;
+		}
+		return null;
+	}
+
+	if (kind === "end") {
+		return null;
+	}
+
+	// Generic fallback: first string-valued config field.
+	for (const [k, v] of Object.entries(config)) {
+		if (typeof v === "string" && v.trim()) {
+			return `${k}: ${truncate(v, 100)}`;
+		}
+	}
+	return null;
+}
+
+// Icon bubble tinted for the node's channel — gradient for Instagram, solid
+// brand colours for the rest. Used by both the trigger card and the generic
+// canvas nodes so the palette stays in sync.
+function canvasPlatformBubble(channel: string, Icon: React.ComponentType<{ className?: string }>) {
+	const palette =
+		channel === "instagram"
+			? "bg-[linear-gradient(135deg,#ffd776_0%,#f74a5c_48%,#7d3cff_100%)] text-white"
+			: channel === "facebook"
+				? "bg-[#1877f2] text-white"
+				: channel === "whatsapp"
+					? "bg-[#25d366] text-white"
+					: channel === "telegram"
+						? "bg-[#27a7e7] text-white"
+						: "bg-[#eef1f5] text-[#7b8598]";
+	const showSocialMark =
+		channel === "instagram" ||
+		channel === "facebook" ||
+		channel === "whatsapp" ||
+		channel === "telegram";
+	return (
+		<div
+			className={cn(
+				"flex size-8 shrink-0 items-center justify-center rounded-full shadow-[0_2px_6px_rgba(15,23,42,0.1)]",
+				palette,
+			)}
+		>
+			{showSocialMark ? (
+				<div className="scale-[0.8]">
+					{platformIcons[channel] ?? <Icon className="size-4" />}
+				</div>
+			) : (
+				<Icon className="size-4" />
+			)}
+		</div>
+	);
+}
+
 function CanvasNode({ data, selected }: NodeProps<NodeData>) {
 	const node = data.node;
 	const Icon = KIND_ICON[node.kind] ?? Bot;
-	const title =
+
+	const catalogKind = data.catalog?.node_kinds.find(
+		(k) => k.kind === node.kind,
+	);
+	const operation =
 		node.title ??
-		data.catalog?.node_kinds.find((k) => k.kind === node.kind)?.label ??
-		node.kind;
-	const description =
-		data.catalog?.node_kinds.find((k) => k.kind === node.kind)?.description ?? "";
+		NODE_OPERATION_LABELS[node.kind] ??
+		catalogKind?.label ??
+		titleize(node.kind);
+
+	// Platform-scoped nodes (message_*, most send operations) surface the
+	// automation's channel as the "app" name. Everything else shows the
+	// catalog category or a friendly fallback.
+	const isPlatformNode =
+		node.kind === "message" || node.kind === "input";
+	const platformName = isPlatformNode
+		? platformLabel(data.channel)
+		: catalogKind?.category
+			? titleize(String(catalogKind.category))
+			: "Automation";
 
 	// Derive ports client-side so new button/quick-reply entries show up as
 	// handles without waiting for a round-trip.
@@ -321,18 +570,21 @@ function CanvasNode({ data, selected }: NodeProps<NodeData>) {
 	}, [node]);
 
 	const outputCount = ports.filter((p) => p.direction === "output").length;
-	// Pad the right side so port labels don't clip the card content.
-	const minHeight = Math.max(96, 60 + outputCount * 22);
+	const hasSingleOutput = outputCount <= 1;
+
+	// Preview text shown in the inner grey box.
+	const preview = nodePreview(node) ?? catalogKind?.description ?? "";
+	const showPreview = preview.length > 0;
 
 	return (
 		<div
 			className={cn(
-				"relative w-[280px] rounded-2xl border bg-white pr-10 shadow-[0_2px_8px_rgba(34,44,66,0.08)] transition-all",
+				"group relative w-[346px] overflow-visible rounded-[22px] border bg-white shadow-[0_2px_10px_rgba(34,44,66,0.08)] transition-all duration-150",
 				selected
-					? "border-[#4680ff] shadow-[0_0_0_2px_rgba(70,128,255,0.18)]"
-					: "border-slate-200",
+					? "border-[#4680ff] shadow-[0_0_0_1px_rgba(70,128,255,0.3),0_3px_12px_rgba(34,44,66,0.1)]"
+					: "border-[#e6e9ef]",
+				"cursor-grab active:cursor-grabbing",
 			)}
-			style={{ minHeight }}
 		>
 			<PortHandles ports={ports} isConnectable={!data.readOnly} />
 
@@ -340,20 +592,39 @@ function CanvasNode({ data, selected }: NodeProps<NodeData>) {
 				<NodeMetricBadge metrics={data.metrics} />
 			) : null}
 
-			<div className="flex items-start gap-3 px-4 py-3">
-				<div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-					<Icon className="size-4" />
-				</div>
-				<div className="min-w-0 flex-1">
-					<div className="truncate text-[13px] font-semibold text-slate-900">
-						{title}
+			<div className="block w-full px-5 py-4 pr-10 text-left">
+				<div className="flex items-start gap-3">
+					<div className="mt-0.5 shrink-0">
+						{canvasPlatformBubble(isPlatformNode ? data.channel : "__generic", Icon)}
 					</div>
-					{description ? (
-						<div className="mt-0.5 truncate text-[11px] text-slate-500">
-							{description}
+					<div className="min-w-0 flex-1">
+						<div className="text-[12px] leading-4 text-[#8b92a0]">
+							{platformName}
 						</div>
-					) : null}
+						<div className="mt-0.5 truncate text-[16px] font-semibold leading-5 text-[#404552]">
+							{operation}
+						</div>
+					</div>
 				</div>
+
+				{showPreview ? (
+					<div className="mt-3 rounded-[16px] bg-[#f4f5f8] px-4 py-3">
+						<div className="line-clamp-3 min-h-[20px] whitespace-pre-wrap text-[14px] leading-[20px] text-[#404552]">
+							{preview}
+						</div>
+					</div>
+				) : null}
+
+				{hasSingleOutput ? (
+					<div className="mt-3 flex justify-end pr-2 text-[13px] font-medium text-[#6f7786]">
+						Next Step
+					</div>
+				) : (
+					// Multi-output nodes label each port individually via
+					// PortHandles — the card footer is left empty so the labels
+					// line up with their respective handles.
+					<div className="mt-3 min-h-[18px]" />
+				)}
 			</div>
 		</div>
 	);
@@ -431,12 +702,25 @@ function TriggerNode({ data, selected }: NodeProps<TriggerNodeData>) {
 				"cursor-grab active:cursor-grabbing",
 			)}
 			onClick={(event) => {
-				if (
-					(event.target as HTMLElement).closest(
-						"button,input,a,[role=button],[role=menuitem]",
-					)
-				) {
-					return;
+				// Guard against clicks that landed on an interactive child
+				// (entrypoint row button, dropdown trigger). `closest()` starts
+				// at the event target and walks upward, so we stop the walk at
+				// the wrapper itself — otherwise `[role=button]` would always
+				// match this element and swallow every click.
+				const currentTarget = event.currentTarget;
+				let el = event.target as HTMLElement | null;
+				while (el && el !== currentTarget) {
+					const role = el.getAttribute("role");
+					if (
+						el.tagName === "BUTTON" ||
+						el.tagName === "INPUT" ||
+						el.tagName === "A" ||
+						role === "button" ||
+						role === "menuitem"
+					) {
+						return;
+					}
+					el = el.parentElement;
 				}
 				data.onSelectCard();
 			}}

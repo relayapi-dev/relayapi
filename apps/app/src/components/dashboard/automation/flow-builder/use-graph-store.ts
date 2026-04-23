@@ -317,8 +317,28 @@ function reducer(state: GraphStoreState, action: Action): GraphStoreState {
 			};
 		}
 
-		case "SET_SELECTION":
-			return { ...state, selection: action.keys };
+		case "SET_SELECTION": {
+			// Idempotent — content-equal incoming keys return the same state
+			// reference, which keeps the `useMemo`-derived store identity
+			// stable. Without this, controlled-selection round-trips through
+			// React Flow produce a new graphStore identity each frame, which
+			// re-runs every effect that takes `graphStore` in its deps and
+			// cascades into a freeze when many components subscribe.
+			const prev = state.selection;
+			const next = action.keys;
+			if (prev === next) return state;
+			if (prev.length === next.length) {
+				let same = true;
+				for (let i = 0; i < prev.length; i++) {
+					if (prev[i] !== next[i]) {
+						same = false;
+						break;
+					}
+				}
+				if (same) return state;
+			}
+			return { ...state, selection: next };
+		}
 
 		case "SET_VALIDATION":
 			// Idempotent — if the incoming issues are content-equal to the
