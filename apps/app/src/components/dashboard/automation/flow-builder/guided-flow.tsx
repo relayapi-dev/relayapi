@@ -86,11 +86,6 @@ import { validateGraph } from "./validation";
 import { useAutosave } from "./use-autosave";
 import type { UseGraphStore } from "./use-graph-store";
 import { generateNodeKey } from "./use-graph-store";
-import {
-	partitionNodePositionChanges,
-	updateLiveNodePositions,
-	type LiveNodePositions,
-} from "./guided-flow-drag-state";
 import type {
 	AutomationCatalog,
 	CatalogEntrypointKind,
@@ -575,7 +570,7 @@ function CanvasNode({ data, selected }: NodeProps<NodeData>) {
 	}, [node]);
 
 	const outputCount = ports.filter((p) => p.direction === "output").length;
-	const hasSingleOutput = outputCount <= 1;
+	const hasSingleOutput = outputCount === 1;
 
 	// Preview text shown in the inner grey box.
 	const preview = nodePreview(node) ?? catalogKind?.description ?? "";
@@ -624,12 +619,12 @@ function CanvasNode({ data, selected }: NodeProps<NodeData>) {
 					<div className="mt-3 flex justify-end pr-2 text-[13px] font-medium text-[#6f7786]">
 						Next Step
 					</div>
-				) : (
+				) : outputCount > 1 ? (
 					// Multi-output nodes label each port individually via
 					// PortHandles — the card footer is left empty so the labels
 					// line up with their respective handles.
 					<div className="mt-3 min-h-[18px]" />
-				)}
+				) : null}
 			</div>
 		</div>
 	);
@@ -1053,9 +1048,6 @@ function CanvasInner({
 	// Trigger canvas node position is local state (the synthetic "__trigger"
 	// node is NOT in graph.nodes). Default places it to the left of the root.
 	const [triggerPos, setTriggerPos] = useState<XYPosition>({ x: -480, y: 0 });
-	const [liveNodePositions, setLiveNodePositions] = useState<LiveNodePositions>(
-		{},
-	);
 
 	// Entrypoint kinds available for this automation's channel — passed into
 	// the trigger card's "+ New Trigger" dropdown.
@@ -1082,7 +1074,7 @@ function CanvasInner({
 		const triggerNode: Node<TriggerNodeData> = {
 			id: TRIGGER_NODE_ID,
 			type: "trigger",
-			position: liveNodePositions[TRIGGER_NODE_ID] ?? triggerPos,
+			position: triggerPos,
 			data: {
 				channel,
 				entrypoints,
@@ -1102,11 +1094,10 @@ function CanvasInner({
 			return {
 				id: node.key,
 				type: "canvas",
-				position:
-					liveNodePositions[node.key] ?? {
-						x: node.canvas_x ?? fallback?.x ?? 0,
-						y: node.canvas_y ?? fallback?.y ?? 0,
-					},
+				position: {
+					x: node.canvas_x ?? fallback?.x ?? 0,
+					y: node.canvas_y ?? fallback?.y ?? 0,
+				},
 				data: {
 					node,
 					catalog,
@@ -1135,7 +1126,6 @@ function CanvasInner({
 		overlaysEnabled,
 		readOnly,
 		selection,
-		liveNodePositions,
 		triggerPos,
 		triggerSelected,
 	]);
@@ -1285,29 +1275,22 @@ function CanvasInner({
 
 	const onNodesChange = useCallback(
 		(changes: NodeChange[]) => {
-			const { live, committed } = partitionNodePositionChanges(changes);
-			if (Object.keys(live).length > 0 || committed.length > 0) {
-				setLiveNodePositions((current) =>
-					updateLiveNodePositions(
-						current,
-						live,
-						committed.map((item) => item.id),
-					),
-				);
-				for (const item of committed) {
-					if (item.id === TRIGGER_NODE_ID) {
+			for (const change of changes) {
+				if (change.type === "position" && change.position && !change.dragging) {
+					if (change.id === TRIGGER_NODE_ID) {
 						// Persist trigger card position in component-local state. It
 						// is not part of the graph — the server never sees it.
-						setTriggerPos(item.position);
+						setTriggerPos({
+							x: change.position.x,
+							y: change.position.y,
+						});
 						continue;
 					}
 					// Commit position on drag stop only (avoids history spam per pixel).
-					graphStore.moveNode(item.id, item.position);
-				}
-			}
-			for (const change of changes) {
-				if (change.type === "position") {
-					continue;
+					graphStore.moveNode(change.id, {
+						x: change.position.x,
+						y: change.position.y,
+					});
 				} else if (change.type === "select") {
 					// React Flow's internal selection — translate to store selection.
 					// We coalesce multiple select events at the end of the changes

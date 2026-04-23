@@ -13,8 +13,10 @@
 // - All "mutations" (addNode / removeNodes / etc.) push the *prior* graph
 //   onto `past`, then mutate. Undo restores the most recent past entry.
 // - `addNode(kind, position, connect?)` is atomic: when `connect` is set, the
-//   new node and its inbound edge land in the same dispatch, so undo reverts
-//   both at once.
+//   new node and its inbound edge land in the same dispatch. If the source
+//   port was already connected, we replace that edge in the same history
+//   entry and preserve the downstream target when the inserted node has a
+//   single default output.
 // - Node keys are short opaque ids (8 chars). We try to use the SDK's
 //   nanoid-style generator if available; otherwise fall back to a sliced
 //   `crypto.randomUUID()`.
@@ -25,6 +27,7 @@ import type {
 	AutomationGraph,
 	AutomationNode,
 } from "./graph-types";
+import { derivePorts } from "./derive-ports";
 import type { ValidationIssue } from "./validation";
 
 const HISTORY_LIMIT = 50;
@@ -155,6 +158,9 @@ type Action =
 			type: "ADD_NODE";
 			node: AutomationNode;
 			edge?: AutomationEdge;
+			tailEdge?: AutomationEdge;
+			replaceEdgeIndex?: number;
+			removeNodeKeys?: string[];
 	  }
 	| { type: "REMOVE_NODES"; keys: string[] }
 	| { type: "MOVE_NODE"; key: string; x: number; y: number }
@@ -197,13 +203,29 @@ function reducer(state: GraphStoreState, action: Action): GraphStoreState {
 		}
 
 		case "ADD_NODE": {
-			const nodes = state.graph.nodes.concat([action.node]);
-			const edges = action.edge
-				? state.graph.edges.concat([action.edge])
-				: state.graph.edges;
+			const removedKeys = new Set(action.removeNodeKeys ?? []);
+			const nodes = state.graph.nodes
+				.filter((n) => !removedKeys.has(n.key))
+				.concat([action.node]);
+			const edges = state.graph.edges
+				.filter((_, index) => index !== action.replaceEdgeIndex)
+				.filter(
+					(e) => !removedKeys.has(e.from_node) && !removedKeys.has(e.to_node),
+				);
+			if (action.edge) edges.push(action.edge);
+			if (action.tailEdge) edges.push(action.tailEdge);
 			return {
 				...state,
-				graph: { ...state.graph, nodes, edges },
+				graph: {
+					...state.graph,
+					nodes,
+					edges,
+					root_node_key:
+						state.graph.root_node_key &&
+						removedKeys.has(state.graph.root_node_key)
+							? null
+							: state.graph.root_node_key,
+				},
 				history: pushHistory(state.history, state.graph),
 				dirty: true,
 			};
@@ -411,6 +433,82 @@ function initialState(initialGraph?: AutomationGraph): GraphStoreState {
 	};
 }
 
+function singleOutputPortKey(node: Pick<AutomationNode, "kind" | "config">): string | null {
+	const outputs = derivePorts(node).filter((p) => p.direction === "output");
+	return outputs.length === 1 ? outputs[0]?.key ?? null : null;
+}
+
+function planAddNode(
+	graph: AutomationGraph,
+	kind: string,
+	key: string,
+	position: { x: number; y: number },
+	connect?: { sourceNodeKey: string; sourcePortKey: string },
+): Extract<Action, { type: "ADD_NODE" }> {
+	const node: AutomationNode = {
+		key,
+		kind,
+		canvas_x: position.x,
+		canvas_y: position.y,
+		config: {},
+		ports: [],
+	};
+
+	if (!connect) {
+		return { type: "ADD_NODE", node };
+	}
+
+	const edge: AutomationEdge = {
+		from_node: connect.sourceNodeKey,
+		from_port: connect.sourcePortKey,
+		to_node: key,
+		to_port: "in",
+	};
+
+	const replaceEdgeIndex = graph.edges.findIndex(
+		(e) =>
+			e.from_node === connect.sourceNodeKey &&
+			e.from_port === connect.sourcePortKey,
+	);
+	if (replaceEdgeIndex < 0) {
+		return { type: "ADD_NODE", node, edge };
+	}
+
+	const existingEdge = graph.edges[replaceEdgeIndex]!;
+	const downstreamPortKey = singleOutputPortKey(node);
+	if (downstreamPortKey) {
+		return {
+			type: "ADD_NODE",
+			node,
+			edge,
+			tailEdge: {
+				from_node: key,
+				from_port: downstreamPortKey,
+				to_node: existingEdge.to_node,
+				to_port: existingEdge.to_port,
+			},
+			replaceEdgeIndex,
+		};
+	}
+
+	const existingTarget = graph.nodes.find((n) => n.key === existingEdge.to_node);
+	const removeNodeKeys =
+		existingTarget?.kind === "end" &&
+		!graph.edges.some(
+			(e, index) => index !== replaceEdgeIndex && e.to_node === existingTarget.key,
+		)
+			? [existingTarget.key]
+			: undefined;
+
+	return {
+		type: "ADD_NODE",
+		node,
+		edge,
+		replaceEdgeIndex,
+		removeNodeKeys,
+	};
+}
+
 export function useGraphStore(initialGraph?: AutomationGraph): UseGraphStore {
 	const [state, dispatch] = useReducer(
 		reducer,
@@ -430,24 +528,9 @@ export function useGraphStore(initialGraph?: AutomationGraph): UseGraphStore {
 	const addNode = useCallback<GraphStoreActions["addNode"]>(
 		(kind, position, connect) => {
 			const key = generateNodeKey();
-			const node: AutomationNode = {
-				key,
-				kind,
-				canvas_x: position.x,
-				canvas_y: position.y,
-				config: {},
-				ports: [],
-			};
-			let edge: AutomationEdge | undefined;
-			if (connect) {
-				edge = {
-					from_node: connect.sourceNodeKey,
-					from_port: connect.sourcePortKey,
-					to_node: key,
-					to_port: "in",
-				};
-			}
-			dispatch({ type: "ADD_NODE", node, edge });
+			dispatch(
+				planAddNode(stateRef.current.graph, kind, key, position, connect),
+			);
 			return key;
 		},
 		[],
@@ -569,4 +652,6 @@ export const __test__ = {
 	initialState,
 	HISTORY_LIMIT,
 	cloneGraph,
+	planAddNode,
+	singleOutputPortKey,
 };

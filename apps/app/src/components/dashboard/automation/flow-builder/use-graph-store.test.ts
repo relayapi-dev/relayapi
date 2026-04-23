@@ -19,6 +19,22 @@ function makeNode(key: string, x = 0, y = 0): AutomationNode {
 	};
 }
 
+function makeKindNode(
+	key: string,
+	kind: string,
+	x = 0,
+	y = 0,
+): AutomationNode {
+	return {
+		key,
+		kind,
+		canvas_x: x,
+		canvas_y: y,
+		config: {},
+		ports: [],
+	};
+}
+
 function graphWith(nodes: AutomationNode[], edges: AutomationGraph["edges"] = []): AutomationGraph {
 	return {
 		schema_version: 1,
@@ -67,6 +83,87 @@ describe("useGraphStore reducer — addNode", () => {
 		});
 		// Single history entry — both mutations land atomically.
 		expect(next.history.past).toHaveLength(1);
+	});
+
+	it("replaces an existing source edge and preserves the downstream target for single-output inserts", () => {
+		const graph = graphWith(
+			[
+				makeKindNode("source", "message"),
+				makeKindNode("done", "end"),
+			],
+			[
+				{
+					from_node: "source",
+					from_port: "next",
+					to_node: "done",
+					to_port: "in",
+				},
+			],
+		);
+		const initial = initialState(graph);
+		const action = __test__.planAddNode(
+			graph,
+			"message",
+			"n2",
+			{ x: 120, y: 40 },
+			{ sourceNodeKey: "source", sourcePortKey: "next" },
+		);
+
+		const next = reducer(initial, action);
+
+		expect(next.graph.nodes.map((n) => n.key)).toEqual(["source", "done", "n2"]);
+		expect(next.graph.edges).toEqual([
+			{
+				from_node: "source",
+				from_port: "next",
+				to_node: "n2",
+				to_port: "in",
+			},
+			{
+				from_node: "n2",
+				from_port: "next",
+				to_node: "done",
+				to_port: "in",
+			},
+		]);
+		expect(next.history.past).toHaveLength(1);
+	});
+
+	it("drops a terminal end node when replacing it with a multi-output insert", () => {
+		const graph = graphWith(
+			[
+				makeKindNode("source", "message"),
+				makeKindNode("done", "end"),
+			],
+			[
+				{
+					from_node: "source",
+					from_port: "next",
+					to_node: "done",
+					to_port: "in",
+				},
+			],
+		);
+		const initial = initialState(graph);
+		const action = __test__.planAddNode(
+			graph,
+			"condition",
+			"branch",
+			{ x: 120, y: 40 },
+			{ sourceNodeKey: "source", sourcePortKey: "next" },
+		);
+
+		const next = reducer(initial, action);
+
+		expect(next.graph.nodes.map((n) => n.key)).toEqual(["source", "branch"]);
+		expect(next.graph.edges).toEqual([
+			{
+				from_node: "source",
+				from_port: "next",
+				to_node: "branch",
+				to_port: "in",
+			},
+		]);
 	});
 });
 
