@@ -149,8 +149,8 @@ export function PortHandles({ ports, isConnectable = true }: PortHandlesProps) {
 				return (
 					<div
 						key={`out-${port.key}`}
-						className="pointer-events-none absolute"
-						style={{ right: -7, top, transform: "translateY(-50%)" }}
+						className="pointer-events-auto absolute"
+						style={{ right: -12, top, transform: "translateY(-50%)" }}
 					>
 						<Handle
 							type="source"
@@ -160,16 +160,21 @@ export function PortHandles({ ports, isConnectable = true }: PortHandlesProps) {
 							data-port-role={port.role ?? "default"}
 							data-port-direction="output"
 							className={cn(
-								"!relative !left-0 !top-0 !size-[12px] !translate-x-0 !translate-y-0 !border-[2px] !shadow-[0_1px_3px_rgba(34,44,66,0.12)]",
+								"!relative !left-0 !top-0 !h-7 !w-[74px] !translate-x-0 !translate-y-0 !border-0 !bg-transparent !shadow-none",
+							)}
+						/>
+						<span
+							aria-hidden="true"
+							className={cn(
+								"pointer-events-none absolute left-[5px] top-1/2 size-[12px] -translate-y-1/2 rounded-full border-[2px] shadow-[0_1px_3px_rgba(34,44,66,0.12)]",
 								style.dot,
 							)}
 						/>
 						<span
 							className={cn(
-								"pointer-events-auto absolute top-1/2 -translate-y-1/2 translate-x-2 whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-medium",
+								"pointer-events-none absolute left-[22px] top-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-medium",
 								style.chip,
 							)}
-							style={{ left: "100%" }}
 							data-testid={`port-chip-${port.key}`}
 						>
 							{labelFor(port)}

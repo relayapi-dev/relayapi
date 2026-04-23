@@ -172,7 +172,7 @@ describe("buildGraphFromTemplate", () => {
 		const publicReply = persisted.nodes.find((n) => n.key === "public_reply");
 		const sendDm = persisted.nodes.find((n) => n.key === "send_dm");
 		expect(publicReply?.canvas_x).toBe(100);
-		expect(sendDm?.canvas_x).toBe(380);
+		expect(sendDm?.canvas_x).toBe(520);
 	});
 
 	it("comment_to_dm adds a visible public reply node and omits a redundant end node", () => {

@@ -400,6 +400,10 @@ function nodePreview(node: AutomationNode): string | null {
 		const summaries = actions.slice(0, 2).map((a) => {
 			const type = typeof a.type === "string" ? a.type : "action";
 			const label = typeof a.label === "string" ? a.label : "";
+			if (type === "reply_to_comment") {
+				const text = typeof a.text === "string" ? a.text.trim() : "";
+				return text ? truncate(text, 140) : "Reply to comment";
+			}
 			if (type === "tag_add" || type === "tag_remove") {
 				const tag = typeof a.tag === "string" ? a.tag : (label || "tag");
 				return `${type === "tag_add" ? "Add tag" : "Remove tag"}: ${tag}`;
@@ -501,6 +505,14 @@ function nodePreview(node: AutomationNode): string | null {
 	return null;
 }
 
+function isPlatformStyledActionGroup(node: AutomationNode): boolean {
+	if (node.kind !== "action_group") return false;
+	const actions = Array.isArray((node.config as { actions?: unknown[] } | null)?.actions)
+		? ((node.config as { actions: Array<Record<string, unknown>> }).actions ?? [])
+		: [];
+	return actions.some((action) => action?.type === "reply_to_comment");
+}
+
 // Icon bubble tinted for the node's channel — gradient for Instagram, solid
 // brand colours for the rest. Used by both the trigger card and the generic
 // canvas nodes so the palette stays in sync.
@@ -555,7 +567,9 @@ function CanvasNode({ data, selected }: NodeProps<NodeData>) {
 	// automation's channel as the "app" name. Everything else shows the
 	// catalog category or a friendly fallback.
 	const isPlatformNode =
-		node.kind === "message" || node.kind === "input";
+		node.kind === "message" ||
+		node.kind === "input" ||
+		isPlatformStyledActionGroup(node);
 	const platformName = isPlatformNode
 		? platformLabel(data.channel)
 		: catalogKind?.category
@@ -1042,6 +1056,10 @@ function CanvasInner({
 				sourcePort?: { nodeKey: string; portKey: string };
 		  }
 	>(null);
+	const [liveNodePositions, setLiveNodePositions] = useState<
+		Record<string, XYPosition>
+	>({});
+	const suppressNextPaneClickRef = useRef(false);
 
 	const { graph, selection } = graphStore;
 
@@ -1091,12 +1109,13 @@ function CanvasInner({
 
 		const stepNodes: Node<NodeData>[] = graph.nodes.map((node) => {
 			const fallback = autoPositions.get(node.key);
+			const live = liveNodePositions[node.key];
 			return {
 				id: node.key,
 				type: "canvas",
 				position: {
-					x: node.canvas_x ?? fallback?.x ?? 0,
-					y: node.canvas_y ?? fallback?.y ?? 0,
+					x: live?.x ?? node.canvas_x ?? fallback?.x ?? 0,
+					y: live?.y ?? node.canvas_y ?? fallback?.y ?? 0,
 				},
 				data: {
 					node,
@@ -1126,6 +1145,7 @@ function CanvasInner({
 		overlaysEnabled,
 		readOnly,
 		selection,
+		liveNodePositions,
 		triggerPos,
 		triggerSelected,
 	]);
@@ -1275,8 +1295,10 @@ function CanvasInner({
 
 	const onNodesChange = useCallback(
 		(changes: NodeChange[]) => {
+			const dragUpdates: Record<string, XYPosition> = {};
+			const clearUpdates = new Set<string>();
 			for (const change of changes) {
-				if (change.type === "position" && change.position && !change.dragging) {
+				if (change.type === "position" && change.position) {
 					if (change.id === TRIGGER_NODE_ID) {
 						// Persist trigger card position in component-local state. It
 						// is not part of the graph — the server never sees it.
@@ -1286,7 +1308,15 @@ function CanvasInner({
 						});
 						continue;
 					}
+					if (change.dragging) {
+						dragUpdates[change.id] = {
+							x: change.position.x,
+							y: change.position.y,
+						};
+						continue;
+					}
 					// Commit position on drag stop only (avoids history spam per pixel).
+					clearUpdates.add(change.id);
 					graphStore.moveNode(change.id, {
 						x: change.position.x,
 						y: change.position.y,
@@ -1306,6 +1336,24 @@ function CanvasInner({
 					}
 					graphStore.removeNodes([change.id]);
 				}
+			}
+			if (Object.keys(dragUpdates).length > 0 || clearUpdates.size > 0) {
+				setLiveNodePositions((prev) => {
+					let changed = false;
+					const next = { ...prev };
+					for (const [key, position] of Object.entries(dragUpdates)) {
+						const current = prev[key];
+						if (current?.x === position.x && current?.y === position.y) continue;
+						next[key] = position;
+						changed = true;
+					}
+					for (const key of clearUpdates) {
+						if (!(key in next)) continue;
+						delete next[key];
+						changed = true;
+					}
+					return changed ? next : prev;
+				});
 			}
 			// Apply selection changes in a single pass. The trigger node's
 			// selection is driven by the parent (via `triggerSelected`), so we
@@ -1473,6 +1521,10 @@ function CanvasInner({
 				},
 				flow,
 				sourcePort: connectStartRef.current,
+			});
+			suppressNextPaneClickRef.current = true;
+			requestAnimationFrame(() => {
+				suppressNextPaneClickRef.current = false;
 			});
 			connectStartRef.current = null;
 		},
@@ -1780,6 +1832,7 @@ function CanvasInner({
 				onConnectStart={onConnectStart}
 				onConnectEnd={onConnectEnd}
 				onPaneClick={() => {
+					if (suppressNextPaneClickRef.current) return;
 					setInsertMenu(null);
 					graphStore.setSelection([]);
 					onPaneClick?.();

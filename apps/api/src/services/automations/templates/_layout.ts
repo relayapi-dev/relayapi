@@ -7,17 +7,19 @@
 // a sensible left-to-right tree.
 //
 // Layout math:
-//   canvas_x = 100 + depth * 280
-//   canvas_y = 100 + sibling_index * 160
+//   canvas_x = 100 + depth * 420
+//   canvas_y = 100 + sibling_index * 200
 // where sibling_index is a running counter per depth level (BFS order).
 // Orphan nodes (unreachable from the root) are stacked below at depth 0.
 
 import type { Graph, GraphNode } from "../../../schemas/automation-graph";
 
 const X_START = 100;
-const X_STEP = 280;
+// Canvas cards render at ~346px wide in the dashboard, so the horizontal step
+// must exceed that width or template-built nodes will overlap on first load.
+const X_STEP = 420;
 const Y_START = 100;
-const Y_STEP = 160;
+const Y_STEP = 200;
 
 export function autoLayoutGraph(graph: Graph): Graph {
 	if (!graph.root_node_key) return graph;
