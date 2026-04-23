@@ -58,13 +58,19 @@ export function AccountSearchCombobox({
 
   const selectedAccount = value ? accounts.find((a) => a.id === value) : null;
 
+  // Parents that recompute `platforms` every render (e.g. `[channel]`) would
+  // otherwise break `fetchAccounts`'s identity on every parent render. Collapse
+  // the array into a stable comma-joined key so we only recompute when the
+  // actual contents change.
+  const platformsKey = platforms?.length ? platforms.slice().sort().join(",") : "";
+
   const fetchAccounts = useCallback(async (query: string) => {
     setLoading(true);
     try {
       const url = new URL("/api/accounts", window.location.origin);
       if (query) url.searchParams.set("search", query);
       if (workspaceId) url.searchParams.set("workspace_id", workspaceId);
-      if (platforms?.length) url.searchParams.set("platforms", platforms.join(","));
+      if (platformsKey) url.searchParams.set("platforms", platformsKey);
       url.searchParams.set("limit", "20");
       const res = await fetch(url.toString());
       if (res.ok) {
@@ -76,7 +82,7 @@ export function AccountSearchCombobox({
     } finally {
       setLoading(false);
     }
-  }, [workspaceId, platforms]);
+  }, [workspaceId, platformsKey]);
 
   // Fetch accounts when dropdown opens or workspace changes
   useEffect(() => {

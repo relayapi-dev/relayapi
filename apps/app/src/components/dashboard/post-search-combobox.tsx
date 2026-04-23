@@ -130,11 +130,18 @@ export function PostSearchCombobox({
     }
   }, [value, accountId]);
 
-  // Reset when account changes
+  // Reset when account changes. Skip the initial mount so we don't clobber
+  // a pre-selected post id the parent just restored from the server — that
+  // would fire a PATCH back through the parent, which refetches, which
+  // re-renders us, and so on. We only want to reset when the account
+  // ACTUALLY changes from one non-null value (or null) to a different value.
+  const prevAccountIdRef = useRef(accountId);
   useEffect(() => {
+    if (prevAccountIdRef.current === accountId) return;
+    prevAccountIdRef.current = accountId;
     setPosts([]);
     onSelect(null);
-  }, [accountId]);
+  }, [accountId, onSelect]);
 
   const handleSearchChange = (val: string) => {
     setSearch(val);

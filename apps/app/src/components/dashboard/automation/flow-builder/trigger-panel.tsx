@@ -17,7 +17,7 @@
 // Plan 2. Data shapes are unchanged — we consume the same `AutomationEntrypoint`
 // records fetched by the parent detail page.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type ChangeEvent } from "react";
 import {
 	ChevronLeft,
 	ChevronRight,
@@ -148,18 +148,41 @@ export function TriggerPanel({
 		[onEntrypointsChanged, onSelectEntrypoint, selectedEntrypointId],
 	);
 
-	const selected = selectedEntrypointId
-		? (entrypoints.find((e) => e.id === selectedEntrypointId) ?? null)
-		: null;
+	const selected = useMemo(
+		() =>
+			selectedEntrypointId
+				? (entrypoints.find((e) => e.id === selectedEntrypointId) ?? null)
+				: null,
+		[entrypoints, selectedEntrypointId],
+	);
+
+	// Stabilise the detail-mode callbacks so children whose deps include them
+	// (AccountSearchCombobox's fetchAccounts, etc.) don't see a fresh identity
+	// on every parent render.
+	const handleDetailBack = useCallback(
+		() => onSelectEntrypoint(null),
+		[onSelectEntrypoint],
+	);
+	const handleDetailUpdate = useCallback(
+		(patch: Record<string, unknown>) => {
+			if (!selected) return;
+			return handleUpdate(selected.id, patch);
+		},
+		[handleUpdate, selected],
+	);
+	const handleDetailDelete = useCallback(() => {
+		if (!selected) return;
+		void handleDelete(selected.id);
+	}, [handleDelete, selected]);
 
 	if (selected) {
 		return (
 			<TriggerDetailMode
 				channel={channel}
 				entrypoint={selected}
-				onBack={() => onSelectEntrypoint(null)}
-				onUpdate={(patch) => handleUpdate(selected.id, patch)}
-				onDelete={() => handleDelete(selected.id)}
+				onBack={handleDetailBack}
+				onUpdate={handleDetailUpdate}
+				onDelete={handleDetailDelete}
 				readOnly={readOnly}
 			/>
 		);
@@ -376,31 +399,73 @@ function TriggerDetailMode({
 	onDelete: () => void;
 	readOnly?: boolean;
 }) {
-	const config = (entrypoint.config ?? {}) as Record<string, unknown>;
-	const filters = (entrypoint.filters ?? {}) as {
-		predicates?: FilterGroup;
-	};
+	const config = useMemo(
+		() => (entrypoint.config ?? {}) as Record<string, unknown>,
+		[entrypoint.config],
+	);
+	const filters = useMemo(
+		() =>
+			(entrypoint.filters ?? {}) as {
+				predicates?: FilterGroup;
+			},
+		[entrypoint.filters],
+	);
 
-	const setConfig = (patch: Record<string, unknown>) => {
-		const next = { ...config, ...patch };
-		void onUpdate({ config: next });
-	};
+	// Memoise the `platforms` array we hand to `AccountSearchCombobox`. Without
+	// this, every parent render produces a fresh `[channel]` literal which
+	// shifts the combobox's internal `fetchAccounts` identity and (worse)
+	// causes any downstream effect that takes `platforms` in its deps to
+	// re-fire. Freezing it on `channel` keeps the child memo keys stable.
+	const accountPlatforms = useMemo<string[] | undefined>(
+		() => (channel === "multi" ? undefined : [channel]),
+		[channel],
+	);
 
-	const setSocialAccount = (accountId: string | null) => {
-		void onUpdate({ social_account_id: accountId });
-	};
+	const setConfig = useCallback(
+		(patch: Record<string, unknown>) => {
+			const next = { ...config, ...patch };
+			void onUpdate({ config: next });
+		},
+		[config, onUpdate],
+	);
 
-	const setPredicates = (next: FilterGroup | undefined) => {
-		const nextFilters: Record<string, unknown> = { ...filters };
-		if (next) nextFilters.predicates = next;
-		else delete nextFilters.predicates;
-		void onUpdate({ filters: nextFilters });
-	};
+	const setSocialAccount = useCallback(
+		(accountId: string | null) => {
+			void onUpdate({ social_account_id: accountId });
+		},
+		[onUpdate],
+	);
 
-	const togglePause = () => {
+	const setPredicates = useCallback(
+		(next: FilterGroup | undefined) => {
+			const nextFilters: Record<string, unknown> = { ...filters };
+			if (next) nextFilters.predicates = next;
+			else delete nextFilters.predicates;
+			void onUpdate({ filters: nextFilters });
+		},
+		[filters, onUpdate],
+	);
+
+	const togglePause = useCallback(() => {
 		const nextStatus = entrypoint.status === "active" ? "paused" : "active";
 		void onUpdate({ status: nextStatus });
-	};
+	}, [entrypoint.status, onUpdate]);
+
+	const handleReentryToggle = useCallback(
+		(e: ChangeEvent<HTMLInputElement>) => {
+			void onUpdate({ allow_reentry: e.target.checked });
+		},
+		[onUpdate],
+	);
+
+	const handleCooldownChange = useCallback(
+		(e: ChangeEvent<HTMLInputElement>) => {
+			void onUpdate({
+				reentry_cooldown_min: Number(e.target.value) || 0,
+			});
+		},
+		[onUpdate],
+	);
 
 	return (
 		<div
@@ -437,7 +502,7 @@ function TriggerDetailMode({
 						<AccountSearchCombobox
 							value={entrypoint.social_account_id ?? null}
 							onSelect={setSocialAccount}
-							platforms={channel === "multi" ? undefined : [channel]}
+							platforms={accountPlatforms}
 							showAllOption={false}
 							placeholder="Any connected account"
 							variant="input"
@@ -472,9 +537,7 @@ function TriggerDetailMode({
 								type="checkbox"
 								checked={entrypoint.allow_reentry}
 								disabled={readOnly}
-								onChange={(e) =>
-									void onUpdate({ allow_reentry: e.target.checked })
-								}
+								onChange={handleReentryToggle}
 							/>
 							Allow the same contact to re-enter
 						</label>
@@ -487,11 +550,7 @@ function TriggerDetailMode({
 								min={0}
 								value={entrypoint.reentry_cooldown_min}
 								disabled={readOnly}
-								onChange={(e) =>
-									void onUpdate({
-										reentry_cooldown_min: Number(e.target.value) || 0,
-									})
-								}
+								onChange={handleCooldownChange}
 								className={INPUT_CLS}
 							/>
 						</div>
