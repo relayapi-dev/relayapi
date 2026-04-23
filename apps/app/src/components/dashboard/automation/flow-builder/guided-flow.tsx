@@ -1308,11 +1308,14 @@ function CanvasInner({
 						});
 						continue;
 					}
-					if (change.dragging) {
+					if (change.dragging === true) {
 						dragUpdates[change.id] = {
 							x: change.position.x,
 							y: change.position.y,
 						};
+						continue;
+					}
+					if (change.dragging !== false) {
 						continue;
 					}
 					// Commit position on drag stop only (avoids history spam per pixel).
