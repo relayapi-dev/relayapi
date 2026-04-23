@@ -142,7 +142,6 @@ async function createCommentToDmAutomation() {
 		channel: "instagram",
 		config: {
 			post_ids: ["post_123"],
-			public_reply: "Sent!",
 			dm_message: {
 				blocks: [
 					{

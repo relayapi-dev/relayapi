@@ -185,8 +185,8 @@ describe("automation catalog", () => {
 		]);
 	});
 
-	it("contains 22 action types", () => {
-		expect(AUTOMATION_CATALOG.action_types).toHaveLength(22);
+	it("contains 23 action types", () => {
+		expect(AUTOMATION_CATALOG.action_types).toHaveLength(23);
 	});
 
 	it("contains channel_capabilities for all 4 supported channels", () => {

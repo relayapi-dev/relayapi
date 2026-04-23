@@ -17,6 +17,7 @@ export function buildCommentToDm(
 ): TemplateBuildOutput {
 	const cfg = (input.config ?? {}) as CommentToDmConfig;
 	const socialAccountId = input.socialAccountId ?? cfg.social_account_id;
+	const publicReply = cfg.public_reply?.trim();
 
 	const blocks: MessageBlock[] =
 		cfg.dm_message?.blocks && cfg.dm_message.blocks.length > 0
@@ -35,8 +36,28 @@ export function buildCommentToDm(
 			"Replies to matching comments on the selected posts with a DM.",
 		graph: autoLayoutGraph({
 			schema_version: 1,
-			root_node_key: "send_dm",
+			root_node_key: publicReply ? "public_reply" : "send_dm",
 			nodes: [
+				...(publicReply
+					? [
+							{
+								key: "public_reply",
+								kind: "action_group",
+								title: "Reply publicly",
+								config: {
+									actions: [
+										{
+											id: "act_public_reply",
+											type: "reply_to_comment",
+											text: publicReply,
+											on_error: "continue",
+										},
+									],
+								},
+								ports: [],
+							},
+						]
+					: []),
 				{
 					key: "send_dm",
 					kind: "message",
@@ -47,22 +68,17 @@ export function buildCommentToDm(
 					},
 					ports: [],
 				},
-				{
-					key: "done",
-					kind: "end",
-					title: "End",
-					config: { reason: "completed" },
-					ports: [],
-				},
 			],
-			edges: [
-				{
-					from_node: "send_dm",
-					from_port: "next",
-					to_node: "done",
-					to_port: "in",
-				},
-			],
+			edges: publicReply
+				? [
+						{
+							from_node: "public_reply",
+							from_port: "next",
+							to_node: "send_dm",
+							to_port: "in",
+						},
+					]
+				: [],
 		}),
 		entrypoints: [
 			{

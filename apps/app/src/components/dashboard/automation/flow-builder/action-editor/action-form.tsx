@@ -7,6 +7,7 @@
 import { useMemo } from "react";
 import { useAutomationCatalog } from "../use-catalog";
 import { AutomationControlsUnknownHint } from "./unknown-hint";
+import { ReplyToCommentForm } from "./action-forms/comment";
 import {
 	AssignConversationForm,
 	NoFieldsInfo,
@@ -112,6 +113,14 @@ export function ActionForm({ action, onChange }: Props) {
 			return <NoFieldsInfo label="Open conversation" />;
 		case "conversation_close":
 			return <NoFieldsInfo label="Close conversation" />;
+		case "reply_to_comment":
+			return (
+				<ReplyToCommentForm
+					action={action}
+					onChange={onChange}
+					error={errors.text}
+				/>
+			);
 		case "conversation_snooze":
 			return (
 				<SnoozeConversationForm

@@ -79,7 +79,7 @@ describe("defaultActionFor", () => {
 		expect(a.id).toBe("reused-id");
 	});
 
-	it("covers all 22 action types without throwing", () => {
+	it("covers all 23 action types without throwing", () => {
 		const types: ActionType[] = [
 			"tag_add",
 			"tag_remove",
@@ -95,6 +95,7 @@ describe("defaultActionFor", () => {
 			"unassign_conversation",
 			"conversation_open",
 			"conversation_close",
+			"reply_to_comment",
 			"conversation_snooze",
 			"notify_admin",
 			"webhook_out",
@@ -104,7 +105,7 @@ describe("defaultActionFor", () => {
 			"log_conversion_event",
 			"change_main_menu",
 		];
-		expect(types).toHaveLength(22);
+		expect(types).toHaveLength(23);
 		for (const t of types) {
 			const a = defaultActionFor(t);
 			expect(a.type).toBe(t);
@@ -211,6 +212,18 @@ describe("summarizeAction", () => {
 			on_error: "abort",
 		};
 		expect(summarizeAction(a)).toBe("Change main menu (v1.1)");
+	});
+
+	it("summarises reply_to_comment with a text preview", () => {
+		const a: Action = {
+			id: "a9",
+			type: "reply_to_comment",
+			on_error: "abort",
+			text: "Thanks for commenting on the post!",
+		};
+		expect(summarizeAction(a)).toBe(
+			"Reply to comment: Thanks for commenting on the post!",
+		);
 	});
 });
 
@@ -325,6 +338,17 @@ describe("validateAction", () => {
 		};
 		const problems = validateAction(a);
 		expect(problems.some((p) => p.path === "event_name")).toBe(true);
+	});
+
+	it("flags reply_to_comment without text", () => {
+		const a: Action = {
+			id: "a10",
+			type: "reply_to_comment",
+			on_error: "abort",
+			text: "",
+		};
+		const problems = validateAction(a);
+		expect(problems.some((p) => p.path === "text")).toBe(true);
 	});
 });
 

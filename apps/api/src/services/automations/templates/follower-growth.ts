@@ -23,6 +23,7 @@ export function buildFollowerGrowth(
 	const winnerTag = cfg.winner_tag ?? "contest_winner";
 	const triggerKeyword = cfg.trigger_keyword ?? "enter";
 	const mustTagCount = cfg.entry_requirements?.must_tag_friends ?? 0;
+	const publicReply = cfg.public_reply?.trim();
 
 	const rulesBlocks: MessageBlock[] =
 		cfg.dm_message?.blocks && cfg.dm_message.blocks.length > 0
@@ -74,8 +75,28 @@ export function buildFollowerGrowth(
 			"Matches contest comments on the selected posts. Confirms winners via DM.",
 		graph: autoLayoutGraph({
 			schema_version: 1,
-			root_node_key: "rules",
+			root_node_key: publicReply ? "public_reply" : "rules",
 			nodes: [
+				...(publicReply
+					? [
+							{
+								key: "public_reply",
+								kind: "action_group",
+								title: "Reply publicly",
+								config: {
+									actions: [
+										{
+											id: "act_public_reply",
+											type: "reply_to_comment",
+											text: publicReply,
+											on_error: "continue",
+										},
+									],
+								},
+								ports: [],
+							},
+						]
+					: []),
 				{
 					key: "rules",
 					kind: "message",
@@ -139,15 +160,18 @@ export function buildFollowerGrowth(
 					},
 					ports: [],
 				},
-				{
-					key: "done",
-					kind: "end",
-					title: "End",
-					config: { reason: "completed" },
-					ports: [],
-				},
 			],
 			edges: [
+				...(publicReply
+					? [
+							{
+								from_node: "public_reply",
+								from_port: "next",
+								to_node: "rules",
+								to_port: "in",
+							},
+						]
+					: []),
 				{
 					from_node: "rules",
 					from_port: "next",
@@ -167,21 +191,9 @@ export function buildFollowerGrowth(
 					to_port: "in",
 				},
 				{
-					from_node: "winner_dm",
-					from_port: "next",
-					to_node: "done",
-					to_port: "in",
-				},
-				{
 					from_node: "check",
 					from_port: "false",
 					to_node: "reminder_dm",
-					to_port: "in",
-				},
-				{
-					from_node: "reminder_dm",
-					from_port: "next",
-					to_node: "done",
 					to_port: "in",
 				},
 			],

@@ -8,7 +8,7 @@
 // and field_set (custom field upsert) — and let the unit-level action_group
 // test cover dispatcher shape.
 
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:test";
 import {
 	contacts,
 	createDb,
@@ -16,6 +16,7 @@ import {
 	customFieldValues,
 	generateId,
 	organization,
+	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
@@ -28,6 +29,7 @@ const CONN =
 	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
 
 const db = createDb(CONN);
+const originalFetch = globalThis.fetch;
 
 let dbAvailable = false;
 let orgId = "";
@@ -59,6 +61,7 @@ async function teardownFixtureOrg() {
 	await db
 		.delete(customFieldDefinitions)
 		.where(eq(customFieldDefinitions.organizationId, orgId));
+	await db.delete(socialAccounts).where(eq(socialAccounts.organizationId, orgId));
 	await db.delete(contacts).where(eq(contacts.organizationId, orgId));
 	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
 	await db.delete(organization).where(eq(organization.id, orgId));
@@ -93,6 +96,22 @@ function makeCtx(contactId: string): RunContext {
 	};
 }
 
+async function createSocialAccount(platform: string, accessToken: string) {
+	const [acc] = await db
+		.insert(socialAccounts)
+		.values({
+			organizationId: orgId,
+			workspaceId,
+			platform: platform as never,
+			platformAccountId: `platacc_${platform}_${Date.now()}`,
+			username: `actions_${platform}`,
+			accessToken,
+		})
+		.returning();
+	if (!acc) throw new Error("social account insert failed");
+	return acc;
+}
+
 beforeAll(async () => {
 	try {
 		await seedFixtureOrg();
@@ -107,6 +126,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	if (dbAvailable) await teardownFixtureOrg();
+});
+
+afterEach(() => {
+	globalThis.fetch = originalFetch;
 });
 
 describe("action dispatcher", () => {
@@ -260,5 +283,58 @@ describe("action dispatcher", () => {
 				ctx,
 			),
 		).rejects.toThrow(/not found/);
+	});
+
+	it("reply_to_comment posts a merged public reply to the triggering Instagram comment", async () => {
+		if (!dbAvailable) {
+			console.warn("skipping: DB fixture unavailable");
+			return;
+		}
+
+		const ct = await createContact();
+		const acc = await createSocialAccount("instagram", "IGAAtest-token");
+
+		let calledUrl = "";
+		let calledBody: Record<string, unknown> | null = null;
+		globalThis.fetch = mock(async (input: unknown, init?: RequestInit) => {
+			calledUrl = String(input);
+			calledBody = init?.body ? JSON.parse(String(init.body)) : null;
+			return new Response(JSON.stringify({ id: "ig_reply_1" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+
+		await dispatchAction(
+			{
+				id: "a4",
+				type: "reply_to_comment",
+				text: "Thanks {{contact.name}}!",
+				on_error: "abort",
+			} as never,
+			{
+				...makeCtx(ct.id),
+				channel: "instagram",
+				context: {
+					contact: { name: "alice" },
+					_triggering_social_account_id: acc.id,
+					triggerEvent: {
+						socialAccountId: acc.id,
+						payload: { comment_id: "ig_comment_42" },
+					},
+				},
+			},
+		);
+
+		expect(calledUrl).toBe(
+			"https://graph.instagram.com/v25.0/ig_comment_42/replies",
+		);
+		expect(calledBody).not.toBeNull();
+		if (!calledBody) throw new Error("expected fetch body");
+		const body = calledBody as unknown as Record<string, unknown>;
+		expect(body).toEqual({
+			message: "Thanks alice!",
+			access_token: "IGAAtest-token",
+		});
 	});
 });

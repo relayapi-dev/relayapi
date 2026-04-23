@@ -7,7 +7,7 @@
 
 export type OnError = "abort" | "continue";
 
-// -- 22 action types per spec §5.4 -----------------------------------------
+// -- Action types -----------------------------------------------------------
 
 export type ActionType =
 	// Contact data
@@ -27,6 +27,7 @@ export type ActionType =
 	| "unassign_conversation"
 	| "conversation_open"
 	| "conversation_close"
+	| "reply_to_comment"
 	| "conversation_snooze"
 	// External
 	| "notify_admin"
@@ -126,6 +127,10 @@ export interface ConversationOpenAction extends BaseAction {
 export interface ConversationCloseAction extends BaseAction {
 	type: "conversation_close";
 }
+export interface ReplyToCommentAction extends BaseAction {
+	type: "reply_to_comment";
+	text: string;
+}
 export interface ConversationSnoozeAction extends BaseAction {
 	type: "conversation_snooze";
 	snooze_minutes: number;
@@ -191,6 +196,7 @@ export type Action =
 	| UnassignConversationAction
 	| ConversationOpenAction
 	| ConversationCloseAction
+	| ReplyToCommentAction
 	| ConversationSnoozeAction
 	| NotifyAdminAction
 	| WebhookOutAction
@@ -289,6 +295,11 @@ export const FALLBACK_ACTION_CATALOG: ActionCatalogEntry[] = [
 		category: "conversation",
 	},
 	{
+		type: "reply_to_comment",
+		label: "Reply to comment",
+		category: "conversation",
+	},
+	{
 		type: "conversation_snooze",
 		label: "Snooze conversation",
 		category: "conversation",
@@ -380,6 +391,8 @@ export function defaultActionFor(
 		case "conversation_open":
 		case "conversation_close":
 			return { id, type, on_error };
+		case "reply_to_comment":
+			return { id, type, on_error, text: "" };
 		case "conversation_snooze":
 			return { id, type, on_error, snooze_minutes: 60 };
 		case "notify_admin":
@@ -474,6 +487,10 @@ export function summarizeAction(action: Action): string {
 			return "Open conversation";
 		case "conversation_close":
 			return "Close conversation";
+		case "reply_to_comment":
+			return action.text
+				? `Reply to comment: ${truncate(action.text, 36)}`
+				: "Reply to comment";
 		case "conversation_snooze":
 			return `Snooze ${action.snooze_minutes}m`;
 		case "notify_admin":
@@ -556,6 +573,13 @@ export function validateAction(action: Action): ValidationProblem[] {
 				problems.push({
 					path: "user_id",
 					message: "Pick a user, round-robin, or unassigned.",
+				});
+			break;
+		case "reply_to_comment":
+			if (!action.text.trim())
+				problems.push({
+					path: "text",
+					message: "Reply text is required.",
 				});
 			break;
 		case "conversation_snooze":

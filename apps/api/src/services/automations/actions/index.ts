@@ -8,6 +8,7 @@ import type { Action } from "../../../schemas/automation-actions";
 import type { RunContext } from "../types";
 import { automationControlHandlers } from "./automation-controls";
 import { changeMainMenuHandlers } from "./change-main-menu";
+import { commentHandlers } from "./comment";
 import { contactHandlers } from "./contact";
 import { conversationHandlers } from "./conversation";
 import { conversionHandlers } from "./conversion";
@@ -25,6 +26,7 @@ export const actionRegistry: ActionRegistry = {
 	...segmentHandlers,
 	...subscriptionHandlers,
 	...conversationHandlers,
+	...commentHandlers,
 	...notifyHandlers,
 	...webhookHandlers,
 	...automationControlHandlers,

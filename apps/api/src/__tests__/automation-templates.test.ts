@@ -168,11 +168,53 @@ describe("buildGraphFromTemplate", () => {
 			expect(typeof node.canvas_x).toBe("number");
 			expect(typeof node.canvas_y).toBe("number");
 		}
-		// send_dm → depth 0, done → depth 1 (one-edge walk from root).
+		// public_reply → depth 0, send_dm → depth 1.
+		const publicReply = persisted.nodes.find((n) => n.key === "public_reply");
 		const sendDm = persisted.nodes.find((n) => n.key === "send_dm");
-		const done = persisted.nodes.find((n) => n.key === "done");
-		expect(sendDm?.canvas_x).toBe(100);
-		expect(done?.canvas_x).toBe(380);
+		expect(publicReply?.canvas_x).toBe(100);
+		expect(sendDm?.canvas_x).toBe(380);
+	});
+
+	it("comment_to_dm adds a visible public reply node and omits a redundant end node", () => {
+		const result = buildGraphFromTemplate({
+			kind: "comment_to_dm",
+			channel: "instagram",
+			config: FIXTURES.comment_to_dm,
+		});
+		expect(result.graph.root_node_key).toBe("public_reply");
+		expect(result.graph.nodes.some((n) => n.kind === "end")).toBe(false);
+		const replyNode = result.graph.nodes.find((n) => n.key === "public_reply");
+		expect(replyNode?.kind).toBe("action_group");
+		expect((replyNode?.config as { actions?: unknown[] } | undefined)?.actions).toEqual([
+			{
+				id: "act_public_reply",
+				type: "reply_to_comment",
+				text: "DM sent!",
+				on_error: "continue",
+			},
+		]);
+		expect(result.graph.edges).toContainEqual({
+			from_node: "public_reply",
+			from_port: "next",
+			to_node: "send_dm",
+			to_port: "in",
+		});
+	});
+
+	it("follower_growth adds a visible public reply node when configured", () => {
+		const result = buildGraphFromTemplate({
+			kind: "follower_growth",
+			channel: "instagram",
+			config: FIXTURES.follower_growth,
+		});
+		expect(result.graph.root_node_key).toBe("public_reply");
+		expect(result.graph.nodes.some((n) => n.kind === "end")).toBe(false);
+		expect(result.graph.edges).toContainEqual({
+			from_node: "public_reply",
+			from_port: "next",
+			to_node: "rules",
+			to_port: "in",
+		});
 	});
 
 	it("blank template produces an empty graph and no entrypoints", () => {

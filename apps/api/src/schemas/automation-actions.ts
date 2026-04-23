@@ -62,6 +62,10 @@ export const UnassignConversationAction = BaseAction.extend({
 });
 export const ConversationOpenAction = BaseAction.extend({ type: z.literal("conversation_open") });
 export const ConversationCloseAction = BaseAction.extend({ type: z.literal("conversation_close") });
+export const ReplyToCommentAction = BaseAction.extend({
+  type: z.literal("reply_to_comment"),
+  text: z.string(),
+});
 export const ConversationSnoozeAction = BaseAction.extend({
   type: z.literal("conversation_snooze"),
   snooze_minutes: z.number().min(1),
@@ -125,7 +129,7 @@ export const ActionSchema = z.discriminatedUnion("type", [
   SubscribeListAction, UnsubscribeListAction,
   OptInChannelAction, OptOutChannelAction,
   AssignConversationAction, UnassignConversationAction,
-  ConversationOpenAction, ConversationCloseAction, ConversationSnoozeAction,
+  ConversationOpenAction, ConversationCloseAction, ReplyToCommentAction, ConversationSnoozeAction,
   NotifyAdminAction,
   WebhookOutAction,
   PauseContactAutomationsAction, ResumeContactAutomationsAction,

@@ -251,6 +251,11 @@ const ACTION_TYPES = [
 		category: "conversation",
 	},
 	{
+		type: "reply_to_comment",
+		label: "Reply to comment",
+		category: "conversation",
+	},
+	{
 		type: "conversation_snooze",
 		label: "Snooze conversation",
 		category: "conversation",
