@@ -8,11 +8,11 @@
 		"./permissions": "./src/permissions.ts"
 	},
 	"dependencies": {
-		"better-auth": "^1.5.5",
-		"@better-auth/api-key": "^1.5.5",
+		"better-auth": "catalog:",
+		"@better-auth/api-key": "catalog:",
 		"@relayapi/db": "workspace:*"
 	},
 	"devDependencies": {
-		"typescript": "^5.8"
+		"typescript": "catalog:"
 	}
 }

@@ -11,23 +11,23 @@
 		"test:billing": "for f in src/__tests__/auth.test.ts src/__tests__/stripe-webhooks.test.ts src/__tests__/usage-tracking.test.ts src/__tests__/billing-flows.test.ts; do bun test ./$f || exit 1; done"
 	},
 	"dependencies": {
-		"@aws-sdk/client-s3": "^3.1019.0",
-		"@aws-sdk/s3-request-presigner": "^3.1019.0",
-		"@hono/swagger-ui": "^0.6.1",
-		"@hono/zod-openapi": "^1.2.2",
-		"@react-email/components": "^1.0.10",
-		"@react-email/render": "^2.0.4",
+		"@aws-sdk/client-s3": "catalog:",
+		"@aws-sdk/s3-request-presigner": "catalog:",
+		"@hono/swagger-ui": "catalog:",
+		"@hono/zod-openapi": "catalog:",
+		"@react-email/components": "catalog:",
+		"@react-email/render": "catalog:",
 		"@relayapi/db": "workspace:*",
-		"fast-xml-parser": "^5.5.10",
-		"hono": "^4.12.7",
-		"resend": "^6.10.0",
-		"stripe": "^20.4.1",
-		"zod": "^4.3.6"
+		"fast-xml-parser": "catalog:",
+		"hono": "catalog:",
+		"resend": "catalog:",
+		"stripe": "catalog:",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20250312.0",
-		"dotenv-cli": "^11.0.0",
-		"typescript": "^5.8",
-		"wrangler": "^4.72.0"
+		"@cloudflare/workers-types": "catalog:",
+		"dotenv-cli": "catalog:",
+		"typescript": "catalog:",
+		"wrangler": "catalog:"
 	}
 }
