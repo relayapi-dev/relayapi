@@ -18,9 +18,14 @@
  * The `catalog:` protocol is only understood by Bun/pnpm, so those packages keep
  * literal versions and are upgraded manually (e.g. `bun update --latest <pkg>`).
  *
+ * A small set of packages is held back from auto-bumping (see HELD below) because
+ * their latest release needs a deliberate migration or breaks the build; the script
+ * logs each one it skips. Pass --force to bump them anyway.
+ *
  * Usage:
- *   bun run deps:upgrade              # upgrade catalog, then `bun install`
+ *   bun run deps:upgrade              # upgrade catalog (minus HELD), then `bun install`
  *   bun run deps:upgrade --dry-run    # print what would change, write nothing
+ *   bun run deps:upgrade --force      # also bump the held-back packages
  */
 
 import { join } from "node:path";
@@ -46,6 +51,25 @@ interface Change {
 	to: string;
 	catalog: string;
 }
+
+// Packages whose newest versions are intentionally NOT auto-bumped because their
+// latest release needs a deliberate migration or breaks the build. Upgrade these
+// by hand (and re-validate with `bun run typecheck`) when you're ready to migrate.
+// Pass `--force` to ignore this list. Keep the reasons up to date.
+const HELD: Record<string, string> = {
+	typescript:
+		"TS 6.0 errors on this repo's moduleResolution:node10 and tightens rootDir — needs a tsconfig migration",
+	"@tsparticles/engine": "v4 is an API rewrite (initParticlesEngine moved, shape/effect props renamed)",
+	"@tsparticles/react": "v4 is an API rewrite (see @tsparticles/engine)",
+	"@tsparticles/slim": "v4 is an API rewrite (see @tsparticles/engine)",
+	three:
+		"@react-three/postprocessing@3.x transitively caps three < 0.184 — bumping forces a duplicate three (runtime hazard)",
+	"@types/three": "must track the held `three` version",
+	postprocessing:
+		"pinned so a single postprocessing version is shared with @react-three/postprocessing@3.x (avoids duplicate Effect classes)",
+};
+
+const FORCE = process.argv.includes("--force");
 
 // Pull off the leading semver operator we want to preserve (^, ~, >=, etc.).
 function rangePrefix(range: string): string {
@@ -89,6 +113,10 @@ async function upgradeCatalog(
 	);
 	for (const [name, version] of latest) {
 		if (!version) continue;
+		if (!FORCE && name in HELD) {
+			console.warn(`  - ${name}: held back — ${HELD[name]}`);
+			continue;
+		}
 		const current = catalog[name];
 		if (!isUpgradeable(current)) {
 			console.warn(`  - ${name}: skipped (non-standard range "${current}")`);

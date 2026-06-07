@@ -157,6 +157,9 @@ class RetroEffectImpl extends Effect {
   }
 }
 
+// @ts-expect-error — wrapEffect's generic constraint is over-strict against the
+// current @react-three/fiber type defs; RetroEffectImpl is a valid postprocessing
+// Effect subclass and works correctly at runtime. Remove when r3f types are fixed.
 const WrappedRetroEffect = wrapEffect(RetroEffectImpl);
 
 const RetroEffect = forwardRef<
