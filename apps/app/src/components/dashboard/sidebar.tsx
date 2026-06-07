@@ -1,41 +1,37 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
 import {
-	PenSquare,
-	Link2,
-	Inbox,
-	MessageCircle,
+	ArrowRight,
 	BarChart3,
-	Key,
-	Webhook,
-	FileText,
-	Users,
-	CreditCard,
-	Flame,
-	X,
-	Sparkles,
-	BookOpen,
 	Bell,
+	BellDot,
+	BookOpen,
+	Check,
 	ChevronRight,
 	ChevronsUpDown,
-	Check,
-	Plus,
+	CreditCard,
+	FileText,
+	Flame,
+	Inbox,
+	Key,
+	Link2,
 	Loader2,
-	ArrowRight,
-	User,
-	BellDot,
-	Shield,
 	LogOut,
-	Settings,
 	Megaphone,
+	MessageCircle,
+	PenSquare,
+	Plus,
+	Settings,
+	Shield,
+	Sparkles,
 	Target,
+	User,
+	Users,
+	Webhook,
 	Workflow,
+	X,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
-import { useStreak } from "@/hooks/use-streak";
-import { useUsage } from "@/hooks/use-usage";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { AnimatePresence, motion } from "motion/react";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -44,18 +40,25 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useStreak } from "@/hooks/use-streak";
+import { useUsage } from "@/hooks/use-usage";
+import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
 import { scheduleIdleTask } from "@/lib/idle";
+import { isModifiedClick } from "@/lib/link-nav";
+import { cn } from "@/lib/utils";
 
 async function loadAuthClient() {
 	return import("@/lib/auth-client");
 }
+
 import type { LucideIcon } from "lucide-react";
 import {
 	type AppOrganization,
 	type AppUser,
+	formatNumber,
 	getOrgColor,
 	slugify,
-	formatNumber,
 } from "@/types/dashboard";
 
 // --- Nav data structure ---
@@ -185,6 +188,19 @@ export function Sidebar({
 	organization,
 }: SidebarProps) {
 	const hrefFor = (page: string) => buildHref?.(page) ?? `/app/${page}`;
+
+	// Navigate via onNavigate (programmatic full-document nav) instead of the
+	// native <a> default. iOS Safari drops the default navigation when onClose()
+	// slides this drawer off-screen mid-tap; programmatic navigation isn't
+	// affected. Keep the href (below) for a11y, prefetch, and open-in-new-tab.
+	const handleNavClick = (
+		e: ReactMouseEvent<HTMLAnchorElement>,
+		page: string,
+	) => {
+		if (isModifiedClick(e)) return; // let the browser open in a new tab
+		e.preventDefault();
+		onNavigate(page);
+	};
 	// --- Usage ---
 	const { usage, loading: usageLoading } = useUsage();
 	// --- Streak ---
@@ -263,7 +279,10 @@ export function Sidebar({
 	useEffect(() => {
 		if (!orgMenuOpen) return;
 		const handleClick = (e: MouseEvent) => {
-			if (orgMenuRef.current && !orgMenuRef.current.contains(e.target as Node)) {
+			if (
+				orgMenuRef.current &&
+				!orgMenuRef.current.contains(e.target as Node)
+			) {
 				setOrgMenuOpen(false);
 				setOrgSearch("");
 			}
@@ -353,7 +372,10 @@ export function Sidebar({
 	useEffect(() => {
 		if (!userMenuOpen) return;
 		const handleClick = (e: MouseEvent) => {
-			if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+			if (
+				userMenuRef.current &&
+				!userMenuRef.current.contains(e.target as Node)
+			) {
 				setUserMenuOpen(false);
 			}
 		};
@@ -393,7 +415,7 @@ export function Sidebar({
 			<a
 				key={item.href}
 				href={hrefFor(item.href)}
-				onClick={() => onClose()}
+				onClick={(e) => handleNavClick(e, item.href)}
 				onMouseEnter={() => onPrefetch?.(item.href)}
 				onFocus={() => onPrefetch?.(item.href)}
 				className={cn(
@@ -458,7 +480,7 @@ export function Sidebar({
 										<a
 											key={child.href}
 											href={hrefFor(child.href)}
-											onClick={() => onClose()}
+											onClick={(e) => handleNavClick(e, child.href)}
 											onMouseEnter={() => onPrefetch?.(child.href)}
 											onFocus={() => onPrefetch?.(child.href)}
 											className={cn(
@@ -549,80 +571,84 @@ export function Sidebar({
 								<AnimatePresence>
 									{orgMenuOpen && (
 										<motion.div
-												variants={dropdownVariants}
-												initial="hidden"
-												animate="visible"
-												exit="exit"
-												className="absolute left-0 top-full z-[60] mt-1 w-52 rounded-md border border-border bg-background p-1 shadow-lg origin-top-left"
-											>
-												{orgsLoading ? (
-													<div className="flex items-center justify-center py-3">
-														<Loader2 className="size-4 animate-spin text-muted-foreground" />
-													</div>
-												) : (
-													<>
-														{orgs.length > 5 && (
-															<div className="px-1 pb-1">
-																<input
-																	type="text"
-																	placeholder="Search organizations..."
-																	value={orgSearch}
-																	onChange={(e) => setOrgSearch(e.target.value)}
-																	className="w-full rounded border border-border bg-background px-2 py-1 text-[12px] outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-																	autoFocus
-																/>
-															</div>
-														)}
-														<div className="max-h-[200px] overflow-y-auto">
-															{orgs
-																.filter((org) =>
-																	!orgSearch || org.name.toLowerCase().includes(orgSearch.toLowerCase())
-																)
-																.map((org) => (
-																	<button
-																		key={org.id}
-																		onClick={() => handleSwitchOrg(org)}
-																		className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] hover:bg-accent/40 transition-colors"
-																	>
-																		{org.logo ? (
-																			<img
-																				src={org.logo}
-																				alt={org.name}
-																				className="size-5 rounded object-cover shrink-0"
-																			/>
-																		) : (
-																			<div
-																				className={cn(
-																					"flex size-5 items-center justify-center rounded text-[10px] font-bold text-white shrink-0",
-																					getOrgColor(org.id),
-																				)}
-																			>
-																				{org.name.charAt(0).toUpperCase()}
-																			</div>
-																		)}
-																		<span className="truncate flex-1 text-left">
-																			{org.name}
-																		</span>
-																		{org.id === currentOrg?.id && (
-																			<Check className="size-3.5 text-foreground shrink-0" />
-																		)}
-																	</button>
-																))}
+											variants={dropdownVariants}
+											initial="hidden"
+											animate="visible"
+											exit="exit"
+											className="absolute left-0 top-full z-[60] mt-1 w-52 rounded-md border border-border bg-background p-1 shadow-lg origin-top-left"
+										>
+											{orgsLoading ? (
+												<div className="flex items-center justify-center py-3">
+													<Loader2 className="size-4 animate-spin text-muted-foreground" />
+												</div>
+											) : (
+												<>
+													{orgs.length > 5 && (
+														<div className="px-1 pb-1">
+															<input
+																type="text"
+																placeholder="Search organizations..."
+																value={orgSearch}
+																onChange={(e) => setOrgSearch(e.target.value)}
+																className="w-full rounded border border-border bg-background px-2 py-1 text-[12px] outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
+																autoFocus
+															/>
 														</div>
-													</>
-												)}
-												<div className="my-1 border-t border-border" />
-												<button
-													onClick={() => {
-														setOrgMenuOpen(false);
-														setCreateOrgOpen(true);
-													}}
-													className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
-												>
-													<Plus className="size-3.5 shrink-0" />
-													<span>Create organization</span>
-												</button>
-											</motion.div>
+													)}
+													<div className="max-h-[200px] overflow-y-auto">
+														{orgs
+															.filter(
+																(org) =>
+																	!orgSearch ||
+																	org.name
+																		.toLowerCase()
+																		.includes(orgSearch.toLowerCase()),
+															)
+															.map((org) => (
+																<button
+																	key={org.id}
+																	onClick={() => handleSwitchOrg(org)}
+																	className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] hover:bg-accent/40 transition-colors"
+																>
+																	{org.logo ? (
+																		<img
+																			src={org.logo}
+																			alt={org.name}
+																			className="size-5 rounded object-cover shrink-0"
+																		/>
+																	) : (
+																		<div
+																			className={cn(
+																				"flex size-5 items-center justify-center rounded text-[10px] font-bold text-white shrink-0",
+																				getOrgColor(org.id),
+																			)}
+																		>
+																			{org.name.charAt(0).toUpperCase()}
+																		</div>
+																	)}
+																	<span className="truncate flex-1 text-left">
+																		{org.name}
+																	</span>
+																	{org.id === currentOrg?.id && (
+																		<Check className="size-3.5 text-foreground shrink-0" />
+																	)}
+																</button>
+															))}
+													</div>
+												</>
+											)}
+											<div className="my-1 border-t border-border" />
+											<button
+												onClick={() => {
+													setOrgMenuOpen(false);
+													setCreateOrgOpen(true);
+												}}
+												className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+											>
+												<Plus className="size-3.5 shrink-0" />
+												<span>Create organization</span>
+											</button>
+										</motion.div>
 									)}
 								</AnimatePresence>
 							</div>
@@ -669,11 +695,12 @@ export function Sidebar({
 								>
 									{streak.current_streak_days}d streak
 								</span>
-								{streak.hours_remaining != null && streak.hours_remaining < 2 && (
-									<span className="text-[10px] text-red-400/70 ml-auto">
-										{Math.round(streak.hours_remaining * 60)}m left
-									</span>
-								)}
+								{streak.hours_remaining != null &&
+									streak.hours_remaining < 2 && (
+										<span className="text-[10px] text-red-400/70 ml-auto">
+											{Math.round(streak.hours_remaining * 60)}m left
+										</span>
+									)}
 							</div>
 						)}
 
@@ -715,168 +742,170 @@ export function Sidebar({
 
 							<AnimatePresence>
 								{userMenuOpen && (
-										<motion.div
-											variants={upwardDropdownVariants}
-											initial="hidden"
-											animate="visible"
-											exit="exit"
-											className="absolute left-0 bottom-full z-[60] mb-1.5 w-52 rounded-md border border-border bg-background p-1 shadow-lg origin-bottom-left"
-										>
-											{/* User info */}
-											<div className="px-2 py-2">
-												<p className="text-[13px] font-medium">
-													{user?.name || "User"}
-												</p>
-												<p className="text-[11px] text-muted-foreground">
-													{user?.email || ""}
-												</p>
-											</div>
+									<motion.div
+										variants={upwardDropdownVariants}
+										initial="hidden"
+										animate="visible"
+										exit="exit"
+										className="absolute left-0 bottom-full z-[60] mb-1.5 w-52 rounded-md border border-border bg-background p-1 shadow-lg origin-bottom-left"
+									>
+										{/* User info */}
+										<div className="px-2 py-2">
+											<p className="text-[13px] font-medium">
+												{user?.name || "User"}
+											</p>
+											<p className="text-[11px] text-muted-foreground">
+												{user?.email || ""}
+											</p>
+										</div>
 
-											{/* Org plan info */}
-											{!usageLoading && (
-												<>
-													<div className="my-1 border-t border-border" />
-													<button
-														onClick={() => {
-															onNavigate("settings");
-															setUserMenuOpen(false);
-														}}
-														className="w-full px-2 py-1.5 rounded hover:bg-accent/40 transition-colors text-left"
-													>
-														<div className="flex items-center gap-1.5">
-															{currentOrg?.logo ? (
-																<img
-																	src={currentOrg.logo}
-																	alt={currentOrg.name}
-																	className="size-4 rounded object-cover shrink-0"
-																/>
-															) : (
-																<div
-																	className={cn(
-																		"flex size-4 items-center justify-center rounded text-[8px] font-bold text-white shrink-0",
-																		orgColor,
-																	)}
-																>
-																	{orgInitial}
-																</div>
-															)}
-															<span className="text-[11px] font-medium text-foreground truncate">
-																{currentOrg?.name || "Org"}
-															</span>
-															<span
-																className={cn(
-																	"rounded px-1 py-px text-[8px] font-semibold uppercase tracking-wider shrink-0 ml-auto",
-																	plan === "pro"
-																		? isCancelling
-																			? "bg-amber-500/10 text-amber-500"
-																			: "bg-primary/10 text-primary"
-																		: "bg-muted text-muted-foreground",
-																)}
-															>
-																{plan === "pro"
-																	? isCancelling
-																		? "Ending"
-																		: "Pro"
-																	: "Free"}
-															</span>
-														</div>
-														<div className="flex items-center justify-between mt-1.5">
-															<div className="flex-1 h-1 rounded-full bg-accent/50">
-																<div
-																	className={cn(
-																		"h-1 rounded-full transition-all",
-																		pct > 95
-																			? "bg-red-400"
-																			: pct > 80
-																				? "bg-amber-400"
-																				: "bg-primary/70",
-																	)}
-																	style={{ width: `${pct}%` }}
-																/>
-															</div>
-															<span className="text-[10px] text-muted-foreground ml-2 shrink-0">
-																{formatNumber(used)}/{formatNumber(included)}
-															</span>
-														</div>
-													</button>
-													{plan !== "pro" && (
-														<div className="px-2 pb-1">
-															<button
-																onClick={() => {
-																	onNavigate("billing");
-																	setUserMenuOpen(false);
-																}}
-																className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md bg-primary/10 py-1 text-[11px] font-medium text-primary hover:bg-primary/15 transition-colors"
-															>
-																<Sparkles className="size-3" />
-																Upgrade to Pro
-															</button>
-														</div>
-													)}
-												</>
-											)}
-
-											<div className="my-1 border-t border-border" />
-
-											{/* Links */}
-											<a
-												href="https://docs.relayapi.dev/"
-												target="_blank"
-												rel="noopener noreferrer"
-												className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
-											>
-												<BookOpen className="size-3.5 shrink-0" />
-												Documentation
-											</a>
-											<button
-												onClick={() => {
-													onNavigate("profile");
-													setUserMenuOpen(false);
-												}}
-												className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
-											>
-												<User className="size-3.5 shrink-0" />
-												Profile
-											</button>
-											<button
-												onClick={() => {
-													const prevParams = new URLSearchParams(window.location.search);
-													const nextParams = new URLSearchParams();
-													for (const key of ["workspace", "account"]) {
-														const value = prevParams.get(key);
-														if (value) nextParams.set(key, value);
-													}
-													nextParams.set("tab", "notifications");
-													window.location.assign(`/app/settings?${nextParams}`);
-													setUserMenuOpen(false);
-												}}
-												className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
-											>
-												<BellDot className="size-3.5 shrink-0" />
-												Notification preferences
-											</button>
-											{user?.role === "admin" && (
+										{/* Org plan info */}
+										{!usageLoading && (
+											<>
+												<div className="my-1 border-t border-border" />
 												<button
 													onClick={() => {
-														onNavigate("admin-users");
+														onNavigate("settings");
 														setUserMenuOpen(false);
 													}}
-													className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+													className="w-full px-2 py-1.5 rounded hover:bg-accent/40 transition-colors text-left"
 												>
-													<Shield className="size-3.5 shrink-0" />
-													Admin
+													<div className="flex items-center gap-1.5">
+														{currentOrg?.logo ? (
+															<img
+																src={currentOrg.logo}
+																alt={currentOrg.name}
+																className="size-4 rounded object-cover shrink-0"
+															/>
+														) : (
+															<div
+																className={cn(
+																	"flex size-4 items-center justify-center rounded text-[8px] font-bold text-white shrink-0",
+																	orgColor,
+																)}
+															>
+																{orgInitial}
+															</div>
+														)}
+														<span className="text-[11px] font-medium text-foreground truncate">
+															{currentOrg?.name || "Org"}
+														</span>
+														<span
+															className={cn(
+																"rounded px-1 py-px text-[8px] font-semibold uppercase tracking-wider shrink-0 ml-auto",
+																plan === "pro"
+																	? isCancelling
+																		? "bg-amber-500/10 text-amber-500"
+																		: "bg-primary/10 text-primary"
+																	: "bg-muted text-muted-foreground",
+															)}
+														>
+															{plan === "pro"
+																? isCancelling
+																	? "Ending"
+																	: "Pro"
+																: "Free"}
+														</span>
+													</div>
+													<div className="flex items-center justify-between mt-1.5">
+														<div className="flex-1 h-1 rounded-full bg-accent/50">
+															<div
+																className={cn(
+																	"h-1 rounded-full transition-all",
+																	pct > 95
+																		? "bg-red-400"
+																		: pct > 80
+																			? "bg-amber-400"
+																			: "bg-primary/70",
+																)}
+																style={{ width: `${pct}%` }}
+															/>
+														</div>
+														<span className="text-[10px] text-muted-foreground ml-2 shrink-0">
+															{formatNumber(used)}/{formatNumber(included)}
+														</span>
+													</div>
 												</button>
-											)}
+												{plan !== "pro" && (
+													<div className="px-2 pb-1">
+														<button
+															onClick={() => {
+																onNavigate("billing");
+																setUserMenuOpen(false);
+															}}
+															className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md bg-primary/10 py-1 text-[11px] font-medium text-primary hover:bg-primary/15 transition-colors"
+														>
+															<Sparkles className="size-3" />
+															Upgrade to Pro
+														</button>
+													</div>
+												)}
+											</>
+										)}
 
-											<div className="my-1 border-t border-border" />
+										<div className="my-1 border-t border-border" />
+
+										{/* Links */}
+										<a
+											href="https://docs.relayapi.dev/"
+											target="_blank"
+											rel="noopener noreferrer"
+											className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+										>
+											<BookOpen className="size-3.5 shrink-0" />
+											Documentation
+										</a>
+										<button
+											onClick={() => {
+												onNavigate("profile");
+												setUserMenuOpen(false);
+											}}
+											className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+										>
+											<User className="size-3.5 shrink-0" />
+											Profile
+										</button>
+										<button
+											onClick={() => {
+												const prevParams = new URLSearchParams(
+													window.location.search,
+												);
+												const nextParams = new URLSearchParams();
+												for (const key of ["workspace", "account"]) {
+													const value = prevParams.get(key);
+													if (value) nextParams.set(key, value);
+												}
+												nextParams.set("tab", "notifications");
+												window.location.assign(`/app/settings?${nextParams}`);
+												setUserMenuOpen(false);
+											}}
+											className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+										>
+											<BellDot className="size-3.5 shrink-0" />
+											Notification preferences
+										</button>
+										{user?.role === "admin" && (
 											<button
-												onClick={handleSignOut}
+												onClick={() => {
+													onNavigate("admin-users");
+													setUserMenuOpen(false);
+												}}
 												className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
 											>
-												<LogOut className="size-3.5 shrink-0" />
-												Sign out
+												<Shield className="size-3.5 shrink-0" />
+												Admin
 											</button>
-										</motion.div>
+										)}
+
+										<div className="my-1 border-t border-border" />
+										<button
+											onClick={handleSignOut}
+											className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+										>
+											<LogOut className="size-3.5 shrink-0" />
+											Sign out
+										</button>
+									</motion.div>
 								)}
 							</AnimatePresence>
 						</div>

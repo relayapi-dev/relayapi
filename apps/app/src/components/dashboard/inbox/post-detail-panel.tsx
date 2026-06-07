@@ -157,11 +157,9 @@ export function PostDetailPanel({
             )}
           </>
         ) : post.thumbnail_url ? (
-          <div className="flex items-start gap-3 px-3.5 py-2.5">
-            <div className="flex-1 min-w-0">
-              {post.text && <p className="text-sm leading-relaxed">{post.text}</p>}
-            </div>
-            <img src={post.thumbnail_url} alt="" className="max-h-56 rounded-md shrink-0 object-contain" />
+          <div className="space-y-2.5 px-3.5 py-2.5">
+            {post.text && <p className="text-sm leading-relaxed">{post.text}</p>}
+            <img src={post.thumbnail_url} alt="" className="max-h-72 max-w-full rounded-md object-contain" />
           </div>
         ) : post.text ? (
           <div className="px-3.5 py-2.5">

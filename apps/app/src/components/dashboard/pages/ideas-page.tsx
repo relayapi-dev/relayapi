@@ -493,7 +493,24 @@ export function IdeasPage() {
 		<div className="flex flex-col gap-6 h-[calc(100dvh-5rem)] md:h-[calc(100dvh-2rem)]">
 			<div className="flex items-center justify-between shrink-0">
 				<h1 className="text-lg font-medium">Ideas</h1>
-				<div className="flex items-center gap-2">
+				<Button
+					type="button"
+					size="sm"
+					className="gap-1.5 h-7 text-xs"
+					onClick={() => {
+						setCreateGroupId(null);
+						setCreateDialogOpen(true);
+					}}
+				>
+					<Plus className="size-3.5" />
+					New Idea
+				</Button>
+			</div>
+
+			{/* Filters on their own row so the header never overflows on mobile (matches media/contacts pages) */}
+			<div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] shrink-0">
+				<div />
+				<div className="pb-2 flex items-center gap-2 shrink-0">
 					<FilterBar />
 
 					{tags.length > 0 && (
@@ -552,19 +569,6 @@ export function IdeasPage() {
 							<X className="size-3.5" />
 						</button>
 					)}
-
-					<Button
-						type="button"
-						size="sm"
-						className="gap-1.5 h-7 text-xs"
-						onClick={() => {
-							setCreateGroupId(null);
-							setCreateDialogOpen(true);
-						}}
-					>
-						<Plus className="size-3.5" />
-						New Idea
-					</Button>
 				</div>
 			</div>
 

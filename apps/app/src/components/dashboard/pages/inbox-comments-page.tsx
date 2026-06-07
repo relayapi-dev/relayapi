@@ -114,12 +114,12 @@ export function InboxCommentsPage({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-medium">Comments</h1>
           <a href="https://docs.relayapi.dev/api-reference/inbox" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => switchView("list")}
             className={cn(
@@ -401,9 +401,12 @@ function ByPostView({
   const [liveRepliedCounts, setLiveRepliedCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
-    const first = posts[0];
-    if (first && !selectedPostKey) {
-      setSelectedPostKey(`${first.id}-${first.account_id}`);
+    if (selectedPostKey || posts.length === 0) return;
+    // Only auto-open the first post in the desktop split view. On mobile the
+    // user should land on the posts list and tap in (matches inbox-messages).
+    if (typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches) {
+      const first = posts[0];
+      if (first) setSelectedPostKey(`${first.id}-${first.account_id}`);
     }
   }, [posts, selectedPostKey]);
 

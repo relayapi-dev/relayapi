@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { apis } from "../../lib/api-data";
 import { siteConfig } from "../../lib/config";
+import { followLink } from "../../lib/link-nav";
 import { platforms } from "../../lib/platform-data";
 import { Icons } from "../icons";
 import {
@@ -260,7 +261,12 @@ function MobileNav({
 																		>
 																			<a
 																				href={`/product/${p.slug}`}
-																				onClick={onClose}
+																				onClick={(e) => {
+																					if (
+																						!followLink(e, `/product/${p.slug}`)
+																					)
+																						onClose();
+																				}}
 																				className="flex items-center gap-3 px-1 py-2 transition-colors"
 																			>
 																				<span className="shrink-0 text-muted-foreground">
@@ -315,7 +321,12 @@ function MobileNav({
 																		>
 																			<a
 																				href={`/product/${a.slug}`}
-																				onClick={onClose}
+																				onClick={(e) => {
+																					if (
+																						!followLink(e, `/product/${a.slug}`)
+																					)
+																						onClose();
+																				}}
 																				className="flex items-center gap-3 px-1 py-2 transition-colors"
 																			>
 																				<span className="shrink-0 text-muted-foreground">
@@ -335,7 +346,9 @@ function MobileNav({
 											) : (
 												<a
 													href={link.href}
-													onClick={onClose}
+													onClick={(e) => {
+														if (!followLink(e, link.href)) onClose();
+													}}
 													{...(link.href.startsWith("http")
 														? { target: "_blank", rel: "noopener noreferrer" }
 														: {})}
@@ -368,7 +381,9 @@ function MobileNav({
 								>
 									<a
 										href="/login"
-										onClick={onClose}
+										onClick={(e) => {
+											if (!followLink(e, "/login")) onClose();
+										}}
 										className="flex w-full h-12 items-center justify-center rounded-lg border border-border bg-transparent px-5 text-sm font-medium text-foreground transition-colors hover:bg-accent/50"
 									>
 										Log in
@@ -391,7 +406,12 @@ function MobileNav({
 										ease: [0.16, 1, 0.3, 1],
 									}}
 								>
-									<a href="/signup" onClick={onClose}>
+									<a
+										href="/signup"
+										onClick={(e) => {
+											if (!followLink(e, "/signup")) onClose();
+										}}
+									>
 										<Button className="w-full mt-3 h-12 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
 											{siteConfig.cta}
 										</Button>
