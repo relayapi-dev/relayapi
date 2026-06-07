@@ -21,7 +21,6 @@ import {
 	Archive,
 	ArrowLeft,
 	FlaskConical,
-	Link2,
 	Loader2,
 	Pause,
 	Play,
@@ -40,7 +39,12 @@ import {
 import { PropertyPanel } from "@/components/dashboard/automation/flow-builder/property-panel";
 import { SimulatorPanel } from "@/components/dashboard/automation/flow-builder/simulator-panel";
 import { RunInspector } from "@/components/dashboard/automation/run-inspector";
-import { BindingsPanel } from "@/components/dashboard/automation/flow-builder/bindings-panel";
+import { BindingDetailPanel } from "@/components/dashboard/automation/flow-builder/binding-detail-panel";
+import type { CanvasBindingRow } from "@/components/dashboard/automation/bindings-tab/display";
+import type {
+	BindingChannel,
+	BindingType,
+} from "@/components/dashboard/automation/bindings-tab/types";
 import { InsightsPanel } from "@/components/dashboard/automation/flow-builder/insights-panel";
 import { TriggerPanel } from "@/components/dashboard/automation/flow-builder/trigger-panel";
 import { useAutomationCatalog } from "@/components/dashboard/automation/flow-builder/use-catalog";
@@ -93,7 +97,7 @@ interface Props {
 }
 
 type TabKey = "canvas" | "runs" | "insights";
-type ToolbarPanel = "simulator" | "bindings";
+type ToolbarPanel = "simulator";
 
 // ---------------------------------------------------------------------------
 // Page
@@ -167,6 +171,14 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const [selectedEntrypointId, setSelectedEntrypointId] = useState<
 		string | null
 	>(null);
+	// Binding selection — mutually exclusive with trigger/node selection.
+	// `selectedBindingId` drives "edit existing binding"; `creatingBindingType`
+	// drives "create a new binding of this type".
+	const [selectedBindingId, setSelectedBindingId] = useState<string | null>(
+		null,
+	);
+	const [creatingBindingType, setCreatingBindingType] =
+		useState<BindingType | null>(null);
 	const [banner, setBanner] = useState<{
 		type: "error" | "success";
 		message: string;
@@ -190,6 +202,19 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const entrypoints = useMemo(
 		() => entrypointsData?.data ?? [],
 		[entrypointsData],
+	);
+
+	// Bindings this automation is attached to (per account). Rendered as cards
+	// in the trigger node and edited in the binding detail panel. These are the
+	// same `/api/automation-bindings` rows the per-account Connections page
+	// reads/writes, so the two surfaces stay in sync automatically.
+	const { data: bindingsData, refetch: refetchBindings } = useApi<{
+		data: CanvasBindingRow[];
+	}>("automation-bindings", { query: { automation_id: automationId } });
+	const bindings = useMemo(() => bindingsData?.data ?? [], [bindingsData]);
+	const selectedBinding = useMemo(
+		() => bindings.find((b) => b.id === selectedBindingId) ?? null,
+		[bindings, selectedBindingId],
 	);
 
 	// ---- Status transitions ------------------------------------------------
@@ -290,6 +315,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 		if (selection.length > 0) {
 			setTriggerSelected(false);
 			setSelectedEntrypointId(null);
+			setSelectedBindingId(null);
+			setCreatingBindingType(null);
 			setToolbarPanel(null);
 		}
 	}, [selection.length]);
@@ -305,6 +332,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 		(entrypointId: string | null) => {
 			setTriggerSelected(true);
 			setSelectedEntrypointId(entrypointId);
+			setSelectedBindingId(null);
+			setCreatingBindingType(null);
 			setToolbarPanel(null);
 			// setSelection is a no-op in the reducer when the next list is
 			// content-equal to the current one, so it's safe to call even when
@@ -334,6 +363,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 					refetchEntrypoints();
 					setTriggerSelected(true);
 					setSelectedEntrypointId(created?.id ?? null);
+					setSelectedBindingId(null);
+					setCreatingBindingType(null);
 					setToolbarPanel(null);
 					graphStore.setSelection([]);
 				} else {
@@ -358,6 +389,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const handlePaneClick = useCallback(() => {
 		setTriggerSelected(false);
 		setSelectedEntrypointId(null);
+		setSelectedBindingId(null);
+		setCreatingBindingType(null);
 		setToolbarPanel(null);
 	}, []);
 
@@ -370,6 +403,46 @@ export function AutomationDetailPage({ automationId }: Props) {
 		refetchEntrypoints();
 		refetchAutomation();
 	}, [refetchEntrypoints, refetchAutomation]);
+
+	// ---- Binding panel callbacks (stabilised, mirror the trigger ones) -----
+
+	const handleSelectBinding = useCallback(
+		(bindingId: string) => {
+			setSelectedBindingId(bindingId);
+			setCreatingBindingType(null);
+			setTriggerSelected(false);
+			setSelectedEntrypointId(null);
+			setToolbarPanel(null);
+			graphStore.setSelection([]);
+		},
+		[graphStore],
+	);
+
+	const handleAddBinding = useCallback(
+		(bindingType: string) => {
+			setCreatingBindingType(bindingType as BindingType);
+			setSelectedBindingId(null);
+			setTriggerSelected(false);
+			setSelectedEntrypointId(null);
+			setToolbarPanel(null);
+			graphStore.setSelection([]);
+		},
+		[graphStore],
+	);
+
+	const handleCloseBinding = useCallback(() => {
+		setSelectedBindingId(null);
+		setCreatingBindingType(null);
+	}, []);
+
+	const handleSelectBindingId = useCallback((id: string | null) => {
+		setSelectedBindingId(id);
+		setCreatingBindingType(null);
+	}, []);
+
+	const handleBindingsChanged = useCallback(() => {
+		refetchBindings();
+	}, [refetchBindings]);
 
 	// ---- Render ------------------------------------------------------------
 

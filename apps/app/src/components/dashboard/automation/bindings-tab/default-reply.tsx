@@ -3,8 +3,9 @@
 // Thin wrapper around `SimpleAutomationBindingTab` that carries the
 // binding_type + copy for this surface. "Default reply" fires when the inbox
 // processor finds no matching entrypoint for an inbound DM — see spec §6.6
-// step 7.
+// step 7. Copy is sourced from the shared binding-editors registry.
 
+import { BINDING_CONFIG_EDITORS } from "./binding-editors";
 import { SimpleAutomationBindingTab } from "./simple-binding-tab";
 import type { BindingChannel } from "./types";
 
@@ -13,14 +14,16 @@ interface Props {
 	channel: BindingChannel;
 }
 
+const ED = BINDING_CONFIG_EDITORS.default_reply;
+
 export function DefaultReplyTab({ socialAccountId, channel }: Props) {
 	return (
 		<SimpleAutomationBindingTab
 			socialAccountId={socialAccountId}
 			channel={channel}
 			bindingType="default_reply"
-			title="Default Reply"
-			subtitle="Runs when no other entrypoint matches this inbound DM."
+			title={ED.title}
+			subtitle={ED.subtitle}
 		/>
 	);
 }

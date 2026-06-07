@@ -12,6 +12,7 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	automationBindings,
 	automations,
+	socialAccounts,
 } from "@relayapi/db";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import {
@@ -74,8 +75,27 @@ const BindingResponseSchema = z.object({
 	sync_error: z.string().nullable(),
 	created_at: z.string(),
 	updated_at: z.string(),
+	// Optional account hydration — populated by list/get via a left-join so the
+	// dashboard (canvas binding cards, bindings panel) can render a real handle
+	// instead of a truncated id. Omitted on create/update responses.
+	social_account: z
+		.object({
+			id: z.string(),
+			handle: z.string().nullable(),
+			display_name: z.string().nullable(),
+			avatar_url: z.string().nullable(),
+		})
+		.nullable()
+		.optional(),
 	warnings: z.array(BindingWarningSchema).optional(),
 });
+
+type BindingAccountSummary = {
+	id: string;
+	username: string | null;
+	displayName: string | null;
+	avatarUrl: string | null;
+};
 
 /**
  * Stubbed binding types don't actually push to the platform yet — the
@@ -99,7 +119,7 @@ export function buildBindingWarnings(
 
 function serializeBinding(
 	row: BindingRow,
-	opts?: { includeWarnings?: boolean },
+	opts?: { includeWarnings?: boolean; account?: BindingAccountSummary | null },
 ): z.infer<typeof BindingResponseSchema> {
 	const base: z.infer<typeof BindingResponseSchema> = {
 		id: row.id,
@@ -118,6 +138,16 @@ function serializeBinding(
 		created_at: row.createdAt.toISOString(),
 		updated_at: row.updatedAt.toISOString(),
 	};
+	// `account.id` is null when a left-join finds no row — guard so we omit
+	// the field rather than emit an account with a null id.
+	if (opts?.account?.id) {
+		base.social_account = {
+			id: opts.account.id,
+			handle: opts.account.username ?? null,
+			display_name: opts.account.displayName ?? null,
+			avatar_url: opts.account.avatarUrl ?? null,
+		};
+	}
 	if (opts?.includeWarnings) {
 		const warnings = buildBindingWarnings(row.bindingType);
 		if (warnings) base.warnings = warnings;
@@ -223,12 +253,31 @@ app.openapi(listBindings, async (c) => {
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			binding: automationBindings,
+			account: {
+				id: socialAccounts.id,
+				username: socialAccounts.username,
+				displayName: socialAccounts.displayName,
+				avatarUrl: socialAccounts.avatarUrl,
+			},
+		})
 		.from(automationBindings)
+		.leftJoin(
+			socialAccounts,
+			eq(automationBindings.socialAccountId, socialAccounts.id),
+		)
 		.where(and(...conditions))
 		.orderBy(desc(automationBindings.createdAt));
 
-	return c.json({ data: rows.map((r) => serializeBinding(r)) }, 200);
+	return c.json(
+		{
+			data: rows.map((r) =>
+				serializeBinding(r.binding, { account: r.account }),
+			),
+		},
+		200,
+	);
 });
 
 const createBinding = createRoute({
@@ -372,7 +421,18 @@ app.openapi(getBinding, async (c) => {
 	const scoped = await loadScopedBinding(c, id);
 	if (!scoped) return notFound(c);
 	if ("denied" in scoped) return scoped.denied as never;
-	return c.json(serializeBinding(scoped.row), 200);
+	const db = c.get("db");
+	const [account] = await db
+		.select({
+			id: socialAccounts.id,
+			username: socialAccounts.username,
+			displayName: socialAccounts.displayName,
+			avatarUrl: socialAccounts.avatarUrl,
+		})
+		.from(socialAccounts)
+		.where(eq(socialAccounts.id, scoped.row.socialAccountId))
+		.limit(1);
+	return c.json(serializeBinding(scoped.row, { account: account ?? null }), 200);
 });
 
 const updateBinding = createRoute({

@@ -4,20 +4,26 @@ import { cors } from "hono/cors";
 import { authMiddleware } from "./middleware/auth";
 import { bodyCacheMiddleware } from "./middleware/body-cache";
 import { dbContextMiddleware } from "./middleware/db-context";
-import { proOnlyMiddleware, aiEnabledMiddleware, workspaceRequiredMiddleware } from "./middleware/feature-gate";
-import { readOnlyMiddleware, workspaceScopeMiddleware } from "./middleware/permissions";
+import {
+	aiEnabledMiddleware,
+	proOnlyMiddleware,
+	workspaceRequiredMiddleware,
+} from "./middleware/feature-gate";
+import {
+	readOnlyMiddleware,
+	workspaceScopeMiddleware,
+} from "./middleware/permissions";
+import { rateLimitMiddleware } from "./middleware/rate-limit";
 import { securityHeadersMiddleware } from "./middleware/security-headers";
 import { toolRateLimitMiddleware } from "./middleware/tool-rate-limit";
-import { rateLimitMiddleware } from "./middleware/rate-limit";
 import { usageTrackingMiddleware } from "./middleware/usage-tracking";
 import { workspaceValidationMiddleware } from "./middleware/workspace-validation";
 import accounts from "./routes/accounts";
 import adsRouter from "./routes/ads";
-import avatars from "./routes/avatars";
+import aiKnowledge from "./routes/ai-knowledge";
 import analytics from "./routes/analytics";
 import apiKeys from "./routes/api-keys";
-import aiKnowledge from "./routes/ai-knowledge";
-import automations from "./routes/automations";
+import autoPostRulesRouter from "./routes/auto-post-rules";
 import automationBindings from "./routes/automation-bindings";
 import automationEntrypointsRouter, {
 	automationScopedEntrypoints,
@@ -26,47 +32,48 @@ import automationRunsRouter, {
 	automationScopedRuns,
 } from "./routes/automation-runs";
 import automationWebhookTrigger from "./routes/automation-webhook-trigger";
-import contactAutomationControls from "./routes/contact-automation-controls";
-import refUrls from "./routes/ref-urls";
-import segments from "./routes/segments";
+import automations from "./routes/automations";
+import avatars from "./routes/avatars";
 import broadcastsRouter from "./routes/broadcasts";
-import { contactsRouter } from "./routes/contacts";
 import connect from "./routes/connect";
-import contentTemplatesRouter from "./routes/content-templates";
-import tagsRouter from "./routes/tags";
-import ideaGroupsRouter from "./routes/idea-groups";
-import ideasRouter from "./routes/ideas";
 import connections from "./routes/connections";
+import contactAutomationControls from "./routes/contact-automation-controls";
+import { contactsRouter } from "./routes/contacts";
+import contentTemplatesRouter from "./routes/content-templates";
+import crossPostActionsRouter from "./routes/cross-post-actions";
 import customFields from "./routes/custom-fields";
 import gmb from "./routes/gmb";
 import health from "./routes/health";
+import ideaGroupsRouter from "./routes/idea-groups";
+import ideasRouter from "./routes/ideas";
 import inbox from "./routes/inbox";
 import inboxAi from "./routes/inbox-ai";
 import inboxFeed from "./routes/inbox-feed";
 import invite from "./routes/invite";
 import mediaRouter from "./routes/media";
+import oauthCallback from "./routes/oauth-callback";
 import orgSettings from "./routes/org-settings";
+import platformWebhooks from "./routes/platform-webhooks";
 import posts from "./routes/posts";
 import queue from "./routes/queue";
 import reddit from "./routes/reddit";
-import threads from "./routes/threads";
-import shortLinksRouter from "./routes/short-links";
+import refUrls from "./routes/ref-urls";
+import segments from "./routes/segments";
 import shortLinkRedirect from "./routes/short-link-redirect";
+import shortLinksRouter from "./routes/short-links";
 import signaturesRouter from "./routes/signatures";
 import streak from "./routes/streak";
+import stripeWebhooks from "./routes/stripe-webhooks";
+import tagsRouter from "./routes/tags";
+import threads from "./routes/threads";
 import tools from "./routes/tools";
 import twitterEngagement from "./routes/twitter-engagement";
 import usage from "./routes/usage";
 import webhooks from "./routes/webhooks";
+import { websocketTicket, websocketUpgrade } from "./routes/websocket";
 import whatsapp from "./routes/whatsapp";
 import whatsappPhoneProvisioning from "./routes/whatsapp-phone-provisioning";
-import autoPostRulesRouter from "./routes/auto-post-rules";
-import crossPostActionsRouter from "./routes/cross-post-actions";
 import workspacesRouter from "./routes/workspaces";
-import oauthCallback from "./routes/oauth-callback";
-import { websocketUpgrade, websocketTicket } from "./routes/websocket";
-import platformWebhooks from "./routes/platform-webhooks";
-import stripeWebhooks from "./routes/stripe-webhooks";
 import type { Env, Variables } from "./types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -75,7 +82,9 @@ const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 app.onError((err, c) => {
 	console.error("Unhandled error:", err);
 	return c.json(
-		{ error: { code: "INTERNAL_ERROR", message: "An internal error occurred" } },
+		{
+			error: { code: "INTERNAL_ERROR", message: "An internal error occurred" },
+		},
 		500,
 	);
 });

@@ -43,6 +43,16 @@ export interface AutomationBindingResponse {
 	sync_error: string | null;
 	created_at: string;
 	updated_at: string;
+	/**
+	 * Account hydration populated by list/retrieve so clients can render a real
+	 * handle/avatar instead of a truncated id. Omitted on create/update.
+	 */
+	social_account?: {
+		id: string;
+		handle: string | null;
+		display_name: string | null;
+		avatar_url: string | null;
+	} | null;
 }
 
 export interface AutomationBindingListResponse {

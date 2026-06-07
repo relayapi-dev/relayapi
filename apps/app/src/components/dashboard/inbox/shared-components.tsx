@@ -1,16 +1,17 @@
 import { cn } from "@/lib/utils";
+import { Avatar } from "./avatar";
 import { platformColors, platformLabels } from "./shared";
 
 export function AuthorAvatar({ avatar, name, size = "md" }: { avatar: string | null; name: string; size?: "sm" | "md" }) {
-  const sizeClass = size === "sm" ? "size-6 text-[9px]" : "size-8 text-[11px]";
-  const initial = (name || "?").charAt(0).toUpperCase();
-  if (avatar) {
-    return <img src={avatar} alt={name} className={cn(sizeClass, "rounded-full border border-border object-cover shrink-0")} />;
-  }
+  const sizeClass = size === "sm" ? "size-6" : "size-8";
+  const textClass = size === "sm" ? "text-[9px]" : "text-[11px]";
   return (
-    <div className={cn(sizeClass, "rounded-full border border-border bg-muted flex items-center justify-center font-medium text-muted-foreground shrink-0")}>
-      {initial}
-    </div>
+    <Avatar
+      src={avatar}
+      name={name}
+      className={cn(sizeClass, "border-border shrink-0")}
+      fallbackClassName={cn(textClass, "bg-muted font-medium text-muted-foreground")}
+    />
   );
 }
 

@@ -7,7 +7,6 @@ import {
 } from "@relayapi/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
-import { cacheRemoteAvatar } from "../lib/avatar-cache";
 import { maybeDecrypt } from "../lib/crypto";
 import { notifyRealtime } from "../lib/notify-post-update";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
@@ -19,6 +18,7 @@ import type {
 	InboundEvent,
 	InboundEventKind,
 } from "./automations/trigger-matcher";
+import { rehostAvatar } from "./avatar-store";
 import { ensureContactForAuthor } from "./contact-linker";
 import { insertMessage, upsertConversation } from "./inbox-persistence";
 import { dispatchWebhookEvent } from "./webhook-delivery";
@@ -484,18 +484,14 @@ export async function processInboxEvent(
 						},
 					};
 
-					// Persist the profile picture into R2 so it survives Meta's
-					// short-lived signed-CDN expiry (the raw `profile_pic` URL would
-					// 403 after a while). Fall back to the raw URL if caching isn't
-					// available so we never regress to no avatar.
-					const storedAvatarUrl = profile.avatarUrl
-						? ((await cacheRemoteAvatar(
-								env,
-								event.organization_id,
-								participantId,
-								profile.avatarUrl,
-							)) ?? profile.avatarUrl)
-						: null;
+					// Re-host the profile picture to R2 (served durably by the public
+					// /avatars/:id route) so it survives Meta's short-lived signed-CDN
+					// expiry. Keyed by conversation id — one participant per DM. Falls
+					// back to the raw URL so we never regress to no avatar.
+					const storedAvatarUrl =
+						(await rehostAvatar(env, conversation.id, profile.avatarUrl)) ??
+						profile.avatarUrl ??
+						null;
 
 					if (profile.displayName) {
 						conversationPatch.participantName = profile.displayName;

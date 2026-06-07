@@ -45,6 +45,7 @@ import {
 	Position,
 	ReactFlow,
 	ReactFlowProvider,
+	useNodesState,
 	useReactFlow,
 	type Connection,
 	type Edge,
@@ -62,6 +63,7 @@ import {
 	GitBranch,
 	Globe,
 	LayoutGrid,
+	Link2,
 	MessageSquare,
 	Play,
 	Plus,
@@ -78,8 +80,16 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+	bindingAccountHandle,
+	bindingLabel,
+	bindingStatusBadge,
+	type CanvasBindingRow,
+} from "../bindings-tab/display";
 import { PortHandles } from "./port-handles";
 import { derivePorts } from "./derive-ports";
 import { InsertMenu } from "./insert-menu";
@@ -89,6 +99,7 @@ import type { UseGraphStore } from "./use-graph-store";
 import { generateNodeKey } from "./use-graph-store";
 import type {
 	AutomationCatalog,
+	CatalogBindingType,
 	CatalogEntrypointKind,
 } from "./use-catalog";
 import type {
@@ -171,6 +182,19 @@ export interface GuidedFlowProps {
 	 * any non-graph selection state (e.g. trigger panel).
 	 */
 	onPaneClick?: () => void;
+	/**
+	 * Connection bindings (welcome_message, default_reply, menu surfaces) this
+	 * automation is attached to. Rendered as cards inside the trigger node
+	 * alongside event entrypoints — they're an alternate way the flow starts.
+	 */
+	bindings?: CanvasBindingRow[];
+	/** Called when a binding card is clicked (opens the binding detail panel). */
+	onSelectBinding?: (bindingId: string) => void;
+	/**
+	 * Called when the user picks a binding type from the "+ New Trigger"
+	 * dropdown's "Conversation entry points" group (opens create mode).
+	 */
+	onAddBinding?: (bindingType: string) => void;
 }
 
 interface NodeData {
@@ -186,10 +210,14 @@ interface TriggerNodeData {
 	channel: string;
 	entrypoints: AutomationEntrypoint[];
 	availableKinds: CatalogEntrypointKind[];
+	bindings: CanvasBindingRow[];
+	bindingTypes: CatalogBindingType[];
 	readOnly: boolean;
 	onSelectCard: () => void;
 	onSelectEntrypoint: (entrypointId: string) => void;
 	onAddEntrypoint: (kind: string) => void;
+	onSelectBinding: (bindingId: string) => void;
+	onAddBinding: (bindingType: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -776,7 +804,11 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 					<span>When...</span>
 				</div>
 
-				{data.entrypoints.length > 0 ? (
+				{data.entrypoints.length === 0 && data.bindings.length === 0 ? (
+					<div className="mt-4 rounded-[16px] border border-dashed border-[#d9dde6] bg-white px-4 py-5 text-center text-[13px] text-[#7e8695]">
+						No triggers yet — add one below.
+					</div>
+				) : (
 					<div className="mt-4 space-y-3">
 						{data.entrypoints.map((ep) => {
 							const summary = humanizeEntrypointKind(ep.kind);
@@ -808,10 +840,45 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 								</button>
 							);
 						})}
-					</div>
-				) : (
-					<div className="mt-4 rounded-[16px] border border-dashed border-[#d9dde6] bg-white px-4 py-5 text-center text-[13px] text-[#7e8695]">
-						No triggers yet — add one below.
+						{/* Connection bindings — an alternate way the flow starts, on a
+						    specific account. Visually distinct (blue link bubble) from
+						    the grey event-entrypoint cards above. */}
+						{data.bindings.map((binding) => {
+							const badge = bindingStatusBadge(binding.status);
+							return (
+								<button
+									key={binding.id}
+									type="button"
+									onClick={(event) => {
+										event.stopPropagation();
+										data.onSelectBinding(binding.id);
+									}}
+									className="nodrag flex w-full items-center gap-3 rounded-[16px] border border-[#dfe6ff] bg-[#f2f5ff] px-4 py-3 text-left transition hover:bg-[#e9edff]"
+								>
+									<div className="flex size-7 items-center justify-center rounded-full bg-[#4680ff] text-white shadow-[0_2px_8px_rgba(15,23,42,0.15)]">
+										<Link2 className="size-3.5" />
+									</div>
+									<div className="min-w-0 flex-1">
+										<div className="flex items-center gap-1.5">
+											<span className="truncate text-[13px] font-medium leading-4 text-[#8b92a0]">
+												{bindingAccountHandle(binding)}
+											</span>
+											<span
+												className={cn(
+													"shrink-0 rounded-full border px-1.5 py-0 text-[9px] font-medium",
+													badge.cls,
+												)}
+											>
+												{badge.label}
+											</span>
+										</div>
+										<div className="mt-0.5 text-[15px] font-semibold leading-5 text-[#404552]">
+											{bindingLabel(binding.binding_type)}
+										</div>
+									</div>
+								</button>
+							);
+						})}
 					</div>
 				)}
 
@@ -822,10 +889,14 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 								type="button"
 								onClick={(event) => event.stopPropagation()}
 								className="nodrag mt-4 flex h-[48px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[15px] font-semibold text-[#4680ff] transition hover:border-[#4680ff] hover:bg-[#f4f8ff]"
-								disabled={data.availableKinds.length === 0}
+								disabled={
+									data.availableKinds.length === 0 &&
+									data.bindingTypes.length === 0
+								}
 								title={
-									data.availableKinds.length === 0
-										? "No entrypoint kinds available for this channel"
+									data.availableKinds.length === 0 &&
+									data.bindingTypes.length === 0
+										? "No triggers available for this channel"
 										: undefined
 								}
 							>
@@ -837,6 +908,11 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 							sideOffset={8}
 							className="w-[320px]"
 						>
+							{data.availableKinds.length > 0 && (
+								<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+									Events
+								</DropdownMenuLabel>
+							)}
 							{data.availableKinds.map((k) => (
 								<DropdownMenuItem
 									key={k.kind}
@@ -852,11 +928,41 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 									</span>
 								</DropdownMenuItem>
 							))}
-							{data.availableKinds.length === 0 && (
-								<div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
-									No entrypoint kinds available.
-								</div>
+							{data.bindingTypes.length > 0 && (
+								<>
+									{data.availableKinds.length > 0 && (
+										<DropdownMenuSeparator />
+									)}
+									<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+										Conversation entry points
+									</DropdownMenuLabel>
+									{data.bindingTypes.map((b) => (
+										<DropdownMenuItem
+											key={b.type}
+											onSelect={(event) => {
+												event.preventDefault();
+												data.onAddBinding(b.type);
+											}}
+										>
+											<span className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+												<Link2 className="size-3.5 text-[#4680ff]" />
+												{b.label}
+												{b.v1_status === "stubbed" && (
+													<span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0 text-[9px] font-medium text-amber-600">
+														v1.1
+													</span>
+												)}
+											</span>
+										</DropdownMenuItem>
+									))}
+								</>
 							)}
+							{data.availableKinds.length === 0 &&
+								data.bindingTypes.length === 0 && (
+									<div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
+										No triggers available.
+									</div>
+								)}
 						</DropdownMenuContent>
 					</DropdownMenu>
 				)}
@@ -878,10 +984,14 @@ const TriggerNode = memo(
 		prev.data.channel === next.data.channel &&
 		prev.data.entrypoints === next.data.entrypoints &&
 		prev.data.availableKinds === next.data.availableKinds &&
+		prev.data.bindings === next.data.bindings &&
+		prev.data.bindingTypes === next.data.bindingTypes &&
 		prev.data.readOnly === next.data.readOnly &&
 		prev.data.onSelectCard === next.data.onSelectCard &&
 		prev.data.onSelectEntrypoint === next.data.onSelectEntrypoint &&
-		prev.data.onAddEntrypoint === next.data.onAddEntrypoint,
+		prev.data.onAddEntrypoint === next.data.onAddEntrypoint &&
+		prev.data.onSelectBinding === next.data.onSelectBinding &&
+		prev.data.onAddBinding === next.data.onAddBinding,
 );
 
 const nodeTypes = { canvas: CanvasNode, trigger: TriggerNode };
@@ -1056,6 +1166,9 @@ function CanvasInner({
 	onAddEntrypoint,
 	triggerSelected = false,
 	onPaneClick,
+	bindings = [],
+	onSelectBinding,
+	onAddBinding,
 }: GuidedFlowProps) {
 	const rf = useReactFlow();
 	const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -1064,6 +1177,10 @@ function CanvasInner({
 		null,
 	);
 	const lastPasteOffset = useRef<number>(0);
+	// True while a node (or selection) is actively being dragged. While true, the
+	// graph → React Flow sync effect and the autosave are suppressed so neither can
+	// clobber the position React Flow is animating under the cursor.
+	const isDraggingRef = useRef(false);
 	const toast = useTinyToast();
 
 	// Overlay controls — only active when the flow is live. Period persists
@@ -1086,9 +1203,6 @@ function CanvasInner({
 				sourcePort?: { nodeKey: string; portKey: string };
 		  }
 	>(null);
-	const [liveNodePositions, setLiveNodePositions] = useState<
-		Record<string, XYPosition>
-	>({});
 	const suppressNextPaneClickRef = useRef(false);
 
 	const { graph, selection } = graphStore;
@@ -1108,6 +1222,17 @@ function CanvasInner({
 		});
 	}, [catalog, channel]);
 
+	// Binding types available for this channel — the "Conversation entry points"
+	// group of the "+ New Trigger" dropdown. Channel-filtered like availableKinds.
+	const availableBindingTypes = useMemo(() => {
+		if (!catalog) return [] as CatalogBindingType[];
+		return catalog.binding_types.filter((b) => {
+			const channels = Array.isArray(b.channels) ? b.channels : [];
+			if (channels.length === 0) return true;
+			return channels.includes(channel);
+		});
+	}, [catalog, channel]);
+
 	// Auto-arrange positions — computed once per graph change; used only as a
 	// fallback when a node has no stored canvas position (e.g. just inserted
 	// by the menu with a cursor-space coordinate).
@@ -1118,7 +1243,12 @@ function CanvasInner({
 
 	// --- React Flow data ---------------------------------------------------
 
-	const rfNodes = useMemo<Node[]>(() => {
+	// Desired node set derived from external state (graph + selection + overlay +
+	// the synthetic trigger card). This is NOT handed straight to React Flow;
+	// instead it is mirrored into RF-owned state (below) so React Flow can own the
+	// live position during a drag. Positions come straight from the committed
+	// canvas_x/y (or auto-layout fallback) — no live-drag override here.
+	const desiredNodes = useMemo<Node[]>(() => {
 		const triggerNode: Node<TriggerNodeData> = {
 			id: TRIGGER_NODE_ID,
 			type: "trigger",
@@ -1127,10 +1257,14 @@ function CanvasInner({
 				channel,
 				entrypoints,
 				availableKinds,
+				bindings,
+				bindingTypes: availableBindingTypes,
 				readOnly,
 				onSelectCard: () => onSelectTrigger?.(null),
 				onSelectEntrypoint: (epId) => onSelectTrigger?.(epId),
 				onAddEntrypoint: (kind) => onAddEntrypoint?.(kind),
+				onSelectBinding: (bindingId) => onSelectBinding?.(bindingId),
+				onAddBinding: (bindingType) => onAddBinding?.(bindingType),
 			},
 			selected: triggerSelected,
 			selectable: true,
@@ -1139,13 +1273,12 @@ function CanvasInner({
 
 		const stepNodes: Node<NodeData>[] = graph.nodes.map((node) => {
 			const fallback = autoPositions.get(node.key);
-			const live = liveNodePositions[node.key];
 			return {
 				id: node.key,
 				type: "canvas",
 				position: {
-					x: live?.x ?? node.canvas_x ?? fallback?.x ?? 0,
-					y: live?.y ?? node.canvas_y ?? fallback?.y ?? 0,
+					x: node.canvas_x ?? fallback?.x ?? 0,
+					y: node.canvas_y ?? fallback?.y ?? 0,
 				},
 				data: {
 					node,
@@ -1165,20 +1298,56 @@ function CanvasInner({
 	}, [
 		autoPositions,
 		availableKinds,
+		availableBindingTypes,
+		bindings,
 		catalog,
 		channel,
 		entrypoints,
 		graph.nodes,
 		onAddEntrypoint,
+		onAddBinding,
+		onSelectBinding,
 		onSelectTrigger,
 		overlay.data,
 		overlaysEnabled,
 		readOnly,
 		selection,
-		liveNodePositions,
 		triggerPos,
 		triggerSelected,
 	]);
+
+	// React Flow owns the node array (canonical useNodesState pattern). During a
+	// drag, RF mutates these positions internally via applyNodeChanges, so the
+	// dragged card follows the cursor without us rebuilding the array per tick.
+	// Seeded with desiredNodes to avoid an empty-canvas flash on mount.
+	const [nodes, setNodes, onNodesChangeRF] = useNodesState(desiredNodes);
+
+	// Mirror external state (graph mutations, selection, overlay metrics, trigger
+	// position) into RF-owned node state — but never while a drag is active, so an
+	// autosave / overlay tick / undo landing mid-drag cannot clobber the position
+	// React Flow is animating. Outside a drag, desiredNodes positions are the
+	// committed canvas_x/y, so this is a no-op for unchanged nodes and correctly
+	// applies inserts, removes, undo/redo, auto-arrange, duplicate/paste and
+	// server-normalised positions. Per-node merge preserves RF's own object while
+	// refreshing position/data/selection.
+	useEffect(() => {
+		if (isDraggingRef.current) return;
+		setNodes((current) => {
+			const byId = new Map(current.map((n) => [n.id, n]));
+			return desiredNodes.map((desired) => {
+				const existing = byId.get(desired.id);
+				if (!existing) return desired;
+				return {
+					...existing,
+					position: desired.position,
+					data: desired.data,
+					selected: desired.selected,
+					draggable: desired.draggable,
+					selectable: desired.selectable,
+				};
+			});
+		});
+	}, [desiredNodes, setNodes]);
 
 	const rfEdges = useMemo<Edge[]>(() => {
 		const edges: Edge[] = graph.edges.map((e, index) => ({
@@ -1223,14 +1392,14 @@ function CanvasInner({
 	// --- Fit view on initial mount / big graph changes ---------------------
 
 	useEffect(() => {
-		const signature = `${rfNodes.length}:${rfEdges.length}`;
+		const signature = `${nodes.length}:${rfEdges.length}`;
 		if (fitSignatureRef.current === signature) return;
 		fitSignatureRef.current = signature;
 		const frame = requestAnimationFrame(() => {
 			rf.fitView({ duration: 260, padding: 0.18 });
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [rfEdges.length, rfNodes.length, rf]);
+	}, [rfEdges.length, nodes.length, rf]);
 
 	// --- Validation ping on every graph change -----------------------------
 
@@ -1250,6 +1419,11 @@ function CanvasInner({
 
 	const doSave = useCallback(async () => {
 		if (readOnly) return;
+		// Don't let an autosave land while the user is dragging — setGraph below
+		// would rebuild the dragged node at its pre-drag canvas_x/y and snap it
+		// back. moveNode (on drag stop) re-dirties the graph, so useAutosave
+		// re-arms and the save fires ~debounce after the drop. Nothing is lost.
+		if (isDraggingRef.current) return;
 		let result: GraphSaveResult;
 		try {
 			if (onSave) {
@@ -1325,8 +1499,11 @@ function CanvasInner({
 
 	const onNodesChange = useCallback(
 		(changes: NodeChange[]) => {
-			const dragUpdates: Record<string, XYPosition> = {};
-			const clearUpdates = new Set<string>();
+			// Let React Flow apply position/selection to its own node state first —
+			// this is what moves the dragged card under the cursor smoothly without
+			// us rebuilding the controlled array on every tick.
+			onNodesChangeRF(changes);
+
 			for (const change of changes) {
 				if (change.type === "position" && change.position) {
 					if (change.id === TRIGGER_NODE_ID) {
@@ -1338,26 +1515,16 @@ function CanvasInner({
 						});
 						continue;
 					}
-					if (change.dragging === true) {
-						dragUpdates[change.id] = {
+					// Commit to the graph store on drag stop only (dragging === false,
+					// strict). Intermediate ticks (dragging === true) are owned by
+					// React Flow; programmatic position changes (dragging === undefined)
+					// originate from our own sync and must not be re-committed.
+					if (change.dragging === false) {
+						graphStore.moveNode(change.id, {
 							x: change.position.x,
 							y: change.position.y,
-						};
-						continue;
+						});
 					}
-					if (change.dragging !== false) {
-						continue;
-					}
-					// Commit position on drag stop only (avoids history spam per pixel).
-					clearUpdates.add(change.id);
-					graphStore.moveNode(change.id, {
-						x: change.position.x,
-						y: change.position.y,
-					});
-				} else if (change.type === "select") {
-					// React Flow's internal selection — translate to store selection.
-					// We coalesce multiple select events at the end of the changes
-					// array into a single setSelection dispatch.
 				} else if (change.type === "remove") {
 					if (change.id === TRIGGER_NODE_ID) {
 						// Trigger card is virtual; ignore delete requests.
@@ -1370,24 +1537,7 @@ function CanvasInner({
 					graphStore.removeNodes([change.id]);
 				}
 			}
-			if (Object.keys(dragUpdates).length > 0 || clearUpdates.size > 0) {
-				setLiveNodePositions((prev) => {
-					let changed = false;
-					const next = { ...prev };
-					for (const [key, position] of Object.entries(dragUpdates)) {
-						const current = prev[key];
-						if (current?.x === position.x && current?.y === position.y) continue;
-						next[key] = position;
-						changed = true;
-					}
-					for (const key of clearUpdates) {
-						if (!(key in next)) continue;
-						delete next[key];
-						changed = true;
-					}
-					return changed ? next : prev;
-				});
-			}
+
 			// Apply selection changes in a single pass. The trigger node's
 			// selection is driven by the parent (via `triggerSelected`), so we
 			// skip it here to avoid polluting the graph store's selection with
@@ -1405,7 +1555,7 @@ function CanvasInner({
 				graphStore.setSelection(Array.from(next));
 			}
 		},
-		[graph.root_node_key, graphStore, selection, toast],
+		[graph.root_node_key, graphStore, onNodesChangeRF, selection, toast],
 	);
 
 	const onEdgesChange = useCallback(
@@ -1856,7 +2006,7 @@ function CanvasInner({
 	return (
 		<div ref={wrapperRef} className="relative h-full min-w-0 flex-1 bg-[#f5f6fa]">
 			<ReactFlow
-				nodes={rfNodes}
+				nodes={nodes}
 				edges={rfEdges}
 				nodeTypes={nodeTypes}
 				onNodesChange={onNodesChange}
@@ -1864,6 +2014,18 @@ function CanvasInner({
 				onConnect={onConnect}
 				onConnectStart={onConnectStart}
 				onConnectEnd={onConnectEnd}
+				onNodeDragStart={() => {
+					isDraggingRef.current = true;
+				}}
+				onNodeDragStop={() => {
+					isDraggingRef.current = false;
+				}}
+				onSelectionDragStart={() => {
+					isDraggingRef.current = true;
+				}}
+				onSelectionDragStop={() => {
+					isDraggingRef.current = false;
+				}}
 				onPaneClick={() => {
 					if (suppressNextPaneClickRef.current) return;
 					setInsertMenu(null);

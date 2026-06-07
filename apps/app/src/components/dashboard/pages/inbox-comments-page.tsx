@@ -14,6 +14,7 @@ import { WorkspaceGuard } from "@/components/dashboard/workspace-guard";
 
 import type { InboxComment, PostWithComments } from "@/components/dashboard/inbox/shared";
 import { stagger, fadeUp, newItemEnter, groupCommentsByThread, formatTimeAgo, platformColors } from "@/components/dashboard/inbox/shared";
+import { Avatar } from "@/components/dashboard/inbox/avatar";
 import { AuthorAvatar, PlatformBadge, ReplyProgressBar } from "@/components/dashboard/inbox/shared-components";
 import { LikeButton, CommentActions } from "@/components/dashboard/inbox/comment-actions";
 import { InlineReplyBox } from "@/components/dashboard/inbox/inline-reply-box";
@@ -255,11 +256,12 @@ function CommentsListView({
             >
               <div className="group flex items-start gap-3">
                 <div className="relative shrink-0">
-                  {c.account_avatar_url ? (
-                    <img src={c.account_avatar_url} alt={platform} className="size-8 rounded-full border border-border object-cover" />
-                  ) : (
-                    <PlatformBadge platform={platform} />
-                  )}
+                  <Avatar
+                    src={c.account_avatar_url}
+                    name={platform}
+                    className="size-8 border-border"
+                    fallback={<PlatformBadge platform={platform} />}
+                  />
                   {platformIcons[platform] && (
                     <div className={cn(
                       "absolute -bottom-1 -right-1 flex size-4 items-center justify-center rounded-full text-white [&_svg]:size-2.5",
@@ -487,11 +489,12 @@ function ByPostView({
           >
             <div className="flex items-start gap-2.5">
               <div className="relative shrink-0">
-                {post.account_avatar_url ? (
-                  <img src={post.account_avatar_url} alt={platform} className="size-8 rounded-full border border-border object-cover" />
-                ) : (
-                  <PlatformBadge platform={platform} />
-                )}
+                <Avatar
+                  src={post.account_avatar_url}
+                  name={platform}
+                  className="size-8 border-border"
+                  fallback={<PlatformBadge platform={platform} />}
+                />
                 {platformIcons[platform] && (
                   <div className={cn(
                     "absolute -bottom-1 -right-1 flex size-4 items-center justify-center rounded-full text-white [&_svg]:size-2.5",

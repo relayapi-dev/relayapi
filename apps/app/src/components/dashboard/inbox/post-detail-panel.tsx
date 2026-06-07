@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
 import type { InboxComment, PostWithComments } from "./shared";
 import { newItemEnter, groupCommentsByThread, formatTimeAgo, platformLabels } from "./shared";
+import { Avatar } from "./avatar";
 import { AuthorAvatar, PlatformBadge } from "./shared-components";
 import { LikeButton, CommentActions } from "./comment-actions";
 import { InlineReplyBox } from "./inline-reply-box";
@@ -114,11 +115,12 @@ export function PostDetailPanel({
       <div className="rounded-lg border border-border overflow-hidden bg-card">
         {/* Post header */}
         <div className="flex items-center gap-2.5 px-3.5 py-2.5">
-          {post.account_avatar_url ? (
-            <img src={post.account_avatar_url} alt="" className="size-8 rounded-full border border-border object-cover shrink-0" />
-          ) : (
-            <PlatformBadge platform={normalizedPlatform} />
-          )}
+          <Avatar
+            src={post.account_avatar_url}
+            name={normalizedPlatform}
+            className="size-8 border-border shrink-0"
+            fallback={<PlatformBadge platform={normalizedPlatform} />}
+          />
           <div className="flex-1 min-w-0">
             <span className="text-xs font-semibold capitalize">{normalizedPlatform}</span>
             <span className="text-[10px] text-muted-foreground ml-2">{formatTimeAgo(post.created_at)}</span>
