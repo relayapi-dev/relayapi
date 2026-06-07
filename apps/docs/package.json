@@ -4,11 +4,11 @@
   "scripts": {
     "dev": "next dev",
     "build": "opennextjs-cloudflare build",
-    "build:next": "bun ./scripts/postinstall.ts && next build",
+    "build:next": "fumadocs-mdx && next build",
     "build:worker": "bun run build",
     "start": "next start",
     "generate-docs": "bun ./scripts/generate-docs.ts",
-    "postinstall": "bun ./scripts/postinstall.ts"
+    "postinstall": "fumadocs-mdx"
   },
   "dependencies": {
     "@radix-ui/react-popover": "catalog:",
