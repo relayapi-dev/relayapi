@@ -58,17 +58,26 @@ export function AccountHealthDialog({ account, onOpenChange }: AccountHealthDial
         <DialogHeader>
           <div className="flex items-center gap-3">
             {account?.avatar_url ? (
-              <img src={account.avatar_url} alt="" className="size-8 rounded-md object-cover" />
-            ) : (
-              <div
-                className={cn(
-                  "flex size-8 items-center justify-center rounded-md text-xs font-bold text-white",
-                  platformColors[platform] || "bg-neutral-700",
-                )}
-              >
-                {platformAvatars[platform] || platform.slice(0, 2).toUpperCase()}
-              </div>
-            )}
+              <img
+                src={account.avatar_url}
+                alt=""
+                className="size-8 rounded-md object-cover"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).style.display = "none";
+                  const fallback = (e.currentTarget as HTMLImageElement).nextElementSibling;
+                  if (fallback) fallback.classList.remove("hidden");
+                }}
+              />
+            ) : null}
+            <div
+              className={cn(
+                "flex size-8 items-center justify-center rounded-md text-xs font-bold text-white",
+                platformColors[platform] || "bg-neutral-700",
+                account?.avatar_url ? "hidden" : "",
+              )}
+            >
+              {platformAvatars[platform] || platform.slice(0, 2).toUpperCase()}
+            </div>
             <div>
               <DialogTitle className="text-base">{title}</DialogTitle>
               <p className="text-xs text-muted-foreground">

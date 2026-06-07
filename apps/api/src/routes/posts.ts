@@ -514,6 +514,7 @@ function formatRecyclingConfig(
 
 function buildTargetResponse(
 	targets: Array<{
+		id?: string | null;
 		socialAccountId: string;
 		platform: string;
 		status: string;
@@ -538,6 +539,7 @@ function buildTargetResponse(
 					avatar_url: t.avatarUrl ?? null,
 					url: t.platformUrl,
 					platform_post_id: t.platformPostId ?? null,
+					target_id: t.id ?? null,
 				},
 			],
 			...(t.error
@@ -639,6 +641,7 @@ app.openapi(listPosts, async (c) => {
 	if (includeTargets && postIds.length > 0) {
 		const fullTargets = await db
 			.select({
+				id: postTargets.id,
 				postId: postTargets.postId,
 				socialAccountId: postTargets.socialAccountId,
 				platform: postTargets.platform,
@@ -1624,6 +1627,7 @@ app.openapi(getPost, async (c) => {
 	const [targets, [recyclingConfig]] = await Promise.all([
 		db
 			.select({
+				id: postTargets.id,
 				socialAccountId: postTargets.socialAccountId,
 				platform: postTargets.platform,
 				status: postTargets.status,
@@ -1825,6 +1829,7 @@ app.openapi(updatePostRoute, async (c) => {
 	const [updatedTargets, [recyclingConfig]] = await Promise.all([
 		db
 			.select({
+				id: postTargets.id,
 				socialAccountId: postTargets.socialAccountId,
 				platform: postTargets.platform,
 				status: postTargets.status,

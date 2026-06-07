@@ -163,6 +163,10 @@ const TargetAccountResult = z.object({
 	avatar_url: z.string().nullable().describe("Account avatar URL"),
 	url: z.string().nullable().describe("Published post URL on the platform"),
 	platform_post_id: z.string().nullable().describe("Platform-native post ID"),
+	target_id: z
+		.string()
+		.nullable()
+		.describe("Post target ID (pt_) — pass to /v1/ads/boost as post_target_id"),
 });
 
 const TargetResult = z.object({

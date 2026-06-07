@@ -14,6 +14,8 @@ export interface AdAccountOption {
 interface AdAccountComboboxProps {
   value: string;
   onSelect: (id: string) => void;
+  /** Reports the full selected account (or null when cleared) so callers can read its platform. */
+  onSelectAccount?: (account: AdAccountOption | null) => void;
   workspaceId?: string | null;
   showAllOption?: boolean;
   placeholder?: string;
@@ -33,6 +35,7 @@ const platformColors: Record<string, string> = {
 export function AdAccountCombobox({
   value,
   onSelect,
+  onSelectAccount,
   workspaceId,
   showAllOption = false,
   placeholder = "Select ad account...",
@@ -116,6 +119,7 @@ export function AdAccountCombobox({
 
   const handleSelect = (id: string) => {
     onSelect(id);
+    onSelectAccount?.(accounts.find((a) => a.id === id) ?? null);
     setOpen(false);
     setSearch("");
   };
@@ -141,7 +145,7 @@ export function AdAccountCombobox({
         {value ? (
           <X
             className="size-3 hover:text-foreground shrink-0"
-            onClick={(e) => { e.stopPropagation(); onSelect(""); }}
+            onClick={(e) => { e.stopPropagation(); onSelect(""); onSelectAccount?.(null); }}
           />
         ) : (
           <Search className="size-3 shrink-0 opacity-50" />
@@ -173,7 +177,7 @@ export function AdAccountCombobox({
                   "w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 transition-colors",
                   !value && "bg-accent/20 font-medium",
                 )}
-                onClick={() => { onSelect(""); setOpen(false); }}
+                onClick={() => { onSelect(""); onSelectAccount?.(null); setOpen(false); }}
               >
                 <Check className={cn("size-3 shrink-0", !value ? "opacity-100" : "opacity-0")} />
                 All ad accounts

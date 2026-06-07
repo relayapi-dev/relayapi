@@ -374,6 +374,11 @@ export namespace PostCreateResponse {
        * Platform-native post ID
        */
       platform_post_id: string | null;
+
+      /**
+       * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
+       */
+      target_id: string | null;
     }
 
     export interface Error {
@@ -513,6 +518,11 @@ export namespace PostRetrieveResponse {
        * Platform-native post ID
        */
       platform_post_id: string | null;
+
+      /**
+       * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
+       */
+      target_id: string | null;
     }
 
     export interface Error {
@@ -642,6 +652,11 @@ export namespace PostUpdateResponse {
        * Platform-native post ID
        */
       platform_post_id: string | null;
+
+      /**
+       * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
+       */
+      target_id: string | null;
     }
 
     export interface Error {
@@ -776,6 +791,11 @@ export namespace PostListResponse {
          * Platform-native post ID
          */
         platform_post_id: string | null;
+
+        /**
+         * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
+         */
+        target_id: string | null;
       }
 
       export interface Error {
@@ -898,6 +918,11 @@ export namespace PostBulkCreateResponse {
          * Platform-native post ID
          */
         platform_post_id: string | null;
+
+        /**
+         * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
+         */
+        target_id: string | null;
       }
 
       export interface Error {
@@ -1021,6 +1046,11 @@ export namespace PostRetryResponse {
        * Platform-native post ID
        */
       platform_post_id: string | null;
+
+      /**
+       * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
+       */
+      target_id: string | null;
     }
 
     export interface Error {
@@ -1135,6 +1165,11 @@ export namespace PostUnpublishResponse {
        * Platform-native post ID
        */
       platform_post_id: string | null;
+
+      /**
+       * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
+       */
+      target_id: string | null;
     }
 
     export interface Error {

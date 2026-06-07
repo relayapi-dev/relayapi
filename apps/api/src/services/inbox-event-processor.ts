@@ -7,6 +7,7 @@ import {
 } from "@relayapi/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
+import { cacheRemoteAvatar } from "../lib/avatar-cache";
 import { maybeDecrypt } from "../lib/crypto";
 import { notifyRealtime } from "../lib/notify-post-update";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
@@ -111,20 +112,39 @@ function instagramGraphBase(token: string): string {
 	return token.startsWith("IGAA") ? GRAPH_BASE.instagram : GRAPH_BASE.facebook;
 }
 
-async function fetchInstagramParticipantProfile(
+// Instagram User Profile API.
+// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/user-profile/
+//   Endpoint: GET https://graph.instagram.com/<VERSION>/<INSTAGRAM_SCOPED_ID>
+//   Fields:   name, username, profile_pic, follower_count,
+//             is_user_follow_business, is_business_follow_user, is_verified_user
+//   Access requires user consent — the user must have messaged the business
+//   (or used an icebreaker / persistent menu); otherwise Graph returns
+//   "User consent is required to access user profile". This is why enrichment
+//   only runs for `message` events, never comments.
+const IG_PROFILE_FIELDS_FULL =
+	"name,username,profile_pic,follower_count,is_user_follow_business,is_business_follow_user";
+const IG_PROFILE_FIELDS_MINIMAL = "name,username,profile_pic";
+
+interface InstagramProfileResponse {
+	name?: string | null;
+	username?: string | null;
+	profile_pic?: string | null;
+	follower_count?: number | null;
+	is_user_follow_business?: boolean | null;
+	is_business_follow_user?: boolean | null;
+}
+
+async function fetchInstagramProfileFields(
 	participantId: string,
 	token: string,
-): Promise<{
-	displayName: string | null;
-	avatarUrl: string | null;
-	metadata: ParticipantMetadataRecord;
-} | null> {
+	fields: string,
+): Promise<InstagramProfileResponse | null> {
 	const profileAbort = new AbortController();
 	const profileTimer = setTimeout(() => profileAbort.abort(), 5_000);
 
 	try {
 		const profileRes = await fetch(
-			`${instagramGraphBase(token)}/${participantId}?fields=name,username,profile_pic,follower_count,is_user_follow_business,is_business_follow_user&access_token=${encodeURIComponent(token)}`,
+			`${instagramGraphBase(token)}/${participantId}?fields=${fields}&access_token=${encodeURIComponent(token)}`,
 			{ signal: profileAbort.signal },
 		);
 
@@ -136,37 +156,57 @@ async function fetchInstagramParticipantProfile(
 			return null;
 		}
 
-		const profile = (await profileRes.json()) as {
-			name?: string | null;
-			username?: string | null;
-			profile_pic?: string | null;
-			follower_count?: number | null;
-			is_user_follow_business?: boolean | null;
-			is_business_follow_user?: boolean | null;
-		};
-		const displayName = profile.name ?? profile.username ?? null;
-
-		if (!displayName && !profile.profile_pic) {
-			return null;
-		}
-
-		return {
-			displayName,
-			avatarUrl: profile.profile_pic ?? null,
-			metadata: {
-				scopedId: participantId,
-				name: profile.name ?? null,
-				username: profile.username ?? null,
-				profilePic: profile.profile_pic ?? null,
-				followerCount: profile.follower_count ?? null,
-				isUserFollowBusiness: profile.is_user_follow_business ?? null,
-				isBusinessFollowUser: profile.is_business_follow_user ?? null,
-				fetchedAt: new Date().toISOString(),
-			},
-		};
+		return (await profileRes.json()) as InstagramProfileResponse;
 	} finally {
 		clearTimeout(profileTimer);
 	}
+}
+
+async function fetchInstagramParticipantProfile(
+	participantId: string,
+	token: string,
+): Promise<{
+	displayName: string | null;
+	avatarUrl: string | null;
+	metadata: ParticipantMetadataRecord;
+} | null> {
+	// Try the full field set first for richer metadata; if the enhanced fields
+	// aren't authorized for this app/user the whole request fails, so retry with
+	// the minimal set so we still recover the name + profile picture.
+	const profile =
+		(await fetchInstagramProfileFields(
+			participantId,
+			token,
+			IG_PROFILE_FIELDS_FULL,
+		)) ??
+		(await fetchInstagramProfileFields(
+			participantId,
+			token,
+			IG_PROFILE_FIELDS_MINIMAL,
+		));
+
+	if (!profile) return null;
+
+	const displayName = profile.name ?? profile.username ?? null;
+
+	if (!displayName && !profile.profile_pic) {
+		return null;
+	}
+
+	return {
+		displayName,
+		avatarUrl: profile.profile_pic ?? null,
+		metadata: {
+			scopedId: participantId,
+			name: profile.name ?? null,
+			username: profile.username ?? null,
+			profilePic: profile.profile_pic ?? null,
+			followerCount: profile.follower_count ?? null,
+			isUserFollowBusiness: profile.is_user_follow_business ?? null,
+			isBusinessFollowUser: profile.is_business_follow_user ?? null,
+			fetchedAt: new Date().toISOString(),
+		},
+	};
 }
 
 async function fetchFacebookParticipantProfile(
@@ -444,11 +484,24 @@ export async function processInboxEvent(
 						},
 					};
 
+					// Persist the profile picture into R2 so it survives Meta's
+					// short-lived signed-CDN expiry (the raw `profile_pic` URL would
+					// 403 after a while). Fall back to the raw URL if caching isn't
+					// available so we never regress to no avatar.
+					const storedAvatarUrl = profile.avatarUrl
+						? ((await cacheRemoteAvatar(
+								env,
+								event.organization_id,
+								participantId,
+								profile.avatarUrl,
+							)) ?? profile.avatarUrl)
+						: null;
+
 					if (profile.displayName) {
 						conversationPatch.participantName = profile.displayName;
 					}
-					if (profile.avatarUrl) {
-						conversationPatch.participantAvatar = profile.avatarUrl;
+					if (storedAvatarUrl) {
+						conversationPatch.participantAvatar = storedAvatarUrl;
 					}
 
 					await db
@@ -465,8 +518,8 @@ export async function processInboxEvent(
 					if (profile.displayName) {
 						messagePatch.authorName = profile.displayName;
 					}
-					if (profile.avatarUrl) {
-						messagePatch.authorAvatarUrl = profile.avatarUrl;
+					if (storedAvatarUrl) {
+						messagePatch.authorAvatarUrl = storedAvatarUrl;
 					}
 
 					if (messagePatch.authorName || messagePatch.authorAvatarUrl) {

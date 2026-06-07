@@ -40,6 +40,7 @@ import {
 	sanitizeSocialAccountMetadata,
 } from "../services/ad-access-token";
 import { fetchAvatarUrl } from "../services/token-refresh";
+import { rehostAvatar, deleteStoredAvatar } from "../services/avatar-store";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -590,6 +591,9 @@ app.openapi(deleteAccount, async (c) => {
 			500,
 		);
 	}
+
+	// Clean up the re-hosted avatar object in R2 (best-effort)
+	c.executionCtx.waitUntil(deleteStoredAvatar(c.env, id));
 
 	c.executionCtx.waitUntil(
 		dispatchWebhookEvent(c.env, db, orgId, "account.disconnected", {
@@ -1978,7 +1982,8 @@ app.openapi(singleSync, async (c) => {
     );
   }
 
-  // Re-fetch avatar URL (CDN URLs expire over time)
+  // Re-fetch avatar URL (CDN URLs expire over time) and re-host it to R2 so the
+  // stored URL is durable. Falls back to the raw CDN URL if re-hosting fails.
   const token = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY);
   if (token) {
     const newAvatarUrl = await fetchAvatarUrl(
@@ -1987,9 +1992,10 @@ app.openapi(singleSync, async (c) => {
       account.platformAccountId,
     );
     if (newAvatarUrl) {
+      const stable = await rehostAvatar(c.env, account.id, newAvatarUrl);
       await db
         .update(socialAccounts)
-        .set({ avatarUrl: newAvatarUrl, updatedAt: new Date() })
+        .set({ avatarUrl: stable ?? newAvatarUrl, updatedAt: new Date() })
         .where(eq(socialAccounts.id, account.id));
     }
   }

@@ -13,6 +13,7 @@ import { usageTrackingMiddleware } from "./middleware/usage-tracking";
 import { workspaceValidationMiddleware } from "./middleware/workspace-validation";
 import accounts from "./routes/accounts";
 import adsRouter from "./routes/ads";
+import avatars from "./routes/avatars";
 import analytics from "./routes/analytics";
 import apiKeys from "./routes/api-keys";
 import aiKnowledge from "./routes/ai-knowledge";
@@ -115,6 +116,9 @@ app.route("/webhooks/platform", platformWebhooks);
 
 // OAuth callback (no auth — OAuth providers redirect browsers here, state token links to session)
 app.route("/connect/oauth", oauthCallback);
+
+// Avatar serving (no auth — public profile images re-hosted to R2, loaded by <img> tags)
+app.route("/avatars", avatars);
 
 // WebSocket upgrade — authenticated via short-lived ticket (before auth middleware)
 app.route("/v1/ws", websocketUpgrade);

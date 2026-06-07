@@ -684,124 +684,6 @@ app.openapi(listAds, async (c) => {
 	} as any);
 });
 
-const getAd = createRoute({
-	operationId: "getAd",
-	method: "get",
-	path: "/{id}",
-	tags: ["Ads"],
-	summary: "Get ad details",
-	security: [{ Bearer: [] }],
-	request: { params: IdParam },
-	responses: {
-		200: {
-			description: "Ad",
-			content: {
-				"application/json": { schema: z.object({ data: AdResponse }) },
-			},
-		},
-		404: {
-			description: "Not found",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-app.openapi(getAd, async (c) => {
-	const orgId = c.get("orgId");
-	const { id } = c.req.valid("param");
-	const db = c.get("db");
-
-	const [ad] = await db
-		.select()
-		.from(ads)
-		.where(and(eq(ads.id, id), eq(ads.organizationId, orgId)))
-		.limit(1);
-
-	if (!ad) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Ad not found" } },
-			404,
-		);
-	}
-
-	return c.json({ data: formatAdResponse(ad) } as any);
-});
-
-const updateAdRoute = createRoute({
-	operationId: "updateAd",
-	method: "patch",
-	path: "/{id}",
-	tags: ["Ads"],
-	summary: "Update ad (name, budget, targeting, pause/resume)",
-	security: [{ Bearer: [] }],
-	request: {
-		params: IdParam,
-		body: { content: { "application/json": { schema: UpdateAdBody } } },
-	},
-	responses: {
-		200: {
-			description: "Ad updated",
-			content: {
-				"application/json": { schema: z.object({ data: AdResponse }) },
-			},
-		},
-		400: {
-			description: "Invalid state",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-app.openapi(updateAdRoute, async (c) => {
-	const orgId = c.get("orgId");
-	const { id } = c.req.valid("param");
-	const body = c.req.valid("json");
-
-	try {
-		const updated = await adService.updateAd(c.env, orgId, id, {
-			name: body.name,
-			status: body.status,
-			dailyBudgetCents: body.daily_budget_cents,
-			lifetimeBudgetCents: body.lifetime_budget_cents,
-			targeting: body.targeting as any,
-		});
-
-		return c.json({ data: formatAdResponse(updated!) } as any);
-	} catch (err) {
-		return handleAdError(c, err);
-	}
-});
-
-const deleteAdRoute = createRoute({
-	operationId: "cancelAd",
-	method: "delete",
-	path: "/{id}",
-	tags: ["Ads"],
-	summary: "Cancel an ad",
-	security: [{ Bearer: [] }],
-	request: { params: IdParam },
-	responses: {
-		200: {
-			description: "Cancelled",
-			content: {
-				"application/json": { schema: z.object({ message: z.string() }) },
-			},
-		},
-	},
-});
-
-app.openapi(deleteAdRoute, async (c) => {
-	const orgId = c.get("orgId");
-	const { id } = c.req.valid("param");
-
-	try {
-		await adService.cancelAd(c.env, orgId, id);
-		return c.json({ message: "Ad cancelled" });
-	} catch (err) {
-		return handleAdError(c, err);
-	}
-});
-
 // =========================================================================
 // ANALYTICS
 // =========================================================================
@@ -1248,6 +1130,133 @@ app.openapi(triggerSync, async (c) => {
 			ads_updated: result.adsUpdated,
 			metrics_updated: result.metricsUpdated,
 		});
+	} catch (err) {
+		return handleAdError(c, err);
+	}
+});
+
+// =========================================================================
+// ADS BY ID
+// IMPORTANT: these single-segment "/{id}" routes are registered LAST, after
+// every literal /v1/ads/* route (e.g. /interests, /audiences). Hono resolves
+// overlapping routes in registration order (first match wins), so registering
+// "/{id}" before a literal like "/audiences" would shadow it — the request
+// would hit getAd and 404 with "Ad not found". Do not move these back up.
+// =========================================================================
+
+const getAd = createRoute({
+	operationId: "getAd",
+	method: "get",
+	path: "/{id}",
+	tags: ["Ads"],
+	summary: "Get ad details",
+	security: [{ Bearer: [] }],
+	request: { params: IdParam },
+	responses: {
+		200: {
+			description: "Ad",
+			content: {
+				"application/json": { schema: z.object({ data: AdResponse }) },
+			},
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(getAd, async (c) => {
+	const orgId = c.get("orgId");
+	const { id } = c.req.valid("param");
+	const db = c.get("db");
+
+	const [ad] = await db
+		.select()
+		.from(ads)
+		.where(and(eq(ads.id, id), eq(ads.organizationId, orgId)))
+		.limit(1);
+
+	if (!ad) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Ad not found" } },
+			404,
+		);
+	}
+
+	return c.json({ data: formatAdResponse(ad) } as any);
+});
+
+const updateAdRoute = createRoute({
+	operationId: "updateAd",
+	method: "patch",
+	path: "/{id}",
+	tags: ["Ads"],
+	summary: "Update ad (name, budget, targeting, pause/resume)",
+	security: [{ Bearer: [] }],
+	request: {
+		params: IdParam,
+		body: { content: { "application/json": { schema: UpdateAdBody } } },
+	},
+	responses: {
+		200: {
+			description: "Ad updated",
+			content: {
+				"application/json": { schema: z.object({ data: AdResponse }) },
+			},
+		},
+		400: {
+			description: "Invalid state",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(updateAdRoute, async (c) => {
+	const orgId = c.get("orgId");
+	const { id } = c.req.valid("param");
+	const body = c.req.valid("json");
+
+	try {
+		const updated = await adService.updateAd(c.env, orgId, id, {
+			name: body.name,
+			status: body.status,
+			dailyBudgetCents: body.daily_budget_cents,
+			lifetimeBudgetCents: body.lifetime_budget_cents,
+			targeting: body.targeting as any,
+		});
+
+		return c.json({ data: formatAdResponse(updated!) } as any);
+	} catch (err) {
+		return handleAdError(c, err);
+	}
+});
+
+const deleteAdRoute = createRoute({
+	operationId: "cancelAd",
+	method: "delete",
+	path: "/{id}",
+	tags: ["Ads"],
+	summary: "Cancel an ad",
+	security: [{ Bearer: [] }],
+	request: { params: IdParam },
+	responses: {
+		200: {
+			description: "Cancelled",
+			content: {
+				"application/json": { schema: z.object({ message: z.string() }) },
+			},
+		},
+	},
+});
+
+app.openapi(deleteAdRoute, async (c) => {
+	const orgId = c.get("orgId");
+	const { id } = c.req.valid("param");
+
+	try {
+		await adService.cancelAd(c.env, orgId, id);
+		return c.json({ message: "Ad cancelled" });
 	} catch (err) {
 		return handleAdError(c, err);
 	}

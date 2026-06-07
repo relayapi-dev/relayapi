@@ -70,6 +70,46 @@ async function presignWithCache(
 	return presignedUrl;
 }
 
+/**
+ * Presign a batch of standalone URLs (e.g. avatar fields that aren't shaped as
+ * `{ url }`) and return a lookup of original URL → presigned URL. Only URLs on
+ * the private media host are signed; null/undefined and raw platform CDN links
+ * are skipped and simply omitted from the map, so callers fall back to the
+ * original value. Dedupes by URL within the call and shares the KV presign cache.
+ */
+export async function presignRelayMediaUrlMap(
+	env: Env,
+	urls: Array<string | null | undefined>,
+	expiresIn: number = 3600,
+): Promise<Map<string, string>> {
+	const result = new Map<string, string>();
+
+	const client = getCachedR2Client(env);
+	if (!client) return result;
+
+	const unique = new Set<string>();
+	for (const url of urls) {
+		if (url?.includes(RELAY_MEDIA_HOST)) unique.add(url);
+	}
+	if (unique.size === 0) return result;
+
+	await Promise.all(
+		[...unique].map(async (url) => {
+			try {
+				const storageKey = decodeURIComponent(new URL(url).pathname.slice(1));
+				result.set(
+					url,
+					await presignWithCache(env, client, storageKey, expiresIn),
+				);
+			} catch {
+				// Leave unmapped → caller falls back to the original URL.
+			}
+		}),
+	);
+
+	return result;
+}
+
 export async function presignRelayMediaUrls<T extends { url: string }>(
 	env: Env,
 	mediaArr: T[] | null,

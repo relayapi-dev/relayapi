@@ -12,6 +12,7 @@ import {
 } from "./shared";
 import { LoadMore } from "@/components/ui/load-more";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Avatar } from "./avatar";
 
 export function ConversationList({
   conversations,
@@ -73,17 +74,12 @@ export function ConversationList({
                   >
                     <div className="flex items-start gap-3">
                       <div className="relative shrink-0">
-                        {conv.participant_avatar ? (
-                          <img
-                            src={conv.participant_avatar}
-                            alt={displayName}
-                            className="size-10 rounded-full border border-[#e5e7eb] object-cover"
-                          />
-                        ) : (
-                          <div className="flex size-10 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f4f6fa] text-sm font-semibold text-slate-500">
-                            {displayName.charAt(0).toUpperCase()}
-                          </div>
-                        )}
+                        <Avatar
+                          src={conv.participant_avatar}
+                          name={displayName}
+                          className="size-10"
+                          fallbackClassName="text-sm"
+                        />
                         <div
                           className={cn(
                             "absolute -bottom-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full border-2 border-white text-[8px] font-bold text-white",

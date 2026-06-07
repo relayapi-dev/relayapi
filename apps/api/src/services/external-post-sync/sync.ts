@@ -15,8 +15,10 @@ import type { Env } from "../../types";
 import type { SyncPostsMessage, RefreshMetricsMessage } from "./types";
 import { RateLimitError } from "./types";
 import { getExternalPostFetcher } from "./index";
-import { refreshTokenIfNeeded } from "../token-refresh";
+import { refreshTokenIfNeeded, fetchAvatarUrl } from "../token-refresh";
+import { rehostAvatar } from "../avatar-store";
 import { mapConcurrently } from "../../lib/concurrency";
+import type { Platform } from "../../schemas/common";
 
 type Database = ReturnType<typeof createDb>;
 
@@ -43,6 +45,7 @@ export async function syncExternalPosts(
 			accessToken: socialAccounts.accessToken,
 			refreshToken: socialAccounts.refreshToken,
 			tokenExpiresAt: socialAccounts.tokenExpiresAt,
+			avatarUrl: socialAccounts.avatarUrl,
 		})
 		.from(socialAccounts)
 		.where(eq(socialAccounts.id, message.social_account_id))
@@ -204,6 +207,28 @@ export async function syncExternalPosts(
 				updatedAt: now,
 			})
 			.where(eq(socialAccountSyncState.id, syncState.id));
+
+		// Keep the stored avatar durable: re-host the platform CDN avatar to R2
+		// once per account. After the first run avatar_url points at /avatars/…,
+		// so this is skipped on later runs — no extra platform API calls. Best-effort.
+		if (!account.avatarUrl?.includes("/avatars/")) {
+			try {
+				const fresh = await fetchAvatarUrl(
+					account.platform as Platform,
+					accessToken,
+					account.platformAccountId,
+				);
+				if (fresh) {
+					const stable = await rehostAvatar(env, account.id, fresh);
+					await db
+						.update(socialAccounts)
+						.set({ avatarUrl: stable ?? fresh, updatedAt: new Date() })
+						.where(eq(socialAccounts.id, account.id));
+				}
+			} catch (err) {
+				console.warn(`[Sync] Avatar re-host failed for ${account.id}:`, err);
+			}
+		}
 
 		// 9. If more pages remain, re-enqueue
 		if (cursor && pagesProcessed >= MAX_PAGES_PER_RUN) {

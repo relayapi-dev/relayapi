@@ -7,6 +7,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AdAccountCombobox } from "./ad-account-combobox";
+import { PostTargetCombobox } from "./post-target-combobox";
 
 interface AdAccount {
   id: string;
@@ -26,6 +27,15 @@ interface CreateAdDialogProps {
 
 const objectives = ["awareness", "traffic", "engagement", "leads", "conversions", "video_views"] as const;
 const ctaOptions = ["LEARN_MORE", "SHOP_NOW", "SIGN_UP", "BOOK_NOW", "CONTACT_US", "APPLY_NOW", "SUBSCRIBE", "DOWNLOAD"] as const;
+
+// Ad-account platform -> social platforms whose published posts it can boost.
+const adToSocialPlatforms: Record<string, string[]> = {
+  meta: ["facebook", "instagram"],
+  twitter: ["twitter"],
+  tiktok: ["tiktok"],
+  linkedin: ["linkedin"],
+  pinterest: ["pinterest"],
+};
 
 const inputClass = "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -51,6 +61,7 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
 
   // Boost-specific
   const [postTargetId, setPostTargetId] = useState("");
+  const [adPlatform, setAdPlatform] = useState<string | null>(null);
 
   // Targeting
   const [ageMin, setAgeMin] = useState("18");
@@ -166,6 +177,13 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
     setGenders((prev) => prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]);
   };
 
+  // Prefer the explicitly-selected account's platform; fall back to the prop list
+  // for the default/persisted account (which the combobox may not have re-emitted).
+  const effectivePlatform = adPlatform ?? adAccounts.find((a) => a.id === adAccountId)?.platform ?? null;
+  const compatiblePlatforms = effectivePlatform
+    ? (adToSocialPlatforms[effectivePlatform] ?? [])
+    : undefined;
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) resetForm(); onOpenChange(o); }}>
       <DialogContent className="max-w-lg max-h-[85vh] grid-rows-[auto_1fr] overflow-hidden">
@@ -180,15 +198,23 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
           {/* Ad Account */}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Ad Account</label>
-            <AdAccountCombobox value={adAccountId} onSelect={setAdAccountId} />
+            <AdAccountCombobox
+              value={adAccountId}
+              onSelect={setAdAccountId}
+              onSelectAccount={(acc) => setAdPlatform(acc?.platform ?? null)}
+            />
           </div>
 
-          {/* Boost: Post Target ID */}
+          {/* Boost: Post picker */}
           {boostMode && (
             <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Post Target ID</label>
-              <input className={inputClass} placeholder="pt_..." value={postTargetId} onChange={(e) => setPostTargetId(e.target.value)} />
-              <p className="text-[10px] text-muted-foreground mt-1">The published post target ID to boost</p>
+              <label className="text-xs text-muted-foreground mb-1 block">Post to boost</label>
+              <PostTargetCombobox
+                value={postTargetId || null}
+                onSelect={(id) => setPostTargetId(id ?? "")}
+                platforms={compatiblePlatforms}
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">Pick a published post to promote as a paid ad</p>
             </div>
           )}
 

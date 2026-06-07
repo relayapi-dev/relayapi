@@ -47,6 +47,7 @@ import {
 	updateConversation,
 } from "../services/inbox-persistence";
 import { notifyRealtime } from "../lib/notify-post-update";
+import { presignRelayMediaUrlMap } from "../lib/r2-presign";
 import { getAccount, igGraphHost } from "./inbox-helpers";
 import type { Env, Variables } from "../types";
 
@@ -75,14 +76,16 @@ function serializeConversation(row: {
 	lastMessageDirection: string | null;
 	createdAt: Date;
 	updatedAt: Date;
-}) {
+}, presignedAvatars?: Map<string, string>) {
 	return {
 		id: row.id,
 		platform: row.platform,
 		type: row.type,
 		account_id: row.accountId,
 		participant_name: row.participantName,
-		participant_avatar: row.participantAvatar,
+		participant_avatar: row.participantAvatar
+			? (presignedAvatars?.get(row.participantAvatar) ?? row.participantAvatar)
+			: null,
 		participant_metadata: row.participantMetadata ?? null,
 		status: row.status,
 		assigned_user_id: row.assignedUserId,
@@ -114,14 +117,16 @@ function serializeMessage(row: {
 	isHidden: boolean | null;
 	isLiked: boolean | null;
 	createdAt: Date;
-}) {
+}, presignedAvatars?: Map<string, string>) {
 	return {
 		id: row.id,
 		conversation_id: row.conversationId,
 		platform_message_id: row.platformMessageId,
 		author_name: row.authorName,
 		author_platform_id: row.authorPlatformId,
-		author_avatar_url: row.authorAvatarUrl,
+		author_avatar_url: row.authorAvatarUrl
+			? (presignedAvatars?.get(row.authorAvatarUrl) ?? row.authorAvatarUrl)
+			: null,
 		text: row.text,
 		direction: row.direction,
 		attachments: row.attachments,
@@ -179,9 +184,14 @@ app.openapi(feedRoute, async (c) => {
 		workspaceScope: c.get("workspaceScope"),
 	});
 
+	const presignedAvatars = await presignRelayMediaUrlMap(
+		c.env,
+		result.data.map((r) => r.participantAvatar),
+	);
+
 	return c.json(
 		{
-			data: result.data.map(serializeConversation),
+			data: result.data.map((r) => serializeConversation(r, presignedAvatars)),
 			next_cursor: result.next_cursor,
 			has_more: result.has_more,
 		} as never,
@@ -383,13 +393,20 @@ app.openapi(searchRoute, async (c) => {
 		workspaceScope: c.get("workspaceScope"),
 	});
 
+	const presignedAvatars = await presignRelayMediaUrlMap(
+		c.env,
+		result.data.map((m) => m.authorAvatarUrl),
+	);
+
 	return c.json(
 		{
 			data: result.data.map((msg) => ({
 				id: msg.id,
 				conversation_id: msg.conversationId,
 				author_name: msg.authorName,
-				author_avatar_url: msg.authorAvatarUrl,
+				author_avatar_url: msg.authorAvatarUrl
+					? (presignedAvatars.get(msg.authorAvatarUrl) ?? msg.authorAvatarUrl)
+					: null,
 				text: msg.text,
 				direction: msg.direction,
 				attachments: msg.attachments,
@@ -489,10 +506,15 @@ app.openapi(getConversationRoute, async (c) => {
 		);
 	}
 
+	const presignedAvatars = await presignRelayMediaUrlMap(c.env, [
+		result.conversation.participantAvatar,
+		...result.messages.map((m) => m.authorAvatarUrl),
+	]);
+
 	return c.json(
 		{
-			conversation: serializeConversation(result.conversation),
-			messages: result.messages.map(serializeMessage),
+			conversation: serializeConversation(result.conversation, presignedAvatars),
+			messages: result.messages.map((m) => serializeMessage(m, presignedAvatars)),
 		} as never,
 		200,
 	);
@@ -578,9 +600,13 @@ app.openapi(updateConversationRoute, async (c) => {
 		);
 	}
 
+	const presignedAvatars = await presignRelayMediaUrlMap(c.env, [
+		updated.participantAvatar,
+	]);
+
 	return c.json(
 		{
-			conversation: serializeConversation(updated),
+			conversation: serializeConversation(updated, presignedAvatars),
 		} as never,
 		200,
 	);

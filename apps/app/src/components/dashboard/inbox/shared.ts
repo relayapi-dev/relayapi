@@ -48,6 +48,7 @@ export interface MessageItem {
   id: string;
   sender: "user" | "participant";
   author_name?: string | null;
+  author_avatar_url?: string | null;
   text: string;
   created_at: string;
   attachments?: Array<{ type: string; url: string }>;

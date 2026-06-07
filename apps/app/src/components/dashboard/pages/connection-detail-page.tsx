@@ -131,17 +131,22 @@ export function ConnectionDetailPage({ accountId, initialTab }: Props) {
 						src={account.avatar_url}
 						alt=""
 						className="size-10 rounded-md object-cover"
+						onError={(e) => {
+							(e.currentTarget as HTMLImageElement).style.display = "none";
+							const fallback = (e.currentTarget as HTMLImageElement).nextElementSibling;
+							if (fallback) fallback.classList.remove("hidden");
+						}}
 					/>
-				) : (
-					<div
-						className={cn(
-							"flex size-10 items-center justify-center rounded-md text-xs font-bold text-white",
-							platformColors[platform] || "bg-neutral-700",
-						)}
-					>
-						{platformAvatars[platform] || platform.slice(0, 2).toUpperCase()}
-					</div>
-				)}
+				) : null}
+				<div
+					className={cn(
+						"flex size-10 items-center justify-center rounded-md text-xs font-bold text-white",
+						platformColors[platform] || "bg-neutral-700",
+						account.avatar_url ? "hidden" : "",
+					)}
+				>
+					{platformAvatars[platform] || platform.slice(0, 2).toUpperCase()}
+				</div>
 				<div className="min-w-0">
 					<h1 className="text-base font-medium truncate">{title}</h1>
 					<p className="text-xs text-muted-foreground truncate">

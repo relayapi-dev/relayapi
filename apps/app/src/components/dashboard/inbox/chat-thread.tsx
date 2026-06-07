@@ -17,6 +17,7 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Avatar } from "./avatar";
 import type { ConversationItem, InboxOrganizationMember, MessageItem, NoteItem, ThreadItem } from "./shared";
 import {
   formatMessageDayLabel,
@@ -98,6 +99,7 @@ function mapApiMessage(message: any): MessageItem {
     id: message.id,
     sender: message.direction === "outbound" ? "user" : "participant",
     author_name: message.author_name ?? null,
+    author_avatar_url: message.author_avatar_url ?? null,
     text: message.text ?? "",
     attachments: normalizeAttachments(message.attachments),
     created_at: message.created_at,
@@ -601,17 +603,12 @@ export function ChatThread({
       <div className="border-b border-[#e7e9ef] bg-white">
         <div className="flex min-h-[52px] items-center justify-between gap-4 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-3">
-            {conversation.participant_avatar ? (
-              <img
-                src={conversation.participant_avatar}
-                alt={displayName}
-                className="size-10 rounded-full border border-[#e5e7eb] object-cover"
-              />
-            ) : (
-              <div className="flex size-10 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f4f6fa] text-sm font-semibold text-slate-500">
-                {displayName.charAt(0).toUpperCase()}
-              </div>
-            )}
+            <Avatar
+              src={conversation.participant_avatar}
+              name={displayName}
+              className="size-10"
+              fallbackClassName="text-sm"
+            />
 
             <div className="min-w-0">
               <p className="truncate text-[14px] font-semibold text-slate-900">{displayName}</p>
@@ -902,17 +899,12 @@ export function ChatThread({
 
                     <div className={cn("flex gap-3", isOutbound ? "justify-end" : "justify-start")}>
                       {!isOutbound && (
-                        conversation.participant_avatar ? (
-                          <img
-                            src={conversation.participant_avatar}
-                            alt={displayName}
-                            className="mt-1 size-8 shrink-0 rounded-full border border-[#e5e7eb] object-cover"
-                          />
-                        ) : (
-                          <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full border border-[#e5e7eb] bg-white text-[11px] font-semibold text-slate-500">
-                            {displayName.charAt(0).toUpperCase()}
-                          </div>
-                        )
+                        <Avatar
+                          src={item.data.author_avatar_url ?? conversation.participant_avatar}
+                          name={item.data.author_name || displayName}
+                          className="mt-1 size-8 shrink-0"
+                          fallbackClassName="bg-white text-[11px]"
+                        />
                       )}
 
                       <div className="max-w-[78%] min-w-0">

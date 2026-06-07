@@ -1,6 +1,7 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { createDb, socialAccounts, socialAccountSyncState } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import { rehostAvatar } from "../services/avatar-store";
 import { GRAPH_BASE } from "../config/api-versions";
 import {
 	OAUTH_CONFIGS,
@@ -915,6 +916,19 @@ export async function exchangeAndSaveAccount(params: {
 	if (!account) {
 		console.error(`[oauth][${platform}] Upsert returned no account`);
 		return { status: "error", code: "INTERNAL_ERROR", message: "Failed to save account" };
+	}
+
+	// Re-host the avatar to R2 so the stored URL is durable (platform CDN URLs
+	// expire). Best-effort — falls back to the raw CDN URL already stored above.
+	if (avatarUrl) {
+		const stableAvatar = await rehostAvatar(env, account.id, avatarUrl);
+		if (stableAvatar) {
+			await db
+				.update(socialAccounts)
+				.set({ avatarUrl: stableAvatar, updatedAt: new Date() })
+				.where(eq(socialAccounts.id, account.id));
+			account.avatarUrl = stableAvatar;
+		}
 	}
 
 	// Detect whether this was a new insert or an update to an existing account
@@ -1940,6 +1954,18 @@ app.openapi(selectFacebookPage, async (c) => {
 		}
 
 		if (account) {
+			// Re-host the avatar to R2 so the stored URL is durable (best-effort).
+			if (pageAvatarUrl) {
+				const stableAvatar = await rehostAvatar(c.env, account.id, pageAvatarUrl);
+				if (stableAvatar) {
+					await db
+						.update(socialAccounts)
+						.set({ avatarUrl: stableAvatar, updatedAt: new Date() })
+						.where(eq(socialAccounts.id, account.id));
+					account.avatarUrl = stableAvatar;
+				}
+			}
+
 			const isNewFbPage = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
 			if (isNewFbPage) {
 				c.executionCtx.waitUntil(

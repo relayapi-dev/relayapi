@@ -6,6 +6,7 @@ import { decryptAccountTokens, maybeDecrypt, maybeEncrypt } from "../lib/crypto"
 import { fetchWithTimeout } from "../lib/fetch-timeout";
 import type { Platform } from "../schemas/common";
 import { sendNotification } from "./notification-manager";
+import { rehostAvatar } from "./avatar-store";
 import { logConnectionEvent } from "../routes/connections";
 import type { Env } from "../types";
 
@@ -147,14 +148,17 @@ export async function refreshAccountToken(env: Env, accountId: string): Promise<
 		updateData.tokenExpiresAt = new Date(Date.now() + result.expires_in * 1000);
 	}
 
-	// Re-fetch avatar URL with the fresh token (CDN URLs expire over time)
+	// Re-fetch avatar URL with the fresh token (CDN URLs expire over time) and
+	// re-host it to R2 so the stored URL is durable. Falls back to the raw CDN
+	// URL if re-hosting fails (best-effort).
 	const newAvatarUrl = await fetchAvatarUrl(
 		account.platform as Platform,
 		result.access_token,
 		account.platformAccountId,
 	);
 	if (newAvatarUrl) {
-		updateData.avatarUrl = newAvatarUrl;
+		const stable = await rehostAvatar(env, account.id, newAvatarUrl);
+		updateData.avatarUrl = stable ?? newAvatarUrl;
 	}
 
 	await db
