@@ -1,6 +1,6 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
 import { getLinkedInRestHeaders, LINKEDIN_API_BASE } from "../lib/linkedin-rest";
-import { classifyPublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const CHARACTER_LIMIT = 3000;
 
@@ -21,8 +21,8 @@ async function linkedinFetch(
 		}),
 	});
 	// Classify HTTP-level errors that apply to all LinkedIn API calls
-	if (res.status === 401) throw new Error(`TOKEN_EXPIRED: LinkedIn token expired or invalid`);
-	if (res.status === 429) throw new Error(`RATE_LIMITED: LinkedIn rate limit exceeded`);
+	if (res.status === 401) throw new PublishError(`TOKEN_EXPIRED: LinkedIn token expired or invalid`, { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 429) throw new PublishError(`RATE_LIMITED: LinkedIn rate limit exceeded`, { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
 	return res;
 }
 
@@ -34,7 +34,10 @@ async function fetchMediaBytes(
 ): Promise<{ bytes: ArrayBuffer; contentType: string; size: number }> {
 	const res = await fetchPublicUrl(url, { timeout: 30_000 });
 	if (!res.ok) {
-		throw new Error(`Failed to fetch media from ${url}: ${res.statusText}`);
+		throw new PublishError(`Failed to fetch media from ${url}: ${res.statusText}`, {
+			statusCode: res.status,
+			detail: `HTTP ${res.status} ${res.statusText}`,
+		});
 	}
 	const bytes = await res.arrayBuffer();
 	const contentType =
@@ -72,8 +75,10 @@ async function uploadImage(
 
 	if (!initRes.ok) {
 		const err = await initRes.json().catch(() => ({}));
-		throw new Error(
+		const raw = `HTTP ${initRes.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(
 			`LinkedIn image upload init failed: ${(err as Record<string, string>).message ?? initRes.statusText}`,
+			{ statusCode: initRes.status, detail: raw },
 		);
 	}
 
@@ -94,7 +99,10 @@ async function uploadImage(
 	});
 
 	if (!uploadRes.ok) {
-		throw new Error(`LinkedIn image upload failed: ${uploadRes.statusText}`);
+		throw new PublishError(`LinkedIn image upload failed: ${uploadRes.statusText}`, {
+			statusCode: uploadRes.status,
+			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+		});
 	}
 
 	return imageUrn;
@@ -134,8 +142,10 @@ async function uploadVideo(
 
 	if (!initRes.ok) {
 		const err = await initRes.json().catch(() => ({}));
-		throw new Error(
+		const raw = `HTTP ${initRes.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(
 			`LinkedIn video upload init failed: ${(err as Record<string, string>).message ?? initRes.statusText}`,
+			{ statusCode: initRes.status, detail: raw },
 		);
 	}
 
@@ -173,8 +183,9 @@ async function uploadVideo(
 		});
 
 		if (!uploadRes.ok) {
-			throw new Error(
+			throw new PublishError(
 				`LinkedIn video part upload failed: ${uploadRes.statusText}`,
+				{ statusCode: uploadRes.status, detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}` },
 			);
 		}
 
@@ -203,8 +214,10 @@ async function uploadVideo(
 
 	if (!finalizeRes.ok) {
 		const err = await finalizeRes.json().catch(() => ({}));
-		throw new Error(
+		const raw = `HTTP ${finalizeRes.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(
 			`LinkedIn video finalize failed: ${(err as Record<string, string>).message ?? finalizeRes.statusText}`,
+			{ statusCode: finalizeRes.status, detail: raw },
 		);
 	}
 
@@ -237,7 +250,10 @@ async function pollVideoStatus(
 		);
 
 		if (!res.ok) {
-			throw new Error(`LinkedIn video status check failed: ${res.statusText}`);
+			throw new PublishError(`LinkedIn video status check failed: ${res.statusText}`, {
+				statusCode: res.status,
+				detail: `HTTP ${res.status} ${res.statusText}`,
+			});
 		}
 
 		const data = (await res.json()) as {
@@ -287,8 +303,10 @@ async function uploadDocument(
 
 	if (!initRes.ok) {
 		const err = await initRes.json().catch(() => ({}));
-		throw new Error(
+		const raw = `HTTP ${initRes.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(
 			`LinkedIn document upload init failed: ${(err as Record<string, string>).message ?? initRes.statusText}`,
+			{ statusCode: initRes.status, detail: raw },
 		);
 	}
 
@@ -309,7 +327,10 @@ async function uploadDocument(
 	});
 
 	if (!uploadRes.ok) {
-		throw new Error(`LinkedIn document upload failed: ${uploadRes.statusText}`);
+		throw new PublishError(`LinkedIn document upload failed: ${uploadRes.statusText}`, {
+			statusCode: uploadRes.status,
+			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+		});
 	}
 
 	return documentUrn;
@@ -345,8 +366,10 @@ async function postFirstComment(
 
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
-		throw new Error(
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(
 			`LinkedIn first comment failed: ${(err as Record<string, string>).message ?? res.statusText}`,
+			{ statusCode: res.status, detail: raw },
 		);
 	}
 }
@@ -437,7 +460,8 @@ export const linkedinPublisher: Publisher = {
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
 				const detail = (err as Record<string, string>).message ?? res.statusText;
-				throw new Error(`LinkedIn reshare failed: ${detail}`);
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+				throw new PublishError(`LinkedIn reshare failed: ${detail}`, { statusCode: res.status, detail: raw });
 			}
 			const postUrn = res.headers.get("x-restli-id") ?? "";
 			return { success: true, platform_post_id: postUrn };

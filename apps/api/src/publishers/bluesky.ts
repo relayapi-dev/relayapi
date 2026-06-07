@@ -1,5 +1,5 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 interface BlueskySession {
 	did: string;

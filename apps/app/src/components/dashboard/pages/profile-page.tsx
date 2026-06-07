@@ -458,6 +458,16 @@ export function ProfilePage() {
                 className="w-full rounded-md border border-border bg-accent/20 px-3 py-2 pl-9 text-[13px] text-muted-foreground cursor-not-allowed"
               />
             </div>
+            <p className="text-[11px] text-muted-foreground">
+              To change your email, contact{" "}
+              <a
+                href="mailto:support@relayapi.dev"
+                className="text-foreground underline underline-offset-2 hover:no-underline"
+              >
+                support
+              </a>{" "}
+              or create a new account.
+            </p>
           </div>
         </div>
       </motion.div>

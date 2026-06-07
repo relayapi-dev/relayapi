@@ -25,7 +25,7 @@ interface SentPost {
   id: string;
   source?: "internal" | "external";
   content: string | null;
-  media: Array<{ url: string; type?: string }> | null;
+  media: Array<{ url: string; type?: string; poster?: string }> | null;
   published_at: string | null;
   created_at: string;
   // Internal posts have targets
@@ -83,7 +83,7 @@ export interface SentPostListProps {
 interface FlatCard {
   postId: string;
   content: string | null;
-  media: Array<{ url: string; type?: string }> | null;
+  media: Array<{ url: string; type?: string; poster?: string }> | null;
   target: SentPostTarget;
   dateKey: string;
   sortTime: number;
@@ -136,13 +136,20 @@ export function SentPostList({
         cards.push({
           postId: post.id,
           content: post.content,
-          media: post.thumbnail_url
-            ? [{ url: post.thumbnail_url, type: post.media_type ?? undefined }]
-            : post.media_urls?.length
-              ? post.media_urls.map((url) => ({
-                  url,
-                  type: post.media_type ?? undefined,
-                }))
+          media: post.media_urls?.length
+            ? post.media_urls.map((url, i) => ({
+                url,
+                type: post.media_type ?? undefined,
+                poster: i === 0 ? (post.thumbnail_url ?? undefined) : undefined,
+              }))
+            : post.thumbnail_url
+              ? [
+                  {
+                    url: post.thumbnail_url,
+                    type: post.media_type ?? undefined,
+                    poster: post.thumbnail_url,
+                  },
+                ]
               : post.media,
           target: {
             accountId: post.social_account_id || "",

@@ -1,5 +1,5 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 /**
  * Mastodon publisher.

@@ -1,4 +1,4 @@
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 /**
  * ConvertKit (Kit) publisher.
@@ -73,14 +73,15 @@ export const convertkitPublisher: Publisher = {
 			if (!createRes.ok) {
 				const err = await createRes.json().catch(() => ({}));
 				const detail = (err as any)?.errors?.[0]?.message ?? (err as any)?.error ?? (err as any)?.message ?? createRes.statusText;
+				const raw = `HTTP ${createRes.status}\n${JSON.stringify(err)}`;
 
 				if (createRes.status === 401) {
-					throw new Error(`TOKEN_EXPIRED: Kit credentials invalid: ${detail}`);
+					throw new PublishError(`TOKEN_EXPIRED: Kit credentials invalid: ${detail}`, { statusCode: createRes.status, detail: raw });
 				}
 				if (createRes.status === 429) {
-					throw new Error(`RATE_LIMITED: ${detail}`);
+					throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: createRes.status, detail: raw });
 				}
-				throw new Error(`Kit create failed (${createRes.status}): ${detail}`);
+				throw new PublishError(`Kit create failed (${createRes.status}): ${detail}`, { statusCode: createRes.status, detail: raw });
 			}
 
 			const created = (await createRes.json()) as {

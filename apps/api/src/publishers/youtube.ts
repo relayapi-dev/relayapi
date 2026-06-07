@@ -1,5 +1,5 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const YOUTUBE_API = "https://www.googleapis.com/youtube/v3";
 const YOUTUBE_UPLOAD_API = "https://www.googleapis.com/upload/youtube/v3";
@@ -34,7 +34,10 @@ async function fetchMediaBytes(
 ): Promise<{ bytes: ArrayBuffer; contentType: string; size: number }> {
 	const res = await fetchPublicUrl(url, { timeout: 30_000 });
 	if (!res.ok) {
-		throw new Error(`Failed to fetch media from ${url}: ${res.statusText}`);
+		throw new PublishError(`Failed to fetch media from ${url}: ${res.statusText}`, {
+			statusCode: res.status,
+			detail: `HTTP ${res.status} ${res.statusText}`,
+		});
 	}
 	const bytes = await res.arrayBuffer();
 	const contentType =
@@ -133,16 +136,17 @@ async function uploadVideo(
 	if (!initRes.ok) {
 		const err = await initRes.json().catch(() => ({}));
 		const errBody = JSON.stringify(err);
+		const raw = `HTTP ${initRes.status}\n${errBody}`;
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
 			initRes.statusText;
 		if (initRes.status === 401 || errBody.includes("Unauthorized") || errBody.includes("UNAUTHENTICATED") || errBody.includes("invalid_grant")) {
-			throw new Error(`TOKEN_EXPIRED: ${detail}`);
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: initRes.status, detail: raw });
 		}
 		if (errBody.includes("uploadLimitExceeded")) {
-			throw new Error(`RATE_LIMITED: Daily upload limit reached`);
+			throw new PublishError(`RATE_LIMITED: Daily upload limit reached`, { statusCode: initRes.status, detail: raw });
 		}
-		throw new Error(`YouTube upload initialization failed: ${detail}`);
+		throw new PublishError(`YouTube upload initialization failed: ${detail}`, { statusCode: initRes.status, detail: raw });
 	}
 
 	const uploadUri = initRes.headers.get("location");
@@ -184,10 +188,11 @@ async function uploadVideo(
 		}
 
 		const err = await uploadRes.json().catch(() => ({}));
+		const raw = `HTTP ${uploadRes.status}\n${JSON.stringify(err)}`;
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
 			uploadRes.statusText;
-		throw new Error(`YouTube video upload failed: ${detail}`);
+		throw new PublishError(`YouTube video upload failed: ${detail}`, { statusCode: uploadRes.status, detail: raw });
 	}
 
 	if (!uploadData) {
@@ -223,10 +228,11 @@ async function setThumbnail(
 
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
 			res.statusText;
-		throw new Error(`YouTube thumbnail upload failed: ${detail}`);
+		throw new PublishError(`YouTube thumbnail upload failed: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 }
 
@@ -266,10 +272,11 @@ async function postFirstComment(
 
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
 			res.statusText;
-		throw new Error(`YouTube first comment failed: ${detail}`);
+		throw new PublishError(`YouTube first comment failed: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	const data = (await res.json()) as {

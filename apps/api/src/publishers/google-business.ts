@@ -1,4 +1,4 @@
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const GBP_API = "https://mybusiness.googleapis.com/v4";
 
@@ -15,9 +15,9 @@ async function gbpFetch(
 			...(options.headers ?? {}),
 		},
 	});
-	if (res.status === 401) throw new Error("TOKEN_EXPIRED: Google Business Profile token expired or invalid");
-	if (res.status === 403) throw new Error("TOKEN_EXPIRED: Google Business Profile access forbidden — token may need refresh");
-	if (res.status === 429) throw new Error("RATE_LIMITED: Google Business Profile rate limit exceeded");
+	if (res.status === 401) throw new PublishError("TOKEN_EXPIRED: Google Business Profile token expired or invalid", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 403) throw new PublishError("TOKEN_EXPIRED: Google Business Profile access forbidden — token may need refresh", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 429) throw new PublishError("RATE_LIMITED: Google Business Profile rate limit exceeded", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
 	return res;
 }
 
@@ -180,7 +180,8 @@ export const googleBusinessPublisher: Publisher = {
 				const detail =
 					(err as { error?: { message?: string } }).error?.message ??
 					res.statusText;
-				throw new Error(`Google Business post creation failed: ${detail}`);
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+				throw new PublishError(`Google Business post creation failed: ${detail}`, { statusCode: res.status, detail: raw });
 			}
 
 			const result = (await res.json()) as {

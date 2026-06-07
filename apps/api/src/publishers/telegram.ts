@@ -1,5 +1,6 @@
 import {
 	classifyPublishError,
+	PublishError,
 	type MediaAttachment,
 	type Publisher,
 	type PublishRequest,
@@ -54,13 +55,14 @@ async function callTelegramApi(
 	const data = (await res.json()) as TelegramResponse;
 	if (!data.ok) {
 		const desc = data.description ?? `Telegram API error: ${method}`;
+		const raw = `HTTP ${res.status}\n${JSON.stringify(data)}`;
 		if (data.description?.includes("Too Many Requests")) {
-			throw new Error(`RATE_LIMITED: ${desc}`);
+			throw new PublishError(`RATE_LIMITED: ${desc}`, { statusCode: res.status, detail: raw });
 		}
 		if (data.description?.includes("Unauthorized") || data.description?.includes("bot was blocked")) {
-			throw new Error(`TOKEN_EXPIRED: ${desc}`);
+			throw new PublishError(`TOKEN_EXPIRED: ${desc}`, { statusCode: res.status, detail: raw });
 		}
-		throw new Error(desc);
+		throw new PublishError(desc, { statusCode: res.status, detail: raw });
 	}
 	return data;
 }

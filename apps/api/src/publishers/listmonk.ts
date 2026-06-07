@@ -1,5 +1,5 @@
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 /**
  * ListMonk publisher.
@@ -114,11 +114,12 @@ export const listmonkPublisher: Publisher = {
 			if (!createRes.ok) {
 				const err = await createRes.json().catch(() => ({}));
 				const detail = (err as any)?.message ?? createRes.statusText;
+				const raw = `HTTP ${createRes.status}\n${JSON.stringify(err)}`;
 
 				if (createRes.status === 401) {
-					throw new Error(`TOKEN_EXPIRED: ListMonk credentials invalid: ${detail}`);
+					throw new PublishError(`TOKEN_EXPIRED: ListMonk credentials invalid: ${detail}`, { statusCode: createRes.status, detail: raw });
 				}
-				throw new Error(`ListMonk create campaign failed (${createRes.status}): ${detail}`);
+				throw new PublishError(`ListMonk create campaign failed (${createRes.status}): ${detail}`, { statusCode: createRes.status, detail: raw });
 			}
 
 			const created = (await createRes.json()) as {
@@ -151,7 +152,8 @@ export const listmonkPublisher: Publisher = {
 
 			if (!statusRes.ok) {
 				const err = await statusRes.json().catch(() => ({}));
-				throw new Error(`ListMonk start campaign failed: ${(err as any)?.message ?? statusRes.statusText}`);
+				const raw = `HTTP ${statusRes.status}\n${JSON.stringify(err)}`;
+				throw new PublishError(`ListMonk start campaign failed: ${(err as any)?.message ?? statusRes.statusText}`, { statusCode: statusRes.status, detail: raw });
 			}
 
 			return {

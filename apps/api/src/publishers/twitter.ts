@@ -1,5 +1,5 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const TWITTER_API = "https://api.x.com/2";
 const TWITTER_UPLOAD_BASE = "https://api.x.com/2/media/upload";
@@ -89,19 +89,20 @@ async function createTweet(
 			?? (err as { message?: string }).message
 			?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
 			?? res.statusText;
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		if (res.status === 401 || detail.includes("Unsupported Authentication") || detail.includes("unauthorized")) {
-			throw new Error(`TOKEN_EXPIRED: ${detail}`);
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
 		}
 		if (res.status === 429 || detail.includes("usage-capped") || detail.includes("Rate limit")) {
-			throw new Error(`RATE_LIMITED: ${detail}`);
+			throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
 		}
 		if (res.status === 403) {
-			throw new Error(`CONTENT_ERROR: Forbidden — ${detail}`);
+			throw new PublishError(`CONTENT_ERROR: Forbidden — ${detail}`, { statusCode: res.status, detail: raw });
 		}
 		if (res.status >= 500) {
-			throw new Error(`PLATFORM_ERROR: ${detail}`);
+			throw new PublishError(`PLATFORM_ERROR: ${detail}`, { statusCode: res.status, detail: raw });
 		}
-		throw new Error(`Twitter tweet creation failed: ${detail}`);
+		throw new PublishError(`Twitter tweet creation failed: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	const result = (await res.json()) as { data: { id: string } };
@@ -121,8 +122,9 @@ async function uploadMedia(
 	// Fetch the media file
 	const mediaRes = await fetchPublicUrl(mediaUrl, { timeout: 30_000 });
 	if (!mediaRes.ok) {
-		throw new Error(
+		throw new PublishError(
 			`Failed to fetch media from ${mediaUrl}: ${mediaRes.statusText}`,
+			{ statusCode: mediaRes.status, detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}` },
 		);
 	}
 	const mediaBytes = await mediaRes.arrayBuffer();
@@ -172,9 +174,10 @@ async function uploadMedia(
 			?? (err as { message?: string }).message
 			?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
 			?? initRes.statusText;
-		if (initRes.status === 401) throw new Error(`TOKEN_EXPIRED: ${detail}`);
-		if (initRes.status === 429) throw new Error(`RATE_LIMITED: ${detail}`);
-		throw new Error(`Twitter media INIT failed: ${detail}`);
+		const raw = `HTTP ${initRes.status}\n${JSON.stringify(err)}`;
+		if (initRes.status === 401) throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: initRes.status, detail: raw });
+		if (initRes.status === 429) throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: initRes.status, detail: raw });
+		throw new PublishError(`Twitter media INIT failed: ${detail}`, { statusCode: initRes.status, detail: raw });
 	}
 	const initData = (await initRes.json()) as {
 		data: { id: string; media_key: string };
@@ -208,8 +211,10 @@ async function uploadMedia(
 				?? (err as { message?: string }).message
 				?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
 				?? appendRes.statusText;
-			throw new Error(
+			const raw = `HTTP ${appendRes.status}\n${JSON.stringify(err)}`;
+			throw new PublishError(
 				`Twitter media APPEND failed at segment ${segmentIndex}: ${detail}`,
+				{ statusCode: appendRes.status, detail: raw },
 			);
 		}
 
@@ -231,7 +236,8 @@ async function uploadMedia(
 			?? (err as { message?: string }).message
 			?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
 			?? finalizeRes.statusText;
-		throw new Error(`Twitter media FINALIZE failed: ${detail}`);
+		const raw = `HTTP ${finalizeRes.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(`Twitter media FINALIZE failed: ${detail}`, { statusCode: finalizeRes.status, detail: raw });
 	}
 
 	const finalizeData = (await finalizeRes.json()) as {
@@ -291,7 +297,8 @@ async function pollMediaStatus(
 				?? (err as { message?: string }).message
 				?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
 				?? res.statusText;
-			throw new Error(`Twitter media STATUS check failed: ${detail}`);
+			const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+			throw new PublishError(`Twitter media STATUS check failed: ${detail}`, { statusCode: res.status, detail: raw });
 		}
 
 		// v2 response wraps under { data: { processing_info } }
@@ -353,9 +360,10 @@ export const twitterPublisher: Publisher = {
 					?? (err as { message?: string }).message
 					?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
 					?? res.statusText;
-				if (res.status === 401) throw new Error(`TOKEN_EXPIRED: ${detail}`);
-				if (res.status === 429) throw new Error(`RATE_LIMITED: ${detail}`);
-				throw new Error(`Twitter retweet failed: ${detail}`);
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+				if (res.status === 401) throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
+				if (res.status === 429) throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(`Twitter retweet failed: ${detail}`, { statusCode: res.status, detail: raw });
 			}
 			return { success: true, platform_post_id: platformPostId };
 		} catch (err) {
@@ -390,9 +398,10 @@ export const twitterPublisher: Publisher = {
 					?? (err as { message?: string }).message
 					?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
 					?? res.statusText;
-				if (res.status === 401) throw new Error(`TOKEN_EXPIRED: ${detail}`);
-				if (res.status === 429) throw new Error(`RATE_LIMITED: ${detail}`);
-				throw new Error(`Twitter quote tweet failed: ${detail}`);
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+				if (res.status === 401) throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
+				if (res.status === 429) throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(`Twitter quote tweet failed: ${detail}`, { statusCode: res.status, detail: raw });
 			}
 			const result = (await res.json()) as { data: { id: string } };
 			return { success: true, platform_post_id: result.data.id };

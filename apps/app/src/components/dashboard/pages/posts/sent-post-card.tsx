@@ -57,7 +57,7 @@ export interface SentPostTarget {
 export interface SentPostCardProps {
   postId: string;
   content: string | null;
-  media: Array<{ url: string; type?: string }> | null;
+  media: Array<{ url: string; type?: string; poster?: string }> | null;
   target: SentPostTarget;
   engagement: SentPostEngagement | null;
   onDelete?: (postId: string) => void;
@@ -93,12 +93,12 @@ function formatTime(dateStr: string | null): string {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-function getMediaThumbUrl(media: Array<{ url: string; type?: string }>): string | null {
+function getMediaThumbUrl(media: Array<{ url: string; type?: string; poster?: string }>): string | null {
   if (!media.length) return null;
   return media[0]?.url ?? null;
 }
 
-function isVideo(media: Array<{ url: string; type?: string }>): boolean {
+function isVideo(media: Array<{ url: string; type?: string; poster?: string }>): boolean {
   const first = media[0];
   if (!first) return false;
   if (first.type === "video") return true;
@@ -122,6 +122,7 @@ export function SentPostCard({
 }: SentPostCardProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const thumbUrl = media ? getMediaThumbUrl(media) : null;
+  const posterUrl = media?.[0]?.poster ?? null;
   const hasVideo = media ? isVideo(media) : false;
   const accountName = target.displayName || target.username || "Unknown";
   const platformLabel = platformLabels[target.platform] || target.platform;
@@ -217,13 +218,21 @@ export function SentPostCard({
                 className={cn("shrink-0 relative", target.platformUrl ? "cursor-pointer" : "cursor-zoom-in")}
               >
                 {hasVideo ? (
-                  <video
-                    src={thumbUrl}
-                    muted
-                    preload="metadata"
-                    onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
-                    className="w-20 h-20 sm:w-36 sm:h-36 rounded-md object-cover"
-                  />
+                  posterUrl ? (
+                    <img
+                      src={posterUrl}
+                      alt=""
+                      className="w-20 h-20 sm:w-36 sm:h-36 rounded-md object-cover"
+                    />
+                  ) : (
+                    <video
+                      src={thumbUrl}
+                      muted
+                      preload="metadata"
+                      onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
+                      className="w-20 h-20 sm:w-36 sm:h-36 rounded-md object-cover"
+                    />
+                  )
                 ) : (
                   <img
                     src={thumbUrl}

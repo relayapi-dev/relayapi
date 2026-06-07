@@ -1,5 +1,5 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 /**
  * Discord publisher.
@@ -160,13 +160,14 @@ export const discordPublisher: Publisher = {
 
 			if (res.status === 429) {
 				const retryAfter = res.headers.get("retry-after");
-				throw new Error(`RATE_LIMITED: Discord rate limit exceeded. Retry after ${retryAfter ?? "unknown"} seconds.`);
+				throw new PublishError(`RATE_LIMITED: Discord rate limit exceeded. Retry after ${retryAfter ?? "unknown"} seconds.`, { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
 			}
 
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
 				const detail = (err as { message?: string }).message ?? res.statusText;
-				throw new Error(`Discord webhook failed: ${detail}`);
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+				throw new PublishError(`Discord webhook failed: ${detail}`, { statusCode: res.status, detail: raw });
 			}
 
 			const result = (await res.json()) as {

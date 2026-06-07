@@ -1,6 +1,6 @@
 import { GRAPH_BASE } from "../config/api-versions";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const GRAPH_API = GRAPH_BASE.facebook;
 
@@ -39,6 +39,7 @@ async function graphPost(
 			error?: { message?: string; code?: number; error_subcode?: number };
 		};
 		const detail = err.error?.message ?? res.statusText;
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		const fbCode = err.error?.code;
 		const subcode = err.error?.error_subcode;
 
@@ -46,15 +47,15 @@ async function graphPost(
 		// Docs: https://developers.facebook.com/docs/graph-api/guides/error-handling
 		if (detail.includes("Error validating access token") || detail.includes("REVOKED_ACCESS_TOKEN") ||
 			subcode === 490 || subcode === 463 || subcode === 464 || subcode === 467 || fbCode === 190) {
-			throw new Error(`TOKEN_EXPIRED: ${detail}`);
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
 		}
 		if (subcode === 1390008 || fbCode === 32 || fbCode === 4 || fbCode === 17) {
-			throw new Error(`RATE_LIMITED: ${detail}`);
+			throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
 		}
 		if (fbCode === 368) {
-			throw new Error(`PLATFORM_ERROR: Temporarily blocked — ${detail}`);
+			throw new PublishError(`PLATFORM_ERROR: Temporarily blocked — ${detail}`, { statusCode: res.status, detail: raw });
 		}
-		throw new Error(`Facebook API error: ${detail}`);
+		throw new PublishError(`Facebook API error: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	return res.json() as Promise<Record<string, unknown>>;
@@ -151,7 +152,8 @@ async function createMultiImagePost(
 			error?: { message?: string };
 		};
 		const detail = err.error?.message ?? res.statusText;
-		throw new Error(`Facebook API error: ${detail}`);
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(`Facebook API error: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	const result = (await res.json()) as Record<string, unknown>;
@@ -218,8 +220,9 @@ async function createVideoStory(
 	// Step 2: Upload binary to the upload_url
 	const videoRes = await fetchPublicUrl(videoUrl, { timeout: 30_000 });
 	if (!videoRes.ok) {
-		throw new Error(
+		throw new PublishError(
 			`Failed to fetch story video from ${videoUrl}: ${videoRes.statusText}`,
+			{ statusCode: videoRes.status, detail: `HTTP ${videoRes.status} ${videoRes.statusText}` },
 		);
 	}
 	const videoBlob = await videoRes.arrayBuffer();
@@ -235,7 +238,10 @@ async function createVideoStory(
 		body: videoBlob,
 	});
 	if (!uploadRes.ok) {
-		throw new Error(`Facebook video story upload failed: ${uploadRes.statusText}`);
+		throw new PublishError(`Facebook video story upload failed: ${uploadRes.statusText}`, {
+			statusCode: uploadRes.status,
+			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+		});
 	}
 
 	// Step 3: Finish upload
@@ -269,8 +275,9 @@ async function createReel(
 	// Fetch the video binary from source URL
 	const videoRes = await fetchPublicUrl(videoUrl, { timeout: 30_000 });
 	if (!videoRes.ok) {
-		throw new Error(
+		throw new PublishError(
 			`Failed to fetch reel video from ${videoUrl}: ${videoRes.statusText}`,
+			{ statusCode: videoRes.status, detail: `HTTP ${videoRes.status} ${videoRes.statusText}` },
 		);
 	}
 	const videoBlob = await videoRes.arrayBuffer();
@@ -290,7 +297,10 @@ async function createReel(
 		body: videoBlob,
 	});
 	if (!uploadRes.ok) {
-		throw new Error(`Facebook reel upload failed: ${uploadRes.statusText}`);
+		throw new PublishError(`Facebook reel upload failed: ${uploadRes.statusText}`, {
+			statusCode: uploadRes.status,
+			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+		});
 	}
 
 	// Facebook Graph API: Finish reel upload (phase 3)

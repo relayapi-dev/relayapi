@@ -1,4 +1,4 @@
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 /**
  * Mailchimp publisher.
@@ -86,14 +86,15 @@ export const mailchimpPublisher: Publisher = {
 			if (!campaignRes.ok) {
 				const err = await campaignRes.json().catch(() => ({}));
 				const detail = (err as any)?.detail ?? (err as any)?.title ?? campaignRes.statusText;
+				const raw = `HTTP ${campaignRes.status}\n${JSON.stringify(err)}`;
 
 				if (campaignRes.status === 401) {
-					throw new Error(`TOKEN_EXPIRED: Mailchimp API key invalid: ${detail}`);
+					throw new PublishError(`TOKEN_EXPIRED: Mailchimp API key invalid: ${detail}`, { statusCode: campaignRes.status, detail: raw });
 				}
 				if (campaignRes.status === 429) {
-					throw new Error(`RATE_LIMITED: ${detail}`);
+					throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: campaignRes.status, detail: raw });
 				}
-				throw new Error(`Mailchimp create campaign failed (${campaignRes.status}): ${detail}`);
+				throw new PublishError(`Mailchimp create campaign failed (${campaignRes.status}): ${detail}`, { statusCode: campaignRes.status, detail: raw });
 			}
 
 			const campaign = (await campaignRes.json()) as {
@@ -121,7 +122,8 @@ export const mailchimpPublisher: Publisher = {
 
 			if (!contentRes.ok) {
 				const err = await contentRes.json().catch(() => ({}));
-				throw new Error(`Mailchimp set content failed: ${(err as any)?.detail ?? contentRes.statusText}`);
+				const raw = `HTTP ${contentRes.status}\n${JSON.stringify(err)}`;
+				throw new PublishError(`Mailchimp set content failed: ${(err as any)?.detail ?? contentRes.statusText}`, { statusCode: contentRes.status, detail: raw });
 			}
 
 			// Step 4: Send or schedule the campaign
@@ -143,7 +145,8 @@ export const mailchimpPublisher: Publisher = {
 
 				if (!scheduleRes.ok) {
 					const err = await scheduleRes.json().catch(() => ({}));
-					throw new Error(`Mailchimp schedule failed: ${(err as any)?.detail ?? scheduleRes.statusText}`);
+					const raw = `HTTP ${scheduleRes.status}\n${JSON.stringify(err)}`;
+					throw new PublishError(`Mailchimp schedule failed: ${(err as any)?.detail ?? scheduleRes.statusText}`, { statusCode: scheduleRes.status, detail: raw });
 				}
 			} else {
 				// Docs: https://mailchimp.com/developer/marketing/api/campaigns/send-campaign/
@@ -157,7 +160,8 @@ export const mailchimpPublisher: Publisher = {
 
 				if (!sendRes.ok) {
 					const err = await sendRes.json().catch(() => ({}));
-					throw new Error(`Mailchimp send failed: ${(err as any)?.detail ?? sendRes.statusText}`);
+					const raw = `HTTP ${sendRes.status}\n${JSON.stringify(err)}`;
+					throw new PublishError(`Mailchimp send failed: ${(err as any)?.detail ?? sendRes.statusText}`, { statusCode: sendRes.status, detail: raw });
 				}
 			}
 

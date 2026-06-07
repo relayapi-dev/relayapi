@@ -1,5 +1,5 @@
 import { GRAPH_BASE } from "../config/api-versions";
-import { classifyPublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const GRAPH_API = GRAPH_BASE.threads;
 
@@ -37,15 +37,16 @@ async function graphPost(
 		const detail = err.error?.message ?? res.statusText;
 		const errCode = err.error?.code;
 		const errSubcode = err.error?.error_subcode;
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		// Detect token expiration
 		// Docs: https://developers.facebook.com/docs/threads/troubleshooting
 		if (errCode === 190 || detail.includes("Error validating access token") || detail.includes("session has been invalidated")) {
-			throw new Error(`TOKEN_EXPIRED: ${detail}`);
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
 		}
 		if (errSubcode === 4 || res.status === 429) {
-			throw new Error(`RATE_LIMITED: ${detail}`);
+			throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
 		}
-		throw new Error(`Threads API error: ${detail}`);
+		throw new PublishError(`Threads API error: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	return res.json() as Promise<Record<string, unknown>>;
@@ -70,7 +71,8 @@ async function graphGet(
 			error?: { message?: string };
 		};
 		const detail = err.error?.message ?? res.statusText;
-		throw new Error(`Threads API error: ${detail}`);
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(`Threads API error: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	return res.json() as Promise<Record<string, unknown>>;

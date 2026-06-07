@@ -1,5 +1,5 @@
 import { API_VERSIONS } from "../config/api-versions";
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const DEBUG = false;
 
@@ -40,18 +40,19 @@ async function graphPost(
 			error?: { message?: string; type?: string; code?: number; error_subcode?: number };
 		};
 		const detail = err.error?.message ?? res.statusText;
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		const subcode = err.error?.error_subcode;
 		if (DEBUG) console.error(`[instagram-publisher] POST ${endpoint} failed: ${res.status} ${err.error?.message ?? "unknown"}`);
 
 		// Classify Instagram-specific errors
 		if (detail.includes("Error validating access token") || detail.includes("REVOKED_ACCESS_TOKEN") ||
 			detail.includes("session has been invalidated") || err.error?.code === 190) {
-			throw new Error(`TOKEN_EXPIRED: ${detail}`);
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
 		}
 		if (subcode === 2207042) {
-			throw new Error(`RATE_LIMITED: Daily post limit reached`);
+			throw new PublishError(`RATE_LIMITED: Daily post limit reached`, { statusCode: res.status, detail: raw });
 		}
-		throw new Error(`Instagram API error: ${detail}`);
+		throw new PublishError(`Instagram API error: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	const result = await res.json() as Record<string, unknown>;
@@ -77,7 +78,8 @@ async function graphGet(
 			error?: { message?: string };
 		};
 		const detail = err.error?.message ?? res.statusText;
-		throw new Error(`Instagram API error: ${detail}`);
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(`Instagram API error: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	return res.json() as Promise<Record<string, unknown>>;

@@ -1,5 +1,5 @@
 import { GRAPH_BASE } from "../config/api-versions";
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const WA_API_BASE = GRAPH_BASE.facebook;
 
@@ -31,13 +31,14 @@ async function waFetch(
 	if (!res.ok || data.error) {
 		const msg = data.error?.message ?? `WhatsApp API error: ${res.status}`;
 		const code = data.error?.code;
+		const raw = `HTTP ${res.status}\n${JSON.stringify(data)}`;
 		if (res.status === 401 || code === 190) {
-			throw new Error(`TOKEN_EXPIRED: ${msg}`);
+			throw new PublishError(`TOKEN_EXPIRED: ${msg}`, { statusCode: res.status, detail: raw });
 		}
 		if (res.status === 429 || code === 4 || code === 80007) {
-			throw new Error(`RATE_LIMITED: ${msg}`);
+			throw new PublishError(`RATE_LIMITED: ${msg}`, { statusCode: res.status, detail: raw });
 		}
-		throw new Error(msg);
+		throw new PublishError(msg, { statusCode: res.status, detail: raw });
 	}
 
 	return data;

@@ -1,4 +1,4 @@
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 /**
  * Beehiiv publisher.
@@ -104,14 +104,15 @@ export const beehiivPublisher: Publisher = {
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
 				const detail = (err as any)?.errors?.[0]?.message ?? (err as any)?.message ?? res.statusText;
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 
 				if (res.status === 401) {
-					throw new Error(`TOKEN_EXPIRED: Beehiiv API key is invalid: ${detail}`);
+					throw new PublishError(`TOKEN_EXPIRED: Beehiiv API key is invalid: ${detail}`, { statusCode: res.status, detail: raw });
 				}
 				if (res.status === 429) {
-					throw new Error(`RATE_LIMITED: ${detail}`);
+					throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
 				}
-				throw new Error(`Beehiiv publish failed (${res.status}): ${detail}`);
+				throw new PublishError(`Beehiiv publish failed (${res.status}): ${detail}`, { statusCode: res.status, detail: raw });
 			}
 
 			// Create Post response only returns { data: { id } }

@@ -550,7 +550,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 		breakdowns?: string[],
 	): Promise<AdMetricsWithDemographics> {
 		const fields =
-			"impressions,reach,clicks,spend,actions,video_views,ctr,cpc,cpm";
+			"impressions,reach,clicks,spend,actions,ctr,cpc,cpm";
 		let url = `${GRAPH_API}/${platformAdId}/insights?fields=${fields}&time_range={"since":"${dateRange.startDate}","until":"${dateRange.endDate}"}&time_increment=1`;
 
 		const data = await metaFetch<{
@@ -561,7 +561,6 @@ export const metaAdAdapter: AdPlatformAdapter = {
 				clicks?: string;
 				spend?: string;
 				actions?: { action_type: string; value: string }[];
-				video_views?: string;
 				ctr?: string;
 				cpc?: string;
 				cpm?: string;
@@ -587,7 +586,10 @@ export const metaAdAdapter: AdPlatformAdapter = {
 				clicks: Number(d.clicks ?? 0),
 				spendCents: Math.round(Number(d.spend ?? 0) * 100),
 				conversions,
-				videoViews: Number(d.video_views ?? 0),
+				videoViews: Number(
+					d.actions?.find((a) => a.action_type === "video_view")
+						?.value ?? 0,
+				),
 				engagement:
 					Number(d.clicks ?? 0) +
 					(d.actions?.reduce(

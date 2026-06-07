@@ -455,6 +455,8 @@ export const postTargets = pgTable(
 		platformPostId: text("platform_post_id"),
 		platformUrl: text("platform_url"),
 		error: text("error"),
+		errorCode: text("error_code"),
+		errorDetail: text("error_detail"),
 		publishedAt: timestamp("published_at", { withTimezone: true }),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
