@@ -35,6 +35,7 @@ import {
 import type { Env, Variables } from "../types";
 import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
 import { assertScopedCreateWorkspace } from "../lib/request-access";
+import { presignRelayMediaUrls } from "../lib/r2-presign";
 import { ensureDefaultGroup } from "./idea-groups";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -80,6 +81,19 @@ function serializeIdea(
 		created_at: row.createdAt.toISOString(),
 		updated_at: row.updatedAt.toISOString(),
 	};
+}
+
+// The relayapi-media bucket is private; media.relayapi.dev URLs must be presigned
+// before a browser <img>/<video> can fetch them (same as posts.ts). presignRelay-
+// MediaUrls preserves every other row field, so serializeIdea reads them unchanged.
+async function serializeIdeaWithMedia(
+	env: Env,
+	row: typeof ideas.$inferSelect,
+	tagRows: (typeof tags.$inferSelect)[],
+	mediaRows: (typeof ideaMedia.$inferSelect)[],
+) {
+	const presigned = (await presignRelayMediaUrls(env, mediaRows)) ?? mediaRows;
+	return serializeIdea(row, tagRows, presigned);
 }
 
 async function fetchIdeaTags(
@@ -317,11 +331,14 @@ app.openapi(listIdeas, async (c) => {
 
 	return c.json(
 		{
-			data: data.map((row) =>
-				serializeIdea(
-					row,
-					tagsByIdeaId.get(row.id) ?? [],
-					mediaByIdeaId.get(row.id) ?? [],
+			data: await Promise.all(
+				data.map((row) =>
+					serializeIdeaWithMedia(
+						c.env,
+						row,
+						tagsByIdeaId.get(row.id) ?? [],
+						mediaByIdeaId.get(row.id) ?? [],
+					),
 				),
 			),
 			next_cursor: hasMore
@@ -381,7 +398,7 @@ app.openapi(getIdea, async (c) => {
 		fetchIdeaMedia(db, id),
 	]);
 
-	return c.json(serializeIdea(row, tagRows, mediaRows), 200);
+	return c.json(await serializeIdeaWithMedia(c.env, row, tagRows, mediaRows), 200);
 });
 
 // ── Create idea ───────────────────────────────────────────────────────────────
@@ -489,7 +506,7 @@ app.openapi(createIdea, async (c) => {
 		fetchIdeaMedia(db, row.id),
 	]);
 
-	return c.json(serializeIdea(row, tagRows, mediaRows), 201);
+	return c.json(await serializeIdeaWithMedia(c.env, row, tagRows, mediaRows), 201);
 });
 
 // ── Update idea ───────────────────────────────────────────────────────────────
@@ -584,7 +601,10 @@ app.openapi(updateIdea, async (c) => {
 		fetchIdeaMedia(db, id),
 	]);
 
-	return c.json(serializeIdea(updatedRow ?? existing, tagRows, mediaRows), 200);
+	return c.json(
+		await serializeIdeaWithMedia(c.env, updatedRow ?? existing, tagRows, mediaRows),
+		200,
+	);
 });
 
 // ── Delete idea ───────────────────────────────────────────────────────────────
@@ -760,7 +780,10 @@ app.openapi(moveIdea, async (c) => {
 		fetchIdeaMedia(db, id),
 	]);
 
-	return c.json(serializeIdea(updatedRow ?? existing, tagRows, mediaRows), 200);
+	return c.json(
+		await serializeIdeaWithMedia(c.env, updatedRow ?? existing, tagRows, mediaRows),
+		200,
+	);
 });
 
 // ── Convert idea ──────────────────────────────────────────────────────────────
@@ -862,7 +885,7 @@ app.openapi(convertIdea, async (c) => {
 
 	return c.json(
 		{
-			idea: serializeIdea(updatedRow ?? existing, tagRows, mediaRows),
+			idea: await serializeIdeaWithMedia(c.env, updatedRow ?? existing, tagRows, mediaRows),
 			post_id: newPost.id,
 		},
 		200,
@@ -1021,7 +1044,8 @@ app.openapi(uploadIdeaMedia, async (c) => {
 		filename: file.name,
 	});
 
-	return c.json(serializeMedia(mediaRow), 201);
+	const [presignedRow] = (await presignRelayMediaUrls(c.env, [mediaRow])) ?? [mediaRow];
+	return c.json(serializeMedia(presignedRow ?? mediaRow), 201);
 });
 
 // ── Delete idea media ─────────────────────────────────────────────────────────

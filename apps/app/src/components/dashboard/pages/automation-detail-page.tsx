@@ -592,25 +592,6 @@ export function AutomationDetailPage({ automationId }: Props) {
 							>
 								<FlaskConical className="size-3.5" />
 							</Button>
-							<Button
-								variant="ghost"
-								size="sm"
-								onClick={() => {
-									setToolbarPanel((prev) =>
-										prev === "bindings" ? null : "bindings",
-									);
-									setTriggerSelected(false);
-									setSelectedEntrypointId(null);
-									graphStore.setSelection([]);
-								}}
-								title="Bindings"
-								className={cn(
-									"h-7 w-7 p-0",
-									toolbarPanel === "bindings" && "bg-accent/40",
-								)}
-							>
-								<Link2 className="size-3.5" />
-							</Button>
 							<div className="mx-0.5 h-4 w-px bg-border" />
 						</>
 					)}
@@ -705,6 +686,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 							onSelectTrigger={handleSelectTrigger}
 							onAddEntrypoint={handleAddEntrypoint}
 							onPaneClick={handlePaneClick}
+							bindings={bindings}
+							onSelectBinding={handleSelectBinding}
+							onAddBinding={handleAddBinding}
 						/>
 					)}
 					{tab === "runs" && (
@@ -737,14 +721,24 @@ export function AutomationDetailPage({ automationId }: Props) {
 						onClose={() => setToolbarPanel(null)}
 					/>
 				)}
-				{tab === "canvas" && toolbarPanel === "bindings" && (
-					<BindingsPanel
-						automationId={automation.id}
-						onClose={() => setToolbarPanel(null)}
-					/>
-				)}
 				{tab === "canvas" &&
 					toolbarPanel === null &&
+					(selectedBindingId || creatingBindingType) && (
+						<BindingDetailPanel
+							automationId={automation.id}
+							channel={automation.channel as BindingChannel}
+							binding={selectedBinding}
+							createType={creatingBindingType}
+							onClose={handleCloseBinding}
+							onChanged={handleBindingsChanged}
+							onSelectBindingId={handleSelectBindingId}
+							readOnly={readOnly}
+						/>
+					)}
+				{tab === "canvas" &&
+					toolbarPanel === null &&
+					!selectedBindingId &&
+					!creatingBindingType &&
 					triggerSelected && (
 						<TriggerPanel
 							automationId={automation.id}
@@ -759,6 +753,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 					)}
 				{tab === "canvas" &&
 					toolbarPanel === null &&
+					!selectedBindingId &&
+					!creatingBindingType &&
 					!triggerSelected &&
 					selectedNode && (
 						<PropertyPanel

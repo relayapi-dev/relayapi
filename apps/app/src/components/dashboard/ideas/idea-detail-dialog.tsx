@@ -109,6 +109,12 @@ function MediaTile({
 	const [imgError, setImgError] = useState(false);
 	const [videoError, setVideoError] = useState(false);
 
+	// A refreshed/presigned URL deserves a clean retry — clear stale error state.
+	useEffect(() => {
+		setImgError(false);
+		setVideoError(false);
+	}, [url]);
+
 	const isImage =
 		type === "image" ||
 		type === "gif" ||
