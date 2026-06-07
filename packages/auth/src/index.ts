@@ -93,7 +93,7 @@ export function createAuth(db: Database, env: AuthEnv) {
 			admin(),
 			organizationPlugin({
 				ac,
-				roles: roles as Record<string, typeof ownerRole>,
+				roles: roles as unknown as Record<string, typeof ownerRole>,
 				allowUserToCreateOrganization: true,
 				organizationLimit: 2,
 				creatorRole: "owner",
