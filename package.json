@@ -105,5 +105,8 @@
 	},
 	"patchedDependencies": {
 		"undici@7.24.4": "patches/undici@7.24.4.patch"
+	},
+	"overrides": {
+		"kysely": "0.28.17"
 	}
 }
