@@ -34,24 +34,35 @@ console.log("[postinstall] Compiled to .source/source.config.mjs");
 // Step 2: Find fumadocs-mdx internal modules dynamically (hashed filenames change per version)
 function findFile(dir: string, prefix: string): string {
 	const files = fs.readdirSync(dir);
-	const match = files.find(
-		(f) => f.startsWith(prefix) && f.endsWith(".js") && !f.includes("-mdx-"),
-	);
+	const match = files.find((f) => f.startsWith(prefix) && f.endsWith(".js"));
 	if (!match) throw new Error(`Cannot find ${prefix}*.js in ${dir}`);
 	return path.join(dir, match);
 }
 
-const buildConfigPath = findFile(distDir, "build-");
+// fumadocs-mdx 15.x consolidated `buildConfig` into the core module, exposed via
+// the minified export `i` (createCore is `n`, both from core-*.js). If a future
+// version renames these, the guard below fails loudly — update to match the new
+// exports in node_modules/fumadocs-mdx/dist/core-*.js.
 const corePath = findFile(distDir, "core-");
 const indexFilePath = path.join(distDir, "plugins/index-file.js");
 
 // Import core modules
-const buildConfig = await import(pathToFileURL(buildConfigPath).href);
 const coreModule = await import(pathToFileURL(corePath).href);
 const indexFileModule = await import(pathToFileURL(indexFilePath).href);
 
-const { n: createCore } = coreModule;
+const { n: createCore, i: buildConfig } = coreModule;
 const indexFile = indexFileModule.default;
+
+if (
+	typeof createCore !== "function" ||
+	typeof buildConfig !== "function" ||
+	typeof indexFile !== "function"
+) {
+	throw new Error(
+		"[postinstall] fumadocs-mdx internal exports changed (createCore/buildConfig/indexFile). " +
+			"Update apps/docs/scripts/postinstall.ts to match node_modules/fumadocs-mdx/dist exports.",
+	);
+}
 
 // Create core with our options
 const core = createCore({
@@ -65,7 +76,8 @@ const core = createCore({
 const configUrl = pathToFileURL(path.join(outDir, "source.config.mjs"));
 configUrl.searchParams.set("hash", Date.now().toString());
 const loaded = await import(configUrl.href);
-const config = buildConfig.t(loaded);
+// buildConfig(config, cwd) — cwd resolves collection `dir` paths like content/docs
+const config = buildConfig(loaded, root);
 
 // Init and emit
 await core.init({ config });
