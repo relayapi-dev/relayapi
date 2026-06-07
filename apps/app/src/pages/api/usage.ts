@@ -14,7 +14,7 @@ export const GET: APIRoute = async (ctx) => {
       },
       period_start: data.usage.cycle_start,
       period_end: data.usage.cycle_end,
-    }, { headers: { "Cache-Control": "private, max-age=60" } });
+    }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (e: any) {
     const headers = e?.headers as Headers | undefined;
     const usageCount = headers?.get("x-usage-count");

@@ -1,5 +1,5 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const SNAPCHAT_API = "https://businessapi.snapchat.com/v1";
 
@@ -18,8 +18,8 @@ async function snapchatFetch(
 	});
 	// Snapchat rate limits: 20 req/s per app, 10 req/s per token
 	// Docs: https://developers.snap.com/api/marketing-api/Ads-API/rate-limits
-	if (res.status === 401) throw new Error(`TOKEN_EXPIRED: Snapchat access token invalid or expired`);
-	if (res.status === 429) throw new Error(`RATE_LIMITED: Snapchat rate limit exceeded`);
+	if (res.status === 401) throw new PublishError(`TOKEN_EXPIRED: Snapchat access token invalid or expired`, { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 429) throw new PublishError(`RATE_LIMITED: Snapchat rate limit exceeded`, { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
 	return res;
 }
 
@@ -191,7 +191,8 @@ export const snapchatPublisher: Publisher = {
 				const err = await createMediaRes
 					.text()
 					.catch(() => createMediaRes.statusText);
-				throw new Error(`Snapchat media container creation failed: ${err}`);
+				const raw = `HTTP ${createMediaRes.status}\n${err}`;
+				throw new PublishError(`Snapchat media container creation failed: ${err}`, { statusCode: createMediaRes.status, detail: raw });
 			}
 
 			const createMediaResult = (await createMediaRes.json()) as {
@@ -231,7 +232,8 @@ export const snapchatPublisher: Publisher = {
 				const err = await uploadRes
 					.text()
 					.catch(() => uploadRes.statusText);
-				throw new Error(`Snapchat media upload failed: ${err}`);
+				const raw = `HTTP ${uploadRes.status}\n${err}`;
+				throw new PublishError(`Snapchat media upload failed: ${err}`, { statusCode: uploadRes.status, detail: raw });
 			}
 
 			// --- Step 4: Finalize the upload (multipart form, not JSON) ---
@@ -250,7 +252,8 @@ export const snapchatPublisher: Publisher = {
 				const err = await finalizeRes
 					.text()
 					.catch(() => finalizeRes.statusText);
-				throw new Error(`Snapchat media finalize failed: ${err}`);
+				const raw = `HTTP ${finalizeRes.status}\n${err}`;
+				throw new PublishError(`Snapchat media finalize failed: ${err}`, { statusCode: finalizeRes.status, detail: raw });
 			}
 
 			// --- Step 5: Create post using the media_id ---
@@ -295,9 +298,10 @@ export const snapchatPublisher: Publisher = {
 
 			if (!postRes.ok) {
 				const err = await postRes.json().catch(() => ({}));
+				const raw = `HTTP ${postRes.status}\n${JSON.stringify(err)}`;
 				const detail =
 					(err as { message?: string }).message ?? postRes.statusText;
-				throw new Error(`Snapchat post creation failed: ${detail}`);
+				throw new PublishError(`Snapchat post creation failed: ${detail}`, { statusCode: postRes.status, detail: raw });
 			}
 
 			const postResult = (await postRes.json()) as Record<string, unknown>;

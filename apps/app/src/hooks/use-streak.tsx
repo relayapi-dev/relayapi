@@ -26,18 +26,24 @@ const StreakContext = createContext<StreakContextValue>({
   refetch: () => {},
 });
 
-const STREAK_CACHE_KEY = "relayapi:streak:v1";
+const STREAK_CACHE_PREFIX = "relayapi:streak:v1";
 const STREAK_CACHE_TTL_MS = 60_000;
 
-function readStreakCache(): StreakData | null {
-  if (typeof window === "undefined") return null;
+// Cache is scoped per active org so switching orgs never reads another org's
+// streak. Returns null when there is no active org (skip caching entirely).
+function streakCacheKey(orgId: string | null | undefined): string | null {
+  return orgId ? `${STREAK_CACHE_PREFIX}:${orgId}` : null;
+}
+
+function readStreakCache(key: string | null): StreakData | null {
+  if (!key || typeof window === "undefined") return null;
 
   try {
-    const raw = window.sessionStorage.getItem(STREAK_CACHE_KEY);
+    const raw = window.sessionStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { timestamp: number; data: StreakData };
     if (!parsed?.timestamp || Date.now() - parsed.timestamp > STREAK_CACHE_TTL_MS) {
-      window.sessionStorage.removeItem(STREAK_CACHE_KEY);
+      window.sessionStorage.removeItem(key);
       return null;
     }
     return parsed.data;
@@ -46,12 +52,12 @@ function readStreakCache(): StreakData | null {
   }
 }
 
-function writeStreakCache(data: StreakData) {
-  if (typeof window === "undefined") return;
+function writeStreakCache(key: string | null, data: StreakData) {
+  if (!key || typeof window === "undefined") return;
 
   try {
     window.sessionStorage.setItem(
-      STREAK_CACHE_KEY,
+      key,
       JSON.stringify({ timestamp: Date.now(), data }),
     );
   } catch {
@@ -59,11 +65,18 @@ function writeStreakCache(data: StreakData) {
   }
 }
 
-export function StreakProvider({ children }: { children: React.ReactNode }) {
+export function StreakProvider({
+  children,
+  orgId,
+}: {
+  children: React.ReactNode;
+  orgId?: string | null;
+}) {
   const [streak, setStreak] = useState<StreakData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const fetchedRef = useRef(false);
+  const cacheKey = streakCacheKey(orgId);
 
   const fetchStreak = useCallback(async (options?: { background?: boolean }) => {
     const background = options?.background ?? false;
@@ -78,7 +91,7 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setStreak(data);
-        writeStreakCache(data);
+        writeStreakCache(cacheKey, data);
       } else {
         const err = await res.json().catch(() => null);
         if (!background) {
@@ -94,12 +107,12 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [cacheKey]);
 
   useEffect(() => {
     if (!fetchedRef.current) {
       fetchedRef.current = true;
-      const cached = readStreakCache();
+      const cached = readStreakCache(cacheKey);
       if (cached) {
         setStreak(cached);
         setLoading(false);
@@ -112,7 +125,7 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
         void fetchDashboardBootstrap().then((data) => {
           if (data?.streak) {
             setStreak(data.streak);
-            writeStreakCache(data.streak);
+            writeStreakCache(cacheKey, data.streak);
             setLoading(false);
           } else {
             void fetchStreak();
@@ -120,7 +133,7 @@ export function StreakProvider({ children }: { children: React.ReactNode }) {
         });
       }, 250);
     }
-  }, [fetchStreak]);
+  }, [fetchStreak, cacheKey]);
 
   return (
     <StreakContext.Provider value={{ streak, loading, error, refetch: fetchStreak }}>

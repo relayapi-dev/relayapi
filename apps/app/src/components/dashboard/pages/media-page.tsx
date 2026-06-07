@@ -85,6 +85,38 @@ function formatFileSize(bytes: number): string {
   return `${bytes} B`;
 }
 
+function MediaPreview({ file }: { file: MediaFile }) {
+  const [failed, setFailed] = useState(false);
+  const isImage = file.mime_type?.startsWith("image/");
+  const isVideo = file.mime_type?.startsWith("video/");
+
+  if (failed || (!isImage && !isVideo)) {
+    return <ImageIcon className="size-8 text-muted-foreground/40" />;
+  }
+
+  if (isVideo) {
+    return (
+      <video
+        src={file.url}
+        controls
+        playsInline
+        preload="metadata"
+        className="size-full object-cover"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return (
+    <img
+      src={file.url}
+      alt={file.filename}
+      className="size-full object-cover"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export function MediaPage({
   initialTab = "library",
 }: {
@@ -203,23 +235,7 @@ export function MediaPage({
                   className="group rounded-md border border-border overflow-hidden hover:bg-accent/20 transition-colors"
                 >
                   <div className="aspect-video bg-accent/20 flex items-center justify-center">
-                    {file.mime_type?.startsWith("image/") ? (
-                      <img
-                        src={file.url}
-                        alt={file.filename}
-                        className="size-full object-cover"
-                        onError={(e) => {
-                          const target = e.currentTarget;
-                          target.style.display = "none";
-                          target.nextElementSibling?.classList.remove("hidden");
-                        }}
-                      />
-                    ) : null}
-                    {!file.mime_type?.startsWith("image/") ? (
-                      <ImageIcon className="size-8 text-muted-foreground/40" />
-                    ) : (
-                      <ImageIcon className="size-8 text-muted-foreground/40 hidden" />
-                    )}
+                    <MediaPreview file={file} />
                   </div>
                   <div className="p-3 flex items-center justify-between">
                     <div className="min-w-0">

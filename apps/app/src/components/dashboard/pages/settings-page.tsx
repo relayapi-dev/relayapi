@@ -510,7 +510,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
       })
       .catch(() => setPrefsError(true))
       .finally(() => setPrefsLoading(false));
-  }, []);
+  }, [activeOrg]);
 
   const savePrefs = useCallback((updated: NotificationPrefs) => {
     clearTimeout(saveTimer.current);

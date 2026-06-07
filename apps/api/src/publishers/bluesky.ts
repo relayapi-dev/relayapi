@@ -50,8 +50,10 @@ async function createSession(
 	});
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
-		throw new Error(
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(
 			`Bluesky auth failed: ${(err as Record<string, string>).message ?? res.statusText}`,
+			{ statusCode: res.status, detail: raw },
 		);
 	}
 	return res.json() as Promise<BlueskySession>;
@@ -75,7 +77,10 @@ async function resolveHandle(
 		},
 	);
 	if (!res.ok) {
-		throw new Error(`Failed to resolve handle @${handle}`);
+		throw new PublishError(`Failed to resolve handle @${handle}`, {
+			statusCode: res.status,
+			detail: `HTTP ${res.status} ${res.statusText}`,
+		});
 	}
 	const data = (await res.json()) as { did: string };
 	return data.did;
@@ -169,8 +174,9 @@ async function uploadBlob(
 	// Fetch the media
 	const mediaRes = await fetchPublicUrl(url, { timeout: 30_000 });
 	if (!mediaRes.ok) {
-		throw new Error(
+		throw new PublishError(
 			`Failed to fetch media from ${url}: ${mediaRes.statusText}`,
+			{ statusCode: mediaRes.status, detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}` },
 		);
 	}
 	const blob = await mediaRes.arrayBuffer();
@@ -196,7 +202,10 @@ async function uploadBlob(
 		body: blob,
 	});
 	if (!uploadRes.ok) {
-		throw new Error(`Bluesky blob upload failed: ${uploadRes.statusText}`);
+		throw new PublishError(`Bluesky blob upload failed: ${uploadRes.statusText}`, {
+			statusCode: uploadRes.status,
+			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+		});
 	}
 	const result = (await uploadRes.json()) as {
 		blob: { ref: { $link: string }; mimeType: string; size: number };
@@ -228,8 +237,10 @@ async function getServiceAuth(
 	);
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
-		throw new Error(
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(
 			`Bluesky service auth failed: ${(err as Record<string, string>).message ?? res.statusText}`,
+			{ statusCode: res.status, detail: raw },
 		);
 	}
 	const data = (await res.json()) as { token: string };
@@ -249,8 +260,9 @@ async function uploadVideo(
 	// Fetch the video
 	const mediaRes = await fetchPublicUrl(url, { timeout: 30_000 });
 	if (!mediaRes.ok) {
-		throw new Error(
+		throw new PublishError(
 			`Failed to fetch video from ${url}: ${mediaRes.statusText}`,
+			{ statusCode: mediaRes.status, detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}` },
 		);
 	}
 	const videoBytes = await mediaRes.arrayBuffer();
@@ -287,7 +299,11 @@ async function uploadVideo(
 
 	if (!uploadRes.ok && uploadRes.status !== 409) {
 		const err = await uploadRes.text();
-		throw new Error(`Bluesky video upload failed: ${uploadRes.status} ${err}`);
+		const raw = `HTTP ${uploadRes.status}\n${err}`;
+		throw new PublishError(`Bluesky video upload failed: ${uploadRes.status} ${err}`, {
+			statusCode: uploadRes.status,
+			detail: raw,
+		});
 	}
 
 	// Response wraps data in a jobStatus key
@@ -377,8 +393,10 @@ async function createPost(
 	});
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
-		throw new Error(
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+		throw new PublishError(
 			`Bluesky post creation failed: ${(err as Record<string, string>).message ?? res.statusText}`,
+			{ statusCode: res.status, detail: raw },
 		);
 	}
 	return res.json() as Promise<{ uri: string; cid: string }>;
@@ -401,7 +419,10 @@ export const blueskyPublisher: Publisher = {
 				headers: { Authorization: `Bearer ${session.accessJwt}` },
 			});
 			if (!getRes.ok) {
-				throw new Error(`Failed to fetch post for repost: ${getRes.statusText}`);
+				throw new PublishError(`Failed to fetch post for repost: ${getRes.statusText}`, {
+					statusCode: getRes.status,
+					detail: `HTTP ${getRes.status} ${getRes.statusText}`,
+				});
 			}
 			const postData = (await getRes.json()) as { uri: string; cid: string };
 
@@ -423,7 +444,8 @@ export const blueskyPublisher: Publisher = {
 			});
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
-				throw new Error(`Bluesky repost failed: ${(err as Record<string, string>).message ?? res.statusText}`);
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+				throw new PublishError(`Bluesky repost failed: ${(err as Record<string, string>).message ?? res.statusText}`, { statusCode: res.status, detail: raw });
 			}
 			const result = (await res.json()) as { uri: string };
 			return { success: true, platform_post_id: result.uri };
@@ -445,7 +467,10 @@ export const blueskyPublisher: Publisher = {
 				headers: { Authorization: `Bearer ${session.accessJwt}` },
 			});
 			if (!getRes.ok) {
-				throw new Error(`Failed to fetch post for reply: ${getRes.statusText}`);
+				throw new PublishError(`Failed to fetch post for reply: ${getRes.statusText}`, {
+					statusCode: getRes.status,
+					detail: `HTTP ${getRes.status} ${getRes.statusText}`,
+				});
 			}
 			const postData = (await getRes.json()) as { uri: string; cid: string };
 

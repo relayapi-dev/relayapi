@@ -90,8 +90,8 @@ export function DashboardShell({
 
 	return (
 		<UserProvider user={user ?? null}>
-			<UsageProvider>
-				<StreakProvider>
+			<UsageProvider orgId={organization?.id ?? null}>
+				<StreakProvider orgId={organization?.id ?? null}>
 					<FilterProvider
 						initialWorkspaceId={initialWorkspaceId}
 						initialAccountId={initialAccountId}

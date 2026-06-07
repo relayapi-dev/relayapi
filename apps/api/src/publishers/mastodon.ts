@@ -37,7 +37,10 @@ async function uploadMedia(
 	// Fetch the media file
 	const mediaRes = await fetchPublicUrl(mediaUrl, { timeout: 30_000 });
 	if (!mediaRes.ok) {
-		throw new Error(`Failed to fetch media from ${mediaUrl}: ${mediaRes.statusText}`);
+		throw new PublishError(`Failed to fetch media from ${mediaUrl}: ${mediaRes.statusText}`, {
+			statusCode: mediaRes.status,
+			detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}`,
+		});
 	}
 	const blob = await mediaRes.blob();
 
@@ -56,7 +59,11 @@ async function uploadMedia(
 
 	if (!res.ok) {
 		const err = await res.text().catch(() => "");
-		throw new Error(`Mastodon media upload failed: ${res.status} ${err}`);
+		const raw = `HTTP ${res.status}\n${err}`;
+		throw new PublishError(`Mastodon media upload failed: ${res.status} ${err}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	const data = (await res.json()) as { id: string; url: string | null };
@@ -80,7 +87,10 @@ async function uploadMedia(
 				break;
 			}
 			if (!pollRes.ok && pollRes.status !== 206) {
-				throw new Error(`Mastodon media poll failed: ${pollRes.status}`);
+				throw new PublishError(`Mastodon media poll failed: ${pollRes.status}`, {
+					statusCode: pollRes.status,
+					detail: `HTTP ${pollRes.status} ${pollRes.statusText}`,
+				});
 			}
 		}
 		if (!processed) {
@@ -204,7 +214,8 @@ export const mastodonPublisher: Publisher = {
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
 				const detail = (err as { error?: string }).error ?? res.statusText;
-				throw new Error(`Mastodon post creation failed: ${detail}`);
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+				throw new PublishError(`Mastodon post creation failed: ${detail}`, { statusCode: res.status, detail: raw });
 			}
 
 			const result = (await res.json()) as {

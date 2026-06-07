@@ -24,6 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { PostErrorDetails, collectPostErrors } from "./post-error-details";
 
 interface PostTarget {
   platform: string;
@@ -33,6 +34,7 @@ interface PostTarget {
   platformUrl: string | null;
   platformPostId: string | null;
   status: string;
+  error?: { code: string; message: string; detail?: string };
 }
 
 interface PostEngagement {
@@ -92,6 +94,7 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
   const [shortLinkStats, setShortLinkStats] = useState<Array<{ short_url: string; original_url: string; click_count: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [isLandscape, setIsLandscape] = useState(false);
+  const [errorsExpanded, setErrorsExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,6 +119,7 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
             platformUrl: account?.url ?? null,
             platformPostId: account?.platform_post_id ?? null,
             status: t.status,
+            error: t.error ?? undefined,
           };
         }
 
@@ -208,6 +212,8 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
   const hasVideo = detail.media?.[0]?.type === "video" || (thumbUrl && /\.(mp4|mov|webm|avi)$/i.test(thumbUrl));
   const platformUrl = targets.find((t) => t.platformUrl)?.platformUrl;
   const primaryPlatform = firstTarget?.platform;
+  const errorRows = collectPostErrors(detail.targets);
+  const hasErrors = errorRows.length > 0;
 
   return (
     <PopoverContent className="w-96 p-0" side="right" align="start">
@@ -216,7 +222,18 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
         <span className="text-[11px] text-muted-foreground">
           {dateStr ? formatDateTime(dateStr) : "No date"}
           {" \u00b7 "}
-          {statusLabels[detail.status] || detail.status}
+          {hasErrors ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setErrorsExpanded((v) => !v); }}
+              className="font-medium text-red-400 hover:text-red-300 underline underline-offset-2 transition-colors"
+              title="View error details"
+            >
+              {statusLabels[detail.status] || detail.status}
+            </button>
+          ) : (
+            statusLabels[detail.status] || detail.status
+          )}
         </span>
         {onExpand && (
           <button
@@ -232,6 +249,12 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
           </button>
         )}
       </div>
+
+      {hasErrors && errorsExpanded && (
+        <div className="px-4 pb-3 border-b border-border">
+          <PostErrorDetails errors={errorRows} />
+        </div>
+      )}
 
       {/* Account + content + media */}
       <div className="px-4 pb-3">

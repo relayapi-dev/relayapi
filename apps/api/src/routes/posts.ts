@@ -521,6 +521,8 @@ function buildTargetResponse(
 		platformUrl: string | null;
 		platformPostId?: string | null;
 		error: string | null;
+		errorCode?: string | null;
+		errorDetail?: string | null;
 		username?: string | null;
 		displayName?: string | null;
 		avatarUrl?: string | null;
@@ -543,7 +545,7 @@ function buildTargetResponse(
 				},
 			],
 			...(t.error
-				? { error: { code: "PUBLISH_FAILED", message: t.error } }
+				? { error: { code: t.errorCode ?? "PUBLISH_FAILED", message: t.error, ...(t.errorDetail ? { detail: t.errorDetail } : {}) } }
 				: {}),
 		};
 	}
@@ -649,6 +651,8 @@ app.openapi(listPosts, async (c) => {
 				platformUrl: postTargets.platformUrl,
 				platformPostId: postTargets.platformPostId,
 				error: postTargets.error,
+				errorCode: postTargets.errorCode,
+				errorDetail: postTargets.errorDetail,
 				publishedAt: postTargets.publishedAt,
 				username: socialAccounts.username,
 				displayName: socialAccounts.displayName,
@@ -1035,6 +1039,8 @@ app.openapi(listAllPostLogs, async (c) => {
 			platformPostId: postTargets.platformPostId,
 			platformUrl: postTargets.platformUrl,
 			error: postTargets.error,
+			errorCode: postTargets.errorCode,
+			errorDetail: postTargets.errorDetail,
 			publishedAt: postTargets.publishedAt,
 			updatedAt: postTargets.updatedAt,
 		})
@@ -1634,6 +1640,8 @@ app.openapi(getPost, async (c) => {
 				platformUrl: postTargets.platformUrl,
 				platformPostId: postTargets.platformPostId,
 				error: postTargets.error,
+				errorCode: postTargets.errorCode,
+				errorDetail: postTargets.errorDetail,
 				username: socialAccounts.username,
 				displayName: socialAccounts.displayName,
 				avatarUrl: socialAccounts.avatarUrl,
@@ -1836,6 +1844,8 @@ app.openapi(updatePostRoute, async (c) => {
 				platformUrl: postTargets.platformUrl,
 				platformPostId: postTargets.platformPostId,
 				error: postTargets.error,
+				errorCode: postTargets.errorCode,
+				errorDetail: postTargets.errorDetail,
 				username: socialAccounts.username,
 				displayName: socialAccounts.displayName,
 				avatarUrl: socialAccounts.avatarUrl,

@@ -1,5 +1,5 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const PINTEREST_API = "https://api.pinterest.com/v5";
 
@@ -16,8 +16,8 @@ async function pinterestFetch(
 			...(options.headers ?? {}),
 		},
 	});
-	if (res.status === 401) throw new Error("TOKEN_EXPIRED: Pinterest access token invalid or expired");
-	if (res.status === 429) throw new Error("RATE_LIMITED: Pinterest rate limit exceeded");
+	if (res.status === 401) throw new PublishError("TOKEN_EXPIRED: Pinterest access token invalid or expired", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 429) throw new PublishError("RATE_LIMITED: Pinterest rate limit exceeded", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
 	return res;
 }
 
@@ -163,8 +163,10 @@ export const pinterestPublisher: Publisher = {
 				);
 				if (!registerRes.ok) {
 					const err = await registerRes.json().catch(() => ({}));
-					throw new Error(
+					const raw = `HTTP ${registerRes.status}\n${JSON.stringify(err)}`;
+					throw new PublishError(
 						`Pinterest media register failed: ${(err as { message?: string }).message ?? registerRes.statusText}`,
+						{ statusCode: registerRes.status, detail: raw },
 					);
 				}
 				const registerData = (await registerRes.json()) as {
@@ -179,7 +181,10 @@ export const pinterestPublisher: Publisher = {
 					timeout: 30_000,
 				});
 				if (!videoRes.ok) {
-					throw new Error(`Failed to fetch video: ${videoRes.statusText}`);
+					throw new PublishError(`Failed to fetch video: ${videoRes.statusText}`, {
+						statusCode: videoRes.status,
+						detail: `HTTP ${videoRes.status} ${videoRes.statusText}`,
+					});
 				}
 				const videoBlob = await videoRes.blob();
 
@@ -198,8 +203,9 @@ export const pinterestPublisher: Publisher = {
 					body: uploadForm,
 				});
 				if (!uploadRes.ok) {
-					throw new Error(
+					throw new PublishError(
 						`Pinterest video upload failed: ${uploadRes.statusText}`,
+						{ statusCode: uploadRes.status, detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}` },
 					);
 				}
 
@@ -265,8 +271,9 @@ export const pinterestPublisher: Publisher = {
 
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 				const detail = (err as { message?: string }).message ?? res.statusText;
-				throw new Error(`Pinterest pin creation failed: ${detail}`);
+				throw new PublishError(`Pinterest pin creation failed: ${detail}`, { statusCode: res.status, detail: raw });
 			}
 
 			const result = (await res.json()) as {

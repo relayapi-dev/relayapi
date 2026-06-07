@@ -46,7 +46,7 @@ export interface PublishTargetResult {
 		username: string | null;
 		url: string | null;
 	}>;
-	error?: { code: string; message: string };
+	error?: { code: string; message: string; detail?: string };
 }
 
 /**
@@ -86,7 +86,7 @@ export async function publishToTargets(
 		platform: string;
 		accountId: string;
 		username: string | null;
-		task: () => Promise<{ success: boolean; platform_url?: string | null; platform_post_id?: string | null; error?: { code: string; message: string } }>;
+		task: () => Promise<{ success: boolean; platform_url?: string | null; platform_post_id?: string | null; error?: { code: string; message: string; detail?: string } }>;
 	};
 	const publishTasks: PublishTask[] = [];
 
@@ -115,6 +115,8 @@ export async function publishToTargets(
 					db.update(postTargets).set({
 						status: "failed",
 						error: `Platform ${target.platform} not supported`,
+						errorCode: "PLATFORM_NOT_SUPPORTED",
+						errorDetail: null,
 					}).where(and(eq(postTargets.postId, postId), eq(postTargets.socialAccountId, account.id))),
 				);
 				continue;
@@ -215,7 +217,7 @@ export async function publishToTargets(
 
 		const result = settled.status === "fulfilled"
 			? settled.value
-			: { success: false as const, error: { code: "PUBLISH_ERROR", message: settled.reason?.message ?? "Unknown error" } };
+			: { success: false as const, error: { code: "PUBLISH_ERROR", message: settled.reason?.message ?? "Unknown error", detail: undefined as string | undefined } };
 
 		if (result.success) {
 			dbUpdatePromises.push(
@@ -233,6 +235,8 @@ export async function publishToTargets(
 				db.update(postTargets).set({
 					status: "failed",
 					error: result.error?.message ?? "Unknown error",
+					errorCode: result.error?.code ?? "PUBLISH_FAILED",
+					errorDetail: result.error?.detail ?? null,
 				}).where(and(eq(postTargets.postId, postId), eq(postTargets.socialAccountId, accountId))),
 			);
 			entry.accounts.push({ id: accountId, username, url: null });

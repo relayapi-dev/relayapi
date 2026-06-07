@@ -385,6 +385,8 @@ export namespace PostCreateResponse {
       code: string;
 
       message: string;
+
+      detail?: string;
     }
   }
 }
@@ -529,6 +531,8 @@ export namespace PostRetrieveResponse {
       code: string;
 
       message: string;
+
+      detail?: string;
     }
   }
 }
@@ -663,6 +667,8 @@ export namespace PostUpdateResponse {
       code: string;
 
       message: string;
+
+      detail?: string;
     }
   }
 }
@@ -802,6 +808,8 @@ export namespace PostListResponse {
         code: string;
 
         message: string;
+
+        detail?: string;
       }
     }
   }
@@ -929,6 +937,8 @@ export namespace PostBulkCreateResponse {
         code: string;
 
         message: string;
+
+        detail?: string;
       }
     }
   }
@@ -1057,6 +1067,8 @@ export namespace PostRetryResponse {
       code: string;
 
       message: string;
+
+      detail?: string;
     }
   }
 }
@@ -1176,6 +1188,8 @@ export namespace PostUnpublishResponse {
       code: string;
 
       message: string;
+
+      detail?: string;
     }
   }
 }
@@ -1298,6 +1312,8 @@ export namespace PostBulkCsvUploadResponse {
       code: string;
 
       message: string;
+
+      detail?: string;
     }
   }
 

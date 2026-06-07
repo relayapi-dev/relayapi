@@ -10,7 +10,7 @@ import {
 	notifications,
 	user,
 } from "@relayapi/db";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { sendEmail } from "../lib/email-queue/producer";
 import { AccountDisconnectedNotification } from "../lib/emails/templates/AccountDisconnectedNotification";
 import { PostFailedNotification } from "../lib/emails/templates/PostFailedNotification";
@@ -93,7 +93,12 @@ export async function sendNotification(
 		db
 			.select()
 			.from(notificationPreferences)
-			.where(eq(notificationPreferences.userId, userId))
+			.where(
+				and(
+					eq(notificationPreferences.userId, userId),
+					eq(notificationPreferences.organizationId, orgId),
+				),
+			)
 			.limit(1),
 		db
 			.select({ email: user.email })
@@ -191,7 +196,12 @@ export async function sendNotificationToOrg(
 		db
 			.select()
 			.from(notificationPreferences)
-			.where(inArray(notificationPreferences.userId, userIds)),
+			.where(
+				and(
+					inArray(notificationPreferences.userId, userIds),
+					eq(notificationPreferences.organizationId, orgId),
+				),
+			),
 		db
 			.select({ id: user.id, email: user.email })
 			.from(user)

@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { notificationPreferences, eq } from "@relayapi/db";
+import { and, eq, notificationPreferences } from "@relayapi/db";
 
 const DEFAULTS = {
 	postFailures: { push: true, email: true },
@@ -14,7 +14,8 @@ const DEFAULTS = {
 
 export const GET: APIRoute = async (context) => {
 	const user = context.locals.user;
-	if (!user) {
+	const org = context.locals.organization as { id: string } | null;
+	if (!user || !org) {
 		return Response.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
@@ -24,7 +25,12 @@ export const GET: APIRoute = async (context) => {
 	const [row] = await db
 		.select()
 		.from(notificationPreferences)
-		.where(eq(notificationPreferences.userId, userId))
+		.where(
+			and(
+				eq(notificationPreferences.userId, userId),
+				eq(notificationPreferences.organizationId, org.id),
+			),
+		)
 		.limit(1);
 
 	if (!row) {
@@ -45,7 +51,8 @@ export const GET: APIRoute = async (context) => {
 
 export const PUT: APIRoute = async (context) => {
 	const user = context.locals.user;
-	if (!user) {
+	const org = context.locals.organization as { id: string } | null;
+	if (!user || !org) {
 		return Response.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
@@ -75,21 +82,32 @@ export const PUT: APIRoute = async (context) => {
 		}
 	}
 
-	// Upsert
+	// Upsert scoped to (user, organization)
 	const [existing] = await db
 		.select({ id: notificationPreferences.id })
 		.from(notificationPreferences)
-		.where(eq(notificationPreferences.userId, userId))
+		.where(
+			and(
+				eq(notificationPreferences.userId, userId),
+				eq(notificationPreferences.organizationId, org.id),
+			),
+		)
 		.limit(1);
 
 	if (existing) {
 		await db
 			.update(notificationPreferences)
 			.set(update)
-			.where(eq(notificationPreferences.userId, userId));
+			.where(
+				and(
+					eq(notificationPreferences.userId, userId),
+					eq(notificationPreferences.organizationId, org.id),
+				),
+			);
 	} else {
 		await db.insert(notificationPreferences).values({
 			userId,
+			organizationId: org.id,
 			...update,
 		});
 	}

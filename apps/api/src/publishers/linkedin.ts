@@ -493,7 +493,8 @@ export const linkedinPublisher: Publisher = {
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
 				const detail = (err as Record<string, string>).message ?? res.statusText;
-				throw new Error(`LinkedIn comment failed: ${detail}`);
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+				throw new PublishError(`LinkedIn comment failed: ${detail}`, { statusCode: res.status, detail: raw });
 			}
 			const data = (await res.json()) as { id?: string; commentUrn?: string };
 			return { success: true, platform_post_id: data.commentUrn ?? data.id };
@@ -619,13 +620,14 @@ export const linkedinPublisher: Publisher = {
 				const err = await res.json().catch(() => ({}));
 				const detail =
 					(err as Record<string, string>).message ?? res.statusText;
+				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 				if (res.status === 401 || detail.includes("Unauthorized") || detail.includes("invalid_grant")) {
-					throw new Error(`TOKEN_EXPIRED: ${detail}`);
+					throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
 				}
 				if (res.status === 429) {
-					throw new Error(`RATE_LIMITED: ${detail}`);
+					throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
 				}
-				throw new Error(`LinkedIn post creation failed: ${detail}`);
+				throw new PublishError(`LinkedIn post creation failed: ${detail}`, { statusCode: res.status, detail: raw });
 			}
 
 			// LinkedIn returns the post URN in the x-restli-id header

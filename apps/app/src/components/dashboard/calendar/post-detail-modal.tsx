@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { formatNumber, formatDateTime, statusLabels } from "./post-detail-popover";
 import type { PostDetail } from "./post-detail-popover";
+import { PostErrorDialog, collectPostErrors } from "./post-error-details";
 
 interface PostDetailModalProps {
   postId: string;
@@ -43,6 +44,7 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
   const [detail, setDetail] = useState<PostDetail | null>(null);
   const [engagement, setEngagement] = useState<PostEngagement | null>(null);
   const [loading, setLoading] = useState(true);
+  const [errorsOpen, setErrorsOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -56,7 +58,7 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
         const data = await res.json();
         if (cancelled) return;
 
-        const mappedTargets: Record<string, { platform: string; username: string | null; displayName: string | null; avatarUrl: string | null; platformUrl: string | null; platformPostId: string | null; status: string }> = {};
+        const mappedTargets: Record<string, { platform: string; username: string | null; displayName: string | null; avatarUrl: string | null; platformUrl: string | null; platformPostId: string | null; status: string; error?: { code: string; message: string; detail?: string } }> = {};
         for (const [key, target] of Object.entries(data.targets || {})) {
           const t = target as any;
           const account = t.accounts?.[0];
@@ -68,6 +70,7 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
             platformUrl: account?.url ?? null,
             platformPostId: account?.platform_post_id ?? null,
             status: t.status,
+            error: t.error ?? undefined,
           };
         }
 
@@ -123,8 +126,11 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
   const hasVideo = detail?.media?.[0]?.type === "video" || (thumbUrl && /\.(mp4|mov|webm|avi)$/i.test(thumbUrl));
   const platformUrl = targets.find((t) => t.platformUrl)?.platformUrl;
   const primaryPlatform = firstTarget?.platform;
+  const errorRows = detail ? collectPostErrors(detail.targets) : [];
+  const hasErrors = errorRows.length > 0;
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg p-0 gap-0">
         {loading ? (
@@ -140,7 +146,18 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
               <span className="text-sm text-muted-foreground">
                 {dateStr ? `Published on ${formatDateTime(dateStr)}` : "No date"}
                 {" \u00b7 "}
-                {statusLabels[detail.status] || detail.status}
+                {hasErrors ? (
+                  <button
+                    type="button"
+                    onClick={() => setErrorsOpen(true)}
+                    className="font-medium text-red-400 hover:text-red-300 underline underline-offset-2 transition-colors"
+                    title="View error details"
+                  >
+                    {statusLabels[detail.status] || detail.status}
+                  </button>
+                ) : (
+                  statusLabels[detail.status] || detail.status
+                )}
               </span>
             </div>
 
@@ -290,5 +307,7 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
         )}
       </DialogContent>
     </Dialog>
+    <PostErrorDialog open={errorsOpen} onOpenChange={setErrorsOpen} errors={errorRows} />
+    </>
   );
 }

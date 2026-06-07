@@ -1,4 +1,4 @@
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const TIKTOK_API = "https://open.tiktokapis.com/v2";
 
@@ -15,8 +15,8 @@ async function tiktokFetch(
 			...(options.headers ?? {}),
 		},
 	});
-	if (res.status === 401) throw new Error("TOKEN_EXPIRED: TikTok access token invalid or expired");
-	if (res.status === 429) throw new Error("RATE_LIMITED: TikTok rate limit exceeded");
+	if (res.status === 401) throw new PublishError("TOKEN_EXPIRED: TikTok access token invalid or expired", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 429) throw new PublishError("RATE_LIMITED: TikTok rate limit exceeded", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
 	return res;
 }
 
@@ -68,8 +68,9 @@ async function pollPublishStatus(
 		if (!res.ok) {
 			httpFailures++;
 			if (httpFailures >= 5) {
-				throw new Error(
+				throw new PublishError(
 					`TikTok publish status polling failed after ${httpFailures} consecutive HTTP errors (last status: ${res.status}).`,
+					{ statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` },
 				);
 			}
 			continue;
@@ -301,10 +302,11 @@ async function publishVideo(
 
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
 			res.statusText;
-		throw new Error(`TikTok video init failed: ${detail}`);
+		throw new PublishError(`TikTok video init failed: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	const initResult = (await res.json()) as TikTokPublishResponse;
@@ -451,10 +453,11 @@ async function publishPhotos(
 
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
+		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
 			res.statusText;
-		throw new Error(`TikTok photo init failed: ${detail}`);
+		throw new PublishError(`TikTok photo init failed: ${detail}`, { statusCode: res.status, detail: raw });
 	}
 
 	const initResult = (await res.json()) as TikTokPublishResponse;

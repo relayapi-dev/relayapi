@@ -1,5 +1,5 @@
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
 
 const REDDIT_API = "https://oauth.reddit.com";
 
@@ -17,8 +17,8 @@ async function redditFetch(
 			...(options.headers ?? {}),
 		},
 	});
-	if (res.status === 401) throw new Error("TOKEN_EXPIRED: Reddit access token invalid or expired");
-	if (res.status === 429) throw new Error("RATE_LIMITED: Reddit rate limit exceeded");
+	if (res.status === 401) throw new PublishError("TOKEN_EXPIRED: Reddit access token invalid or expired", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 429) throw new PublishError("RATE_LIMITED: Reddit rate limit exceeded", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
 	// Read Reddit rate limit headers for proactive throttling
 	// Docs: https://github.com/reddit-archive/reddit/wiki/API (Rules section)
 	const remaining = res.headers.get("x-ratelimit-remaining");
@@ -79,7 +79,8 @@ async function uploadMediaAsset(
 
 	if (!leaseRes.ok) {
 		const errText = await leaseRes.text().catch(() => leaseRes.statusText);
-		throw new Error(`Reddit media asset lease failed: ${errText}`);
+		const raw = `HTTP ${leaseRes.status}\n${errText}`;
+		throw new PublishError(`Reddit media asset lease failed: ${errText}`, { statusCode: leaseRes.status, detail: raw });
 	}
 
 	const leaseData = (await leaseRes.json()) as RedditMediaAssetResponse;
@@ -88,7 +89,10 @@ async function uploadMediaAsset(
 	// Step 2: Fetch the file binary from the provided URL
 	const fileRes = await fetchPublicUrl(fileUrl, { timeout: 30_000 });
 	if (!fileRes.ok) {
-		throw new Error(`Failed to fetch media file from ${fileUrl}`);
+		throw new PublishError(`Failed to fetch media file from ${fileUrl}`, {
+			statusCode: fileRes.status,
+			detail: `HTTP ${fileRes.status} ${fileRes.statusText}`,
+		});
 	}
 	const fileBlob = await fileRes.blob();
 
@@ -186,7 +190,8 @@ async function submitGalleryPost(
 
 	if (!res.ok) {
 		const errText = await res.text().catch(() => res.statusText);
-		throw new Error(`Reddit gallery submit failed: ${errText}`);
+		const raw = `HTTP ${res.status}\n${errText}`;
+		throw new PublishError(`Reddit gallery submit failed: ${errText}`, { statusCode: res.status, detail: raw });
 	}
 
 	return res.json() as Promise<RedditGallerySubmitResponse>;
@@ -282,7 +287,8 @@ async function submitPost(
 
 	if (!res.ok) {
 		const errText = await res.text().catch(() => res.statusText);
-		throw new Error(`Reddit submit failed: ${errText}`);
+		const raw = `HTTP ${res.status}\n${errText}`;
+		throw new PublishError(`Reddit submit failed: ${errText}`, { statusCode: res.status, detail: raw });
 	}
 
 	return res.json() as Promise<RedditSubmitResponse>;

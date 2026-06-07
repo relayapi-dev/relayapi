@@ -17,6 +17,7 @@ import { usePaginatedApi } from "@/hooks/use-api";
 import { FilterBar } from "@/components/dashboard/filter-bar";
 import { platformIcons } from "@/lib/platform-icons";
 import { platformColors, platformLabels } from "@/lib/platform-maps";
+import { PostErrorDialog } from "../calendar/post-error-details";
 import { useFilterQuery, useFilter } from "@/components/dashboard/filter-context";
 import type { CalendarPeriod } from "@/components/dashboard/calendar/calendar-header";
 import { SentPostList } from "@/components/dashboard/pages/posts/sent-post-list";
@@ -252,7 +253,7 @@ export function PostsPage({
   );
 
   const [syncing, setSyncing] = useState(false);
-  const [errorDetailPost, setErrorDetailPost] = useState<{ id: string; errors: Array<{ platform: string; message: string }> } | null>(null);
+  const [errorDetailPost, setErrorDetailPost] = useState<{ id: string; errors: Array<{ platform: string; message: string; detail?: string }> } | null>(null);
   const [unpublishPost, setUnpublishPost] = useState<{ id: string; platforms: string[] } | null>(null);
   const [unpublishSelected, setUnpublishSelected] = useState<Set<string>>(new Set());
   const [unpublishing, setUnpublishing] = useState(false);
@@ -338,11 +339,11 @@ export function PostsPage({
       const res = await fetch(`/api/posts/${postId}`);
       if (!res.ok) return;
       const data = await res.json();
-      const errors: Array<{ platform: string; message: string }> = [];
+      const errors: Array<{ platform: string; message: string; detail?: string }> = [];
       for (const target of Object.values(data.targets || {})) {
         const t = target as any;
-        if (t.status === "failed" && t.error?.message) {
-          errors.push({ platform: t.platform, message: t.error.message });
+        if (t.error?.message) {
+          errors.push({ platform: t.platform, message: t.error.message, detail: t.error.detail });
         }
       }
       setErrorDetailPost({ id: postId, errors });
@@ -756,24 +757,11 @@ export function PostsPage({
       </Dialog>
 
       {/* Error detail dialog */}
-      <Dialog open={!!errorDetailPost} onOpenChange={() => setErrorDetailPost(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="text-sm font-medium">Error Details</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-2 text-xs">
-            {errorDetailPost?.errors.map((err, i) => (
-              <div key={i} className="rounded-md border border-red-400/20 bg-red-400/5 px-3 py-2">
-                <span className="font-medium text-red-400 capitalize">{platformLabels[err.platform] || err.platform}</span>
-                <p className="text-muted-foreground mt-0.5">{err.message}</p>
-              </div>
-            ))}
-            {errorDetailPost?.errors.length === 0 && (
-              <p className="text-muted-foreground">No error details available.</p>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <PostErrorDialog
+        open={!!errorDetailPost}
+        onOpenChange={() => setErrorDetailPost(null)}
+        errors={errorDetailPost?.errors ?? []}
+      />
     </div>
   );
 }

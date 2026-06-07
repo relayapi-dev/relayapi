@@ -937,48 +937,59 @@ export const notifications = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Notification preferences (per-user channel settings)
+// Notification preferences (per-user, per-organization channel settings)
 // ---------------------------------------------------------------------------
 
-export const notificationPreferences = pgTable("notification_preferences", {
-	id: text("id")
-		.primaryKey()
-		.$defaultFn(() => generateId("npref_")),
-	userId: text("user_id")
-		.notNull()
-		.references(() => user.id, { onDelete: "cascade" })
-		.unique(),
-	postFailures: jsonb("post_failures")
-		.notNull()
-		.default({ push: true, email: true }),
-	postPublished: jsonb("post_published")
-		.notNull()
-		.default({ push: true, email: false }),
-	accountDisconnects: jsonb("account_disconnects")
-		.notNull()
-		.default({ push: true, email: true }),
-	paymentAlerts: jsonb("payment_alerts")
-		.notNull()
-		.default({ push: true, email: true }),
-	usageAlerts: jsonb("usage_alerts")
-		.notNull()
-		.default({ push: true, email: true }),
-	weeklyDigest: jsonb("weekly_digest")
-		.notNull()
-		.default({ push: false, email: false }),
-	marketing: jsonb("marketing")
-		.notNull()
-		.default({ push: false, email: false }),
-	streakWarnings: jsonb("streak_warnings")
-		.notNull()
-		.default({ push: true, email: true }),
-	createdAt: timestamp("created_at", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
+export const notificationPreferences = pgTable(
+	"notification_preferences",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("npref_")),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		postFailures: jsonb("post_failures")
+			.notNull()
+			.default({ push: true, email: true }),
+		postPublished: jsonb("post_published")
+			.notNull()
+			.default({ push: true, email: false }),
+		accountDisconnects: jsonb("account_disconnects")
+			.notNull()
+			.default({ push: true, email: true }),
+		paymentAlerts: jsonb("payment_alerts")
+			.notNull()
+			.default({ push: true, email: true }),
+		usageAlerts: jsonb("usage_alerts")
+			.notNull()
+			.default({ push: true, email: true }),
+		weeklyDigest: jsonb("weekly_digest")
+			.notNull()
+			.default({ push: false, email: false }),
+		marketing: jsonb("marketing")
+			.notNull()
+			.default({ push: false, email: false }),
+		streakWarnings: jsonb("streak_warnings")
+			.notNull()
+			.default({ push: true, email: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("notification_preferences_user_org_idx").on(
+			table.userId,
+			table.organizationId,
+		),
+	],
+);
 
 // ---------------------------------------------------------------------------
 // Inbox — Conversations & Messages (unified across all platforms)

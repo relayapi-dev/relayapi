@@ -23,18 +23,24 @@ const UsageContext = createContext<UsageContextValue>({
   refetch: () => {},
 });
 
-const USAGE_CACHE_KEY = "relayapi:usage:v1";
+const USAGE_CACHE_PREFIX = "relayapi:usage:v1";
 const USAGE_CACHE_TTL_MS = 60_000;
 
-function readUsageCache(): UsageData | null {
-  if (typeof window === "undefined") return null;
+// Cache is scoped per active org so switching orgs never reads another org's
+// usage. Returns null when there is no active org (skip caching entirely).
+function usageCacheKey(orgId: string | null | undefined): string | null {
+  return orgId ? `${USAGE_CACHE_PREFIX}:${orgId}` : null;
+}
+
+function readUsageCache(key: string | null): UsageData | null {
+  if (!key || typeof window === "undefined") return null;
 
   try {
-    const raw = window.sessionStorage.getItem(USAGE_CACHE_KEY);
+    const raw = window.sessionStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { timestamp: number; data: UsageData };
     if (!parsed?.timestamp || Date.now() - parsed.timestamp > USAGE_CACHE_TTL_MS) {
-      window.sessionStorage.removeItem(USAGE_CACHE_KEY);
+      window.sessionStorage.removeItem(key);
       return null;
     }
     return parsed.data;
@@ -43,12 +49,12 @@ function readUsageCache(): UsageData | null {
   }
 }
 
-function writeUsageCache(data: UsageData) {
-  if (typeof window === "undefined") return;
+function writeUsageCache(key: string | null, data: UsageData) {
+  if (!key || typeof window === "undefined") return;
 
   try {
     window.sessionStorage.setItem(
-      USAGE_CACHE_KEY,
+      key,
       JSON.stringify({ timestamp: Date.now(), data }),
     );
   } catch {
@@ -56,11 +62,18 @@ function writeUsageCache(data: UsageData) {
   }
 }
 
-export function UsageProvider({ children }: { children: React.ReactNode }) {
+export function UsageProvider({
+  children,
+  orgId,
+}: {
+  children: React.ReactNode;
+  orgId?: string | null;
+}) {
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const fetchedRef = useRef(false);
+  const cacheKey = usageCacheKey(orgId);
 
   const fetchUsage = useCallback(async (options?: { background?: boolean }) => {
     const background = options?.background ?? false;
@@ -75,7 +88,7 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setUsage(data);
-        writeUsageCache(data);
+        writeUsageCache(cacheKey, data);
       } else {
         const err = await res.json().catch(() => null);
         if (!background) {
@@ -91,12 +104,12 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [cacheKey]);
 
   useEffect(() => {
     if (!fetchedRef.current) {
       fetchedRef.current = true;
-      const cached = readUsageCache();
+      const cached = readUsageCache(cacheKey);
       if (cached) {
         setUsage(cached);
         setLoading(false);
@@ -109,7 +122,7 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
         void fetchDashboardBootstrap().then((data) => {
           if (data?.usage) {
             setUsage(data.usage);
-            writeUsageCache(data.usage);
+            writeUsageCache(cacheKey, data.usage);
             setLoading(false);
           } else if (data) {
             // Bootstrap succeeded but usage is null — fall back to individual fetch
@@ -121,7 +134,7 @@ export function UsageProvider({ children }: { children: React.ReactNode }) {
         });
       });
     }
-  }, [fetchUsage]);
+  }, [fetchUsage, cacheKey]);
 
   return (
     <UsageContext.Provider value={{ usage, loading, error, refetch: fetchUsage }}>

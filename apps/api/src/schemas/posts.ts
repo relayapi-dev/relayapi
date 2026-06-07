@@ -170,13 +170,17 @@ const TargetAccountResult = z.object({
 });
 
 const TargetResult = z.object({
-	status: z.enum(["draft", "scheduled", "publishing", "published", "failed"]),
+	status: z.enum(["draft", "scheduled", "publishing", "published", "failed", "partial"]),
 	platform: PlatformEnum,
 	accounts: z.array(TargetAccountResult).optional(),
 	error: z
 		.object({
 			code: z.string(),
 			message: z.string(),
+			detail: z
+				.string()
+				.optional()
+				.describe("Raw platform error (HTTP status + response body), sanitized and truncated"),
 		})
 		.optional(),
 });

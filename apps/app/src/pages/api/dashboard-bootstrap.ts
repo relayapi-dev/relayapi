@@ -123,6 +123,6 @@ export const GET: APIRoute = async (ctx) => {
 			streak: apiCalls.streak,
 			notif_count: notifCount,
 		},
-		{ headers: { "Cache-Control": "private, max-age=30" } },
+		{ headers: { "Cache-Control": "private, no-store" } },
 	);
 };
