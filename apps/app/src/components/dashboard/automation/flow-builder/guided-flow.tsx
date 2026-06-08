@@ -28,14 +28,7 @@
 // are rendered by `port-handles.tsx` from the canonical `derivePorts()`
 // output.
 
-import {
-	memo,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	Background,
 	BackgroundVariant,
@@ -414,11 +407,11 @@ function nodePreview(node: AutomationNode): string | null {
 				return text ? truncate(text, 140) : "Reply to comment";
 			}
 			if (type === "tag_add" || type === "tag_remove") {
-				const tag = typeof a.tag === "string" ? a.tag : (label || "tag");
+				const tag = typeof a.tag === "string" ? a.tag : label || "tag";
 				return `${type === "tag_add" ? "Add tag" : "Remove tag"}: ${tag}`;
 			}
 			if (type === "field_set" || type === "field_clear") {
-				const field = typeof a.field === "string" ? a.field : (label || "field");
+				const field = typeof a.field === "string" ? a.field : label || "field";
 				return `${type === "field_set" ? "Set field" : "Clear field"}: ${field}`;
 			}
 			return titleize(type);
@@ -439,11 +432,12 @@ function nodePreview(node: AutomationNode): string | null {
 	}
 
 	if (kind === "delay") {
-		const minutes = typeof config.duration_minutes === "number"
-			? config.duration_minutes
-			: typeof config.minutes === "number"
-				? config.minutes
-				: null;
+		const minutes =
+			typeof config.duration_minutes === "number"
+				? config.duration_minutes
+				: typeof config.minutes === "number"
+					? config.minutes
+					: null;
 		if (minutes !== null) {
 			if (minutes < 60) return `Wait ${minutes} min`;
 			const hours = Math.round((minutes / 60) * 10) / 10;
@@ -455,40 +449,43 @@ function nodePreview(node: AutomationNode): string | null {
 	}
 
 	if (kind === "input") {
-		const field = typeof config.field === "string"
-			? config.field
-			: typeof config.capture_field === "string"
-				? config.capture_field
-				: "";
+		const field =
+			typeof config.field === "string"
+				? config.field
+				: typeof config.capture_field === "string"
+					? config.capture_field
+					: "";
 		if (field) return `Capture ${field}`;
-		const prompt = typeof config.prompt === "string" ? config.prompt.trim() : "";
+		const prompt =
+			typeof config.prompt === "string" ? config.prompt.trim() : "";
 		if (prompt) return truncate(prompt, 140);
 		return null;
 	}
 
 	if (kind === "http_request") {
-		const method = typeof config.method === "string"
-			? String(config.method).toUpperCase()
-			: "GET";
+		const method =
+			typeof config.method === "string"
+				? String(config.method).toUpperCase()
+				: "GET";
 		const url = typeof config.url === "string" ? config.url : "";
 		if (url) return `${method} ${truncate(url, 80)}`;
 		return null;
 	}
 
 	if (kind === "start_automation") {
-		const target = typeof config.target_automation_id === "string"
-			? config.target_automation_id
-			: typeof config.automation_id === "string"
-				? config.automation_id
-				: "";
+		const target =
+			typeof config.target_automation_id === "string"
+				? config.target_automation_id
+				: typeof config.automation_id === "string"
+					? config.automation_id
+					: "";
 		if (target) return `Start ${target.slice(0, 8)}`;
 		return null;
 	}
 
 	if (kind === "goto") {
-		const target = typeof config.target_node_key === "string"
-			? config.target_node_key
-			: "";
+		const target =
+			typeof config.target_node_key === "string" ? config.target_node_key : "";
 		if (target) return `Go to ${target}`;
 		return null;
 	}
@@ -516,8 +513,11 @@ function nodePreview(node: AutomationNode): string | null {
 
 function isPlatformStyledActionGroup(node: AutomationNode): boolean {
 	if (node.kind !== "action_group") return false;
-	const actions = Array.isArray((node.config as { actions?: unknown[] } | null)?.actions)
-		? ((node.config as { actions: Array<Record<string, unknown>> }).actions ?? [])
+	const actions = Array.isArray(
+		(node.config as { actions?: unknown[] } | null)?.actions,
+	)
+		? ((node.config as { actions: Array<Record<string, unknown>> }).actions ??
+			[])
 		: [];
 	return actions.some((action) => action?.type === "reply_to_comment");
 }
@@ -525,7 +525,10 @@ function isPlatformStyledActionGroup(node: AutomationNode): boolean {
 // Icon bubble tinted for the node's channel — gradient for Instagram, solid
 // brand colours for the rest. Used by both the trigger card and the generic
 // canvas nodes so the palette stays in sync.
-function canvasPlatformBubble(channel: string, Icon: React.ComponentType<{ className?: string }>) {
+function canvasPlatformBubble(
+	channel: string,
+	Icon: React.ComponentType<{ className?: string }>,
+) {
 	const palette =
 		channel === "instagram"
 			? "bg-[linear-gradient(135deg,#ffd776_0%,#f74a5c_48%,#7d3cff_100%)] text-white"
@@ -611,14 +614,15 @@ function CanvasNodeInner({ data, selected }: NodeProps<NodeData>) {
 		>
 			<PortHandles ports={ports} isConnectable={!data.readOnly} />
 
-			{data.overlaysEnabled ? (
-				<NodeMetricBadge metrics={data.metrics} />
-			) : null}
+			{data.overlaysEnabled ? <NodeMetricBadge metrics={data.metrics} /> : null}
 
 			<div className="block w-full px-5 py-4 pr-10 text-left">
 				<div className="flex items-start gap-3">
 					<div className="mt-0.5 shrink-0">
-						{canvasPlatformBubble(isPlatformNode ? data.channel : "__generic", Icon)}
+						{canvasPlatformBubble(
+							isPlatformNode ? data.channel : "__generic",
+							Icon,
+						)}
 					</div>
 					<div className="min-w-0 flex-1">
 						<div className="text-[12px] leading-4 text-[#8b92a0]">
@@ -910,9 +914,7 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 							))}
 							{data.bindingTypes.length > 0 && (
 								<>
-									{data.availableKinds.length > 0 && (
-										<DropdownMenuSeparator />
-									)}
+									{data.availableKinds.length > 0 && <DropdownMenuSeparator />}
 									<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 										Conversation entry points
 									</DropdownMenuLabel>
@@ -980,11 +982,7 @@ const nodeTypes = { canvas: CanvasNode, trigger: TriggerNode };
 // Canvas controls
 // ---------------------------------------------------------------------------
 
-function CanvasControls({
-	onAutoArrange,
-}: {
-	onAutoArrange?: () => void;
-}) {
+function CanvasControls({ onAutoArrange }: { onAutoArrange?: () => void }) {
 	const rf = useReactFlow();
 	return (
 		<Panel position="top-right" className="!right-4 !top-1/2 !-translate-y-1/2">
@@ -1175,17 +1173,20 @@ function CanvasInner({
 	}, []);
 	const overlay = useNodeOverlays(automationId, overlayPeriod, overlaysEnabled);
 
-	const [insertMenu, setInsertMenu] = useState<
-		| null
-		| {
-				screen: { x: number; y: number };
-				flow: { x: number; y: number };
-				sourcePort?: { nodeKey: string; portKey: string };
-		  }
-	>(null);
+	const [insertMenu, setInsertMenu] = useState<null | {
+		screen: { x: number; y: number };
+		flow: { x: number; y: number };
+		sourcePort?: { nodeKey: string; portKey: string };
+	}>(null);
 	const suppressNextPaneClickRef = useRef(false);
 
 	const { graph, selection } = graphStore;
+
+	// Always points at the latest committed graph. doSave reads this in its
+	// async tail to tell whether the user edited while a save was in flight, so
+	// the returning server snapshot never clobbers in-flight edits.
+	const graphRef = useRef(graph);
+	graphRef.current = graph;
 
 	// Trigger canvas node position is local state (the synthetic "__trigger"
 	// node is NOT in graph.nodes). Default places it to the left of the root.
@@ -1409,26 +1410,29 @@ function CanvasInner({
 
 	// --- Autosave ----------------------------------------------------------
 
-	// Monotonically increasing save token so the autosave hook only triggers
-	// on *content* change, not every re-render.
-	const saveVersion = useMemo(
-		() => `${graph.nodes.length}:${graph.edges.length}:${JSON.stringify(graph)}`.length,
-		[graph],
-	);
+	// Content signature so the autosave hook re-arms on *any* graph change, not
+	// every re-render. Must be the full serialized content — a length-based
+	// token misses position-only moves (e.g. x:520 → x:613 keeps the same
+	// length), which would leave a drag unsaved until some other edit toggled
+	// the dirty flag.
+	const saveVersion = useMemo(() => JSON.stringify(graph), [graph]);
 
 	const doSave = useCallback(async () => {
 		if (readOnly) return;
-		// Don't let an autosave land while the user is dragging — setGraph below
-		// would rebuild the dragged node at its pre-drag canvas_x/y and snap it
-		// back. moveNode (on drag stop) re-dirties the graph, so useAutosave
-		// re-arms and the save fires ~debounce after the drop. Nothing is lost.
+		// Don't let an autosave land while the user is dragging — adopting the
+		// server graph below would rebuild the dragged node at its pre-drag
+		// canvas_x/y and snap it back. moveNode (on drag stop) re-dirties the
+		// graph, so useAutosave re-arms and the save fires ~debounce after drop.
 		if (isDraggingRef.current) return;
+		// Snapshot the exact graph we're sending so we can detect edits made
+		// while the request is in flight.
+		const sentGraph = graph;
 		let result: GraphSaveResult;
 		try {
 			if (onSave) {
-				result = await onSave(graph);
+				result = await onSave(sentGraph);
 			} else {
-				result = await defaultSave(automationId, graph);
+				result = await defaultSave(automationId, sentGraph);
 			}
 		} catch (err) {
 			toast.push(
@@ -1442,14 +1446,18 @@ function CanvasInner({
 			return;
 		}
 
-		// Apply canonical graph + validation to the local store. The API may
-		// have normalised the graph (derived ports, ordered edges), so we
-		// overwrite the local copy with the server's version. Callers are
-		// aware of the 750ms autosave debounce — edits made between request
-		// and response are covered by the next save cycle.
+		// Adopt the server's canonical graph (it may have normalised ports /
+		// edge order) ONLY if the user hasn't edited since this save was sent.
+		// If they did (e.g. dragged another node while the request was in
+		// flight), overwriting with the server snapshot would discard those
+		// edits and clearing dirty would stop them ever being saved. Instead we
+		// keep the local graph dirty so the next autosave cycle persists it —
+		// the server re-normalises then.
 		const serverGraph = result.graph as AutomationGraph;
-		graphStore.setGraph(serverGraph);
-		graphStore.markSaved();
+		if (graphRef.current === sentGraph) {
+			graphStore.setGraph(serverGraph);
+			graphStore.markSaved();
+		}
 
 		// Translate server validation payload → client ValidationIssue shape.
 		const mapIssue = (
@@ -1801,9 +1809,7 @@ function CanvasInner({
 				if (readOnly) return;
 				if (selection.length === 0) return;
 				e.preventDefault();
-				const deletable = selection.filter(
-					(k) => k !== graph.root_node_key,
-				);
+				const deletable = selection.filter((k) => k !== graph.root_node_key);
 				if (deletable.length !== selection.length) {
 					toast.push("Root node cannot be deleted");
 				}
@@ -1867,7 +1873,9 @@ function CanvasInner({
 					return;
 				}
 				e.preventDefault();
-				const selectedNodes = rf.getNodes().filter((n) => selection.includes(n.id));
+				const selectedNodes = rf
+					.getNodes()
+					.filter((n) => selection.includes(n.id));
 				rf.fitView({
 					duration: 220,
 					padding: 0.25,
@@ -1887,15 +1895,7 @@ function CanvasInner({
 		window.addEventListener("keydown", handler);
 		return () => window.removeEventListener("keydown", handler);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [
-		graph.root_node_key,
-		graphStore,
-		readOnly,
-		rf,
-		selection,
-		toast,
-		doSave,
-	]);
+	}, [graph.root_node_key, graphStore, readOnly, rf, selection, toast, doSave]);
 
 	// --- Clipboard helpers -------------------------------------------------
 
@@ -2016,7 +2016,10 @@ function CanvasInner({
 	// --- Render ------------------------------------------------------------
 
 	return (
-		<div ref={wrapperRef} className="relative h-full min-w-0 flex-1 bg-[#f5f6fa]">
+		<div
+			ref={wrapperRef}
+			className="relative h-full min-w-0 flex-1 bg-[#f5f6fa]"
+		>
 			<ReactFlow
 				nodes={nodes}
 				edges={rfEdges}
@@ -2057,7 +2060,12 @@ function CanvasInner({
 				maxZoom={1.8}
 				className="bg-transparent"
 			>
-				<Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="#dfe2ea" />
+				<Background
+					variant={BackgroundVariant.Dots}
+					gap={24}
+					size={1.2}
+					color="#dfe2ea"
+				/>
 				<CanvasControls
 					onAutoArrange={readOnly ? undefined : handleAutoArrange}
 				/>

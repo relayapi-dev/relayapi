@@ -18,6 +18,7 @@ import type {
 	HashedUser,
 	PlatformAdAccount,
 	PlatformAdResult,
+	PlatformAudience,
 	PlatformAudienceResult,
 	PlatformCampaignResult,
 	DateRange,
@@ -102,6 +103,26 @@ export function mapMetaObjectiveToLocal(objective?: string): string {
 	};
 
 	return map[objective ?? ""] ?? "engagement";
+}
+
+/**
+ * Map a Meta custom audience `subtype` to our local `audience_type` enum
+ * (only `customer_list | website | lookalike` exist locally). Meta exposes
+ * many more subtypes (CUSTOM, LOOKALIKE, WEBSITE, IG_BUSINESS, FB_EVENT,
+ * CLAIM, …); collapse anything that isn't clearly a lookalike or website
+ * audience into `customer_list`.
+ */
+function mapMetaSubtypeToLocal(
+	subtype?: string,
+): "customer_list" | "website" | "lookalike" {
+	switch (subtype) {
+		case "LOOKALIKE":
+			return "lookalike";
+		case "WEBSITE":
+			return "website";
+		default:
+			return "customer_list";
+	}
 }
 
 function mapMetaStatusToLocal(status: string): string {

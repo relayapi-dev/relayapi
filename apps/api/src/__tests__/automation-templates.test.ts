@@ -5,13 +5,11 @@
 
 import { describe, expect, it } from "bun:test";
 import {
-	estimateNodeSize,
-} from "../services/automations/templates/_layout";
-import {
 	buildGraphFromTemplate,
 	listTemplateKinds,
 	type TemplateKind,
 } from "../services/automations/templates";
+import { estimateNodeSize } from "../services/automations/templates/_layout";
 import { validateGraph } from "../services/automations/validator";
 
 type FixtureConfig = Record<string, unknown>;
@@ -183,7 +181,9 @@ describe("buildGraphFromTemplate", () => {
 			channel: "instagram",
 			config: {},
 		});
-		const root = result.graph.nodes.find((n) => n.key === result.graph.root_node_key);
+		const root = result.graph.nodes.find(
+			(n) => n.key === result.graph.root_node_key,
+		);
 		expect(root).toBeDefined();
 		expect(typeof root!.canvas_x).toBe("number");
 		expect(typeof root!.canvas_y).toBe("number");
@@ -231,7 +231,9 @@ describe("buildGraphFromTemplate", () => {
 		expect(result.graph.nodes.some((n) => n.kind === "end")).toBe(false);
 		const replyNode = result.graph.nodes.find((n) => n.key === "public_reply");
 		expect(replyNode?.kind).toBe("action_group");
-		expect((replyNode?.config as { actions?: unknown[] } | undefined)?.actions).toEqual([
+		expect(
+			(replyNode?.config as { actions?: unknown[] } | undefined)?.actions,
+		).toEqual([
 			{
 				id: "act_public_reply",
 				type: "reply_to_comment",

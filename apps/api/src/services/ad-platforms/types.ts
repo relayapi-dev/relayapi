@@ -175,6 +175,17 @@ export interface PlatformAudienceResult {
 	approximateSize?: number;
 }
 
+/** An existing custom audience discovered from the platform */
+export interface PlatformAudience {
+	/** Platform-side audience id */
+	id: string;
+	name: string;
+	type: "customer_list" | "website" | "lookalike";
+	description?: string | null;
+	size?: number | null;
+	status?: string | null;
+}
+
 export interface HashedUser {
 	emailHash?: string;
 	phoneHash?: string;
@@ -285,6 +296,12 @@ export interface AdPlatformAdapter {
 		accessToken: string,
 		query: string,
 	): Promise<TargetingInterest[]>;
+
+	/** List existing custom audiences for an ad account */
+	listAudiences(
+		accessToken: string,
+		adAccountId: string,
+	): Promise<PlatformAudience[]>;
 
 	/** Create a custom audience */
 	createCustomAudience(

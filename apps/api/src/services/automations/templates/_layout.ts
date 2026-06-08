@@ -40,9 +40,10 @@ const MARGIN = 40;
  * Estimates a card's rendered size from its kind + config. Exported so tests
  * can assert the laid-out graph has no overlapping bounding boxes.
  */
-export function estimateNodeSize(
-	node: Pick<GraphNode, "kind" | "config">,
-): { width: number; height: number } {
+export function estimateNodeSize(node: Pick<GraphNode, "kind" | "config">): {
+	width: number;
+	height: number;
+} {
 	const outputs = derivePorts(node).filter(
 		(p) => p.direction === "output",
 	).length;

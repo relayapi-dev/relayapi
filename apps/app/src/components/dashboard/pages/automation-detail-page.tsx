@@ -118,20 +118,23 @@ export function AutomationDetailPage({ automationId }: Props) {
 	// ---- Graph store -------------------------------------------------------
 
 	const graphStore = useGraphStore(EMPTY_GRAPH);
-	const lastHydratedSignature = useRef<string | null>(null);
+	const hydratedIdRef = useRef<string | null>(null);
 
-	// Hydrate the graph store on first load / on each refetch, but skip
-	// re-hydration while the user has unsaved local edits so a background
-	// refetch can't clobber their in-progress draft.
+	// Hydrate the graph store ONCE per automation, on first load. After that the
+	// editing session owns the graph and autosave keeps the server in sync — we
+	// must NOT re-seed it from later refetches. Trigger edits, status changes,
+	// activate/pause etc. all call refetchAutomation() and bump updated_at; if a
+	// refetch whose graph snapshot predates an in-flight position autosave
+	// re-hydrated the store, it would revert the user's node positions. Keying
+	// on the id alone (not updated_at) avoids that revert; metadata derived from
+	// `automation` (status badge, entrypoints panel) still updates on refetch.
 	useEffect(() => {
 		if (!automation) return;
-		if (graphStore.dirty) return;
-		const signature = `${automation.id}:${automation.updated_at}`;
-		if (lastHydratedSignature.current === signature) return;
-		lastHydratedSignature.current = signature;
+		if (hydratedIdRef.current === automation.id) return;
+		hydratedIdRef.current = automation.id;
 		graphStore.setGraph(automation.graph ?? EMPTY_GRAPH);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [automation?.id, automation?.updated_at, graphStore.dirty]);
+	}, [automation?.id]);
 
 	// ---- Local UI state ----------------------------------------------------
 
@@ -187,12 +190,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 	// Entrypoints — rendered into the synthetic trigger canvas node + trigger
 	// panel. Separate fetch so the trigger card updates independently of the
 	// automation graph autosave lifecycle.
-	const {
-		data: entrypointsData,
-		refetch: refetchEntrypoints,
-	} = useApi<{ data: AutomationEntrypoint[] }>(
-		`automations/${automationId}/entrypoints`,
-	);
+	const { data: entrypointsData, refetch: refetchEntrypoints } = useApi<{
+		data: AutomationEntrypoint[];
+	}>(`automations/${automationId}/entrypoints`);
 	// Stabilise the `entrypoints` reference. Without this memo we produce a
 	// new `[]` literal on every render whenever `entrypointsData` is falsy,
 	// which cascades through `GuidedFlow`'s `useMemo`-derived node list and
@@ -258,7 +258,8 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const handlePauseResume = useCallback(async () => {
 		if (!automation) return;
 		setBanner(null);
-		const m = automation.status === "active" ? pauseAutomation : resumeAutomation;
+		const m =
+			automation.status === "active" ? pauseAutomation : resumeAutomation;
 		const res = await m.mutate();
 		if (res) refetchAutomation();
 		else if (m.error) setBanner({ type: "error", message: m.error });
@@ -368,9 +369,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 					setToolbarPanel(null);
 					graphStore.setSelection([]);
 				} else {
-					const body = (await res.json().catch(() => null)) as
-						| { error?: { message?: string } }
-						| null;
+					const body = (await res.json().catch(() => null)) as {
+						error?: { message?: string };
+					} | null;
 					setBanner({
 						type: "error",
 						message: body?.error?.message ?? "Failed to create trigger",
@@ -625,9 +626,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 						<Button
 							size="sm"
 							onClick={handleActivate}
-							disabled={
-								activateAutomation.loading || hasValidationErrors
-							}
+							disabled={activateAutomation.loading || hasValidationErrors}
 							className="h-7 gap-1.5 text-xs"
 						>
 							{activateAutomation.loading ? (
@@ -797,16 +796,12 @@ export function AutomationDetailPage({ automationId }: Props) {
 									const patchKey = patch.key;
 									// Key rename requires a setGraph to also fix up edges.
 									const renamed = graphStore.graph.nodes.map((n) =>
-										n.key === selectedNode.key
-											? { ...n, key: patchKey }
-											: n,
+										n.key === selectedNode.key ? { ...n, key: patchKey } : n,
 									);
 									const renamedEdges = graphStore.graph.edges.map((e) => ({
 										...e,
 										from_node:
-											e.from_node === selectedNode.key
-												? patchKey
-												: e.from_node,
+											e.from_node === selectedNode.key ? patchKey : e.from_node,
 										to_node:
 											e.to_node === selectedNode.key ? patchKey : e.to_node,
 									}));
@@ -889,10 +884,7 @@ function StatusBadge({
 	const cfg = map[status] ?? map.draft!;
 	return (
 		<span
-			className={cn(
-				"inline-flex items-center gap-1 font-medium",
-				cfg.classes,
-			)}
+			className={cn("inline-flex items-center gap-1 font-medium", cfg.classes)}
 		>
 			{status === "active" && <PlayCircle className="size-2.5" />}
 			{cfg.label}
