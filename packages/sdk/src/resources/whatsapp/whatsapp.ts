@@ -91,7 +91,10 @@ export class Whatsapp extends APIResource {
   phoneNumbers: PhoneNumbersAPI.PhoneNumbers = new PhoneNumbersAPI.PhoneNumbers(this._client);
 
   /**
-   * Send bulk WhatsApp messages via template
+   * Queue a bulk WhatsApp template send. The recipients are persisted as a
+   * broadcast and the broadcast is returned immediately; the messages are
+   * delivered asynchronously (avoiding request timeouts on large lists). Poll
+   * `GET /v1/broadcasts/{id}` for delivery status.
    */
   bulkSend(body: WhatsappBulkSendParams, options?: RequestOptions): APIPromise<WhatsappBulkSendResponse> {
     return this._client.post('/v1/whatsapp/bulk-send', { body, ...options });
@@ -108,41 +111,40 @@ export class Whatsapp extends APIResource {
   }
 }
 
+/**
+ * The broadcast the bulk send was queued as. Poll `GET /v1/broadcasts/{id}` for
+ * delivery progress.
+ */
 export interface WhatsappBulkSendResponse {
-  results: Array<WhatsappBulkSendResponse.Result>;
+  id: string;
 
-  summary: WhatsappBulkSendResponse.Summary;
-}
+  account_id: string;
 
-export namespace WhatsappBulkSendResponse {
-  export interface Result {
-    /**
-     * Recipient phone number
-     */
-    phone: string;
+  created_at: string;
 
-    /**
-     * Send status
-     */
-    status: 'sent' | 'failed';
+  description: string | null;
 
-    /**
-     * Error message if failed
-     */
-    error?: string | null;
-  }
+  failed_count: number;
 
-  export interface Summary {
-    /**
-     * Failed count
-     */
-    failed: number;
+  message_text: string | null;
 
-    /**
-     * Successfully sent count
-     */
-    sent: number;
-  }
+  name: string | null;
+
+  platform: string;
+
+  recipient_count: number;
+
+  sent_count: number;
+
+  status: 'draft' | 'scheduled' | 'sending' | 'sent' | 'partially_failed' | 'failed' | 'cancelled';
+
+  template_language: string | null;
+
+  template_name: string | null;
+
+  completed_at?: string | null;
+
+  scheduled_at?: string | null;
 }
 
 export interface WhatsappListPhoneNumbersResponse {

@@ -1,11 +1,13 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
+	broadcasts,
+	broadcastRecipients,
 	createDb,
 	socialAccounts,
 	whatsappBroadcasts,
 	whatsappBroadcastRecipients,
 } from "@relayapi/db";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
 import { ErrorResponse } from "../schemas/common";
@@ -15,7 +17,6 @@ import {
 	BroadcastListResponse,
 	BroadcastResponse,
 	BulkSendBody,
-	BulkSendResponse,
 	BusinessProfileResponse,
 	CreateBroadcastBody,
 	CreateTemplateBody,
@@ -37,6 +38,7 @@ import {
 	FlowAccountIdBody,
 	SendFlowBody,
 } from "../schemas/whatsapp";
+import { BroadcastResponse as GenericBroadcastResponse } from "../schemas/broadcasts";
 import { GRAPH_BASE } from "../config/api-versions";
 import type { Env, Variables } from "../types";
 
@@ -97,8 +99,8 @@ const bulkSend = createRoute({
 	},
 	responses: {
 		200: {
-			description: "Bulk send result",
-			content: { "application/json": { schema: BulkSendResponse } },
+			description: "Broadcast queued for asynchronous delivery",
+			content: { "application/json": { schema: GenericBroadcastResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -753,61 +755,73 @@ app.openapi(bulkSend, async (c) => {
 		);
 	}
 
-	const phoneNumberId = account.platformAccountId;
-	const token = account.accessToken;
+	// Persist as a scheduled broadcast and let the broadcast processor deliver it
+	// asynchronously — the previous inline send loop could exceed Worker
+	// wall-time / subrequest limits for large recipient lists. Clients poll
+	// GET /v1/broadcasts/{id} for delivery status.
+	const [broadcast] = await db
+		.insert(broadcasts)
+		.values({
+			organizationId: orgId,
+			workspaceId: account.workspaceId ?? null,
+			socialAccountId: account.id,
+			platform: "whatsapp",
+			name: "WhatsApp bulk send",
+			templateName: body.template.name,
+			templateLanguage: body.template.language,
+			templateComponents: body.template.components ?? null,
+			status: "scheduled",
+			scheduledAt: new Date(),
+		})
+		.returning();
 
-	const results: Array<{ phone: string; status: "sent" | "failed"; error: string | null }> = [];
-	let sent = 0;
-	let failed = 0;
+	// Bulk insert recipients (onConflictDoNothing dedups repeated phones within
+	// the same broadcast); recipientCount reflects rows actually added.
+	const insertResult = await db
+		.insert(broadcastRecipients)
+		.values(
+			body.recipients.map((recipient) => ({
+				broadcastId: broadcast!.id,
+				contactIdentifier: recipient.phone,
+			})),
+		)
+		.onConflictDoNothing()
+		.returning({ id: broadcastRecipients.id });
 
-	for (const recipient of body.recipients) {
-		try {
-			const messageBody: Record<string, unknown> = {
-				messaging_product: "whatsapp",
-				to: recipient.phone,
-				type: "template",
-				template: {
-					name: body.template.name,
-					language: { code: body.template.language },
-					...(body.template.components
-						? { components: body.template.components }
-						: {}),
-				},
-			};
+	const [updated] = await db
+		.update(broadcasts)
+		.set({ recipientCount: insertResult.length, updatedAt: new Date() })
+		.where(eq(broadcasts.id, broadcast!.id))
+		.returning();
 
-			// WhatsApp Cloud API: Send a message (template, text, media, etc.)
-			// https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages
-			const res = await fetch(`${WA_API_BASE}/${phoneNumberId}/messages`, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(messageBody),
-			});
-
-			if (res.ok) {
-				results.push({ phone: recipient.phone, status: "sent", error: null });
-				sent++;
-			} else {
-				const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-				const errorMsg =
-					(err as { error?: { message?: string } }).error?.message ??
-					`HTTP ${res.status}`;
-				results.push({ phone: recipient.phone, status: "failed", error: errorMsg });
-				failed++;
-			}
-		} catch (e) {
-			results.push({
-				phone: recipient.phone,
-				status: "failed",
-				error: e instanceof Error ? e.message : "Unknown error",
-			});
-			failed++;
-		}
-	}
-
-	return c.json({ summary: { sent, failed }, results }, 200);
+	const b = updated!;
+	return c.json(
+		{
+			id: b.id,
+			name: b.name ?? null,
+			description: b.description ?? null,
+			platform: b.platform,
+			account_id: b.socialAccountId,
+			status: b.status as
+				| "draft"
+				| "scheduled"
+				| "sending"
+				| "sent"
+				| "partially_failed"
+				| "failed"
+				| "cancelled",
+			message_text: b.messageText ?? null,
+			template_name: b.templateName ?? null,
+			template_language: b.templateLanguage ?? null,
+			recipient_count: b.recipientCount,
+			sent_count: b.sentCount,
+			failed_count: b.failedCount,
+			scheduled_at: b.scheduledAt?.toISOString() ?? null,
+			completed_at: b.completedAt?.toISOString() ?? null,
+			created_at: b.createdAt.toISOString(),
+		},
+		200,
+	);
 });
 
 // --- Broadcasts (Drizzle-based) ---
@@ -989,92 +1003,14 @@ app.openapi(sendBroadcast, async (c) => {
 		);
 	}
 
-	const phoneNumberId = account.platformAccountId;
-	const token = account.accessToken;
-
-	// Mark as sending
-	await db
-		.update(whatsappBroadcasts)
-		.set({ status: "sending", updatedAt: new Date() })
-		.where(eq(whatsappBroadcasts.id, broadcast_id));
-
-	// Fetch recipients
-	const recipients = await db
-		.select()
-		.from(whatsappBroadcastRecipients)
-		.where(eq(whatsappBroadcastRecipients.broadcastId, broadcast_id));
-
-	let sent = 0;
-	let failed = 0;
-
-	for (const recipient of recipients) {
-		try {
-			const messageBody = {
-				messaging_product: "whatsapp",
-				to: recipient.phone,
-				type: "template",
-				template: {
-					name: broadcast.templateName,
-					language: { code: broadcast.templateLanguage },
-					...(broadcast.templateComponents
-						? { components: broadcast.templateComponents }
-						: {}),
-				},
-			};
-
-			// WhatsApp Cloud API: Send a message (template, text, media, etc.)
-			// https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages
-			const res = await fetch(`${WA_API_BASE}/${phoneNumberId}/messages`, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(messageBody),
-			});
-
-			if (res.ok) {
-				const json = (await res.json().catch(() => ({}))) as { messages?: Array<{ id?: string }> };
-				const messageId = json.messages?.[0]?.id ?? null;
-				await db
-					.update(whatsappBroadcastRecipients)
-					.set({ status: "sent", messageId, sentAt: new Date() })
-					.where(eq(whatsappBroadcastRecipients.id, recipient.id));
-				sent++;
-			} else {
-				const err = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-				const errorMsg = err.error?.message ?? `HTTP ${res.status}`;
-				await db
-					.update(whatsappBroadcastRecipients)
-					.set({ status: "failed", error: errorMsg })
-					.where(eq(whatsappBroadcastRecipients.id, recipient.id));
-				failed++;
-			}
-		} catch (e) {
-			await db
-				.update(whatsappBroadcastRecipients)
-				.set({ status: "failed", error: e instanceof Error ? e.message : "Unknown error" })
-				.where(eq(whatsappBroadcastRecipients.id, recipient.id));
-			failed++;
-		}
-	}
-
-	const finalStatus =
-		failed === 0
-			? "sent"
-			: sent === 0
-				? "failed"
-				: "partially_failed";
-
+	// Queue the broadcast for asynchronous delivery. The previous inline loop did
+	// one external send + DB update per recipient (up to 1000) on the request
+	// path, which could exceed Worker wall-time / subrequest limits and time out.
+	// The every-minute WhatsApp broadcast processor now delivers it in resumable,
+	// bounded chunks. Clients poll GET /v1/whatsapp/broadcasts/{id} for status.
 	const [updated] = await db
 		.update(whatsappBroadcasts)
-		.set({
-			status: finalStatus,
-			sentCount: sent,
-			failedCount: failed,
-			completedAt: new Date(),
-			updatedAt: new Date(),
-		})
+		.set({ status: "scheduled", scheduledAt: new Date(), updatedAt: new Date() })
 		.where(eq(whatsappBroadcasts.id, broadcast_id))
 		.returning();
 

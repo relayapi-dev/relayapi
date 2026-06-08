@@ -45,20 +45,6 @@ export const BulkSendBody = z.object({
 	}),
 });
 
-export const BulkSendResultItem = z.object({
-	phone: z.string().describe("Recipient phone number"),
-	status: z.enum(["sent", "failed"]).describe("Send status"),
-	error: z.string().nullable().optional().describe("Error message if failed"),
-});
-
-export const BulkSendResponse = z.object({
-	summary: z.object({
-		sent: z.number().describe("Successfully sent count"),
-		failed: z.number().describe("Failed count"),
-	}),
-	results: z.array(BulkSendResultItem),
-});
-
 // =====================
 // Broadcasts
 // =====================

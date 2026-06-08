@@ -7,6 +7,7 @@ import {
 } from "../services/automations/scheduler";
 import { processScheduledBroadcasts } from "../services/broadcast-processor";
 import { processCrossPostActions } from "../services/cross-post-processor";
+import { processScheduledWhatsAppBroadcasts } from "../services/whatsapp-broadcast-processor";
 import { processDunning } from "../services/dunning";
 import { enqueueExternalPostSync } from "../services/external-post-sync/cron";
 import { cleanupOldConversations } from "../services/inbox-maintenance";
@@ -29,6 +30,7 @@ export async function handleScheduled(
 	ctx.waitUntil(processScheduledPosts(env));
 	ctx.waitUntil(processRecyclingPosts(env));
 	ctx.waitUntil(processScheduledBroadcasts(env));
+	ctx.waitUntil(processScheduledWhatsAppBroadcasts(env));
 	ctx.waitUntil(processCrossPostActions(env));
 	ctx.waitUntil(processAutomationSchedule(env));
 	ctx.waitUntil(processAutomationInputTimeouts(env));
