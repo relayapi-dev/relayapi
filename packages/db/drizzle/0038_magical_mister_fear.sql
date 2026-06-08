@@ -1,0 +1,3 @@
+ALTER TABLE "ads" ADD COLUMN "boost_external_post_id" text;--> statement-breakpoint
+ALTER TABLE "ads" ADD CONSTRAINT "ads_boost_external_post_id_external_posts_id_fk" FOREIGN KEY ("boost_external_post_id") REFERENCES "public"."external_posts"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "ads_boost_external_post_idx" ON "ads" USING btree ("boost_external_post_id");

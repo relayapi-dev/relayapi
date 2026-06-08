@@ -9,6 +9,7 @@ import {
 	adCampaigns,
 	posts,
 	postTargets,
+	externalPosts,
 	socialAccounts,
 	eq,
 } from "@relayapi/db";
@@ -378,7 +379,8 @@ export async function boostPost(
 	orgId: string,
 	params: {
 		adAccountId: string;
-		postTargetId: string;
+		postTargetId?: string;
+		externalPostId?: string;
 		name?: string;
 		objective?: string;
 		targeting?: AdTargeting;
@@ -395,27 +397,65 @@ export async function boostPost(
 ) {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
-	// Verify the post target exists, is published, and belongs to this org
-	const [target] = await db
-		.select()
-		.from(postTargets)
-		.innerJoin(posts, eq(postTargets.postId, posts.id))
-		.where(and(eq(postTargets.id, params.postTargetId), eq(posts.organizationId, orgId)))
-		.limit(1)
-		.then((rows) => rows.map((r) => r.post_targets));
+	// Resolve the platform post id to boost from either a RelayAPI post target
+	// (post_target_id) or a natively-published post synced into external_posts
+	// (external_post_id). Exactly one is provided (enforced by BoostPostBody).
+	let platformPostId: string;
+	let boostPostTargetId: string | null = null;
+	let boostExternalPostId: string | null = null;
 
-	if (!target) throw new AdPlatformError("NOT_FOUND", "Post target not found");
-	if (target.status !== "published") {
-		throw new AdPlatformError(
-			"INVALID_STATE",
-			"Can only boost published posts",
-		);
-	}
-	if (!target.platformPostId) {
-		throw new AdPlatformError(
-			"INVALID_STATE",
-			"Post has no platform post ID",
-		);
+	if (params.externalPostId) {
+		const [ext] = await db
+			.select()
+			.from(externalPosts)
+			.where(
+				and(
+					eq(externalPosts.id, params.externalPostId),
+					eq(externalPosts.organizationId, orgId),
+				),
+			)
+			.limit(1);
+
+		if (!ext) throw new AdPlatformError("NOT_FOUND", "External post not found");
+		if (!ext.platformPostId) {
+			throw new AdPlatformError(
+				"INVALID_STATE",
+				"Post has no platform post ID",
+			);
+		}
+		platformPostId = ext.platformPostId;
+		boostExternalPostId = ext.id;
+	} else {
+		// Verify the post target exists, is published, and belongs to this org
+		const [target] = await db
+			.select()
+			.from(postTargets)
+			.innerJoin(posts, eq(postTargets.postId, posts.id))
+			.where(
+				and(
+					eq(postTargets.id, params.postTargetId!),
+					eq(posts.organizationId, orgId),
+				),
+			)
+			.limit(1)
+			.then((rows) => rows.map((r) => r.post_targets));
+
+		if (!target)
+			throw new AdPlatformError("NOT_FOUND", "Post target not found");
+		if (target.status !== "published") {
+			throw new AdPlatformError(
+				"INVALID_STATE",
+				"Can only boost published posts",
+			);
+		}
+		if (!target.platformPostId) {
+			throw new AdPlatformError(
+				"INVALID_STATE",
+				"Post has no platform post ID",
+			);
+		}
+		platformPostId = target.platformPostId;
+		boostPostTargetId = target.id;
 	}
 
 	const ctx = await getAccountWithToken(db, params.adAccountId, orgId, env);
@@ -424,13 +464,13 @@ export async function boostPost(
 	const adapter = getAdPlatformAdapter(ctx.adPlatform);
 	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
 
-	const adName = params.name ?? `Boost - ${target.platformPostId}`;
+	const adName = params.name ?? `Boost - ${platformPostId}`;
 
 	const result = await adapter.boostPost(
 		ctx.accessToken,
 		ctx.adAccount.platformAdAccountId,
 		{
-			platformPostId: target.platformPostId,
+			platformPostId,
 			name: adName,
 			objective: params.objective ?? "engagement",
 			targeting: params.targeting,
@@ -484,8 +524,9 @@ export async function boostPost(
 			platformAdId: result.platformAdId,
 			name: adName,
 			status: "pending_review",
-			boostPostTargetId: params.postTargetId,
-			boostPlatformPostId: target.platformPostId,
+			boostPostTargetId,
+			boostExternalPostId,
+			boostPlatformPostId: platformPostId,
 			targeting: params.targeting as any,
 			dailyBudgetCents: params.dailyBudgetCents,
 			lifetimeBudgetCents: params.lifetimeBudgetCents,

@@ -1,21 +1,21 @@
 {
-  "name": "@relayapi/db",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "scripts": {
-    "generate": "drizzle-kit generate",
-    "migrate": "drizzle-kit migrate"
-  },
-  "dependencies": {
-    "drizzle-orm": "catalog:",
-    "postgres": "catalog:"
-  },
-  "devDependencies": {
-    "drizzle-kit": "catalog:",
-    "typescript": "catalog:"
-  }
+	"name": "@relayapi/db",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"generate": "drizzle-kit generate",
+		"migrate": "drizzle-kit migrate"
+	},
+	"dependencies": {
+		"drizzle-orm": "catalog:",
+		"postgres": "catalog:"
+	},
+	"devDependencies": {
+		"drizzle-kit": "catalog:",
+		"typescript": "catalog:"
+	}
 }

@@ -610,6 +610,7 @@ app.openapi(boostPostRoute, async (c) => {
 		const ad = await adService.boostPost(c.env, orgId, {
 			adAccountId: body.ad_account_id,
 			postTargetId: body.post_target_id,
+			externalPostId: body.external_post_id,
 			name: body.name,
 			objective: body.objective,
 			targeting: body.targeting as any,
@@ -1284,6 +1285,7 @@ function formatAdResponse(
 		image_url: ad.imageUrl,
 		video_url: ad.videoUrl,
 		boost_post_target_id: ad.boostPostTargetId,
+		boost_external_post_id: ad.boostExternalPostId,
 		targeting: ad.targeting ?? null,
 		daily_budget_cents: ad.dailyBudgetCents,
 		lifetime_budget_cents: ad.lifetimeBudgetCents,

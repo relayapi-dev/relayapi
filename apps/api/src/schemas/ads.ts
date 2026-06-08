@@ -179,27 +179,38 @@ export const CreateAdBody = z.object({
 	end_date: z.string().datetime({ offset: true }).optional(),
 });
 
-export const BoostPostBody = z.object({
-	ad_account_id: z.string(),
-	post_target_id: z.string().describe("Published post target ID to boost"),
-	name: z.string().max(255).optional(),
-	objective: AdObjectiveEnum.default("engagement"),
-	targeting: AdTargetingSchema.optional(),
-	daily_budget_cents: z.number().int().positive(),
-	lifetime_budget_cents: z.number().int().positive().optional(),
-	currency: z.string().length(3).default("USD"),
-	duration_days: z.number().int().min(1).max(365),
-	start_date: z.string().datetime({ offset: true }).optional(),
-	end_date: z.string().datetime({ offset: true }).optional(),
-	bid_amount: z.number().positive().optional(),
-	tracking: z
-		.object({
-			pixel_id: z.string().optional(),
-			url_tags: z.string().optional(),
-		})
-		.optional(),
-	special_ad_categories: z.array(z.string()).optional(),
-});
+export const BoostPostBody = z
+	.object({
+		ad_account_id: z.string(),
+		post_target_id: z
+			.string()
+			.optional()
+			.describe("Published RelayAPI post target ID (pt_) to boost"),
+		external_post_id: z
+			.string()
+			.optional()
+			.describe("Natively-published / external post ID (xp_) to boost"),
+		name: z.string().max(255).optional(),
+		objective: AdObjectiveEnum.default("engagement"),
+		targeting: AdTargetingSchema.optional(),
+		daily_budget_cents: z.number().int().positive(),
+		lifetime_budget_cents: z.number().int().positive().optional(),
+		currency: z.string().length(3).default("USD"),
+		duration_days: z.number().int().min(1).max(365),
+		start_date: z.string().datetime({ offset: true }).optional(),
+		end_date: z.string().datetime({ offset: true }).optional(),
+		bid_amount: z.number().positive().optional(),
+		tracking: z
+			.object({
+				pixel_id: z.string().optional(),
+				url_tags: z.string().optional(),
+			})
+			.optional(),
+		special_ad_categories: z.array(z.string()).optional(),
+	})
+	.refine((b) => Boolean(b.post_target_id) !== Boolean(b.external_post_id), {
+		message: "Provide exactly one of post_target_id or external_post_id",
+	});
 
 export const UpdateAdBody = z.object({
 	name: z.string().min(1).max(255).optional(),
@@ -224,6 +235,7 @@ export const AdResponse = z.object({
 	image_url: z.string().nullable(),
 	video_url: z.string().nullable(),
 	boost_post_target_id: z.string().nullable(),
+	boost_external_post_id: z.string().nullable(),
 	targeting: z.any().nullable(),
 	daily_budget_cents: z.number().nullable(),
 	lifetime_budget_cents: z.number().nullable(),

@@ -4,8 +4,13 @@ import { cn } from "@/lib/utils";
 import { platformColors, platformLabels, platformAvatars } from "@/lib/platform-maps";
 
 interface PostTargetOption {
-  /** Post target ID (pt_) — the value submitted to /v1/ads/boost */
-  targetId: string;
+  /**
+   * The value submitted to /v1/ads/boost. For RelayAPI posts this is the post
+   * target ID (pt_); for native/external posts it's the external post ID (xp_).
+   * The dialog picks post_target_id vs external_post_id by this prefix.
+   */
+  id: string;
+  source: "internal" | "external";
   platformPostId: string;
   platform: string;
   accountName: string | null;
@@ -43,7 +48,7 @@ export function PostTargetCombobox({
   // "*" = no filter (undefined); "" = filter out everything (empty array).
   const platformsKey = platforms === undefined ? "*" : [...platforms].sort().join("|");
 
-  const selectedPost = value ? posts.find((p) => p.targetId === value) : null;
+  const selectedPost = value ? posts.find((p) => p.id === value) : null;
 
   const fetchPosts = useCallback(async () => {
     setLoading(true);
@@ -51,7 +56,9 @@ export function PostTargetCombobox({
       const url = new URL("/api/posts", window.location.origin);
       url.searchParams.set("status", "published");
       url.searchParams.set("include", "targets,media");
-      url.searchParams.set("limit", "50");
+      // Include natively-published posts (external_posts) so they're boostable too.
+      url.searchParams.set("include_external", "true");
+      url.searchParams.set("limit", "100");
       const res = await fetch(url.toString());
       if (res.ok) {
         const json = await res.json();
@@ -59,8 +66,23 @@ export function PostTargetCombobox({
           platformsKey === "*" ? null : new Set(platformsKey ? platformsKey.split("|") : []);
         const items: PostTargetOption[] = [];
         for (const post of json.data ?? []) {
-          // Only internal posts have post targets (pt_); external posts can't be boosted.
-          if (post.source === "external") continue;
+          // Native/external posts: boosted via external_post_id (xp_).
+          if (post.source === "external") {
+            if (!post.platform_post_id) continue;
+            if (allowed && !allowed.has(post.platform)) continue;
+            items.push({
+              id: post.id, // xp_
+              source: "external",
+              platformPostId: post.platform_post_id,
+              platform: post.platform,
+              accountName: post.account_name ?? null,
+              content: post.content ?? null,
+              thumbnailUrl: post.thumbnail_url ?? post.media_urls?.[0] ?? null,
+              publishedAt: post.published_at ?? null,
+            });
+            continue;
+          }
+          // RelayAPI posts: boosted via post target id (pt_).
           const targets = post.targets ?? {};
           for (const target of Object.values(targets) as any[]) {
             if (target?.status !== "published") continue;
@@ -68,7 +90,8 @@ export function PostTargetCombobox({
             for (const acc of target.accounts ?? []) {
               if (!acc.target_id || !acc.platform_post_id) continue;
               items.push({
-                targetId: acc.target_id,
+                id: acc.target_id, // pt_
+                source: "internal",
                 platformPostId: acc.platform_post_id,
                 platform: target.platform,
                 accountName: acc.display_name ?? acc.username ?? null,
@@ -79,12 +102,12 @@ export function PostTargetCombobox({
             }
           }
         }
-        // Deduplicate by target id (pt_ is unique per post+account)
+        // Deduplicate by id (pt_/xp_ are unique per post+account)
         const seen = new Set<string>();
         setPosts(
           items.filter((p) => {
-            if (seen.has(p.targetId)) return false;
-            seen.add(p.targetId);
+            if (seen.has(p.id)) return false;
+            seen.add(p.id);
             return true;
           }),
         );
@@ -220,20 +243,20 @@ export function PostTargetCombobox({
           <div className="max-h-56 overflow-y-auto py-1">
             {filtered.map((post) => (
               <button
-                key={post.targetId}
+                key={post.id}
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent/30 transition-colors",
-                  value === post.targetId && "bg-accent/20 font-medium",
+                  value === post.id && "bg-accent/20 font-medium",
                 )}
-                onClick={() => handleSelect(post.targetId)}
+                onClick={() => handleSelect(post.id)}
               >
                 <Check
                   className={cn(
                     "size-3 shrink-0",
-                    value === post.targetId ? "opacity-100" : "opacity-0",
+                    value === post.id ? "opacity-100" : "opacity-0",
                   )}
                 />
-                {post.thumbnailUrl && !brokenThumbs.has(post.targetId) ? (
+                {post.thumbnailUrl && !brokenThumbs.has(post.id) ? (
                   <img
                     src={post.thumbnailUrl}
                     alt=""
@@ -241,7 +264,7 @@ export function PostTargetCombobox({
                     onError={() =>
                       setBrokenThumbs((prev) => {
                         const next = new Set(prev);
-                        next.add(post.targetId);
+                        next.add(post.id);
                         return next;
                       })
                     }

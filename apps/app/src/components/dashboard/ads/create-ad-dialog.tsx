@@ -135,7 +135,10 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
       };
 
       if (boostMode) {
-        payload.post_target_id = postTargetId;
+        // Native/external posts use an xp_ id (external_post_id); RelayAPI posts
+        // use a pt_ post target id (post_target_id).
+        if (postTargetId.startsWith("xp_")) payload.external_post_id = postTargetId;
+        else payload.post_target_id = postTargetId;
         payload.daily_budget_cents = Math.round(Number(dailyBudget) * 100);
         payload.duration_days = Number(durationDays);
       } else {

@@ -200,6 +200,7 @@ export interface AdResponse {
   image_url: string | null;
   video_url: string | null;
   boost_post_target_id: string | null;
+  boost_external_post_id: string | null;
   targeting: Record<string, unknown> | null;
   daily_budget_cents: number | null;
   lifetime_budget_cents: number | null;
@@ -356,7 +357,10 @@ export interface AdCreateParams {
 
 export interface AdBoostParams {
   ad_account_id: string;
-  post_target_id: string;
+  /** Published RelayAPI post target ID (pt_) to boost. Provide exactly one of post_target_id or external_post_id. */
+  post_target_id?: string;
+  /** Natively-published / external post ID (xp_) to boost. Provide exactly one of post_target_id or external_post_id. */
+  external_post_id?: string;
   name?: string;
   objective?: string;
   targeting?: Record<string, unknown>;

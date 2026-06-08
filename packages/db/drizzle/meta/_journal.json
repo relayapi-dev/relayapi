@@ -267,6 +267,13 @@
       "when": 1780849094070,
       "tag": "0037_groovy_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1780913233938,
+      "tag": "0038_magical_mister_fear",
+      "breakpoints": true
     }
   ]
 }

@@ -1735,9 +1735,15 @@ export const ads = pgTable(
 		linkUrl: text("link_url"),
 		imageUrl: text("image_url"),
 		videoUrl: text("video_url"),
-		// Boost mode: references a published post
+		// Boost mode: references a published post.
+		// A boost references either a RelayAPI post target (boostPostTargetId) or
+		// a natively-published post synced into external_posts (boostExternalPostId).
 		boostPostTargetId: text("boost_post_target_id").references(
 			() => postTargets.id,
+			{ onDelete: "set null" },
+		),
+		boostExternalPostId: text("boost_external_post_id").references(
+			() => externalPosts.id,
 			{ onDelete: "set null" },
 		),
 		boostPlatformPostId: text("boost_platform_post_id"),
@@ -1766,6 +1772,7 @@ export const ads = pgTable(
 		index("ads_platform_ad_id_idx").on(table.platformAdId),
 		index("ads_org_status_idx").on(table.organizationId, table.status),
 		index("ads_boost_post_idx").on(table.boostPostTargetId),
+		index("ads_boost_external_post_idx").on(table.boostExternalPostId),
 	],
 );
 
