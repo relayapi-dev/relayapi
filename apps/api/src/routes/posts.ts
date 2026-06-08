@@ -582,7 +582,9 @@ app.openapi(listPosts, async (c) => {
 	applyWorkspaceScope(c, conditions, posts.workspaceId);
 
 	if (cursor) {
-		conditions.push(lt(posts.createdAt, new Date(cursor)));
+		conditions.push(
+			lt(sql`coalesce(${posts.publishedAt}, ${posts.createdAt})`, new Date(cursor)),
+		);
 	}
 
 	if (status) {
@@ -631,7 +633,7 @@ app.openapi(listPosts, async (c) => {
 		})
 		.from(posts)
 		.where(and(...conditions))
-		.orderBy(desc(posts.createdAt))
+		.orderBy(desc(sql`coalesce(${posts.publishedAt}, ${posts.createdAt})`))
 		.limit(limit + 1);
 
 	const hasMore = allPosts.length > limit;
@@ -783,22 +785,34 @@ app.openapi(listPosts, async (c) => {
 				from,
 				to,
 				limit,
+				cursor,
 			});
-			const merged = mergeByPublishedAt(internalItems, ext, limit);
+			const moreExternal = ext.length > limit;
+			const extPage = ext.slice(0, limit);
+			const merged = mergeByPublishedAt(internalItems, extPage, limit);
+			const last = merged.at(-1);
+			const more =
+				hasMore ||
+				moreExternal ||
+				internalItems.length + extPage.length > merged.length;
 			return c.json(
 				{
 					data: merged,
-					next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
-					has_more: hasMore || ext.length >= limit,
+					next_cursor: more && last ? (last.published_at ?? last.created_at) : null,
+					has_more: more,
 				},
 				200,
 			);
 		}
 
+		const lastInternal = data.at(-1);
 		return c.json(
 			{
 				data: internalItems,
-				next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+				next_cursor: hasMore
+					? ((lastInternal?.publishedAt ?? lastInternal?.createdAt)?.toISOString() ??
+						null)
+					: null,
 				has_more: hasMore,
 			},
 			200,
@@ -861,22 +875,34 @@ app.openapi(listPosts, async (c) => {
 			from,
 			to,
 			limit,
+			cursor,
 		});
-		const merged = mergeByPublishedAt(leanItems, ext, limit);
+		const moreExternal = ext.length > limit;
+		const extPage = ext.slice(0, limit);
+		const merged = mergeByPublishedAt(leanItems, extPage, limit);
+		const last = merged.at(-1);
+		const more =
+			hasMore ||
+			moreExternal ||
+			leanItems.length + extPage.length > merged.length;
 		return c.json(
 			{
 				data: merged,
-				next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
-				has_more: hasMore || ext.length >= limit,
+				next_cursor: more && last ? (last.published_at ?? last.created_at) : null,
+				has_more: more,
 			},
 			200,
 		);
 	}
 
+	const lastInternal = data.at(-1);
 	return c.json(
 		{
 			data: leanItems,
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: hasMore
+				? ((lastInternal?.publishedAt ?? lastInternal?.createdAt)?.toISOString() ??
+					null)
+				: null,
 			has_more: hasMore,
 		},
 		200,
@@ -897,6 +923,7 @@ async function fetchExternalPostItems(
 		from?: string;
 		to?: string;
 		limit: number;
+		cursor?: string;
 	},
 ) {
 	const conditions = [eq(externalPosts.organizationId, orgId)];
@@ -910,6 +937,9 @@ async function fetchExternalPostItems(
 	}
 	if (filters.to) {
 		conditions.push(lte(externalPosts.publishedAt, new Date(filters.to)));
+	}
+	if (filters.cursor) {
+		conditions.push(lt(externalPosts.publishedAt, new Date(filters.cursor)));
 	}
 
 	const rows = await db
@@ -937,7 +967,7 @@ async function fetchExternalPostItems(
 		)
 		.where(and(...conditions))
 		.orderBy(desc(externalPosts.publishedAt))
-		.limit(filters.limit);
+		.limit(filters.limit + 1);
 
 	return rows.map((ep) => ({
 		id: ep.id,
@@ -958,7 +988,7 @@ async function fetchExternalPostItems(
 	}));
 }
 
-function mergeByPublishedAt(
+export function mergeByPublishedAt(
 	internal: any[],
 	external: any[],
 	limit: number,
