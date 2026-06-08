@@ -13,6 +13,7 @@
 	"dependencies": {
 		"@aws-sdk/client-s3": "catalog:",
 		"@aws-sdk/s3-request-presigner": "catalog:",
+		"@dagrejs/dagre": "catalog:",
 		"@hono/swagger-ui": "catalog:",
 		"@hono/zod-openapi": "catalog:",
 		"@react-email/components": "catalog:",

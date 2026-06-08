@@ -11,7 +11,6 @@ import { Field, FormShell, INPUT_CLS, numberOrUndefined } from "./shared";
 interface Variant {
 	key: string;
 	weight: number;
-	label?: string;
 }
 
 interface RandomizerConfig {

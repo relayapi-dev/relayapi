@@ -14,6 +14,7 @@
     "@astrojs/cloudflare": "catalog:",
     "@astrojs/react": "catalog:",
     "@better-auth/api-key": "catalog:",
+    "@dagrejs/dagre": "catalog:",
     "@dnd-kit/core": "catalog:",
     "@dnd-kit/sortable": "catalog:",
     "@dnd-kit/utilities": "catalog:",

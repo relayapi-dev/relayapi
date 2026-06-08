@@ -87,7 +87,11 @@ export function HttpRequestEditor({
 			>
 				<div className="space-y-1.5">
 					{headerRows.map(([k, v], idx) => (
-						<div key={`${idx}-${k}`} className="flex items-center gap-1.5">
+						// Bare index key: stable while typing a header name (a
+						// content-based key would remount the row each keystroke and
+						// drop focus). Rows are fully controlled and deleted via the
+						// trash button, so index reuse on delete is safe.
+						<div key={idx} className="flex items-center gap-1.5">
 							<input
 								type="text"
 								value={k}

@@ -44,6 +44,7 @@ export function StartAutomationEditor({
 		onChange({ ...config, ...p });
 
 	const [rows, setRows] = useState<AutomationRow[]>([]);
+	const [loaded, setLoaded] = useState(false);
 	const [manual, setManual] = useState(false);
 
 	useEffect(() => {
@@ -59,6 +60,8 @@ export function StartAutomationEditor({
 				if (!cancelled && Array.isArray(body.data)) setRows(body.data);
 			} catch {
 				if (!cancelled) setManual(true);
+			} finally {
+				if (!cancelled) setLoaded(true);
 			}
 		})();
 		return () => {
@@ -78,7 +81,21 @@ export function StartAutomationEditor({
 				required
 				description="The enrolled contact is added to this automation. It must be active to run."
 			>
-				{manual || (options.length === 0 && rows.length === 0) ? (
+				{manual ? (
+					<input
+						type="text"
+						value={cfg.target_automation_id ?? ""}
+						onChange={(e) =>
+							patch({ target_automation_id: e.target.value || undefined })
+						}
+						placeholder="auto_..."
+						className={INPUT_CLS}
+					/>
+				) : !loaded ? (
+					<select disabled className={INPUT_CLS}>
+						<option>Loading automations…</option>
+					</select>
+				) : options.length === 0 ? (
 					<input
 						type="text"
 						value={cfg.target_automation_id ?? ""}
@@ -112,7 +129,7 @@ export function StartAutomationEditor({
 				)}
 			</Field>
 
-			{!manual && rows.length > 0 ? (
+			{!manual && loaded && options.length > 0 ? (
 				<button
 					type="button"
 					onClick={() => setManual(true)}

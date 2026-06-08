@@ -5,6 +5,9 @@
 
 import { describe, expect, it } from "bun:test";
 import {
+	estimateNodeSize,
+} from "../services/automations/templates/_layout";
+import {
 	buildGraphFromTemplate,
 	listTemplateKinds,
 	type TemplateKind,
@@ -12,6 +15,40 @@ import {
 import { validateGraph } from "../services/automations/validator";
 
 type FixtureConfig = Record<string, unknown>;
+
+type PositionedNode = {
+	key: string;
+	kind: string;
+	config: Record<string, unknown>;
+	canvas_x?: number;
+	canvas_y?: number;
+};
+
+// True if any two node bounding boxes (using the layout's own size estimate)
+// overlap. The dagre layout must guarantee this is always false.
+function anyNodesOverlap(nodes: PositionedNode[]): boolean {
+	for (let i = 0; i < nodes.length; i++) {
+		for (let j = i + 1; j < nodes.length; j++) {
+			const a = nodes[i]!;
+			const b = nodes[j]!;
+			const sa = estimateNodeSize(a);
+			const sb = estimateNodeSize(b);
+			const ax = a.canvas_x ?? 0;
+			const ay = a.canvas_y ?? 0;
+			const bx = b.canvas_x ?? 0;
+			const by = b.canvas_y ?? 0;
+			if (
+				ax < bx + sb.width &&
+				bx < ax + sa.width &&
+				ay < by + sb.height &&
+				by < ay + sa.height
+			) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
 
 const FIXTURES: Record<TemplateKind, FixtureConfig> = {
 	blank: {},
@@ -109,7 +146,7 @@ describe("buildGraphFromTemplate", () => {
 	// all stacked at (0, 0) because builders didn't set positions).
 	for (const kind of Object.keys(FIXTURES) as TemplateKind[]) {
 		if (kind === "blank") continue;
-		it(`assigns canvas positions to every node for ${kind}`, () => {
+		it(`assigns non-overlapping canvas positions to every node for ${kind}`, () => {
 			const result = buildGraphFromTemplate({
 				kind,
 				channel: "instagram",
@@ -120,6 +157,9 @@ describe("buildGraphFromTemplate", () => {
 				expect(typeof node.canvas_x).toBe("number");
 				expect(typeof node.canvas_y).toBe("number");
 			}
+			expect(anyNodesOverlap(result.graph.nodes as PositionedNode[])).toBe(
+				false,
+			);
 		});
 
 		it(`produces non-empty ports on every node after validation for ${kind}`, () => {
@@ -137,7 +177,7 @@ describe("buildGraphFromTemplate", () => {
 		});
 	}
 
-	it("places the root node at (100, 100) for a non-blank template", () => {
+	it("places the root node at the left edge of the layout for a non-blank template", () => {
 		const result = buildGraphFromTemplate({
 			kind: "welcome_flow",
 			channel: "instagram",
@@ -145,15 +185,20 @@ describe("buildGraphFromTemplate", () => {
 		});
 		const root = result.graph.nodes.find((n) => n.key === result.graph.root_node_key);
 		expect(root).toBeDefined();
-		expect(root!.canvas_x).toBe(100);
-		expect(root!.canvas_y).toBe(100);
+		expect(typeof root!.canvas_x).toBe("number");
+		expect(typeof root!.canvas_y).toBe("number");
+		// LR layout: the root is a source node, so it sits at the left-most x.
+		const minX = Math.min(
+			...result.graph.nodes.map((n) => n.canvas_x ?? Number.POSITIVE_INFINITY),
+		);
+		expect(root!.canvas_x).toBe(minX);
 	});
 
 	// Simulates what POST /v1/automations does end-to-end: build from template,
 	// run validateGraph, persist the canonical graph. Guards against the
 	// regression where the canvas rendered empty because persisted nodes had
 	// `ports: []` and no canvas_x / canvas_y.
-	it("persistable graph for comment_to_dm has ports AND canvas positions on every node", () => {
+	it("persistable graph for comment_to_dm has ports AND non-overlapping canvas positions on every node", () => {
 		const built = buildGraphFromTemplate({
 			kind: "comment_to_dm",
 			channel: "instagram",
@@ -168,11 +213,12 @@ describe("buildGraphFromTemplate", () => {
 			expect(typeof node.canvas_x).toBe("number");
 			expect(typeof node.canvas_y).toBe("number");
 		}
-		// public_reply → depth 0, send_dm → depth 1.
+		// public_reply → root, send_dm → downstream. LR layout places the
+		// downstream node to the right, and the two cards must not overlap.
 		const publicReply = persisted.nodes.find((n) => n.key === "public_reply");
 		const sendDm = persisted.nodes.find((n) => n.key === "send_dm");
-		expect(publicReply?.canvas_x).toBe(100);
-		expect(sendDm?.canvas_x).toBe(520);
+		expect(sendDm!.canvas_x!).toBeGreaterThan(publicReply!.canvas_x!);
+		expect(anyNodesOverlap(persisted.nodes as PositionedNode[])).toBe(false);
 	});
 
 	it("comment_to_dm adds a visible public reply node and omits a redundant end node", () => {

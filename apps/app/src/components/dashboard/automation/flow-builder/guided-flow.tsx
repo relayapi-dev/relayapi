@@ -97,6 +97,7 @@ import { validateGraph } from "./validation";
 import { useAutosave } from "./use-autosave";
 import type { UseGraphStore } from "./use-graph-store";
 import { generateNodeKey } from "./use-graph-store";
+import { type LayoutNode, layoutGraph } from "./layout";
 import type {
 	AutomationCatalog,
 	CatalogBindingType,
@@ -221,68 +222,47 @@ interface TriggerNodeData {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-arrange (preserved from pre-rewrite canvas).
+// Auto-arrange (dagre). Mirrors the server template layout in
+// `apps/api/src/services/automations/templates/_layout.ts` so created and
+// edited graphs lay out the same way. Dagre packs nodes by their real box
+// size, so cards never overlap regardless of width/height or branch fan-out
+// (the old fixed 420/200-step BFS overlapped: step cards render 390px wide and
+// can be far taller than 200px). Keep the two layouts in sync.
 // ---------------------------------------------------------------------------
 
-const LAYER_GAP = 420;
-const ROW_GAP = 200;
+const STEP_NODE_WIDTH = 390; // matches the `w-[390px]` step card
+const BASE_NODE_HEIGHT = 200;
+const PER_OUTPUT_HEIGHT = 36;
 
+// Estimated card size from kind + config, used before React Flow has measured
+// the DOM (and as a fallback). Output-port count is a good proxy for height.
+function estimateNodeSize(node: AutomationNode): {
+	width: number;
+	height: number;
+} {
+	const outputs = derivePorts(node).filter(
+		(p) => p.direction === "output",
+	).length;
+	return {
+		width: STEP_NODE_WIDTH,
+		height: BASE_NODE_HEIGHT + Math.max(0, outputs - 1) * PER_OUTPUT_HEIGHT,
+	};
+}
+
+// Fallback positions for nodes lacking a stored canvas_x/canvas_y. Uses size
+// estimates (no measured DOM here). `_rootKey` is unused — dagre derives the
+// left-to-right order from edges — but kept for call-site compatibility.
 function computeAutoPositions(
 	nodes: AutomationNode[],
 	edges: AutomationEdge[],
-	rootKey: string | null,
+	_rootKey: string | null,
 ): Map<string, XYPosition> {
-	const layers = new Map<number, string[]>();
-	const childrenByKey = new Map<string, string[]>();
-	for (const e of edges) {
-		const list = childrenByKey.get(e.from_node) ?? [];
-		list.push(e.to_node);
-		childrenByKey.set(e.from_node, list);
-	}
-
-	const seen = new Set<string>();
-	const queue: Array<{ depth: number; key: string }> = [];
-	if (rootKey) {
-		queue.push({ depth: 0, key: rootKey });
-		seen.add(rootKey);
-	}
-
-	while (queue.length > 0) {
-		const current = queue.shift()!;
-		const layer = layers.get(current.depth) ?? [];
-		layer.push(current.key);
-		layers.set(current.depth, layer);
-		for (const childKey of childrenByKey.get(current.key) ?? []) {
-			if (seen.has(childKey)) continue;
-			seen.add(childKey);
-			queue.push({ depth: current.depth + 1, key: childKey });
-		}
-	}
-
-	const lastDepth = layers.size > 0 ? Math.max(...layers.keys()) : -1;
-	let orphanDepth = lastDepth + 1;
-	for (const n of nodes) {
-		if (seen.has(n.key)) continue;
-		const layer = layers.get(orphanDepth) ?? [];
-		layer.push(n.key);
-		layers.set(orphanDepth, layer);
-		orphanDepth += 1;
-	}
-
-	const positions = new Map<string, XYPosition>();
-	for (const [depth, keys] of Array.from(layers.entries()).sort(
-		(a, b) => a[0] - b[0],
-	)) {
-		const startY = -((keys.length - 1) * ROW_GAP) / 2;
-		keys.forEach((key, index) => {
-			positions.set(key, {
-				x: depth * LAYER_GAP,
-				y: startY + index * ROW_GAP,
-			});
-		});
-	}
-
-	return positions;
+	const layoutNodes: LayoutNode[] = nodes.map((n) => ({
+		key: n.key,
+		...estimateNodeSize(n),
+	}));
+	const layoutEdges = edges.map((e) => ({ from: e.from_node, to: e.to_node }));
+	return layoutGraph(layoutNodes, layoutEdges);
 }
 
 // ---------------------------------------------------------------------------
@@ -1241,6 +1221,25 @@ function CanvasInner({
 		[graph],
 	);
 
+	// Legacy graphs created before server-side dagre layout can have nodes with
+	// no stored position. Commit the computed fallback once so the layout is
+	// stable and gets persisted (via autosave), instead of recomputing it on
+	// every load. Only fires when *every* node lacks a position (the legacy
+	// case); template/inserted nodes always carry canvas_x/canvas_y.
+	const fallbackPersistedRef = useRef(false);
+	useEffect(() => {
+		if (readOnly || fallbackPersistedRef.current) return;
+		const allMissing =
+			graph.nodes.length > 0 &&
+			graph.nodes.every((n) => n.canvas_x == null || n.canvas_y == null);
+		if (!allMissing) return;
+		fallbackPersistedRef.current = true;
+		for (const n of graph.nodes) {
+			const pos = autoPositions.get(n.key);
+			if (pos) graphStore.moveNode(n.key, { x: pos.x, y: pos.y });
+		}
+	}, [graph.nodes, autoPositions, graphStore, readOnly]);
+
 	// --- React Flow data ---------------------------------------------------
 
 	// Desired node set derived from external state (graph + selection + overlay +
@@ -1733,11 +1732,24 @@ function CanvasInner({
 
 	const handleAutoArrange = useCallback(() => {
 		if (readOnly) return;
-		const positions = computeAutoPositions(
-			graph.nodes,
-			graph.edges,
-			graph.root_node_key,
-		);
+		// Prefer React Flow's *measured* card sizes so even very tall cards pack
+		// without overlap; fall back to per-kind estimates before measurement.
+		const measured = new Map(nodes.map((n) => [n.id, n]));
+		const layoutNodes: LayoutNode[] = graph.nodes.map((n) => {
+			const rfNode = measured.get(n.key);
+			const est = estimateNodeSize(n);
+			return {
+				key: n.key,
+				width: rfNode?.width && rfNode.width > 0 ? rfNode.width : est.width,
+				height:
+					rfNode?.height && rfNode.height > 0 ? rfNode.height : est.height,
+			};
+		});
+		const layoutEdges = graph.edges.map((e) => ({
+			from: e.from_node,
+			to: e.to_node,
+		}));
+		const positions = layoutGraph(layoutNodes, layoutEdges);
 		for (const [key, pos] of positions) {
 			graphStore.moveNode(key, pos);
 		}
@@ -1745,7 +1757,7 @@ function CanvasInner({
 			rf.fitView({ duration: 220, padding: 0.18 });
 		});
 		onAutoArrange?.();
-	}, [graph, graphStore, onAutoArrange, readOnly, rf]);
+	}, [graph, graphStore, nodes, onAutoArrange, readOnly, rf]);
 
 	// --- Keyboard shortcuts (Task L5) --------------------------------------
 
