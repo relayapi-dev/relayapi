@@ -6,6 +6,7 @@ import type {
 	DailyMetricPoint,
 	DateRange,
 } from "./types";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 const API_VERSION = "v25.0";
 
@@ -35,7 +36,7 @@ async function igFetch(
 	const url = `https://${graphHost}/${API_VERSION}${path}${separator}access_token=${accessToken}`;
 
 	try {
-		const res = await fetch(url);
+		const res = await fetchWithTimeout(url);
 		if (!res.ok) {
 			const body = await res.text();
 			console.error(

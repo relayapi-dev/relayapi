@@ -1,4 +1,5 @@
 import { GRAPH_BASE } from "../../config/api-versions";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 import type {
 	PlatformAnalyticsFetcher,
 	PlatformOverview,
@@ -89,7 +90,7 @@ async function threadsFetch<T = unknown>(
 	const url = `${BASE_URL}${path}${separator}access_token=${accessToken}`;
 
 	try {
-		const res = await fetch(url);
+		const res = await fetchWithTimeout(url);
 		if (!res.ok) {
 			console.error(
 				`[threads-analytics] API error ${res.status} for ${path}: ${await res.text()}`,

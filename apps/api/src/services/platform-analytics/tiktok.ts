@@ -6,6 +6,7 @@ import type {
 	DailyMetricPoint,
 	DateRange,
 } from "./types";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 const BASE_URL = "https://open.tiktokapis.com/v2";
 
@@ -85,7 +86,7 @@ async function fetchAllVideos(
 			const body: Record<string, unknown> = { max_count: Math.min(maxCount, 20) };
 			if (cursor !== undefined) body.cursor = cursor;
 
-			const res = await fetch(`${BASE_URL}/video/list/`, {
+			const res = await fetchWithTimeout(`${BASE_URL}/video/list/`, {
 				method: "POST",
 				headers: authHeaders(accessToken),
 				body: JSON.stringify(body),
@@ -119,7 +120,7 @@ async function fetchVideoDetails(
 	if (videoIds.length === 0) return [];
 
 	try {
-		const res = await fetch(
+		const res = await fetchWithTimeout(
 			`${BASE_URL}/video/query/?fields=id,title,view_count,like_count,comment_count,share_count,create_time,cover_image_url,share_url`,
 			{
 				method: "POST",
@@ -163,7 +164,7 @@ export const tiktokAnalytics: PlatformAnalyticsFetcher = {
 		let videoCount: number | null = null;
 
 		try {
-			const res = await fetch(
+			const res = await fetchWithTimeout(
 				`${BASE_URL}/user/info/?fields=follower_count,following_count,likes_count,video_count`,
 				{ headers: authHeaders(accessToken) },
 			);

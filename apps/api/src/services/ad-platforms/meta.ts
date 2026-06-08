@@ -26,8 +26,14 @@ import type {
 } from "./types";
 import { AdPlatformError } from "./types";
 import { GRAPH_BASE } from "../../config/api-versions";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 const GRAPH_API = GRAPH_BASE.facebook;
+
+// Cap every Meta Graph call so a hung graph.facebook.com cannot stall the worker.
+// Generous enough for ad-creation calls (campaign/adset/creative/ad) while still
+// failing fast instead of waiting out the platform's own long timeout.
+const META_FETCH_TIMEOUT_MS = 20_000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -39,7 +45,8 @@ async function metaFetch<T = unknown>(
 	options: RequestInit = {},
 ): Promise<T> {
 	const separator = url.includes("?") ? "&" : "?";
-	const res = await fetch(`${url}${separator}access_token=${accessToken}`, {
+	const res = await fetchWithTimeout(`${url}${separator}access_token=${accessToken}`, {
+		timeout: META_FETCH_TIMEOUT_MS,
 		...options,
 		headers: {
 			"Content-Type": "application/json",

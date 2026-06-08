@@ -1,4 +1,5 @@
 import { GRAPH_BASE } from "../../config/api-versions";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 import {
 	PlatformAnalyticsError,
 	type PlatformAnalyticsFetcher,
@@ -55,7 +56,7 @@ async function fbFetch<T = unknown>(
 	}
 
 	try {
-		const res = await fetch(url.toString());
+		const res = await fetchWithTimeout(url.toString());
 		if (!res.ok) {
 			const errorBody = await res.text();
 			console.error(

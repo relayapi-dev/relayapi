@@ -11,14 +11,26 @@
 const ENC_PREFIX = "enc:";
 const IV_LENGTH = 12;
 
-async function importKey(hexKey: string): Promise<CryptoKey> {
-	const raw = new Uint8Array(
-		hexKey.match(/.{2}/g)!.map((b) => Number.parseInt(b, 16)),
-	);
-	return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
-		"encrypt",
-		"decrypt",
-	]);
+// The imported CryptoKey is pure (raw AES key, no KDF) but each call still parses
+// the hex and crosses into SubtleCrypto. The secret is process-wide and constant,
+// so memoize the imported key per hex secret for the lifetime of the isolate —
+// every import after the first collapses into a Map hit. This matters on hot
+// inbox/posts list paths that decrypt many account tokens per request.
+const keyCache = new Map<string, Promise<CryptoKey>>();
+
+function importKey(hexKey: string): Promise<CryptoKey> {
+	let cached = keyCache.get(hexKey);
+	if (!cached) {
+		const raw = new Uint8Array(
+			hexKey.match(/.{2}/g)!.map((b) => Number.parseInt(b, 16)),
+		);
+		cached = crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
+			"encrypt",
+			"decrypt",
+		]);
+		keyCache.set(hexKey, cached);
+	}
+	return cached;
 }
 
 export async function encryptToken(

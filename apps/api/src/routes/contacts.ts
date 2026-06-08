@@ -553,20 +553,24 @@ app.openapi(listContacts, async (c) => {
 
 	// Load channels for all returned contacts
 	const contactIds = data.map((ct) => ct.id);
-	const channels =
-			contactIds.length > 0
-				? await db
-						.select({
-							id: contactChannels.id,
-							contactId: contactChannels.contactId,
-							socialAccountId: contactChannels.socialAccountId,
-							platform: contactChannels.platform,
-							identifier: contactChannels.identifier,
-							createdAt: contactChannels.createdAt,
-						})
-						.from(contactChannels)
-						.where(inArray(contactChannels.contactId, contactIds))
-				: [];
+	// Channels and segment memberships both key only on contactIds and are
+	// independent — fetch them in parallel instead of two serial round-trips.
+	const [channels, segmentIdsByContact] = await Promise.all([
+		contactIds.length > 0
+			? db
+					.select({
+						id: contactChannels.id,
+						contactId: contactChannels.contactId,
+						socialAccountId: contactChannels.socialAccountId,
+						platform: contactChannels.platform,
+						identifier: contactChannels.identifier,
+						createdAt: contactChannels.createdAt,
+					})
+					.from(contactChannels)
+					.where(inArray(contactChannels.contactId, contactIds))
+			: Promise.resolve([]),
+		getContactSegmentIds(db, contactIds),
+	]);
 
 	const channelsByContact = new Map<
 		string,
@@ -577,8 +581,6 @@ app.openapi(listContacts, async (c) => {
 		list.push(ch);
 		channelsByContact.set(ch.contactId, list);
 	}
-
-	const segmentIdsByContact = await getContactSegmentIds(db, contactIds);
 
 	return c.json(
 		{
@@ -674,12 +676,14 @@ app.openapi(getContact, async (c) => {
 	const denied = assertWorkspaceScope(c, contact.workspaceId);
 	if (denied) return denied;
 
-	const channels = await db
-		.select()
-		.from(contactChannels)
-		.where(eq(contactChannels.contactId, contact.id));
-
-	const segmentIds = (await getContactSegmentIds(db, [contact.id])).get(contact.id) ?? [];
+	const [channels, segmentIdsMap] = await Promise.all([
+		db
+			.select()
+			.from(contactChannels)
+			.where(eq(contactChannels.contactId, contact.id)),
+		getContactSegmentIds(db, [contact.id]),
+	]);
+	const segmentIds = segmentIdsMap.get(contact.id) ?? [];
 
 	return c.json(serializeContact(contact, channels, segmentIds), 200);
 });
@@ -730,12 +734,14 @@ app.openapi(updateContact, async (c) => {
 		);
 	}
 
-	const channels = await db
-		.select()
-		.from(contactChannels)
-		.where(eq(contactChannels.contactId, updated.id));
-
-	const segmentIds = (await getContactSegmentIds(db, [updated.id])).get(updated.id) ?? [];
+	const [channels, segmentIdsMap] = await Promise.all([
+		db
+			.select()
+			.from(contactChannels)
+			.where(eq(contactChannels.contactId, updated.id)),
+		getContactSegmentIds(db, [updated.id]),
+	]);
+	const segmentIds = segmentIdsMap.get(updated.id) ?? [];
 
 	return c.json(serializeContact(updated, channels, segmentIds), 200);
 });
@@ -1234,20 +1240,21 @@ app.openapi(mergeContact, async (c) => {
 		.returning({ id: customFieldValues.id });
 	const fieldsMoved = fieldsMovedRows.length;
 
-	// Update broadcast recipients from source to target
-	const recipientResult = await db
-		.update(broadcastRecipients)
-		.set({ contactId: targetId })
-		.where(eq(broadcastRecipients.contactId, sourceId))
-		.returning({ id: broadcastRecipients.id });
+	// Re-parent broadcast recipients and inbox conversations from source to
+	// target — independent tables, so run both updates in parallel.
+	const [recipientResult, conversationResult] = await Promise.all([
+		db
+			.update(broadcastRecipients)
+			.set({ contactId: targetId })
+			.where(eq(broadcastRecipients.contactId, sourceId))
+			.returning({ id: broadcastRecipients.id }),
+		db
+			.update(inboxConversations)
+			.set({ contactId: targetId })
+			.where(eq(inboxConversations.contactId, sourceId))
+			.returning({ id: inboxConversations.id }),
+	]);
 	const recipientsUpdated = recipientResult.length;
-
-	// Update inbox conversations from source to target
-	const conversationResult = await db
-		.update(inboxConversations)
-		.set({ contactId: targetId })
-		.where(eq(inboxConversations.contactId, sourceId))
-		.returning({ id: inboxConversations.id });
 	const conversationsUpdated = conversationResult.length;
 
 	// Delete the source contact

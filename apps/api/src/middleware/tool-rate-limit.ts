@@ -21,7 +21,11 @@ export const toolRateLimitMiddleware = createMiddleware<{
 	// but this is acceptable for a low-volume daily quota (2-10/day).
 	const current = parseInt((await c.env.KV.get(key)) ?? "0", 10);
 	const newCount = current + 1;
-	await c.env.KV.put(key, String(newCount), { expirationTtl: 172800 });
+	// Defer the write off the request path — the counter is already non-atomic by
+	// design (see note above), so awaiting the put before the handler buys nothing.
+	c.executionCtx.waitUntil(
+		c.env.KV.put(key, String(newCount), { expirationTtl: 172800 }),
+	);
 
 	if (newCount > limit) {
 		return c.json(

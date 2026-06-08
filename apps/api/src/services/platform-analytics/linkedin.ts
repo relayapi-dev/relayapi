@@ -7,6 +7,7 @@ import type {
 	DateRange,
 } from "./types";
 import { getLinkedInRestHeaders, LINKEDIN_API_BASE } from "../../lib/linkedin-rest";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 // Country code to name mapping for LinkedIn geo facets
 const COUNTRY_NAMES: Record<string, string> = {
@@ -77,7 +78,7 @@ async function linkedinFetch(
 	path: string,
 ): Promise<Response> {
 	const url = path.startsWith("http") ? path : `${LINKEDIN_API_BASE}${path}`;
-	return fetch(url, {
+	return fetchWithTimeout(url, {
 		headers: getLinkedInRestHeaders(accessToken),
 	});
 }

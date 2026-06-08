@@ -6,6 +6,7 @@ import type {
 	DailyMetricPoint,
 	DateRange,
 } from "./types";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 const BASE_URL = "https://api.pinterest.com/v5";
 
@@ -72,7 +73,7 @@ async function pinterestFetch<T = unknown>(
 	accessToken: string,
 ): Promise<T | null> {
 	try {
-		const res = await fetch(`${BASE_URL}${path}`, {
+		const res = await fetchWithTimeout(`${BASE_URL}${path}`, {
 			headers: authHeaders(accessToken),
 		});
 

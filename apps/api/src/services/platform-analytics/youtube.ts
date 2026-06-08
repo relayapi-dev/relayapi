@@ -6,6 +6,7 @@ import type {
 	DailyMetricPoint,
 	DateRange,
 } from "./types";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 const YT_ANALYTICS_BASE = "https://youtubeanalytics.googleapis.com/v2/reports";
 const YT_DATA_BASE = "https://www.googleapis.com/youtube/v3";
@@ -125,7 +126,7 @@ async function ytAnalyticsFetch(
 	}
 
 	try {
-		const res = await fetch(url.toString(), {
+		const res = await fetchWithTimeout(url.toString(), {
 			headers: { Authorization: `Bearer ${accessToken}` },
 		});
 		if (!res.ok) {
@@ -156,7 +157,7 @@ async function ytDataFetch<T = unknown>(
 	}
 
 	try {
-		const res = await fetch(url.toString(), {
+		const res = await fetchWithTimeout(url.toString(), {
 			headers: { Authorization: `Bearer ${accessToken}` },
 		});
 		if (!res.ok) {

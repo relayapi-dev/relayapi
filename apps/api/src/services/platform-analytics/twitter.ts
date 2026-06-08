@@ -6,6 +6,7 @@ import type {
 	DailyMetricPoint,
 	DateRange,
 } from "./types";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 const BASE_URL = "https://api.x.com/2";
 
@@ -94,7 +95,7 @@ async function fetchAllTweetsInRange(
 			params.set("pagination_token", paginationToken);
 		}
 
-		const res = await fetch(
+		const res = await fetchWithTimeout(
 			`${BASE_URL}/users/${userId}/tweets?${params.toString()}`,
 			{ headers: authHeaders(accessToken) },
 		);
@@ -130,7 +131,7 @@ export const twitterAnalytics: PlatformAnalyticsFetcher = {
 		let listedCount: number | null = null;
 
 		try {
-			const userRes = await fetch(
+			const userRes = await fetchWithTimeout(
 				`${BASE_URL}/users/${platformAccountId}?user.fields=public_metrics`,
 				{ headers: authHeaders(accessToken) },
 			);
@@ -215,7 +216,7 @@ export const twitterAnalytics: PlatformAnalyticsFetcher = {
 				end_time: `${dateRange.to}T23:59:59Z`,
 			});
 
-			const res = await fetch(
+			const res = await fetchWithTimeout(
 				`${BASE_URL}/users/${platformAccountId}/tweets?${params.toString()}`,
 				{ headers: authHeaders(accessToken) },
 			);

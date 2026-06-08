@@ -6,6 +6,7 @@ import type {
 	DailyMetricPoint,
 	DateRange,
 } from "./types";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 const BASE_URL = "https://businessprofileperformance.googleapis.com/v1";
 
@@ -112,7 +113,7 @@ async function fetchMetrics(
 	const url = buildFetchUrl(locationId, dateRange);
 
 	try {
-		const res = await fetch(url, { headers: authHeaders(accessToken) });
+		const res = await fetchWithTimeout(url, { headers: authHeaders(accessToken) });
 		if (!res.ok) {
 			console.error(
 				`[google-business-analytics] API error ${res.status}: ${await res.text()}`,

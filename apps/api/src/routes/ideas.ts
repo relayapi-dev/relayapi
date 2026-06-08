@@ -295,25 +295,29 @@ app.openapi(listIdeas, async (c) => {
 	// Batch-fetch tags and media to avoid N+1
 	const ideaIds = data.map((r) => r.id);
 
-	const allTagRows = await db
-		.select({
-			ideaId: ideaTags.ideaId,
-			id: tags.id,
-			name: tags.name,
-			color: tags.color,
-			organizationId: tags.organizationId,
-			workspaceId: tags.workspaceId,
-			createdAt: tags.createdAt,
-		})
-		.from(ideaTags)
-		.innerJoin(tags, eq(ideaTags.tagId, tags.id))
-		.where(inArray(ideaTags.ideaId, ideaIds));
-
-	const allMediaRows = await db
-		.select()
-		.from(ideaMedia)
-		.where(inArray(ideaMedia.ideaId, ideaIds))
-		.orderBy(asc(ideaMedia.position));
+	// Tags and media both key only on ideaIds and are independent — fetch in
+	// parallel (one Worker->Postgres RTT instead of two), matching the sibling
+	// idea handlers (getIdea/createIdea/update) that already Promise.all this pair.
+	const [allTagRows, allMediaRows] = await Promise.all([
+		db
+			.select({
+				ideaId: ideaTags.ideaId,
+				id: tags.id,
+				name: tags.name,
+				color: tags.color,
+				organizationId: tags.organizationId,
+				workspaceId: tags.workspaceId,
+				createdAt: tags.createdAt,
+			})
+			.from(ideaTags)
+			.innerJoin(tags, eq(ideaTags.tagId, tags.id))
+			.where(inArray(ideaTags.ideaId, ideaIds)),
+		db
+			.select()
+			.from(ideaMedia)
+			.where(inArray(ideaMedia.ideaId, ideaIds))
+			.orderBy(asc(ideaMedia.position)),
+	]);
 
 	// Group by idea ID
 	const tagsByIdeaId = new Map<string, (typeof tags.$inferSelect)[]>();

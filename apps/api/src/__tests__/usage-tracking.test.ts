@@ -28,6 +28,7 @@ import {
 	getUsageCount,
 	usageTrackingMiddleware,
 } from "../middleware/usage-tracking";
+import { createDb } from "@relayapi/db";
 import type { Env, Variables } from "../types";
 import { MockKV, createMockEnv } from "./__mocks__/env";
 
@@ -67,6 +68,8 @@ function createTestApp(opts: {
 		c.set("keyId", keyId);
 		c.set("plan", plan);
 		c.set("callsIncluded", callsIncluded);
+		// Mirror dbContextMiddleware: usage tracking now reads the shared c.get("db").
+		c.set("db", createDb(c.env.HYPERDRIVE.connectionString));
 		await next();
 	});
 

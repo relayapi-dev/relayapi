@@ -139,11 +139,10 @@ async function getUsageUnits(
 }
 
 async function persistUsageAndLogs(
-	env: Env,
+	db: ReturnType<typeof getRequestDb>,
 	entry: ApiLogEntry,
 	usage?: UsageWrite,
 ): Promise<void> {
-	const db = getRequestDb(env);
 	const tasks: Promise<unknown>[] = [
 		db.insert(apiRequestLogs).values({
 			organizationId: entry.orgId,
@@ -212,7 +211,7 @@ export const usageTrackingMiddleware = createMiddleware<{
 		const keyId = c.get("keyId");
 		if (orgId) {
 			c.executionCtx.waitUntil(
-				persistUsageAndLogs(c.env, {
+				persistUsageAndLogs(c.get("db"), {
 					orgId,
 					keyId,
 					method: c.req.method,
@@ -308,7 +307,7 @@ export const usageTrackingMiddleware = createMiddleware<{
 		c.header("X-Usage-Count", String(newCount));
 		c.header("X-Usage-Limit", String(callsIncluded));
 		c.executionCtx.waitUntil(
-			persistUsageAndLogs(c.env, {
+			persistUsageAndLogs(c.get("db"), {
 				orgId,
 				keyId,
 				method: c.req.method,
@@ -338,7 +337,7 @@ export const usageTrackingMiddleware = createMiddleware<{
 
 	c.executionCtx.waitUntil(
 		persistUsageAndLogs(
-			c.env,
+			c.get("db"),
 			{
 				orgId,
 				keyId,
