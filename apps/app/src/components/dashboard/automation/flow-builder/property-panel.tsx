@@ -21,6 +21,17 @@ import { ActionEditor } from "./action-editor";
 import { INPUT_CLS } from "./field-styles";
 import { MessageComposer } from "./message-composer";
 import type { MessageConfig } from "./message-composer/types";
+import {
+	ConditionEditor,
+	DelayEditor,
+	EndEditor,
+	GotoEditor,
+	HttpRequestEditor,
+	InputEditor,
+	type NodeSummary,
+	RandomizerEditor,
+	StartAutomationEditor,
+} from "./node-editors";
 
 const PANEL_WIDTH_CLS = "w-[360px] xl:w-[392px]";
 
@@ -103,6 +114,8 @@ interface Props {
 	onDelete: () => void;
 	onClose: () => void;
 	existingKeys: string[];
+	/** All nodes in the graph (for the goto target picker). */
+	nodeSummaries: NodeSummary[];
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +130,7 @@ export function PropertyPanel({
 	onDelete,
 	onClose,
 	existingKeys,
+	nodeSummaries,
 }: Props) {
 	const [localKey, setLocalKey] = useState(node?.key ?? "");
 	useEffect(() => {
@@ -152,6 +166,7 @@ export function PropertyPanel({
 		automationId,
 		automationChannel,
 		onChange,
+		nodeSummaries,
 	});
 
 	return (
@@ -352,12 +367,19 @@ function renderEditor({
 	automationId,
 	automationChannel,
 	onChange,
+	nodeSummaries,
 }: {
 	node: PropertyPanelNode;
 	automationId: string;
 	automationChannel: string;
 	onChange: (patch: { config?: Record<string, unknown> }) => void;
+	nodeSummaries: NodeSummary[];
 }) {
+	// Each node editor receives the node's config and emits the *full* next
+	// config object, which we hand straight back via `onChange`.
+	const setConfig = (next: Record<string, unknown>) =>
+		onChange({ config: next });
+
 	if (node.kind === "message") {
 		const composerNode = {
 			key: node.key,
@@ -397,6 +419,38 @@ function renderEditor({
 				}
 			/>
 		);
+	}
+
+	switch (node.kind) {
+		case "http_request":
+			return <HttpRequestEditor config={node.config} onChange={setConfig} />;
+		case "input":
+			return <InputEditor config={node.config} onChange={setConfig} />;
+		case "delay":
+			return <DelayEditor config={node.config} onChange={setConfig} />;
+		case "condition":
+			return <ConditionEditor config={node.config} onChange={setConfig} />;
+		case "randomizer":
+			return <RandomizerEditor config={node.config} onChange={setConfig} />;
+		case "start_automation":
+			return (
+				<StartAutomationEditor
+					config={node.config}
+					onChange={setConfig}
+					automationId={automationId}
+				/>
+			);
+		case "goto":
+			return (
+				<GotoEditor
+					config={node.config}
+					onChange={setConfig}
+					nodeSummaries={nodeSummaries}
+					currentNodeKey={node.key}
+				/>
+			);
+		case "end":
+			return <EndEditor />;
 	}
 
 	return (

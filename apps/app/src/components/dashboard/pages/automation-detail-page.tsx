@@ -749,6 +749,9 @@ export function AutomationDetailPage({ automationId }: Props) {
 							onClose={handleCloseTrigger}
 							onEntrypointsChanged={handleEntrypointsChanged}
 							readOnly={readOnly}
+							bindings={bindings}
+							onSelectBinding={handleSelectBinding}
+							onAddBinding={handleAddBinding}
 						/>
 					)}
 				{tab === "canvas" &&
@@ -831,6 +834,11 @@ export function AutomationDetailPage({ automationId }: Props) {
 							}}
 							onClose={() => graphStore.setSelection([])}
 							existingKeys={graphStore.graph.nodes.map((n) => n.key)}
+							nodeSummaries={graphStore.graph.nodes.map((n) => ({
+								key: n.key,
+								title: n.title,
+								kind: n.kind,
+							}))}
 						/>
 					)}
 			</div>

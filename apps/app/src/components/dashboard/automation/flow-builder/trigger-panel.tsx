@@ -21,6 +21,7 @@ import { useCallback, useMemo, type ChangeEvent } from "react";
 import {
 	ChevronLeft,
 	ChevronRight,
+	Link2,
 	Loader2,
 	Plus,
 	Trash2,
@@ -35,14 +36,23 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useMutation } from "@/hooks/use-api";
 import {
 	useAutomationCatalog,
+	type CatalogBindingType,
 	type CatalogEntrypointKind,
 } from "./use-catalog";
+import {
+	bindingAccountHandle,
+	bindingLabel,
+	bindingStatusBadge,
+	type CanvasBindingRow,
+} from "../bindings-tab/display";
 import type { AutomationEntrypoint } from "./guided-flow";
 import { FilterGroupEditor, type FilterGroup } from "./filter-group-editor";
 import { INPUT_CLS } from "./field-styles";
@@ -60,6 +70,13 @@ interface Props {
 	onClose: () => void;
 	onEntrypointsChanged: () => void;
 	readOnly?: boolean;
+	// Connection bindings (welcome_message, default_reply, menu surfaces) this
+	// automation is attached to. Listed alongside entrypoints so the panel
+	// mirrors the canvas trigger node. Selecting/adding one is handled by the
+	// host page (opens the BindingDetailPanel), so this panel only renders rows.
+	bindings: CanvasBindingRow[];
+	onSelectBinding: (bindingId: string) => void;
+	onAddBinding: (bindingType: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +106,9 @@ export function TriggerPanel({
 	onClose,
 	onEntrypointsChanged,
 	readOnly,
+	bindings,
+	onSelectBinding,
+	onAddBinding,
 }: Props) {
 	const catalog = useAutomationCatalog();
 
@@ -96,6 +116,17 @@ export function TriggerPanel({
 		if (!catalog.data) return [];
 		return catalog.data.entrypoint_kinds.filter((k) => {
 			const channels = Array.isArray(k.channels) ? k.channels : [];
+			if (channels.length === 0) return true;
+			return channels.includes(channel);
+		});
+	}, [catalog.data, channel]);
+
+	// Binding types available for this channel — the "Conversation entry points"
+	// group of the "+ New Trigger" dropdown. Mirrors the canvas node's logic.
+	const availableBindingTypes = useMemo(() => {
+		if (!catalog.data) return [] as CatalogBindingType[];
+		return catalog.data.binding_types.filter((b) => {
+			const channels = Array.isArray(b.channels) ? b.channels : [];
 			if (channels.length === 0) return true;
 			return channels.includes(channel);
 		});
@@ -199,6 +230,10 @@ export function TriggerPanel({
 			readOnly={readOnly}
 			creating={createEntrypoint.loading}
 			createError={createEntrypoint.error}
+			bindings={bindings}
+			availableBindingTypes={availableBindingTypes}
+			onSelectBinding={onSelectBinding}
+			onAddBinding={onAddBinding}
 		/>
 	);
 }
@@ -217,6 +252,10 @@ function TriggerListMode({
 	readOnly,
 	creating,
 	createError,
+	bindings,
+	availableBindingTypes,
+	onSelectBinding,
+	onAddBinding,
 }: {
 	channel: string;
 	entrypoints: AutomationEntrypoint[];
@@ -227,6 +266,10 @@ function TriggerListMode({
 	readOnly?: boolean;
 	creating?: boolean;
 	createError?: string | null;
+	bindings: CanvasBindingRow[];
+	availableBindingTypes: CatalogBindingType[];
+	onSelectBinding: (bindingId: string) => void;
+	onAddBinding: (bindingType: string) => void;
 }) {
 	return (
 		<div
@@ -262,7 +305,7 @@ function TriggerListMode({
 
 			<ScrollArea className="flex-1 bg-[#fbfcfe]">
 				<div className="space-y-3 px-4 py-4">
-					{entrypoints.length === 0 ? (
+					{entrypoints.length === 0 && bindings.length === 0 ? (
 						<div className="rounded-[16px] border border-dashed border-[#d9dde6] bg-white px-4 py-6 text-center text-[13px] text-[#7e8695]">
 							{readOnly
 								? "No triggers configured."
@@ -306,15 +349,59 @@ function TriggerListMode({
 						))
 					)}
 
+					{/* Connection bindings — an alternate way the flow starts, on a
+						specific account. Blue link bubble distinguishes them from the
+						grey event entrypoints above, mirroring the canvas node.
+						Selecting one hands off to the host page's BindingDetailPanel. */}
+					{bindings.map((binding) => {
+						const badge = bindingStatusBadge(binding.status);
+						return (
+							<button
+								key={binding.id}
+								type="button"
+								onClick={() => onSelectBinding(binding.id)}
+								className="flex w-full items-center gap-3 rounded-[16px] border border-[#dfe6ff] bg-[#f7f9ff] px-4 py-3 text-left transition hover:border-[#4680ff]/40 hover:bg-[#eef3ff]"
+							>
+								<div className="flex size-10 items-center justify-center rounded-full bg-[#4680ff] text-white shadow-[0_2px_8px_rgba(15,23,42,0.15)]">
+									<Link2 className="size-4" />
+								</div>
+								<div className="min-w-0 flex-1">
+									<div className="flex items-center gap-1.5">
+										<span className="truncate text-[13px] font-medium text-[#353a44]">
+											{bindingLabel(binding.binding_type)}
+										</span>
+										<span
+											className={cn(
+												"shrink-0 rounded-full border px-1.5 py-0 text-[9px] font-medium",
+												badge.cls,
+											)}
+										>
+											{badge.label}
+										</span>
+									</div>
+									<div className="mt-0.5 truncate text-[11px] text-[#7e8695]">
+										{bindingAccountHandle(binding)}
+									</div>
+								</div>
+								<ChevronRight className="size-3.5 shrink-0 text-[#bfc6d3]" />
+							</button>
+						);
+					})}
+
 					{!readOnly && (
 						<DropdownMenu>
 							<DropdownMenuTrigger asChild>
 								<button
 									type="button"
-									disabled={availableKinds.length === 0 || creating}
+									disabled={
+										(availableKinds.length === 0 &&
+											availableBindingTypes.length === 0) ||
+										creating
+									}
 									className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-[14px] border border-dashed border-[#d9dde6] text-[14px] font-semibold text-[#4680ff] transition hover:border-[#4680ff] hover:bg-[#f4f8ff] disabled:cursor-not-allowed disabled:opacity-60"
 									title={
-										availableKinds.length === 0
+										availableKinds.length === 0 &&
+										availableBindingTypes.length === 0
 											? `No triggers available for ${channel}`
 											: undefined
 									}
@@ -328,6 +415,11 @@ function TriggerListMode({
 								</button>
 							</DropdownMenuTrigger>
 							<DropdownMenuContent align="center" sideOffset={8} className="w-[320px]">
+								{availableKinds.length > 0 && (
+									<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+										Events
+									</DropdownMenuLabel>
+								)}
 								{availableKinds.map((k) => (
 									<DropdownMenuItem
 										key={k.kind}
@@ -341,11 +433,39 @@ function TriggerListMode({
 										</span>
 									</DropdownMenuItem>
 								))}
-								{availableKinds.length === 0 && (
-									<div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
-										No trigger kinds for this channel.
-									</div>
+								{availableBindingTypes.length > 0 && (
+									<>
+										{availableKinds.length > 0 && <DropdownMenuSeparator />}
+										<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+											Conversation entry points
+										</DropdownMenuLabel>
+										{availableBindingTypes.map((b) => (
+											<DropdownMenuItem
+												key={b.type}
+												onSelect={(event) => {
+													event.preventDefault();
+													onAddBinding(b.type);
+												}}
+											>
+												<span className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+													<Link2 className="size-3.5 text-[#4680ff]" />
+													{b.label}
+													{b.v1_status === "stubbed" && (
+														<span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0 text-[9px] font-medium text-amber-600">
+															v1.1
+														</span>
+													)}
+												</span>
+											</DropdownMenuItem>
+										))}
+									</>
 								)}
+								{availableKinds.length === 0 &&
+									availableBindingTypes.length === 0 && (
+										<div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
+											No triggers available.
+										</div>
+									)}
 							</DropdownMenuContent>
 						</DropdownMenu>
 					)}
