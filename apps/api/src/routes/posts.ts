@@ -561,6 +561,7 @@ app.openapi(listPosts, async (c) => {
 		limit,
 		workspace_id,
 		account_id,
+		account_ids,
 		status,
 		from,
 		to,
@@ -568,6 +569,13 @@ app.openapi(listPosts, async (c) => {
 		include_external,
 	} = c.req.valid("query");
 	const db = c.get("db");
+
+	const accountIdList = account_ids
+		? account_ids
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean)
+		: [];
 
 	const includeSet = new Set(
 		(include ?? "")
@@ -604,7 +612,11 @@ app.openapi(listPosts, async (c) => {
 		);
 	}
 
-	if (account_id) {
+	if (accountIdList.length > 0) {
+		conditions.push(
+			sql`${posts.id} IN (SELECT ${postTargets.postId} FROM ${postTargets} WHERE ${inArray(postTargets.socialAccountId, accountIdList)})`,
+		);
+	} else if (account_id) {
 		conditions.push(
 			sql`${posts.id} IN (SELECT ${postTargets.postId} FROM ${postTargets} WHERE ${postTargets.socialAccountId} = ${account_id})`,
 		);
@@ -782,6 +794,7 @@ app.openapi(listPosts, async (c) => {
 			const ext = await fetchExternalPostItems(db, orgId, c, {
 				workspace_id,
 				account_id,
+				account_ids: accountIdList,
 				from,
 				to,
 				limit,
@@ -920,6 +933,7 @@ async function fetchExternalPostItems(
 	filters: {
 		workspace_id?: string;
 		account_id?: string;
+		account_ids?: string[];
 		from?: string;
 		to?: string;
 		limit: number;
@@ -929,7 +943,11 @@ async function fetchExternalPostItems(
 	const conditions = [eq(externalPosts.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, externalPosts.workspaceId);
 
-	if (filters.account_id) {
+	if (filters.account_ids && filters.account_ids.length > 0) {
+		conditions.push(
+			inArray(externalPosts.socialAccountId, filters.account_ids),
+		);
+	} else if (filters.account_id) {
 		conditions.push(eq(externalPosts.socialAccountId, filters.account_id));
 	}
 	if (filters.from) {

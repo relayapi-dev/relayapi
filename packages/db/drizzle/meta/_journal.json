@@ -274,6 +274,13 @@
       "when": 1780913233938,
       "tag": "0038_magical_mister_fear",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1780927431397,
+      "tag": "0039_curious_lester",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "ad_audiences_account_platform_audience_idx" ON "ad_audiences" USING btree ("ad_account_id","platform_audience_id");

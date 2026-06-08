@@ -1494,6 +1494,12 @@ export interface PostListParams {
   account_id?: string;
 
   /**
+   * Filter by any of several account IDs (comma-separated). Takes precedence
+   * over account_id.
+   */
+  account_ids?: string;
+
+  /**
    * Filter by post status
    */
   status?: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';

@@ -13,6 +13,7 @@ export const GET: APIRoute = async (ctx) => {
     };
     if (url.searchParams.get("workspace_id")) params.workspace_id = url.searchParams.get("workspace_id");
     if (url.searchParams.get("account_id")) params.account_id = url.searchParams.get("account_id");
+    if (url.searchParams.get("account_ids")) params.account_ids = url.searchParams.get("account_ids");
     if (url.searchParams.get("status")) params.status = url.searchParams.get("status");
     if (url.searchParams.get("from")) params.from = url.searchParams.get("from");
     if (url.searchParams.get("to")) params.to = url.searchParams.get("to");

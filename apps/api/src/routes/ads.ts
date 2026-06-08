@@ -135,8 +135,17 @@ app.openapi(listAdAccounts, async (c) => {
 		const db = c.get("db");
 		const conditions = [eq(adAccounts.organizationId, orgId)];
 		applyWorkspaceScope(c, conditions, adAccounts.workspaceId);
+		// Only surface ad accounts that can promote at least one connected
+		// Page/IG. Filtering by a specific social account checks membership in
+		// the boostable set (an ad account may promote several connected pages).
 		if (social_account_id) {
-			conditions.push(eq(adAccounts.socialAccountId, social_account_id));
+			conditions.push(
+				sql`${adAccounts.metadata}->'boostable_social_account_ids' @> ${JSON.stringify(social_account_id)}::jsonb`,
+			);
+		} else {
+			conditions.push(
+				sql`jsonb_array_length(coalesce(${adAccounts.metadata}->'boostable_social_account_ids', '[]'::jsonb)) > 0`,
+			);
 		}
 		if (workspace_id) {
 			conditions.push(eq(adAccounts.workspaceId, workspace_id));
@@ -161,16 +170,31 @@ app.openapi(listAdAccounts, async (c) => {
 		const items = accounts.slice(0, limit);
 
 		return c.json({
-			data: items.map((a) => ({
-				id: a.id,
-				social_account_id: a.socialAccountId,
-				platform: a.platform,
-				platform_ad_account_id: a.platformAdAccountId,
-				name: a.name,
-				currency: a.currency,
-				timezone: a.timezone,
-				status: a.status,
-			})),
+			data: items.map((a) => {
+				const md = (a.metadata ?? {}) as Record<string, unknown>;
+				return {
+					id: a.id,
+					social_account_id: a.socialAccountId,
+					platform: a.platform,
+					platform_ad_account_id: a.platformAdAccountId,
+					name: a.name,
+					currency: a.currency,
+					timezone: a.timezone,
+					status: a.status,
+					boostable_social_account_ids: Array.isArray(
+						md.boostable_social_account_ids,
+					)
+						? (md.boostable_social_account_ids as string[])
+						: [],
+					boostable_accounts: Array.isArray(md.boostable_accounts)
+						? (md.boostable_accounts as {
+								id: string;
+								platform: string;
+								username: string | null;
+							}[])
+						: [],
+				};
+			}),
 			next_cursor: hasMore ? items[items.length - 1]!.id : null,
 			has_more: hasMore,
 		});
@@ -933,10 +957,21 @@ app.openapi(listAudiences, async (c) => {
 	const { ad_account_id, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
 
+	// Import existing custom audiences from the platform before reading (mirrors
+	// how listAdAccounts discovers accounts). Best-effort: a token/permission
+	// error must not hide audiences already stored locally, so we log and fall
+	// through to the DB read instead of failing the request.
+	try {
+		await adAudienceService.discoverAudiences(c.env, orgId, ad_account_id);
+	} catch (err) {
+		console.error("[Ads] audience discovery failed", err);
+	}
+
 	const conditions = [
 		eq(adAudiences.organizationId, orgId),
 		eq(adAudiences.adAccountId, ad_account_id),
 	];
+	applyWorkspaceScope(c, conditions, adAudiences.workspaceId);
 	if (cursor) conditions.push(sql`${adAudiences.id} < ${cursor}`);
 
 	const audiences = await db

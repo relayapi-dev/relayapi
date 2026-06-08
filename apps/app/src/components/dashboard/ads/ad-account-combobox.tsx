@@ -9,6 +9,8 @@ export interface AdAccountOption {
   name: string | null;
   currency: string | null;
   social_account_id: string;
+  /** Connected social account IDs whose published posts this ad account can boost. */
+  boostable_social_account_ids?: string[];
 }
 
 interface AdAccountComboboxProps {

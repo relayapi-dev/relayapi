@@ -35,6 +35,7 @@ interface AdAccount {
   currency: string | null;
   timezone: string | null;
   status: string | null;
+  boostable_social_account_ids?: string[];
 }
 
 interface Campaign {

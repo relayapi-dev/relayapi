@@ -1850,6 +1850,13 @@ export const adAudiences = pgTable(
 		index("ad_audiences_workspace_idx").on(table.workspaceId),
 		index("ad_audiences_ad_account_idx").on(table.adAccountId),
 		index("ad_audiences_platform_id_idx").on(table.platformAudienceId),
+		// Conflict target for upserting audiences discovered from the platform.
+		// platformAudienceId is nullable; Postgres treats NULLs as distinct, so
+		// RelayAPI-created rows still pending a platform id never collide.
+		uniqueIndex("ad_audiences_account_platform_audience_idx").on(
+			table.adAccountId,
+			table.platformAudienceId,
+		),
 	],
 );
 

@@ -24,6 +24,11 @@ interface PostTargetComboboxProps {
   onSelect: (postTargetId: string | null) => void;
   /** Social platforms the selected ad account can boost (e.g. ["facebook","instagram"]). Undefined = no filter. */
   platforms?: string[];
+  /**
+   * Connected social account IDs the selected ad account can boost. Undefined =
+   * no account filter; an empty array shows no posts (account boosts nothing).
+   */
+  accountIds?: string[];
   placeholder?: string;
   className?: string;
 }
@@ -32,6 +37,7 @@ export function PostTargetCombobox({
   value,
   onSelect,
   platforms,
+  accountIds,
   placeholder = "Select a published post...",
   className,
 }: PostTargetComboboxProps) {
@@ -47,18 +53,29 @@ export function PostTargetCombobox({
   // Collapse platforms to a stable dependency key.
   // "*" = no filter (undefined); "" = filter out everything (empty array).
   const platformsKey = platforms === undefined ? "*" : [...platforms].sort().join("|");
+  // Same convention for the connected-account filter (the ad account's boostable set).
+  const accountIdsKey = accountIds === undefined ? "*" : [...accountIds].sort().join("|");
 
   const selectedPost = value ? posts.find((p) => p.id === value) : null;
 
   const fetchPosts = useCallback(async () => {
     setLoading(true);
     try {
+      const accountFilter =
+        accountIdsKey === "*"
+          ? null
+          : new Set(accountIdsKey ? accountIdsKey.split("|") : []);
       const url = new URL("/api/posts", window.location.origin);
       url.searchParams.set("status", "published");
       url.searchParams.set("include", "targets,media");
       // Include natively-published posts (external_posts) so they're boostable too.
       url.searchParams.set("include_external", "true");
       url.searchParams.set("limit", "100");
+      // Scope to the ad account's boostable connected accounts (server-side, so
+      // it stays correct beyond the 100-post fetch window).
+      if (accountFilter && accountFilter.size > 0) {
+        url.searchParams.set("account_ids", [...accountFilter].join(","));
+      }
       const res = await fetch(url.toString());
       if (res.ok) {
         const json = await res.json();
@@ -70,6 +87,7 @@ export function PostTargetCombobox({
           if (post.source === "external") {
             if (!post.platform_post_id) continue;
             if (allowed && !allowed.has(post.platform)) continue;
+            if (accountFilter && !accountFilter.has(post.social_account_id)) continue;
             items.push({
               id: post.id, // xp_
               source: "external",
@@ -89,6 +107,8 @@ export function PostTargetCombobox({
             if (allowed && !allowed.has(target.platform)) continue;
             for (const acc of target.accounts ?? []) {
               if (!acc.target_id || !acc.platform_post_id) continue;
+              // acc.id is the social account id; keep only boostable accounts.
+              if (accountFilter && !accountFilter.has(acc.id)) continue;
               items.push({
                 id: acc.target_id, // pt_
                 source: "internal",
@@ -117,23 +137,24 @@ export function PostTargetCombobox({
     } finally {
       setLoading(false);
     }
-  }, [platformsKey]);
+  }, [platformsKey, accountIdsKey]);
 
   // Fetch when the dropdown opens
   useEffect(() => {
     if (open) fetchPosts();
   }, [open, fetchPosts]);
 
-  // Clear the selection when the compatible platforms change (e.g. the ad
-  // account switched to a different platform), so an incompatible target
-  // can't be submitted. Skip the initial mount.
-  const prevPlatformsKeyRef = useRef(platformsKey);
+  // Clear the selection when the ad account changes (different compatible
+  // platforms or boostable accounts), so an incompatible target can't be
+  // submitted. Skip the initial mount.
+  const filterKey = `${platformsKey}::${accountIdsKey}`;
+  const prevFilterKeyRef = useRef(filterKey);
   useEffect(() => {
-    if (prevPlatformsKeyRef.current === platformsKey) return;
-    prevPlatformsKeyRef.current = platformsKey;
+    if (prevFilterKeyRef.current === filterKey) return;
+    prevFilterKeyRef.current = filterKey;
     setPosts([]);
     onSelect(null);
-  }, [platformsKey, onSelect]);
+  }, [filterKey, onSelect]);
 
   // Close on outside click
   useEffect(() => {

@@ -151,6 +151,12 @@ export interface AdAccountResponse {
   currency: string | null;
   timezone: string | null;
   status: string | null;
+
+  /** Connected social account IDs whose published posts this ad account can boost. */
+  boostable_social_account_ids: string[];
+
+  /** Connected Pages/IG accounts this ad account can promote. */
+  boostable_accounts: Array<{ id: string; platform: string; username: string | null }>;
 }
 
 export interface AdAccountListResponse {

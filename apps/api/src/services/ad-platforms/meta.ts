@@ -21,6 +21,7 @@ import type {
 	PlatformAudience,
 	PlatformAudienceResult,
 	PlatformCampaignResult,
+	PromotablePage,
 	DateRange,
 	TargetingInterest,
 	UpdateAdParams,
@@ -112,7 +113,7 @@ export function mapMetaObjectiveToLocal(objective?: string): string {
  * CLAIM, …); collapse anything that isn't clearly a lookalike or website
  * audience into `customer_list`.
  */
-function mapMetaSubtypeToLocal(
+export function mapMetaSubtypeToLocal(
 	subtype?: string,
 ): "customer_list" | "website" | "lookalike" {
 	switch (subtype) {
@@ -231,6 +232,124 @@ export const metaAdAdapter: AdPlatformAdapter = {
 			currency: acc.currency,
 			timezone: acc.timezone_name,
 			status: acc.account_status === 1 ? "active" : "disabled",
+		}));
+	},
+
+	// -----------------------------------------------------------------------
+	// Promotable Pages
+	// -----------------------------------------------------------------------
+
+	/**
+	 * The Pages an ad account is permitted to promote, with each Page's
+	 * connected Instagram business account resolved in batched multi-get calls.
+	 *
+	 * Endpoints (Facebook Marketing API):
+	 *  - GET /act_{ad_account_id}/promote_pages?fields=id,name
+	 *      https://developers.facebook.com/docs/graph-api/reference/ad-account/promote_pages/
+	 *      Returns the Page nodes this ad account can advertise.
+	 *  - GET /?ids={page_ids}&fields=instagram_business_account{id}
+	 *      https://developers.facebook.com/docs/graph-api/reference/page/
+	 *      `instagram_business_account` is the IGUser linked to the Page.
+	 *
+	 * `platformAdAccountId` is already the `act_{id}` form returned by
+	 * /me/adaccounts (used verbatim like every other call in this adapter).
+	 */
+	async listPromotablePages(
+		accessToken: string,
+		platformAdAccountId: string,
+	): Promise<PromotablePage[]> {
+		// 1. Collect promotable Pages (follow cursor pagination, bounded).
+		const pages: { id: string; name?: string }[] = [];
+		const MAX_PAGE_REQUESTS = 10; // 100 pages/request → up to 1000 Pages
+		let after: string | undefined;
+		for (let i = 0; i < MAX_PAGE_REQUESTS; i++) {
+			const afterParam = after ? `&after=${encodeURIComponent(after)}` : "";
+			const res = await metaFetch<{
+				data?: { id: string; name?: string }[];
+				paging?: { next?: string; cursors?: { after?: string } };
+			}>(
+				`${GRAPH_API}/${platformAdAccountId}/promote_pages?fields=id,name&limit=100${afterParam}`,
+				accessToken,
+			);
+			for (const p of res.data ?? []) pages.push({ id: p.id, name: p.name });
+			after = res.paging?.next ? res.paging?.cursors?.after : undefined;
+			if (!after) break;
+		}
+
+		if (pages.length === 0) return [];
+
+		// 2. Resolve each Page's connected Instagram business account.
+		const igByPageId = new Map<string, string>();
+		const IG_CHUNK = 50;
+		for (let i = 0; i < pages.length; i += IG_CHUNK) {
+			const chunk = pages.slice(i, i + IG_CHUNK);
+			try {
+				const res = await metaFetch<
+					Record<
+						string,
+						{ instagram_business_account?: { id: string } }
+					>
+				>(
+					`${GRAPH_API}/?ids=${chunk
+						.map((p) => p.id)
+						.join(",")}&fields=instagram_business_account{id}`,
+					accessToken,
+				);
+				for (const [pageId, value] of Object.entries(res)) {
+					const igId = value?.instagram_business_account?.id;
+					if (igId) igByPageId.set(pageId, igId);
+				}
+			} catch {
+				// IG resolution is best-effort; a failed chunk yields Page-only matches.
+			}
+		}
+
+		return pages.map((p) => ({
+			pageId: p.id,
+			name: p.name,
+			instagramBusinessAccountId: igByPageId.get(p.id),
+		}));
+	},
+
+	// -----------------------------------------------------------------------
+	// Audiences (discovery)
+	// -----------------------------------------------------------------------
+
+	async listAudiences(
+		accessToken: string,
+		adAccountId: string,
+	): Promise<PlatformAudience[]> {
+		// GET /{ad-account-id}/customaudiences
+		// https://developers.facebook.com/docs/marketing-api/reference/custom-audience
+		const data = await metaFetch<{
+			data: {
+				id: string;
+				name: string;
+				subtype?: string;
+				description?: string;
+				approximate_count_lower_bound?: number;
+				approximate_count_upper_bound?: number;
+				delivery_status?: { code?: number; description?: string };
+				operation_status?: { code?: number; description?: string };
+			}[];
+		}>(
+			`${GRAPH_API}/${adAccountId}/customaudiences?fields=id,name,subtype,description,approximate_count_lower_bound,approximate_count_upper_bound,delivery_status,operation_status&limit=100`,
+			accessToken,
+		);
+
+		return data.data.map((a) => ({
+			id: a.id,
+			name: a.name,
+			type: mapMetaSubtypeToLocal(a.subtype),
+			description: a.description ?? null,
+			size:
+				a.approximate_count_upper_bound ??
+				a.approximate_count_lower_bound ??
+				null,
+			status:
+				a.delivery_status?.description ??
+				a.operation_status?.description ??
+				null,
 		}));
 	},
 

@@ -38,6 +38,17 @@ export interface PlatformAdAccount {
 	status?: string;
 }
 
+/**
+ * A Page an ad account is permitted to promote, plus the Instagram business
+ * account connected to that Page (if any). Used to scope which connected
+ * social accounts' posts can be boosted through a given ad account.
+ */
+export interface PromotablePage {
+	pageId: string;
+	name?: string;
+	instagramBusinessAccountId?: string;
+}
+
 export interface CreateCampaignParams {
 	name: string;
 	objective: string;
@@ -233,6 +244,16 @@ export interface AdPlatformAdapter {
 		accessToken: string,
 		platformAccountId: string,
 	): Promise<PlatformAdAccount[]>;
+
+	/**
+	 * List the Pages an ad account can promote (plus each Page's connected
+	 * Instagram business account). Optional: platforms that can't express this
+	 * relationship simply omit it, and discovery falls back to legacy behaviour.
+	 */
+	listPromotablePages?(
+		accessToken: string,
+		platformAdAccountId: string,
+	): Promise<PromotablePage[]>;
 
 	/** Create a campaign on the platform */
 	createCampaign(

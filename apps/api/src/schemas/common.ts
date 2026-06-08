@@ -52,6 +52,12 @@ export const PaginationParams = z.object({
 export const FilterParams = PaginationParams.extend({
 	workspace_id: z.string().optional().describe("Filter by workspace ID"),
 	account_id: z.string().optional().describe("Filter by specific account ID"),
+	account_ids: z
+		.string()
+		.optional()
+		.describe(
+			"Filter by any of several account IDs (comma-separated). Takes precedence over account_id.",
+		),
 	status: z.enum(["draft", "scheduled", "publishing", "published", "failed"]).optional().describe("Filter by post status"),
 	include: z.string().optional().describe("Comma-separated list of fields to include in the response (e.g. 'targets,media')"),
 	include_external: z.enum(["true", "false"]).default("false").optional()

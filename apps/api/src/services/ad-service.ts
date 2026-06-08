@@ -13,7 +13,7 @@ import {
 	socialAccounts,
 	eq,
 } from "@relayapi/db";
-import { and, desc, sql } from "drizzle-orm";
+import { and, inArray, sql } from "drizzle-orm";
 import type { Env } from "../types";
 import {
 	getAdPlatformAdapter,
@@ -23,6 +23,8 @@ import { resolveAdsAccessToken } from "./ad-access-token";
 import type {
 	AdPlatform,
 	AdTargeting,
+	PlatformAdAccount,
+	PromotablePage,
 } from "./ad-platforms/types";
 import { AdPlatformError } from "./ad-platforms/types";
 
@@ -66,6 +68,116 @@ async function getAccountWithToken(
 // ---------------------------------------------------------------------------
 // Ad Account Operations
 // ---------------------------------------------------------------------------
+
+type AdAccountUpsert = {
+	pa: PlatformAdAccount;
+	socialAccountId: string;
+	workspaceId: string | null;
+	metadata: Record<string, unknown> | null;
+};
+
+async function upsertAdAccounts(
+	db: Database,
+	rows: AdAccountUpsert[],
+	orgId: string,
+	adPlatform: AdPlatform,
+) {
+	if (rows.length === 0) return;
+	const CHUNK = 100;
+	for (let i = 0; i < rows.length; i += CHUNK) {
+		const chunk = rows.slice(i, i + CHUNK);
+		await db
+			.insert(adAccounts)
+			.values(
+				chunk.map(({ pa, socialAccountId, workspaceId, metadata }) => ({
+					organizationId: orgId,
+					workspaceId,
+					socialAccountId,
+					platform: adPlatform,
+					platformAdAccountId: pa.id,
+					name: pa.name,
+					currency: pa.currency ?? "USD",
+					timezone: pa.timezone,
+					status: pa.status ?? "active",
+					metadata,
+				})),
+			)
+			.onConflictDoUpdate({
+				target: [
+					adAccounts.organizationId,
+					adAccounts.platform,
+					adAccounts.platformAdAccountId,
+				],
+				set: {
+					name: sql`excluded.name`,
+					currency: sql`excluded.currency`,
+					timezone: sql`excluded.timezone`,
+					status: sql`excluded.status`,
+					socialAccountId: sql`excluded.social_account_id`,
+					workspaceId: sql`excluded.workspace_id`,
+					metadata: sql`excluded.metadata`,
+					updatedAt: new Date(),
+				},
+			});
+	}
+}
+
+/**
+ * Remove (or neutralise) ad accounts the user can access but that don't promote
+ * any connected Page/IG. Rows with no dependent campaigns/ads are deleted; rows
+ * with history have their boostable set emptied so the list endpoint hides them
+ * without cascade-deleting campaigns/ads.
+ */
+async function pruneUnmatchedAdAccounts(
+	db: Database,
+	orgId: string,
+	adPlatform: AdPlatform,
+	platformAdAccountIds: string[],
+) {
+	const stale = await db
+		.select({ id: adAccounts.id })
+		.from(adAccounts)
+		.where(
+			and(
+				eq(adAccounts.organizationId, orgId),
+				eq(adAccounts.platform, adPlatform),
+				inArray(adAccounts.platformAdAccountId, platformAdAccountIds),
+			),
+		);
+	if (stale.length === 0) return;
+
+	const staleIds = stale.map((r) => r.id);
+	const [campaignRefs, adRefs] = await Promise.all([
+		db
+			.select({ adAccountId: adCampaigns.adAccountId })
+			.from(adCampaigns)
+			.where(inArray(adCampaigns.adAccountId, staleIds)),
+		db
+			.select({ adAccountId: ads.adAccountId })
+			.from(ads)
+			.where(inArray(ads.adAccountId, staleIds)),
+	]);
+	const referenced = new Set<string>([
+		...campaignRefs.map((r) => r.adAccountId),
+		...adRefs.map((r) => r.adAccountId),
+	]);
+
+	const deletable = staleIds.filter((id) => !referenced.has(id));
+	const neutralize = staleIds.filter((id) => referenced.has(id));
+
+	if (deletable.length > 0) {
+		await db.delete(adAccounts).where(inArray(adAccounts.id, deletable));
+	}
+	if (neutralize.length > 0) {
+		await db
+			.update(adAccounts)
+			.set({
+				metadata: sql`jsonb_set(coalesce(${adAccounts.metadata}, '{}'::jsonb), '{boostable_social_account_ids}', '[]'::jsonb)`,
+				updatedAt: new Date(),
+			})
+			.where(inArray(adAccounts.id, neutralize));
+	}
+}
 
 export async function discoverAdAccounts(
 	env: Env,
@@ -117,43 +229,130 @@ export async function discoverAdAccounts(
 		accessToken,
 		socialAcc.platformAccountId,
 	);
+	if (platformAccounts.length === 0) return platformAccounts;
 
-	// Batch upsert discovered accounts (inherit workspaceId from social account)
-	const socialAccountWorkspaceId = socialAcc.workspaceId;
-	if (platformAccounts.length > 0) {
-		const CHUNK = 100;
-		for (let i = 0; i < platformAccounts.length; i += CHUNK) {
-			const chunk = platformAccounts.slice(i, i + CHUNK);
-			await db
-				.insert(adAccounts)
-				.values(
-					chunk.map((pa) => ({
-						organizationId: orgId,
-						workspaceId: socialAccountWorkspaceId,
-						socialAccountId,
-						platform: adPlatform,
-						platformAdAccountId: pa.id,
-						name: pa.name,
-						currency: pa.currency ?? "USD",
-						timezone: pa.timezone,
-						status: pa.status ?? "active",
+	// Platforms that can't resolve which Pages an ad account promotes keep the
+	// legacy behaviour (attach every discovered account to the triggering one).
+	if (!adapter.listPromotablePages) {
+		await upsertAdAccounts(
+			db,
+			platformAccounts.map((pa) => ({
+				pa,
+				socialAccountId,
+				workspaceId: socialAcc.workspaceId,
+				metadata: null,
+			})),
+			orgId,
+			adPlatform,
+		);
+		return platformAccounts;
+	}
+
+	// Match each ad account's promotable Pages/IG accounts against ALL of the
+	// org's connected Meta accounts (not just the one that triggered discovery).
+	const connected = await db
+		.select({
+			id: socialAccounts.id,
+			platform: socialAccounts.platform,
+			platformAccountId: socialAccounts.platformAccountId,
+			username: socialAccounts.username,
+			displayName: socialAccounts.displayName,
+			workspaceId: socialAccounts.workspaceId,
+		})
+		.from(socialAccounts)
+		.where(
+			and(
+				eq(socialAccounts.organizationId, orgId),
+				inArray(socialAccounts.platform, ["facebook", "instagram"]),
+			),
+		);
+
+	type Connected = (typeof connected)[number];
+	const pageBySocialPlatformId = new Map<string, Connected>();
+	const igBySocialPlatformId = new Map<string, Connected>();
+	for (const acc of connected) {
+		if (acc.platform === "facebook")
+			pageBySocialPlatformId.set(acc.platformAccountId, acc);
+		else if (acc.platform === "instagram")
+			igBySocialPlatformId.set(acc.platformAccountId, acc);
+	}
+	const triggering = connected.find((c) => c.id === socialAccountId);
+
+	const syncedAt = new Date().toISOString();
+	const toUpsert: AdAccountUpsert[] = [];
+	const unmatchedPlatformAdAccountIds: string[] = [];
+
+	// Resolve promotable Pages per ad account with bounded concurrency.
+	const CONCURRENCY = 5;
+	for (let i = 0; i < platformAccounts.length; i += CONCURRENCY) {
+		const batch = platformAccounts.slice(i, i + CONCURRENCY);
+		const results = await Promise.all(
+			batch.map(async (pa) => {
+				try {
+					const promotable = await adapter.listPromotablePages!(
+						accessToken,
+						pa.id,
+					);
+					return { pa, promotable };
+				} catch {
+					// A throttled/unauthorized account is treated as "no matches".
+					return { pa, promotable: [] as PromotablePage[] };
+				}
+			}),
+		);
+
+		for (const { pa, promotable } of results) {
+			const matches = new Map<string, Connected>();
+			for (const page of promotable) {
+				const fb = pageBySocialPlatformId.get(page.pageId);
+				if (fb) matches.set(fb.id, fb);
+				if (page.instagramBusinessAccountId) {
+					const ig = igBySocialPlatformId.get(
+						page.instagramBusinessAccountId,
+					);
+					if (ig) matches.set(ig.id, ig);
+				}
+			}
+
+			if (matches.size === 0) {
+				unmatchedPlatformAdAccountIds.push(pa.id);
+				continue;
+			}
+
+			const matched = [...matches.values()];
+			// Primary = a connected Facebook Page (carries the Meta ads user
+			// token) when available, else the triggering account, else any match.
+			const primary =
+				matched.find((m) => m.platform === "facebook") ??
+				triggering ??
+				matched[0]!;
+
+			toUpsert.push({
+				pa,
+				socialAccountId: primary.id,
+				workspaceId: primary.workspaceId,
+				metadata: {
+					boostable_social_account_ids: matched.map((m) => m.id),
+					boostable_accounts: matched.map((m) => ({
+						id: m.id,
+						platform: m.platform,
+						username: m.username ?? m.displayName ?? null,
 					})),
-				)
-				.onConflictDoUpdate({
-					target: [
-						adAccounts.organizationId,
-						adAccounts.platform,
-						adAccounts.platformAdAccountId,
-					],
-					set: {
-						name: sql`excluded.name`,
-						currency: sql`excluded.currency`,
-						timezone: sql`excluded.timezone`,
-						status: sql`excluded.status`,
-						updatedAt: new Date(),
-					},
-				});
+					promote_pages_synced_at: syncedAt,
+				},
+			});
 		}
+	}
+
+	await upsertAdAccounts(db, toUpsert, orgId, adPlatform);
+
+	if (unmatchedPlatformAdAccountIds.length > 0) {
+		await pruneUnmatchedAdAccounts(
+			db,
+			orgId,
+			adPlatform,
+			unmatchedPlatformAdAccountIds,
+		);
 	}
 
 	return platformAccounts;
@@ -403,6 +602,7 @@ export async function boostPost(
 	let platformPostId: string;
 	let boostPostTargetId: string | null = null;
 	let boostExternalPostId: string | null = null;
+	let postSocialAccountId: string | null = null;
 
 	if (params.externalPostId) {
 		const [ext] = await db
@@ -425,6 +625,7 @@ export async function boostPost(
 		}
 		platformPostId = ext.platformPostId;
 		boostExternalPostId = ext.id;
+		postSocialAccountId = ext.socialAccountId;
 	} else {
 		// Verify the post target exists, is published, and belongs to this org
 		const [target] = await db
@@ -456,10 +657,28 @@ export async function boostPost(
 		}
 		platformPostId = target.platformPostId;
 		boostPostTargetId = target.id;
+		postSocialAccountId = target.socialAccountId;
 	}
 
 	const ctx = await getAccountWithToken(db, params.adAccountId, orgId, env);
 	if (!ctx) throw new AdPlatformError("NOT_FOUND", "Ad account not found");
+
+	// Guard: the post's account must be one this ad account can actually promote.
+	// Skip when the boostable set is unknown (legacy/non-Meta) to avoid regressions.
+	const boostableIds = (
+		ctx.adAccount.metadata as { boostable_social_account_ids?: unknown } | null
+	)?.boostable_social_account_ids;
+	if (
+		Array.isArray(boostableIds) &&
+		boostableIds.length > 0 &&
+		postSocialAccountId &&
+		!boostableIds.includes(postSocialAccountId)
+	) {
+		throw new AdPlatformError(
+			"INVALID_STATE",
+			"This post's account cannot be promoted through the selected ad account",
+		);
+	}
 
 	const adapter = getAdPlatformAdapter(ctx.adPlatform);
 	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");

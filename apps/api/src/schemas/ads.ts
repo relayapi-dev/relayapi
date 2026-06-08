@@ -70,6 +70,12 @@ export const AdTargetingSchema = z.object({
 // Ad Accounts
 // ---------------------------------------------------------------------------
 
+export const BoostableAccount = z.object({
+	id: z.string(),
+	platform: z.string(),
+	username: z.string().nullable(),
+});
+
 export const AdAccountResponse = z.object({
 	id: z.string(),
 	social_account_id: z.string(),
@@ -79,6 +85,16 @@ export const AdAccountResponse = z.object({
 	currency: z.string().nullable(),
 	timezone: z.string().nullable(),
 	status: z.string().nullable(),
+	boostable_social_account_ids: z
+		.array(z.string())
+		.default([])
+		.describe(
+			"Connected social account IDs whose published posts this ad account can boost",
+		),
+	boostable_accounts: z
+		.array(BoostableAccount)
+		.default([])
+		.describe("Connected Pages/IG accounts this ad account can promote"),
 });
 
 export const ListAdAccountsParams = z.object({

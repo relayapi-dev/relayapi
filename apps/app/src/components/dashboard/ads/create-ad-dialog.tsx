@@ -15,6 +15,7 @@ interface AdAccount {
   platform: string;
   name: string | null;
   currency: string | null;
+  boostable_social_account_ids?: string[];
 }
 
 interface CreateAdDialogProps {
@@ -62,6 +63,8 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
   // Boost-specific
   const [postTargetId, setPostTargetId] = useState("");
   const [adPlatform, setAdPlatform] = useState<string | null>(null);
+  // Connected social accounts the selected ad account can boost (null = unknown).
+  const [boostableAccountIds, setBoostableAccountIds] = useState<string[] | null>(null);
 
   // Targeting
   const [ageMin, setAgeMin] = useState("18");
@@ -182,10 +185,14 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
 
   // Prefer the explicitly-selected account's platform; fall back to the prop list
   // for the default/persisted account (which the combobox may not have re-emitted).
-  const effectivePlatform = adPlatform ?? adAccounts.find((a) => a.id === adAccountId)?.platform ?? null;
+  const selectedAccount = adAccounts.find((a) => a.id === adAccountId);
+  const effectivePlatform = adPlatform ?? selectedAccount?.platform ?? null;
   const compatiblePlatforms = effectivePlatform
     ? (adToSocialPlatforms[effectivePlatform] ?? [])
     : undefined;
+  // Scope the post picker to the connected accounts this ad account can boost.
+  const effectiveBoostableIds =
+    boostableAccountIds ?? selectedAccount?.boostable_social_account_ids;
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) resetForm(); onOpenChange(o); }}>
@@ -204,7 +211,10 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
             <AdAccountCombobox
               value={adAccountId}
               onSelect={setAdAccountId}
-              onSelectAccount={(acc) => setAdPlatform(acc?.platform ?? null)}
+              onSelectAccount={(acc) => {
+                setAdPlatform(acc?.platform ?? null);
+                setBoostableAccountIds(acc?.boostable_social_account_ids ?? null);
+              }}
             />
           </div>
 
@@ -216,6 +226,7 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
                 value={postTargetId || null}
                 onSelect={(id) => setPostTargetId(id ?? "")}
                 platforms={compatiblePlatforms}
+                accountIds={effectiveBoostableIds}
               />
               <p className="text-[10px] text-muted-foreground mt-1">Pick a published post to promote as a paid ad</p>
             </div>

@@ -10,7 +10,7 @@ import {
 	socialAccounts,
 	eq,
 } from "@relayapi/db";
-import { and } from "drizzle-orm";
+import { and, sql } from "drizzle-orm";
 import type { Env } from "../types";
 import { getAdPlatformAdapter } from "./ad-platforms";
 import { resolveAdsAccessToken } from "./ad-access-token";
@@ -58,6 +58,77 @@ async function getAdAccountWithToken(
 	const accessToken = await resolveAdsAccessToken(result.socialAccount, env);
 
 	return { ...result, accessToken };
+}
+
+// ---------------------------------------------------------------------------
+// Discover audiences
+// ---------------------------------------------------------------------------
+
+/**
+ * Import existing custom audiences from the platform into the local
+ * `ad_audiences` table for an ad account. Mirrors `discoverAdAccounts` in
+ * `ad-service.ts`: fetch from the platform adapter, then upsert. Without this
+ * the list endpoint only ever shows audiences created through RelayAPI.
+ */
+export async function discoverAudiences(
+	env: Env,
+	orgId: string,
+	adAccountId: string,
+): Promise<void> {
+	const db = createDb(env.HYPERDRIVE.connectionString);
+
+	const ctx = await getAdAccountWithToken(db, adAccountId, orgId, env);
+	if (!ctx) {
+		throw new AdPlatformError("NOT_FOUND", "Ad account not found");
+	}
+
+	const adapter = getAdPlatformAdapter(ctx.adAccount.platform);
+	if (!adapter) {
+		throw new AdPlatformError(
+			"UNSUPPORTED_PLATFORM",
+			`No adapter for ad platform "${ctx.adAccount.platform}"`,
+		);
+	}
+
+	// Pass the platform-side ad account id (e.g. Meta "act_…"), but store rows
+	// under the internal adAccountId so the list query matches.
+	const platformAudiences = await adapter.listAudiences(
+		ctx.accessToken,
+		ctx.adAccount.platformAdAccountId,
+	);
+
+	if (platformAudiences.length === 0) return;
+
+	const CHUNK = 100;
+	for (let i = 0; i < platformAudiences.length; i += CHUNK) {
+		const chunk = platformAudiences.slice(i, i + CHUNK);
+		await db
+			.insert(adAudiences)
+			.values(
+				chunk.map((pa) => ({
+					organizationId: orgId,
+					workspaceId: ctx.adAccount.workspaceId,
+					adAccountId,
+					platform: ctx.adAccount.platform,
+					platformAudienceId: pa.id,
+					name: pa.name,
+					type: pa.type,
+					description: pa.description ?? null,
+					size: pa.size ?? null,
+					status: pa.status ?? "ready",
+				})),
+			)
+			.onConflictDoUpdate({
+				target: [adAudiences.adAccountId, adAudiences.platformAudienceId],
+				set: {
+					name: sql`excluded.name`,
+					description: sql`excluded.description`,
+					size: sql`excluded.size`,
+					status: sql`excluded.status`,
+					updatedAt: new Date(),
+				},
+			});
+	}
 }
 
 // ---------------------------------------------------------------------------
