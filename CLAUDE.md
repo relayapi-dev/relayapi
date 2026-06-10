@@ -22,6 +22,11 @@ bun run dev:docs      # Next.js docs site
 # Type checking
 bun run typecheck     # All packages and apps
 
+# Tests
+cd apps/api && bun run test   # API suite — runs each file in its own process
+cd apps/app && bun test       # Dashboard suite
+
+
 # Database
 bun run db:generate   # Generate Drizzle migrations
 bun run db:migrate    # Run migrations
@@ -76,7 +81,9 @@ The API uses these Cloudflare bindings defined in `wrangler.jsonc`:
 
 ### CI/CD
 
-GitHub Actions deploy each app independently on push to `main` when relevant paths change. All use Wrangler with `CLOUDFLARE_API_TOKEN` secret. The `sync-openapi` workflow auto-commits updated OpenAPI specs.
+GitHub Actions deploy each app independently on push to `main` when relevant paths change (`deploy-api.yml`, `deploy-app.yml`); a test job (typecheck + suite) gates every deploy, and `ci-api.yml`/`ci-app.yml` run the same checks on PRs. All use Wrangler with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets. The `sync-openapi` workflow auto-commits updated OpenAPI specs.
+
+**API tests must be run via `bun run test` in `apps/api`** (the `run-tests-isolated.ts` runner): plain `bun test src/__tests__` executes all files in one process, where `mock.module("@relayapi/db", …)` calls from the billing suites poison the automation suites with false failures. DB-fixture suites skip themselves when the SSH tunnel is down, so the suite passes without a database.
 
 ### SDK Releases
 

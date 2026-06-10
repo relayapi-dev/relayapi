@@ -1,0 +1,92 @@
+name: Deploy App
+
+# Tests gate the deploy: typecheck + the app test suite must pass before the
+# dashboard worker is deployed.
+#
+# Required repository secrets:
+# - CLOUDFLARE_API_TOKEN
+# - CLOUDFLARE_ACCOUNT_ID  (relay account: 3496f40fcd55a91da50ded8abea2cf7a)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/app/**"
+      - "packages/db/**"
+      - "packages/auth/**"
+      - "packages/sdk/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/deploy-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-app-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Typecheck + Test App
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build SDK (typecheck:app depends on its dist)
+        run: bun run build:sdk
+
+      - name: Typecheck apps/app
+        run: bun run tsc --noEmit
+        working-directory: apps/app
+
+      - name: Run app tests
+        run: bun test
+        working-directory: apps/app
+
+  deploy:
+    name: Build + Deploy App
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build SDK
+        run: bun run build:sdk
+
+      - name: Build App
+        run: bun run build
+        working-directory: apps/app
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+          # Build-time placeholders — runtime values come from worker secrets.
+          BETTER_AUTH_SECRET: "github-actions-build-secret"
+          BETTER_AUTH_URL: "https://relayapi.dev"
+          # Satisfies the local Hyperdrive binding during the SSR build; the
+          # deployed worker uses the real HYPERDRIVE binding.
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: "postgres://x:x@localhost:5433/x"
+
+      - name: Deploy App
+        # wrangler resolves the built config at dist/server/wrangler.json
+        run: bunx wrangler deploy --keep-vars
+        working-directory: apps/app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

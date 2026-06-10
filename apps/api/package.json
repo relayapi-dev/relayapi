@@ -7,8 +7,9 @@
 		"dev": "dotenv -e .dev.vars -- wrangler dev --port 8789 --persist-to ../../.wrangler/state",
 		"build": "cd ../.. && bun install && cd apps/api",
 		"deploy": "wrangler deploy",
-		"test": "bun test",
-		"test:billing": "for f in src/__tests__/auth.test.ts src/__tests__/stripe-webhooks.test.ts src/__tests__/usage-tracking.test.ts src/__tests__/billing-flows.test.ts; do bun test ./$f || exit 1; done"
+		"test": "bun run scripts/run-tests-isolated.ts",
+		"test:single-process": "bun test",
+		"test:billing": "bun run scripts/run-tests-isolated.ts auth.test stripe-webhooks usage-tracking billing-flows"
 	},
 	"dependencies": {
 		"@aws-sdk/client-s3": "catalog:",

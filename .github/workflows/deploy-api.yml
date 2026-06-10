@@ -1,0 +1,81 @@
+name: Deploy API
+
+# Tests gate the deploy: the deploy job only runs when typecheck + the full
+# isolated test suite pass (DB-dependent suites skip themselves in CI, where
+# no database is reachable).
+#
+# Required repository secrets:
+# - CLOUDFLARE_API_TOKEN
+# - CLOUDFLARE_ACCOUNT_ID  (relay account: 3496f40fcd55a91da50ded8abea2cf7a)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/**"
+      - "packages/db/**"
+      - "packages/auth/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/deploy-api.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-api-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Typecheck + Test API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck packages/db
+        run: bun run tsc --noEmit
+        working-directory: packages/db
+
+      - name: Typecheck packages/auth
+        run: bun run tsc --noEmit
+        working-directory: packages/auth
+
+      - name: Typecheck apps/api
+        run: bun run tsc --noEmit
+        working-directory: apps/api
+
+      - name: Run API tests (isolated per-file)
+        run: bun run test
+        working-directory: apps/api
+
+  deploy:
+    name: Deploy API
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Deploy API
+        run: bunx wrangler deploy --keep-vars
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
