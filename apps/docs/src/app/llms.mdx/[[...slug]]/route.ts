@@ -1,7 +1,6 @@
 import { generateApiPageContent } from "@/lib/llm-text";
 import { source } from "@/lib/source";
 import { notFound } from "next/navigation";
-import fs from "node:fs/promises";
 
 export const revalidate = false;
 
@@ -29,12 +28,10 @@ export async function GET(
 		lines.push(`Documentation: https://docs.relayapi.dev${page.url}`);
 		lines.push("");
 
-		if (page.absolutePath) {
-			const raw = await fs.readFile(page.absolutePath, "utf-8");
-			const match = raw.match(/^---[\s\S]*?---\n*/);
-			const content = match ? raw.slice(match[0].length) : raw;
-			lines.push(content);
-		}
+		// Processed Markdown is bundled into the page module (see
+		// source.config.ts `includeProcessedMarkdown`), so this works at runtime
+		// on Cloudflare Workers — unlike reading the source file from disk.
+		lines.push(await page.data.getText("processed"));
 	}
 
 	return new Response(lines.join("\n").trim(), {

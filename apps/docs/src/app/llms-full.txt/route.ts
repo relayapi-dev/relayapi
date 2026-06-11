@@ -1,6 +1,5 @@
 import { generateLLMText } from "@/lib/llm-text";
 import { source } from "@/lib/source";
-import fs from "node:fs/promises";
 
 export const revalidate = false;
 
@@ -11,10 +10,11 @@ export async function GET() {
 			const isApiPage = !!page.data.full;
 			let content: string | undefined;
 
-			if (!isApiPage && page.absolutePath) {
-				const raw = await fs.readFile(page.absolutePath, "utf-8");
-				const match = raw.match(/^---[\s\S]*?---\n*/);
-				content = match ? raw.slice(match[0].length) : raw;
+			if (!isApiPage) {
+				// Processed Markdown is bundled into the page module (see
+				// source.config.ts `includeProcessedMarkdown`), so this works at
+				// runtime on Cloudflare Workers — unlike reading from disk.
+				content = await page.data.getText("processed");
 			}
 
 			return generateLLMText(
