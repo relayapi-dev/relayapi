@@ -1,0 +1,87 @@
+name: Deploy Docs
+
+# The API reference is regenerated fresh from the live OpenAPI spec at deploy
+# time (apps/docs/scripts/generate-docs.ts) and is NOT committed to the repo —
+# content/docs/api-reference/ is gitignored. A typecheck gates the deploy.
+#
+# Triggers:
+# - push to main touching apps/docs (code/content changes)
+# - every 6h, so changes to the live OpenAPI spec publish without a code push
+# - manual dispatch
+#
+# Required repository secrets:
+# - CLOUDFLARE_API_TOKEN
+# - CLOUDFLARE_ACCOUNT_ID  (relay account: 3496f40fcd55a91da50ded8abea2cf7a)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/docs/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/deploy-docs.yml"
+  schedule:
+    - cron: "0 */6 * * *" # republish to pick up live OpenAPI spec changes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-docs-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Typecheck Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck apps/docs
+        run: bun run tsc --noEmit
+        working-directory: apps/docs
+
+  deploy:
+    name: Generate + Build + Deploy Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Regenerate the API reference from the live spec. This fails the deploy
+      # (leaving the previous deployment live) if the spec is unreachable or
+      # empty, so broken/empty docs can never be published.
+      - name: Generate API reference from live OpenAPI spec
+        run: bun run generate-docs
+        working-directory: apps/docs
+
+      - name: Build Docs (OpenNext)
+        run: bun run build
+        working-directory: apps/docs
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+
+      - name: Deploy Docs
+        run: bunx wrangler deploy --keep-vars
+        working-directory: apps/docs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

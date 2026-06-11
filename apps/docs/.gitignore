@@ -1,2 +1,7 @@
 out/
 .open-next/
+
+# Generated from the live OpenAPI spec at deploy time (and on demand for local
+# dev) by scripts/generate-docs.ts. Treated as a build artifact, not committed.
+content/docs/api-reference/
+.api-reference-tmp/
