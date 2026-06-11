@@ -659,9 +659,17 @@ app.openapi(listPosts, async (c) => {
 	applyWorkspaceScope(c, conditions, posts.workspaceId);
 
 	if (cursor) {
-		conditions.push(
-			lt(sql`coalesce(${posts.publishedAt}, ${posts.createdAt})`, new Date(cursor)),
-		);
+		// Bind the cursor with an explicit ::timestamptz cast rather than passing a
+		// JS Date to lt(): the left operand is a raw coalesce() expression (not a
+		// column), so Drizzle can't infer the param type, and under Hyperdrive's
+		// prepare:true + fetch_types:false Postgres rejects `timestamptz < $untyped`
+		// (HTTP 500 on every page-2 request). Guard against an unparseable cursor.
+		const cursorDate = new Date(cursor);
+		if (!Number.isNaN(cursorDate.getTime())) {
+			conditions.push(
+				sql`coalesce(${posts.publishedAt}, ${posts.createdAt}) < ${cursor}::timestamptz`,
+			);
+		}
 	}
 
 	if (status) {
