@@ -1,7 +1,6 @@
 {
   "title": "Resources",
   "pages": [
-    "python-sdk",
     "cli",
     "integrations"
   ]

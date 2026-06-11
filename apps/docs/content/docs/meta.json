@@ -6,7 +6,6 @@
     "quickstart",
     "---SDKs & Tools---",
     "sdks",
-    "resources/python-sdk",
     "resources/cli",
     "resources/mcp",
     "resources/integrations",

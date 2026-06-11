@@ -1,0 +1,247 @@
+---
+title: Java SDK
+description: Official Java client library for RelayAPI. Post to 21 platforms from any JVM application.
+icon: Package
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Official Java SDK for RelayAPI. Post to 21 platforms, manage accounts, upload media, and track analytics. Works with any JVM language and ships both synchronous and asynchronous clients.
+
+## Setup
+
+### Install
+
+<Tabs items={['Gradle', 'Maven']}>
+<Tab value="Gradle">
+```groovy
+implementation("dev.relayapi:relay-java:0.1.0")
+```
+</Tab>
+<Tab value="Maven">
+```xml
+<dependency>
+  <groupId>dev.relayapi</groupId>
+  <artifactId>relay-java</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
+</Tab>
+</Tabs>
+
+Requires Java 8 or later.
+
+### Authenticate
+
+```java
+import dev.relayapi.client.RelayClient;
+import dev.relayapi.client.okhttp.RelayOkHttpClient;
+
+RelayClient client = RelayOkHttpClient.fromEnv(); // reads RELAY_API_KEY / RELAY_BASE_URL
+```
+
+Or configure the key explicitly:
+
+```java
+RelayClient client = RelayOkHttpClient.builder()
+    .apiKey("rlay_live_...")
+    .build();
+```
+
+<Callout type="info">
+Get your API key from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**.
+</Callout>
+
+## Quick Examples
+
+### Create and Publish a Post
+
+```java
+import dev.relayapi.models.posts.PostCreateParams;
+import dev.relayapi.models.posts.PostCreateResponse;
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Hello from the Java SDK!")
+    .addTarget("twitter")
+    .addTarget("linkedin")
+    .scheduledAt("now")
+    .build());
+
+System.out.println("Post created: " + post.id() + " — status: " + post.status());
+```
+
+### Schedule a Post
+
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("This will go out tomorrow morning")
+    .addTarget("twitter")
+    .addTarget("linkedin")
+    .scheduledAt("2025-01-15T09:00:00Z")
+    .timezone("America/New_York")
+    .build());
+```
+
+### Save as Draft
+
+```java
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Work in progress...")
+    .addTarget("instagram")
+    .scheduledAt("draft")
+    .build());
+```
+
+### List Connected Accounts
+
+```java
+import dev.relayapi.models.accounts.AccountListResponse;
+
+AccountListResponse accounts = client.accounts().list();
+accounts.data().forEach(acc ->
+    System.out.println(acc.platform() + ": " + acc.displayName() + " (" + acc.id() + ")"));
+```
+
+### Upload Media
+
+```java
+import dev.relayapi.models.media.MediaGetPresignUrlParams;
+import dev.relayapi.models.media.MediaGetPresignUrlResponse;
+
+// Get a presigned upload URL
+MediaGetPresignUrlResponse presign = client.media().getPresignUrl(
+    MediaGetPresignUrlParams.builder()
+        .filename("photo.jpg")
+        .contentType("image/jpeg")
+        .build());
+
+// PUT the file to presign.uploadUrl(), then reference presign.url() in a post
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Check out this photo!")
+    .addTarget("instagram")
+    .addMedia(PostCreateParams.Media.builder()
+        .url(presign.url())
+        .type(PostCreateParams.Media.Type.IMAGE)
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+
+### Cross-Post with Per-Platform Content
+
+```java
+import dev.relayapi.core.JsonValue;
+import java.util.Map;
+
+PostCreateResponse post = client.posts().create(PostCreateParams.builder()
+    .content("Default content for all platforms")
+    .addTarget("twitter")
+    .addTarget("linkedin")
+    .targetOptions(PostCreateParams.TargetOptions.builder()
+        .putAdditionalProperty("twitter", JsonValue.from(Map.of("content", "Short version for Twitter")))
+        .putAdditionalProperty("linkedin", JsonValue.from(Map.of("content", "Longer professional version for LinkedIn")))
+        .build())
+    .scheduledAt("now")
+    .build());
+```
+
+### Get Post Analytics
+
+```java
+import dev.relayapi.models.analytics.AnalyticsRetrieveParams;
+import dev.relayapi.models.analytics.AnalyticsRetrieveResponse;
+
+AnalyticsRetrieveResponse analytics = client.analytics().retrieve(
+    AnalyticsRetrieveParams.builder()
+        .postId("post_abc123")
+        .build());
+```
+
+### Check Account Health
+
+```java
+// All accounts
+client.accounts().health().list();
+
+// A single account by ID
+client.accounts().health().retrieve("acc_twitter_123");
+```
+
+## Async Usage
+
+Every client has an async counterpart that returns `CompletableFuture`:
+
+```java
+import dev.relayapi.client.RelayClientAsync;
+import dev.relayapi.client.okhttp.RelayOkHttpClientAsync;
+import dev.relayapi.models.posts.PostListResponse;
+import java.util.concurrent.CompletableFuture;
+
+RelayClientAsync client = RelayOkHttpClientAsync.fromEnv();
+CompletableFuture<PostListResponse> posts = client.posts().list();
+```
+
+## Error Handling
+
+When the API returns a non-success status code, the SDK throws an unchecked exception. All extend `RelayServiceException`:
+
+| Status Code | Exception |
+|---|---|
+| 400 | `BadRequestException` |
+| 401 | `UnauthorizedException` |
+| 404 | `NotFoundException` |
+| 429 | `RateLimitException` |
+| >=500 | `InternalServerException` |
+
+```java
+import dev.relayapi.errors.RateLimitException;
+import dev.relayapi.errors.RelayServiceException;
+
+try {
+    client.posts().create(PostCreateParams.builder()
+        .content("Hello!")
+        .addTarget("twitter")
+        .scheduledAt("now")
+        .build());
+} catch (RateLimitException e) {
+    System.out.println("Rate limited");
+} catch (RelayServiceException e) {
+    System.out.println("API error " + e.statusCode());
+}
+```
+
+### Raw Responses
+
+Access the underlying HTTP response (status code, headers) with `withRawResponse()`:
+
+```java
+import dev.relayapi.core.http.HttpResponseFor;
+
+HttpResponseFor<PostListResponse> response = client.posts().withRawResponse().list();
+int statusCode = response.statusCode();
+PostListResponse parsed = response.parse();
+```
+
+## Configuration
+
+| Builder method | Environment Variable | Default |
+|---|---|---|
+| `apiKey()` | `RELAY_API_KEY` | Required |
+| `baseUrl()` | `RELAY_BASE_URL` | `https://api.relayapi.dev` |
+| `maxRetries()` | — | `2` |
+
+### Timeouts
+
+```java
+import dev.relayapi.core.RequestOptions;
+import java.time.Duration;
+
+client.posts().list(RequestOptions.builder()
+    .timeout(Duration.ofSeconds(30))
+    .build());
+```
+
+## Links
+
+- [GitHub](https://github.com/relayapi-dev/relay-java)
+- [API Reference](/api-reference)

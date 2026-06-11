@@ -1,0 +1,182 @@
+---
+title: Go SDK
+description: Official Go client library for RelayAPI. Post to 21 platforms with idiomatic, fully-typed Go.
+icon: Package
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Official Go SDK for RelayAPI. Post to 21 platforms, manage accounts, upload media, and track analytics.
+
+## Setup
+
+### Install
+
+```bash
+go get -u github.com/relayapi-dev/relay-go
+```
+
+Requires Go 1.22 or later.
+
+### Authenticate
+
+```go
+import (
+    relaygo "github.com/relayapi-dev/relay-go"
+    "github.com/relayapi-dev/relay-go/option"
+)
+
+client := relaygo.NewClient() // reads RELAY_API_KEY from environment
+```
+
+Or pass the key directly:
+
+```go
+client := relaygo.NewClient(
+    option.WithAPIKey("rlay_live_..."),
+)
+```
+
+<Callout type="info">
+Get your API key from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**.
+</Callout>
+
+## Quick Examples
+
+Request fields are wrapped with `relaygo.F(...)` so the SDK can distinguish between an unset field and a zero value.
+
+### Create and Publish a Post
+
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Hello from the Go SDK!"),
+    Targets:     relaygo.F([]string{"twitter", "linkedin"}),
+    ScheduledAt: relaygo.F("now"),
+})
+if err != nil {
+    panic(err.Error())
+}
+fmt.Printf("Post created: %s — status: %s\n", post.ID, post.Status)
+```
+
+### Schedule a Post
+
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("This will go out tomorrow morning"),
+    Targets:     relaygo.F([]string{"twitter", "linkedin"}),
+    ScheduledAt: relaygo.F("2025-01-15T09:00:00Z"),
+    Timezone:    relaygo.F("America/New_York"),
+})
+```
+
+### Save as Draft
+
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content:     relaygo.F("Work in progress..."),
+    Targets:     relaygo.F([]string{"instagram"}),
+    ScheduledAt: relaygo.F("draft"),
+})
+```
+
+### List Connected Accounts
+
+```go
+accounts, err := client.Accounts.List(context.TODO(), relaygo.AccountListParams{})
+if err != nil {
+    panic(err.Error())
+}
+for _, acc := range accounts.Data {
+    fmt.Printf("%s: %s (%s)\n", acc.Platform, acc.DisplayName, acc.ID)
+}
+```
+
+### Upload Media
+
+```go
+// Get a presigned upload URL
+presign, err := client.Media.GetPresignURL(context.TODO(), relaygo.MediaGetPresignURLParams{
+    Filename:    relaygo.F("photo.jpg"),
+    ContentType: relaygo.F("image/jpeg"),
+})
+
+// PUT the file directly to presign.UploadURL, then reference presign.URL in a post
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Check out this photo!"),
+    Targets: relaygo.F([]string{"instagram"}),
+    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
+        URL:  relaygo.F(presign.URL),
+        Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage),
+    }}),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+
+### Cross-Post with Per-Platform Content
+
+```go
+post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
+    Content: relaygo.F("Default content for all platforms"),
+    Targets: relaygo.F([]string{"twitter", "linkedin", "bluesky"}),
+    TargetOptions: relaygo.F(map[string]map[string]interface{}{
+        "twitter":  {"content": "Short version for Twitter"},
+        "linkedin": {"content": "Longer professional version for LinkedIn"},
+    }),
+    ScheduledAt: relaygo.F("now"),
+})
+```
+
+### Get Post Analytics
+
+```go
+analytics, err := client.Analytics.Get(context.TODO(), relaygo.AnalyticsGetParams{
+    PostID: relaygo.F("post_abc123"),
+})
+fmt.Printf("%+v\n", analytics)
+```
+
+### Check Account Health
+
+```go
+// All accounts
+health, err := client.Accounts.Health.List(context.TODO())
+
+// A single account by ID
+acc, err := client.Accounts.Health.Get(context.TODO(), "acc_twitter_123")
+```
+
+## Error Handling
+
+When the API returns a non-success status code, the error can be inspected as a `*relaygo.Error`:
+
+```go
+_, err := client.Posts.List(context.TODO(), relaygo.PostListParams{})
+if err != nil {
+    var apierr *relaygo.Error
+    if errors.As(err, &apierr) {
+        println(string(apierr.DumpRequest(true)))
+        println(string(apierr.DumpResponse(true)))
+    }
+    panic(err.Error())
+}
+```
+
+## Configuration
+
+Set your API key via the `RELAY_API_KEY` environment variable, or pass `option.WithAPIKey(...)` / `option.WithBaseURL(...)` to `NewClient`.
+
+### Timeouts
+
+Pass a context with a deadline to bound any request:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+defer cancel()
+client.Posts.List(ctx, relaygo.PostListParams{})
+```
+
+## Links
+
+- [GitHub](https://github.com/relayapi-dev/relay-go)
+- [API Reference](/api-reference)

@@ -32,9 +32,7 @@ export default async function Page(props: {
   const MDXContent = page.data.body;
   const isApiPage = page.data.full;
   const markdownUrl = page.url === "/" ? "/index.mdx" : `${page.url}.mdx`;
-  const sourcePath = params.slug
-    ? `apps/docs/content/docs/${params.slug.join("/")}.mdx`
-    : "apps/docs/content/docs/index.mdx";
+  const sourcePath = `apps/docs/content/docs/${page.path}`;
 
   if (isApiPage) {
     return (

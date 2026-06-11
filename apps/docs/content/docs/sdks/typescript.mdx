@@ -1,0 +1,224 @@
+---
+title: TypeScript SDK
+description: Official TypeScript / Node.js client library for RelayAPI. Post to 21 platforms with a few lines of code.
+icon: Package
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Official TypeScript SDK for RelayAPI. Fully typed, works in Node.js, Bun, Deno, Cloudflare Workers, and the browser. Post to 21 platforms, manage accounts, upload media, and track analytics.
+
+## Setup
+
+### Install
+
+```bash
+npm install @relayapi/sdk
+```
+
+### Authenticate
+
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay(); // reads RELAY_API_KEY from environment
+```
+
+Or pass the key directly:
+
+```typescript
+const client = new Relay({ apiKey: 'rlay_live_...' });
+```
+
+<Callout type="info">
+Get your API key from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**.
+</Callout>
+
+## Quick Examples
+
+### Create and Publish a Post
+
+```typescript
+const post = await client.posts.create({
+  content: 'Hello from the TypeScript SDK!',
+  targets: ['twitter', 'linkedin'],
+  scheduled_at: 'now',
+});
+
+console.log(`Post created: ${post.id} — status: ${post.status}`);
+```
+
+### Schedule a Post
+
+```typescript
+const post = await client.posts.create({
+  content: 'This will go out tomorrow morning',
+  targets: ['twitter', 'linkedin'],
+  scheduled_at: '2025-01-15T09:00:00Z',
+  timezone: 'America/New_York',
+});
+```
+
+### Save as Draft
+
+```typescript
+const post = await client.posts.create({
+  content: 'Work in progress...',
+  targets: ['instagram'],
+  scheduled_at: 'draft',
+});
+```
+
+### List Connected Accounts
+
+```typescript
+const accounts = await client.accounts.list();
+
+for (const acc of accounts.data) {
+  console.log(`${acc.platform}: ${acc.display_name} (${acc.id})`);
+}
+```
+
+### Upload Media
+
+```typescript
+// Get a presigned upload URL
+const presign = await client.media.getPresignURL({
+  filename: 'photo.jpg',
+  content_type: 'image/jpeg',
+});
+
+// Upload the file directly to the URL
+import { readFile } from 'node:fs/promises';
+const file = await readFile('photo.jpg');
+await fetch(presign.upload_url, {
+  method: 'PUT',
+  body: file,
+  headers: { 'Content-Type': 'image/jpeg' },
+});
+
+// Use the public URL in a post
+const post = await client.posts.create({
+  content: 'Check out this photo!',
+  targets: ['instagram'],
+  media: [{ url: presign.url, type: 'image' }],
+  scheduled_at: 'now',
+});
+```
+
+### Cross-Post with Per-Platform Content
+
+```typescript
+const post = await client.posts.create({
+  content: 'Default content for all platforms',
+  targets: ['twitter', 'linkedin', 'bluesky'],
+  target_options: {
+    twitter: { content: 'Short version for Twitter' },
+    linkedin: { content: 'Longer professional version for LinkedIn with more context' },
+  },
+  scheduled_at: 'now',
+});
+```
+
+### Get Post Analytics
+
+```typescript
+const analytics = await client.analytics.retrieve({ post_id: 'post_abc123' });
+console.log(analytics);
+```
+
+### Check Account Health
+
+```typescript
+const health = await client.accounts.health.list();
+
+for (const acc of health.data) {
+  console.log(`${acc.platform} (${acc.username}): ${acc.healthy ? 'healthy' : 'needs attention'}`);
+}
+```
+
+## Error Handling
+
+When the API returns a non-success status code, a subclass of `Relay.APIError` is thrown:
+
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+
+const post = await client.posts
+  .create({ content: 'Hello!', targets: ['twitter'], scheduled_at: 'now' })
+  .catch((err) => {
+    if (err instanceof Relay.APIError) {
+      console.log(err.status); // 400
+      console.log(err.name);   // BadRequestError
+      console.log(err.headers);
+    } else {
+      throw err;
+    }
+  });
+```
+
+| Status Code | Error Type |
+|---|---|
+| 400 | `BadRequestError` |
+| 401 | `AuthenticationError` |
+| 403 | `PermissionDeniedError` |
+| 404 | `NotFoundError` |
+| 422 | `UnprocessableEntityError` |
+| 429 | `RateLimitError` |
+| >=500 | `InternalServerError` |
+| N/A | `APIConnectionError` |
+
+### Retries
+
+Connection errors, 408, 409, 429, and >=500 responses are automatically retried twice by default with exponential backoff. Configure with `maxRetries`:
+
+```typescript
+// For all requests:
+const client = new Relay({ maxRetries: 0 }); // default is 2
+
+// Or per-request:
+await client.posts.list({ maxRetries: 5 });
+```
+
+### Timeouts
+
+Requests time out after 1 minute by default:
+
+```typescript
+const client = new Relay({ timeout: 20 * 1000 }); // 20 seconds
+
+// Override per-request:
+await client.posts.list({ timeout: 5 * 1000 });
+```
+
+## Configuration
+
+| Option / Env Var | Description |
+|---|---|
+| `apiKey` / `RELAY_API_KEY` | Your API key (required if not passed to constructor) |
+| `baseURL` / `RELAY_BASE_URL` | Custom API base URL (default: `https://api.relayapi.dev`) |
+| `maxRetries` | Number of automatic retries (default: `2`) |
+| `timeout` | Request timeout in ms (default: 1 minute) |
+| `logLevel` / `RELAY_LOG` | `debug`, `info`, `warn` (default), `error`, or `off` |
+
+### Logging
+
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay({
+  logLevel: 'debug', // logs all HTTP requests and responses
+});
+```
+
+## Requirements
+
+TypeScript >= 4.9. Supported runtimes: Node.js 20 LTS or later, Deno v1.28+, Bun 1.0+, Cloudflare Workers, Vercel Edge Runtime, and up-to-date browsers.
+
+## Links
+
+- [GitHub](https://github.com/relayapi-dev/relayapi/tree/main/packages/sdk)
+- [npm](https://www.npmjs.com/package/@relayapi/sdk)
+- [API Reference](/api-reference)
