@@ -3,6 +3,8 @@
 // Docs: https://developers.telnyx.com/api/numbers
 // ---------------------------------------------------------------------------
 
+import { fetchWithTimeout } from "../lib/fetch-timeout";
+
 const TELNYX_API = "https://api.telnyx.com/v2";
 
 // ---------------------------------------------------------------------------
@@ -43,13 +45,14 @@ async function telnyxFetch<T = unknown>(
 	apiKey: string,
 	options: RequestInit = {},
 ): Promise<T> {
-	const res = await fetch(url, {
+	const res = await fetchWithTimeout(url, {
 		...options,
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${apiKey}`,
 			...options.headers,
 		},
+		timeout: 5_000,
 	});
 
 	if (!res.ok) {

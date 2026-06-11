@@ -27,6 +27,12 @@ describe("uploadMedia", () => {
 				return new Response(null, { status: 200 });
 			}
 
+			// The presigned PUT is now followed by a confirm call that flips the
+			// media row pending -> ready.
+			if (url === "/api/media/confirm") {
+				return new Response(null, { status: 200 });
+			}
+
 			throw new Error(`Unexpected fetch: ${url}`);
 		}) as typeof fetch;
 
@@ -42,6 +48,51 @@ describe("uploadMedia", () => {
 		expect(calls).toEqual([
 			"/api/media/presign",
 			"https://uploads.example.test/file.png",
+			"/api/media/confirm",
+		]);
+	});
+
+	it("falls back to the direct upload proxy when confirm fails", async () => {
+		const calls: string[] = [];
+		const getUrl = (input: RequestInfo | URL) =>
+			typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+		globalThis.fetch = (async (input) => {
+			const url = getUrl(input);
+			calls.push(url);
+
+			if (url === "/api/media/presign") {
+				return Response.json({
+					upload_url: "https://uploads.example.test/file.png",
+					url: "https://cdn.example.test/file.png",
+				});
+			}
+
+			if (url === "https://uploads.example.test/file.png") {
+				return new Response(null, { status: 200 });
+			}
+
+			// Confirm rejects (e.g. MIME/size re-validation) — must not return the
+			// unconfirmed URL; fall through to the direct upload proxy instead.
+			if (url === "/api/media/confirm") {
+				return new Response(null, { status: 400 });
+			}
+
+			if (url === "/api/media/upload?filename=hello.png") {
+				return Response.json({ url: "https://cdn.example.test/hello.png" });
+			}
+
+			throw new Error(`Unexpected fetch: ${url}`);
+		}) as typeof fetch;
+
+		const file = new File(["hello"], "hello.png", { type: "image/png" });
+		const result = await uploadMedia(file);
+
+		expect(result.url).toBe("https://cdn.example.test/hello.png");
+		expect(calls).toEqual([
+			"/api/media/presign",
+			"https://uploads.example.test/file.png",
+			"/api/media/confirm",
+			"/api/media/upload?filename=hello.png",
 		]);
 	});
 

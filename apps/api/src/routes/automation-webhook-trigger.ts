@@ -15,12 +15,15 @@ app.post("/:slug", async (c) => {
 	const slug = c.req.param("slug");
 	const rawBody = await c.req.text();
 	const signatureHeader = c.req.header("x-relay-signature") ?? null;
+	// Optional replay-protection timestamp; when present the receiver requires
+	// the signature to cover `${timestamp}.${body}` and rejects stale timestamps.
+	const timestampHeader = c.req.header("x-relay-timestamp") ?? null;
 
 	const db = createDb(c.env.HYPERDRIVE.connectionString);
 
 	const result = await receiveAutomationWebhook(
 		db,
-		{ slug, rawBody, signatureHeader },
+		{ slug, rawBody, signatureHeader, timestampHeader },
 		c.env as unknown as Record<string, unknown>,
 	);
 
@@ -39,6 +42,16 @@ app.post("/:slug", async (c) => {
 					error: {
 						code: "bad_signature",
 						message: "signature verification failed",
+					},
+				},
+				401,
+			);
+		case "stale_timestamp":
+			return c.json(
+				{
+					error: {
+						code: "stale_timestamp",
+						message: "timestamp outside the allowed window",
 					},
 				},
 				401,

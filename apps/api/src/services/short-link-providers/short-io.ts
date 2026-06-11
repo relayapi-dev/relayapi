@@ -10,6 +10,7 @@
  *   GET https://api-v2.short.io/statistics/domain/{DomainId}/link_clicks?ids=<id>
  *   Response: { "<id>": <clicks> }
  */
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 import type { ShortLinkProvider } from "./types";
 
 const SHORT_IO_API = "https://api.short.io";
@@ -23,7 +24,7 @@ export const shortIoProvider: ShortLinkProvider = {
 			throw new Error("Short.io requires a custom domain");
 		}
 
-		const res = await fetch(`${SHORT_IO_API}/links`, {
+		const res = await fetchWithTimeout(`${SHORT_IO_API}/links`, {
 			method: "POST",
 			headers: {
 				Authorization: apiKey,
@@ -33,6 +34,7 @@ export const shortIoProvider: ShortLinkProvider = {
 				originalURL: url,
 				domain,
 			}),
+			timeout: 5_000,
 		});
 
 		if (!res.ok) {
@@ -59,10 +61,11 @@ export const shortIoProvider: ShortLinkProvider = {
 
 				// Step 1: Get the link's numeric id and DomainId via /links/expand
 				// The endpoint accepts domain (hostname string) or domain_id (integer)
-				const expandRes = await fetch(
+				const expandRes = await fetchWithTimeout(
 					`${SHORT_IO_API}/links/expand?domain=${encodeURIComponent(parsed.hostname)}&path=${encodeURIComponent(path)}`,
 					{
 						headers: { Authorization: apiKey },
+						timeout: 5_000,
 					},
 				);
 
@@ -75,10 +78,11 @@ export const shortIoProvider: ShortLinkProvider = {
 				if (!linkData.id || !linkData.DomainId) return;
 
 				// Step 2: Get click stats via the statistics endpoint
-				const statsRes = await fetch(
+				const statsRes = await fetchWithTimeout(
 					`${SHORT_IO_STATS_API}/statistics/domain/${linkData.DomainId}/link_clicks?ids=${linkData.id}`,
 					{
 						headers: { Authorization: apiKey },
+						timeout: 5_000,
 					},
 				);
 

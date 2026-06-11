@@ -45,10 +45,19 @@ export function createMockDb() {
 		let tableName = "";
 		let filterFn: ((row: any) => boolean) | null = null;
 		let limitCount: number | null = null;
+		const joins: Array<{ table: string; cols: [string, string] | null }> = [];
 
 		const chain = {
 			from(table: unknown) {
 				tableName = resolveTable(table);
+				return chain;
+			},
+			leftJoin(table: unknown, condition: unknown) {
+				const cols =
+					condition && typeof condition === "object" && "_joinCols" in (condition as any)
+						? ((condition as any)._joinCols as [string, string])
+						: null;
+				joins.push({ table: resolveTable(table), cols });
 				return chain;
 			},
 			where(condition: unknown) {
@@ -70,6 +79,25 @@ export function createMockDb() {
 				try {
 					let rows = data.get(tableName) ?? [];
 					if (filterFn) rows = rows.filter(filterFn);
+					// Merge leftJoin rows: joined fields are added underneath the
+					// main row's own fields (main row wins on name conflicts).
+					if (joins.length > 0) {
+						rows = rows.map((row) => {
+							let merged = { ...row };
+							for (const j of joins) {
+								const joinRows = data.get(j.table) ?? [];
+								const match = j.cols
+									? joinRows.find(
+											(jr) =>
+												jr[j.cols![0]] === row[j.cols![1]] ||
+												jr[j.cols![1]] === row[j.cols![0]],
+										)
+									: undefined;
+								if (match) merged = { ...match, ...merged };
+							}
+							return merged;
+						});
+					}
 					if (fields && Object.keys(fields).length === 1 && "total" in fields) {
 						calls.push({ type: "select", table: tableName });
 						resolve([{ total: rows.length }]);
@@ -206,6 +234,14 @@ export function createMockDb() {
  */
 export function mockEq(column: unknown, value: unknown) {
 	const colName = getColName(column);
+	// Column-to-column comparison (a join condition): expose both column
+	// names so selectChain.leftJoin can match rows across tables.
+	if (value && typeof value === "object" && "name" in (value as any)) {
+		return {
+			_filter: () => false,
+			_joinCols: [colName, (value as any).name] as [string, string],
+		};
+	}
 	return {
 		_filter: (row: any) => row[colName] === value,
 	};

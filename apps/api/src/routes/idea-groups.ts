@@ -318,31 +318,28 @@ app.openapi(deleteIdeaGroup, async (c) => {
 		);
 	}
 
-	// Move all ideas in this group to the default group
+	// Move all ideas in this group to the default group in one set-based statement
+	// (a window function appends them after the default group's current max
+	// position) instead of one UPDATE per idea.
 	const defaultGroupId = await ensureDefaultGroup(db, orgId, existing.workspaceId);
-	const [positionResult] = await db
-		.select({ maxPos: max(ideas.position) })
-		.from(ideas)
-		.where(eq(ideas.groupId, defaultGroupId));
-
-	const ideasToMove = await db
-		.select({ id: ideas.id })
-		.from(ideas)
-		.where(eq(ideas.groupId, id))
-		.orderBy(asc(ideas.position));
-
-	await Promise.all(
-		ideasToMove.map((idea, index) =>
-			db
-				.update(ideas)
-				.set({
-					groupId: defaultGroupId,
-					position: (positionResult?.maxPos ?? -1) + index + 1,
-					updatedAt: new Date(),
-				})
-				.where(eq(ideas.id, idea.id)),
+	await db.execute(sql`
+		WITH ranked AS (
+			SELECT id, row_number() OVER (ORDER BY position ASC) AS rn
+			FROM ideas
+			WHERE group_id = ${id}
 		),
-	);
+		base AS (
+			SELECT COALESCE(MAX(position), -1) AS max_pos
+			FROM ideas
+			WHERE group_id = ${defaultGroupId}
+		)
+		UPDATE ideas
+		SET group_id = ${defaultGroupId},
+			position = (SELECT max_pos FROM base) + ranked.rn,
+			updated_at = now()
+		FROM ranked
+		WHERE ideas.id = ranked.id
+	`);
 
 	await db.delete(ideaGroups).where(eq(ideaGroups.id, id));
 
@@ -380,17 +377,22 @@ app.openapi(reorderIdeaGroups, async (c) => {
 	const { groups } = c.req.valid("json");
 	const db = c.get("db");
 
-	// Bulk update positions — only update groups that belong to this org
-	await Promise.all(
-		groups.map(({ id, position }) =>
-			db
-				.update(ideaGroups)
-				.set({ position, updatedAt: new Date() })
-				.where(
-					and(eq(ideaGroups.id, id), eq(ideaGroups.organizationId, orgId)),
-				),
-		),
-	);
+	// Bulk update positions in a single set-based statement (joined to a VALUES
+	// list) instead of one UPDATE per group — only update groups in this org.
+	if (groups.length > 0) {
+		const valuesList = sql.join(
+			groups.map(
+				({ id, position }) => sql`(${id}::text, ${position}::real)`,
+			),
+			sql`, `,
+		);
+		await db.execute(sql`
+			UPDATE idea_groups AS g
+			SET position = v.position, updated_at = now()
+			FROM (VALUES ${valuesList}) AS v(id, position)
+			WHERE g.id = v.id AND g.organization_id = ${orgId}
+		`);
+	}
 
 	// Return the full list ordered by position
 	const conditions = [eq(ideaGroups.organizationId, orgId)];

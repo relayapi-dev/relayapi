@@ -37,42 +37,53 @@ export function generateId(prefix: string): string {
 
 const authSchema = pgSchema("auth");
 
-export const user = authSchema.table("user", {
-	id: text("id").primaryKey(),
-	name: text("name"),
-	email: text("email").notNull(),
-	emailVerified: boolean("emailVerified").notNull().default(false),
-	image: text("image"),
-	role: text("role"),
-	banned: boolean("banned"),
-	banReason: text("banReason"),
-	banExpires: timestamp("banExpires", { withTimezone: true }),
-	createdAt: timestamp("createdAt", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updatedAt", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
+export const user = authSchema.table(
+	"user",
+	{
+		id: text("id").primaryKey(),
+		name: text("name"),
+		email: text("email").notNull(),
+		emailVerified: boolean("emailVerified").notNull().default(false),
+		image: text("image"),
+		role: text("role"),
+		banned: boolean("banned"),
+		banReason: text("banReason"),
+		banExpires: timestamp("banExpires", { withTimezone: true }),
+		createdAt: timestamp("createdAt", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updatedAt", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [uniqueIndex("user_email_idx").on(table.email)],
+);
 
-export const session = authSchema.table("session", {
-	id: text("id").primaryKey(),
-	userId: text("userId")
-		.notNull()
-		.references(() => user.id),
-	token: text("token").notNull(),
-	expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
-	ipAddress: text("ipAddress"),
-	userAgent: text("userAgent"),
-	activeOrganizationId: text("activeOrganizationId"),
-	impersonatedBy: text("impersonatedBy"),
-	createdAt: timestamp("createdAt", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updatedAt", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
+export const session = authSchema.table(
+	"session",
+	{
+		id: text("id").primaryKey(),
+		userId: text("userId")
+			.notNull()
+			.references(() => user.id),
+		token: text("token").notNull(),
+		expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
+		ipAddress: text("ipAddress"),
+		userAgent: text("userAgent"),
+		activeOrganizationId: text("activeOrganizationId"),
+		impersonatedBy: text("impersonatedBy"),
+		createdAt: timestamp("createdAt", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updatedAt", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("session_token_idx").on(table.token),
+		index("session_userId_idx").on(table.userId),
+	],
+);
 
 export const account = authSchema.table("account", {
 	id: text("id").primaryKey(),
@@ -166,19 +177,26 @@ export const organization = authSchema.table("organization", {
 		.notNull(),
 });
 
-export const member = authSchema.table("member", {
-	id: text("id").primaryKey(),
-	userId: text("userId")
-		.notNull()
-		.references(() => user.id, { onDelete: "cascade" }),
-	organizationId: text("organizationId")
-		.notNull()
-		.references(() => organization.id, { onDelete: "cascade" }),
-	role: text("role").notNull(),
-	createdAt: timestamp("createdAt", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
+export const member = authSchema.table(
+	"member",
+	{
+		id: text("id").primaryKey(),
+		userId: text("userId")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		organizationId: text("organizationId")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		role: text("role").notNull(),
+		createdAt: timestamp("createdAt", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("member_userId_idx").on(table.userId),
+		index("member_organizationId_idx").on(table.organizationId),
+	],
+);
 
 export const invitation = authSchema.table("invitation", {
 	id: text("id").primaryKey(),
@@ -365,6 +383,8 @@ export const socialAccounts = pgTable(
 		index("social_accounts_org_idx").on(table.organizationId),
 		index("social_accounts_webhook_id_idx").on(table.platform, table.webhookAccountId),
 		index("social_accounts_workspace_idx").on(table.workspaceId),
+		// Daily token-refresh cron scans accounts by expiry.
+		index("social_accounts_token_expiry_idx").on(table.tokenExpiresAt),
 	],
 );
 
@@ -435,6 +455,18 @@ export const posts = pgTable(
 		index("posts_status_scheduled_idx").on(table.status, table.scheduledAt),
 		index("posts_recycled_from_idx").on(table.recycledFromId),
 		index("posts_thread_group_idx").on(table.threadGroupId, table.threadPosition),
+		// Supports GET /v1/posts, which orders + cursors on
+		// coalesce(published_at, created_at) DESC. Neither single-column index
+		// above can satisfy the expression, so the list endpoint top-N sorts
+		// the whole org partition without this.
+		index("posts_org_effective_date_idx").on(
+			table.organizationId,
+			sql`coalesce(${table.publishedAt}, ${table.createdAt}) desc`,
+		),
+		// Cron metrics-refresh scan: published posts ordered by collection time.
+		index("posts_metrics_refresh_idx")
+			.on(table.metricsCollectedAt)
+			.where(sql`${table.status} = 'published'`),
 	],
 );
 
@@ -547,6 +579,7 @@ export const media = pgTable(
 	(table) => [
 		index("media_org_idx").on(table.organizationId),
 		index("media_workspace_idx").on(table.workspaceId),
+		index("media_storage_key_idx").on(table.storageKey),
 	],
 );
 
@@ -559,8 +592,11 @@ export const webhookEndpoints = pgTable(
 		organizationId: text("organization_id")
 			.notNull()
 			.references(() => organization.id),
+		// Cascade (not set-null): a workspace-scoped endpoint must be deleted with
+		// its workspace. Setting workspace_id to NULL would silently promote it to
+		// an org-wide endpoint receiving every workspace's events.
 		workspaceId: text("workspace_id").references(() => workspaces.id, {
-			onDelete: "set null",
+			onDelete: "cascade",
 		}),
 		url: text("url").notNull(),
 		secret: text("secret").notNull(), // hashed
@@ -780,6 +816,10 @@ export const usageRecords = pgTable(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		// NULL = overage for this period has not yet been billed to Stripe.
+		// Set to the billing timestamp once an overage invoice item is created,
+		// so the monthly invoice cron is idempotent and never double-bills.
+		billedAt: timestamp("billed_at", { withTimezone: true }),
 	},
 	(table) => [
 		uniqueIndex("usage_records_org_period_idx").on(
@@ -1079,6 +1119,10 @@ export const inboxConversations = pgTable(
 		index("inbox_conv_org_workspace_idx").on(table.organizationId, table.workspaceId),
 		index("inbox_conv_contact_idx").on(table.contactId),
 		index("inbox_conv_assigned_user_idx").on(table.assignedUserId),
+		// Cron archive/sweep scans open conversations by recency.
+		index("inbox_conv_open_last_message_idx")
+			.on(table.lastMessageAt)
+			.where(sql`${table.status} = 'open'`),
 	],
 );
 
@@ -1129,6 +1173,12 @@ export const inboxMessages = pgTable(
 		),
 		index("inbox_msg_platform_message_id_idx").on(
 			table.platformMessageId,
+		),
+		// Backs the leading-wildcard ILIKE in inbox message search. Requires the
+		// pg_trgm extension (enabled in the generated migration).
+		index("inbox_msg_text_trgm_idx").using(
+			"gin",
+			sql`${table.text} gin_trgm_ops`,
 		),
 	],
 );
@@ -2594,7 +2644,6 @@ export const automations = pgTable(
 		index("idx_automations_template")
 			.on(table.createdFromTemplate)
 			.where(sql`${table.createdFromTemplate} IS NOT NULL`),
-		index("idx_automations_graph_gin").using("gin", table.graph),
 	],
 );
 
@@ -2639,6 +2688,11 @@ export const automationEntrypoints = pgTable(
 			table.kind,
 			table.status,
 		),
+		// Inbound-webhook slug must be globally unique and is looked up by slug on
+		// every trigger. Backs the app-level uniqueness check and the keyed lookup.
+		uniqueIndex("idx_automation_entrypoints_webhook_slug")
+			.on(sql`(${table.config}->>'webhook_slug')`)
+			.where(sql`${table.kind} = 'webhook_inbound'`),
 	],
 );
 

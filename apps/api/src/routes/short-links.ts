@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { shortLinkConfigs, shortLinks } from "@relayapi/db";
-import { and, desc, eq, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
 	ShortLinkConfigBody,
@@ -393,22 +393,19 @@ app.openapi(listShortLinksRoute, async (c) => {
 	const db = c.get("db");
 
 	const conditions = [eq(shortLinks.organizationId, orgId)];
+	// Keyset pagination on (createdAt, id). Read the cursor row's created_at as raw
+	// text so it isn't round-tripped through a JS Date, which truncates Postgres
+	// microseconds to millisecond precision and would skip rows sharing the cursor's
+	// millisecond. Bind it back with an explicit ::timestamptz cast.
 	if (cursor) {
 		const [cursorRow] = await db
-			.select({ createdAt: shortLinks.createdAt })
+			.select({ createdAt: sql<string>`${shortLinks.createdAt}::text` })
 			.from(shortLinks)
 			.where(eq(shortLinks.id, cursor))
 			.limit(1);
 		if (cursorRow) {
-			// Tie-break on ID to avoid skipping records with identical timestamps
 			conditions.push(
-				or(
-					lt(shortLinks.createdAt, cursorRow.createdAt),
-					and(
-						eq(shortLinks.createdAt, cursorRow.createdAt),
-						sql`${shortLinks.id} < ${cursor}`,
-					),
-				)!,
+				sql`(${shortLinks.createdAt}, ${shortLinks.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}

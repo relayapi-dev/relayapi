@@ -1,5 +1,15 @@
 import { z } from "@hono/zod-openapi";
 
+/** Validate an IANA timezone string by attempting to build a formatter for it. */
+function isValidIanaTimezone(tz: string): boolean {
+	try {
+		new Intl.DateTimeFormat("en-US", { timeZone: tz });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 // --- Queue slot ---
 
 export const QueueSlot = z.object({
@@ -11,9 +21,12 @@ export const QueueSlot = z.object({
 		.describe("Day of week (0=Sunday, 6=Saturday)"),
 	time: z
 		.string()
-		.regex(/^\d{2}:\d{2}$/)
+		.regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be valid HH:MM (00:00–23:59)")
 		.describe("Time in HH:MM format"),
-	timezone: z.string().describe("IANA timezone (e.g. America/New_York)"),
+	timezone: z
+		.string()
+		.refine(isValidIanaTimezone, "Invalid IANA timezone")
+		.describe("IANA timezone (e.g. America/New_York)"),
 });
 
 // --- Queue schedule ---
@@ -32,7 +45,10 @@ export const QueueSchedule = z.object({
 export const CreateQueueBody = z.object({
 	name: z.string().optional().describe("Schedule name"),
 	slots: z.array(QueueSlot).min(1).describe("Time slots"),
-	timezone: z.string().describe("Default timezone for slots"),
+	timezone: z
+		.string()
+		.refine(isValidIanaTimezone, "Invalid IANA timezone")
+		.describe("Default timezone for slots"),
 });
 
 // --- Update queue ---

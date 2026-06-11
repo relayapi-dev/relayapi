@@ -14,6 +14,7 @@ import { ErrorResponse } from "../schemas/common";
 import {
 	AccountIdQuery,
 	BroadcastIdParams,
+	BroadcastListQuery,
 	BroadcastListResponse,
 	BroadcastResponse,
 	BulkSendBody,
@@ -122,7 +123,7 @@ const listBroadcasts = createRoute({
 	deprecated: true,
 	description: "Deprecated. Use GET /v1/broadcasts instead.",
 	security: [{ Bearer: [] }],
-	request: { query: AccountIdQuery },
+	request: { query: BroadcastListQuery },
 	responses: {
 		200: {
 			description: "Broadcasts list",
@@ -828,23 +829,42 @@ app.openapi(bulkSend, async (c) => {
 
 app.openapi(listBroadcasts, async (c) => {
 	const orgId = c.get("orgId");
-	const { account_id } = c.req.valid("query");
+	const { account_id, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
+
+	const conditions = [
+		eq(whatsappBroadcasts.organizationId, orgId),
+		eq(whatsappBroadcasts.socialAccountId, account_id),
+	];
+
+	// Keyset pagination (composite: createdAt DESC, id DESC to handle ties),
+	// mirroring the canonical GET /v1/broadcasts route.
+	if (cursor) {
+		const [cursorRow] = await db
+			.select({ createdAt: whatsappBroadcasts.createdAt })
+			.from(whatsappBroadcasts)
+			.where(eq(whatsappBroadcasts.id, cursor))
+			.limit(1);
+		if (cursorRow) {
+			conditions.push(
+				sql`(${whatsappBroadcasts.createdAt} < ${cursorRow.createdAt} OR (${whatsappBroadcasts.createdAt} = ${cursorRow.createdAt} AND ${whatsappBroadcasts.id} < ${cursor}))`,
+			);
+		}
+	}
 
 	const rows = await db
 		.select()
 		.from(whatsappBroadcasts)
-		.where(
-			and(
-				eq(whatsappBroadcasts.organizationId, orgId),
-				eq(whatsappBroadcasts.socialAccountId, account_id),
-			),
-		)
-		.orderBy(desc(whatsappBroadcasts.createdAt));
+		.where(and(...conditions))
+		.orderBy(desc(whatsappBroadcasts.createdAt), desc(whatsappBroadcasts.id))
+		.limit(limit + 1);
+
+	const hasMore = rows.length > limit;
+	const page = rows.slice(0, limit);
 
 	return c.json(
 		{
-			data: rows.map((b) => ({
+			data: page.map((b) => ({
 				id: b.id,
 				name: b.name,
 				status: b.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
@@ -855,6 +875,8 @@ app.openapi(listBroadcasts, async (c) => {
 				scheduled_at: b.scheduledAt?.toISOString() ?? null,
 				created_at: b.createdAt.toISOString(),
 			})),
+			next_cursor: hasMore ? page[page.length - 1]!.id : null,
+			has_more: hasMore,
 		},
 		200,
 	);

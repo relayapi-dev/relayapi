@@ -3,7 +3,6 @@
  * (in-app push + email) based on user preferences.
  */
 
-import { render } from "@react-email/render";
 import {
 	createDb,
 	notificationPreferences,
@@ -12,13 +11,6 @@ import {
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { sendEmail } from "../lib/email-queue/producer";
-import { AccountDisconnectedNotification } from "../lib/emails/templates/AccountDisconnectedNotification";
-import { PostFailedNotification } from "../lib/emails/templates/PostFailedNotification";
-import { PostPublishedNotification } from "../lib/emails/templates/PostPublishedNotification";
-import { UsageWarningNotification } from "../lib/emails/templates/UsageWarningNotification";
-import { StreakBrokenNotification } from "../lib/emails/templates/StreakBrokenNotification";
-import { StreakWarningNotification } from "../lib/emails/templates/StreakWarningNotification";
-import { WeeklyDigestNotification } from "../lib/emails/templates/WeeklyDigestNotification";
 import type { Env } from "../types";
 import { notifyRealtime } from "../lib/notify-post-update";
 
@@ -284,87 +276,16 @@ export async function sendNotificationToOrg(
 	}
 }
 
-const APP_URL = "https://relayapi.dev/app";
-
+/**
+ * Render via dynamic import so the react-email stack stays out of the
+ * eagerly-evaluated module graph (see lib/emails/render-notification.ts).
+ */
 async function renderEmailForType(
 	type: NotificationType,
 	data: Record<string, unknown>,
 ): Promise<string | null> {
-	switch (type) {
-		case "post_failed":
-			return render(
-				PostFailedNotification({
-					platforms: (data.platforms as string[]) || [],
-					postId: (data.postId as string) || "",
-					errorSummary: (data.body as string) || "Your post failed to publish",
-					dashboardUrl: `${APP_URL}/posts`,
-				}),
-			);
-
-		case "post_published":
-			return render(
-				PostPublishedNotification({
-					platforms: (data.platforms as string[]) || [],
-					postId: (data.postId as string) || "",
-					dashboardUrl: `${APP_URL}/posts`,
-				}),
-			);
-
-		case "account_disconnected":
-			return render(
-				AccountDisconnectedNotification({
-					platform: (data.platform as string) || "Unknown",
-					accountName: (data.accountName as string) || "",
-					dashboardUrl: `${APP_URL}/connections`,
-				}),
-			);
-
-		case "usage_warning":
-			return render(
-				UsageWarningNotification({
-					percentUsed: (data.percentUsed as number) || 0,
-					callsUsed: (data.callsUsed as number) || 0,
-					callsIncluded: (data.callsIncluded as number) || 0,
-					plan: (data.plan as string) || "free",
-					dashboardUrl: `${APP_URL}/billing`,
-				}),
-			);
-
-		case "weekly_digest":
-			return render(
-				WeeklyDigestNotification({
-					postsPublished: (data.postsPublished as number) || 0,
-					postsFailed: (data.postsFailed as number) || 0,
-					totalImpressions: (data.totalImpressions as number) || 0,
-					dashboardUrl: `${APP_URL}/analytics`,
-				}),
-			);
-
-		case "streak_warning":
-			return render(
-				data.brokenStreakDays
-					? StreakBrokenNotification({
-							brokenStreakDays: (data.brokenStreakDays as number) || 0,
-							bestStreakDays: (data.bestStreakDays as number) || 0,
-							dashboardUrl: `${APP_URL}/posts`,
-						})
-					: StreakWarningNotification({
-							currentStreakDays: (data.currentStreakDays as number) || 0,
-							hoursRemaining: (data.hoursRemaining as number) || 0,
-							dashboardUrl: `${APP_URL}/posts`,
-						}),
-			);
-
-		case "payment_failed":
-			// Payment failed emails are already handled by the dunning service
-			// Only send in-app notification here
-			return null;
-
-		case "marketing":
-			// Marketing emails are sent manually, not through this system
-			return null;
-
-		default:
-			return null;
-	}
+	const { renderEmailForType: renderImpl } = await import(
+		"../lib/emails/render-notification"
+	);
+	return renderImpl(type, data);
 }

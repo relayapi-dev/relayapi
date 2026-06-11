@@ -15,13 +15,20 @@ import * as schema from "./schema";
  * - max: 5         — Workers limit on concurrent outbound connections per request
  * - fetch_types: false — skip extra round-trip for type metadata
  */
-export function createDb(connectionString: string) {
+export function createDb(
+	connectionString: string,
+	opts?: { onQuery?: (sql: string) => void },
+) {
 	const client = postgres(connectionString, {
 		prepare: true,
 		max: 5,
 		fetch_types: false,
 	});
-	return drizzle(client, { schema });
+	const onQuery = opts?.onQuery;
+	return drizzle(client, {
+		schema,
+		logger: onQuery ? { logQuery: (query) => onQuery(query) } : undefined,
+	});
 }
 
 export type Database = ReturnType<typeof createDb>;

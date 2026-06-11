@@ -7,12 +7,18 @@ import {
 	externalPosts,
 	socialAccountSyncState,
 } from "@relayapi/db";
-import { and, eq, lte, or, isNull, gt, lt, sql } from "drizzle-orm";
+import { and, inArray, or, isNull, gt, lt, sql } from "drizzle-orm";
 import type { Env } from "../../types";
 import type { SyncPostsMessage, RefreshMetricsMessage } from "./types";
 
 const BATCH_SIZE = 100; // CF Queue sendBatch limit
 const MAX_ACCOUNTS_PER_RUN = 500;
+// How far to push nextSyncAt when claiming a row for enqueue. Long enough that a
+// slow backlog drain doesn't re-enqueue the same accounts on the next 5-min tick,
+// short enough that a row whose consumer never ran becomes due again promptly.
+const SYNC_CLAIM_WINDOW_MS = 15 * 60_000;
+// Same idea for metrics refresh — claim by advancing metricsUpdatedAt.
+const METRICS_CLAIM_WINDOW_MS = 15 * 60_000;
 const METRICS_REFRESH_HOURS = 6;
 const METRICS_POST_AGE_DAYS = 7;
 const METRICS_BATCH_SIZE = 50;
@@ -46,25 +52,36 @@ async function enqueueDueAccounts(
 	env: Env,
 	now: Date,
 ): Promise<void> {
+	// Claim due rows at enqueue time: push nextSyncAt forward by a short claim
+	// window in the SAME statement that selects them (UPDATE ... RETURNING over a
+	// CTE that picks the due rows). Without this, when the backlog takes longer
+	// than the 5-minute cron period to drain, the next tick re-selects and
+	// re-enqueues the same accounts (the consumer only advances nextSyncAt on
+	// completion), multiplying external API calls and queue depth. The consumer
+	// later overwrites nextSyncAt with the real poll interval; if it never runs,
+	// the row simply becomes due again after the claim window.
+	const claimUntil = new Date(now.getTime() + SYNC_CLAIM_WINDOW_MS);
 	const dueAccounts = await db
-		.select({
+		.update(socialAccountSyncState)
+		.set({ nextSyncAt: claimUntil, updatedAt: now })
+		.where(
+			sql`${socialAccountSyncState.id} IN (
+				SELECT id FROM ${socialAccountSyncState}
+				WHERE ${socialAccountSyncState.enabled} = true
+					AND ${socialAccountSyncState.nextSyncAt} <= ${now}
+					AND (
+						${socialAccountSyncState.rateLimitResetAt} IS NULL
+						OR ${socialAccountSyncState.rateLimitResetAt} <= ${now}
+					)
+				ORDER BY ${socialAccountSyncState.nextSyncAt}
+				LIMIT ${MAX_ACCOUNTS_PER_RUN}
+			)`,
+		)
+		.returning({
 			socialAccountId: socialAccountSyncState.socialAccountId,
 			organizationId: socialAccountSyncState.organizationId,
 			platform: socialAccountSyncState.platform,
-		})
-		.from(socialAccountSyncState)
-		.where(
-			and(
-				eq(socialAccountSyncState.enabled, true),
-				lte(socialAccountSyncState.nextSyncAt, now),
-				or(
-					isNull(socialAccountSyncState.rateLimitResetAt),
-					lte(socialAccountSyncState.rateLimitResetAt, now),
-				),
-			),
-		)
-		.orderBy(socialAccountSyncState.nextSyncAt)
-		.limit(MAX_ACCOUNTS_PER_RUN);
+		});
 
 	if (dueAccounts.length === 0) return;
 
@@ -151,6 +168,21 @@ async function enqueueMetricsRefresh(
 	}
 
 	if (totalStale === 0) return;
+
+	// Claim the selected posts by pushing metricsUpdatedAt into the future so the
+	// next 5-min tick does not re-enqueue them while this batch is still draining
+	// (the consumer only sets metricsUpdatedAt = now on completion). If the
+	// consumer never runs, the claim window lapses and the post becomes stale
+	// again. One bulk UPDATE for all claimed ids.
+	const claimedIds: string[] = [];
+	for (const data of byAccount.values()) claimedIds.push(...data.postIds);
+	if (claimedIds.length > 0) {
+		const claimUntil = new Date(now.getTime() + METRICS_CLAIM_WINDOW_MS);
+		await db
+			.update(externalPosts)
+			.set({ metricsUpdatedAt: claimUntil })
+			.where(inArray(externalPosts.id, claimedIds));
+	}
 
 	// Enqueue metrics refresh messages (batches of 50 post IDs each)
 	const messages: { body: RefreshMetricsMessage }[] = [];

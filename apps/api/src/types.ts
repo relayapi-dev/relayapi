@@ -79,6 +79,10 @@ export interface Env {
 
 	// Email (Resend)
 	RESEND_API_KEY: string;
+
+	// Performance instrumentation — set to "1" to emit Server-Timing headers
+	// and structured per-request timing logs (see lib/perf.ts)
+	PERF_LOGS?: string;
 }
 
 import type { Database } from "@relayapi/db";
@@ -92,9 +96,14 @@ export interface Variables {
 	callsIncluded: number;
 	aiEnabled: boolean;
 	dailyToolLimit: number;
+	/** Current Stripe billing-period bounds (ISO). Absent for free/period-less orgs. */
+	periodStart?: string | null;
+	periodEnd?: string | null;
 	parsedBody: Record<string, unknown> | null;
 	/** Per-request Drizzle instance. Set by dbContextMiddleware on /v1/*. */
 	db: Database;
+	/** Per-request perf tracker. Set by perfLogMiddleware when PERF_LOGS=1. */
+	perf?: import("./lib/perf").PerfTracker;
 }
 
 /** Shape stored in KV for each API key */
@@ -108,6 +117,14 @@ export interface KVKeyData {
 	calls_included: number;
 	ai_enabled?: boolean;
 	daily_tool_limit?: number;
+	/**
+	 * The org's current Stripe billing period (ISO strings), carried so the
+	 * usage-record write path keys on the actual billing window without a
+	 * per-request subscription lookup. Null/absent for free orgs and subs
+	 * missing period bounds — the usage period then falls back to calendar month.
+	 */
+	period_start?: string | null;
+	period_end?: string | null;
 	/** @deprecated Rate limiting now uses CF Rate Limiting binding */
 	rate_limit_max?: number;
 	/** @deprecated Rate limiting now uses CF Rate Limiting binding */

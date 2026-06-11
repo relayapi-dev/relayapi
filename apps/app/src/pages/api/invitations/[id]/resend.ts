@@ -1,9 +1,12 @@
 import type { APIRoute } from "astro";
 import { env } from "cloudflare:workers";
-import { invitation, organization, user, eq } from "@relayapi/db";
+import { invitation, member, organization, user, eq } from "@relayapi/db";
+import { and } from "drizzle-orm";
 import { render } from "@react-email/render";
 import { Resend } from "resend";
 import { InvitationEmail } from "../../../../lib/emails/invitation-email";
+
+const INVITE_MANAGER_ROLES = new Set(["owner", "admin"]);
 
 export const POST: APIRoute = async (context) => {
 	const currentUser = context.locals.user;
@@ -38,6 +41,25 @@ export const POST: APIRoute = async (context) => {
 
 		if (!row) {
 			return Response.json({ error: "Invitation not found" }, { status: 404 });
+		}
+
+		// AUTHZ: the caller must be an owner/admin of the invitation's org.
+		// Without this, any authenticated user could resend (and re-trigger the
+		// invite email for) any invitation by guessing its id (IDOR).
+		const currentUserId = currentUser.id as string;
+		const [membership] = await db
+			.select({ role: member.role })
+			.from(member)
+			.where(
+				and(
+					eq(member.userId, currentUserId),
+					eq(member.organizationId, row.organizationId),
+				),
+			)
+			.limit(1);
+
+		if (!membership || !INVITE_MANAGER_ROLES.has(membership.role ?? "")) {
+			return Response.json({ error: "Forbidden" }, { status: 403 });
 		}
 
 		if (row.status !== "pending") {

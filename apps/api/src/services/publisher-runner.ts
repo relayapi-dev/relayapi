@@ -268,19 +268,66 @@ export async function publishToTargets(
 	// Flush all DB updates in parallel
 	await Promise.all(dbUpdatePromises);
 
-	// Compute final status
-	const statuses = Object.values(responseTargets).map((t) => t.status);
+	// Compute final status from the FULL set of post_targets rows in the DB, not
+	// just the in-memory subset passed to this call. Retry/partial paths only pass
+	// the previously-failed targets, so deriving status from `responseTargets` alone
+	// would wrongly flip a partially-live post to "failed" (wiping publishedAt and
+	// firing post.failed while content is still live). Reading the persisted rows
+	// after the flush keeps full-set callers behavior-identical while fixing retry.
+	const allTargetRows = await db
+		.select({ status: postTargets.status, publishedAt: postTargets.publishedAt })
+		.from(postTargets)
+		.where(eq(postTargets.postId, postId));
+
+	const statuses = allTargetRows.map((r) => r.status);
+
+	// Guard: a post always has at least one target row. An empty set here means the
+	// post has no targets at all (e.g. its only account was disconnected, deleting
+	// the rows). `[].every(...)` is vacuously true, which would falsely mark the post
+	// "published" and fire a post.published webhook for zero publishes — bail to
+	// "failed" instead.
+	if (statuses.length === 0) {
+		await db
+			.update(posts)
+			.set({
+				status: "failed",
+				publishedAt: null,
+				updatedAt: new Date(),
+			})
+			.where(eq(posts.id, postId));
+		// Await customer webhook delivery so it completes before the consumer acks
+		// (the runtime would otherwise cancel a detached promise after return). A
+		// dedicated webhook-delivery queue is the planned non-blocking follow-up.
+		await dispatchWebhookEvent(env, db, orgId, "post.failed", {
+			post_id: postId,
+			status: "failed",
+			targets: responseTargets,
+		}).catch(console.error);
+		await notifyRealtime(env, orgId, { type: "post.updated", post_id: postId, status: "failed" });
+		return responseTargets;
+	}
+
 	const finalStatus = statuses.every((s) => s === "published")
 		? "published"
 		: statuses.every((s) => s === "failed")
 			? "failed"
 			: "partial";
 
+	// Preserve an existing publishedAt for partial posts (some targets are already
+	// live) instead of nulling it. Only set/clear when transitioning to a terminal
+	// all-published / all-failed state.
+	const existingPublishedAt = allTargetRows.find((r) => r.publishedAt)?.publishedAt ?? null;
+
 	await db
 		.update(posts)
 		.set({
 			status: finalStatus,
-			publishedAt: finalStatus === "published" ? new Date() : null,
+			publishedAt:
+				finalStatus === "published"
+					? new Date()
+					: finalStatus === "partial"
+						? existingPublishedAt
+						: null,
 			updatedAt: new Date(),
 		})
 		.where(eq(posts.id, postId));
@@ -293,13 +340,16 @@ export async function publishToTargets(
 				? "post.failed"
 				: "post.partial";
 
+	// Customer webhook delivery can take seconds (retries + backoff sleeps) and would
+	// Await delivery so it completes before the consumer acks; a dedicated
+	// webhook-delivery queue is the planned non-blocking follow-up.
+	// realtime notification is a fast internal call and still awaits so the dashboard
+	// update is guaranteed before this invocation returns.
 	await dispatchWebhookEvent(env, db, orgId, webhookEvent, {
 		post_id: postId,
 		status: finalStatus,
 		targets: responseTargets,
-	});
-
-	// Push real-time update to connected dashboard clients
+	}).catch(console.error);
 	await notifyRealtime(env, orgId, { type: "post.updated", post_id: postId, status: finalStatus });
 
 	// Update posting streak (any successful publish counts)
@@ -310,6 +360,78 @@ export async function publishToTargets(
 	}
 
 	return responseTargets;
+}
+
+/**
+ * Finalize a post's status purely from its persisted post_targets rows, then
+ * dispatch the matching webhook and realtime notification. Used to recover posts
+ * that were claimed into "publishing" but whose targets are all already terminal
+ * (e.g. a previous attempt crashed after publishing every target but before the
+ * post-level status update). Prevents posts being abandoned in "publishing".
+ */
+async function finalizePostStatusFromTargets(
+	env: Env,
+	db: ReturnType<typeof createDb>,
+	postId: string,
+	orgId: string,
+): Promise<void> {
+	const allTargetRows = await db
+		.select({ status: postTargets.status, publishedAt: postTargets.publishedAt })
+		.from(postTargets)
+		.where(eq(postTargets.postId, postId));
+
+	const statuses = allTargetRows.map((r) => r.status);
+	if (statuses.length === 0) {
+		await db
+			.update(posts)
+			.set({ status: "failed", publishedAt: null, updatedAt: new Date() })
+			.where(eq(posts.id, postId));
+		// Await customer webhook delivery so it completes before the consumer acks
+		// (the runtime would otherwise cancel a detached promise after return). A
+		// dedicated webhook-delivery queue is the planned non-blocking follow-up.
+		await dispatchWebhookEvent(env, db, orgId, "post.failed", {
+			post_id: postId,
+			status: "failed",
+		}).catch(console.error);
+		await notifyRealtime(env, orgId, { type: "post.updated", post_id: postId, status: "failed" });
+		return;
+	}
+
+	const finalStatus = statuses.every((s) => s === "published")
+		? "published"
+		: statuses.every((s) => s === "failed")
+			? "failed"
+			: "partial";
+	const existingPublishedAt = allTargetRows.find((r) => r.publishedAt)?.publishedAt ?? null;
+
+	await db
+		.update(posts)
+		.set({
+			status: finalStatus,
+			publishedAt:
+				finalStatus === "published"
+					? (existingPublishedAt ?? new Date())
+					: finalStatus === "partial"
+						? existingPublishedAt
+						: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(posts.id, postId));
+
+	const webhookEvent =
+		finalStatus === "published"
+			? "post.published"
+			: finalStatus === "failed"
+				? "post.failed"
+				: "post.partial";
+	// Await customer webhook delivery so it completes before the consumer acks
+		// (the runtime would otherwise cancel a detached promise after return). A
+		// dedicated webhook-delivery queue is the planned non-blocking follow-up.
+	await dispatchWebhookEvent(env, db, orgId, webhookEvent, {
+		post_id: postId,
+		status: finalStatus,
+	}).catch(console.error);
+	await notifyRealtime(env, orgId, { type: "post.updated", post_id: postId, status: finalStatus });
 }
 
 /**
@@ -330,30 +452,52 @@ export async function publishPostById(
 
 	if (!post || !["scheduled", "publishing"].includes(post.status)) return;
 
-	// Atomically claim the post by transitioning status.
-	// For "scheduled" → "publishing", for "publishing" → same but with updated timestamp.
-	// This prevents duplicate publishing from at-least-once queue delivery.
+	// Atomically claim the post via compare-and-swap on (status, updatedAt). This
+	// prevents duplicate publishing from at-least-once queue delivery, duplicate cron
+	// enqueues, and the publishing→publishing re-claim race, while still allowing the
+	// scheduler's handoff (which pre-flips "scheduled" → "publishing") and recovery of
+	// posts left stuck in "publishing" by a crashed prior attempt.
+	//
+	// Both "scheduled" and "publishing" rows are claimable, but the WHERE pins the exact
+	// updatedAt we just read. Two concurrent messages for the same row read the same
+	// updatedAt; only the first UPDATE matches and bumps updatedAt, so the second matches
+	// zero rows and no-ops — no double publish. A crashed "publishing" post is recovered
+	// because whatever consumer reads it next CAS-claims its current updatedAt.
 	const claimed = await db
 		.update(posts)
 		.set({ status: "publishing", updatedAt: new Date() })
-		.where(and(eq(posts.id, postId), eq(posts.status, post.status)))
+		.where(
+			and(
+				eq(posts.id, postId),
+				eq(posts.status, post.status),
+				eq(posts.updatedAt, post.updatedAt),
+			),
+		)
 		.returning({ id: posts.id });
 
 	if (claimed.length === 0) return;
 
-	// Get all pending targets
+	// Get all targets
 	const targets = await db
 		.select()
 		.from(postTargets)
 		.where(eq(postTargets.postId, postId));
 
-	// Guard: if any target is already published, another worker completed — bail
-	if (targets.some((t) => t.status === "published")) return;
-
-	// Filter to actionable targets
+	// Filter to actionable (not-yet-terminal) targets
 	const actionableTargets = targets.filter((t) =>
 		["draft", "scheduled", "publishing"].includes(t.status),
 	);
+
+	// Recovery / idempotency guard: if some targets are already published but others
+	// remain actionable (a previous attempt crashed after publishing a subset), do NOT
+	// bail silently — that would leave the post stuck in "publishing" forever. Resume by
+	// publishing only the remaining actionable targets below. If NO actionable targets
+	// remain (every target is already in a terminal published/failed state), finalize the
+	// post status from the persisted target rows instead of abandoning it.
+	if (actionableTargets.length === 0) {
+		await finalizePostStatusFromTargets(env, db, postId, orgId);
+		return;
+	}
 
 	// Batch-fetch all social accounts in one query
 	const accountIds = [...new Set(actionableTargets.map((t) => t.socialAccountId))];
@@ -385,6 +529,16 @@ export async function publishPostById(
 				accounts: [account],
 			});
 		}
+	}
+
+	// Guard: if no target resolved to a live account (every actionable target's
+	// social account was deleted or is missing), there is nothing to publish. Do NOT
+	// call publishToTargets with an empty set — finalize the post from its persisted
+	// target rows so it is not abandoned in "publishing" and no false post.published
+	// is emitted.
+	if (targetMap.size === 0) {
+		await finalizePostStatusFromTargets(env, db, postId, orgId);
+		return;
 	}
 
 	const overrides = (post.platformOverrides as Record<

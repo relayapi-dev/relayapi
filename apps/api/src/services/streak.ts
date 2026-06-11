@@ -37,13 +37,20 @@ export async function updateStreak(
 	const nowIso = now.toISOString();
 
 	// Read the existing row before upserting so we can detect new-streak starts
+	// and dedupe milestone events. currentStreakDays is constant for every post
+	// within the same 24h window, so we only fire a milestone when the day count
+	// actually advanced into a milestone (not on every post made that day).
 	const [existing] = await db
-		.select({ streakStartedAt: orgStreaks.streakStartedAt })
+		.select({
+			streakStartedAt: orgStreaks.streakStartedAt,
+			currentStreakDays: orgStreaks.currentStreakDays,
+		})
 		.from(orgStreaks)
 		.where(eq(orgStreaks.organizationId, orgId))
 		.limit(1);
 
 	const wasInactive = !existing || existing.streakStartedAt === null;
+	const previousStreakDays = existing?.currentStreakDays ?? 0;
 
 	const result = await db
 		.insert(orgStreaks)
@@ -83,8 +90,13 @@ export async function updateStreak(
 		);
 	}
 
-	// Check for milestones
-	if (MILESTONE_DAYS.includes(streak.currentStreakDays)) {
+	// Check for milestones — only on the post that advances the streak into the
+	// milestone day, never on subsequent posts the same day (which keep
+	// currentStreakDays unchanged), so consumers see exactly one milestone event.
+	if (
+		streak.currentStreakDays > previousStreakDays &&
+		MILESTONE_DAYS.includes(streak.currentStreakDays)
+	) {
 		dispatchWebhookEvent(env, db, orgId, "streak.milestone", {
 			current_streak_days: streak.currentStreakDays,
 			streak_started_at: streak.streakStartedAt?.toISOString() ?? null,

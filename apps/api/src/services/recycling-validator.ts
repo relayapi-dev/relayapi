@@ -116,9 +116,19 @@ export function computeNextRecycleAt(
 		case "week":
 			next.setUTCDate(next.getUTCDate() + gap * 7);
 			break;
-		case "month":
+		case "month": {
+			// Adding months can overflow short months (Jan 31 + 1mo -> Mar 3),
+			// which permanently drifts the schedule. Clamp to the last day of the
+			// intended target month instead.
+			const originalDay = next.getUTCDate();
+			next.setUTCDate(1);
 			next.setUTCMonth(next.getUTCMonth() + gap);
+			const daysInTargetMonth = new Date(
+				Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0),
+			).getUTCDate();
+			next.setUTCDate(Math.min(originalDay, daysInTargetMonth));
 			break;
+		}
 	}
 	return next;
 }

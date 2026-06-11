@@ -2,10 +2,23 @@
  * Email service — renders React Email templates and sends via queue (or direct fallback).
  */
 
-import { render } from "@react-email/render";
 import { sendEmail } from "../lib/email-queue/producer";
-import { PaymentFailedReminder } from "../lib/emails/templates/PaymentFailedReminder";
-import { PlanDeactivated } from "../lib/emails/templates/PlanDeactivated";
+
+/**
+ * react-email + templates are loaded lazily so this module (imported from
+ * the queue consumer entry) doesn't drag the react-email stack — the
+ * largest chunk of the worker bundle — into cold-start evaluation.
+ * Rendering only happens for dunning cron emails.
+ */
+async function loadRenderStack() {
+	const [{ render }, { PaymentFailedReminder }, { PlanDeactivated }] =
+		await Promise.all([
+			import("@react-email/render"),
+			import("../lib/emails/templates/PaymentFailedReminder"),
+			import("../lib/emails/templates/PlanDeactivated"),
+		]);
+	return { render, PaymentFailedReminder, PlanDeactivated };
+}
 
 export async function sendPaymentFailedReminder(
 	queue: Queue | undefined,
@@ -22,6 +35,7 @@ export async function sendPaymentFailedReminder(
 		? "[Action Required] Your RelayAPI payment is still outstanding"
 		: "Your RelayAPI payment failed";
 
+	const { render, PaymentFailedReminder } = await loadRenderStack();
 	const html = await render(
 		PaymentFailedReminder({
 			orgName: params.orgName,
@@ -46,6 +60,7 @@ export async function sendPlanDeactivatedEmail(
 		orgName: string;
 	},
 ): Promise<void> {
+	const { render, PlanDeactivated } = await loadRenderStack();
 	const html = await render(
 		PlanDeactivated({
 			orgName: params.orgName,

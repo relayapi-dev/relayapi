@@ -344,15 +344,20 @@ app.openapi(listRulesRoute, async (c) => {
 	if (status) {
 		conditions.push(eq(autoPostRules.status, status));
 	}
+	// Cursor pagination (composite: createdAt DESC, id DESC to handle timestamp ties).
+	// Read the cursor row's created_at as raw text so it isn't round-tripped through a
+	// JS Date, which truncates Postgres microseconds to millisecond precision and would
+	// skip rows sharing the cursor's millisecond. Bind it back with an explicit
+	// ::timestamptz cast to keep the keyset comparison exact.
 	if (cursor) {
 		const [cursorRow] = await db
-			.select({ createdAt: autoPostRules.createdAt })
+			.select({ createdAt: sql<string>`${autoPostRules.createdAt}::text` })
 			.from(autoPostRules)
 			.where(eq(autoPostRules.id, cursor))
 			.limit(1);
 		if (cursorRow) {
 			conditions.push(
-				sql`(${autoPostRules.createdAt} < ${cursorRow.createdAt} OR (${autoPostRules.createdAt} = ${cursorRow.createdAt} AND ${autoPostRules.id} < ${cursor}))`,
+				sql`(${autoPostRules.createdAt}, ${autoPostRules.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}

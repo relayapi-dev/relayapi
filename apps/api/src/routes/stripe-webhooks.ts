@@ -43,7 +43,7 @@ function getSubscriptionPeriod(subscription: Stripe.Subscription): {
 }
 
 app.post("/", async (c) => {
-	const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
+	const stripe = await createStripeClient(c.env.STRIPE_SECRET_KEY);
 	const body = await c.req.text();
 	const sig = c.req.header("stripe-signature");
 
@@ -62,17 +62,32 @@ app.post("/", async (c) => {
 	}
 
 	// Idempotency — Stripe retries failed webhooks for 3 days. Skip events
-	// we've already seen. The mark is written after handler completion below.
+	// we've already seen. The mark is written only after the handler succeeds
+	// below, so a transient failure leaves the event un-marked and Stripe's
+	// retry will reprocess it.
 	const dedupKey = `stripe-evt:${event.id}`;
 	const alreadySeen = await c.env.KV.get(dedupKey);
 	if (alreadySeen) return c.json({ received: true, duplicate: true });
 
-	const ctx = c.executionCtx;
-	ctx.waitUntil(
-		handleEvent(event, c.env).then(() =>
-			c.env.KV.put(dedupKey, "1", { expirationTtl: 60 * 60 * 24 * 7 }),
-		),
-	);
+	// Process the event synchronously before ACKing. Stripe does NOT retry
+	// 2xx-acknowledged events, so fire-and-forget via waitUntil would
+	// permanently drop the event on any transient failure (Hyperdrive blip,
+	// Stripe API error). handleEvent is a handful of DB queries plus at most
+	// one Stripe API call, comfortably within Stripe's webhook timeout.
+	try {
+		await handleEvent(event, c.env);
+		await c.env.KV.put(dedupKey, "1", { expirationTtl: 60 * 60 * 24 * 7 });
+	} catch (err) {
+		console.error(
+			"Stripe webhook handler failed:",
+			event.type,
+			event.id,
+			err,
+		);
+		// Return non-2xx so Stripe's built-in 3-day retry loop recovers the
+		// event. The dedup key is intentionally not written on failure.
+		return c.json({ error: "Webhook handler failed" }, 500);
+	}
 
 	return c.json({ received: true });
 });
@@ -89,7 +104,7 @@ async function handleEvent(event: Stripe.Event, env: Env): Promise<void> {
 			if (session.metadata?.type === "wa_phone_number") {
 				const phoneNumberId = session.metadata.phoneNumberId;
 				if (phoneNumberId) {
-					const stripe = createStripeClient(env.STRIPE_SECRET_KEY);
+					const stripe = await createStripeClient(env.STRIPE_SECRET_KEY);
 					const subscription = await stripe.subscriptions.retrieve(
 						session.subscription as string,
 					);
@@ -107,7 +122,7 @@ async function handleEvent(event: Stripe.Event, env: Env): Promise<void> {
 				break;
 			}
 
-			const stripe = createStripeClient(env.STRIPE_SECRET_KEY);
+			const stripe = await createStripeClient(env.STRIPE_SECRET_KEY);
 			const subscription = await stripe.subscriptions.retrieve(
 				session.subscription as string,
 			);
@@ -161,6 +176,7 @@ async function handleEvent(event: Stripe.Event, env: Env): Promise<void> {
 					existingSub.organizationId,
 					"pro",
 					PRICING.proCallsIncluded,
+					{ period },
 				);
 				break;
 			}
@@ -179,8 +195,11 @@ async function handleEvent(event: Stripe.Event, env: Env): Promise<void> {
 				})
 				.where(eq(organizationSubscriptions.organizationId, orgId));
 
-			// Sync KV keys to pro
-			await syncOrgKeysToKV(env, db, orgId, "pro", PRICING.proCallsIncluded);
+			// Sync KV keys to pro, stamping the new billing period so the first
+			// post-upgrade calls already key on the Stripe window.
+			await syncOrgKeysToKV(env, db, orgId, "pro", PRICING.proCallsIncluded, {
+				period,
+			});
 			break;
 		}
 
@@ -223,26 +242,21 @@ async function handleEvent(event: Stripe.Event, env: Env): Promise<void> {
 				})
 				.where(eq(organizationSubscriptions.id, sub.id));
 
-			// If moved to past_due, downgrade KV keys
-			if (newStatus === "past_due") {
-				await syncOrgKeysToKV(
-					env,
-					db,
-					sub.organizationId,
-					"free",
-					PRICING.freeCallsIncluded,
-				);
-			}
-			// If back to active, upgrade KV keys
-			if (newStatus === "active" && sub.status !== "active") {
-				await syncOrgKeysToKV(
-					env,
-					db,
-					sub.organizationId,
-					"pro",
-					PRICING.proCallsIncluded,
-				);
-			}
+			// Always re-stamp KV (plan + billing period) on every update, not just
+			// on status transitions: a normal period roll keeps status "active"
+			// but moves currentPeriodStart, and the cached period must follow so
+			// usage records key on the new window immediately.
+			const kvPlan = newStatus === "active" ? "pro" : "free";
+			await syncOrgKeysToKV(
+				env,
+				db,
+				sub.organizationId,
+				kvPlan,
+				kvPlan === "pro"
+					? PRICING.proCallsIncluded
+					: PRICING.freeCallsIncluded,
+				{ period },
+			);
 			break;
 		}
 
@@ -436,18 +450,34 @@ async function syncOrgKeysToKV(
 	orgId: string,
 	plan: "free" | "pro",
 	callsIncluded: number,
-	opts?: { aiEnabled?: boolean; dailyToolLimit?: number },
+	opts?: {
+		aiEnabled?: boolean;
+		dailyToolLimit?: number;
+		period?: { start: Date | null; end: Date | null };
+	},
 ): Promise<void> {
 	const orgKeys = (await db
 		.select({ key: apikey.key })
 		.from(apikey)
 		.where(eq(apikey.organizationId, orgId))) as Array<{ key: string }>;
 
+	// Stamp the Stripe billing period onto every cached key so the usage-record
+	// write path keys on the CURRENT window immediately after a plan change or
+	// period roll, instead of waiting up to the 10-min KV TTL to re-hydrate (a
+	// stale period splits a month's usage across two records, each granting a
+	// full included allowance and under-billing overage). Free plans carry no
+	// period and fall back to calendar month.
+	const hasPeriod = plan === "pro" && opts?.period?.start && opts?.period?.end;
+	const periodStart = hasPeriod ? opts!.period!.start!.toISOString() : null;
+	const periodEnd = hasPeriod ? opts!.period!.end!.toISOString() : null;
+
 	for (const k of orgKeys) {
 		const existing = await env.KV.get<KVKeyData>(`apikey:${k.key}`, "json");
 		if (existing) {
 			existing.plan = plan;
 			existing.calls_included = callsIncluded;
+			existing.period_start = periodStart;
+			existing.period_end = periodEnd;
 			if (opts?.aiEnabled !== undefined) existing.ai_enabled = opts.aiEnabled;
 			if (opts?.dailyToolLimit !== undefined) existing.daily_tool_limit = opts.dailyToolLimit;
 			await env.KV.put(`apikey:${k.key}`, JSON.stringify(existing), {

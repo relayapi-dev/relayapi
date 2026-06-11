@@ -281,6 +281,13 @@
       "when": 1780927431397,
       "tag": "0039_curious_lester",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1781176273191,
+      "tag": "0040_round_kinsey_walden",
+      "breakpoints": true
     }
   ]
 }

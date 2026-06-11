@@ -73,6 +73,10 @@ export interface TagUpdateParams {
 }
 
 export interface TagListParams {
+  /**
+   * Opaque pagination cursor. Pass back the `next_cursor` from a prior page
+   * verbatim — do not parse it (its underlying keyset format may change).
+   */
   cursor?: string;
   limit?: number;
   workspace_id?: string;

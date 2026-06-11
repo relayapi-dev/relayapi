@@ -8,9 +8,7 @@ import {
 	contactChannels,
 } from "@relayapi/db";
 import { and, eq, desc, inArray, sql, lte, count } from "drizzle-orm";
-import { mapConcurrently } from "../lib/concurrency";
 import { maybeDecrypt } from "../lib/crypto";
-import { sendMessage } from "../services/message-sender";
 import { ErrorResponse } from "../schemas/common";
 import {
 	AddRecipientsBody,
@@ -263,11 +261,13 @@ const sendBroadcastRoute = createRoute({
 	path: "/{id}/send",
 	tags: ["Broadcasts"],
 	summary: "Trigger immediate send",
+	description:
+		"Queues the broadcast for immediate delivery. Returns 202 with the broadcast in `scheduled` status; the every-minute processor sends pending recipients in bounded batches and finalizes counts. Poll GET /v1/broadcasts/{id} for progress.",
 	security: [{ Bearer: [] }],
 	request: { params: BroadcastIdParams },
 	responses: {
-		200: {
-			description: "Send result",
+		202: {
+			description: "Broadcast queued for sending",
 			content: { "application/json": { schema: BroadcastResponse } },
 		},
 		400: {
@@ -382,16 +382,20 @@ app.openapi(listBroadcasts, async (c) => {
 	if (account_id) conditions.push(eq(broadcasts.socialAccountId, account_id));
 	if (status) conditions.push(eq(broadcasts.status, status));
 
-	// Cursor pagination (composite: createdAt DESC, id DESC to handle timestamp ties)
+	// Cursor pagination (composite: createdAt DESC, id DESC to handle timestamp ties).
+	// Read the cursor row's created_at as raw text so we don't round-trip it through
+	// a JS Date, which truncates Postgres microseconds to millisecond precision and
+	// would skip rows sharing the cursor's millisecond. Bind it back with an explicit
+	// ::timestamptz cast to keep the keyset comparison exact.
 	if (cursor) {
 		const [cursorRow] = await db
-			.select({ createdAt: broadcasts.createdAt })
+			.select({ createdAt: sql<string>`${broadcasts.createdAt}::text` })
 			.from(broadcasts)
 			.where(eq(broadcasts.id, cursor))
 			.limit(1);
 		if (cursorRow) {
 			conditions.push(
-				sql`(${broadcasts.createdAt} < ${cursorRow.createdAt} OR (${broadcasts.createdAt} = ${cursorRow.createdAt} AND ${broadcasts.id} < ${cursor}))`,
+				sql`(${broadcasts.createdAt}, ${broadcasts.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}
@@ -704,7 +708,6 @@ app.openapi(listRecipients, async (c) => {
 	});
 });
 
-// @ts-expect-error — Hono strict return types
 app.openapi(sendBroadcastRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
@@ -755,90 +758,25 @@ app.openapi(sendBroadcastRoute, async (c) => {
 		);
 	}
 
-	// Mark as sending
-	await db
-		.update(broadcasts)
-		.set({ status: "sending", updatedAt: new Date() })
-		.where(eq(broadcasts.id, id));
-
-	// Fetch pending recipients
-	const recipients = await db
-		.select()
-		.from(broadcastRecipients)
-		.where(
-			and(
-				eq(broadcastRecipients.broadcastId, id),
-				eq(broadcastRecipients.status, "pending"),
-			),
-		);
-
-	// Fan out platform calls + per-recipient DB updates concurrently. Keep the
-	// concurrency modest to respect platform rate limits and Hyperdrive's
-	// outbound connection cap.
-	const BROADCAST_SEND_CONCURRENCY = 5;
-	const outcomes = await mapConcurrently(
-		recipients,
-		BROADCAST_SEND_CONCURRENCY,
-		async (recipient) => {
-			const result = await sendMessage({
-				platform: broadcast.platform,
-				accessToken: account.accessToken!,
-				platformAccountId: account.platformAccountId ?? "",
-				recipientId: recipient.contactIdentifier,
-				text: broadcast.messageText ?? "",
-				templateName: broadcast.templateName ?? undefined,
-				templateLanguage: broadcast.templateLanguage ?? undefined,
-				templateComponents: (recipient.variables
-					? (recipient.variables as unknown[])
-					: (broadcast.templateComponents as unknown[] | null)) ?? undefined,
-			});
-
-			if (result.success) {
-				await db
-					.update(broadcastRecipients)
-					.set({
-						status: "sent",
-						messageId: result.messageId ?? null,
-						sentAt: new Date(),
-					})
-					.where(eq(broadcastRecipients.id, recipient.id));
-				return "sent" as const;
-			}
-			await db
-				.update(broadcastRecipients)
-				.set({ status: "failed", error: result.error ?? "Unknown error" })
-				.where(eq(broadcastRecipients.id, recipient.id));
-			return "failed" as const;
-		},
-	);
-
-	let sent = 0;
-	let failed = 0;
-	for (const outcome of outcomes) {
-		if (outcome === "sent") sent++;
-		else failed++;
-	}
-
-	const finalStatus: BroadcastStatus =
-		failed === 0
-			? "sent"
-			: sent === 0
-				? "failed"
-				: "partially_failed";
-
+	// Hand off to the resumable cron-driven processor instead of fanning out the
+	// entire broadcast inline on the request path. We mark the broadcast
+	// `scheduled` with `scheduledAt = now` so the every-minute
+	// processScheduledBroadcasts (services/broadcast-processor.ts) picks it up,
+	// claims pending recipients in bounded keyset chunks, and finalizes counts —
+	// avoiding proxy/subrequest limits and the "wedged in sending forever" failure
+	// mode when a large send is cut off mid-request.
 	const [updated] = await db
 		.update(broadcasts)
 		.set({
-			status: finalStatus,
-			sentCount: sent,
-			failedCount: failed,
-			completedAt: new Date(),
+			status: "scheduled",
+			scheduledAt: new Date(),
+			completedAt: null,
 			updatedAt: new Date(),
 		})
 		.where(eq(broadcasts.id, id))
 		.returning();
 
-	return c.json(serializeBroadcast(updated!));
+	return c.json(serializeBroadcast(updated!), 202);
 });
 
 // @ts-expect-error — Hono strict return types

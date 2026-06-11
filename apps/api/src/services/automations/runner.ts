@@ -72,13 +72,16 @@ export async function runLoop(
 			return { status: run.status as RunStatus, exit_reason: run.exitReason };
 		}
 
-		// 1. Pause check — (contact, automation) or global (contact, NULL).
-		const paused = await findActivePause(
-			db,
-			run.organizationId,
-			run.contactId,
-			run.automationId,
-		);
+		// 1+2. Pause check and graph load both depend only on immutable run
+		// fields (organizationId, contactId, automationId), so issue them in
+		// parallel to shave one DB round trip per node visited. Semantics are
+		// unchanged: the pause result is still applied before the graph is used.
+		const [paused, auto] = await Promise.all([
+			findActivePause(db, run.organizationId, run.contactId, run.automationId),
+			db.query.automations.findFirst({
+				where: eq(automations.id, run.automationId),
+			}),
+		]);
 		if (paused) {
 			const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
 				status: "waiting",
@@ -89,18 +92,18 @@ export async function runLoop(
 			return { status: "waiting", exit_reason: null };
 		}
 
-		// 2. Load graph fresh on every iteration so edits take effect immediately.
-		const auto = await db.query.automations.findFirst({
-			where: eq(automations.id, run.automationId),
-		});
+		// Load graph fresh on every iteration so edits take effect immediately.
 		if (!auto) {
-			await exitRun(
+			const exited = await exitRun(
 				db,
 				run.id,
 				run.updatedAt,
 				"exited",
 				"automation_deleted",
 			);
+			if (exited) {
+				await incrementCounter(db, run.automationId, "total_exited");
+			}
 			return { status: "exited", exit_reason: "automation_deleted" };
 		}
 		const graph = (auto.graph ?? {
@@ -131,7 +134,16 @@ export async function runLoop(
 				payload: { reason: "current_node_missing" },
 				error: null,
 			});
-			await exitRun(db, run.id, run.updatedAt, "exited", "graph_changed");
+			const exited = await exitRun(
+				db,
+				run.id,
+				run.updatedAt,
+				"exited",
+				"graph_changed",
+			);
+			if (exited) {
+				await incrementCounter(db, run.automationId, "total_exited");
+			}
 			return { status: "exited", exit_reason: "graph_changed" };
 		}
 
@@ -255,12 +267,21 @@ export async function runLoop(
 				context: ctx.context,
 			});
 			if (ok && result.timeout_at) {
+				// Stamp the node key that armed this timeout into the job payload so
+				// the scheduler can reject a stale timeout job whose run has since
+				// advanced to a DIFFERENT waiting node (e.g. answered input A, then
+				// parked on a buttons message). Without this binding, A's old job
+				// would fire at its original deadline and kill the unrelated wait.
+				const timeoutPayload = {
+					...((result.payload as Record<string, unknown> | null) ?? {}),
+					_timeout_node_key: node.key,
+				};
 				await db.insert(automationScheduledJobs).values({
 					runId: run.id,
 					jobType: "input_timeout",
 					automationId: run.automationId,
 					runAt: result.timeout_at,
-					payload: result.payload ?? null,
+					payload: timeoutPayload,
 				});
 			}
 			return { status: "waiting", exit_reason: null };
@@ -367,6 +388,17 @@ export async function enrollContact(
 		contextOverrides?: Record<string, any>;
 		env: Record<string, any>;
 		runLoopOptions?: RunLoopOptions;
+		/**
+		 * Contact state already loaded by the caller (e.g. the trigger matcher
+		 * loads the contact row + custom fields to evaluate entrypoint filters).
+		 * When supplied, buildInitialRunContext skips its two queries and reuses
+		 * this, saving ~2 redundant DB round trips per enrollment.
+		 */
+		prehydrated?: {
+			contact: Record<string, any> | null;
+			tags: string[];
+			fields: Record<string, string>;
+		};
 	},
 ): Promise<{ runId: string }> {
 	const auto = await db.query.automations.findFirst({
@@ -389,6 +421,7 @@ export async function enrollContact(
 		args.contactId,
 		args.organizationId,
 		args.contextOverrides ?? {},
+		args.prehydrated,
 	);
 	const initialContext = {
 		...hydrated,
@@ -440,6 +473,83 @@ export async function enrollContact(
 }
 
 /**
+ * Wakes runs that runLoop parked on a contact pause. When a run hits an active
+ * pause (automation_contact_controls), runLoop sets status='waiting',
+ * waitingFor='external_event' and returns without scheduling any resume job.
+ * Nothing else wakes those runs — so when the pause is lifted (the
+ * resume_automations_for_contact action or the contact-automation-resume route
+ * deletes the control row), the caller must call this to re-activate and
+ * re-enter the parked runs. Otherwise the run stays wedged forever and, because
+ * of the partial unique index on active/waiting runs, the contact can never
+ * re-enroll in that automation again.
+ *
+ * Scope: when `automationId` is provided, only runs for that automation are
+ * resumed (matching a "current"-scope unpause); when null, all of the contact's
+ * external_event-parked runs are resumed (a "global"-scope unpause).
+ *
+ * Best-effort: a per-run failure is swallowed so one bad run can't block the
+ * rest. Returns the number of runs that were re-entered.
+ */
+export async function resumeExternalEventRuns(
+	db: Db,
+	args: {
+		organizationId: string;
+		contactId: string;
+		automationId: string | null;
+		env: Record<string, any>;
+	},
+): Promise<{ resumed: number }> {
+	const parked = await db
+		.select({ id: automationRuns.id, automationId: automationRuns.automationId })
+		.from(automationRuns)
+		.where(
+			and(
+				eq(automationRuns.organizationId, args.organizationId),
+				eq(automationRuns.contactId, args.contactId),
+				eq(automationRuns.status, "waiting"),
+				eq(automationRuns.waitingFor, "external_event"),
+				args.automationId
+					? eq(automationRuns.automationId, args.automationId)
+					: undefined,
+			),
+		);
+
+	let resumed = 0;
+	for (const row of parked) {
+		try {
+			// Re-read the run for its current updatedAt, flip it back to active
+			// (guarded), then re-enter runLoop. runLoop re-checks the pause on its
+			// first iteration, so if another pause is still active the run simply
+			// re-parks — no harm.
+			const fresh = await db.query.automationRuns.findFirst({
+				where: eq(automationRuns.id, row.id),
+			});
+			if (
+				!fresh ||
+				fresh.status !== "waiting" ||
+				fresh.waitingFor !== "external_event"
+			) {
+				continue;
+			}
+			const ok = await updateRunOptimistic(db, fresh.id, fresh.updatedAt, {
+				status: "active",
+				waitingFor: null,
+				waitingUntil: null,
+			});
+			if (!ok) continue;
+			await runLoop(db, fresh.id, { db, ...args.env });
+			resumed += 1;
+		} catch (err) {
+			console.error(
+				`[automation runner] failed to resume external_event run ${row.id}:`,
+				err,
+			);
+		}
+	}
+	return { resumed };
+}
+
+/**
  * Build the initial `automation_runs.context` JSONB payload for a fresh
  * enrollment. Loads the contact row, inline tag array, and keyed custom
  * field values so merge-tag resolution and condition evaluation have access
@@ -456,33 +566,54 @@ async function buildInitialRunContext(
 	contactId: string,
 	organizationId: string,
 	overrides: Record<string, any>,
+	prehydrated?: {
+		contact: Record<string, any> | null;
+		tags: string[];
+		fields: Record<string, string>;
+	},
 ): Promise<Record<string, any>> {
-	const contact = await db.query.contacts.findFirst({
-		where: eq(contacts.id, contactId),
-	});
+	// Reuse caller-supplied contact state when available (the trigger matcher
+	// already loaded the contact row + custom fields to evaluate filters), so we
+	// don't re-run the same two queries here.
+	if (prehydrated) {
+		return {
+			contact: prehydrated.contact ?? null,
+			tags: prehydrated.tags ?? [],
+			fields: prehydrated.fields ?? {},
+			...overrides,
+		};
+	}
+
+	// The contact row and the custom-field map are independent reads — issue
+	// them in parallel to save one DB round trip on every enrollment (this path
+	// runs per inbound message / internal event / scheduled contact).
+	const [contact, fieldRows] = await Promise.all([
+		db.query.contacts.findFirst({
+			where: eq(contacts.id, contactId),
+		}),
+		// Custom fields: keyed by `custom_field_definitions.slug` (the schema
+		// uses `slug`, not `key`). We scope by organization and inner-join to
+		// the definition to get the slug + resolve to a `{ slug: value }` map.
+		db
+			.select({
+				slug: customFieldDefinitions.slug,
+				value: customFieldValues.value,
+			})
+			.from(customFieldValues)
+			.innerJoin(
+				customFieldDefinitions,
+				eq(customFieldValues.definitionId, customFieldDefinitions.id),
+			)
+			.where(
+				and(
+					eq(customFieldValues.contactId, contactId),
+					eq(customFieldValues.organizationId, organizationId),
+				),
+			),
+	]);
 
 	// Tags live inline on `contacts.tags` (text[]); no separate join table.
 	const tags = contact?.tags ?? [];
-
-	// Custom fields: keyed by `custom_field_definitions.slug` (the schema
-	// uses `slug`, not `key`). We scope by organization and inner-join to
-	// the definition to get the slug + resolve to a `{ slug: value }` map.
-	const fieldRows = await db
-		.select({
-			slug: customFieldDefinitions.slug,
-			value: customFieldValues.value,
-		})
-		.from(customFieldValues)
-		.innerJoin(
-			customFieldDefinitions,
-			eq(customFieldValues.definitionId, customFieldDefinitions.id),
-		)
-		.where(
-			and(
-				eq(customFieldValues.contactId, contactId),
-				eq(customFieldValues.organizationId, organizationId),
-			),
-		);
 	const fields: Record<string, string> = {};
 	for (const row of fieldRows) {
 		if (row.slug) fields[row.slug] = row.value;
@@ -556,7 +687,7 @@ function stepOutcomeFromResult(result: HandlerResult): string {
 	}
 }
 
-type RunUpdate = Partial<{
+export type RunUpdate = Partial<{
 	status: RunStatus;
 	currentNodeKey: string | null;
 	currentPortKey: string | null;
@@ -571,8 +702,13 @@ type RunUpdate = Partial<{
  * Applies a run update guarded by the prior updated_at value. Returns true iff
  * the update hit a row (i.e. this worker still owned the run). A false return
  * means another worker took over; callers should exit the loop gracefully.
+ *
+ * Exported so the scheduler (input_timeout / resume_run) and the input /
+ * interactive resume paths can guard their run-state writes on the same
+ * updated_at predicate, closing the timeout-vs-reply race where two workers
+ * both advanced a waiting run through different ports.
  */
-async function updateRunOptimistic(
+export async function updateRunOptimistic(
 	db: Db,
 	runId: string,
 	priorUpdatedAt: Date,
@@ -616,15 +752,15 @@ async function exitRun(
 	priorUpdatedAt: Date,
 	status: Extract<RunStatus, "completed" | "exited" | "failed">,
 	exitReason: string,
-): Promise<void> {
-	await updateRunOptimistic(db, runId, priorUpdatedAt, {
+): Promise<boolean> {
+	return updateRunOptimistic(db, runId, priorUpdatedAt, {
 		status,
 		exitReason,
 		completedAt: new Date(),
 	});
 }
 
-async function incrementCounter(
+export async function incrementCounter(
 	db: Db,
 	automationId: string,
 	column: "total_completed" | "total_failed" | "total_exited",

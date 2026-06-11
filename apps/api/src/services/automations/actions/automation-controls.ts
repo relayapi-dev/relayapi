@@ -10,6 +10,7 @@
 import { automationContactControls } from "@relayapi/db";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
+import { resumeExternalEventRuns } from "../runner";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type PauseContactAutomationsAction = Extract<
@@ -96,6 +97,15 @@ const resumeContactAutomations: ActionHandler<
 				),
 			);
 	}
+
+	// Wake any runs that parked on the pause (status waiting / waitingFor
+	// external_event) — removing the control row alone leaves them wedged.
+	await resumeExternalEventRuns(db, {
+		organizationId: ctx.organizationId,
+		contactId: ctx.contactId,
+		automationId,
+		env: ctx.env ?? {},
+	});
 };
 
 export const automationControlHandlers: ActionRegistry = {

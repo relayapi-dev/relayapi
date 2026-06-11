@@ -31,6 +31,13 @@ import type {
 // Public types
 // ---------------------------------------------------------------------------
 
+// In-process sleep caps for typing indicators + in-message delay blocks. These
+// run inside the shared inbox queue consumer / cron drain, so we clamp each
+// individual sleep and the cumulative sleep per dispatch to keep one automation
+// from stalling the multi-tenant pipeline. Longer pauses must use a delay node.
+const MAX_SINGLE_SLEEP_MS = 10_000;
+const MAX_TOTAL_SLEEP_MS = 15_000;
+
 export type AutomationChannel =
 	| "instagram"
 	| "facebook"
@@ -177,10 +184,29 @@ export async function dispatchAutomationMessage(
 		};
 	}
 
+	// These dispatches run inside the shared relayapi-inbox queue consumer and
+	// the every-minute cron drain, both of which process jobs sequentially under
+	// a CPU/wall-clock budget. Any in-process sleep here blocks the whole shared
+	// pipeline, so clamp individual waits and cap the cumulative sleep per
+	// dispatch. Longer pauses must be modeled as a delay NODE (which parks the
+	// run with a scheduled resume_run job) rather than sleeping in the consumer.
+	let remainingSleepBudgetMs = MAX_TOTAL_SLEEP_MS;
+	const sleepClamped = async (requestedMs: number): Promise<void> => {
+		const ms = Math.min(
+			Math.max(0, Math.round(requestedMs)),
+			MAX_SINGLE_SLEEP_MS,
+			remainingSleepBudgetMs,
+		);
+		if (ms > 0) {
+			remainingSleepBudgetMs -= ms;
+			await wait(ms);
+		}
+	};
+
 	// Typing indicator / leading delay. We intentionally gate this behind a
 	// non-zero value so the common "no typing indicator" path stays instant.
 	if (input.typingDelayMs && input.typingDelayMs > 0) {
-		await wait(input.typingDelayMs);
+		await sleepClamped(input.typingDelayMs);
 	}
 
 	// Find the index of the LAST sendable (non-delay) block so we know where
@@ -190,10 +216,11 @@ export async function dispatchAutomationMessage(
 	for (let i = 0; i < blocks.length; i++) {
 		const block = blocks[i]!;
 
-		// In-message delay is a pause, not an outbound message.
+		// In-message delay is a pause, not an outbound message. Clamped to the
+		// per-dispatch sleep budget so a misconfigured (or malicious) delay block
+		// can't stall the shared inbox/cron pipeline.
 		if (block.type === "delay") {
-			const ms = Math.max(0, Math.round((block.seconds ?? 0) * 1000));
-			if (ms > 0) await wait(ms);
+			await sleepClamped((block.seconds ?? 0) * 1000);
 			sent.push({ blockId: block.id, skipped: true, reason: "delay_block" });
 			continue;
 		}

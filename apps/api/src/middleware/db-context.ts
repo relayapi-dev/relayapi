@@ -1,3 +1,4 @@
+import { createDb } from "@relayapi/db";
 import { createMiddleware } from "hono/factory";
 import { getRequestDb } from "../lib/request-db";
 import type { Env, Variables } from "../types";
@@ -15,6 +16,17 @@ export const dbContextMiddleware = createMiddleware<{
 	Bindings: Env;
 	Variables: Variables;
 }>(async (c, next) => {
-	c.set("db", getRequestDb(c.env));
+	const perf = c.get("perf");
+	if (perf && !(c.env as { TEST_DB?: unknown }).TEST_DB) {
+		// Perf instrumentation enabled — count every query this request issues
+		c.set(
+			"db",
+			createDb(c.env.HYPERDRIVE.connectionString, {
+				onQuery: (sql) => perf.recordQuery(sql),
+			}),
+		);
+	} else {
+		c.set("db", getRequestDb(c.env));
+	}
 	await next();
 });

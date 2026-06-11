@@ -1,8 +1,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { generateId, media } from "@relayapi/db";
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
-import { type S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { generateId, media, posts } from "@relayapi/db";
+import type { AwsClient } from "aws4fetch";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { ErrorResponse, IdParam, PaginationParams, FilterParams } from "../schemas/common";
 import {
 	MediaListResponse,
@@ -13,7 +12,13 @@ import {
 } from "../schemas/media";
 import type { Env, Variables } from "../types";
 import { applyWorkspaceScope } from "../lib/workspace-scope";
-import { getCachedR2Client, RELAY_R2_BUCKET } from "../lib/r2-presign";
+import {
+	getCachedR2Client,
+	presignR2Url,
+	presignViewUrlWithCache,
+	purgePresignedViewCache,
+	RELAY_MEDIA_HOST,
+} from "../lib/r2-presign";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -39,7 +44,7 @@ const ALLOWED_MIME_TYPES = new Set([
 	"application/pdf",
 ]);
 
-function requireS3Client(env: Env): S3Client {
+function requireR2Client(env: Env): AwsClient {
 	const client = getCachedR2Client(env);
 	if (!client) {
 		throw new Error("R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and CF_ACCOUNT_ID must be set");
@@ -47,12 +52,15 @@ function requireS3Client(env: Env): S3Client {
 	return client;
 }
 
-async function getPresignedViewUrl(s3: S3Client, storageKey: string): Promise<string> {
-	return getSignedUrl(
-		s3,
-		new GetObjectCommand({ Bucket: RELAY_R2_BUCKET, Key: storageKey }),
-		{ expiresIn: PRESIGN_GET_EXPIRES },
-	);
+// View URLs go through the shared KV presign cache (50-min TTL); on list
+// endpoints this replaces up to `limit` fresh SigV4 signing chains per request
+// with warm KV reads.
+async function getPresignedViewUrl(
+	env: Env,
+	client: AwsClient,
+	storageKey: string,
+): Promise<string> {
+	return presignViewUrlWithCache(env, client, storageKey, PRESIGN_GET_EXPIRES);
 }
 
 // --- Route definitions ---
@@ -84,7 +92,7 @@ const uploadMedia = createRoute({
 	tags: ["Media"],
 	summary: "Upload a file",
 	description:
-		"Upload a raw file body. Pass the filename as a query parameter and set the Content-Type header.",
+		"Upload a raw file body. Pass the filename as a query parameter and set the Content-Type header to the file's actual MIME type (e.g. image/png, video/mp4). The Content-Type is validated against an allowlist; application/octet-stream is rejected.",
 	security: [{ Bearer: [] }],
 	request: {
 		query: z.object({
@@ -184,6 +192,10 @@ const deleteMedia = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		409: {
+			description: "Media is still referenced by an active post",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -227,7 +239,7 @@ const confirmMedia = createRoute({
 
 app.openapi(listMedia, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit, workspace_id } = c.req.valid("query");
+	const { limit, workspace_id, cursor } = c.req.valid("query");
 	const db = c.get("db");
 
 	const conditions = [
@@ -238,6 +250,23 @@ app.openapi(listMedia, async (c) => {
 	if (workspace_id) {
 		// Show workspace-specific + shared org-level media
 		conditions.push(or(eq(media.workspaceId, workspace_id), isNull(media.workspaceId))!);
+	}
+	// Composite keyset on (created_at, id) — the full sort key. The cursor is the
+	// id of the last item from the previous page; we read that row's created_at
+	// as text (avoiding the JS-Date microsecond truncation that would skip rows)
+	// and bind it back with an explicit ::timestamptz cast. A plain created_at
+	// keyset would drop rows that share a created_at across the page boundary.
+	if (cursor) {
+		const [cursorRow] = await db
+			.select({ createdAt: sql<string>`${media.createdAt}::text` })
+			.from(media)
+			.where(eq(media.id, cursor))
+			.limit(1);
+		if (cursorRow) {
+			conditions.push(
+				sql`(${media.createdAt}, ${media.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
+			);
+		}
 	}
 
 	const records = await db
@@ -254,15 +283,15 @@ app.openapi(listMedia, async (c) => {
 		})
 		.from(media)
 		.where(and(...conditions))
-		.orderBy(desc(media.createdAt))
+		.orderBy(desc(media.createdAt), desc(media.id))
 		.limit(limit + 1);
 
 	const hasMore = records.length > limit;
 	const data = records.slice(0, limit);
 
-	const s3 = requireS3Client(c.env);
+	const client = requireR2Client(c.env);
 	const urls = await Promise.all(
-		data.map((r) => getPresignedViewUrl(s3, r.storageKey)),
+		data.map((r) => getPresignedViewUrl(c.env, client, r.storageKey)),
 	);
 
 	return c.json(
@@ -332,8 +361,11 @@ app.openapi(uploadMedia, async (c) => {
 		size = bufferedBody.byteLength;
 	}
 
-	// Sanitize filename: strip path separators, traversal sequences, and XSS-relevant chars
-	const safeFilename = filename.replace(/[/\\]/g, "_").replace(/\.\./g, "_").replace(/\0/g, "").replace(/[<>"'&]/g, "_");
+	// Sanitize filename: strip path separators, traversal sequences, and XSS-relevant chars.
+	// Also replace %, #, ? — these survive the storage key but break the canonical-URL
+	// round-trip (new URL() + decodeURIComponent) used to re-derive the key at presign/
+	// publish time, producing dead media URLs.
+	const safeFilename = filename.replace(/[/\\]/g, "_").replace(/\.\./g, "_").replace(/\0/g, "").replace(/[<>"'&]/g, "_").replace(/[%#?]/g, "_");
 	const storageKey = `${orgId}/${generateId("file_")}/${safeFilename}`;
 
 	await c.env.MEDIA_BUCKET.put(storageKey, body, {
@@ -402,20 +434,22 @@ app.openapi(presignMedia, async (c) => {
 		);
 	}
 
-	const safeFilename = filename.replace(/[/\\]/g, "_").replace(/\.\./g, "_").replace(/\0/g, "");
+	// Replace %, #, ? in addition to path separators / traversal / NUL: these survive
+	// into the storage key but break the canonical-URL round-trip (new URL() +
+	// decodeURIComponent) used to re-derive the key at presign/publish time.
+	const safeFilename = filename.replace(/[/\\]/g, "_").replace(/\.\./g, "_").replace(/\0/g, "").replace(/[%#?]/g, "_");
 	const storageKey = `${orgId}/${generateId("file_")}/${safeFilename}`;
 	const expiresIn = 3600; // 1 hour
 
-	const s3 = requireS3Client(c.env);
+	const client = requireR2Client(c.env);
 
-	const uploadUrl = await getSignedUrl(
-		s3,
-		new PutObjectCommand({
-			Bucket: RELAY_R2_BUCKET,
-			Key: storageKey,
-			ContentType: content_type,
-		}),
-		{ expiresIn },
+	const uploadUrl = await presignR2Url(
+		c.env,
+		client,
+		storageKey,
+		"PUT",
+		expiresIn,
+		content_type,
 	);
 
 	const url = `https://media.relayapi.dev/${storageKey}`;
@@ -460,8 +494,8 @@ app.openapi(getMedia, async (c) => {
 		);
 	}
 
-	const s3 = requireS3Client(c.env);
-	const url = await getPresignedViewUrl(s3, record.storageKey);
+	const client = requireR2Client(c.env);
+	const url = await getPresignedViewUrl(c.env, client, record.storageKey);
 
 	return c.json(
 		{
@@ -497,10 +531,42 @@ app.openapi(deleteMedia, async (c) => {
 		);
 	}
 
-	// Delete from R2 + DB in parallel (independent systems)
+	// Refuse to delete media still referenced by an active (non-terminal) post:
+	// otherwise the post fails only at publish time when the now-missing object
+	// 404s on the platform. Media URLs are persisted verbatim in
+	// platform_overrides._media[].url as `https://<host>/<storageKey>`.
+	const canonicalUrl = `https://${RELAY_MEDIA_HOST}/${record.storageKey}`;
+	const referencing = await db
+		.select({ id: posts.id })
+		.from(posts)
+		.where(
+			and(
+				eq(posts.organizationId, orgId),
+				inArray(posts.status, ["draft", "scheduled", "publishing"]),
+				sql`${posts.platformOverrides}::text LIKE ${`%${canonicalUrl}%`}`,
+			),
+		)
+		.limit(1);
+
+	if (referencing.length > 0) {
+		return c.json(
+			{
+				error: {
+					code: "MEDIA_IN_USE",
+					message:
+						"Media is still referenced by an active post. Remove it from the post before deleting.",
+				},
+			},
+			409,
+		);
+	}
+
+	// Delete from R2 + DB in parallel (independent systems), and purge any cached
+	// presigned GET URL so list responses stop returning a URL that now 404s.
 	await Promise.all([
 		c.env.MEDIA_BUCKET.delete(record.storageKey),
 		db.delete(media).where(eq(media.id, id)),
+		purgePresignedViewCache(c.env, record.storageKey, PRESIGN_GET_EXPIRES),
 	]);
 
 	return c.body(null, 204);
@@ -564,27 +630,46 @@ app.openapi(confirmMedia, async (c) => {
 		)
 		.returning();
 
-	if (!updated) {
+	// Idempotency: a retried confirm (after a lost response) finds no pending row
+	// because the first call already marked it ready. Return the already-ready
+	// record as success instead of a misleading 404.
+	let record = updated;
+	if (!record) {
+		const [existing] = await db
+			.select()
+			.from(media)
+			.where(
+				and(
+					eq(media.storageKey, storage_key),
+					eq(media.organizationId, orgId),
+					eq(media.status, "ready"),
+				),
+			)
+			.limit(1);
+		record = existing;
+	}
+
+	if (!record) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "No pending media record found for this storage key" } },
 			404,
 		);
 	}
 
-	const s3 = requireS3Client(c.env);
-	const viewUrl = await getPresignedViewUrl(s3, updated.storageKey);
+	const client = requireR2Client(c.env);
+	const viewUrl = await getPresignedViewUrl(c.env, client, record.storageKey);
 
 	return c.json(
 		{
-			id: updated.id,
+			id: record.id,
 			url: viewUrl,
-			filename: updated.filename,
-			mime_type: updated.mimeType,
-			size: updated.size,
-			width: updated.width ?? null,
-			height: updated.height ?? null,
-			duration: updated.duration ?? null,
-			created_at: updated.createdAt.toISOString(),
+			filename: record.filename,
+			mime_type: record.mimeType,
+			size: record.size,
+			width: record.width ?? null,
+			height: record.height ?? null,
+			duration: record.duration ?? null,
+			created_at: record.createdAt.toISOString(),
 		},
 		200,
 	);

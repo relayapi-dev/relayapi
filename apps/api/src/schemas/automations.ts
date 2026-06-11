@@ -60,6 +60,19 @@ export const AutomationResponseSchema = z.object({
   updated_at: z.string(),
 });
 
+/**
+ * List-item shape for GET /v1/automations. Deliberately OMITS the heavy
+ * `graph`, `template_config`, and `validation_errors` JSONB blobs — a 100-row
+ * page of full graphs can move multi-MB payloads through Hyperdrive and Worker
+ * memory when only name/status metadata is needed for listing. Fetch the full
+ * graph via GET /v1/automations/{id} (AutomationResponseSchema).
+ */
+export const AutomationListItemSchema = AutomationResponseSchema.omit({
+  graph: true,
+  template_config: true,
+  validation_errors: true,
+});
+
 export const AutomationEnrollSchema = z.object({
   contact_id: z.string(),
   entrypoint_id: z.string().optional(),
@@ -92,7 +105,26 @@ export const AutomationSimulateSchema = z.object({
 
 const PredicateSchema = z.object({
   field: z.string(),
-  op: z.string(),
+  // Constrain to the ops the evaluator actually handles
+  // (services/automations/filter-eval.ts). A free string silently evaluated to
+  // false (default branch), producing permanently-empty segments / always-false
+  // conditions with no feedback to the user on creation.
+  op: z.enum([
+    "eq",
+    "neq",
+    "contains",
+    "not_contains",
+    "starts_with",
+    "ends_with",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "in",
+    "not_in",
+    "exists",
+    "not_exists",
+  ]),
   value: z.any().optional(),
 });
 
@@ -103,4 +135,5 @@ export const FilterGroup = z.object({
 });
 
 export type AutomationResponse = z.infer<typeof AutomationResponseSchema>;
+export type AutomationListItem = z.infer<typeof AutomationListItemSchema>;
 export type AutomationValidation = z.infer<typeof AutomationValidationSchema>;

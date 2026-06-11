@@ -65,6 +65,7 @@ function writeCachedStatus(hasApiKey: boolean) {
 
 export function useDashboardApiKeyStatus(
 	enabled = true,
+	orgId?: string | null,
 ): DashboardApiKeyStatusValue {
 	const cachedStatus = readCachedStatus();
 	const [hasApiKey, setHasApiKey] = useState<boolean | null>(cachedStatus);
@@ -104,13 +105,20 @@ export function useDashboardApiKeyStatus(
 		if (cachedStatus !== null) {
 			setHasApiKey(cachedStatus);
 			setLoading(false);
+			// Warm-cache refresh via the shared dashboard bootstrap so the sidebar's
+			// single bootstrap call serves key status too (org-keyed for cache reuse).
 			return scheduleIdleTask(() => {
-				void fetchStatus({ background: true });
+				void fetchDashboardBootstrap({ orgId }).then((data) => {
+					if (data) {
+						setHasApiKey(data.has_api_key);
+						writeCachedStatus(data.has_api_key);
+					}
+				});
 			}, 1500);
 		}
 
 		return scheduleAfterPaint(() => {
-			void fetchDashboardBootstrap().then((data) => {
+			void fetchDashboardBootstrap({ orgId }).then((data) => {
 				if (data) {
 					setHasApiKey(data.has_api_key);
 					writeCachedStatus(data.has_api_key);
@@ -120,7 +128,7 @@ export function useDashboardApiKeyStatus(
 				}
 			});
 		});
-	}, [cachedStatus, enabled, fetchStatus]);
+	}, [cachedStatus, enabled, fetchStatus, orgId]);
 
 	return {
 		hasApiKey,

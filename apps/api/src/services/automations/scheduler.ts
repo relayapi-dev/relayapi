@@ -18,13 +18,21 @@ import {
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Env } from "../../types";
 import { matchAndEnrollOrBinding } from "./binding-router";
-import { runLoop } from "./runner";
+import { incrementCounter, runLoop, updateRunOptimistic } from "./runner";
 import type { InboundEvent } from "./trigger-matcher";
 
 type Db = Database;
 
-const DEFAULT_BATCH_SIZE = 50;
+// Claim fewer jobs per tick so a single heavy job (a resume_run that walks a
+// deep graph, or a scheduled_trigger enrollment slice) is less likely to blow
+// the cron CPU/wall budget and leave the rest of the batch stuck in
+// 'processing' until the stale reclaim. scheduled_trigger now self-paginates
+// (SCHEDULE_ENROLL_BATCH) so a single schedule no longer consumes the tick.
+const DEFAULT_BATCH_SIZE = 25;
 const DEFAULT_STALE_TIMEOUT_MINUTES = 5;
+// After this many stale-reclaim cycles a job is marked 'failed' rather than
+// re-queued, so a job that repeatedly kills its worker can't retry forever.
+const MAX_JOB_ATTEMPTS = 5;
 
 export type ProcessScheduledJobsOptions = {
 	batchSize?: number;
@@ -48,12 +56,23 @@ export async function processScheduledJobs(
 	const batchSize = opts.batchSize ?? DEFAULT_BATCH_SIZE;
 	const staleMin = opts.staleTimeoutMinutes ?? DEFAULT_STALE_TIMEOUT_MINUTES;
 
-	// 1. Reclaim stale 'processing' rows.
+	// 1. Reclaim stale 'processing' rows. Cap retries: a job that consistently
+	//    kills its worker before the failed-mark (CPU/wall limit, OOM) would
+	//    otherwise be re-dispatched forever, re-executing side effects each time.
+	//    Once attempts reach the cap, mark it 'failed' instead of re-queuing.
 	await db.execute(sql`
 		UPDATE automation_scheduled_jobs
-		   SET status = 'pending',
+		   SET status = CASE
+		                  WHEN attempts + 1 >= ${MAX_JOB_ATTEMPTS} THEN 'failed'
+		                  ELSE 'pending'
+		                END,
 		       attempts = attempts + 1,
-		       claimed_at = NULL
+		       claimed_at = NULL,
+		       error = CASE
+		                  WHEN attempts + 1 >= ${MAX_JOB_ATTEMPTS}
+		                    THEN 'max attempts exceeded after stale reclaim'
+		                  ELSE error
+		                END
 		 WHERE status = 'processing'
 		   AND claimed_at < NOW() - make_interval(mins => ${staleMin})
 	`);
@@ -136,6 +155,74 @@ async function dispatchJob(
 	switch (job.job_type) {
 		case "resume_run": {
 			if (!job.run_id) return { failed: true, error: "missing run_id" };
+			// A delay node parks the run with waitingFor='delay' and leaves
+			// currentNodeKey pointing at the delay node itself. If we call runLoop
+			// directly it would re-dispatch the delay handler, which recomputes a
+			// fresh resume_at and re-parks the run forever. So advance the run
+			// through the delay node's outgoing edge BEFORE re-entering runLoop —
+			// mirroring the input_timeout path. Guard on updatedAt so a concurrent
+			// worker doesn't double-advance.
+			const delayRun = await db.query.automationRuns.findFirst({
+				where: eq(automationRuns.id, job.run_id),
+			});
+			if (!delayRun) return "done"; // run gone — nothing to do
+			if (
+				delayRun.status === "waiting" &&
+				delayRun.waitingFor === "delay" &&
+				(!delayRun.waitingUntil || delayRun.waitingUntil <= new Date())
+			) {
+				const auto = await db.query.automations.findFirst({
+					where: (t, { eq: eqOp }) => eqOp(t.id, delayRun.automationId),
+				});
+				const graph = (auto?.graph ?? { edges: [] }) as {
+					edges?: Array<{
+						from_node: string;
+						from_port: string;
+						to_node: string;
+						to_port: string;
+					}>;
+				};
+				const edges = graph.edges ?? [];
+				const nextEdge = delayRun.currentNodeKey
+					? edges.find(
+							(e) =>
+								e.from_node === delayRun.currentNodeKey &&
+								e.from_port === "next",
+						)
+					: undefined;
+				const advanced = await updateRunOptimistic(
+					db,
+					delayRun.id,
+					delayRun.updatedAt,
+					nextEdge
+						? {
+								status: "active",
+								currentNodeKey: nextEdge.to_node,
+								currentPortKey: nextEdge.to_port,
+								waitingFor: null,
+								waitingUntil: null,
+							}
+						: {
+								// Delay node has no outgoing edge — graceful completion,
+								// matching runLoop's no-outgoing-edge behavior.
+								status: "completed",
+								exitReason: "completed",
+								completedAt: new Date(),
+								waitingFor: null,
+								waitingUntil: null,
+							},
+				);
+				if (!advanced) {
+					// Another worker advanced this run first — no-op.
+					return "done";
+				}
+				if (!nextEdge) {
+					// Completed via the no-outgoing-edge path — mirror runLoop and
+					// bump the completion counter (it would otherwise undercount).
+					await incrementCounter(db, delayRun.automationId, "total_completed");
+					return "done"; // completed, no further work
+				}
+			}
 			const result = await runLoop(db, job.run_id, env);
 			if (result.status === "failed") {
 				return {
@@ -160,9 +247,26 @@ async function dispatchJob(
 				// Wait window extended — not our turn.
 				return "done";
 			}
-			// Try to advance via the `timeout` port from the current node.
+			// Bind the job to the node that armed it. A run can answer one input,
+			// advance to a SECOND wait (another input with no timeout, or a buttons
+			// message), and this stale job's deadline can then elapse. Only act when
+			// the run is still parked on the same node that scheduled this timeout.
+			const timeoutPayload = (job.payload ?? {}) as Record<string, unknown>;
+			const scheduledNodeKey =
+				typeof timeoutPayload._timeout_node_key === "string"
+					? timeoutPayload._timeout_node_key
+					: null;
+			if (scheduledNodeKey && run.currentNodeKey !== scheduledNodeKey) {
+				// The run has advanced past the node that armed this timeout — stale
+				// job, no-op.
+				return "done";
+			}
+			// Try to advance via the timeout port from the current node. Message
+			// nodes expose this port as `no_response`; input nodes as `timeout`
+			// (see ports.ts). Accept either so operator-wired no-response branches
+			// off a message node actually fire instead of the run being killed.
 			const auto = await db.query.automations.findFirst({
-				where: (t, { eq }) => eq(t.id, run.automationId),
+				where: (t, { eq: eqOp }) => eqOp(t.id, run.automationId),
 			});
 			const graph = (auto?.graph ?? { edges: [] }) as {
 				edges?: Array<{
@@ -176,34 +280,34 @@ async function dispatchJob(
 			const timeoutEdge = run.currentNodeKey
 				? edges.find(
 						(e) =>
-							e.from_node === run.currentNodeKey && e.from_port === "timeout",
+							e.from_node === run.currentNodeKey &&
+							(e.from_port === "timeout" || e.from_port === "no_response"),
 					)
 				: undefined;
 			if (timeoutEdge) {
-				await db
-					.update(automationRuns)
-					.set({
-						status: "active",
-						currentNodeKey: timeoutEdge.to_node,
-						currentPortKey: timeoutEdge.to_port,
-						waitingFor: null,
-						waitingUntil: null,
-						updatedAt: new Date(),
-					})
-					.where(eq(automationRuns.id, run.id));
+				const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+					status: "active",
+					currentNodeKey: timeoutEdge.to_node,
+					currentPortKey: timeoutEdge.to_port,
+					waitingFor: null,
+					waitingUntil: null,
+				});
+				// A concurrent reply (input/interactive resume) won the race and
+				// advanced the run already — don't re-enter runLoop on a snapshot we
+				// no longer own.
+				if (!ok) return "done";
 				await runLoop(db, run.id, env);
 			} else {
-				await db
-					.update(automationRuns)
-					.set({
-						status: "exited",
-						exitReason: "input_timeout",
-						completedAt: new Date(),
-						waitingFor: null,
-						waitingUntil: null,
-						updatedAt: new Date(),
-					})
-					.where(eq(automationRuns.id, run.id));
+				const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+					status: "exited",
+					exitReason: "input_timeout",
+					completedAt: new Date(),
+					waitingFor: null,
+					waitingUntil: null,
+				});
+				if (ok) {
+					await incrementCounter(db, run.automationId, "total_exited");
+				}
 			}
 			return "done";
 		}
@@ -212,7 +316,12 @@ async function dispatchJob(
 			if (!job.entrypoint_id) {
 				return { failed: true, error: "missing entrypoint_id" };
 			}
-			return await dispatchScheduledTrigger(db, env, job.entrypoint_id);
+			return await dispatchScheduledTrigger(
+				db,
+				env,
+				job.entrypoint_id,
+				job.payload,
+			);
 		}
 
 		case "webhook_reception_failure": {
@@ -280,10 +389,18 @@ export async function processAutomationInputTimeouts(
  *   5. If enrollment throws, mark the current job failed but the next-run
  *      job stays queued, so the schedule survives.
  */
+// Max contacts enrolled per scheduled_trigger tick. A schedule with a large
+// segment can match thousands of contacts; enrolling all of them serially
+// (each running runLoop) inside one cron tick can blow the CPU/wall budget and
+// starve every other org's jobs. We process this many per tick and re-enqueue a
+// continuation job (due immediately) carrying the cursor offset for the rest.
+const SCHEDULE_ENROLL_BATCH = 200;
+
 async function dispatchScheduledTrigger(
 	db: Db,
 	env: Record<string, unknown>,
 	entrypointId: string,
+	jobPayload: unknown,
 ): Promise<DispatchOutcome> {
 	const ep = await db.query.automationEntrypoints.findFirst({
 		where: eq(automationEntrypoints.id, entrypointId),
@@ -302,16 +419,29 @@ async function dispatchScheduledTrigger(
 		return "done";
 	}
 
+	// A continuation tick carries a cursor offset in its payload. Such ticks must
+	// NOT re-enqueue the next cron occurrence (the originating tick already did),
+	// otherwise each continuation would double-arm the schedule.
+	const payload = (jobPayload ?? {}) as Record<string, unknown>;
+	const cursorOffset =
+		typeof payload._cursor_offset === "number" && payload._cursor_offset > 0
+			? payload._cursor_offset
+			: 0;
+	const isContinuation = cursorOffset > 0;
+
 	// 1. Compute and enqueue the next firing BEFORE any other work. This keeps
-	//    the schedule alive across transient enrollment failures.
-	const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
-	const nextRun = cfg.cron
-		? computeNextCronRun(cfg.cron, new Date(), cfg.timezone)
-		: null;
-	if (!nextRun) {
-		return { failed: true, error: "unsupported cron pattern" };
+	//    the schedule alive across transient enrollment failures. Skip on
+	//    continuation ticks.
+	if (!isContinuation) {
+		const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
+		const nextRun = cfg.cron
+			? computeNextCronRun(cfg.cron, new Date(), cfg.timezone)
+			: null;
+		if (!nextRun) {
+			return { failed: true, error: "unsupported cron pattern" };
+		}
+		await insertNextScheduledJobIfNotExists(db, ep.id, nextRun, auto.id);
 	}
-	await insertNextScheduledJobIfNotExists(db, ep.id, nextRun, auto.id);
 
 	// 2. Require a filter — enrolling an entire org is never intended.
 	const filters = (ep.filters ?? null) as Record<string, unknown> | null;
@@ -335,12 +465,19 @@ async function dispatchScheduledTrigger(
 		};
 	}
 
-	// 3. Fire enroll-or-binding for each candidate. Individual contact failures
-	//    never block the remaining contacts; a catastrophic error (thrown out
-	//    of the loop itself) is caught here so the next-run job we already
-	//    queued above survives.
+	// Stable order so the cursor offset paginates deterministically across
+	// continuation ticks (enumeration returns an unordered Set).
+	candidateIds.sort();
+	const batch = candidateIds.slice(
+		cursorOffset,
+		cursorOffset + SCHEDULE_ENROLL_BATCH,
+	);
+
+	// 3. Fire enroll-or-binding for each candidate in this batch. Individual
+	//    contact failures never block the rest; a catastrophic error (thrown out
+	//    of the loop itself) is caught here so the next-run job survives.
 	try {
-		for (const contactId of candidateIds) {
+		for (const contactId of batch) {
 			const event: InboundEvent = {
 				kind: "schedule" as never,
 				channel: auto.channel as InboundEvent["channel"],
@@ -371,6 +508,20 @@ async function dispatchScheduledTrigger(
 			failed: true,
 			error: `scheduled_trigger enrollment loop failed: ${err instanceof Error ? err.message : String(err)}`,
 		};
+	}
+
+	// More candidates remain — re-enqueue a continuation job (due now) for the
+	// next slice so this tick stays bounded.
+	const nextOffset = cursorOffset + batch.length;
+	if (nextOffset < candidateIds.length && batch.length > 0) {
+		await db.insert(automationScheduledJobs).values({
+			jobType: "scheduled_trigger",
+			automationId: auto.id,
+			entrypointId: ep.id,
+			runAt: new Date(),
+			status: "pending",
+			payload: { _cursor_offset: nextOffset },
+		});
 	}
 	return "done";
 }

@@ -1,6 +1,7 @@
 import { swaggerUI } from "@hono/swagger-ui";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
+import { perfLogMiddleware, timed } from "./lib/perf";
 import { authMiddleware } from "./middleware/auth";
 import { bodyCacheMiddleware } from "./middleware/body-cache";
 import { dbContextMiddleware } from "./middleware/db-context";
@@ -89,6 +90,10 @@ app.onError((err, c) => {
 	);
 });
 
+// Perf instrumentation (no-op unless PERF_LOGS=1) — first, so `total` covers
+// the entire middleware pipeline + handler
+app.use("*", perfLogMiddleware);
+
 // CORS — public API, allow all origins (security is via Bearer token, not origin)
 app.use(
 	"*",
@@ -137,26 +142,26 @@ app.route("/v1/ws", websocketUpgrade);
 app.route("/v1/webhooks/automation-trigger", automationWebhookTrigger);
 
 // Auth middleware for all /v1 routes (except /v1/ws + /v1/webhooks/automation-trigger which handle their own auth above)
-app.use("/v1/*", authMiddleware);
+app.use("/v1/*", timed("auth", authMiddleware));
 
 // Request-scoped Drizzle instance — all downstream middleware and route handlers
 // read the shared instance via c.get("db") instead of calling createDb() themselves.
 app.use("/v1/*", dbContextMiddleware);
 
 // Rate limiting (runs after auth sets the variables)
-app.use("/v1/*", rateLimitMiddleware);
+app.use("/v1/*", timed("ratelimit", rateLimitMiddleware));
 
 // Permission enforcement — read-only keys and workspace scoping
-app.use("/v1/*", readOnlyMiddleware);
+app.use("/v1/*", timed("readonly", readOnlyMiddleware));
 
 // Cache parsed request body once for all downstream middleware (avoids 2-3x re-parsing).
 // MUST run before workspaceScopeMiddleware which reads parsedBody for scope validation.
-app.use("/v1/*", bodyCacheMiddleware);
+app.use("/v1/*", timed("bodycache", bodyCacheMiddleware));
 
 // Validate that any referenced workspace_id belongs to the authenticated organization.
-app.use("/v1/*", workspaceValidationMiddleware);
+app.use("/v1/*", timed("wsval", workspaceValidationMiddleware));
 
-app.use("/v1/*", workspaceScopeMiddleware);
+app.use("/v1/*", timed("wsscope", workspaceScopeMiddleware));
 
 // WebSocket ticket — issues short-lived tokens for the public /v1/ws upgrade
 app.route("/v1/ws-ticket", websocketTicket);
@@ -190,7 +195,7 @@ app.use("/v1/inbox/summarize", aiEnabledMiddleware);
 app.use("/v1/inbox/priorities", aiEnabledMiddleware);
 
 // Usage tracking (runs after auth + rate limit + feature gate)
-app.use("/v1/*", usageTrackingMiddleware);
+app.use("/v1/*", timed("usage", usageTrackingMiddleware));
 
 // Mount versioned routes (flat — avoids 3-level nesting that breaks OpenAPI spec generation)
 app.route("/v1/posts", posts);
@@ -213,8 +218,10 @@ app.route("/v1/inbox", inbox);
 app.route("/v1/inbox", inboxAi);
 app.route("/v1/inbox", inboxFeed);
 app.route("/v1/reddit", reddit);
-app.route("/v1/whatsapp", whatsapp);
+// Mount the more-specific provisioning router first so its GET /phone-numbers
+// handler is matched before the broader Cloud-API GET /v1/whatsapp/phone-numbers.
 app.route("/v1/whatsapp/phone-numbers", whatsappPhoneProvisioning);
+app.route("/v1/whatsapp", whatsapp);
 app.route("/v1/contacts", contactsRouter);
 app.route("/v1/custom-fields", customFields);
 app.route("/v1/broadcasts", broadcastsRouter);

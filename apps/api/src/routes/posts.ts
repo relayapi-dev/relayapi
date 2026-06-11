@@ -27,7 +27,6 @@ import {
 	assertWorkspaceScope,
 } from "../lib/workspace-scope";
 import { incrementUsage } from "../middleware/usage-tracking";
-import type { PublishRequest } from "../publishers";
 import { addToPlaylist } from "../publishers/youtube";
 import type { Platform } from "../schemas/common";
 import {
@@ -49,10 +48,6 @@ import {
 	UpdatePostBody,
 } from "../schemas/posts";
 import {
-	type PublishTargetInput,
-	publishToTargets,
-} from "../services/publisher-runner";
-import {
 	computeNextRecycleAt,
 	validateRecyclingConfig,
 } from "../services/recycling-validator";
@@ -63,6 +58,7 @@ import { refreshTokenIfNeeded } from "../services/token-refresh";
 import { dispatchWebhookEvent } from "../services/webhook-delivery";
 import type { Env, Variables } from "../types";
 import { PRICING } from "../types";
+import { resolveBillingPeriod } from "../middleware/usage-tracking";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -73,6 +69,63 @@ async function presignMediaUrls(
 	mediaArr: Array<{ url: string; type?: string }> | null,
 ): Promise<Array<{ url: string; type?: string }> | null> {
 	return presignRelayMediaUrls(env, mediaArr, PRESIGN_GET_EXPIRES);
+}
+
+// Matches an explicit UTC offset or "Z" at the end of an ISO datetime string.
+const ISO_HAS_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * Resolve a scheduled-at wall-clock string to a UTC Date, honouring the post's IANA
+ * timezone. `new Date("2026-06-15T10:00:00")` on Workers parses an offset-less string
+ * as UTC, so "10:00 America/New_York" would publish 4-5h early. When the string carries
+ * no explicit offset and a timezone is provided, interpret the wall-clock time AS LOCAL
+ * to that timezone and convert to the correct UTC instant. Strings that already include
+ * an offset (or "Z") are respected as-is. Uses Intl to compute the zone offset (DST-aware),
+ * matching the approach in slot-finder.ts.
+ */
+function resolveScheduledAt(value: string, timezone?: string | null): Date {
+	if (!timezone || ISO_HAS_OFFSET.test(value)) {
+		return new Date(value);
+	}
+	// Parse the wall-clock components by treating the input as if it were UTC, then
+	// shift by the target zone's offset at that instant.
+	const asUtc = new Date(`${value}Z`);
+	if (Number.isNaN(asUtc.getTime())) {
+		// Fall back to native parsing so callers still get an (Invalid) Date rather than
+		// throwing here; upstream validation handles malformed input.
+		return new Date(value);
+	}
+	const offsetMinutes = tzOffsetMinutes(asUtc, timezone);
+	return new Date(asUtc.getTime() - offsetMinutes * 60_000);
+}
+
+/** UTC offset (minutes east of UTC) for an IANA timezone at a given instant. */
+function tzOffsetMinutes(at: Date, timeZone: string): number {
+	const parts = new Intl.DateTimeFormat("en-US", {
+		timeZone,
+		hourCycle: "h23",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+	}).formatToParts(at);
+	const get = (type: string) =>
+		Number(parts.find((p) => p.type === type)?.value ?? "0");
+	const asLocalUtc = Date.UTC(
+		get("year"),
+		get("month") - 1,
+		get("day"),
+		get("hour"),
+		get("minute"),
+		get("second"),
+	);
+	let offset = Math.round((asLocalUtc - at.getTime()) / 60_000);
+	// Normalize across the day boundary.
+	if (offset > 720) offset -= 1440;
+	if (offset < -720) offset += 1440;
+	return offset;
 }
 
 // --- Route definitions ---
@@ -586,6 +639,22 @@ app.openapi(listPosts, async (c) => {
 	const includeTargets = includeSet.has("targets");
 	const includeMedia = includeSet.has("media");
 
+	// Kick off the external-posts fetch concurrently with the internal query — it
+	// depends only on request params, so awaiting it after the internal round trips
+	// adds an avoidable serial DB RTT to every include_external=true request.
+	const externalPromise =
+		include_external === "true" && (!status || status === "published")
+			? fetchExternalPostItems(db, orgId, c, {
+					workspace_id,
+					account_id,
+					account_ids: accountIdList,
+					from,
+					to,
+					limit,
+					cursor,
+				})
+			: null;
+
 	const conditions = [eq(posts.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, posts.workspaceId);
 
@@ -790,16 +859,8 @@ app.openapi(listPosts, async (c) => {
 		);
 
 		// Merge external posts if requested
-		if (include_external === "true" && (!status || status === "published")) {
-			const ext = await fetchExternalPostItems(db, orgId, c, {
-				workspace_id,
-				account_id,
-				account_ids: accountIdList,
-				from,
-				to,
-				limit,
-				cursor,
-			});
+		if (externalPromise) {
+			const ext = await externalPromise;
 			const moreExternal = ext.length > limit;
 			const extPage = ext.slice(0, limit);
 			const merged = mergeByPublishedAt(internalItems, extPage, limit);
@@ -881,15 +942,8 @@ app.openapi(listPosts, async (c) => {
 	);
 
 	// Merge external posts if requested
-	if (include_external === "true" && (!status || status === "published")) {
-		const ext = await fetchExternalPostItems(db, orgId, c, {
-			workspace_id,
-			account_id,
-			from,
-			to,
-			limit,
-			cursor,
-		});
+	if (externalPromise) {
+		const ext = await externalPromise;
 		const moreExternal = ext.length > limit;
 		const extPage = ext.slice(0, limit);
 		const merged = mergeByPublishedAt(leanItems, extPage, limit);
@@ -949,6 +1003,17 @@ async function fetchExternalPostItems(
 		);
 	} else if (filters.account_id) {
 		conditions.push(eq(externalPosts.socialAccountId, filters.account_id));
+	} else if (filters.workspace_id) {
+		// Honour the workspace_id filter for external posts (it was previously ignored,
+		// so a filtered timeline leaked external posts from every workspace the key can
+		// access). OR the account's workspace to cover external_posts rows whose own
+		// workspaceId was nulled by ON DELETE SET NULL — mirrors the internal-posts query.
+		conditions.push(
+			or(
+				eq(externalPosts.workspaceId, filters.workspace_id),
+				eq(socialAccounts.workspaceId, filters.workspace_id),
+			)!,
+		);
 	}
 	if (filters.from) {
 		conditions.push(gte(externalPosts.publishedAt, new Date(filters.from)));
@@ -1068,7 +1133,7 @@ function formatLogEntry(t: {
 
 app.openapi(listAllPostLogs, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit, from, to } = c.req.valid("query");
+	const { limit, from, to, cursor } = c.req.valid("query");
 	const db = c.get("db");
 
 	// Single JOIN query with DB-level filtering and pagination
@@ -1076,6 +1141,15 @@ app.openapi(listAllPostLogs, async (c) => {
 	applyWorkspaceScope(c, conditions, posts.workspaceId);
 	if (from) conditions.push(gte(postTargets.updatedAt, new Date(from)));
 	if (to) conditions.push(lte(postTargets.updatedAt, new Date(to)));
+	// Apply the incoming cursor as a keyset on updatedAt (the ORDER BY key). Previously
+	// the cursor was ignored, so following next_cursor returned page 1 forever and
+	// auto-paginating clients looped. The cursor is the previous page's last updatedAt.
+	if (cursor) {
+		const cursorDate = new Date(cursor);
+		if (!Number.isNaN(cursorDate.getTime())) {
+			conditions.push(lt(postTargets.updatedAt, cursorDate));
+		}
+	}
 
 	const rows = await db
 		.select({
@@ -1104,7 +1178,11 @@ app.openapi(listAllPostLogs, async (c) => {
 	return c.json(
 		{
 			data: data.map(formatLogEntry),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			// Emit the last row's updatedAt as the keyset cursor (matches the ORDER BY key);
+			// the previous id-based cursor could never be applied as a keyset on updatedAt.
+			next_cursor: hasMore
+				? (data.at(-1)?.updatedAt.toISOString() ?? null)
+				: null,
 			has_more: hasMore,
 		},
 		200,
@@ -1159,7 +1237,7 @@ app.openapi(createPostRoute, async (c) => {
 		}
 		scheduledAt = new Date(slot.slot_at);
 	} else {
-		scheduledAt = new Date(body.scheduled_at);
+		scheduledAt = resolveScheduledAt(body.scheduled_at, body.timezone);
 	}
 
 	const postStatus: "draft" | "scheduled" | "publishing" | "failed" = isDraft
@@ -1359,11 +1437,14 @@ app.openapi(createPostRoute, async (c) => {
 				);
 			}
 
-			// Atomically increment usage counter (skip for drafts)
+			// Atomically increment usage counter (skip for drafts). Use the same
+			// billing-period resolution as the usage-tracking middleware so the
+			// postsCount and apiCallsCount writes land on one usage_records row
+			// (the upsert target is organizationId + periodStart) instead of
+			// splitting into a calendar-month row and a Stripe-period row.
 			if (!isDraft) {
-				const now = new Date();
-				const cycleStart = new Date(now.getFullYear(), now.getMonth(), 1);
-				const cycleEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+				const { periodStart: cycleStart, periodEnd: cycleEnd } =
+					resolveBillingPeriod(c.get("periodStart"), c.get("periodEnd"));
 
 				await tx
 					.insert(usageRecords)
@@ -1379,7 +1460,9 @@ app.openapi(createPostRoute, async (c) => {
 						set: {
 							postsCount: sql`${usageRecords.postsCount} + 1`,
 							overagePosts: sql`GREATEST(0, ${usageRecords.postsCount} + 1 - ${usageRecords.postsIncluded})`,
-							overageCostCents: sql`GREATEST(0, ${usageRecords.postsCount} + 1 - ${usageRecords.postsIncluded}) * ${PRICING.pricePerThousandCallsCents}`,
+							// pricePerThousandCallsCents is per 1000 calls — divide by 1000 so each
+							// overage post records its actual cost (~0.1c) instead of 100c (1000x).
+							overageCostCents: sql`GREATEST(0, ${usageRecords.postsCount} + 1 - ${usageRecords.postsIncluded}) * ${PRICING.pricePerThousandCallsCents} / 1000.0`,
 							updatedAt: new Date(),
 						},
 					});
@@ -1650,35 +1733,27 @@ app.openapi(getPost, async (c) => {
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
 
-	const [post] = await db
-		.select({
-			id: posts.id,
-			status: posts.status,
-			content: posts.content,
-			notes: posts.notes,
-			scheduledAt: posts.scheduledAt,
-			platformOverrides: posts.platformOverrides,
-			timezone: posts.timezone,
-			recycledFromId: posts.recycledFromId,
-			workspaceId: posts.workspaceId,
-			createdAt: posts.createdAt,
-			updatedAt: posts.updatedAt,
-		})
-		.from(posts)
-		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
-		.limit(1);
-
-	if (!post) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Post not found" } },
-			404,
-		);
-	}
-
-	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied as never;
-
-	const [targets, [recyclingConfig]] = await Promise.all([
+	// All three queries are keyed on the path id, so they run in one parallel
+	// round trip instead of post-then-children (results are discarded unless
+	// the post exists, belongs to the org, and passes workspace scope).
+	const [[post], targets, [recyclingConfig]] = await Promise.all([
+		db
+			.select({
+				id: posts.id,
+				status: posts.status,
+				content: posts.content,
+				notes: posts.notes,
+				scheduledAt: posts.scheduledAt,
+				platformOverrides: posts.platformOverrides,
+				timezone: posts.timezone,
+				recycledFromId: posts.recycledFromId,
+				workspaceId: posts.workspaceId,
+				createdAt: posts.createdAt,
+				updatedAt: posts.updatedAt,
+			})
+			.from(posts)
+			.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
+			.limit(1),
 		db
 			.select({
 				id: postTargets.id,
@@ -1699,13 +1774,23 @@ app.openapi(getPost, async (c) => {
 				socialAccounts,
 				eq(postTargets.socialAccountId, socialAccounts.id),
 			)
-			.where(eq(postTargets.postId, post.id)),
+			.where(eq(postTargets.postId, id)),
 		db
 			.select()
 			.from(postRecyclingConfigs)
-			.where(eq(postRecyclingConfigs.sourcePostId, post.id))
+			.where(eq(postRecyclingConfigs.sourcePostId, id))
 			.limit(1),
 	]);
+
+	if (!post) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
+	}
+
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
 
 	const overrides = post.platformOverrides as Record<string, any> | null;
 	const rawMedia = overrides?._media
@@ -1808,15 +1893,43 @@ app.openapi(updatePostRoute, async (c) => {
 			Object.keys(newOverrides).length > 0 ? newOverrides : null;
 	}
 
+	const effectiveTimezone = body.timezone ?? post.timezone ?? null;
 	if (body.scheduled_at !== undefined) {
 		if (body.scheduled_at === "draft") {
 			updates.status = "draft";
 			updates.scheduledAt = null;
 		} else if (body.scheduled_at === "now") {
 			updates.status = "publishing";
+		} else if (body.scheduled_at === "auto") {
+			// Auto-schedule to the best available slot, mirroring the create handler.
+			// Previously "auto" fell into the else branch → new Date("auto") (Invalid Date)
+			// → 500 when serialized.
+			const { findBestSlot } = await import("../services/slot-finder");
+			const slot = await findBestSlot(c.env, orgId, {
+				after: new Date(),
+				strategy: "smart",
+			});
+			if (!slot) {
+				return c.json(
+					{
+						error: {
+							code: "NO_SLOT_AVAILABLE",
+							message:
+								"No available slot found. Configure queue slots or try a specific time.",
+						},
+					},
+					409 as never,
+				);
+			}
+			updates.status = "scheduled";
+			updates.scheduledAt = new Date(slot.slot_at);
 		} else {
 			updates.status = "scheduled";
-			updates.scheduledAt = new Date(body.scheduled_at);
+			// Honour the post's IANA timezone for offset-less wall-clock times.
+			updates.scheduledAt = resolveScheduledAt(
+				body.scheduled_at,
+				effectiveTimezone,
+			);
 		}
 	}
 
@@ -1829,14 +1942,30 @@ app.openapi(updatePostRoute, async (c) => {
 
 	// Handle targets update
 	if (body.targets !== undefined && body.targets.length > 0) {
-		const { resolved } = await resolveTargets(
+		const { resolved, failed } = await resolveTargets(
 			db,
 			orgId,
 			body.targets,
 			c.get("workspaceScope"),
 		);
 
-		await db.delete(postTargets).where(eq(postTargets.postId, id));
+		// If NOTHING resolved, do NOT delete the existing targets — wiping them would
+		// leave the post with zero targets (it would publish to nothing, or get stuck).
+		// Reject with NO_VALID_TARGETS, mirroring createThread.
+		if (resolved.length === 0) {
+			return c.json(
+				{
+					error: {
+						code: "NO_VALID_TARGETS",
+						message:
+							failed.length > 0
+								? failed.map((f) => `${f.key}: ${f.error.message}`).join("; ")
+								: "No valid targets resolved.",
+					},
+				},
+				400,
+			);
+		}
 
 		const targetStatus =
 			updated.status === "draft"
@@ -1853,19 +1982,56 @@ app.openapi(updatePostRoute, async (c) => {
 				status: targetStatus as any,
 			})),
 		);
-		if (targetValues.length > 0) {
-			await db.insert(postTargets).values(targetValues);
+
+		// Delete + re-insert in one transaction so a failure between the two statements
+		// cannot leave the post target-less.
+		await db.transaction(async (tx) => {
+			await tx.delete(postTargets).where(eq(postTargets.postId, id));
+			if (targetValues.length > 0) {
+				await tx.insert(postTargets).values(targetValues);
+			}
+		});
+	}
+
+	// Re-anchor pending cross-post actions when the schedule moves. Their executeAt is
+	// computed from the post's scheduledAt at creation; if the post is rescheduled (or
+	// moved to "now"/"draft") the actions otherwise fire at the stale time or fail
+	// terminally ("No published post target found") before the post ever publishes.
+	if (body.scheduled_at !== undefined && body.scheduled_at !== "draft") {
+		// Anchor = the post's new publish time. For "now"/"publishing" use now().
+		const anchor =
+			updates.status === "publishing"
+				? new Date()
+				: (updates.scheduledAt as Date | null | undefined) ?? null;
+		if (anchor) {
+			c.executionCtx.waitUntil(
+				db
+					.update(crossPostActions)
+					.set({
+						executeAt: sql`${anchor.toISOString()}::timestamptz + (${crossPostActions.delayMinutes} * interval '1 minute')`,
+					})
+					.where(
+						and(
+							eq(crossPostActions.postId, id),
+							eq(crossPostActions.status, "pending"),
+						),
+					),
+			);
 		}
 	}
 
-	// Enqueue for publishing if status changed to "publishing"
+	// Enqueue for publishing if status changed to "publishing".
+	// usage_tracked:true — usageTrackingMiddleware already bills this mutating PATCH
+	// request 1 unit, so the queue consumer must NOT increment again. The old
+	// usage_tracked:false caused double-billing on success and re-billing on every
+	// retry, matching the POST create path which sets usage_tracked:true.
 	if (updates.status === "publishing") {
 		c.executionCtx.waitUntil(
 			c.env.PUBLISH_QUEUE.send({
 				type: "publish",
 				post_id: id,
 				org_id: orgId,
-				usage_tracked: false,
+				usage_tracked: true,
 			}),
 		);
 	}
@@ -1975,11 +2141,14 @@ app.openapi(deletePost, async (c) => {
 	const denied = assertWorkspaceScope(c, post.workspaceId);
 	if (denied) return denied;
 
-	// Delete recycling config, targets, then post (FK constraints)
-	await db
-		.delete(postRecyclingConfigs)
-		.where(eq(postRecyclingConfigs.sourcePostId, id));
-	await db.delete(postTargets).where(eq(postTargets.postId, id));
+	// Delete children first (FK constraints) — the two child deletes are
+	// independent of each other, only the parent delete must come last.
+	await Promise.all([
+		db
+			.delete(postRecyclingConfigs)
+			.where(eq(postRecyclingConfigs.sourcePostId, id)),
+		db.delete(postTargets).where(eq(postTargets.postId, id)),
+	]);
 	await db.delete(posts).where(eq(posts.id, id));
 
 	c.executionCtx.waitUntil(
@@ -2028,11 +2197,6 @@ app.openapi(retryPost, async (c) => {
 		.from(postTargets)
 		.where(and(eq(postTargets.postId, id), eq(postTargets.status, "failed")));
 
-	// Charge usage for each failed target being retried (N platforms = N units)
-	if (failedTargets.length > 0) {
-		await incrementUsage(c.env.KV, orgId, failedTargets.length);
-	}
-
 	if (failedTargets.length === 0) {
 		const allTargets = await db
 			.select()
@@ -2056,14 +2220,11 @@ app.openapi(retryPost, async (c) => {
 		);
 	}
 
-	// Reset failed targets to publishing (batch update)
-	const failedTargetIds = failedTargets.map((t) => t.id);
-	await db
-		.update(postTargets)
-		.set({ status: "publishing", error: null })
-		.where(inArray(postTargets.id, failedTargetIds));
-
-	// Batch-fetch all social accounts for failed targets
+	// Resolve which failed targets are actually retryable: their social account must
+	// still exist AND be within the API key's workspace scope. We must filter BEFORE
+	// resetting target status — otherwise targets whose account is missing/out-of-scope
+	// would be flipped to "publishing" but never published, stranding them un-retryable
+	// (a later retry only re-selects status="failed") and billing for a no-op.
 	const accountIds = [...new Set(failedTargets.map((t) => t.socialAccountId))];
 	const wsScope = c.get("workspaceScope");
 	const retryAccountConditions = [inArray(socialAccounts.id, accountIds)];
@@ -2071,85 +2232,96 @@ app.openapi(retryPost, async (c) => {
 		retryAccountConditions.push(inArray(socialAccounts.workspaceId, wsScope));
 	}
 	const accounts = await db
-		.select({
-			id: socialAccounts.id,
-			username: socialAccounts.username,
-		})
+		.select({ id: socialAccounts.id })
 		.from(socialAccounts)
 		.where(and(...retryAccountConditions));
-	const accountMap = new Map(accounts.map((a) => [a.id, a]));
+	const resolvableAccountIds = new Set(accounts.map((a) => a.id));
 
-	// Group failed targets for publishing
-	const targetMap = new Map<string, PublishTargetInput>();
-	for (const t of failedTargets) {
-		const account = accountMap.get(t.socialAccountId);
-		if (!account) continue;
-
-		const key = t.platform;
-		const existing = targetMap.get(key);
-		if (existing) {
-			existing.accounts.push(account);
-		} else {
-			targetMap.set(key, {
-				key,
-				platform: t.platform as Platform,
-				accounts: [account],
-			});
-		}
-	}
-
-	const targetOverrides =
-		(post.platformOverrides as Record<string, Record<string, unknown>>) ?? null;
-
-	const results = await publishToTargets(
-		c.env,
-		post.id,
-		orgId,
-		post.content,
-		[],
-		targetOverrides,
-		Array.from(targetMap.values()),
+	const retryableTargets = failedTargets.filter((t) =>
+		resolvableAccountIds.has(t.socialAccountId),
 	);
 
-	// Parallel fetch: all targets + updated post
-	const [allTargets, [updatedPost]] = await Promise.all([
-		db.select().from(postTargets).where(eq(postTargets.postId, id)),
-		db
-			.select({
-				id: posts.id,
-				status: posts.status,
-				content: posts.content,
-				scheduledAt: posts.scheduledAt,
-				recycledFromId: posts.recycledFromId,
-				createdAt: posts.createdAt,
-				updatedAt: posts.updatedAt,
-			})
-			.from(posts)
-			.where(eq(posts.id, id))
-			.limit(1),
-	]);
+	// Nothing resolvable to retry — leave targets untouched (still "failed", still
+	// retryable later) and do not charge usage. Return the post unchanged.
+	if (retryableTargets.length === 0) {
+		const allTargets = await db
+			.select()
+			.from(postTargets)
+			.where(eq(postTargets.postId, id));
+		return c.json(
+			{
+				id: post.id,
+				status: post.status,
+				content: post.content,
+				scheduled_at: post.scheduledAt?.toISOString() ?? null,
+				targets: buildTargetResponse(allTargets),
+				media: null,
+				recycling: null,
+				recycled_from_id: post.recycledFromId ?? null,
+				created_at: post.createdAt.toISOString(),
+				updated_at: post.updatedAt.toISOString(),
+			},
+			200,
+		);
+	}
 
-	const finalPost = updatedPost ?? post;
+	// Reset ONLY the resolvable failed targets to "publishing" and flip the post to
+	// "publishing", then hand off to the publish queue. Publishing inline here blocked
+	// the HTTP response on every platform API call (video polling can take minutes) plus
+	// awaited webhook retries — the same reason single-post create enqueues. The consumer
+	// (publishPostById) re-extracts media from platformOverrides._media (fixing the bug
+	// where retry published without attachments) and only acts on actionable targets.
+	const retryableTargetIds = retryableTargets.map((t) => t.id);
+	await db
+		.update(postTargets)
+		.set({ status: "publishing", error: null })
+		.where(inArray(postTargets.id, retryableTargetIds));
+	await db
+		.update(posts)
+		.set({ status: "publishing", updatedAt: new Date() })
+		.where(eq(posts.id, id));
+
+	// Charge usage only for the targets actually being retried. The result is unused and
+	// the KV counter was never atomic, so defer via waitUntil rather than blocking.
+	c.executionCtx.waitUntil(
+		incrementUsage(c.env.KV, orgId, retryableTargets.length),
+	);
+
+	// usage_tracked:true — the mutating-request middleware already billed this request,
+	// and we billed the retried targets above, so the consumer must not re-bill.
+	c.executionCtx.waitUntil(
+		c.env.PUBLISH_QUEUE.send({
+			type: "publish",
+			post_id: id,
+			org_id: orgId,
+			usage_tracked: true,
+		}),
+	);
+
+	const allTargets = await db
+		.select()
+		.from(postTargets)
+		.where(eq(postTargets.postId, id));
 
 	c.executionCtx.waitUntil(
 		notifyRealtime(c.env, orgId, {
 			type: "post.updated",
 			post_id: id,
-			status: finalPost.status,
+			status: "publishing",
 		}),
 	);
 	return c.json(
 		{
-			id: finalPost.id,
-			status: finalPost.status,
-			content: finalPost.content,
-			scheduled_at: finalPost.scheduledAt?.toISOString() ?? null,
+			id: post.id,
+			status: "publishing",
+			content: post.content,
+			scheduled_at: post.scheduledAt?.toISOString() ?? null,
 			targets: buildTargetResponse(allTargets),
 			media: null,
 			recycling: null,
-			recycled_from_id: finalPost.recycledFromId ?? null,
-			created_at: finalPost.createdAt.toISOString(),
-			updated_at: finalPost.updatedAt.toISOString(),
+			recycled_from_id: post.recycledFromId ?? null,
+			created_at: post.createdAt.toISOString(),
+			updated_at: new Date().toISOString(),
 		},
 		200,
 	);
@@ -2228,7 +2400,7 @@ app.openapi(bulkCreatePosts, async (c) => {
 				scheduledAt = new Date(slot.slot_at);
 				autoScheduledTimes.push(scheduledAt);
 			} else {
-				scheduledAt = new Date(item.scheduled_at);
+				scheduledAt = resolveScheduledAt(item.scheduled_at, item.timezone);
 			}
 
 			const postStatus: "draft" | "scheduled" | "publishing" | "failed" =
@@ -2284,41 +2456,29 @@ app.openapi(bulkCreatePosts, async (c) => {
 				await db.insert(postTargets).values(bulkTargetValues);
 			}
 
-			// Publish now if requested
+			// Publish now if requested: enqueue to PUBLISH_QUEUE rather than publishing
+			// inline. Inline publishing awaited every platform's API (8-30s+, minutes for
+			// video) serially per item, so a 10-item "now" bulk could run for minutes or
+			// hit Worker limits. The post + targets are already persisted with status
+			// "publishing"; the consumer (publishPostById) performs the publish and
+			// re-extracts media from platformOverrides._media.
 			if (isNow && resolved.length > 0) {
-				const publishTargets: PublishTargetInput[] = resolved.map((t) => ({
-					key: t.key,
-					platform: t.platform,
-					accounts: t.accounts.map((a) => ({
-						id: a.id,
-						username: a.username,
-					})),
-				}));
-
-				const publishResults = await publishToTargets(
-					c.env,
-					post.id,
-					orgId,
-					item.content ?? null,
-					(item.media ?? []) as PublishRequest["media"],
-					(item.target_options as Record<string, Record<string, unknown>>) ??
-						null,
-					publishTargets,
+				// usage_tracked:true — the mutating bulk request was already billed by the
+				// usage middleware (1 unit); avoid the consumer re-billing per item.
+				c.executionCtx.waitUntil(
+					c.env.PUBLISH_QUEUE.send({
+						type: "publish",
+						post_id: post.id,
+						org_id: orgId,
+						usage_tracked: true,
+					}),
 				);
-
-				const statuses = Object.values(publishResults).map((t) => t.status);
-				const finalStatus = statuses.every((s) => s === "published")
-					? "published"
-					: statuses.every((s) => s === "failed")
-						? "failed"
-						: "partial";
-
 				results.push({
 					id: post.id,
-					status: finalStatus,
+					status: "publishing",
 					content: post.content,
 					scheduled_at: item.scheduled_at,
-					targets: publishResults,
+					targets: {},
 					media: item.media ?? null,
 					recycling: null,
 					recycled_from_id: null,
@@ -2379,6 +2539,12 @@ app.openapi(unpublishPost, async (c) => {
 			404,
 		);
 	}
+
+	// Enforce workspace scope: unpublish issues real DELETE calls to external platforms
+	// and flips the post status, so a workspace-scoped key must not be able to unpublish
+	// a post in another workspace of the same org. Mirrors every other post mutation.
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied;
 
 	if (!["published", "partial"].includes(post.status)) {
 		return c.json(
@@ -2546,9 +2712,14 @@ app.openapi(unpublishPost, async (c) => {
 			}),
 	);
 
-	// Build update promises for targets that went through platform deletion
+	// Build update promises for targets that went through platform deletion.
+	// On a FAILED deletion the content is still live on the platform, so the target
+	// must stay "published" (with the error recorded) — marking it "failed" would both
+	// misreport the state and block any retry (unpublish only accepts published/partial
+	// posts). Only a SUCCESSFUL deletion flips the target to "draft".
 	const updatePromises: Promise<unknown>[] = [];
 	const processedTargetIds = new Set<string>();
+	let anySuccessfullyRemoved = false;
 
 	for (const result of deleteResults) {
 		const val =
@@ -2557,20 +2728,29 @@ app.openapi(unpublishPost, async (c) => {
 				: { targetId: "", success: false };
 		if (!val.targetId) continue;
 		processedTargetIds.add(val.targetId);
-		updatePromises.push(
-			db
-				.update(postTargets)
-				.set({
-					status: val.success ? "draft" : "failed",
-					error: val.success ? null : "Platform deletion failed",
-				})
-				.where(eq(postTargets.id, val.targetId)),
-		);
+		if (val.success) {
+			anySuccessfullyRemoved = true;
+			updatePromises.push(
+				db
+					.update(postTargets)
+					.set({ status: "draft", error: null })
+					.where(eq(postTargets.id, val.targetId)),
+			);
+		} else {
+			updatePromises.push(
+				db
+					.update(postTargets)
+					.set({ error: "Platform deletion failed" })
+					.where(eq(postTargets.id, val.targetId)),
+			);
+		}
 	}
 
-	// Also update published targets that had no platformPostId (skipped above)
+	// Published targets with no platformPostId (skipped above) were never really live —
+	// safe to flip to "draft".
 	for (const target of publishedTargets) {
 		if (!processedTargetIds.has(target.id)) {
+			anySuccessfullyRemoved = true;
 			updatePromises.push(
 				db
 					.update(postTargets)
@@ -2580,33 +2760,48 @@ app.openapi(unpublishPost, async (c) => {
 		}
 	}
 
-	// Flush all target updates + post status update first, THEN re-fetch for response
-	await Promise.all([
-		...updatePromises,
-		db
-			.update(posts)
-			.set({ status: "draft", updatedAt: new Date() })
-			.where(eq(posts.id, id)),
-	]);
+	await Promise.all(updatePromises);
 
+	// Re-fetch all targets and derive the post status from the ACTUAL outcome rather
+	// than hardcoding "draft". If any target is still "published" (a subset was filtered
+	// out by `platforms`, or a deletion failed), the post is "partial" so it stays
+	// retryable and downstream guards behave. Only flip to "draft" when every previously
+	// published target was successfully removed.
 	const allTargets = await db
 		.select()
 		.from(postTargets)
 		.where(eq(postTargets.postId, id));
 
+	const anyStillPublished = allTargets.some((t) => t.status === "published");
+	const finalPostStatus: "draft" | "partial" | string = anyStillPublished
+		? "partial"
+		: anySuccessfullyRemoved
+			? "draft"
+			: // nothing was removed and nothing remains published — preserve prior status
+				post.status;
+
+	await db
+		.update(posts)
+		.set({ status: finalPostStatus as "draft", updatedAt: new Date() })
+		.where(eq(posts.id, id));
+
 	c.executionCtx.waitUntil(
 		notifyRealtime(c.env, orgId, {
 			type: "post.updated",
 			post_id: id,
-			status: "draft",
+			status: finalPostStatus,
 		}),
 	);
 	return c.json(
 		{
 			id: post.id,
-			status: "draft",
+			status: finalPostStatus,
 			content: post.content,
 			scheduled_at: post.scheduledAt?.toISOString() ?? null,
+			// Per-target deletion errors are surfaced inside `targets` (buildTargetResponse
+			// includes each target's status + error); failed-deletion targets remain
+			// "published" with their error recorded, and the top-level status is "partial"
+			// when any target is still live, accurately reflecting the mixed outcome.
 			targets: buildTargetResponse(allTargets),
 			media: null,
 			recycling: null,
@@ -2648,16 +2843,27 @@ const getPostLogs = createRoute({
 	},
 });
 
+// @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(getPostLogs, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
 
-	const [post] = await db
-		.select()
-		.from(posts)
-		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
-		.limit(1);
+	// Run the ownership probe and the child query concurrently — the child query is
+	// independent of the ownership result (which only gates the 404), so serializing
+	// them doubles the DB latency. We discard the child rows when the post is absent.
+	const [[post], targets] = await Promise.all([
+		db
+			.select({ id: posts.id, workspaceId: posts.workspaceId })
+			.from(posts)
+			.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
+			.limit(1),
+		db
+			.select()
+			.from(postTargets)
+			.where(eq(postTargets.postId, id))
+			.orderBy(desc(postTargets.updatedAt)),
+	]);
 
 	if (!post) {
 		return c.json(
@@ -2666,11 +2872,10 @@ app.openapi(getPostLogs, async (c) => {
 		);
 	}
 
-	const targets = await db
-		.select()
-		.from(postTargets)
-		.where(eq(postTargets.postId, id))
-		.orderBy(desc(postTargets.updatedAt));
+	// Enforce workspace scope so a workspace-scoped key cannot read logs of a post in
+	// another workspace of the same org.
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied;
 
 	return c.json(
 		{
@@ -3298,7 +3503,10 @@ app.openapi(bulkCsvUpload, async (c) => {
 				parsedScheduledAt = new Date(slot.slot_at);
 				csvAutoScheduledTimes.push(parsedScheduledAt);
 			} else {
-				parsedScheduledAt = new Date(item.scheduled_at);
+				parsedScheduledAt = resolveScheduledAt(
+					item.scheduled_at,
+					item.timezone,
+				);
 			}
 
 			const postStatus: "draft" | "scheduled" | "publishing" = isDraft
@@ -3358,26 +3566,19 @@ app.openapi(bulkCsvUpload, async (c) => {
 				await db.insert(postTargets).values(targetValues);
 			}
 
-			// Publish immediately if requested
+			// Publish immediately if requested: enqueue to PUBLISH_QUEUE instead of
+			// publishing inline. The CSV endpoint accepts up to 500 rows; inline serial
+			// publishing (8-30s+ per row, minutes for video) would blow the request budget.
+			// The post + targets are persisted as "publishing"; the consumer publishes and
+			// re-extracts media from platformOverrides._media.
 			if (isNow && resolved.length > 0) {
-				const publishTargets: PublishTargetInput[] = resolved.map((t) => ({
-					key: t.key,
-					platform: t.platform,
-					accounts: t.accounts.map((a) => ({
-						id: a.id,
-						username: a.username,
-					})),
-				}));
-
-				await publishToTargets(
-					c.env,
-					post.id,
-					orgId,
-					item.content ?? null,
-					(item.media ?? []) as PublishRequest["media"],
-					(item.target_options as Record<string, Record<string, unknown>>) ??
-						null,
-					publishTargets,
+				c.executionCtx.waitUntil(
+					c.env.PUBLISH_QUEUE.send({
+						type: "publish",
+						post_id: post.id,
+						org_id: orgId,
+						usage_tracked: true,
+					}),
 				);
 			}
 
@@ -3419,16 +3620,25 @@ app.openapi(bulkCsvUpload, async (c) => {
 
 // --- Recycling sub-route handlers ---
 
+// @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(getRecyclingConfig, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
 
-	const [post] = await db
-		.select({ id: posts.id })
-		.from(posts)
-		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
-		.limit(1);
+	// Ownership probe and child query run concurrently (child is independent of the 404).
+	const [[post], [config]] = await Promise.all([
+		db
+			.select({ id: posts.id, workspaceId: posts.workspaceId })
+			.from(posts)
+			.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
+			.limit(1),
+		db
+			.select()
+			.from(postRecyclingConfigs)
+			.where(eq(postRecyclingConfigs.sourcePostId, id))
+			.limit(1),
+	]);
 
 	if (!post) {
 		return c.json(
@@ -3437,11 +3647,8 @@ app.openapi(getRecyclingConfig, async (c) => {
 		);
 	}
 
-	const [config] = await db
-		.select()
-		.from(postRecyclingConfigs)
-		.where(eq(postRecyclingConfigs.sourcePostId, id))
-		.limit(1);
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied;
 
 	if (!config) {
 		return c.json(
@@ -3479,11 +3686,23 @@ app.openapi(putRecyclingConfig, async (c) => {
 		);
 	}
 
-	const [post] = await db
-		.select({ id: posts.id, status: posts.status })
-		.from(posts)
-		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
-		.limit(1);
+	// Probe ownership and existing config concurrently (config is independent of 404).
+	const [[post], [existingConfig]] = await Promise.all([
+		db
+			.select({
+				id: posts.id,
+				status: posts.status,
+				workspaceId: posts.workspaceId,
+			})
+			.from(posts)
+			.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
+			.limit(1),
+		db
+			.select({ id: postRecyclingConfigs.id })
+			.from(postRecyclingConfigs)
+			.where(eq(postRecyclingConfigs.sourcePostId, id))
+			.limit(1),
+	]);
 
 	if (!post) {
 		return c.json(
@@ -3492,12 +3711,8 @@ app.openapi(putRecyclingConfig, async (c) => {
 		);
 	}
 
-	// Check for existing config (for update vs create)
-	const [existingConfig] = await db
-		.select({ id: postRecyclingConfigs.id })
-		.from(postRecyclingConfigs)
-		.where(eq(postRecyclingConfigs.sourcePostId, id))
-		.limit(1);
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied;
 
 	const validation = await validateRecyclingConfig(
 		db,
@@ -3583,7 +3798,7 @@ app.openapi(deleteRecyclingConfig, async (c) => {
 	const db = c.get("db");
 
 	const [post] = await db
-		.select({ id: posts.id })
+		.select({ id: posts.id, workspaceId: posts.workspaceId })
 		.from(posts)
 		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
 		.limit(1);
@@ -3595,24 +3810,43 @@ app.openapi(deleteRecyclingConfig, async (c) => {
 		);
 	}
 
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied;
+
 	await db
 		.delete(postRecyclingConfigs)
-		.where(eq(postRecyclingConfigs.sourcePostId, id));
+		.where(
+			and(
+				eq(postRecyclingConfigs.sourcePostId, id),
+				eq(postRecyclingConfigs.organizationId, orgId),
+			),
+		);
 
 	return c.body(null, 204);
 });
 
+// @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(listRecycledCopies, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { limit } = c.req.valid("query");
 	const db = c.get("db");
 
-	const [post] = await db
-		.select({ id: posts.id })
-		.from(posts)
-		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
-		.limit(1);
+	// Ownership probe and child query run concurrently (child is org-scoped, so parallel
+	// execution leaks nothing; the probe only gates the 404).
+	const [[post], copies] = await Promise.all([
+		db
+			.select({ id: posts.id, workspaceId: posts.workspaceId })
+			.from(posts)
+			.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
+			.limit(1),
+		db
+			.select()
+			.from(posts)
+			.where(and(eq(posts.recycledFromId, id), eq(posts.organizationId, orgId)))
+			.orderBy(desc(posts.createdAt))
+			.limit(limit + 1),
+	]);
 
 	if (!post) {
 		return c.json(
@@ -3621,12 +3855,8 @@ app.openapi(listRecycledCopies, async (c) => {
 		);
 	}
 
-	const copies = await db
-		.select()
-		.from(posts)
-		.where(and(eq(posts.recycledFromId, id), eq(posts.organizationId, orgId)))
-		.orderBy(desc(posts.createdAt))
-		.limit(limit + 1);
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied;
 
 	const hasMore = copies.length > limit;
 	const data = copies.slice(0, limit);
@@ -3710,6 +3940,7 @@ const updatePostNotes = createRoute({
 	},
 });
 
+// @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(getPostNotes, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
@@ -3717,18 +3948,20 @@ app.openapi(getPostNotes, async (c) => {
 
 	// Try internal posts first
 	const [post] = await db
-		.select({ notes: posts.notes })
+		.select({ notes: posts.notes, workspaceId: posts.workspaceId })
 		.from(posts)
 		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
 		.limit(1);
 
 	if (post) {
+		const denied = assertWorkspaceScope(c, post.workspaceId);
+		if (denied) return denied;
 		return c.json({ notes: post.notes ?? null }, 200);
 	}
 
 	// Fall back to external posts
 	const [ext] = await db
-		.select({ notes: externalPosts.notes })
+		.select({ notes: externalPosts.notes, workspaceId: externalPosts.workspaceId })
 		.from(externalPosts)
 		.where(
 			and(eq(externalPosts.id, id), eq(externalPosts.organizationId, orgId)),
@@ -3736,6 +3969,8 @@ app.openapi(getPostNotes, async (c) => {
 		.limit(1);
 
 	if (ext) {
+		const denied = assertWorkspaceScope(c, ext.workspaceId);
+		if (denied) return denied;
 		return c.json({ notes: ext.notes ?? null }, 200);
 	}
 
@@ -3745,6 +3980,7 @@ app.openapi(getPostNotes, async (c) => {
 	);
 });
 
+// @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(updatePostNotes, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
@@ -3753,12 +3989,14 @@ app.openapi(updatePostNotes, async (c) => {
 
 	// Try internal posts first
 	const [post] = await db
-		.select({ id: posts.id })
+		.select({ id: posts.id, workspaceId: posts.workspaceId })
 		.from(posts)
 		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
 		.limit(1);
 
 	if (post) {
+		const denied = assertWorkspaceScope(c, post.workspaceId);
+		if (denied) return denied;
 		await db
 			.update(posts)
 			.set({ notes, updatedAt: new Date() })
@@ -3768,7 +4006,7 @@ app.openapi(updatePostNotes, async (c) => {
 
 	// Fall back to external posts
 	const [ext] = await db
-		.select({ id: externalPosts.id })
+		.select({ id: externalPosts.id, workspaceId: externalPosts.workspaceId })
 		.from(externalPosts)
 		.where(
 			and(eq(externalPosts.id, id), eq(externalPosts.organizationId, orgId)),
@@ -3776,6 +4014,8 @@ app.openapi(updatePostNotes, async (c) => {
 		.limit(1);
 
 	if (ext) {
+		const denied = assertWorkspaceScope(c, ext.workspaceId);
+		if (denied) return denied;
 		await db
 			.update(externalPosts)
 			.set({ notes, updatedAt: new Date() })

@@ -22,12 +22,31 @@ const NO_EXPIRY_PLATFORMS: Platform[] = [
 ];
 
 /**
+ * Wait for a per-account refresh lock to clear, polling KV up to ~2s in short
+ * intervals instead of a flat 2s sleep. Returns once the lock is gone or the
+ * budget is exhausted.
+ */
+async function waitForLockRelease(env: Env, lockKey: string): Promise<void> {
+	for (let i = 0; i < 4; i++) {
+		await new Promise((r) => setTimeout(r, 500));
+		const stillLocked = await env.KV.get(lockKey).catch(() => null);
+		if (!stillLocked) return;
+	}
+}
+
+/**
  * Cron handler: find all accounts with tokens expiring within 7 days
  * and enqueue them to the REFRESH_QUEUE for processing.
  */
 export async function enqueueExpiringTokenRefresh(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+	// Lower bound: stop re-enqueueing accounts whose tokens expired long ago and
+	// can never be refreshed (revoked grant, missing refresh token). Without this
+	// bound the same dead account is re-enqueued and re-notifies every org member
+	// every single day, forever. 14 days gives a generous window for transient
+	// provider outages while killing the infinite notification tail.
+	const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
 
 	let cursor: string | null = null;
 	let totalEnqueued = 0;
@@ -38,6 +57,7 @@ export async function enqueueExpiringTokenRefresh(env: Env): Promise<void> {
 		const conditions = [
 			isNotNull(socialAccounts.tokenExpiresAt),
 			lt(socialAccounts.tokenExpiresAt, sevenDaysFromNow),
+			gt(socialAccounts.tokenExpiresAt, fourteenDaysAgo),
 			notInArray(socialAccounts.platform, NO_EXPIRY_PLATFORMS),
 		];
 		if (cursor) {
@@ -93,24 +113,101 @@ export async function refreshAccountToken(env: Env, accountId: string): Promise<
 
 	if (!account.tokenExpiresAt) return;
 
+	// Acquire the same per-account lock the request path uses, to serialize with
+	// concurrent publish/analytics refreshes. Single-use rotating refresh tokens
+	// (Twitter, TikTok) are otherwise raced: one path rotates the token, the other
+	// POSTs the now-consumed token, gets invalid_grant, and falsely flags the
+	// account as needing reconnection. If the lock is held, another path is already
+	// refreshing — wait briefly, re-read, and skip if a fresh token was written.
+	const lockKey = `token-refresh-lock:${accountId}`;
+	const existingLock = await env.KV.get(lockKey);
+	if (existingLock) {
+		await waitForLockRelease(env, lockKey);
+		const [fresh] = await db
+			.select({ tokenExpiresAt: socialAccounts.tokenExpiresAt })
+			.from(socialAccounts)
+			.where(eq(socialAccounts.id, accountId))
+			.limit(1);
+		// If the other refresher pushed the expiry out past the 5-min threshold,
+		// the token is fresh — nothing to do.
+		if (
+			fresh?.tokenExpiresAt &&
+			fresh.tokenExpiresAt.getTime() > Date.now() + 5 * 60 * 1000
+		) {
+			console.log(`[Token Refresh] Account ${accountId} already refreshed by another path, skipping`);
+			return;
+		}
+	}
+	await env.KV.put(lockKey, "1", { expirationTtl: 30 });
+
+	try {
+		await refreshAccountTokenLocked(env, db, account);
+	} finally {
+		await env.KV.delete(lockKey).catch(() => {});
+	}
+}
+
+/**
+ * Inner refresh logic for a single account, assumed to run under the
+ * per-account KV lock acquired by refreshAccountToken.
+ */
+async function refreshAccountTokenLocked(
+	env: Env,
+	db: ReturnType<typeof createDb>,
+	account: typeof socialAccounts.$inferSelect,
+): Promise<void> {
+	const accountId = account.id;
+
 	// Decrypt tokens before passing to refresh logic
 	const decrypted = await decryptAccountTokens(account, env.ENCRYPTION_KEY);
 
 	// Call the existing refresh logic (bypasses the 5-minute check by calling refreshToken directly)
-	const result = await refreshTokenDirect(env, account.platform as Platform, {
-		accessToken: decrypted.accessToken,
-		refreshToken: decrypted.refreshToken,
-	});
+	const result = await refreshTokenDirect(
+		env,
+		account.platform as Platform,
+		{
+			accessToken: decrypted.accessToken,
+			refreshToken: decrypted.refreshToken,
+		},
+		account.metadata,
+	);
 
 	if (!result) {
 		console.warn(`[Token Refresh] No refresh available for ${account.platform} account ${accountId}`);
+
+		// Mark the account as refresh-failed so the cron can stop re-notifying.
+		// We persist a marker in metadata (no dedicated column) and clear it on
+		// the next successful refresh / reconnect.
+		const existingMeta =
+			account.metadata && typeof account.metadata === "object"
+				? (account.metadata as Record<string, unknown>)
+				: {};
+		await db
+			.update(socialAccounts)
+			.set({
+				metadata: { ...existingMeta, refresh_failed_at: new Date().toISOString() },
+				updatedAt: new Date(),
+			})
+			.where(eq(socialAccounts.id, accountId))
+			.catch((err) =>
+				console.error("[Token Refresh] Failed to persist refresh-failed marker:", err),
+			);
+
+		// Dedupe the disconnect notification: only notify members once per account
+		// per 7-day window so a permanently-dead account doesn't spam everyone daily.
+		const notifyDedupeKey = `token-refresh-notified:${accountId}`;
+		const alreadyNotified = await env.KV.get(notifyDedupeKey).catch(() => null);
+		if (alreadyNotified) {
+			return;
+		}
+		await env.KV.put(notifyDedupeKey, "1", { expirationTtl: 7 * 24 * 60 * 60 }).catch(() => {});
 
 		await logConnectionEvent(env, account.organizationId, {
 			account_id: account.id,
 			platform: account.platform,
 			event: "error",
 			message: `Token refresh failed for ${account.displayName || account.username || account.platform} — reconnection needed`,
-		});
+		}, db);
 
 		// Notify org members that an account token could not be refreshed
 		const orgMembers = await db
@@ -137,6 +234,17 @@ export async function refreshAccountToken(env: Env, accountId: string): Promise<
 		return;
 	}
 
+	// Clear any prior refresh-failed marker now that the token refreshed cleanly.
+	const prevMeta =
+		account.metadata && typeof account.metadata === "object"
+			? (account.metadata as Record<string, unknown>)
+			: null;
+	let clearedMeta: Record<string, unknown> | undefined;
+	if (prevMeta && "refresh_failed_at" in prevMeta) {
+		const { refresh_failed_at: _removed, ...rest } = prevMeta;
+		clearedMeta = rest;
+	}
+
 	const updateData: Record<string, unknown> = {
 		accessToken: await maybeEncrypt(result.access_token, env.ENCRYPTION_KEY),
 		updatedAt: new Date(),
@@ -147,24 +255,41 @@ export async function refreshAccountToken(env: Env, accountId: string): Promise<
 	if (result.expires_in) {
 		updateData.tokenExpiresAt = new Date(Date.now() + result.expires_in * 1000);
 	}
-
-	// Re-fetch avatar URL with the fresh token (CDN URLs expire over time) and
-	// re-host it to R2 so the stored URL is durable. Falls back to the raw CDN
-	// URL if re-hosting fails (best-effort).
-	const newAvatarUrl = await fetchAvatarUrl(
-		account.platform as Platform,
-		result.access_token,
-		account.platformAccountId,
-	);
-	if (newAvatarUrl) {
-		const stable = await rehostAvatar(env, account.id, newAvatarUrl);
-		updateData.avatarUrl = stable ?? newAvatarUrl;
+	if (clearedMeta !== undefined) {
+		updateData.metadata = clearedMeta;
 	}
 
+	// Persist the new (possibly single-use rotated) tokens FIRST — within ms of
+	// issuance — so a concurrent reader never burns a token we've already rotated.
+	// The avatar re-host below is a separate best-effort update.
 	await db
 		.update(socialAccounts)
 		.set(updateData)
 		.where(eq(socialAccounts.id, accountId));
+
+	// Clear the disconnect-notification dedupe key so a future failure re-notifies.
+	await env.KV.delete(`token-refresh-notified:${accountId}`).catch(() => {});
+
+	// Re-fetch avatar URL with the fresh token (CDN URLs expire over time) and
+	// re-host it to R2 so the stored URL is durable. Falls back to the raw CDN
+	// URL if re-hosting fails (best-effort, separate write so token persistence
+	// is never delayed by the avatar round-trip).
+	try {
+		const newAvatarUrl = await fetchAvatarUrl(
+			account.platform as Platform,
+			result.access_token,
+			account.platformAccountId,
+		);
+		if (newAvatarUrl) {
+			const stable = await rehostAvatar(env, account.id, newAvatarUrl);
+			await db
+				.update(socialAccounts)
+				.set({ avatarUrl: stable ?? newAvatarUrl, updatedAt: new Date() })
+				.where(eq(socialAccounts.id, accountId));
+		}
+	} catch (err) {
+		console.warn(`[Token Refresh] Avatar re-host failed for ${accountId}:`, err);
+	}
 
 	console.log(`[Token Refresh] Refreshed ${account.platform} account ${accountId}`);
 
@@ -173,7 +298,7 @@ export async function refreshAccountToken(env: Env, accountId: string): Promise<
 		platform: account.platform,
 		event: "token_refreshed",
 		message: `Token refreshed for ${account.displayName || account.username || account.platform} account`,
-	});
+	}, db);
 }
 
 interface TokenResult {
@@ -214,8 +339,10 @@ export async function refreshTokenIfNeeded(
 	const lockKey = `token-refresh-lock:${account.id}`;
 	const existingLock = await env.KV.get(lockKey);
 	if (existingLock) {
-		// Another request is already refreshing — wait briefly, then read the fresh token from DB
-		await new Promise((r) => setTimeout(r, 2000));
+		// Another request is already refreshing — poll briefly for it to finish
+		// (up to ~2s, but break as soon as the lock clears) instead of a flat 2s
+		// sleep, then read the fresh token from DB.
+		await waitForLockRelease(env, lockKey);
 		const db = createDb(env.HYPERDRIVE.connectionString);
 		const [fresh] = await db
 			.select({ accessToken: socialAccounts.accessToken })
@@ -272,6 +399,7 @@ async function refreshToken(
 		accessToken: string | null;
 		refreshToken: string | null;
 	},
+	metadata?: unknown,
 ): Promise<TokenResult | null> {
 	switch (platform) {
 		case "twitter":
@@ -291,11 +419,26 @@ async function refreshToken(
 			// Exchange requires user interaction — return null to use existing token.
 			return null;
 
-		case "instagram":
+		case "instagram": {
+			// Instagram accounts connected via Facebook Login store a Facebook
+			// long-lived USER token (grant_type=fb_exchange_token), NOT a
+			// graph.instagram.com token. The ig_refresh_token grant only works for
+			// Instagram-Login (graph.instagram.com) tokens, so calling it for a
+			// Facebook-Login account always fails and drops the account into the
+			// daily "reconnect needed" loop. Detect the connection method from the
+			// metadata flag set at connect time and skip refresh (return null,
+			// same as facebook) for Facebook-Login Instagram accounts; the FB token
+			// lasts ~60d and the user reconnects when it expires.
+			const igMethod =
+				metadata && typeof metadata === "object"
+					? (metadata as Record<string, unknown>).ig_login_method
+					: undefined;
+			if (igMethod === "facebook") return null;
 			// Instagram Platform API — refresh a long-lived token directly
 			// https://developers.facebook.com/docs/instagram-platform/reference/refresh_access_token
 			if (!account.accessToken) return null;
 			return refreshInstagram(account.accessToken);
+		}
 
 		case "linkedin":
 			// LinkedIn OAuth 2.0 — Refresh an access token
@@ -429,8 +572,16 @@ async function refreshStandard(params: {
 		return null;
 	}
 
-	const data = (await res.json()) as TokenResult;
-	return data;
+	const data = (await res.json()) as Partial<TokenResult> & Record<string, unknown>;
+	// Some providers (e.g. TikTok) return error bodies with HTTP 200 and no
+	// access_token. Reject these so we never overwrite a working token with null.
+	if (typeof data.access_token !== "string" || data.access_token.length === 0) {
+		console.error(
+			`Token refresh returned no access_token for ${params.tokenUrl}: ${JSON.stringify(data).slice(0, 200)}`,
+		);
+		return null;
+	}
+	return data as TokenResult;
 }
 
 /** Instagram: refresh the long-lived token directly */
@@ -454,10 +605,14 @@ async function refreshInstagram(
 	if (!res.ok) return null;
 
 	const data = (await res.json()) as {
-		access_token: string;
-		token_type: string;
-		expires_in: number;
+		access_token?: string;
+		token_type?: string;
+		expires_in?: number;
 	};
+
+	if (typeof data.access_token !== "string" || data.access_token.length === 0) {
+		return null;
+	}
 
 	return {
 		access_token: data.access_token,
@@ -483,10 +638,14 @@ async function refreshThreads(
 	if (!res.ok) return null;
 
 	const data = (await res.json()) as {
-		access_token: string;
-		token_type: string;
-		expires_in: number;
+		access_token?: string;
+		token_type?: string;
+		expires_in?: number;
 	};
+
+	if (typeof data.access_token !== "string" || data.access_token.length === 0) {
+		return null;
+	}
 
 	return {
 		access_token: data.access_token,
@@ -607,10 +766,23 @@ async function refreshTikTok(
 	if (!res.ok) return null;
 
 	const data = (await res.json()) as {
-		access_token: string;
-		refresh_token: string;
-		expires_in: number;
+		access_token?: string;
+		refresh_token?: string;
+		expires_in?: number;
+		error?: string;
+		error_description?: string;
+		log_id?: string;
 	};
+
+	// TikTok's /v2/oauth/token/ endpoint returns errors (e.g. invalid_grant) in a
+	// 200 body as {error, error_description, log_id} with no access_token. Reject
+	// these so we never persist a null access token over a still-working one.
+	if (typeof data.access_token !== "string" || data.access_token.length === 0) {
+		console.error(
+			`TikTok token refresh returned no access_token: ${JSON.stringify(data).slice(0, 200)}`,
+		);
+		return null;
+	}
 
 	return {
 		access_token: data.access_token,

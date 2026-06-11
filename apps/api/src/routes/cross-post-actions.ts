@@ -106,15 +106,20 @@ app.openapi(listByPost, async (c) => {
 
 	const conditions = [eq(crossPostActions.postId, post_id)];
 
+	// Cursor pagination (composite: createdAt DESC, id DESC to handle timestamp
+	// ties). Read the cursor row's created_at as raw text so it isn't round-tripped
+	// through a JS Date, which truncates Postgres microseconds to millisecond
+	// precision and would skip rows sharing the cursor's millisecond. Bind it back
+	// with an explicit ::timestamptz cast to keep the keyset comparison exact.
 	if (cursor) {
 		const [cursorRow] = await db
-			.select({ createdAt: crossPostActions.createdAt })
+			.select({ createdAt: sql<string>`${crossPostActions.createdAt}::text` })
 			.from(crossPostActions)
 			.where(eq(crossPostActions.id, cursor))
 			.limit(1);
 		if (cursorRow) {
 			conditions.push(
-				sql`(${crossPostActions.createdAt} < ${cursorRow.createdAt} OR (${crossPostActions.createdAt} = ${cursorRow.createdAt} AND ${crossPostActions.id} < ${cursor}))`,
+				sql`(${crossPostActions.createdAt}, ${crossPostActions.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}

@@ -183,6 +183,7 @@ export async function discoverAdAccounts(
 	env: Env,
 	orgId: string,
 	socialAccountId: string,
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ): Promise<
 	{
 		id: string;
@@ -192,8 +193,6 @@ export async function discoverAdAccounts(
 		status?: string;
 	}[]
 > {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
 	const [socialAcc] = await db
 		.select()
 		.from(socialAccounts)
@@ -376,8 +375,8 @@ export async function createCampaign(
 		endDate?: string;
 		specialAdCategories?: string[];
 	},
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ) {
-	const db = createDb(env.HYPERDRIVE.connectionString);
 	const ctx = await getAccountWithToken(db, params.adAccountId, orgId, env);
 	if (!ctx) throw new AdPlatformError("NOT_FOUND", "Ad account not found");
 
@@ -447,8 +446,8 @@ export async function createAd(
 		startDate?: string;
 		endDate?: string;
 	},
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ) {
-	const db = createDb(env.HYPERDRIVE.connectionString);
 	const ctx = await getAccountWithToken(db, params.adAccountId, orgId, env);
 	if (!ctx) throw new AdPlatformError("NOT_FOUND", "Ad account not found");
 
@@ -593,9 +592,8 @@ export async function boostPost(
 		tracking?: { pixelId?: string; urlTags?: string };
 		specialAdCategories?: string[];
 	},
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ) {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
 	// Resolve the platform post id to boost from either a RelayAPI post target
 	// (post_target_id) or a natively-published post synced into external_posts
 	// (external_post_id). Exactly one is provided (enforced by BoostPostBody).
@@ -768,9 +766,8 @@ export async function updateAd(
 		lifetimeBudgetCents?: number;
 		targeting?: AdTargeting;
 	},
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ) {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
 	const [ad] = await db
 		.select()
 		.from(ads)
@@ -820,9 +817,12 @@ export async function updateAd(
 	return updated;
 }
 
-export async function cancelAd(env: Env, orgId: string, adId: string) {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
+export async function cancelAd(
+	env: Env,
+	orgId: string,
+	adId: string,
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
+) {
 	const [ad] = await db
 		.select()
 		.from(ads)
@@ -857,9 +857,8 @@ export async function updateCampaignStatus(
 	orgId: string,
 	campaignId: string,
 	status: "active" | "paused",
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ) {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
 	const [campaign] = await db
 		.select()
 		.from(adCampaigns)

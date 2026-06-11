@@ -56,6 +56,12 @@ export const StartOAuthResponse = z.object({
 		.string()
 		.url()
 		.describe("URL to redirect the user for OAuth authorization"),
+	temp_token: z
+		.string()
+		.optional()
+		.describe(
+			"Headless mode only: one-time token to poll GET /connect/pending-data for the OAuth result once the user finishes provider authorization",
+		),
 });
 
 // ---------------------------------------------------------------------------
@@ -169,37 +175,26 @@ export const PendingDataQuery = z.object({
 	token: z.string().describe("Temporary token from headless OAuth flow"),
 });
 
+// Headless OAuth result, polled with the temp_token returned by GET /connect/{platform}?headless=true.
+// The server-side callback stores the outcome of the token exchange under this key.
 export const PendingDataResponse = z.object({
 	platform: PlatformEnum,
-	temp_token: z.string().describe("Token to use for secondary selection"),
-	user_profile: z
-		.object({
-			id: z.string(),
-			name: z.string().nullable(),
-			username: z.string().nullable(),
-			avatar_url: z.string().nullable(),
-		})
-		.describe("Basic user profile from the platform"),
-	pages: z
-		.array(z.record(z.string(), z.any()))
+	status: z
+		.enum(["success", "pending_selection", "error"])
+		.describe(
+			"Outcome of the headless OAuth exchange. 'pending_selection' means a secondary selection step (e.g. Facebook page) is required.",
+		),
+	account: AccountResponse.optional().describe(
+		"Connected account — present when status is 'success'",
+	),
+	error: z.string().optional().describe("Provider error code (status 'error')"),
+	error_description: z
+		.string()
+		.nullable()
 		.optional()
-		.describe("Facebook pages available"),
-	profiles: z
-		.array(z.record(z.string(), z.any()))
-		.optional()
-		.describe("Snapchat profiles available"),
-	boards: z
-		.array(z.record(z.string(), z.any()))
-		.optional()
-		.describe("Pinterest boards available"),
-	locations: z
-		.array(z.record(z.string(), z.any()))
-		.optional()
-		.describe("Google Business locations available"),
-	organizations: z
-		.array(z.record(z.string(), z.any()))
-		.optional()
-		.describe("LinkedIn organizations available"),
+		.describe("Provider error description (status 'error')"),
+	error_code: z.string().optional().describe("RelayAPI error code (status 'error')"),
+	error_message: z.string().optional().describe("RelayAPI error message (status 'error')"),
 });
 
 // ---------------------------------------------------------------------------

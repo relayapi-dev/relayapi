@@ -18,7 +18,7 @@
 import { automationRuns, automations, type Database } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import type { Graph } from "../../schemas/automation-graph";
-import { runLoop } from "./runner";
+import { runLoop, updateRunOptimistic } from "./runner";
 
 /**
  * Outcome of attempting to resume a waiting run on an interactive payload:
@@ -104,35 +104,30 @@ export async function resumeWaitingRunOnInteractive(
 
 	if (!edge) {
 		// Operator wired a button but no outgoing edge — mirror runLoop's
-		// graceful completion for unrouted ports.
-		await db
-			.update(automationRuns)
-			.set({
-				status: "completed",
-				exitReason: "completed",
-				completedAt: new Date(),
-				context: updatedContext,
-				currentPortKey: port.key,
-				waitingFor: null,
-				waitingUntil: null,
-				updatedAt: new Date(),
-			})
-			.where(eq(automationRuns.id, runId));
-		return "resumed";
-	}
-
-	await db
-		.update(automationRuns)
-		.set({
-			status: "active",
+		// graceful completion for unrouted ports. Guard on updatedAt so a
+		// concurrent input_timeout fire (or a duplicate inbound payload) can't
+		// double-advance: the loser sees the CAS fail and bails.
+		const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+			status: "completed",
+			exitReason: "completed",
+			completedAt: new Date(),
+			context: updatedContext,
+			currentPortKey: port.key,
 			waitingFor: null,
 			waitingUntil: null,
-			currentNodeKey: edge.to_node,
-			currentPortKey: edge.to_port,
-			context: updatedContext,
-			updatedAt: new Date(),
-		})
-		.where(eq(automationRuns.id, runId));
+		});
+		return ok ? "resumed" : "race";
+	}
+
+	const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+		status: "active",
+		waitingFor: null,
+		waitingUntil: null,
+		currentNodeKey: edge.to_node,
+		currentPortKey: edge.to_port,
+		context: updatedContext,
+	});
+	if (!ok) return "race";
 
 	// Mirror enrollContact / resumeWaitingRunOnInput: ensure handlers can reach
 	// the live `db` binding via env even when the caller didn't populate it.

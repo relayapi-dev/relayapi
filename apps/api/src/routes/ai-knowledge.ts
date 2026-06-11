@@ -127,15 +127,19 @@ app.openapi(listKbs, async (c) => {
 	if (workspace_id)
 		conditions.push(eq(aiKnowledgeBases.workspaceId, workspace_id));
 
+	// Keyset pagination on (createdAt, id). Read the cursor row's created_at as raw
+	// text so it isn't round-tripped through a JS Date, which truncates Postgres
+	// microseconds to millisecond precision and would skip rows sharing the cursor's
+	// millisecond. Bind it back with an explicit ::timestamptz cast.
 	if (cursor) {
 		const cursorRow = await db
-			.select({ createdAt: aiKnowledgeBases.createdAt })
+			.select({ createdAt: sql<string>`${aiKnowledgeBases.createdAt}::text` })
 			.from(aiKnowledgeBases)
 			.where(eq(aiKnowledgeBases.id, cursor))
 			.limit(1);
 		if (cursorRow[0]) {
 			conditions.push(
-				sql`(${aiKnowledgeBases.createdAt}, ${aiKnowledgeBases.id}) < (${cursorRow[0].createdAt}, ${cursor})`,
+				sql`(${aiKnowledgeBases.createdAt}, ${aiKnowledgeBases.id}) < (${cursorRow[0].createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}
@@ -426,15 +430,19 @@ app.openapi(listDocs, async (c) => {
 	}
 
 	const conditions = [eq(aiKnowledgeDocuments.kbId, id)];
+	// Keyset pagination on (createdAt, id). Read the cursor row's created_at as raw
+	// text so it isn't round-tripped through a JS Date, which truncates Postgres
+	// microseconds to millisecond precision and would skip rows sharing the cursor's
+	// millisecond. Bind it back with an explicit ::timestamptz cast.
 	if (cursor) {
 		const cursorRow = await db
-			.select({ createdAt: aiKnowledgeDocuments.createdAt })
+			.select({ createdAt: sql<string>`${aiKnowledgeDocuments.createdAt}::text` })
 			.from(aiKnowledgeDocuments)
 			.where(eq(aiKnowledgeDocuments.id, cursor))
 			.limit(1);
 		if (cursorRow[0]) {
 			conditions.push(
-				sql`(${aiKnowledgeDocuments.createdAt}, ${aiKnowledgeDocuments.id}) < (${cursorRow[0].createdAt}, ${cursor})`,
+				sql`(${aiKnowledgeDocuments.createdAt}, ${aiKnowledgeDocuments.id}) < (${cursorRow[0].createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}

@@ -33,7 +33,7 @@ import {
 	InterestResponse,
 	ListAdAccountsParams,
 	SearchInterestsParams,
-	SyncResponse,
+	SyncQueuedResponse,
 	UpdateAdBody,
 	UpdateCampaignBody,
 } from "../schemas/ads";
@@ -46,7 +46,6 @@ import {
 } from "../services/ad-platforms";
 import { AdPlatformError } from "../services/ad-platforms/types";
 import * as adService from "../services/ad-service";
-import * as adSync from "../services/ad-sync";
 import type { Env, Variables } from "../types";
 import {
 	applyWorkspaceScope,
@@ -85,6 +84,43 @@ function handleAdError(c: any, err: unknown) {
 		},
 		500,
 	);
+}
+
+// ---------------------------------------------------------------------------
+// Cursor helpers — composite keyset pagination on (created_at, id)
+//
+// List endpoints sort by `desc(createdAt)` but resource ids are random (not
+// monotonic), so a plain `id < cursor` filter slices the keyspace in an order
+// unrelated to the sort, duplicating and silently dropping rows across pages.
+// We encode an opaque `<createdAt ISO>|<id>` cursor and compare the (createdAt,
+// id) tuple as a total order that matches the ORDER BY, guaranteeing stable
+// keyset pagination.
+// ---------------------------------------------------------------------------
+
+function encodeCursor(createdAt: Date, id: string): string {
+	// base64url(<createdAt ISO>|<id>) — matches the inbox cursor idiom (btoa +
+	// url-safe substitution) so we don't depend on Node's Buffer global.
+	return btoa(`${createdAt.toISOString()}|${id}`)
+		.replace(/\+/g, "-")
+		.replace(/\//g, "_")
+		.replace(/=+$/, "");
+}
+
+function decodeCursor(
+	cursor: string | undefined,
+): { createdAt: Date; id: string } | null {
+	if (!cursor) return null;
+	try {
+		const decoded = atob(cursor.replace(/-/g, "+").replace(/_/g, "/"));
+		const sep = decoded.lastIndexOf("|");
+		if (sep === -1) return null;
+		const createdAt = new Date(decoded.slice(0, sep));
+		const id = decoded.slice(sep + 1);
+		if (Number.isNaN(createdAt.getTime()) || !id) return null;
+		return { createdAt, id };
+	} catch {
+		return null;
+	}
 }
 
 // =========================================================================
@@ -128,8 +164,34 @@ app.openapi(listAdAccounts, async (c) => {
 	const { social_account_id, workspace_id, q, cursor, limit } = c.req.valid("query");
 
 	try {
-		if (social_account_id) {
-			await adService.discoverAdAccounts(c.env, orgId, social_account_id);
+		// Discovering ad accounts is an external Meta crawl (1 + N×(1-10) Graph
+		// calls) plus upsert/prune writes. Only run it when explicitly filtering
+		// by a social account, never on cursor-paginated follow-up pages (they
+		// re-read already-imported data), and gate it behind a short-TTL KV
+		// freshness marker so routine filtered list calls don't re-crawl Meta on
+		// every request. The first/stale call stays inline so the dashboard
+		// Discover flow still returns fresh data.
+		if (social_account_id && !cursor) {
+			const discoverKey = `ad-discovery:${orgId}:${social_account_id}`;
+			let fresh = false;
+			try {
+				fresh = (await c.env.KV.get(discoverKey)) !== null;
+			} catch (err) {
+				console.error("[Ads] ad-account discovery gating failed", err);
+			}
+			if (!fresh) {
+				await adService.discoverAdAccounts(
+					c.env,
+					orgId,
+					social_account_id,
+					c.get("db"),
+				);
+				try {
+					await c.env.KV.put(discoverKey, "1", { expirationTtl: 600 });
+				} catch (err) {
+					console.error("[Ads] ad-account discovery marker put failed", err);
+				}
+			}
 		}
 
 		const db = c.get("db");
@@ -236,17 +298,22 @@ app.openapi(createCampaignRoute, async (c) => {
 	const body = c.req.valid("json");
 
 	try {
-		const campaign = await adService.createCampaign(c.env, orgId, {
-			adAccountId: body.ad_account_id,
-			name: body.name,
-			objective: body.objective,
-			dailyBudgetCents: body.daily_budget_cents,
-			lifetimeBudgetCents: body.lifetime_budget_cents,
-			currency: body.currency,
-			startDate: body.start_date,
-			endDate: body.end_date,
-			specialAdCategories: body.special_ad_categories,
-		});
+		const campaign = await adService.createCampaign(
+			c.env,
+			orgId,
+			{
+				adAccountId: body.ad_account_id,
+				name: body.name,
+				objective: body.objective,
+				dailyBudgetCents: body.daily_budget_cents,
+				lifetimeBudgetCents: body.lifetime_budget_cents,
+				currency: body.currency,
+				startDate: body.start_date,
+				endDate: body.end_date,
+				specialAdCategories: body.special_ad_categories,
+			},
+			c.get("db"),
+		);
 
 		if (!campaign) {
 			return c.json(
@@ -317,13 +384,18 @@ app.openapi(listCampaigns, async (c) => {
 	if (ad_account_id)
 		conditions.push(eq(adCampaigns.adAccountId, ad_account_id));
 	if (workspace_id) conditions.push(eq(adCampaigns.workspaceId, workspace_id));
-	if (cursor) conditions.push(sql`${adCampaigns.id} < ${cursor}`);
+	const decodedCursor = decodeCursor(cursor);
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${adCampaigns.createdAt}, ${adCampaigns.id}) < (${decodedCursor.createdAt.toISOString()}::timestamptz, ${decodedCursor.id})`,
+		);
+	}
 
 	const campaigns = await db
 		.select()
 		.from(adCampaigns)
 		.where(and(...conditions))
-		.orderBy(desc(adCampaigns.createdAt))
+		.orderBy(desc(adCampaigns.createdAt), desc(adCampaigns.id))
 		.limit(limit + 1);
 
 	const hasMore = campaigns.length > limit;
@@ -364,7 +436,12 @@ app.openapi(listCampaigns, async (c) => {
 			created_at: camp.createdAt.toISOString(),
 			updated_at: camp.updatedAt.toISOString(),
 		})),
-		next_cursor: hasMore ? items[items.length - 1]!.id : null,
+		next_cursor: hasMore
+			? encodeCursor(
+					items[items.length - 1]!.createdAt,
+					items[items.length - 1]!.id,
+				)
+			: null,
 		has_more: hasMore,
 	} as any);
 });
@@ -481,6 +558,7 @@ app.openapi(updateCampaignStatus, async (c) => {
 				orgId,
 				id,
 				body.status,
+				c.get("db"),
 			);
 			return c.json(result);
 		}
@@ -530,8 +608,8 @@ app.openapi(deleteCampaign, async (c) => {
 	const { id } = c.req.valid("param");
 
 	try {
-		await adService.updateCampaignStatus(c.env, orgId, id, "paused");
 		const db = c.get("db");
+		await adService.updateCampaignStatus(c.env, orgId, id, "paused", db);
 		await db
 			.update(adCampaigns)
 			.set({ status: "cancelled", updatedAt: new Date() })
@@ -577,24 +655,29 @@ app.openapi(createAdRoute, async (c) => {
 	const body = c.req.valid("json");
 
 	try {
-		const ad = await adService.createAd(c.env, orgId, {
-			adAccountId: body.ad_account_id,
-			campaignId: body.campaign_id,
-			name: body.name,
-			objective: body.objective,
-			headline: body.headline,
-			body: body.body,
-			callToAction: body.call_to_action,
-			linkUrl: body.link_url,
-			imageUrl: body.image_url,
-			videoUrl: body.video_url,
-			targeting: body.targeting as any,
-			dailyBudgetCents: body.daily_budget_cents,
-			lifetimeBudgetCents: body.lifetime_budget_cents,
-			durationDays: body.duration_days,
-			startDate: body.start_date,
-			endDate: body.end_date,
-		});
+		const ad = await adService.createAd(
+			c.env,
+			orgId,
+			{
+				adAccountId: body.ad_account_id,
+				campaignId: body.campaign_id,
+				name: body.name,
+				objective: body.objective,
+				headline: body.headline,
+				body: body.body,
+				callToAction: body.call_to_action,
+				linkUrl: body.link_url,
+				imageUrl: body.image_url,
+				videoUrl: body.video_url,
+				targeting: body.targeting as any,
+				dailyBudgetCents: body.daily_budget_cents,
+				lifetimeBudgetCents: body.lifetime_budget_cents,
+				durationDays: body.duration_days,
+				startDate: body.start_date,
+				endDate: body.end_date,
+			},
+			c.get("db"),
+		);
 
 		return c.json({ data: formatAdResponse(ad!) } as any, 201);
 	} catch (err) {
@@ -631,28 +714,33 @@ app.openapi(boostPostRoute, async (c) => {
 	const body = c.req.valid("json");
 
 	try {
-		const ad = await adService.boostPost(c.env, orgId, {
-			adAccountId: body.ad_account_id,
-			postTargetId: body.post_target_id,
-			externalPostId: body.external_post_id,
-			name: body.name,
-			objective: body.objective,
-			targeting: body.targeting as any,
-			dailyBudgetCents: body.daily_budget_cents,
-			lifetimeBudgetCents: body.lifetime_budget_cents,
-			currency: body.currency,
-			durationDays: body.duration_days,
-			startDate: body.start_date,
-			endDate: body.end_date,
-			bidAmount: body.bid_amount,
-			tracking: body.tracking
-				? {
-						pixelId: body.tracking.pixel_id,
-						urlTags: body.tracking.url_tags,
-					}
-				: undefined,
-			specialAdCategories: body.special_ad_categories,
-		});
+		const ad = await adService.boostPost(
+			c.env,
+			orgId,
+			{
+				adAccountId: body.ad_account_id,
+				postTargetId: body.post_target_id,
+				externalPostId: body.external_post_id,
+				name: body.name,
+				objective: body.objective,
+				targeting: body.targeting as any,
+				dailyBudgetCents: body.daily_budget_cents,
+				lifetimeBudgetCents: body.lifetime_budget_cents,
+				currency: body.currency,
+				durationDays: body.duration_days,
+				startDate: body.start_date,
+				endDate: body.end_date,
+				bidAmount: body.bid_amount,
+				tracking: body.tracking
+					? {
+							pixelId: body.tracking.pixel_id,
+							urlTags: body.tracking.url_tags,
+						}
+					: undefined,
+				specialAdCategories: body.special_ad_categories,
+			},
+			c.get("db"),
+		);
 
 		return c.json({ data: formatAdResponse(ad!) } as any, 201);
 	} catch (err) {
@@ -690,13 +778,18 @@ app.openapi(listAds, async (c) => {
 	if (workspace_id) conditions.push(eq(ads.workspaceId, workspace_id));
 	if (source === "internal") conditions.push(eq(ads.isExternal, false));
 	if (source === "external") conditions.push(eq(ads.isExternal, true));
-	if (cursor) conditions.push(sql`${ads.id} < ${cursor}`);
+	const decodedCursor = decodeCursor(cursor);
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${ads.createdAt}, ${ads.id}) < (${decodedCursor.createdAt.toISOString()}::timestamptz, ${decodedCursor.id})`,
+		);
+	}
 
 	const results = await db
 		.select()
 		.from(ads)
 		.where(and(...conditions))
-		.orderBy(desc(ads.createdAt))
+		.orderBy(desc(ads.createdAt), desc(ads.id))
 		.limit(limit + 1);
 
 	const hasMore = results.length > limit;
@@ -704,7 +797,12 @@ app.openapi(listAds, async (c) => {
 
 	return c.json({
 		data: items.map(formatAdResponse),
-		next_cursor: hasMore ? items[items.length - 1]!.id : null,
+		next_cursor: hasMore
+			? encodeCursor(
+					items[items.length - 1]!.createdAt,
+					items[items.length - 1]!.id,
+				)
+			: null,
 		has_more: hasMore,
 	} as any);
 });
@@ -958,13 +1056,32 @@ app.openapi(listAudiences, async (c) => {
 	const db = c.get("db");
 
 	// Import existing custom audiences from the platform before reading (mirrors
-	// how listAdAccounts discovers accounts). Best-effort: a token/permission
-	// error must not hide audiences already stored locally, so we log and fall
-	// through to the DB read instead of failing the request.
-	try {
-		await adAudienceService.discoverAudiences(c.env, orgId, ad_account_id);
-	} catch (err) {
-		console.error("[Ads] audience discovery failed", err);
+	// how listAdAccounts discovers accounts). This is an expensive external Meta
+	// crawl + DB upserts, so we never block the response on it:
+	//   1. Skip discovery entirely on cursor-paginated follow-up pages — they
+	//      re-read already-imported data, so re-discovery is pure waste.
+	//   2. On the first page, gate discovery behind a short-TTL KV marker so it
+	//      runs at most once per org+account per window, and run it via
+	//      waitUntil() so the response is served from the local table
+	//      immediately (data is eventually consistent within the TTL window).
+	if (!cursor) {
+		const discoverKey = `ads:aud-discover:${orgId}:${ad_account_id}`;
+		try {
+			const marker = await c.env.KV.get(discoverKey);
+			if (!marker) {
+				await c.env.KV.put(discoverKey, "1", { expirationTtl: 600 });
+				c.executionCtx.waitUntil(
+					adAudienceService
+						.discoverAudiences(c.env, orgId, ad_account_id)
+						.catch((err) =>
+							console.error("[Ads] audience discovery failed", err),
+						),
+				);
+			}
+		} catch (err) {
+			// A KV hiccup must not fail the list — fall through to the DB read.
+			console.error("[Ads] audience discovery gating failed", err);
+		}
 	}
 
 	const conditions = [
@@ -972,13 +1089,18 @@ app.openapi(listAudiences, async (c) => {
 		eq(adAudiences.adAccountId, ad_account_id),
 	];
 	applyWorkspaceScope(c, conditions, adAudiences.workspaceId);
-	if (cursor) conditions.push(sql`${adAudiences.id} < ${cursor}`);
+	const decodedCursor = decodeCursor(cursor);
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${adAudiences.createdAt}, ${adAudiences.id}) < (${decodedCursor.createdAt.toISOString()}::timestamptz, ${decodedCursor.id})`,
+		);
+	}
 
 	const audiences = await db
 		.select()
 		.from(adAudiences)
 		.where(and(...conditions))
-		.orderBy(desc(adAudiences.createdAt))
+		.orderBy(desc(adAudiences.createdAt), desc(adAudiences.id))
 		.limit(limit + 1);
 
 	const hasMore = audiences.length > limit;
@@ -998,7 +1120,12 @@ app.openapi(listAudiences, async (c) => {
 			created_at: a.createdAt.toISOString(),
 			updated_at: a.updatedAt.toISOString(),
 		})),
-		next_cursor: hasMore ? items[items.length - 1]!.id : null,
+		next_cursor: hasMore
+			? encodeCursor(
+					items[items.length - 1]!.createdAt,
+					items[items.length - 1]!.id,
+				)
+			: null,
 		has_more: hasMore,
 	} as any);
 });
@@ -1145,12 +1272,18 @@ const triggerSync = createRoute({
 	path: "/accounts/{id}/sync",
 	tags: ["Ads"],
 	summary: "Trigger manual sync for an ad account",
+	description:
+		"Enqueues a full external sync (Graph fetch + ad/campaign upserts + metrics refresh) on the ads queue and returns immediately. Poll the list/analytics endpoints for results.",
 	security: [{ Bearer: [] }],
 	request: { params: IdParam },
 	responses: {
-		200: {
-			description: "Sync result",
-			content: { "application/json": { schema: SyncResponse } },
+		202: {
+			description: "Sync queued",
+			content: { "application/json": { schema: SyncQueuedResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
@@ -1158,14 +1291,33 @@ const triggerSync = createRoute({
 app.openapi(triggerSync, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
+	const db = c.get("db");
 
 	try {
-		const result = await adSync.syncExternalAds(c.env, id, orgId);
-		return c.json({
-			ads_created: result.adsCreated,
-			ads_updated: result.adsUpdated,
-			metrics_updated: result.metricsUpdated,
+		// Validate the account exists and belongs to the org before enqueueing.
+		const [account] = await db
+			.select({ id: adAccounts.id })
+			.from(adAccounts)
+			.where(and(eq(adAccounts.id, id), eq(adAccounts.organizationId, orgId)))
+			.limit(1);
+
+		if (!account) {
+			return c.json(
+				{ error: { code: "NOT_FOUND", message: "Ad account not found" } },
+				404,
+			);
+		}
+
+		// The full sync (external Graph fetch, per-ad upserts, and metrics refresh
+		// of up to 200 ads) can exceed the request window, so run it on the ADS
+		// queue instead of inline. The same job type the cron enqueues.
+		await c.env.ADS_QUEUE.send({
+			type: "sync_external",
+			org_id: orgId,
+			ad_account_id: id,
 		});
+
+		return c.json({ status: "queued" as const }, 202);
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -1254,13 +1406,19 @@ app.openapi(updateAdRoute, async (c) => {
 	const body = c.req.valid("json");
 
 	try {
-		const updated = await adService.updateAd(c.env, orgId, id, {
-			name: body.name,
-			status: body.status,
-			dailyBudgetCents: body.daily_budget_cents,
-			lifetimeBudgetCents: body.lifetime_budget_cents,
-			targeting: body.targeting as any,
-		});
+		const updated = await adService.updateAd(
+			c.env,
+			orgId,
+			id,
+			{
+				name: body.name,
+				status: body.status,
+				dailyBudgetCents: body.daily_budget_cents,
+				lifetimeBudgetCents: body.lifetime_budget_cents,
+				targeting: body.targeting as any,
+			},
+			c.get("db"),
+		);
 
 		return c.json({ data: formatAdResponse(updated!) } as any);
 	} catch (err) {
@@ -1291,7 +1449,7 @@ app.openapi(deleteAdRoute, async (c) => {
 	const { id } = c.req.valid("param");
 
 	try {
-		await adService.cancelAd(c.env, orgId, id);
+		await adService.cancelAd(c.env, orgId, id, c.get("db"));
 		return c.json({ message: "Ad cancelled" });
 	} catch (err) {
 		return handleAdError(c, err);

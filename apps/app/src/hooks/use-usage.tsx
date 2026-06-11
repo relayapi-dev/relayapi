@@ -113,13 +113,20 @@ export function UsageProvider({
       if (cached) {
         setUsage(cached);
         setLoading(false);
+        // Warm-cache refresh via the shared dashboard bootstrap so the sidebar's
+        // single bootstrap call serves usage too (org-keyed for cache reuse).
         return scheduleIdleTask(() => {
-          void fetchUsage({ background: true });
+          void fetchDashboardBootstrap({ orgId }).then((data) => {
+            if (data?.usage) {
+              setUsage(data.usage);
+              writeUsageCache(cacheKey, data.usage);
+            }
+          });
         }, 1500);
       }
 
       return scheduleAfterPaint(() => {
-        void fetchDashboardBootstrap().then((data) => {
+        void fetchDashboardBootstrap({ orgId }).then((data) => {
           if (data?.usage) {
             setUsage(data.usage);
             writeUsageCache(cacheKey, data.usage);

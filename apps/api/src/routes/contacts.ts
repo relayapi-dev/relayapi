@@ -6,6 +6,11 @@ import {
 	customFieldValues,
 	broadcastRecipients,
 	inboxConversations,
+	automationRuns,
+	automationContactControls,
+	contactSegmentMemberships,
+	contactSubscriptions,
+	generateId,
 } from "@relayapi/db";
 import { and, eq, ilike, inArray, sql, desc, or } from "drizzle-orm";
 import { ErrorResponse } from "../schemas/common";
@@ -394,6 +399,10 @@ const mergeContact = createRoute({
 			description: "Merge result",
 			content: { "application/json": { schema: MergeContactResponse } },
 		},
+		400: {
+			description: "Validation error",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -519,14 +528,20 @@ app.openapi(listContacts, async (c) => {
 	}
 
 	if (cursor) {
+		// Fetch the cursor row's created_at as raw text so we don't round-trip it
+		// through a JS Date, which truncates Postgres microseconds to millisecond
+		// precision. Truncation would skip rows sharing the cursor's millisecond
+		// (common after bulk imports) once the page boundary falls inside that
+		// millisecond. Bind it back with an explicit ::timestamptz cast to keep the
+		// keyset comparison exact.
 		const [cursorRow] = await db
-			.select({ createdAt: contacts.createdAt })
+			.select({ createdAt: sql<string>`${contacts.createdAt}::text` })
 			.from(contacts)
 			.where(eq(contacts.id, cursor))
 			.limit(1);
 		if (cursorRow) {
 			conditions.push(
-				sql`(${contacts.createdAt} < ${cursorRow.createdAt} OR (${contacts.createdAt} = ${cursorRow.createdAt} AND ${contacts.id} < ${cursor}))`,
+				sql`(${contacts.createdAt}, ${contacts.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}
@@ -1048,7 +1063,14 @@ app.openapi(bulkCreate, async (c) => {
 	const batchSize = 500;
 	for (let i = 0; i < body.contacts.length; i += batchSize) {
 		const batch = body.contacts.slice(i, i + batchSize);
+		// Pre-generate contact ids client-side so we can correlate each returned
+		// row to its source batch item by ID, not by array position. With
+		// .onConflictDoNothing() RETURNING only yields rows actually inserted
+		// (duplicates skipped by the unique (workspace_id, email) index are
+		// omitted), so positional zipping would attach channels to the wrong
+		// contacts — or drop them entirely — once any row in the batch conflicts.
 		const values = batch.map((item) => ({
+			id: generateId("ct_"),
 			organizationId: orgId,
 			workspaceId: body.workspace_id,
 			name: item.name ?? null,
@@ -1063,11 +1085,14 @@ app.openapi(bulkCreate, async (c) => {
 			.onConflictDoNothing()
 			.returning({ id: contacts.id });
 
-		const insertedIds = result.map((r) => r.id);
-		created += insertedIds.length;
+		const insertedIdSet = new Set(result.map((r) => r.id));
+		created += insertedIdSet.size;
 
 		// Batch channel inserts for this batch — one query instead of N.
 		// onConflictDoNothing mirrors the prior per-row try/catch on duplicates.
+		// Only attach a channel when its contact row was actually inserted; this
+		// pairs each channel with the exact contact generated for that item and
+		// naturally skips channels for rows skipped as duplicates.
 		const channelValues: Array<{
 			contactId: string;
 			socialAccountId: string;
@@ -1076,8 +1101,13 @@ app.openapi(bulkCreate, async (c) => {
 		}> = [];
 		for (let j = 0; j < batch.length; j++) {
 			const item = batch[j]!;
-			const contactId = insertedIds[j];
-			if (contactId && item.account_id && item.platform && item.identifier) {
+			const contactId = values[j]!.id;
+			if (
+				insertedIdSet.has(contactId) &&
+				item.account_id &&
+				item.platform &&
+				item.identifier
+			) {
 				channelValues.push({
 					contactId,
 					socialAccountId: item.account_id,
@@ -1164,6 +1194,23 @@ app.openapi(mergeContact, async (c) => {
 	const { merge_contact_id: sourceId } = c.req.valid("json");
 	const db = c.get("db");
 
+	// Guard against self-merge. Without this, the dedupe DELETEs below match
+	// every channel/field against itself and wipe them all, and the final
+	// source delete then destroys the contact row outright — returning 200
+	// while irrecoverably deleting the contact and its cascaded children.
+	if (sourceId === targetId) {
+		return c.json(
+			{
+				error: {
+					code: "VALIDATION_ERROR",
+					message:
+						"merge_contact_id must be different from the target contact id",
+				},
+			},
+			400,
+		);
+	}
+
 	// Verify both contacts belong to this org
 	const [target] = await db
 		.select({ id: contacts.id, workspaceId: contacts.workspaceId })
@@ -1201,71 +1248,179 @@ app.openapi(mergeContact, async (c) => {
 	const sourceDenied = assertWorkspaceScope(c, source.workspaceId);
 	if (sourceDenied) return sourceDenied;
 
-	// Move channels from source to target in bulk (skip duplicates).
-	// Two queries total instead of N: first delete source rows whose
-	// (socialAccountId, identifier) already exists under target (would violate
-	// the unique index), then re-parent the rest.
-	await db.execute(sql`
-		DELETE FROM contact_channels
-		WHERE contact_id = ${sourceId}
-			AND (social_account_id, identifier) IN (
-				SELECT social_account_id, identifier
-				FROM contact_channels
-				WHERE contact_id = ${targetId}
-			)
-	`);
-	const channelsMovedRows = await db
-		.update(contactChannels)
-		.set({ contactId: targetId })
-		.where(eq(contactChannels.contactId, sourceId))
-		.returning({ id: contactChannels.id });
-	const channelsMoved = channelsMovedRows.length;
+	// Run the whole merge inside a single transaction so a mid-sequence failure
+	// (TOCTOU on a unique index, transient DB error, worker eviction) rolls back
+	// cleanly instead of leaving a durable half-merged contact. All child-table
+	// re-parenting and the final source delete must be atomic with each other.
+	const result = await db.transaction(async (tx) => {
+		// Move channels from source to target in bulk (skip duplicates).
+		// Two queries total instead of N: first delete source rows whose
+		// (socialAccountId, identifier) already exists under target (would violate
+		// the unique index), then re-parent the rest.
+		await tx.execute(sql`
+			DELETE FROM contact_channels
+			WHERE contact_id = ${sourceId}
+				AND (social_account_id, identifier) IN (
+					SELECT social_account_id, identifier
+					FROM contact_channels
+					WHERE contact_id = ${targetId}
+				)
+		`);
+		const channelsMovedRows = await tx
+			.update(contactChannels)
+			.set({ contactId: targetId })
+			.where(eq(contactChannels.contactId, sourceId))
+			.returning({ id: contactChannels.id });
+		const channelsMoved = channelsMovedRows.length;
 
-	// Move custom field values from source to target in bulk (skip duplicates).
-	// Same pattern: the unique index is on (definitionId, contactId), so delete
-	// source rows whose definitionId already has a value on target, then re-parent.
-	await db.execute(sql`
-		DELETE FROM custom_field_values
-		WHERE contact_id = ${sourceId}
-			AND definition_id IN (
-				SELECT definition_id
-				FROM custom_field_values
-				WHERE contact_id = ${targetId}
-			)
-	`);
-	const fieldsMovedRows = await db
-		.update(customFieldValues)
-		.set({ contactId: targetId })
-		.where(eq(customFieldValues.contactId, sourceId))
-		.returning({ id: customFieldValues.id });
-	const fieldsMoved = fieldsMovedRows.length;
+		// Move custom field values from source to target in bulk (skip duplicates).
+		// Same pattern: the unique index is on (definitionId, contactId), so delete
+		// source rows whose definitionId already has a value on target, then re-parent.
+		await tx.execute(sql`
+			DELETE FROM custom_field_values
+			WHERE contact_id = ${sourceId}
+				AND definition_id IN (
+					SELECT definition_id
+					FROM custom_field_values
+					WHERE contact_id = ${targetId}
+				)
+		`);
+		const fieldsMovedRows = await tx
+			.update(customFieldValues)
+			.set({ contactId: targetId })
+			.where(eq(customFieldValues.contactId, sourceId))
+			.returning({ id: customFieldValues.id });
+		const fieldsMoved = fieldsMovedRows.length;
 
-	// Re-parent broadcast recipients and inbox conversations from source to
-	// target — independent tables, so run both updates in parallel.
-	const [recipientResult, conversationResult] = await Promise.all([
-		db
+		// Re-parent broadcast recipients and inbox conversations from source to
+		// target — independent tables.
+		const recipientResult = await tx
 			.update(broadcastRecipients)
 			.set({ contactId: targetId })
 			.where(eq(broadcastRecipients.contactId, sourceId))
-			.returning({ id: broadcastRecipients.id }),
-		db
+			.returning({ id: broadcastRecipients.id });
+		const conversationResult = await tx
 			.update(inboxConversations)
 			.set({ contactId: targetId })
 			.where(eq(inboxConversations.contactId, sourceId))
-			.returning({ id: inboxConversations.id }),
-	]);
-	const recipientsUpdated = recipientResult.length;
-	const conversationsUpdated = conversationResult.length;
+			.returning({ id: inboxConversations.id });
+		const recipientsUpdated = recipientResult.length;
+		const conversationsUpdated = conversationResult.length;
 
-	// Delete the source contact
-	await db.delete(contacts).where(eq(contacts.id, sourceId));
+		// Re-parent automation runs (sequence/automation enrollments). These FK
+		// with onDelete cascade, so without this the final source delete would
+		// silently destroy the source's active and historical runs. The partial
+		// unique index idx_automation_runs_active_uniq is on (contact_id,
+		// automation_id) for status in (active, waiting), so first drop any
+		// active/waiting source run that collides with an active/waiting target
+		// run for the same automation, then re-parent the rest.
+		await tx.execute(sql`
+			DELETE FROM automation_runs
+			WHERE contact_id = ${sourceId}
+				AND status IN ('active', 'waiting')
+				AND automation_id IN (
+					SELECT automation_id
+					FROM automation_runs
+					WHERE contact_id = ${targetId}
+						AND status IN ('active', 'waiting')
+				)
+		`);
+		const enrollmentRows = await tx
+			.update(automationRuns)
+			.set({ contactId: targetId })
+			.where(eq(automationRuns.contactId, sourceId))
+			.returning({ id: automationRuns.id });
+		const enrollmentsUpdated = enrollmentRows.length;
+
+		// Re-parent automation pause/opt-out controls. FK with onDelete cascade,
+		// so they would otherwise be destroyed by the source delete — making a
+		// merged contact who had opted out messageable again. Dedupe against both
+		// the per-automation unique index (contact_id, automation_id where
+		// automation_id IS NOT NULL) and the global one (contact_id where
+		// automation_id IS NULL) before re-parenting.
+		await tx.execute(sql`
+			DELETE FROM automation_contact_controls
+			WHERE contact_id = ${sourceId}
+				AND (
+					(
+						automation_id IS NOT NULL
+						AND automation_id IN (
+							SELECT automation_id
+							FROM automation_contact_controls
+							WHERE contact_id = ${targetId}
+								AND automation_id IS NOT NULL
+						)
+					)
+					OR (
+						automation_id IS NULL
+						AND EXISTS (
+							SELECT 1
+							FROM automation_contact_controls
+							WHERE contact_id = ${targetId}
+								AND automation_id IS NULL
+						)
+					)
+				)
+		`);
+		await tx
+			.update(automationContactControls)
+			.set({ contactId: targetId })
+			.where(eq(automationContactControls.contactId, sourceId));
+
+		// Re-parent static segment memberships ('source: manual' rows cannot be
+		// recomputed). PK is (contact_id, segment_id), so drop source rows for
+		// segments the target already belongs to, then re-parent the rest.
+		await tx.execute(sql`
+			DELETE FROM contact_segment_memberships
+			WHERE contact_id = ${sourceId}
+				AND segment_id IN (
+					SELECT segment_id
+					FROM contact_segment_memberships
+					WHERE contact_id = ${targetId}
+				)
+		`);
+		await tx
+			.update(contactSegmentMemberships)
+			.set({ contactId: targetId })
+			.where(eq(contactSegmentMemberships.contactId, sourceId));
+
+		// Re-parent subscription-list rows. No FK (so the source delete would
+		// orphan them), PK is (contact_id, list_id). Drop source rows for lists
+		// the target is already on, then re-parent the rest.
+		await tx.execute(sql`
+			DELETE FROM contact_subscriptions
+			WHERE contact_id = ${sourceId}
+				AND list_id IN (
+					SELECT list_id
+					FROM contact_subscriptions
+					WHERE contact_id = ${targetId}
+				)
+		`);
+		await tx
+			.update(contactSubscriptions)
+			.set({ contactId: targetId })
+			.where(eq(contactSubscriptions.contactId, sourceId));
+
+		// Delete the source contact (remaining cascade children, if any, are now
+		// empty or intentionally cascaded).
+		await tx.delete(contacts).where(eq(contacts.id, sourceId));
+
+		return {
+			channelsMoved,
+			fieldsMoved,
+			recipientsUpdated,
+			conversationsUpdated,
+			enrollmentsUpdated,
+		};
+	});
 
 	return c.json(
 		{
-			channels_moved: channelsMoved,
-			fields_moved: fieldsMoved,
-			recipients_updated: recipientsUpdated,
-			conversations_updated: conversationsUpdated,
+			channels_moved: result.channelsMoved,
+			fields_moved: result.fieldsMoved,
+			recipients_updated: result.recipientsUpdated,
+			conversations_updated: result.conversationsUpdated,
+			enrollments_updated: result.enrollmentsUpdated,
 		},
 		200,
 	);

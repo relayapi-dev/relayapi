@@ -9,6 +9,7 @@ import { ErrorResponse } from "../schemas/common";
 import {
 	CommentActionResponse,
 	CommentIdParams,
+	CommentModerationQuery,
 	CommentsQuery,
 	CommentsResponse,
 	PostCommentsParams,
@@ -455,6 +456,7 @@ async function fetchYouTubePosts(
 // ---------------------------------------------------------------------------
 
 const POSTS_CACHE_TTL = 300; // 5 minutes
+const COMMENTS_CACHE_TTL = 90; // short TTL — comments change faster than posts
 
 /** Delete inbox post caches for all accounts in an org so data is fresh on next load */
 async function invalidateInboxCache(
@@ -469,6 +471,10 @@ async function invalidateInboxCache(
 			.select({ id: socialAccounts.id })
 			.from(socialAccounts)
 			.where(eq(socialAccounts.organizationId, orgId));
+		// Delete post-list caches. Per-post comment caches (inbox-comments:*) are
+		// short-lived (COMMENTS_CACHE_TTL) and self-expire; we can't enumerate
+		// them by post here without an org→post index, so a mutation refreshes
+		// posts immediately and comments within ~90s.
 		await Promise.all(
 			accounts.map((a) => kv.delete(`inbox-posts:${a.id}`).catch(() => {})),
 		);
@@ -479,6 +485,40 @@ async function invalidateInboxCache(
 	if (env) {
 		await notifyRealtime(env, orgId, { type: "inbox.updated" }).catch(() => {});
 	}
+}
+
+/**
+ * Short-TTL KV cache for a single post's comment page. Mirrors getCachedPosts:
+ * the live platform fetch is the dominant cost on GET /inbox/comments, and the
+ * same posts are polled repeatedly by the dashboard. Keyed by post + page size
+ * so different limits don't collide.
+ */
+async function getCachedComments(
+	kv: KVNamespace,
+	postId: string,
+	commentsPerPost: number,
+	fetcher: () => Promise<{ data: CommentData[]; next_cursor: string | null }>,
+): Promise<{ data: CommentData[]; next_cursor: string | null }> {
+	const cacheKey = `inbox-comments:${postId}:${commentsPerPost}`;
+	try {
+		const cached = await kv.get<{ data: CommentData[]; next_cursor: string | null }>(
+			cacheKey,
+			"json",
+		);
+		if (cached) return cached;
+	} catch {
+		// cache miss
+	}
+
+	const result = await fetcher();
+	try {
+		await kv.put(cacheKey, JSON.stringify(result), {
+			expirationTtl: COMMENTS_CACHE_TTL,
+		});
+	} catch {
+		// non-critical
+	}
+	return result;
 }
 
 async function getCachedPosts(
@@ -516,14 +556,17 @@ async function getCachedPosts(
 		p.account_id = accountId;
 	}
 
-	if (posts.length > 0) {
-		try {
-			await kv.put(cacheKey, JSON.stringify(posts), {
-				expirationTtl: POSTS_CACHE_TTL,
-			});
-		} catch {
-			// non-critical
-		}
+	// Cache empty results too, with a shorter negative-cache TTL, so accounts
+	// with zero posts or broken/expired tokens (every fetcher returns [] on a
+	// non-OK response) don't hit the platform API on every inbox load. The
+	// `if (cached) return cached` check above handles `[]` correctly since an
+	// empty array is truthy.
+	try {
+		await kv.put(cacheKey, JSON.stringify(posts), {
+			expirationTtl: posts.length > 0 ? POSTS_CACHE_TTL : 60,
+		});
+	} catch {
+		// non-critical
 	}
 	return posts;
 }
@@ -628,7 +671,7 @@ const deleteComment = createRoute({
 	tags: ["Inbox"],
 	summary: "Delete a comment",
 	security: [{ Bearer: [] }],
-	request: { params: CommentIdParams },
+	request: { params: CommentIdParams, query: CommentModerationQuery },
 	responses: {
 		200: {
 			description: "Delete result",
@@ -650,7 +693,7 @@ const hideComment = createRoute({
 	tags: ["Inbox"],
 	summary: "Hide a comment",
 	security: [{ Bearer: [] }],
-	request: { params: CommentIdParams },
+	request: { params: CommentIdParams, query: CommentModerationQuery },
 	responses: {
 		200: {
 			description: "Hide result",
@@ -672,7 +715,7 @@ const unhideComment = createRoute({
 	tags: ["Inbox"],
 	summary: "Unhide a comment",
 	security: [{ Bearer: [] }],
-	request: { params: CommentIdParams },
+	request: { params: CommentIdParams, query: CommentModerationQuery },
 	responses: {
 		200: {
 			description: "Unhide result",
@@ -694,7 +737,7 @@ const likeComment = createRoute({
 	tags: ["Inbox"],
 	summary: "Like a comment",
 	security: [{ Bearer: [] }],
-	request: { params: CommentIdParams },
+	request: { params: CommentIdParams, query: CommentModerationQuery },
 	responses: {
 		200: {
 			description: "Like result",
@@ -716,7 +759,7 @@ const unlikeComment = createRoute({
 	tags: ["Inbox"],
 	summary: "Unlike a comment",
 	security: [{ Bearer: [] }],
-	request: { params: CommentIdParams },
+	request: { params: CommentIdParams, query: CommentModerationQuery },
 	responses: {
 		200: {
 			description: "Unlike result",
@@ -841,7 +884,9 @@ app.openapi(listComments, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform, account_id, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
-	const maxPostsToInspect = Math.max(limit * 3, 30);
+	// Hard ceiling independent of limit so a large limit can't blow up the live
+	// comment fan-out (each inspected post is one Graph/YouTube subrequest).
+	const maxPostsToInspect = Math.min(Math.max(limit, 10) * 3, 30);
 
 	const accounts = await getAccountsForOrg(db, orgId, { platform, accountId: account_id }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	if (accounts.length === 0) {
@@ -892,20 +937,23 @@ app.openapi(listComments, async (c) => {
 		if (!account?.accessToken) return [] as CommentWithPost[];
 
 		try {
-			let result: { data: CommentData[]; next_cursor: string | null };
-			switch (post.platform) {
-				case "facebook":
-					result = await fetchFacebookComments(account.accessToken, post.id, undefined, commentsPerPost);
-					break;
-				case "instagram":
-					result = await fetchInstagramComments(account.accessToken, post.id, undefined, commentsPerPost, account.username ?? undefined);
-					break;
-				case "youtube":
-					result = await fetchYouTubeComments(account.accessToken, post.id, undefined, commentsPerPost);
-					break;
-				default:
-					result = { data: [], next_cursor: null };
-			}
+			const result = await getCachedComments(
+				c.env.KV,
+				post.id,
+				commentsPerPost,
+				async () => {
+					switch (post.platform) {
+						case "facebook":
+							return fetchFacebookComments(account.accessToken!, post.id, undefined, commentsPerPost);
+						case "instagram":
+							return fetchInstagramComments(account.accessToken!, post.id, undefined, commentsPerPost, account.username ?? undefined);
+						case "youtube":
+							return fetchYouTubeComments(account.accessToken!, post.id, undefined, commentsPerPost);
+						default:
+							return { data: [], next_cursor: null };
+					}
+				},
+			);
 
 			return result.data.map((comment) => ({
 				...comment,
@@ -1115,7 +1163,7 @@ app.openapi(replyToComment, async (c) => {
 				);
 				if (!res.ok) return c.json({ success: false }, 200);
 				const json = (await res.json()) as { id?: string };
-				await invalidateInboxCache(c.env.KV, db, orgId, c.env);
+				c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
 				return c.json({ success: true, comment_id: json.id }, 200);
 			}
 			case "instagram": {
@@ -1137,7 +1185,7 @@ app.openapi(replyToComment, async (c) => {
 				);
 				if (!igRes.ok) return c.json({ success: false }, 200);
 				const igJson = (await igRes.json()) as { id?: string };
-				await invalidateInboxCache(c.env.KV, db, orgId, c.env);
+				c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
 				return c.json({ success: true, comment_id: igJson.id }, 200);
 			}
 			case "youtube": {
@@ -1161,7 +1209,7 @@ app.openapi(replyToComment, async (c) => {
 				);
 				if (!res.ok) return c.json({ success: false }, 200);
 				const json = (await res.json()) as { id?: string };
-				await invalidateInboxCache(c.env.KV, db, orgId, c.env);
+				c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
 				return c.json({ success: true, comment_id: json.id }, 200);
 			}
 			default:
@@ -1175,13 +1223,14 @@ app.openapi(replyToComment, async (c) => {
 app.openapi(deleteComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
+	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	// Comment_id doesn't tell us which account owns the comment — we fan out a
-	// platform delete to every candidate account and take the first success.
-	// Parallel > serial: for N accounts at ~400ms each, serial is 400N ms,
-	// parallel caps at ~400ms + the success account's latency.
-	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	// When the caller supplies account_id (it already knows the owning account
+	// from listComments), target that single account. Otherwise comment_id alone
+	// doesn't tell us the owner, so fan out a platform delete to every candidate
+	// and take the first success.
+	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	const candidates = accounts.filter(
 		(a) =>
 			a.accessToken &&
@@ -1230,7 +1279,7 @@ app.openapi(deleteComment, async (c) => {
 	);
 
 	if (results.some((r) => r.status === "fulfilled")) {
-		await invalidateInboxCache(c.env.KV, db, orgId, c.env);
+		c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
 		return c.json({ success: true }, 200);
 	}
 	return c.json({ success: false }, 200);
@@ -1239,11 +1288,13 @@ app.openapi(deleteComment, async (c) => {
 app.openapi(hideComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
+	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	// Hide is Facebook/Instagram only. Parallelize across candidates; first
-	// success wins. See deleteComment for the rationale.
-	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	// Hide is Facebook/Instagram only. Target the supplied account when given;
+	// otherwise parallelize across candidates and take the first success. See
+	// deleteComment for the rationale.
+	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	const candidates = accounts.filter(
 		(a) => a.accessToken && (a.platform === "facebook" || a.platform === "instagram"),
 	);
@@ -1286,7 +1337,7 @@ app.openapi(hideComment, async (c) => {
 	);
 
 	if (results.some((r) => r.status === "fulfilled")) {
-		await invalidateInboxCache(c.env.KV, db, orgId, c.env);
+		c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
 		return c.json({ success: true }, 200);
 	}
 	return c.json({ success: false }, 200);
@@ -1295,10 +1346,12 @@ app.openapi(hideComment, async (c) => {
 app.openapi(unhideComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
+	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	// Unhide is Facebook/Instagram only. Parallelized; first success wins.
-	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	// Unhide is Facebook/Instagram only. Target the supplied account when given;
+	// otherwise parallelize and take the first success.
+	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	const candidates = accounts.filter(
 		(a) => a.accessToken && (a.platform === "facebook" || a.platform === "instagram"),
 	);
@@ -1341,7 +1394,7 @@ app.openapi(unhideComment, async (c) => {
 	);
 
 	if (results.some((r) => r.status === "fulfilled")) {
-		await invalidateInboxCache(c.env.KV, db, orgId, c.env);
+		c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
 		return c.json({ success: true }, 200);
 	}
 	return c.json({ success: false }, 200);
@@ -1350,12 +1403,16 @@ app.openapi(unhideComment, async (c) => {
 app.openapi(likeComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
+	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	// Only Facebook supports liking comments. Parallelize across FB accounts.
+	// Only Facebook supports liking comments. Target the supplied account when
+	// given — without it the fan-out makes EVERY Facebook page that can access
+	// the comment like it, not just the owning one. Otherwise fall back to the
+	// FB-account fan-out (first success wins).
 	// NOTE: Instagram Graph API does NOT support liking comments.
 	// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/
-	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	const candidates = accounts.filter((a) => a.accessToken && a.platform === "facebook");
 
 	const results = await Promise.allSettled(
@@ -1385,12 +1442,14 @@ app.openapi(likeComment, async (c) => {
 app.openapi(unlikeComment, async (c) => {
 	const orgId = c.get("orgId");
 	const { comment_id } = c.req.valid("param");
+	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	// Only Facebook supports unliking comments. Parallelize across FB accounts.
+	// Only Facebook supports unliking comments. Target the supplied account when
+	// given; otherwise fall back to the FB-account fan-out.
 	// NOTE: Instagram Graph API does NOT support unliking comments.
 	// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/
-	const accounts = await getAccountsForOrg(db, orgId, undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
 	const candidates = accounts.filter((a) => a.accessToken && a.platform === "facebook");
 
 	const results = await Promise.allSettled(
@@ -1480,52 +1539,119 @@ app.openapi(listReviews, async (c) => {
 		created_at: string;
 	};
 
+	// Composite cursor: each platform returns its own opaque page token (Google
+	// pageTokens are location/query-bound, Facebook after-cursors are edge-bound),
+	// so a single shared token can't paginate multiple accounts. Decode the
+	// incoming cursor as a base64url JSON map { [accountId]: platformToken } and
+	// hand each account ONLY its own token. When a cursor was supplied but an
+	// account has no entry, that account is already exhausted — return empty
+	// instead of replaying a foreign token.
+	const decodeCursorMap = (raw: string | undefined): Record<string, string> | null => {
+		if (!raw) return null;
+		try {
+			const json = atob(raw.replace(/-/g, "+").replace(/_/g, "/"));
+			const parsed = JSON.parse(json) as unknown;
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				return parsed as Record<string, string>;
+			}
+		} catch {
+			// Malformed/legacy cursor — treat as a fresh first page.
+		}
+		return null;
+	};
+	const encodeCursorMap = (map: Record<string, string>): string =>
+		btoa(JSON.stringify(map))
+			.replace(/\+/g, "-")
+			.replace(/\//g, "_")
+			.replace(/=+$/, "");
+
+	const cursorMap = decodeCursorMap(cursor);
+	const cursorSupplied = cursor !== undefined && cursor !== "";
+	// Per-account page size so the lossy merge-and-slice can't silently drop
+	// reviews from accounts other than the page-token originator.
+	const perAccountPageSize = Math.max(Math.ceil(limit / accounts.length), 5);
+
 	// Fetch reviews from all accounts in parallel (capped by getAccountsForOrg limit)
 	const results = await mapConcurrently(
 		accounts.filter((account) => account.accessToken),
 		4,
-		async (account): Promise<{ reviews: ReviewItem[]; cursor: string | null }> => {
+		async (account): Promise<{ accountId: string; reviews: ReviewItem[]; cursor: string | null }> => {
+			// Per-account token from the composite cursor. If a cursor was supplied
+			// but this account has no entry, it's exhausted — skip it.
+			const accountCursor = cursorMap ? cursorMap[account.id] : undefined;
+			if (cursorSupplied && cursorMap && accountCursor === undefined) {
+				return { accountId: account.id, reviews: [], cursor: null };
+			}
 			try {
 				switch (account.platform) {
 					case "googlebusiness": {
-						// Google Business Profile API: List accounts to get the GMB account name
+						// The connect flow persists both the GMB account name and the
+						// location id on social_accounts.metadata. Read those first and
+						// skip BOTH discovery round trips (accounts + locations) when
+						// available — the optional PUT gmb-location endpoint stores
+						// `default_location_id`, the standard OAuth flow stores
+						// `location_id` / `google_account_name`.
 						// Docs: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/list
-						const accountsRes = await fetch(
-							"https://mybusinessaccountmanagement.googleapis.com/v1/accounts",
-							{ headers: { Authorization: `Bearer ${account.accessToken}` } },
-						);
-						if (!accountsRes.ok) return { reviews: [], cursor: null };
-						const accountsJson = (await accountsRes.json()) as {
-							accounts: Array<{ name: string }>;
-						};
-						const gmbAccount = accountsJson.accounts?.[0];
-						if (!gmbAccount) return { reviews: [], cursor: null };
-
-						// Get the location (use metadata default or first location)
-						const meta = account.metadata as { default_location_id?: string } | null;
-						let locationName = meta?.default_location_id;
+						const meta = account.metadata as {
+							default_location_id?: string;
+							location_id?: string;
+							google_account_name?: string;
+						} | null;
+						let locationName = meta?.default_location_id ?? meta?.location_id;
 
 						if (!locationName) {
+							// No persisted location — fall back to discovery (accounts → locations).
+							const accountsRes = await fetch(
+								"https://mybusinessaccountmanagement.googleapis.com/v1/accounts",
+								{ headers: { Authorization: `Bearer ${account.accessToken}` } },
+							);
+							if (!accountsRes.ok) return { accountId: account.id, reviews: [], cursor: null };
+							const accountsJson = (await accountsRes.json()) as {
+								accounts: Array<{ name: string }>;
+							};
+							const gmbAccount = accountsJson.accounts?.[0];
+							if (!gmbAccount) return { accountId: account.id, reviews: [], cursor: null };
+
 							const locRes = await fetch(
 								`https://mybusinessbusinessinformation.googleapis.com/v1/${gmbAccount.name}/locations`,
 								{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 							);
-							if (!locRes.ok) return { reviews: [], cursor: null };
+							if (!locRes.ok) return { accountId: account.id, reviews: [], cursor: null };
 							const locJson = (await locRes.json()) as {
 								locations: Array<{ name: string }>;
 							};
 							locationName = locJson.locations?.[0]?.name;
+
+							// Persist the discovered values so discovery happens at most
+							// once per account (off the response path).
+							if (locationName) {
+								const discoveredLocation = locationName;
+								c.executionCtx.waitUntil(
+									db
+										.update(socialAccounts)
+										.set({
+											metadata: {
+												...(meta ?? {}),
+												google_account_name: gmbAccount.name,
+												location_id: discoveredLocation,
+											},
+										})
+										.where(eq(socialAccounts.id, account.id))
+										.then(() => {})
+										.catch(() => {}),
+								);
+							}
 						}
 
-						if (!locationName) return { reviews: [], cursor: null };
+						if (!locationName) return { accountId: account.id, reviews: [], cursor: null };
 
-						let url = `https://mybusiness.googleapis.com/v4/${locationName}/reviews?pageSize=${limit}`;
-						if (cursor) url += `&pageToken=${encodeURIComponent(cursor)}`;
+						let url = `https://mybusiness.googleapis.com/v4/${locationName}/reviews?pageSize=${perAccountPageSize}`;
+						if (accountCursor) url += `&pageToken=${encodeURIComponent(accountCursor)}`;
 
 						const res = await fetch(url, {
 							headers: { Authorization: `Bearer ${account.accessToken}` },
 						});
-						if (!res.ok) return { reviews: [], cursor: null };
+						if (!res.ok) return { accountId: account.id, reviews: [], cursor: null };
 
 						const json = (await res.json()) as {
 							reviews: Array<{
@@ -1558,13 +1684,13 @@ app.openapi(listReviews, async (c) => {
 								created_at: review.createTime,
 							});
 						}
-						return { reviews, cursor: json.nextPageToken ?? null };
+						return { accountId: account.id, reviews, cursor: json.nextPageToken ?? null };
 					}
 					case "facebook": {
-						let url = `${GRAPH_BASE.facebook}/${account.platformAccountId}/ratings?access_token=${encodeURIComponent(account.accessToken!)}&limit=${limit}&fields=reviewer,rating,review_text,created_time`;
-						if (cursor) url += `&after=${encodeURIComponent(cursor)}`;
+						let url = `${GRAPH_BASE.facebook}/${account.platformAccountId}/ratings?access_token=${encodeURIComponent(account.accessToken!)}&limit=${perAccountPageSize}&fields=reviewer,rating,review_text,created_time`;
+						if (accountCursor) url += `&after=${encodeURIComponent(accountCursor)}`;
 						const res = await fetch(url);
-						if (!res.ok) return { reviews: [], cursor: null };
+						if (!res.ok) return { accountId: account.id, reviews: [], cursor: null };
 						const json = (await res.json()) as {
 							data: Array<{
 								reviewer: { name: string; id: string };
@@ -1590,29 +1716,34 @@ app.openapi(listReviews, async (c) => {
 								created_at: review.created_time,
 							});
 						}
-						return { reviews, cursor: json.paging?.next ? (json.paging.cursors?.after ?? null) : null };
+						return { accountId: account.id, reviews, cursor: json.paging?.next ? (json.paging.cursors?.after ?? null) : null };
 					}
 					default:
-						return { reviews: [], cursor: null };
+						return { accountId: account.id, reviews: [], cursor: null };
 				}
 			} catch {
-				return { reviews: [], cursor: null };
+				return { accountId: account.id, reviews: [], cursor: null };
 			}
 		},
 	);
 
 	const allReviews: ReviewItem[] = [];
-	let lastCursor: string | null = null;
+	// Build the next composite cursor by collecting every non-null per-account
+	// page token. null only when no account has more pages.
+	const nextCursorMap: Record<string, string> = {};
 	for (const result of results) {
 		allReviews.push(...result.reviews);
-		if (result.cursor) lastCursor = result.cursor;
+		if (result.cursor) nextCursorMap[result.accountId] = result.cursor;
 	}
+
+	const nextCursor =
+		Object.keys(nextCursorMap).length > 0 ? encodeCursorMap(nextCursorMap) : null;
 
 	return c.json(
 		{
-			data: allReviews.slice(0, limit) as any,
-			next_cursor: lastCursor,
-			has_more: allReviews.length > limit || lastCursor !== null,
+			data: allReviews as any,
+			next_cursor: nextCursor,
+			has_more: nextCursor !== null,
 		},
 		200,
 	);

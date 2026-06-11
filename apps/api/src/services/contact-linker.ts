@@ -1,4 +1,4 @@
-import { eq, and, ilike } from "drizzle-orm";
+import { eq, and, ilike, sql } from "drizzle-orm";
 import type { Database } from "@relayapi/db";
 import { contacts, contactChannels, socialAccounts } from "@relayapi/db";
 
@@ -47,15 +47,19 @@ export async function findMatchingContact(
 		}
 	}
 
-	// Priority 2: Phone match (if identifier looks like a phone number)
+	// Priority 2: Phone match (if identifier looks like a phone number).
+	// Compare digits-only on BOTH sides so a WhatsApp wa_id like "393331234567"
+	// links to a contact stored in E.164 form "+393331234567" instead of
+	// duplicating the contact. (Postgres regexp_replace strips non-digits.)
 	if (participantPlatformId && /^\+?\d{7,15}$/.test(participantPlatformId)) {
+		const normalizedPhone = participantPlatformId.replace(/\D/g, "");
 		const [phoneMatch] = await db
 			.select({ id: contacts.id })
 			.from(contacts)
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
-					eq(contacts.phone, participantPlatformId),
+					sql`regexp_replace(${contacts.phone}, '\\D', '', 'g') = ${normalizedPhone}`,
 				),
 			)
 			.limit(1);
@@ -134,16 +138,20 @@ export async function ensureContactForAuthor(
 		authorName,
 	);
 	if (existing && existing.confidence !== "name_suggestion") {
-		// Promote an exact match. If the match came via phone/email but no
-		// channel row exists for this (platform, socialAccount, identifier),
-		// link the channel now so future sends can find it without re-matching.
-		await ensureChannelLink(
-			db,
-			existing.contactId,
-			socialAccountId,
-			platform,
-			authorId,
-		);
+		// An "exact" match already matched ON the (socialAccount, identifier)
+		// channel row, so the channel link provably exists — skip the redundant
+		// ensureChannelLink existence SELECT. Only phone/email matches may lack a
+		// channel row for this (platform, socialAccount, identifier) tuple, so
+		// link it now for those so future sends find it without re-matching.
+		if (existing.confidence !== "exact") {
+			await ensureChannelLink(
+				db,
+				existing.contactId,
+				socialAccountId,
+				platform,
+				authorId,
+			);
+		}
 		return existing.contactId;
 	}
 
@@ -158,16 +166,24 @@ export async function ensureContactForAuthor(
 		return null;
 	}
 
+	// Only treat the author id as a phone number for channels whose identifiers
+	// ARE phone numbers (WhatsApp wa_id, SMS E.164). Telegram/Instagram/Facebook
+	// ids are plain integers that pass a naive /\d{7,15}/ test, so writing them
+	// to contacts.phone produces a bogus phone that the phone matcher could later
+	// collide against an unrelated WhatsApp/SMS participant.
+	const PHONE_PLATFORMS = new Set(["whatsapp", "sms", "twilio"]);
+	const phone =
+		PHONE_PLATFORMS.has(platform) && /^\+?\d{7,15}$/.test(authorId)
+			? authorId
+			: null;
+
 	const [created] = await db
 		.insert(contacts)
 		.values({
 			organizationId: orgId,
 			workspaceId: account.workspaceId,
 			name: authorName ?? null,
-			// Phone-shaped identifiers (e.g. WhatsApp wa_id, SMS E.164) go into
-			// the contacts.phone column so condition nodes and merge tags work
-			// without extra lookups.
-			phone: /^\+?\d{7,15}$/.test(authorId) ? authorId : null,
+			phone,
 		})
 		.returning({ id: contacts.id });
 	if (!created) return null;

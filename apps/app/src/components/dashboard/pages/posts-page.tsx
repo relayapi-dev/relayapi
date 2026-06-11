@@ -143,6 +143,12 @@ export function PostsPage({
   const filterQuery = useFilterQuery();
   const { accountId } = useFilter();
 
+  // List-view data (queue/failed/all hooks) only renders when the list is
+  // actually shown. In calendar view CalendarView fetches its own data via
+  // useCalendarPosts, so gating these hooks on the rendered view avoids a
+  // wasted full proxy round trip on the default (calendar) load.
+  const listRendered = viewMode === "list" || isMobile;
+
   // Queue tab: scheduled + failed + publishing posts
   const queueQuery: Record<string, string | undefined> = { ...filterQuery, status: "scheduled", include: "targets,media" };
   const {
@@ -155,7 +161,7 @@ export function PostsPage({
     setData: setQueuePosts,
     refetch: refetchQueue,
   } = usePaginatedApi<Post>(
-    activeTab === "queue" ? "posts" : null,
+    activeTab === "queue" && listRendered ? "posts" : null,
     {
       initialCursor: initialQueueData?.nextCursor,
       initialData: initialQueueData?.data,
@@ -167,7 +173,7 @@ export function PostsPage({
 
   // Also fetch failed posts count for badge
   const { data: failedPosts, refetch: refetchFailed } = usePaginatedApi<Post>(
-    activeTab === "queue" ? "posts" : null,
+    activeTab === "queue" && listRendered ? "posts" : null,
     {
       initialCursor: initialFailedData?.nextCursor,
       initialData: initialFailedData?.data,
@@ -242,7 +248,7 @@ export function PostsPage({
     setData: setAllPosts,
     refetch: refetchAll,
   } = usePaginatedApi<any>(
-    activeTab === "all" ? "posts" : null,
+    activeTab === "all" && listRendered ? "posts" : null,
     {
       initialCursor: initialAllData?.nextCursor,
       initialData: initialAllData?.data,
@@ -285,7 +291,7 @@ export function PostsPage({
 
   useRealtimeUpdates(useCallback((event) => {
     if (event.type.startsWith("post.")) refetchActiveTab();
-  }, [refetchActiveTab]));
+  }, [refetchActiveTab]), { defer: true });
 
   const handleRetry = async (id: string) => {
     try {

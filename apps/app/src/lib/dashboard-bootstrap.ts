@@ -8,10 +8,46 @@ export interface DashboardBootstrapData {
 	notif_count: number;
 }
 
-let pending: Promise<DashboardBootstrapData | null> | null = null;
+interface CacheEntry {
+	at: number;
+	data: DashboardBootstrapData | null;
+}
 
-export function fetchDashboardBootstrap(): Promise<DashboardBootstrapData | null> {
-	if (pending) return pending;
+// Short-lived result cache so the 4 dashboard consumers (sidebar bootstrap +
+// usage/streak/key-status hooks) share a single /api/dashboard-bootstrap call
+// per full-document navigation instead of each refiring it once the in-flight
+// promise has resolved. Keyed by active org id so an org switch isn't served a
+// stale result.
+const RESULT_TTL_MS = 45_000;
+
+let pending: Promise<DashboardBootstrapData | null> | null = null;
+let pendingKey: string | null = null;
+let cache: { key: string; entry: CacheEntry } | null = null;
+
+export interface FetchDashboardBootstrapOptions {
+	/** Cache key (typically the active org id) so org switches aren't served stale data. */
+	orgId?: string | null;
+	/** Bypass the TTL cache and force a fresh fetch. */
+	force?: boolean;
+}
+
+export function fetchDashboardBootstrap(
+	options: FetchDashboardBootstrapOptions = {},
+): Promise<DashboardBootstrapData | null> {
+	const key = options.orgId ?? "__default__";
+
+	if (!options.force) {
+		// Serve a fresh cached result if we have one for this org.
+		if (
+			cache &&
+			cache.key === key &&
+			Date.now() - cache.entry.at < RESULT_TTL_MS
+		) {
+			return Promise.resolve(cache.entry.data);
+		}
+		// Coalesce with an in-flight request for the same org.
+		if (pending && pendingKey === key) return pending;
+	}
 
 	const request = (async () => {
 		try {
@@ -26,9 +62,19 @@ export function fetchDashboardBootstrap(): Promise<DashboardBootstrapData | null
 	})();
 
 	pending = request;
-	request.finally(() => {
-		if (pending === request) pending = null;
-	});
+	pendingKey = key;
+	request
+		.then((data) => {
+			// Only cache successful responses so a transient failure doesn't
+			// suppress retries for the whole TTL window.
+			if (data) cache = { key, entry: { at: Date.now(), data } };
+		})
+		.finally(() => {
+			if (pending === request) {
+				pending = null;
+				pendingKey = null;
+			}
+		});
 
 	return request;
 }

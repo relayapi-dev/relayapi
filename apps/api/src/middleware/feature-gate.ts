@@ -35,59 +35,60 @@ export const workspaceRequiredMiddleware = createMiddleware<{
 		return next();
 	}
 
-	const orgId = c.get("orgId");
-
-	// Check org-level setting from KV (fast, cached)
-	const settings = await c.env.KV.get<{ require_workspace_id: boolean }>(
-		`org-settings:${orgId}`,
-		"json",
-	);
-
-	const scopedKeyRequiresWorkspace = !hasAllWorkspaceScope(c);
-	if (!settings?.require_workspace_id && !scopedKeyRequiresWorkspace) {
-		return next();
-	}
-
-	// Check query param first (works for all content types)
+	// Fast in-memory short-circuits FIRST — a request that already carries a
+	// workspace_id passes unconditionally, so skip the org-settings KV read
+	// entirely on the hot create path. (Behavior is identical: the original
+	// code returned next() for these requests regardless of the setting.)
 	const url = new URL(c.req.url);
-	if (url.searchParams.has("workspace_id")) {
+	const hasWorkspaceInQuery = url.searchParams.has("workspace_id");
+	const body = c.get("parsedBody");
+	const hasWorkspaceInBody = Boolean(body?.workspace_id);
+	if (hasWorkspaceInQuery || hasWorkspaceInBody) {
 		return next();
 	}
 
-	// Check pre-parsed JSON body for workspace_id
-	const body = c.get("parsedBody");
-	if (body) {
-		if (!body.workspace_id) {
-			return c.json(
-				{
-					error: {
-						code: "WORKSPACE_ID_REQUIRED",
-						message:
-							scopedKeyRequiresWorkspace
-								? "This API key is scoped to specific workspaces. Pass workspace_id in the request body or query string."
-								: "This organization requires workspace_id on all create requests. Pass workspace_id in the request body or query string.",
-					},
-				},
-				400,
-			);
+	// No workspace_id present — determine whether it's required.
+	// Scoped keys always require it (free, in-memory check). Only fall through
+	// to the org-settings KV read when the key has all-workspace scope.
+	const scopedKeyRequiresWorkspace = !hasAllWorkspaceScope(c);
+	if (!scopedKeyRequiresWorkspace) {
+		const orgId = c.get("orgId");
+		const settings = await c.env.KV.get<{ require_workspace_id: boolean }>(
+			`org-settings:${orgId}`,
+			"json",
+		);
+		if (!settings?.require_workspace_id) {
+			return next();
 		}
-	} else {
-		// Non-JSON body (e.g. multipart upload) without workspace_id in query
-		return c.json(
-				{
-					error: {
-						code: "WORKSPACE_ID_REQUIRED",
-						message:
-							scopedKeyRequiresWorkspace
-								? "This API key is scoped to specific workspaces. Pass workspace_id as a query parameter."
-								: "This organization requires workspace_id on all create requests. Pass workspace_id as a query parameter.",
-					},
-				},
-				400,
-			);
 	}
 
-	return next();
+	// workspace_id is required but absent — return the appropriate error.
+	if (body) {
+		return c.json(
+			{
+				error: {
+					code: "WORKSPACE_ID_REQUIRED",
+					message: scopedKeyRequiresWorkspace
+						? "This API key is scoped to specific workspaces. Pass workspace_id in the request body or query string."
+						: "This organization requires workspace_id on all create requests. Pass workspace_id in the request body or query string.",
+				},
+			},
+			400,
+		);
+	}
+
+	// Non-JSON body (e.g. multipart upload) without workspace_id in query
+	return c.json(
+		{
+			error: {
+				code: "WORKSPACE_ID_REQUIRED",
+				message: scopedKeyRequiresWorkspace
+					? "This API key is scoped to specific workspaces. Pass workspace_id as a query parameter."
+					: "This organization requires workspace_id on all create requests. Pass workspace_id as a query parameter.",
+			},
+		},
+		400,
+	);
 });
 
 export const aiEnabledMiddleware = createMiddleware<{

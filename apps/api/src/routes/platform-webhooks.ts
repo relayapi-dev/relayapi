@@ -87,22 +87,54 @@ async function verifyHmacSha256(
 interface AccountLookup {
 	orgId: string;
 	accountId: string;
+	/** platformAccountId stored on the social_accounts row (used for echo detection) */
+	platformAccountId?: string;
+	/** webhookAccountId stored on the social_accounts row (used for echo detection) */
+	webhookAccountId?: string;
 }
 
-async function resolveAccount(
+// Sentinel value cached when a platform account ID resolves to no social account.
+// Short TTL so newly connected accounts start resolving quickly.
+const NEGATIVE_CACHE_VALUE = "miss";
+const NEGATIVE_CACHE_TTL = 60;
+
+/**
+ * Resolve ALL social accounts connected to a given platform account ID.
+ *
+ * The unique index on social_accounts is (organizationId, platform,
+ * platformAccountId), so the same Facebook Page / WhatsApp number / IG account
+ * can legitimately be connected by multiple organizations (e.g. an agency and
+ * its client). Returning only one of them would silently misroute every inbound
+ * event to a single tenant, so this returns every matching account and callers
+ * fan-out the event to each. Results are ordered deterministically by id so the
+ * list is stable across cache expiries.
+ */
+async function resolveAccounts(
 	env: Env,
 	platform: string,
 	platformAccountId: string,
-): Promise<AccountLookup | null> {
+): Promise<AccountLookup[]> {
 	const kvKey = `platform-account:${platform}:${platformAccountId}`;
-	const cached = await env.KV.get<AccountLookup>(kvKey, "json");
-	if (cached) return cached;
+	const cachedRaw = await env.KV.get(kvKey);
+	if (cachedRaw === NEGATIVE_CACHE_VALUE) return [];
+	if (cachedRaw) {
+		try {
+			const parsed = JSON.parse(cachedRaw);
+			// Tolerate the previous single-object cache shape across deploys:
+			// only trust an array, otherwise re-query and overwrite the entry.
+			if (Array.isArray(parsed)) return parsed as AccountLookup[];
+		} catch {
+			// Fall through to a fresh lookup on malformed cache entries.
+		}
+	}
 
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const [account] = await db
+	const accounts = await db
 		.select({
 			id: socialAccounts.id,
 			organizationId: socialAccounts.organizationId,
+			platformAccountId: socialAccounts.platformAccountId,
+			webhookAccountId: socialAccounts.webhookAccountId,
 		})
 		.from(socialAccounts)
 		.where(
@@ -111,17 +143,20 @@ async function resolveAccount(
 				eq(socialAccounts.platformAccountId, platformAccountId),
 			),
 		)
-		.limit(1);
+		.orderBy(socialAccounts.id);
+
+	let rows = accounts;
 
 	// Instagram webhooks use the IGBA ID as entry.id, which differs from both
 	// platformAccountId (user_id) and webhookAccountId (IGUID) stored during
-	// connection. Try webhookAccountId first, then auto-link if unambiguous.
-	if (!account && platform === "instagram") {
-		// 1. Check webhookAccountId (uses social_accounts_webhook_id_idx index)
-		const [byWebhook] = await db
+	// connection. Fall back to webhookAccountId (uses social_accounts_webhook_id_idx).
+	if (rows.length === 0 && platform === "instagram") {
+		rows = await db
 			.select({
 				id: socialAccounts.id,
 				organizationId: socialAccounts.organizationId,
+				platformAccountId: socialAccounts.platformAccountId,
+				webhookAccountId: socialAccounts.webhookAccountId,
 			})
 			.from(socialAccounts)
 			.where(
@@ -130,30 +165,32 @@ async function resolveAccount(
 					eq(socialAccounts.webhookAccountId, platformAccountId),
 				),
 			)
-			.limit(1);
+			.orderBy(socialAccounts.id);
 
-		if (byWebhook) {
-			const result: AccountLookup = {
-				orgId: byWebhook.organizationId,
-				accountId: byWebhook.id,
-			};
-			await env.KV.put(kvKey, JSON.stringify(result), { expirationTtl: 300 });
-			return result;
+		if (rows.length === 0) {
+			console.warn("[platform-webhooks] Instagram webhook account could not be resolved safely", {
+				webhookEntryId: platformAccountId,
+			});
 		}
-
-		console.warn("[platform-webhooks] Instagram webhook account could not be resolved safely", {
-			webhookEntryId: platformAccountId,
-		});
 	}
 
-	if (!account) return null;
+	if (rows.length === 0) {
+		// Negative cache so repeated events for an unknown account don't hammer
+		// Postgres. Short TTL so newly connected accounts resolve quickly.
+		await env.KV.put(kvKey, NEGATIVE_CACHE_VALUE, {
+			expirationTtl: NEGATIVE_CACHE_TTL,
+		});
+		return [];
+	}
 
-	const result: AccountLookup = {
-		orgId: account.organizationId,
-		accountId: account.id,
-	};
-	await env.KV.put(kvKey, JSON.stringify(result), { expirationTtl: 300 });
-	return result;
+	const results: AccountLookup[] = rows.map((row) => ({
+		orgId: row.organizationId,
+		accountId: row.id,
+		platformAccountId: row.platformAccountId ?? undefined,
+		webhookAccountId: row.webhookAccountId ?? undefined,
+	}));
+	await env.KV.put(kvKey, JSON.stringify(results), { expirationTtl: 300 });
+	return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +262,11 @@ app.post("/facebook", async (c) => {
 		entryIds: parsed.entry?.map((e) => e.id),
 		hasMessaging: parsed.entry?.some((e) => e.messaging?.length),
 	});
-	ctx.waitUntil(processFacebookWebhook(parsed, c.env));
+	ctx.waitUntil(
+		processFacebookWebhook(parsed, c.env).catch((err) => {
+			console.error("[platform-webhooks] Facebook/IG processing failed", err);
+		}),
+	);
 
 	return c.json({ received: true }, 200);
 });
@@ -255,14 +296,17 @@ async function processFacebookWebhook(
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
 	for (const entry of body.entry ?? []) {
-		const lookup = await resolveAccount(env, platform, entry.id);
-		if (!lookup) {
+		const lookups = await resolveAccounts(env, platform, entry.id);
+		if (lookups.length === 0) {
 			console.warn(
 				`[platform-webhooks] No account found for ${platform}:${entry.id}`,
 			);
 			continue;
 		}
 
+		// The same platform account can be connected by multiple orgs (agency +
+		// client), so fan-out every event to each matching account/org.
+		for (const lookup of lookups) {
 		// Handle field changes (comments, feed updates)
 		let syncTriggered = false;
 		for (const change of entry.changes ?? []) {
@@ -316,16 +360,11 @@ async function processFacebookWebhook(
 		// Instagram has multiple ID formats: platformAccountId (user_id),
 		// webhookAccountId (ISGID/IGUID), entry.id (IGBA ID), and the
 		// messaging-scoped IGSID (only revealed in webhook sender/recipient).
+		// platformAccountId/webhookAccountId come from the KV-cached lookup, so
+		// no extra per-entry DB select is needed.
 		const knownBusinessIds = new Set<string>([entry.id]);
-		{
-			const [acct] = await db
-				.select({ pid: socialAccounts.platformAccountId, wid: socialAccounts.webhookAccountId })
-				.from(socialAccounts)
-				.where(eq(socialAccounts.id, lookup.accountId))
-				.limit(1);
-			if (acct?.pid) knownBusinessIds.add(acct.pid);
-			if (acct?.wid) knownBusinessIds.add(acct.wid);
-		}
+		if (lookup.platformAccountId) knownBusinessIds.add(lookup.platformAccountId);
+		if (lookup.webhookAccountId) knownBusinessIds.add(lookup.webhookAccountId);
 
 		// Load the business's messaging IGSID from KV if previously discovered.
 		// This ID differs from platformAccountId/webhookAccountId/entry.id and is
@@ -418,7 +457,7 @@ async function processFacebookWebhook(
 					// Check if this echo was sent by RelayAPI — already stored
 					const isOurMessage = await env.KV.get(`outbound-mid:${mid}`);
 					if (isOurMessage) {
-						await env.KV.put(`msg-dedup:${mid}`, "1", { expirationTtl: 300 });
+						await env.KV.put(`msg-dedup:${lookup.accountId}:${mid}`, "1", { expirationTtl: 300 });
 						continue;
 					}
 
@@ -429,13 +468,14 @@ async function processFacebookWebhook(
 						.where(eq(inboxMessages.platformMessageId, mid))
 						.limit(1);
 					if (existingMsg) {
-						await env.KV.put(`msg-dedup:${mid}`, "1", { expirationTtl: 300 });
+						await env.KV.put(`msg-dedup:${lookup.accountId}:${mid}`, "1", { expirationTtl: 300 });
 						continue;
 					}
 
-					// Deduplicate — prevent processing same echo twice
-					if (await env.KV.get(`msg-dedup:${mid}`)) continue;
-					await env.KV.put(`msg-dedup:${mid}`, "1", { expirationTtl: 300 });
+					// Deduplicate — prevent processing same echo twice. The mark is
+					// written AFTER a successful enqueue (below) so a transient
+					// send failure does not permanently suppress a redelivery.
+					if (await env.KV.get(`msg-dedup:${lookup.accountId}:${mid}`)) continue;
 				}
 
 				// Echo NOT from RelayAPI — sent via another platform (e.g. Respond.io)
@@ -455,13 +495,17 @@ async function processFacebookWebhook(
 					payload: msg,
 					received_at: new Date().toISOString(),
 				} satisfies InboxQueueMessage);
+				// Mark as processed only after the enqueue succeeded.
+				if (mid) {
+					await env.KV.put(`msg-dedup:${lookup.accountId}:${mid}`, "1", { expirationTtl: 300 });
+				}
 				continue;
 			}
 
 			if (mid) {
 				// Layer 2: KV outbound-mid (fast, eventually consistent)
 				if (await env.KV.get(`outbound-mid:${mid}`)) {
-					await env.KV.put(`msg-dedup:${mid}`, "1", { expirationTtl: 300 });
+					await env.KV.put(`msg-dedup:${lookup.accountId}:${mid}`, "1", { expirationTtl: 300 });
 					continue;
 				}
 
@@ -472,13 +516,16 @@ async function processFacebookWebhook(
 					.where(eq(inboxMessages.platformMessageId, mid))
 					.limit(1);
 				if (existingMsg) {
-					await env.KV.put(`msg-dedup:${mid}`, "1", { expirationTtl: 300 });
+					await env.KV.put(`msg-dedup:${lookup.accountId}:${mid}`, "1", { expirationTtl: 300 });
 					continue;
 				}
 
 				// Layer 4: Recent outbound text match — catches the Page subscription
 				// duplicate which arrives with a different mid and no is_echo.
-				// Uses a tight 15s window to minimize false positives.
+				// Uses a tight 15s window to minimize false positives. Scoped to
+				// the SAME conversation (the inbound sender's thread) so a genuine
+				// inbound whose text merely matches an unrelated outbound to a
+				// different customer is not dropped.
 				const msgText = msg.message?.text;
 				if (msgText) {
 					const [recentOutbound] = await db
@@ -491,6 +538,10 @@ async function processFacebookWebhook(
 						.where(
 							and(
 								eq(inboxConversations.accountId, lookup.accountId),
+								eq(
+									inboxConversations.platformConversationId,
+									msg.sender.id,
+								),
 								eq(inboxMessages.direction, "outbound"),
 								eq(inboxMessages.text, msgText),
 								sql`${inboxMessages.createdAt} > NOW() - INTERVAL '15 seconds'`,
@@ -499,14 +550,16 @@ async function processFacebookWebhook(
 						.limit(1);
 					if (recentOutbound) {
 						console.log("[platform-webhooks] Echo skipped (cross-subscription dedup)", { mid, senderId: msg.sender.id });
-						await env.KV.put(`msg-dedup:${mid}`, "1", { expirationTtl: 300 });
+						await env.KV.put(`msg-dedup:${lookup.accountId}:${mid}`, "1", { expirationTtl: 300 });
 						continue;
 					}
 				}
 
-				// Deduplicate by message ID — prevents processing same DM twice
-				if (await env.KV.get(`msg-dedup:${mid}`)) continue;
-				await env.KV.put(`msg-dedup:${mid}`, "1", { expirationTtl: 300 });
+				// Deduplicate by message ID — prevents processing same DM twice.
+				// Only the read-check happens here; the mark is written AFTER a
+				// successful enqueue so a transient INBOX_QUEUE.send failure does
+				// not permanently suppress a redelivery of the same mid.
+				if (await env.KV.get(`msg-dedup:${lookup.accountId}:${mid}`)) continue;
 			}
 
 			await env.INBOX_QUEUE.send({
@@ -519,6 +572,12 @@ async function processFacebookWebhook(
 				payload: msg,
 				received_at: new Date().toISOString(),
 			} satisfies InboxQueueMessage);
+
+			// Mark as processed only after the enqueue succeeded.
+			if (mid) {
+				await env.KV.put(`msg-dedup:${lookup.accountId}:${mid}`, "1", { expirationTtl: 300 });
+			}
+		}
 		}
 	}
 }
@@ -581,7 +640,11 @@ app.post("/youtube", async (c) => {
 
 	// Respond immediately
 	const ctx = c.executionCtx;
-	ctx.waitUntil(processYouTubeWebhook(body, c.env));
+	ctx.waitUntil(
+		processYouTubeWebhook(body, c.env).catch((err) => {
+			console.error("[platform-webhooks] YouTube processing failed", err);
+		}),
+	);
 
 	return c.text("OK", 200);
 });
@@ -604,41 +667,44 @@ async function processYouTubeWebhook(
 	const channelId = channelIdMatch[1];
 	const videoId = videoIdMatch?.[1] ?? null;
 
-	const lookup = await resolveAccount(env, "youtube", channelId);
-	if (!lookup) {
+	const lookups = await resolveAccounts(env, "youtube", channelId);
+	if (lookups.length === 0) {
 		console.warn(
 			`[platform-webhooks] No account found for youtube:${channelId}`,
 		);
 		return;
 	}
 
-	await env.INBOX_QUEUE.send({
-		type: "youtube_pubsub",
-		platform: "youtube",
-		platform_account_id: channelId,
-		organization_id: lookup.orgId,
-		account_id: lookup.accountId,
-		event_type: "video_update",
-		payload: { video_id: videoId, raw_xml: body },
-		received_at: new Date().toISOString(),
-	} satisfies InboxQueueMessage);
-
-	// Also trigger external post sync for newly published videos
-	const dedupeKey = `sync-dedup:${lookup.accountId}`;
-	const recent = await env.KV.get(dedupeKey);
-	if (!recent) {
-		await env.KV.put(dedupeKey, "1", { expirationTtl: 60 });
-		await env.SYNC_QUEUE.send({
-			type: "sync_posts",
-			social_account_id: lookup.accountId,
-			organization_id: lookup.orgId,
+	// The same channel can be connected by multiple orgs — fan-out to each.
+	for (const lookup of lookups) {
+		await env.INBOX_QUEUE.send({
+			type: "youtube_pubsub",
 			platform: "youtube",
-			webhook_triggered: true,
-			hint: {
-				event_type: "video_update",
-				platform_post_id: videoId ?? undefined,
-			},
-		} satisfies SyncPostsMessage);
+			platform_account_id: channelId,
+			organization_id: lookup.orgId,
+			account_id: lookup.accountId,
+			event_type: "video_update",
+			payload: { video_id: videoId, raw_xml: body },
+			received_at: new Date().toISOString(),
+		} satisfies InboxQueueMessage);
+
+		// Also trigger external post sync for newly published videos
+		const dedupeKey = `sync-dedup:${lookup.accountId}`;
+		const recent = await env.KV.get(dedupeKey);
+		if (!recent) {
+			await env.KV.put(dedupeKey, "1", { expirationTtl: 60 });
+			await env.SYNC_QUEUE.send({
+				type: "sync_posts",
+				social_account_id: lookup.accountId,
+				organization_id: lookup.orgId,
+				platform: "youtube",
+				webhook_triggered: true,
+				hint: {
+					event_type: "video_update",
+					platform_post_id: videoId ?? undefined,
+				},
+			} satisfies SyncPostsMessage);
+		}
 	}
 }
 
@@ -677,7 +743,11 @@ app.post("/whatsapp", async (c) => {
 
 	// Respond immediately — Meta requires a response within 5 seconds
 	const ctx = c.executionCtx;
-	ctx.waitUntil(processWhatsAppWebhook(JSON.parse(body), c.env));
+	ctx.waitUntil(
+		processWhatsAppWebhook(JSON.parse(body), c.env).catch((err) => {
+			console.error("[platform-webhooks] WhatsApp processing failed", err);
+		}),
+	);
 
 	return c.json({ received: true }, 200);
 });
@@ -723,40 +793,43 @@ async function processWhatsAppWebhook(
 			const phoneNumberId = change.value.metadata?.phone_number_id;
 			if (!phoneNumberId) continue;
 
-			const lookup = await resolveAccount(env, "whatsapp", phoneNumberId);
-			if (!lookup) {
+			const lookups = await resolveAccounts(env, "whatsapp", phoneNumberId);
+			if (lookups.length === 0) {
 				console.warn(
 					`[platform-webhooks] No account found for whatsapp:${phoneNumberId}`,
 				);
 				continue;
 			}
 
-			// Incoming messages
-			if (change.value.messages?.length) {
-				await env.INBOX_QUEUE.send({
-					type: "whatsapp_webhook",
-					platform: "whatsapp",
-					platform_account_id: phoneNumberId,
-					organization_id: lookup.orgId,
-					account_id: lookup.accountId,
-					event_type: "messages",
-					payload: change.value,
-					received_at: new Date().toISOString(),
-				} satisfies InboxQueueMessage);
-			}
+			// The same WhatsApp number can be connected by multiple orgs — fan-out.
+			for (const lookup of lookups) {
+				// Incoming messages
+				if (change.value.messages?.length) {
+					await env.INBOX_QUEUE.send({
+						type: "whatsapp_webhook",
+						platform: "whatsapp",
+						platform_account_id: phoneNumberId,
+						organization_id: lookup.orgId,
+						account_id: lookup.accountId,
+						event_type: "messages",
+						payload: change.value,
+						received_at: new Date().toISOString(),
+					} satisfies InboxQueueMessage);
+				}
 
-			// Delivery/read status updates
-			if (change.value.statuses?.length) {
-				await env.INBOX_QUEUE.send({
-					type: "whatsapp_webhook",
-					platform: "whatsapp",
-					platform_account_id: phoneNumberId,
-					organization_id: lookup.orgId,
-					account_id: lookup.accountId,
-					event_type: "statuses",
-					payload: change.value,
-					received_at: new Date().toISOString(),
-				} satisfies InboxQueueMessage);
+				// Delivery/read status updates
+				if (change.value.statuses?.length) {
+					await env.INBOX_QUEUE.send({
+						type: "whatsapp_webhook",
+						platform: "whatsapp",
+						platform_account_id: phoneNumberId,
+						organization_id: lookup.orgId,
+						account_id: lookup.accountId,
+						event_type: "statuses",
+						payload: change.value,
+						received_at: new Date().toISOString(),
+					} satisfies InboxQueueMessage);
+				}
 			}
 		}
 	}
@@ -797,7 +870,11 @@ app.post("/telegram/:secret", async (c) => {
 
 	// Respond immediately
 	const ctx = c.executionCtx;
-	ctx.waitUntil(processTelegramWebhook(JSON.parse(body), secret, c.env));
+	ctx.waitUntil(
+		processTelegramWebhook(JSON.parse(body), secret, c.env).catch((err) => {
+			console.error("[platform-webhooks] Telegram processing failed", err);
+		}),
+	);
 
 	return c.json({ ok: true }, 200);
 });
@@ -816,6 +893,26 @@ interface TelegramUpdate {
 		date: number;
 		text?: string;
 	};
+	// Inline-keyboard button taps arrive as callback_query updates with NO
+	// top-level `message`; the originating message is nested under
+	// callback_query.message. The downstream normalizer turns these into
+	// button_click events used to resume parked automations.
+	callback_query?: {
+		id: string;
+		from: {
+			id: number;
+			first_name: string;
+			last_name?: string;
+			username?: string;
+		};
+		data?: string;
+		message?: {
+			message_id: number;
+			chat: { id: number; type: string };
+			date?: number;
+			text?: string;
+		};
+	};
 }
 
 async function processTelegramWebhook(
@@ -823,27 +920,38 @@ async function processTelegramWebhook(
 	secret: string,
 	env: Env,
 ): Promise<void> {
-	if (!body.message) return;
+	// Resolve the chat id from a normal message OR an inline-button callback.
+	const chatId = body.message
+		? String(body.message.chat.id)
+		: body.callback_query?.message
+			? String(body.callback_query.message.chat.id)
+			: undefined;
 
-	const chatId = String(body.message.chat.id);
-	const lookup = await resolveAccount(env, "telegram", chatId);
-	if (!lookup) {
+	if (!chatId) return;
+
+	const lookups = await resolveAccounts(env, "telegram", chatId);
+	if (lookups.length === 0) {
 		console.warn(
 			`[platform-webhooks] No account found for telegram:${chatId}`,
 		);
 		return;
 	}
 
-	await env.INBOX_QUEUE.send({
-		type: "telegram_webhook",
-		platform: "telegram",
-		platform_account_id: chatId,
-		organization_id: lookup.orgId,
-		account_id: lookup.accountId,
-		event_type: "message",
-		payload: body,
-		received_at: new Date().toISOString(),
-	} satisfies InboxQueueMessage);
+	const eventType = body.callback_query ? "callback_query" : "message";
+
+	// The same chat can be connected by multiple orgs — fan-out to each.
+	for (const lookup of lookups) {
+		await env.INBOX_QUEUE.send({
+			type: "telegram_webhook",
+			platform: "telegram",
+			platform_account_id: chatId,
+			organization_id: lookup.orgId,
+			account_id: lookup.accountId,
+			event_type: eventType,
+			payload: body,
+			received_at: new Date().toISOString(),
+		} satisfies InboxQueueMessage);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -895,7 +1003,11 @@ app.post("/sms", async (c) => {
 
 	// Respond immediately
 	const ctx = c.executionCtx;
-	ctx.waitUntil(processSmsWebhook(params, c.env));
+	ctx.waitUntil(
+		processSmsWebhook(params, c.env).catch((err) => {
+			console.error("[platform-webhooks] SMS processing failed", err);
+		}),
+	);
 
 	// Twilio expects a TwiML response — empty response means "do nothing"
 	return c.text("<Response></Response>", 200, {
@@ -913,29 +1025,35 @@ async function processSmsWebhook(
 		return;
 	}
 
-	// Normalize phone number — strip leading '+' for lookup consistency
+	// Normalize phone number — strip leading '+' for lookup consistency.
+	// Both lookups are negatively cached, so the variant that misses costs at
+	// most one DB query per 60s rather than one on every inbound SMS.
 	const normalizedTo = to.startsWith("+") ? to.slice(1) : to;
-	const lookup =
-		(await resolveAccount(env, "sms", to)) ??
-		(await resolveAccount(env, "sms", normalizedTo));
+	let lookups = await resolveAccounts(env, "sms", to);
+	if (lookups.length === 0 && normalizedTo !== to) {
+		lookups = await resolveAccounts(env, "sms", normalizedTo);
+	}
 
-	if (!lookup) {
+	if (lookups.length === 0) {
 		console.warn(
 			`[platform-webhooks] No account found for sms:${to}`,
 		);
 		return;
 	}
 
-	await env.INBOX_QUEUE.send({
-		type: "sms_webhook",
-		platform: "sms",
-		platform_account_id: to,
-		organization_id: lookup.orgId,
-		account_id: lookup.accountId,
-		event_type: "message",
-		payload: body,
-		received_at: new Date().toISOString(),
-	} satisfies InboxQueueMessage);
+	// The same number can be connected by multiple orgs — fan-out to each.
+	for (const lookup of lookups) {
+		await env.INBOX_QUEUE.send({
+			type: "sms_webhook",
+			platform: "sms",
+			platform_account_id: to,
+			organization_id: lookup.orgId,
+			account_id: lookup.accountId,
+			event_type: "message",
+			payload: body,
+			received_at: new Date().toISOString(),
+		} satisfies InboxQueueMessage);
+	}
 }
 
 export default app;

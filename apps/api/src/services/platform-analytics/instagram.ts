@@ -142,20 +142,35 @@ export function createInstagramAnalytics(
 				const since = toUnix(dateRange.from);
 				const until = toUnix(dateRange.to);
 
-				// Current period insights — split by metric_type
-				// reach supports time_series; engagement metrics only support total_value
-				const [timeSeriesData, totalValueData] = await Promise.all([
-					igFetch(
-						graphHost,
-						accessToken,
-						`/${platformAccountId}/insights?metric=reach&period=day&metric_type=time_series&since=${since}&until=${until}`,
-					),
-					igFetch(
-						graphHost,
-						accessToken,
-						`/${platformAccountId}/insights?metric=total_interactions,accounts_engaged,follows_and_unfollows&period=day&metric_type=total_value&since=${since}&until=${until}`,
-					),
-				]);
+				// All three fetch waves are mutually independent — current-period
+				// insights, the follower-count profile fetch, and the previous-period
+				// sums (prevRange derives only from dateRange) — so run them in a
+				// single parallel wave instead of three serialized round trips.
+				const prevRange = getPreviousPeriod(dateRange);
+				const [timeSeriesData, totalValueData, profileData, prev] =
+					await Promise.all([
+						igFetch(
+							graphHost,
+							accessToken,
+							`/${platformAccountId}/insights?metric=reach&period=day&metric_type=time_series&since=${since}&until=${until}`,
+						),
+						igFetch(
+							graphHost,
+							accessToken,
+							`/${platformAccountId}/insights?metric=total_interactions,accounts_engaged,follows_and_unfollows&period=day&metric_type=total_value&since=${since}&until=${until}`,
+						),
+						igFetch(
+							graphHost,
+							accessToken,
+							`/${platformAccountId}?fields=followers_count`,
+						),
+						fetchInsightsSums(
+							graphHost,
+							accessToken,
+							platformAccountId,
+							prevRange,
+						),
+					]);
 
 				const reach = sumMetric(timeSeriesData?.data ?? [], "reach");
 				const totalInteractions = getTotalValue(totalValueData?.data ?? [], "total_interactions");
@@ -165,23 +180,8 @@ export function createInstagramAnalytics(
 					"follows_and_unfollows",
 				);
 
-				// Follower count
-				const profileData = await igFetch(
-					graphHost,
-					accessToken,
-					`/${platformAccountId}?fields=followers_count`,
-				);
 				const followers: number | null =
 					profileData?.followers_count ?? null;
-
-				// Previous period for % changes
-				const prevRange = getPreviousPeriod(dateRange);
-				const prev = await fetchInsightsSums(
-					graphHost,
-					accessToken,
-					platformAccountId,
-					prevRange,
-				);
 
 				const reachChange =
 					prev.reach > 0
@@ -248,62 +248,73 @@ export function createInstagramAnalytics(
 					return ts >= fromTs && ts < untilTs;
 				});
 
+				// Fetch per-item insights in parallel rather than sequentially.
+				// Promise.all preserves input order, so response semantics are
+				// unchanged. Chunk to ~10 concurrent calls to respect Meta's
+				// per-app rate limits.
+				const CONCURRENCY = 10;
 				const results: PlatformPostMetrics[] = [];
 
-				for (const item of mediaItems) {
-					const insightsData = await igFetch(
-						graphHost,
-						accessToken,
-						`/${item.id}/insights?metric=reach,likes,comments,shares,saved,views,total_interactions`,
+				for (let i = 0; i < mediaItems.length; i += CONCURRENCY) {
+					const chunk = mediaItems.slice(i, i + CONCURRENCY);
+					const chunkResults = await Promise.all(
+						chunk.map(async (item: any) => {
+							const insightsData = await igFetch(
+								graphHost,
+								accessToken,
+								`/${item.id}/insights?metric=reach,likes,comments,shares,saved,views,total_interactions`,
+							);
+
+							const metrics: any[] = insightsData?.data ?? [];
+							const getValue = (name: string): number => {
+								const m = metrics.find((x: any) => x.name === name);
+								// Media insights return a single value, not an array
+								if (m?.values?.[0]?.value != null)
+									return m.values[0].value;
+								if (typeof m?.total_value?.value === "number")
+									return m.total_value.value;
+								return 0;
+							};
+
+							const postReach = getValue("reach");
+							const likes = getValue("likes");
+							const comments = getValue("comments");
+							const shares = getValue("shares");
+							const saved = getValue("saved");
+							const totalInteractions = getValue("total_interactions");
+
+							const engagementRate =
+								postReach > 0
+									? (totalInteractions / postReach) * 100
+									: 0;
+
+							// Use thumbnail_url for video types, otherwise media_url
+							const isVideo =
+								item.media_type === "VIDEO" ||
+								item.media_type === "REELS";
+							const mediaUrl = isVideo
+								? (item.thumbnail_url ?? item.media_url ?? null)
+								: (item.media_url ?? null);
+
+							return {
+								platform_post_id: item.id,
+								content: item.caption ?? null,
+								published_at: item.timestamp,
+								media_url: mediaUrl,
+								media_type: item.media_type ?? null,
+								impressions: postReach, // IG uses reach
+								reach: postReach,
+								likes,
+								comments,
+								shares,
+								saves: saved,
+								clicks: 0, // Not available in IG media insights
+								engagement_rate: engagementRate,
+								platform_url: item.permalink ?? null,
+							} satisfies PlatformPostMetrics;
+						}),
 					);
-
-					const metrics: any[] = insightsData?.data ?? [];
-					const getValue = (name: string): number => {
-						const m = metrics.find((x: any) => x.name === name);
-						// Media insights return a single value, not an array
-						if (m?.values?.[0]?.value != null) return m.values[0].value;
-						if (typeof m?.total_value?.value === "number")
-							return m.total_value.value;
-						return 0;
-					};
-
-					const postReach = getValue("reach");
-					const likes = getValue("likes");
-					const comments = getValue("comments");
-					const shares = getValue("shares");
-					const saved = getValue("saved");
-					const views = getValue("views");
-					const totalInteractions = getValue("total_interactions");
-
-					const engagementRate =
-						postReach > 0
-							? (totalInteractions / postReach) * 100
-							: 0;
-
-					// Use thumbnail_url for video types, otherwise media_url
-					const isVideo =
-						item.media_type === "VIDEO" ||
-						item.media_type === "REELS";
-					const mediaUrl = isVideo
-						? (item.thumbnail_url ?? item.media_url ?? null)
-						: (item.media_url ?? null);
-
-					results.push({
-						platform_post_id: item.id,
-						content: item.caption ?? null,
-						published_at: item.timestamp,
-						media_url: mediaUrl,
-						media_type: item.media_type ?? null,
-						impressions: postReach, // IG uses reach
-						reach: postReach,
-						likes,
-						comments,
-						shares,
-						saves: saved,
-						clicks: 0, // Not available in IG media insights
-						engagement_rate: engagementRate,
-						platform_url: item.permalink ?? null,
-					});
+					results.push(...chunkResults);
 				}
 
 				return results;
@@ -313,6 +324,83 @@ export function createInstagramAnalytics(
 					err,
 				);
 				return [];
+			}
+		},
+
+		// -----------------------------------------------------------------
+		// getSinglePostMetrics — direct lookup by media ID (no list scan)
+		// -----------------------------------------------------------------
+		async getSinglePostMetrics(
+			accessToken: string,
+			_platformAccountId: string,
+			platformPostId: string,
+		): Promise<PlatformPostMetrics | null> {
+			try {
+				// One media fetch + one insights fetch for the exact post,
+				// instead of listing up to 50 media items + N insights calls.
+				const [mediaData, insightsData] = await Promise.all([
+					igFetch(
+						graphHost,
+						accessToken,
+						`/${platformPostId}?fields=id,caption,timestamp,media_type,media_url,thumbnail_url,permalink`,
+					),
+					igFetch(
+						graphHost,
+						accessToken,
+						`/${platformPostId}/insights?metric=reach,likes,comments,shares,saved,views,total_interactions`,
+					),
+				]);
+
+				if (!mediaData?.id) return null;
+
+				const metrics: any[] = insightsData?.data ?? [];
+				const getValue = (name: string): number => {
+					const m = metrics.find((x: any) => x.name === name);
+					if (m?.values?.[0]?.value != null) return m.values[0].value;
+					if (typeof m?.total_value?.value === "number")
+						return m.total_value.value;
+					return 0;
+				};
+
+				const postReach = getValue("reach");
+				const likes = getValue("likes");
+				const comments = getValue("comments");
+				const shares = getValue("shares");
+				const saved = getValue("saved");
+				const totalInteractions = getValue("total_interactions");
+
+				const engagementRate =
+					postReach > 0 ? (totalInteractions / postReach) * 100 : 0;
+
+				const isVideo =
+					mediaData.media_type === "VIDEO" ||
+					mediaData.media_type === "REELS";
+				const mediaUrl = isVideo
+					? (mediaData.thumbnail_url ?? mediaData.media_url ?? null)
+					: (mediaData.media_url ?? null);
+
+				return {
+					platform_post_id: mediaData.id,
+					content: mediaData.caption ?? null,
+					published_at: mediaData.timestamp,
+					media_url: mediaUrl,
+					media_type: mediaData.media_type ?? null,
+					impressions: postReach, // IG uses reach
+					reach: postReach,
+					likes,
+					comments,
+					shares,
+					saves: saved,
+					clicks: 0, // Not available in IG media insights
+					engagement_rate: engagementRate,
+					platform_url: mediaData.permalink ?? null,
+				};
+			} catch (err) {
+				console.error(
+					"[instagram-analytics] getSinglePostMetrics failed:",
+					err,
+				);
+				return null;
 			}
 		},
 

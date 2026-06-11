@@ -48,9 +48,15 @@ function evalPredicate(
 	const actual = resolveField(pred.field, subject);
 	switch (pred.op) {
 		case "eq":
-			return actual === pred.value;
+			// Custom field values hydrate as strings (the custom_field_values.value
+			// text column), so a numeric JSON predicate value (e.g. 30) would never
+			// strict-equal the stored "30". Fall back to a numeric comparison when
+			// both sides parse as numbers; otherwise compare as-is.
+			if (actual === pred.value) return true;
+			return looseNumericEquals(actual, pred.value);
 		case "neq":
-			return actual !== pred.value;
+			if (actual === pred.value) return false;
+			return !looseNumericEquals(actual, pred.value);
 		case "contains":
 			if (Array.isArray(actual))
 				return actual.includes(pred.value as never);
@@ -65,14 +71,25 @@ function evalPredicate(
 			);
 		case "ends_with":
 			return typeof actual === "string" && actual.endsWith(String(pred.value));
-		case "gt":
-			return typeof actual === "number" && actual > Number(pred.value);
-		case "gte":
-			return typeof actual === "number" && actual >= Number(pred.value);
-		case "lt":
-			return typeof actual === "number" && actual < Number(pred.value);
-		case "lte":
-			return typeof actual === "number" && actual <= Number(pred.value);
+		case "gt": {
+			// Coerce `actual` to a number — custom fields hydrate as strings, so a
+			// strict `typeof actual === "number"` guard rejected every stored field
+			// value and the comparison always evaluated false.
+			const a = toFiniteNumber(actual);
+			return a !== null && a > Number(pred.value);
+		}
+		case "gte": {
+			const a = toFiniteNumber(actual);
+			return a !== null && a >= Number(pred.value);
+		}
+		case "lt": {
+			const a = toFiniteNumber(actual);
+			return a !== null && a < Number(pred.value);
+		}
+		case "lte": {
+			const a = toFiniteNumber(actual);
+			return a !== null && a <= Number(pred.value);
+		}
 		case "in":
 			return (
 				Array.isArray(pred.value) && pred.value.includes(actual as never)
@@ -88,6 +105,33 @@ function evalPredicate(
 		default:
 			return false;
 	}
+}
+
+/**
+ * Coerces a value to a finite number, returning null when it can't be parsed.
+ * Used by the numeric comparison operators so string-stored custom field values
+ * (e.g. "18") compare correctly against numeric predicate values. Rejects
+ * empty strings, booleans, and Infinity/NaN.
+ */
+function toFiniteNumber(value: unknown): number | null {
+	if (typeof value === "number") return Number.isFinite(value) ? value : null;
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (trimmed.length === 0) return null;
+		const n = Number(trimmed);
+		return Number.isFinite(n) ? n : null;
+	}
+	return null;
+}
+
+/**
+ * True when both operands parse as finite numbers and are numerically equal.
+ * Lets `eq`/`neq` match a numeric predicate value against a string-stored field.
+ */
+function looseNumericEquals(actual: unknown, expected: unknown): boolean {
+	const a = toFiniteNumber(actual);
+	const b = toFiniteNumber(expected);
+	return a !== null && b !== null && a === b;
 }
 
 function resolveField(

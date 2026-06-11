@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { createDb, connectionLogs } from "@relayapi/db";
-import { and, count, desc, eq, gte, lte } from "drizzle-orm";
+import { and, desc, eq, gte, lt, lte } from "drizzle-orm";
 import { ErrorResponse, PaginationParams } from "../schemas/common";
 import type { Env, Variables } from "../types";
 
@@ -36,9 +36,13 @@ export async function logConnectionEvent(
 		event: string;
 		message: string | null;
 	},
+	// Optional request-scoped client to avoid allocating a fresh postgres-js
+	// client per log write. Background callers (e.g. the token-refresh cron) omit
+	// it and fall back to creating one.
+	dbClient?: ReturnType<typeof createDb>,
 ): Promise<void> {
 	try {
-		const db = createDb(env.HYPERDRIVE.connectionString);
+		const db = dbClient ?? createDb(env.HYPERDRIVE.connectionString);
 		await db.insert(connectionLogs).values({
 			organizationId: orgId,
 			socialAccountId: entry.account_id,
@@ -80,26 +84,28 @@ const listConnectionLogs = createRoute({
 
 app.openapi(listConnectionLogs, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit, from, to } = c.req.valid("query");
+	const { limit, from, to, cursor } = c.req.valid("query");
 	const db = c.get("db");
 
 	const baseConditions = [eq(connectionLogs.organizationId, orgId)];
 	if (from) baseConditions.push(gte(connectionLogs.createdAt, new Date(from)));
 	if (to) baseConditions.push(lte(connectionLogs.createdAt, new Date(to)));
+	// Keyset pagination: cursor is the createdAt of the last row from the previous
+	// page (results are ordered createdAt DESC). Guard against an invalid date so a
+	// malformed cursor doesn't produce an `IS NULL`-style no-op filter.
+	if (cursor) {
+		const cursorDate = new Date(cursor);
+		if (!Number.isNaN(cursorDate.getTime())) {
+			baseConditions.push(lt(connectionLogs.createdAt, cursorDate));
+		}
+	}
 
-	const [rows, countRows] = await Promise.all([
-		db
-			.select()
-			.from(connectionLogs)
-			.where(and(...baseConditions))
-			.orderBy(desc(connectionLogs.createdAt))
-			.limit(limit + 1),
-		db
-			.select({ total: count() })
-			.from(connectionLogs)
-			.where(and(...baseConditions)),
-	]);
-	const total = countRows[0]?.total ?? 0;
+	const rows = await db
+		.select()
+		.from(connectionLogs)
+		.where(and(...baseConditions))
+		.orderBy(desc(connectionLogs.createdAt))
+		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
 	const data = rows.slice(0, limit);
@@ -114,9 +120,8 @@ app.openapi(listConnectionLogs, async (c) => {
 				message: l.message,
 				created_at: l.createdAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: hasMore ? (data.at(-1)?.createdAt.toISOString() ?? null) : null,
 			has_more: hasMore,
-			total,
 		},
 		200,
 	);

@@ -339,7 +339,12 @@ async function syncKeysToKV(
 			const data = typeof raw === "string" ? JSON.parse(raw) : raw;
 			data.plan = plan;
 			data.calls_included = callsIncluded;
-			await kv.put(`apikey:${k.key}`, JSON.stringify(data));
+			// Mirror the API's apikey:* KV TTL convention (24h) so a rewritten auth
+			// record still expires as a revocation backstop instead of persisting
+			// indefinitely; the API middleware re-hydrates it from the DB on first use.
+			await kv.put(`apikey:${k.key}`, JSON.stringify(data), {
+				expirationTtl: 86400,
+			});
 		}
 	}
 }

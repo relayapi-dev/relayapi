@@ -1,3 +1,5 @@
+import { createDb, shortLinks } from "@relayapi/db";
+import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Env } from "../types";
 
@@ -29,10 +31,24 @@ app.get("/:code", async (c) => {
 
 	c.executionCtx.waitUntil(
 		(async () => {
-			const key = `sl:${code}:clicks`;
-			const current = await c.env.KV.get(key);
-			const count = current ? parseInt(current, 10) : 0;
-			await c.env.KV.put(key, String(count + 1));
+			// Atomic SQL increment is the durable source of truth: KV get-then-put on
+			// a single key is eventually consistent (60s colo read cache) and capped at
+			// ~1 write/sec, so concurrent clicks silently lose increments. The DB round
+			// trip is hidden by waitUntil (post-response). short_url is built as
+			// `{domain}/r/{code}` (see short-link-providers/relayapi.ts), so match on the
+			// `/r/{code}` suffix.
+			try {
+				const db = createDb(c.env.HYPERDRIVE.connectionString);
+				await db
+					.update(shortLinks)
+					.set({ clickCount: sql`${shortLinks.clickCount} + 1` })
+					.where(sql`${shortLinks.shortUrl} LIKE ${`%/r/${code}`}`);
+			} catch (err) {
+				console.error(
+					`[ShortLinks] Failed to increment click count for code ${code}:`,
+					err,
+				);
+			}
 		})(),
 	);
 

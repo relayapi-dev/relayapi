@@ -448,13 +448,8 @@ app.openapi(createIdea, async (c) => {
 		groupId = await ensureDefaultGroup(db, orgId, workspaceId);
 	}
 
-	// Place at end of group
-	const [result] = await db
-		.select({ maxPos: max(ideas.position) })
-		.from(ideas)
-		.where(eq(ideas.groupId, groupId));
-	const position = (result?.maxPos ?? 0) + 1;
-
+	// Place at end of group — fold the max-position read into the INSERT via a
+	// scalar subquery, which also closes the read-then-write race.
 	const [row] = await db
 		.insert(ideas)
 		.values({
@@ -463,7 +458,7 @@ app.openapi(createIdea, async (c) => {
 			groupId,
 			title: body.title ?? null,
 			content: body.content ?? null,
-			position,
+			position: sql`COALESCE((SELECT MAX(position) FROM ideas WHERE group_id = ${groupId}), 0) + 1`,
 			assignedTo: body.assigned_to ?? null,
 		})
 		.returning();
@@ -477,40 +472,49 @@ app.openapi(createIdea, async (c) => {
 		);
 	}
 
-	// Associate tags
-	if (body.tag_ids && body.tag_ids.length > 0) {
-		await db.insert(ideaTags).values(
-			body.tag_ids.map((tagId) => ({ ideaId: row.id, tagId })),
-		);
-	}
+	const hasTags = Boolean(body.tag_ids && body.tag_ids.length > 0);
+	const hasMedia = Boolean(body.media && body.media.length > 0);
 
-	// Attach inline media
-	if (body.media && body.media.length > 0) {
-		await db.insert(ideaMedia).values(
-			body.media.map((item, index) => ({
-				ideaId: row.id,
-				url: item.url,
-				type: item.type ?? inferMediaTypeFromUrl(item.url),
-				alt: item.alt ?? null,
-				position: index,
-			})),
-		);
-	}
-
-	// Log activity
-	await logActivity(db, row.id, keyId, "created");
-	if (body.media && body.media.length > 0) {
-		await logActivity(db, row.id, keyId, "media_added", {
-			count: body.media.length,
-		});
-	}
-
-	const [tagRows, mediaRows] = await Promise.all([
-		fetchIdeaTags(db, row.id),
-		fetchIdeaMedia(db, row.id),
+	// The tag insert, media insert, and both activity-log inserts are mutually
+	// independent once the idea row exists, so run them in one parallel batch
+	// instead of a sequential chain. Capture inserted media via .returning() so
+	// the response is built without a follow-up fetch.
+	const [, insertedMedia] = await Promise.all([
+		hasTags
+			? db
+					.insert(ideaTags)
+					.values(body.tag_ids!.map((tagId) => ({ ideaId: row.id, tagId })))
+			: Promise.resolve(undefined),
+		hasMedia
+			? db
+					.insert(ideaMedia)
+					.values(
+						body.media!.map((item, index) => ({
+							ideaId: row.id,
+							url: item.url,
+							type: item.type ?? inferMediaTypeFromUrl(item.url),
+							alt: item.alt ?? null,
+							position: index,
+						})),
+					)
+					.returning()
+			: Promise.resolve([] as (typeof ideaMedia.$inferSelect)[]),
+		logActivity(db, row.id, keyId, "created"),
+		hasMedia
+			? logActivity(db, row.id, keyId, "media_added", {
+					count: body.media!.length,
+				})
+			: Promise.resolve(undefined),
 	]);
 
-	return c.json(await serializeIdeaWithMedia(c.env, row, tagRows, mediaRows), 201);
+	// Tags were just inserted; fetch their details (the insert above returns only
+	// the join rows). Media rows come straight from the insert's .returning().
+	const tagRows = hasTags ? await fetchIdeaTags(db, row.id) : [];
+
+	return c.json(
+		await serializeIdeaWithMedia(c.env, row, tagRows, insertedMedia ?? []),
+		201,
+	);
 });
 
 // ── Update idea ───────────────────────────────────────────────────────────────

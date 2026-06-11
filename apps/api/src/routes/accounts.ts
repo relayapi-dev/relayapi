@@ -1,9 +1,12 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { socialAccounts, socialAccountSyncState, workspaces } from "@relayapi/db";
-import { and, desc, eq, isNull, gt, or, ilike, inArray } from "drizzle-orm";
+import { and, desc, eq, isNull, gt, lt, or, ilike, inArray, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { getOwnedAccount } from "../lib/accounts";
-import { deleteConnectedAccountGraph } from "../lib/delete-account";
+import {
+	deleteConnectedAccountGraph,
+	invalidateAccountCaches,
+} from "../lib/delete-account";
 import { maybeDecrypt } from "../lib/crypto";
 import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
@@ -448,8 +451,13 @@ app.openapi(listAccounts, async (c) => {
 			conditions.push(inArray(socialAccounts.platform, platformList));
 		}
 	}
+	// Keyset pagination on the actual sort key (connected_at, id). The cursor is
+	// the id of the last row from the previous page; resolve its connected_at in
+	// SQL so equal timestamps are tie-broken deterministically by id.
 	if (cursor) {
-		conditions.push(gt(socialAccounts.id, cursor));
+		conditions.push(
+			sql`(${socialAccounts.connectedAt}, ${socialAccounts.id}) < ((select s.connected_at from social_accounts s where s.id = ${cursor}), ${cursor})`,
+		);
 	}
 
 	const accounts = await db
@@ -469,7 +477,7 @@ app.openapi(listAccounts, async (c) => {
 		.from(socialAccounts)
 		.leftJoin(workspaces, eq(socialAccounts.workspaceId, workspaces.id))
 		.where(and(...conditions))
-		.orderBy(desc(socialAccounts.connectedAt))
+		.orderBy(desc(socialAccounts.connectedAt), desc(socialAccounts.id))
 		.limit(limit + 1);
 
 	const hasMore = accounts.length > limit;
@@ -564,6 +572,8 @@ app.openapi(deleteAccount, async (c) => {
 			username: socialAccounts.username,
 			displayName: socialAccounts.displayName,
 			workspaceId: socialAccounts.workspaceId,
+			platformAccountId: socialAccounts.platformAccountId,
+			webhookAccountId: socialAccounts.webhookAccountId,
 		})
 		.from(socialAccounts)
 		.where(
@@ -591,6 +601,17 @@ app.openapi(deleteAccount, async (c) => {
 			500,
 		);
 	}
+
+	// Invalidate the KV caches that reference this account so platform webhooks
+	// stop resolving to the now-deleted account before the entries' TTLs expire.
+	c.executionCtx.waitUntil(
+		invalidateAccountCaches(c.env.KV, {
+			accountId: account.id,
+			platform: account.platform,
+			platformAccountId: account.platformAccountId,
+			webhookAccountId: account.webhookAccountId,
+		}),
+	);
 
 	// Clean up the re-hosted avatar object in R2 (best-effort)
 	c.executionCtx.waitUntil(deleteStoredAvatar(c.env, id));
@@ -1984,21 +2005,32 @@ app.openapi(singleSync, async (c) => {
 
   // Re-fetch avatar URL (CDN URLs expire over time) and re-host it to R2 so the
   // stored URL is durable. Falls back to the raw CDN URL if re-hosting fails.
-  const token = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY);
-  if (token) {
-    const newAvatarUrl = await fetchAvatarUrl(
-      account.platform as Platform,
-      token,
-      account.platformAccountId,
-    );
-    if (newAvatarUrl) {
-      const stable = await rehostAvatar(c.env, account.id, newAvatarUrl);
-      await db
-        .update(socialAccounts)
-        .set({ avatarUrl: stable ?? newAvatarUrl, updatedAt: new Date() })
-        .where(eq(socialAccounts.id, account.id));
-    }
-  }
+  // The response does not include the avatar, so this external fetch + R2 write
+  // is deferred past the response via waitUntil to keep this a fast enqueue.
+  c.executionCtx.waitUntil(
+    (async () => {
+      try {
+        const token = await maybeDecrypt(
+          account.accessToken,
+          c.env.ENCRYPTION_KEY,
+        );
+        if (!token) return;
+        const newAvatarUrl = await fetchAvatarUrl(
+          account.platform as Platform,
+          token,
+          account.platformAccountId,
+        );
+        if (!newAvatarUrl) return;
+        const stable = await rehostAvatar(c.env, account.id, newAvatarUrl);
+        await db
+          .update(socialAccounts)
+          .set({ avatarUrl: stable ?? newAvatarUrl, updatedAt: new Date() })
+          .where(eq(socialAccounts.id, account.id));
+      } catch {
+        // Best-effort avatar refresh; never block or fail the sync enqueue.
+      }
+    })(),
+  );
 
   // Upsert sync state: reset errors, schedule now
   await db
@@ -2094,37 +2126,37 @@ app.openapi(forceSync, async (c) => {
 		return c.json({ enqueued_count: 0 }, 200);
 	}
 
-	// Ensure sync state exists for each account and enqueue
-	const messages: { body: SyncPostsMessage }[] = [];
-
-	for (const account of syncable) {
-		// Upsert sync state
-		await db
-			.insert(socialAccountSyncState)
-			.values({
+	// Ensure sync state exists for each account and enqueue. Collapse the
+	// per-account upsert into a single multi-row statement (the conflict-update
+	// values are all constants) to avoid O(n) blocking DB round trips.
+	const now = new Date();
+	await db
+		.insert(socialAccountSyncState)
+		.values(
+			syncable.map((account) => ({
 				socialAccountId: account.id,
 				organizationId: orgId,
 				platform: account.platform as any,
-				nextSyncAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: socialAccountSyncState.socialAccountId,
-				set: {
-					enabled: true,
-					nextSyncAt: new Date(),
-					updatedAt: new Date(),
-				},
-			});
-
-		messages.push({
-			body: {
-				type: "sync_posts",
-				social_account_id: account.id,
-				organization_id: orgId,
-				platform: account.platform,
+				nextSyncAt: now,
+			})),
+		)
+		.onConflictDoUpdate({
+			target: socialAccountSyncState.socialAccountId,
+			set: {
+				enabled: true,
+				nextSyncAt: now,
+				updatedAt: now,
 			},
 		});
-	}
+
+	const messages: { body: SyncPostsMessage }[] = syncable.map((account) => ({
+		body: {
+			type: "sync_posts",
+			social_account_id: account.id,
+			organization_id: orgId,
+			platform: account.platform,
+		},
+	}));
 
 	// Batch-enqueue to SYNC_QUEUE (100 per sendBatch)
 	for (let i = 0; i < messages.length; i += 100) {

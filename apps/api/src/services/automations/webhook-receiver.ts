@@ -14,7 +14,7 @@ import {
 	workspaces,
 	type Database,
 } from "@relayapi/db";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { maybeDecrypt } from "../../lib/crypto";
 import { enrollContact } from "./runner";
 
@@ -23,10 +23,17 @@ export type Db = Database;
 export type WebhookReceptionResult =
 	| { status: "ok"; runId: string; automationId: string }
 	| { status: "bad_signature" }
+	| { status: "stale_timestamp" }
 	| { status: "unknown_slug" }
 	| { status: "bad_payload"; error: string }
 	| { status: "contact_lookup_failed"; reason?: string }
 	| { status: "enrollment_failed"; error: string };
+
+// Max accepted clock skew (seconds) between the caller-supplied
+// X-Relay-Timestamp and server time. A request whose timestamp deviates by more
+// than this is rejected as a replay / stale request. Mirrors Stripe's 5-minute
+// tolerance.
+const MAX_TIMESTAMP_SKEW_SECONDS = 300;
 
 // ---------------------------------------------------------------------------
 // JSONPath extractor — minimal regex-based.
@@ -312,10 +319,26 @@ export async function receiveAutomationWebhook(
 		slug: string;
 		rawBody: string;
 		signatureHeader: string | null;
+		/**
+		 * Optional caller-supplied `X-Relay-Timestamp` (unix seconds). When
+		 * present, the HMAC is computed over `"<timestamp>.<body>"` and the
+		 * timestamp must be within MAX_TIMESTAMP_SKEW_SECONDS of server time —
+		 * binding the signature to a time window so a captured request can't be
+		 * replayed indefinitely. When absent, the legacy body-only scheme is used
+		 * (backwards-compatible for existing integrations).
+		 */
+		timestampHeader?: string | null;
 	},
 	env: Record<string, unknown>,
 ): Promise<WebhookReceptionResult> {
-	// 1. Look up entrypoint by slug.
+	// 1. Look up entrypoint by slug. Push the slug predicate into SQL so we
+	//    fetch at most one row instead of every active webhook entrypoint
+	//    platform-wide (O(tenant count) transfer + JS scan). Order by
+	//    created_at ASC so that if two entrypoints somehow share a slug, the
+	//    OLDER one wins deterministically across requests/deploys rather than
+	//    flipping with the natural row order. Creation now rejects duplicate
+	//    slugs (see routes/automation-entrypoints.ts), so collisions should
+	//    not occur, but the ordering keeps resolution stable for legacy data.
 	const rows = await db
 		.select({ entrypoint: automationEntrypoints, automation: automations })
 		.from(automationEntrypoints)
@@ -328,13 +351,13 @@ export async function receiveAutomationWebhook(
 				eq(automationEntrypoints.kind, "webhook_inbound"),
 				eq(automationEntrypoints.status, "active"),
 				eq(automations.status, "active"),
+				sql`${automationEntrypoints.config}->>'webhook_slug' = ${params.slug}`,
 			),
-		);
+		)
+		.orderBy(asc(automationEntrypoints.createdAt))
+		.limit(1);
 
-	const match = rows.find((r) => {
-		const cfg = (r.entrypoint.config ?? {}) as Record<string, unknown>;
-		return cfg.webhook_slug === params.slug;
-	});
+	const match = rows[0];
 	if (!match) return { status: "unknown_slug" };
 
 	const cfg = (match.entrypoint.config ?? {}) as Record<string, unknown>;
@@ -359,9 +382,26 @@ export async function receiveAutomationWebhook(
 	}
 	if (!secret) return { status: "bad_signature" };
 
+	// Replay protection: when the caller supplies X-Relay-Timestamp, reject
+	// requests outside the skew window and bind the timestamp into the signed
+	// payload so a captured (signature, body) pair can't be replayed after the
+	// window elapses. Absent the header, fall back to the legacy body-only
+	// scheme for backwards compatibility.
+	const timestampHeader = params.timestampHeader?.trim();
+	let signedPayload = params.rawBody;
+	if (timestampHeader) {
+		const ts = Number(timestampHeader);
+		if (!Number.isFinite(ts)) return { status: "bad_signature" };
+		const nowSeconds = Date.now() / 1000;
+		if (Math.abs(nowSeconds - ts) > MAX_TIMESTAMP_SKEW_SECONDS) {
+			return { status: "stale_timestamp" };
+		}
+		signedPayload = `${timestampHeader}.${params.rawBody}`;
+	}
+
 	const sigOk = await verifyHmacSha256(
 		secret,
-		params.rawBody,
+		signedPayload,
 		params.signatureHeader,
 	);
 	if (!sigOk) return { status: "bad_signature" };

@@ -476,7 +476,7 @@ export interface ContactMergeResponse {
   recipients_updated: number;
 
   /**
-   * Number of sequence enrollments updated
+   * Number of automation enrollments (runs) re-parented from the merged contact
    */
   enrollments_updated: number;
 
@@ -745,7 +745,9 @@ export interface ContactBulkOperationsParams {
 
 export interface ContactMergeParams {
   /**
-   * ID of the contact to merge into this one (will be deleted)
+   * ID of the contact to merge into this one (will be deleted). Must be
+   * different from the target contact id; merging a contact into itself returns
+   * a 400 validation error.
    */
   merge_contact_id: string;
 }

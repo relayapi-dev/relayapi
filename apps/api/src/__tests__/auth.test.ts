@@ -199,6 +199,10 @@ describe("authMiddleware", () => {
 			calls_included: 10_000,
 			ai_enabled: true,
 			daily_tool_limit: 10,
+			// Stripe billing-period bounds — null here because the mock subscription
+			// has no current_period_start/end, so usage falls back to calendar month.
+			period_start: null,
+			period_end: null,
 		});
 	});
 

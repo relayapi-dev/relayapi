@@ -11,6 +11,7 @@ interface OAuthState {
 	method?: string | null;
 	redirect_url: string;
 	code_verifier: string | null;
+	headless?: boolean;
 }
 
 /**
@@ -42,17 +43,50 @@ app.get("/callback", async (c) => {
 		return c.text("Invalid or expired state token", 400);
 	}
 
+	// One-time-use enforcement. KV get->delete is not atomic and KV is eventually
+	// consistent, so two near-simultaneous hits of the same callback URL (double
+	// click, browser prefetch, link scanners) could both pass the state check and
+	// both re-exchange the same authorization code — which providers like Google
+	// then treat as a replay and revoke all tokens for. Mitigate by writing a
+	// short-TTL "claimed" marker and bailing if we did not win the claim.
+	const claimKey = `oauth-state-claimed:${state}`;
+	if (await c.env.KV.get(claimKey)) {
+		return c.text("This authorization link has already been used.", 400);
+	}
+	await c.env.KV.put(claimKey, "1", { expirationTtl: 600 });
 	// Delete state immediately (one-time use)
 	await c.env.KV.delete(`oauth-state:${state}`);
 
-	const { org_id, platform, method, redirect_url, code_verifier } = stateData;
+	const { org_id, platform, method, redirect_url, code_verifier, headless } = stateData;
 	if (!isAllowedCustomerRedirectUrl(redirect_url)) {
 		return c.text("Invalid redirect target", 400);
 	}
 	const redirectUrl = new URL(redirect_url);
 
+	// In headless mode there is no customer redirect to forward query params to:
+	// the OAuth result is stored under `pending-oauth:{state}` for the caller to
+	// poll via GET /connect/pending-data, and the user's browser lands on a
+	// minimal confirmation page here.
+	const storeHeadlessResult = async (
+		payload: Record<string, unknown>,
+	): Promise<Response> => {
+		await c.env.KV.put(`pending-oauth:${state}`, JSON.stringify({ platform, ...payload }), {
+			expirationTtl: 600,
+		});
+		return c.html(
+			"<!doctype html><html><body><p>You can return to your application now.</p></body></html>",
+		);
+	};
+
 	// Handle OAuth errors from the provider
 	if (error) {
+		if (headless) {
+			return storeHeadlessResult({
+				status: "error",
+				error,
+				error_description: errorDescription ?? null,
+			});
+		}
 		redirectUrl.searchParams.set("status", "error");
 		redirectUrl.searchParams.set("error", error);
 		if (errorDescription) {
@@ -63,6 +97,13 @@ app.get("/callback", async (c) => {
 	}
 
 	if (!code) {
+		if (headless) {
+			return storeHeadlessResult({
+				status: "error",
+				error: "missing_code",
+				error_description: "No authorization code received",
+			});
+		}
 		redirectUrl.searchParams.set("status", "error");
 		redirectUrl.searchParams.set("error", "missing_code");
 		redirectUrl.searchParams.set("error_description", "No authorization code received");
@@ -83,7 +124,22 @@ app.get("/callback", async (c) => {
 			redirectUri: oauthRedirectUri,
 			codeVerifier: code_verifier ?? undefined,
 			method: method ?? undefined,
+			waitUntil: (p) => c.executionCtx.waitUntil(p),
 		});
+
+		if (headless) {
+			if (result.status === "success") {
+				return storeHeadlessResult({ status: "success", account: result.account });
+			}
+			if (result.status === "pending_selection") {
+				return storeHeadlessResult({ status: "pending_selection" });
+			}
+			return storeHeadlessResult({
+				status: "error",
+				error_code: result.code,
+				error_message: result.message,
+			});
+		}
 
 		redirectUrl.searchParams.set("platform", platform);
 
@@ -100,6 +156,14 @@ app.get("/callback", async (c) => {
 
 		return c.redirect(redirectUrl.toString(), 302);
 	} catch (err) {
+		if (headless) {
+			return storeHeadlessResult({
+				status: "error",
+				error_code: "TOKEN_EXCHANGE_FAILED",
+				error_message:
+					err instanceof Error ? err.message : "OAuth token exchange failed",
+			});
+		}
 		redirectUrl.searchParams.set("status", "error");
 		redirectUrl.searchParams.set("error_code", "TOKEN_EXCHANGE_FAILED");
 		redirectUrl.searchParams.set(

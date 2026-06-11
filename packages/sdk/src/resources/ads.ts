@@ -14,7 +14,16 @@ export class Ads extends APIResource {
     return this._client.get('/v1/ads/accounts', { query, ...options });
   }
 
-  syncAccount(id: string, options?: RequestOptions): APIPromise<AdSyncResponse> {
+  /**
+   * Trigger a manual sync for an ad account.
+   *
+   * Asynchronous: the full external sync (Graph fetch + ad/campaign upserts +
+   * metrics refresh) is enqueued on the ads queue and this resolves immediately
+   * with `202 { status: "queued" }`. Poll {@link listCampaigns}/{@link list}/
+   * {@link getAnalytics} for results. Throws `404 NOT_FOUND` if the ad account
+   * does not belong to the caller's org.
+   */
+  syncAccount(id: string, options?: RequestOptions): APIPromise<AdSyncQueuedResponse> {
     return this._client.post(path`/v1/ads/accounts/${id}/sync`, options);
   }
 
@@ -36,6 +45,10 @@ export class Ads extends APIResource {
     return this._client.patch(path`/v1/ads/campaigns/${id}`, { body, ...options });
   }
 
+  /**
+   * List campaigns. Paginated with an opaque cursor (`next_cursor`); pass it
+   * back verbatim as `cursor`. Ordering is `desc(created_at), desc(id)`.
+   */
   listCampaigns(
     query: AdListCampaignsParams | null | undefined = {},
     options?: RequestOptions,
@@ -72,6 +85,10 @@ export class Ads extends APIResource {
     return this._client.patch(path`/v1/ads/${id}`, { body, ...options });
   }
 
+  /**
+   * List ads. Paginated with an opaque cursor (`next_cursor`); pass it back
+   * verbatim as `cursor`. Ordering is `desc(created_at), desc(id)`.
+   */
   list(
     query: AdListParams | null | undefined = {},
     options?: RequestOptions,
@@ -115,6 +132,12 @@ export class Ads extends APIResource {
     return this._client.get(path`/v1/ads/audiences/${id}`, options);
   }
 
+  /**
+   * List audiences. Paginated with an opaque cursor (`next_cursor`); pass it
+   * back verbatim as `cursor`. Ordering is `desc(created_at), desc(id)`.
+   * Platform audience discovery runs in the background, so freshly-imported
+   * audiences may appear on a subsequent request rather than the first.
+   */
   listAudiences(
     query: AdListAudiencesParams,
     options?: RequestOptions,
@@ -296,10 +319,23 @@ export interface AdUpdateCampaignResponse {
   skipped: number;
 }
 
+/**
+ * Legacy synchronous sync result. No longer returned by {@link Ads.syncAccount}
+ * (which is now asynchronous — see {@link AdSyncQueuedResponse}); retained for
+ * back-compat with callers that still reference the shape.
+ */
 export interface AdSyncResponse {
   ads_created: number;
   ads_updated: number;
   metrics_updated: number;
+}
+
+/**
+ * 202 acknowledgement from {@link Ads.syncAccount}. The sync runs asynchronously
+ * on the ads queue; poll the list/analytics endpoints for completion.
+ */
+export interface AdSyncQueuedResponse {
+  status: 'queued';
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +490,7 @@ export declare namespace Ads {
     type AdAddAudienceUsersResponse as AdAddAudienceUsersResponse,
     type AdUpdateCampaignResponse as AdUpdateCampaignResponse,
     type AdSyncResponse as AdSyncResponse,
+    type AdSyncQueuedResponse as AdSyncQueuedResponse,
     type AdListAccountsParams as AdListAccountsParams,
     type AdCreateCampaignParams as AdCreateCampaignParams,
     type AdUpdateCampaignParams as AdUpdateCampaignParams,

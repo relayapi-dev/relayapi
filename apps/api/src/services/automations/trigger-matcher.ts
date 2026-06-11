@@ -19,7 +19,7 @@ import {
 	customFieldValues,
 	type Database,
 } from "@relayapi/db";
-import { and, desc, eq, gte, isNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { evaluateFilterGroup } from "./filter-eval";
 import { enrollContact } from "./runner";
 
@@ -296,8 +296,29 @@ export async function matchAndEnroll(
 ): Promise<MatchResult> {
 	// 1. Load candidate entrypoints — channel + kind + active.
 	//    Allow either (social_account_id IS NULL) OR (social_account_id = event.socialAccountId).
+	//
+	// Schedule events are pre-pinned to the firing entrypoint: dispatchScheduledTrigger
+	// already loaded ONE specific schedule entrypoint, enumerated its filters, and
+	// is now enrolling those exact contacts. Without pinning, matchAndEnroll would
+	// re-select ALL active schedule entrypoints on this org+channel and enroll the
+	// contact into whichever one sorts highest by specificity — so with two
+	// schedules on the same org, every dispatch funnels contacts into one winner
+	// and the other schedule silently never enrolls anyone. Constrain to the
+	// entrypoint id carried in the payload to keep each schedule self-contained.
+	const scheduledEntrypointId =
+		event.kind === "schedule" &&
+		typeof event.payload?.entrypoint_id === "string"
+			? (event.payload.entrypoint_id as string)
+			: null;
+	// Narrow the joined automation projection to just `id` — the only field the
+	// matcher reads (status/organizationId are used only in the WHERE clause).
+	// Selecting the whole row pulled the `graph` JSONB (the full node/edge flow)
+	// once per candidate entrypoint on every inbound event for no reason.
 	const rows = await db
-		.select({ entrypoint: automationEntrypoints, automation: automations })
+		.select({
+			entrypoint: automationEntrypoints,
+			automation: { id: automations.id },
+		})
 		.from(automationEntrypoints)
 		.innerJoin(automations, eq(automationEntrypoints.automationId, automations.id))
 		.where(
@@ -307,6 +328,9 @@ export async function matchAndEnroll(
 				eq(automationEntrypoints.status, "active"),
 				eq(automations.status, "active"),
 				eq(automations.organizationId, event.organizationId),
+				scheduledEntrypointId
+					? eq(automationEntrypoints.id, scheduledEntrypointId)
+					: undefined,
 				event.socialAccountId
 					? or(
 							isNull(automationEntrypoints.socialAccountId),
@@ -409,59 +433,68 @@ export async function matchAndEnroll(
 		pauseRows.map((p) => p.automationId).filter((id): id is string => !!id),
 	);
 
-	// 4. Re-entry guard — per-automation.
+	// 4. Re-entry guard — per-automation. Fetch run state for ALL survivor
+	//    automations in ONE aggregate query (keyed on (contact_id, automation_id),
+	//    covered by idx_automation_runs_contact_auto) instead of 1-2 round trips
+	//    per candidate. Then evaluate the three guards (active run, prior run,
+	//    cooldown window) in memory.
+	const survivorAutomationIds = Array.from(
+		new Set(survivors.map((row) => row.automation.id)),
+	);
+	const runStatsRows =
+		survivorAutomationIds.length > 0
+			? await db
+					.select({
+						automationId: automationRuns.automationId,
+						hasActive: sql<boolean>`bool_or(${automationRuns.status} IN ('active','waiting'))`,
+						runCount: sql<number>`count(*)`,
+						lastCompletedAt: sql<Date | null>`max(${automationRuns.completedAt})`,
+					})
+					.from(automationRuns)
+					.where(
+						and(
+							eq(automationRuns.contactId, event.contactId),
+							inArray(automationRuns.automationId, survivorAutomationIds),
+						),
+					)
+					.groupBy(automationRuns.automationId)
+			: [];
+	const runStatsByAutomation = new Map<
+		string,
+		{ hasActive: boolean; runCount: number; lastCompletedAt: Date | null }
+	>();
+	for (const r of runStatsRows) {
+		runStatsByAutomation.set(r.automationId, {
+			hasActive: Boolean(r.hasActive),
+			runCount: Number(r.runCount),
+			lastCompletedAt: r.lastCompletedAt ? new Date(r.lastCompletedAt) : null,
+		});
+	}
+
 	const finalists: Candidate[] = [];
 	for (const row of survivors) {
 		const auto = row.automation;
 		if (pausedAutomationIds.has(auto.id)) continue;
 
+		const stats = runStatsByAutomation.get(auto.id);
+
 		// Active / waiting run already exists?
-		const activeRun = await db
-			.select({ id: automationRuns.id })
-			.from(automationRuns)
-			.where(
-				and(
-					eq(automationRuns.automationId, auto.id),
-					eq(automationRuns.contactId, event.contactId),
-					or(
-						eq(automationRuns.status, "active"),
-						eq(automationRuns.status, "waiting"),
-					),
-				),
-			)
-			.limit(1);
-		if (activeRun.length > 0) continue;
+		if (stats?.hasActive) continue;
 
 		const ep = row.entrypoint;
 		if (!ep.allowReentry) {
-			const priorRun = await db
-				.select({ id: automationRuns.id })
-				.from(automationRuns)
-				.where(
-					and(
-						eq(automationRuns.automationId, auto.id),
-						eq(automationRuns.contactId, event.contactId),
-					),
-				)
-				.limit(1);
-			if (priorRun.length > 0) continue;
+			// Any prior run blocks re-entry.
+			if (stats && stats.runCount > 0) continue;
 		} else if (ep.reentryCooldownMin && ep.reentryCooldownMin > 0) {
 			const cooldownStart = new Date(
 				Date.now() - ep.reentryCooldownMin * 60 * 1000,
 			);
-			const recent = await db
-				.select({ id: automationRuns.id })
-				.from(automationRuns)
-				.where(
-					and(
-						eq(automationRuns.automationId, auto.id),
-						eq(automationRuns.contactId, event.contactId),
-						gte(automationRuns.completedAt, cooldownStart),
-					),
-				)
-				.orderBy(desc(automationRuns.completedAt))
-				.limit(1);
-			if (recent.length > 0) continue;
+			if (
+				stats?.lastCompletedAt &&
+				stats.lastCompletedAt >= cooldownStart
+			) {
+				continue;
+			}
 		}
 
 		finalists.push(row);
@@ -502,6 +535,13 @@ export async function matchAndEnroll(
 			socialAccountId: event.socialAccountId ?? null,
 			contextOverrides: { triggerEvent: event },
 			env,
+			// Reuse the contact row + custom fields we already loaded above for
+			// filter evaluation so enrollContact doesn't re-query them.
+			prehydrated: {
+				contact: (contactRow as Record<string, any> | undefined) ?? null,
+				tags: tagList,
+				fields: fieldsMap as Record<string, string>,
+			},
 		});
 		return {
 			matched: true,

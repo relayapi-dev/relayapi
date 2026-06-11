@@ -76,7 +76,12 @@ async function handleThreadPublish(
 		}
 
 		if (result.nextPosition !== null && result.nextDelayMs > 0) {
-			// Enqueue next position with delay
+			// Enqueue next position with delay. Cloudflare Queues rejects delaySeconds
+			// greater than 43200 (12h); the thread schema allows delay_minutes up to 1440
+			// (24h), so cap here. Without the cap the send() throws AFTER this position was
+			// already published, the catch retries the whole (already-live) position, and
+			// the remaining thread items are eventually dropped — breaking the chain.
+			const QUEUE_MAX_DELAY_SECONDS = 43200;
 			await env.PUBLISH_QUEUE.send(
 				{
 					type: "publish_thread_item",
@@ -84,7 +89,12 @@ async function handleThreadPublish(
 					org_id: body.org_id,
 					position: result.nextPosition,
 				},
-				{ delaySeconds: Math.ceil(result.nextDelayMs / 1000) },
+				{
+					delaySeconds: Math.min(
+						Math.ceil(result.nextDelayMs / 1000),
+						QUEUE_MAX_DELAY_SECONDS,
+					),
+				},
 			);
 		} else if (result.nextPosition !== null) {
 			// Next position has no delay, but was not published (shouldn't happen)
@@ -102,7 +112,9 @@ async function handleThreadPublish(
 			`Thread publish failed for ${body.thread_group_id}:`,
 			err,
 		);
-		if (message.attempts >= 5) {
+		// max_retries: 3 → attempts maxes at 4. Use >= 4 so the terminal branch fires on
+		// the final attempt rather than being unreachable dead code.
+		if (message.attempts >= 4) {
 			console.error(
 				`[Thread] Max retries exceeded for ${body.thread_group_id}, dropping`,
 			);
@@ -132,14 +144,53 @@ async function handlePostPublish(
 		message.ack();
 	} catch (err) {
 		console.error(`Queue publish failed for ${body.post_id}:`, err);
-		if (message.attempts >= 5) {
+		// The relayapi-publish consumer is configured with max_retries: 3, so attempts
+		// maxes out at 4 (initial + 3 retries). Use >= 4 so this terminal branch actually
+		// runs on the final attempt instead of being dead code (the old >= 5 never fired,
+		// and Cloudflare silently dropped the message leaving the post stuck "publishing").
+		if (message.attempts >= 4) {
 			console.error(
-				`[Publish] Max retries exceeded for ${body.post_id}, dropping`,
+				`[Publish] Max retries exceeded for ${body.post_id}, marking failed`,
 			);
+			// Move the post out of "publishing" so it is not stuck forever. Only flip a
+			// post that is still "publishing" (don't clobber a post another path finalized).
+			try {
+				await markPostFailedOnDrop(env, body.post_id, body.org_id);
+			} catch (markErr) {
+				console.error(
+					`[Publish] Failed to mark ${body.post_id} failed on drop:`,
+					markErr,
+				);
+			}
 			message.ack();
 		} else {
 			message.retry({ delaySeconds: 2 ** message.attempts });
 		}
 	}
+}
+
+/**
+ * On terminal publish failure (retries exhausted, no dead-letter queue configured for
+ * relayapi-publish), move the post out of "publishing" to "failed" so the dashboard
+ * does not show it publishing forever and the failure is recorded.
+ */
+async function markPostFailedOnDrop(
+	env: Env,
+	postId: string,
+	orgId: string,
+): Promise<void> {
+	const { createDb, posts } = await import("@relayapi/db");
+	const { and, eq } = await import("drizzle-orm");
+	const db = createDb(env.HYPERDRIVE.connectionString);
+	await db
+		.update(posts)
+		.set({ status: "failed", updatedAt: new Date() })
+		.where(
+			and(
+				eq(posts.id, postId),
+				eq(posts.organizationId, orgId),
+				eq(posts.status, "publishing"),
+			),
+		);
 }
 

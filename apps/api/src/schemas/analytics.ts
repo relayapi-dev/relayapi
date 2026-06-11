@@ -3,15 +3,27 @@ import { PlatformEnum } from "./common";
 
 // --- Query params ---
 
+/**
+ * Optional ISO-8601 date string that is validated before being passed to
+ * `new Date(...)` in handlers. Garbage input (e.g. ?from_date=garbage) would
+ * otherwise become an `Invalid Date` and throw a RangeError inside postgres-js,
+ * returning a 500 instead of a 400.
+ */
+const optionalDateString = (description: string) =>
+	z
+		.string()
+		.refine((v) => !Number.isNaN(Date.parse(v)), {
+			message: "Invalid date — expected an ISO 8601 date string",
+		})
+		.optional()
+		.describe(description);
+
 export const AnalyticsQuery = z.object({
 	platform: PlatformEnum.optional().describe("Filter by platform"),
 	account_id: z.string().optional().describe("Filter by account ID"),
 	post_id: z.string().optional().describe("Filter by post ID"),
-	from_date: z
-		.string()
-		.optional()
-		.describe("Start date (ISO 8601 date string)"),
-	to_date: z.string().optional().describe("End date (ISO 8601 date string)"),
+	from_date: optionalDateString("Start date (ISO 8601 date string)"),
+	to_date: optionalDateString("End date (ISO 8601 date string)"),
 	limit: z.coerce
 		.number()
 		.int()
@@ -25,8 +37,8 @@ export const AnalyticsQuery = z.object({
 export const DailyMetricsQuery = z.object({
 	platform: PlatformEnum.optional().describe("Filter by platform"),
 	account_id: z.string().optional().describe("Filter by account ID"),
-	from_date: z.string().optional().describe("Start date (ISO 8601)"),
-	to_date: z.string().optional().describe("End date (ISO 8601)"),
+	from_date: optionalDateString("Start date (ISO 8601)"),
+	to_date: optionalDateString("End date (ISO 8601)"),
 });
 
 export const ContentDecayQuery = z.object({
@@ -42,21 +54,21 @@ export const ContentDecayQuery = z.object({
 
 export const PostTimelineQuery = z.object({
 	post_id: z.string().describe("Post ID"),
-	from_date: z.string().optional().describe("Start date (ISO 8601)"),
-	to_date: z.string().optional().describe("End date (ISO 8601)"),
+	from_date: optionalDateString("Start date (ISO 8601)"),
+	to_date: optionalDateString("End date (ISO 8601)"),
 });
 
 export const PostingFrequencyQuery = z.object({
 	platform: PlatformEnum.optional().describe("Filter by platform"),
 	account_id: z.string().optional().describe("Filter by account ID"),
-	from_date: z.string().optional().describe("Start date (ISO 8601)"),
-	to_date: z.string().optional().describe("End date (ISO 8601)"),
+	from_date: optionalDateString("Start date (ISO 8601)"),
+	to_date: optionalDateString("End date (ISO 8601)"),
 });
 
 export const YouTubeDailyViewsQuery = z.object({
 	account_id: z.string().describe("YouTube account ID"),
-	from_date: z.string().optional().describe("Start date (ISO 8601)"),
-	to_date: z.string().optional().describe("End date (ISO 8601)"),
+	from_date: optionalDateString("Start date (ISO 8601)"),
+	to_date: optionalDateString("End date (ISO 8601)"),
 });
 
 // --- Response schemas ---

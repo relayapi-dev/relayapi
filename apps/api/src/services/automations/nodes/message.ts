@@ -19,6 +19,9 @@ import type {
 } from "../../../schemas/automation-graph";
 import { maybeDecrypt } from "../../../lib/crypto";
 import {
+	CHANNEL_CAPABILITIES,
+	CHANNEL_SUPPORTS_BUTTONS,
+	CHANNEL_SUPPORTS_QUICK_REPLIES,
 	dispatchAutomationMessage,
 	type AutomationChannel,
 } from "../platforms";
@@ -44,10 +47,13 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 		// to render and nothing to wait for. Skip recipient resolution so we
 		// don't fail runs whose message node is still a placeholder.
 		if (blocks.length === 0 && quickReplies.length === 0) {
-			if (cfg.wait_for_reply) {
-				const timeoutAt = cfg.no_response_timeout_min
-					? new Date(ctx.now.getTime() + cfg.no_response_timeout_min * 60_000)
-					: undefined;
+			// Only park when there's a timeout to eventually wake the run — an
+			// empty message with no interactive ports and no timeout has no resume
+			// path and would wedge the run (see §4 below for the same reasoning).
+			if (cfg.wait_for_reply && cfg.no_response_timeout_min) {
+				const timeoutAt = new Date(
+					ctx.now.getTime() + cfg.no_response_timeout_min * 60_000,
+				);
 				return {
 					result: "wait_input",
 					timeout_at: timeoutAt,
@@ -106,9 +112,31 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 		};
 
 		// 4. Decide whether to wait ---------------------------------------------
-		const hasInteractive =
-			hasAnyBranchButton(renderedBlocks) || renderedQuickReplies.length > 0;
-		const shouldWait = !!cfg.wait_for_reply || hasInteractive;
+		// Only count interactive elements the CHANNEL can actually deliver. The
+		// dispatcher silently skips branch buttons / quick replies on channels
+		// that don't support them (e.g. WhatsApp has no quick replies and no
+		// card/gallery), so waiting for a tap on UI that was never sent would
+		// wedge the run forever — the contact can't produce a button./quick_reply
+		// port event, and a plain text reply can't resume a message-kind wait.
+		const channel = ctx.channel as AutomationChannel;
+		const channelCaps = CHANNEL_CAPABILITIES[channel];
+		const deliverableBranchButton =
+			!!channelCaps &&
+			CHANNEL_SUPPORTS_BUTTONS[channel] &&
+			hasDeliverableBranchButton(renderedBlocks, channelCaps);
+		const deliverableQuickReply =
+			renderedQuickReplies.length > 0 && CHANNEL_SUPPORTS_QUICK_REPLIES[channel];
+		const hasInteractive = deliverableBranchButton || deliverableQuickReply;
+
+		// A plain `wait_for_reply` (no interactive elements) is only honored when
+		// the operator also set a `no_response_timeout_min` — without a timeout
+		// AND without any resumable interactive port, the run would never advance
+		// (no text-reply resume path exists for message-kind waits in v1). Parking
+		// indefinitely on a plain reply just wedges the run, so fall through to
+		// `next` instead.
+		const plainWaitWithTimeout =
+			!!cfg.wait_for_reply && !!cfg.no_response_timeout_min;
+		const shouldWait = hasInteractive || plainWaitWithTimeout;
 
 		if (shouldWait) {
 			const timeoutAt = cfg.no_response_timeout_min
@@ -201,9 +229,18 @@ function renderBlock(block: MessageBlock, mergeCtx: MergeContext): MessageBlock 
 	}
 }
 
-/** A message implicitly awaits a reply if ANY block has a `branch` button. */
-function hasAnyBranchButton(blocks: MessageBlock[]): boolean {
+/**
+ * A message implicitly awaits a reply if ANY block the channel can actually
+ * deliver carries a `branch` button. Blocks whose type the channel doesn't
+ * support (e.g. card/gallery on WhatsApp) are skipped — their buttons are
+ * never sent, so we must not park the run waiting for a tap that can't happen.
+ */
+function hasDeliverableBranchButton(
+	blocks: MessageBlock[],
+	channelCaps: Record<MessageBlock["type"], boolean>,
+): boolean {
 	for (const block of blocks) {
+		if (!channelCaps[block.type]) continue;
 		if (block.type === "text" || block.type === "card") {
 			if (block.buttons?.some((b) => b.type === "branch")) return true;
 		}

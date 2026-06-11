@@ -252,6 +252,7 @@ export {
 export {
   Automations,
   type AutomationResponse,
+  type AutomationListItem,
   type AutomationListResponse,
   type AutomationGraphUpdateResponse,
   type AutomationEnrollResponse,

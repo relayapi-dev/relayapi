@@ -198,7 +198,10 @@ async function processOneConfig(
 			.where(eq(postRecyclingConfigs.id, config.id));
 	}
 
-	// Dispatch webhook
+	// Await delivery so it completes before this cron item returns (a detached
+	// promise would be cancelled after the scheduled handler resolves). Moving
+	// delivery to a dedicated webhook-delivery queue is the planned follow-up to
+	// keep a slow/dead customer endpoint from serializing the cron batch.
 	await dispatchWebhookEvent(
 		env,
 		db,
@@ -220,5 +223,5 @@ async function processOneConfig(
 					: null,
 		},
 		sourcePost.workspaceId,
-	);
+	).catch(console.error);
 }

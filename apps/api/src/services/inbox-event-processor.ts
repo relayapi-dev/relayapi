@@ -4,6 +4,7 @@ import {
 	inboxConversations,
 	inboxMessages,
 	socialAccounts,
+	webhookEndpoints,
 } from "@relayapi/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
@@ -21,7 +22,7 @@ import type {
 import { rehostAvatar } from "./avatar-store";
 import { ensureContactForAuthor } from "./contact-linker";
 import { insertMessage, upsertConversation } from "./inbox-persistence";
-import { dispatchWebhookEvent } from "./webhook-delivery";
+import { deliverWebhook, dispatchWebhookEvent } from "./webhook-delivery";
 import { subscribeYouTubeChannel } from "./webhook-subscription";
 
 // ---------------------------------------------------------------------------
@@ -345,7 +346,12 @@ export async function processInboxEvent(
 		// mutates `messageCount`. The welcome_message binding router depends on
 		// this signal; computing it after the insert always returns `false`
 		// (spec bug B2).
-		let preInsertInboundCount: number | null = null;
+		// Whether this contact has any PRIOR inbound message on this channel
+		// (before the current event is inserted). `null` = signal not applicable
+		// (not an inbound message event). A brand-new, still-unlinked conversation
+		// (contactId === null) has zero prior inbound by definition, so the value
+		// stays `false` and the welcome_message binding correctly fires.
+		let hadPriorInboundOnChannel: boolean | null = null;
 		try {
 			if (isPersistedEvent) {
 				conversation = await upsertConversation(db, {
@@ -367,43 +373,47 @@ export async function processInboxEvent(
 					postPlatformId: event.post_id ?? null,
 				});
 				if (conversation) {
-					// Inbound-only count across ALL conversations for (contact, channel).
-					// A brand new conversation_id doesn't help here — the binding-router
-					// welcome scope is "first inbound on channel ever", which spans the
-					// contact's whole history on that channel. `contactId` can be null
-					// while the conversation is still unlinked (no matching contact), in
-					// which case the count is always 0 and the welcome fires — consistent
-					// with the pre-Plan-5 behavior.
-					if (
-						direction === "inbound" &&
-						event.type === "message" &&
-						conversation.contactId
-					) {
-						const [row] = await db
-							.select({ count: sql<number>`COUNT(*)` })
-							.from(inboxMessages)
-							.innerJoin(
-								inboxConversations,
-								eq(inboxMessages.conversationId, inboxConversations.id),
-							)
-							.where(
-								and(
-									eq(
-										inboxConversations.organizationId,
-										event.organization_id,
+					// "First inbound on channel ever" — the binding-router welcome
+					// scope spans the contact's whole history on that channel. When
+					// the conversation is still UNLINKED (no matching contact yet),
+					// the contact is brand-new, so there are zero prior inbound
+					// messages and `hadPriorInboundOnChannel` stays `false` → the
+					// welcome fires (the previous `conversation.contactId` guard left
+					// it `null`, defeating the welcome for every organically-new
+					// contact). An EXISTS/LIMIT 1 probe is enough; the only consumer
+					// is the boolean test below.
+					if (direction === "inbound" && event.type === "message") {
+						if (conversation.contactId) {
+							const priorRows = await db
+								.select({ one: sql<number>`1` })
+								.from(inboxMessages)
+								.innerJoin(
+									inboxConversations,
+									eq(inboxMessages.conversationId, inboxConversations.id),
+								)
+								.where(
+									and(
+										eq(
+											inboxConversations.organizationId,
+											event.organization_id,
+										),
+										eq(
+											inboxConversations.platform,
+											event.platform as never,
+										),
+										eq(
+											inboxConversations.contactId,
+											conversation.contactId,
+										),
+										eq(inboxMessages.direction, "inbound"),
 									),
-									eq(
-										inboxConversations.platform,
-										event.platform as never,
-									),
-									eq(
-										inboxConversations.contactId,
-										conversation.contactId,
-									),
-									eq(inboxMessages.direction, "inbound"),
-								),
-							);
-						preInsertInboundCount = Number(row?.count ?? 0);
+								)
+								.limit(1);
+							hadPriorInboundOnChannel = priorRows.length > 0;
+						} else {
+							// Unlinked conversation → brand-new contact → no prior inbound.
+							hadPriorInboundOnChannel = false;
+						}
 					}
 					await insertMessage(db, {
 						conversationId: conversation.id,
@@ -419,130 +429,24 @@ export async function processInboxEvent(
 				}
 			}
 		} catch (err) {
+			// DB persistence MUST propagate so the queue consumer retries — an
+			// acked-but-unstored inbound message is permanently lost while the
+			// downstream webhook still announces it. The webhook/realtime dispatch
+			// below stays best-effort, but storage failures are fatal here.
 			console.error("[inbox-processor] DB storage failed:", err);
-		}
-
-		// 1b. Meta participant profile enrichment — Instagram/Messenger webhooks
-		// carry the participant's scoped ID, but not their display name/avatar.
-		// Fetch and persist the profile data so the inbox shows the real person.
-		const existingParticipantMetadata = asRecord(
-			conversation?.participantMetadata,
-		);
-		const existingInstagramProfile = asRecord(
-			existingParticipantMetadata?.instagramProfile,
-		);
-		const existingFacebookProfile = asRecord(
-			existingParticipantMetadata?.facebookProfile,
-		);
-		const participantId = conversationPartner?.id ?? null;
-		const needsIdentityRefresh =
-			isMissingParticipantIdentity(
-				conversation?.participantName,
-				participantId,
-			) || !conversation?.participantAvatar;
-
-		if (
-			conversation &&
-			event.type === "message" &&
-			participantId &&
-			sa?.accessToken &&
-			((event.platform === "instagram" &&
-				(needsIdentityRefresh ||
-					isStaleProfile(
-						existingInstagramProfile?.fetchedAt,
-						1000 * 60 * 60 * 24,
-					))) ||
-				(event.platform === "facebook" &&
-					(needsIdentityRefresh ||
-						isStaleProfile(
-							existingFacebookProfile?.fetchedAt,
-							1000 * 60 * 60 * 24,
-						))))
-		) {
-			try {
-				const token = await maybeDecrypt(sa.accessToken, env.ENCRYPTION_KEY);
-				if (!token) throw new Error("Failed to decrypt access token");
-
-				const profile =
-					event.platform === "instagram"
-						? await fetchInstagramParticipantProfile(participantId, token)
-						: await fetchFacebookParticipantProfile(participantId, token);
-				if (profile) {
-					const conversationPatch: Partial<
-						typeof inboxConversations.$inferInsert
-					> = {
-						participantMetadata: {
-							...(existingParticipantMetadata ?? {}),
-							[event.platform === "instagram"
-								? "instagramProfile"
-								: "facebookProfile"]: {
-								...(event.platform === "instagram"
-									? (existingInstagramProfile ?? {})
-									: (existingFacebookProfile ?? {})),
-								...profile.metadata,
-							},
-						},
-					};
-
-					// Re-host the profile picture to R2 (served durably by the public
-					// /avatars/:id route) so it survives Meta's short-lived signed-CDN
-					// expiry. Keyed by conversation id — one participant per DM. Falls
-					// back to the raw URL so we never regress to no avatar.
-					const storedAvatarUrl =
-						(await rehostAvatar(env, conversation.id, profile.avatarUrl)) ??
-						profile.avatarUrl ??
-						null;
-
-					if (profile.displayName) {
-						conversationPatch.participantName = profile.displayName;
-					}
-					if (storedAvatarUrl) {
-						conversationPatch.participantAvatar = storedAvatarUrl;
-					}
-
-					await db
-						.update(inboxConversations)
-						.set(conversationPatch)
-						.where(
-							and(
-								eq(inboxConversations.id, conversation.id),
-								eq(inboxConversations.organizationId, event.organization_id),
-							),
-						);
-
-					const messagePatch: Partial<typeof inboxMessages.$inferInsert> = {};
-					if (profile.displayName) {
-						messagePatch.authorName = profile.displayName;
-					}
-					if (storedAvatarUrl) {
-						messagePatch.authorAvatarUrl = storedAvatarUrl;
-					}
-
-					if (messagePatch.authorName || messagePatch.authorAvatarUrl) {
-						await db
-							.update(inboxMessages)
-							.set(messagePatch)
-							.where(
-								and(
-									eq(inboxMessages.conversationId, conversation.id),
-									eq(inboxMessages.organizationId, event.organization_id),
-									eq(inboxMessages.authorPlatformId, participantId),
-									eq(inboxMessages.direction, "inbound"),
-								),
-							);
-					}
-				}
-			} catch (err) {
-				console.error(
-					`[inbox-processor] ${event.platform} participant profile enrichment failed:`,
-					err,
-				);
-			}
+			throw err;
 		}
 
 		// 2. Hand off inbound events to the unified automations engine. Outbound
 		// echoes never trigger automations. Contact resolution mirrors the inbox
 		// participant auto-linker so conditions / merge-tags see a real contact.
+		//
+		// NOTE: Meta participant profile enrichment (the ~0.5-15s fetch + avatar
+		// rehost) is deliberately run AFTER this dispatch (step 1b below), not
+		// before: nothing in dispatchAutomationMatch consumes the enriched
+		// conversation — ensureContactForAuthor uses the raw `event.author.name` —
+		// so enriching first only adds head-of-line latency to the very automation
+		// (welcome/first-DM) the enrichment fires alongside.
 		if (direction === "inbound") {
 			// `is_first_inbound_on_channel` is the signal the welcome_message
 			// binding router needs — true iff this inbound is the contact's
@@ -552,7 +456,7 @@ export async function processInboxEvent(
 			// wasn't the Plan 4 / §6.6 intent. Computed pre-insert above so
 			// `insertMessage` doesn't defeat it.
 			const isFirstInboundOnChannel =
-				event.type === "message" && preInsertInboundCount === 0;
+				event.type === "message" && hadPriorInboundOnChannel === false;
 			await dispatchAutomationMatch(event, db, env, {
 				workspace_id: sa?.workspaceId ?? null,
 				is_conversation_start:
@@ -567,33 +471,35 @@ export async function processInboxEvent(
 			});
 		}
 
+		// 1b. Meta participant profile enrichment — Instagram/Messenger webhooks
+		// carry the participant's scoped ID, but not their display name/avatar.
+		// Run AFTER automation dispatch (see note above) so the slow Meta fetch +
+		// avatar rehost never head-of-line blocks auto-replies.
+		await enrichMetaParticipantProfile(
+			event,
+			db,
+			env,
+			conversation,
+			conversationPartner?.id ?? null,
+			sa?.accessToken ?? null,
+		);
+
 		// `follow` / `ad_click` events don't produce inbox rows, so the outbound
 		// webhook dispatch + realtime notify paths don't apply to them.
 		if (!isPersistedEvent) {
 			continue;
 		}
 
-		// 3. Dispatch outbound webhook
+		// 3 + 4. Dispatch the outbound customer webhook AND the dashboard realtime
+		// notify CONCURRENTLY. These are independent: a dead/slow customer webhook
+		// endpoint (up to ~20s of inline retries in deliverWebhook) must not delay
+		// the realtime inbox update or hold up the rest of the batch.
 		const webhookEvent =
 			event.type === "comment"
 				? "comment.received"
 				: direction === "outbound"
 					? "message.sent"
 					: "message.received";
-		await dispatchWebhookEvent(env, db, event.organization_id, webhookEvent, {
-			id: event.platform_event_id,
-			type: event.type,
-			platform: event.platform,
-			account_id: event.account_id,
-			author: event.author,
-			text: event.text,
-			post_id: event.post_id,
-			conversation_id: event.conversation_id,
-			parent_id: event.parent_id,
-			created_at: event.created_at,
-		});
-
-		// 4. Push real-time update to connected dashboard clients
 		const realtimeEvent =
 			event.type === "comment"
 				? {
@@ -612,10 +518,151 @@ export async function processInboxEvent(
 							conversation_id: conversation?.id ?? event.conversation_id,
 							platform: event.platform,
 						};
-		await notifyRealtime(env, event.organization_id, realtimeEvent).catch(
-			(err) => {
+		await Promise.allSettled([
+			dispatchWebhookEvent(env, db, event.organization_id, webhookEvent, {
+				id: event.platform_event_id,
+				type: event.type,
+				platform: event.platform,
+				account_id: event.account_id,
+				author: event.author,
+				text: event.text,
+				post_id: event.post_id,
+				conversation_id: event.conversation_id,
+				parent_id: event.parent_id,
+				created_at: event.created_at,
+			}),
+			notifyRealtime(env, event.organization_id, realtimeEvent).catch((err) => {
 				console.error("[inbox-processor] notifyRealtime failed:", err);
-			},
+			}),
+		]);
+	}
+}
+
+/**
+ * Meta (Instagram/Messenger) participant profile enrichment. Webhooks carry the
+ * participant's scoped ID but not their display name/avatar, so on the first
+ * inbound DM (or every 24h once stale) we fetch the profile + rehost the avatar
+ * to R2 and persist it onto the conversation + the inbound message rows.
+ *
+ * Extracted from `processInboxEvent` and called AFTER automation dispatch:
+ * nothing in the automation path consumes the enriched conversation, so running
+ * the slow (~0.5-15s) fetch first only adds head-of-line latency to the
+ * welcome/first-DM automation it fires alongside. Best-effort — failures are
+ * logged and swallowed.
+ */
+async function enrichMetaParticipantProfile(
+	event: NormalizedInboxEvent,
+	db: ReturnType<typeof createDb>,
+	env: Env,
+	conversation: Awaited<ReturnType<typeof upsertConversation>> | null,
+	participantId: string | null,
+	accessToken: string | null,
+): Promise<void> {
+	if (
+		!conversation ||
+		event.type !== "message" ||
+		!participantId ||
+		!accessToken ||
+		(event.platform !== "instagram" && event.platform !== "facebook")
+	) {
+		return;
+	}
+
+	const existingParticipantMetadata = asRecord(conversation.participantMetadata);
+	const existingInstagramProfile = asRecord(
+		existingParticipantMetadata?.instagramProfile,
+	);
+	const existingFacebookProfile = asRecord(
+		existingParticipantMetadata?.facebookProfile,
+	);
+	const needsIdentityRefresh =
+		isMissingParticipantIdentity(conversation.participantName, participantId) ||
+		!conversation.participantAvatar;
+
+	const shouldEnrich =
+		event.platform === "instagram"
+			? needsIdentityRefresh ||
+				isStaleProfile(existingInstagramProfile?.fetchedAt, 1000 * 60 * 60 * 24)
+			: needsIdentityRefresh ||
+				isStaleProfile(existingFacebookProfile?.fetchedAt, 1000 * 60 * 60 * 24);
+
+	if (!shouldEnrich) return;
+
+	try {
+		const token = await maybeDecrypt(accessToken, env.ENCRYPTION_KEY);
+		if (!token) throw new Error("Failed to decrypt access token");
+
+		const profile =
+			event.platform === "instagram"
+				? await fetchInstagramParticipantProfile(participantId, token)
+				: await fetchFacebookParticipantProfile(participantId, token);
+		if (profile) {
+			const conversationPatch: Partial<typeof inboxConversations.$inferInsert> = {
+				participantMetadata: {
+					...(existingParticipantMetadata ?? {}),
+					[event.platform === "instagram"
+						? "instagramProfile"
+						: "facebookProfile"]: {
+						...(event.platform === "instagram"
+							? (existingInstagramProfile ?? {})
+							: (existingFacebookProfile ?? {})),
+						...profile.metadata,
+					},
+				},
+			};
+
+			// Re-host the profile picture to R2 (served durably by the public
+			// /avatars/:id route) so it survives Meta's short-lived signed-CDN
+			// expiry. Keyed by conversation id — one participant per DM. Falls
+			// back to the raw URL so we never regress to no avatar.
+			const storedAvatarUrl =
+				(await rehostAvatar(env, conversation.id, profile.avatarUrl)) ??
+				profile.avatarUrl ??
+				null;
+
+			if (profile.displayName) {
+				conversationPatch.participantName = profile.displayName;
+			}
+			if (storedAvatarUrl) {
+				conversationPatch.participantAvatar = storedAvatarUrl;
+			}
+
+			await db
+				.update(inboxConversations)
+				.set(conversationPatch)
+				.where(
+					and(
+						eq(inboxConversations.id, conversation.id),
+						eq(inboxConversations.organizationId, event.organization_id),
+					),
+				);
+
+			const messagePatch: Partial<typeof inboxMessages.$inferInsert> = {};
+			if (profile.displayName) {
+				messagePatch.authorName = profile.displayName;
+			}
+			if (storedAvatarUrl) {
+				messagePatch.authorAvatarUrl = storedAvatarUrl;
+			}
+
+			if (messagePatch.authorName || messagePatch.authorAvatarUrl) {
+				await db
+					.update(inboxMessages)
+					.set(messagePatch)
+					.where(
+						and(
+							eq(inboxMessages.conversationId, conversation.id),
+							eq(inboxMessages.organizationId, event.organization_id),
+							eq(inboxMessages.authorPlatformId, participantId),
+							eq(inboxMessages.direction, "inbound"),
+						),
+					);
+			}
+		}
+	} catch (err) {
+		console.error(
+			`[inbox-processor] ${event.platform} participant profile enrichment failed:`,
+			err,
 		);
 	}
 }
@@ -1587,9 +1634,12 @@ function normalizeWhatsAppEvent(
 
 	if (!value.messages?.length) return events;
 
-	const contact = value.contacts?.[0];
-
 	for (const msg of value.messages) {
+		// WhatsApp can batch messages from MULTIPLE senders in one change.value;
+		// contacts[] carries one entry per distinct wa_id. Match THIS message's
+		// sender by `msg.from` rather than blindly using contacts[0], otherwise a
+		// second sender's message is attributed to the first sender's name.
+		const contact = value.contacts?.find((cnt) => cnt.wa_id === msg.from);
 		const interactive = extractWhatsAppInteractivePayload(msg);
 		events.push({
 			type: "message",
@@ -1614,6 +1664,17 @@ function normalizeWhatsAppEvent(
 	return events;
 }
 
+// WhatsApp delivery-status lifecycle ranks. Cloudflare Queues are
+// at-least-once with retry reordering and WhatsApp status webhooks are not
+// ordering-guaranteed, so a late "delivered"/"sent" must NOT regress a terminal
+// "read"/"failed". Higher rank = later in the lifecycle.
+const WA_STATUS_RANK: Record<string, number> = {
+	sent: 1,
+	delivered: 2,
+	read: 3,
+	failed: 3,
+};
+
 async function processWhatsAppStatuses(
 	message: InboxQueueMessage,
 	env: Env,
@@ -1622,40 +1683,81 @@ async function processWhatsAppStatuses(
 	const value = message.payload as WhatsAppWebhookValue;
 	if (!value.statuses?.length) return;
 
-	for (const status of value.statuses) {
-		// Update the outbound message's platformData with the latest status
-		const [updated] = await db
-			.update(inboxMessages)
-			.set({
-				platformData: sql`jsonb_set(
-					COALESCE(${inboxMessages.platformData}, '{}'::jsonb),
-					'{wa_status}',
-					${JSON.stringify({ status: status.status, timestamp: status.timestamp })}::jsonb
-				)`,
-			})
-			.where(eq(inboxMessages.platformMessageId, status.id))
-			.returning({
-				id: inboxMessages.id,
-				conversationId: inboxMessages.conversationId,
-			});
+	// Pre-fetch the org's enabled endpoints subscribed to message.status_updated
+	// ONCE. Without a subscriber we run only the status UPDATEs and skip dispatch
+	// entirely, avoiding a per-status uncached endpoint SELECT + delivery.
+	const endpoints = await db
+		.select()
+		.from(webhookEndpoints)
+		.where(
+			and(
+				eq(webhookEndpoints.organizationId, message.organization_id),
+				eq(webhookEndpoints.enabled, true),
+			),
+		);
+	const statusEndpoints = endpoints.filter((w) => {
+		const events = w.events ?? [];
+		return events.length === 0 || events.includes("message.status_updated");
+	});
 
-		if (updated) {
-			// Dispatch webhook event
-			await dispatchWebhookEvent(
-				env,
-				db,
-				message.organization_id,
-				"message.status_updated",
-				{
-					message_id: status.id,
-					status: status.status,
-					recipient: status.recipient_id,
-					timestamp: status.timestamp,
-					errors: status.errors,
-				},
-			);
-		}
-	}
+	// Process statuses concurrently — each is an independent UPDATE (+ optional
+	// dispatch). Statuses were previously strictly serial (>=200ms each), backing
+	// up the shared inbox queue consumer on WhatsApp broadcast status floods.
+	await Promise.allSettled(
+		value.statuses.map(async (status) => {
+			const incomingRank = WA_STATUS_RANK[status.status] ?? 0;
+			// Only apply the update when the incoming status is at least as
+			// advanced as the stored one — a CASE comparison on the stored
+			// wa_status rank skips writes that would regress a terminal/newer state.
+			const [updated] = await db
+				.update(inboxMessages)
+				.set({
+					platformData: sql`jsonb_set(
+						COALESCE(${inboxMessages.platformData}, '{}'::jsonb),
+						'{wa_status}',
+						${JSON.stringify({ status: status.status, timestamp: status.timestamp })}::jsonb
+					)`,
+				})
+				.where(
+					and(
+						eq(inboxMessages.platformMessageId, status.id),
+						sql`COALESCE(
+							CASE (${inboxMessages.platformData} #>> '{wa_status,status}')
+								WHEN 'sent' THEN 1
+								WHEN 'delivered' THEN 2
+								WHEN 'read' THEN 3
+								WHEN 'failed' THEN 3
+								ELSE 0
+							END,
+							0
+						) <= ${incomingRank}`,
+					),
+				)
+				.returning({
+					id: inboxMessages.id,
+					conversationId: inboxMessages.conversationId,
+				});
+
+			if (updated && statusEndpoints.length > 0) {
+				await Promise.allSettled(
+					statusEndpoints.map((w) =>
+						deliverWebhook(env, w, "message.status_updated", {
+							message_id: status.id,
+							status: status.status,
+							recipient: status.recipient_id,
+							timestamp: status.timestamp,
+							errors: status.errors,
+						}).catch((err) =>
+							console.error(
+								`[inbox-processor] wa status webhook delivery failed for ${w.id}:`,
+								err,
+							),
+						),
+					),
+				);
+			}
+		}),
+	);
 }
 
 // --- Telegram ---

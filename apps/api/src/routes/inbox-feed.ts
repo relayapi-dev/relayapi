@@ -223,10 +223,14 @@ app.openapi(bulkRoute, async (c) => {
 	const workspaceScope = c.get("workspaceScope");
 	const { action, targets, params } = c.req.valid("json");
 
-	// Build workspace scope conditions for direct DB queries
-	const wsConditions = (conversationId: string) => {
+	let processed = 0;
+	let failed = 0;
+	const errors: string[] = [];
+
+	// Workspace-scoped set-based predicate matching ALL targets at once.
+	const setConditions = () => {
 		const conds = [
-			eq(inboxConversations.id, conversationId),
+			inArray(inboxConversations.id, targets),
 			eq(inboxConversations.organizationId, orgId),
 		];
 		if (workspaceScope !== "all") {
@@ -240,103 +244,101 @@ app.openapi(bulkRoute, async (c) => {
 		return conds;
 	};
 
-	let processed = 0;
-	let failed = 0;
-	const errors: string[] = [];
+	// Mark any targets not returned by a set-based UPDATE as failed/not-found.
+	const recordResult = (returnedIds: string[]) => {
+		const returned = new Set(returnedIds);
+		processed += returned.size;
+		for (const id of targets) {
+			if (!returned.has(id)) {
+				failed++;
+				errors.push(`${id}: not found`);
+			}
+		}
+	};
 
-	// Label/unlabel are the only actions that need the current labels array to
-	// compute the merged result. Pre-fetch all of them in one query so the
-	// per-conversation loop doesn't do its own SELECT.
-	const needsLabels = action === "label" || action === "unlabel";
-	const existingLabelsByConvo = new Map<string, string[]>();
-	if (needsLabels && targets.length > 0) {
-		const scopeConds = [
-			inArray(inboxConversations.id, targets),
-			eq(inboxConversations.organizationId, orgId),
-		];
-		if (workspaceScope !== "all") {
-			scopeConds.push(
-				or(
-					inArray(inboxConversations.workspaceId, workspaceScope),
-					isNull(inboxConversations.workspaceId),
-				)!,
-			);
-		}
-		const rows = await db
-			.select({ id: inboxConversations.id, labels: inboxConversations.labels })
-			.from(inboxConversations)
-			.where(and(...scopeConds));
-		for (const r of rows) {
-			existingLabelsByConvo.set(r.id, r.labels ?? []);
-		}
+	if (targets.length === 0) {
+		return c.json({ processed, failed, errors }, 200);
 	}
 
-	for (const conversationId of targets) {
+	// Archive / unarchive / mark_read / set_priority apply identical values to
+	// every target, so they collapse into ONE set-based UPDATE instead of N
+	// sequential single-row writes.
+	if (
+		action === "archive" ||
+		action === "unarchive" ||
+		action === "mark_read" ||
+		action === "set_priority"
+	) {
+		const setClause: Record<string, unknown> = { updatedAt: new Date() };
+		if (action === "archive") setClause.status = "archived";
+		else if (action === "unarchive") setClause.status = "open";
+		else if (action === "mark_read") setClause.unreadCount = 0;
+		else if (action === "set_priority") setClause.priority = params?.priority ?? "normal";
+
 		try {
-			let updates: Parameters<typeof updateConversation>[3];
+			const rows = await db
+				.update(inboxConversations)
+				.set(setClause)
+				.where(and(...setConditions()))
+				.returning({ id: inboxConversations.id });
+			recordResult(rows.map((r) => r.id));
+		} catch (err) {
+			failed = targets.length;
+			errors.push(
+				`bulk: ${err instanceof Error ? err.message : "unknown error"}`,
+			);
+		}
+		return c.json({ processed, failed, errors }, 200);
+	}
 
-			switch (action) {
-				case "label": {
-					const currentLabels = existingLabelsByConvo.get(conversationId);
-					if (currentLabels === undefined) {
-						failed++;
-						errors.push(`${conversationId}: not found`);
-						continue;
-					}
-					const newLabels = params?.labels ?? [];
-					const merged = [...new Set([...currentLabels, ...newLabels])];
-					updates = { labels: merged };
-					break;
-				}
-				case "unlabel": {
-					const currentLabels = existingLabelsByConvo.get(conversationId);
-					if (currentLabels === undefined) {
-						failed++;
-						errors.push(`${conversationId}: not found`);
-						continue;
-					}
-					const removeLabels = new Set(params?.labels ?? []);
-					updates = {
-						labels: currentLabels.filter((l) => !removeLabels.has(l)),
-					};
-					break;
-				}
-				case "archive":
-					updates = { status: "archived" };
-					break;
-				case "unarchive":
-					updates = { status: "open" };
-					break;
-				case "mark_read":
-					// Reset unread count directly
-					await db
-						.update(inboxConversations)
-						.set({ unreadCount: 0, updatedAt: new Date() })
-						.where(and(...wsConditions(conversationId)));
-					processed++;
-					continue;
-				case "set_priority":
-					updates = { priority: params?.priority ?? "normal" };
-					break;
+	// Label / unlabel need each conversation's current labels to compute the
+	// merged array, so pre-fetch them all in one SELECT, compute in JS, then
+	// run the per-row updates in parallel (Promise.all) rather than serially.
+	const existingLabelsByConvo = new Map<string, string[]>();
+	const rows = await db
+		.select({ id: inboxConversations.id, labels: inboxConversations.labels })
+		.from(inboxConversations)
+		.where(and(...setConditions()));
+	for (const r of rows) {
+		existingLabelsByConvo.set(r.id, r.labels ?? []);
+	}
+
+	const labelResults = await Promise.allSettled(
+		targets.map(async (conversationId) => {
+			const currentLabels = existingLabelsByConvo.get(conversationId);
+			if (currentLabels === undefined) {
+				return { id: conversationId, ok: false, error: "not found" };
 			}
-
+			let merged: string[];
+			if (action === "label") {
+				merged = [...new Set([...currentLabels, ...(params?.labels ?? [])])];
+			} else {
+				const removeLabels = new Set(params?.labels ?? []);
+				merged = currentLabels.filter((l) => !removeLabels.has(l));
+			}
 			const result = await updateConversation(
 				db,
 				conversationId,
 				orgId,
-				updates,
+				{ labels: merged },
 				workspaceScope,
 			);
-			if (result) {
+			return { id: conversationId, ok: !!result, error: result ? null : "not found" };
+		}),
+	);
+
+	for (const settled of labelResults) {
+		if (settled.status === "fulfilled") {
+			if (settled.value.ok) {
 				processed++;
 			} else {
 				failed++;
-				errors.push(`${conversationId}: not found`);
+				errors.push(`${settled.value.id}: ${settled.value.error}`);
 			}
-		} catch (err) {
+		} else {
 			failed++;
 			errors.push(
-				`${conversationId}: ${err instanceof Error ? err.message : "unknown error"}`,
+				`bulk: ${settled.reason instanceof Error ? settled.reason.message : "unknown error"}`,
 			);
 		}
 	}
@@ -619,7 +621,7 @@ app.openapi(sendMessageRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id: conversationId } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const { account_id, text, attachments, message_tag, quick_replies, template } = body;
+	const { account_id, text, attachments, message_tag, quick_replies, template, reply_to } = body;
 	const db = c.get("db");
 
 	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
@@ -639,7 +641,12 @@ app.openapi(sendMessageRoute, async (c) => {
 					const [conv] = await db
 						.select({ participantPlatformId: inboxConversations.participantPlatformId, platformConversationId: inboxConversations.platformConversationId })
 						.from(inboxConversations)
-						.where(eq(inboxConversations.id, conversationId))
+						.where(
+							and(
+								eq(inboxConversations.id, conversationId),
+								eq(inboxConversations.organizationId, orgId),
+							),
+						)
 						.limit(1);
 					recipientId = conv?.participantPlatformId ?? conv?.platformConversationId ?? undefined;
 				} else {
@@ -778,8 +785,20 @@ app.openapi(sendMessageRoute, async (c) => {
 				}
 				// Mark all sent mids as outbound so the webhook handler skips
 				// echoes — Instagram Login API doesn't set is_echo on echoes.
-				for (const sentMid of sentMids) {
-					await c.env.KV.put(`outbound-mid:${sentMid}`, "1", { expirationTtl: 300 });
+				// Deferred + parallel: KV is eventually consistent and the webhook
+				// echo handler falls back to a strongly-consistent DB mid check, so
+				// these writes don't need to block the response. Dedupe via Set
+				// (lastMessageId is pushed in both the attachment/text branches and
+				// again after persistence).
+				const uniqueMids = [...new Set(sentMids)];
+				if (uniqueMids.length > 0) {
+					c.executionCtx.waitUntil(
+						Promise.all(
+							uniqueMids.map((mid) =>
+								c.env.KV.put(`outbound-mid:${mid}`, "1", { expirationTtl: 300 }),
+							),
+						),
+					);
 				}
 
 				c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "inbox.message.sent", conversation_id: conversationId }));
@@ -819,6 +838,13 @@ app.openapi(sendMessageRoute, async (c) => {
 				// Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages/
 				let waBody: Record<string, unknown>;
 
+				// reply_to threads the message to a prior WhatsApp message via the
+				// Cloud API `context.message_id` (the platform wamid).
+				// Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#reply-to-message
+				const waContext = reply_to
+					? { context: { message_id: reply_to } }
+					: {};
+
 				if (attachments && attachments.length > 0) {
 					// Send first attachment as media message
 					const att = attachments[0]!;
@@ -835,6 +861,7 @@ app.openapi(sendMessageRoute, async (c) => {
 						to: recipientPhone,
 						type: waType,
 						[waType]: { link: att.url, ...(text && { caption: text }) },
+						...waContext,
 					};
 				} else if (text) {
 					waBody = {
@@ -843,6 +870,7 @@ app.openapi(sendMessageRoute, async (c) => {
 						to: recipientPhone,
 						type: "text",
 						text: { body: text },
+						...waContext,
 					};
 				} else {
 					return c.json({ success: false, error: "WhatsApp requires text or attachments" }, 200);
@@ -942,19 +970,40 @@ app.openapi(sendTypingRoute, async (c) => {
 		switch (account.platform) {
 			case "facebook":
 			case "instagram": {
-				// Get recipient ID from conversation
+				// Get recipient ID from conversation.
 				// Docs: https://developers.facebook.com/docs/messenger-platform/send-messages/sender-actions
-				const convRes = await fetch(
-					`${GRAPH_BASE.facebook}/${conversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
-				);
-				if (!convRes.ok) return c.json({ success: true }, 200);
-				const convJson = (await convRes.json()) as {
-					participants?: { data: Array<{ id: string }> };
-				};
-				const recipient = convJson.participants?.data?.find(
-					(p) => p.id !== account.platformAccountId,
-				);
-				if (!recipient) return c.json({ success: true }, 200);
+				let recipientId: string | undefined;
+				// Local DB conversations (conv_ prefix) have no Graph conversation
+				// node — the participants fetch can only 404. Read the recipient
+				// straight from the DB instead, mirroring send-message.
+				if (conversationId.startsWith("conv_")) {
+					const [conv] = await db
+						.select({
+							participantPlatformId: inboxConversations.participantPlatformId,
+							platformConversationId: inboxConversations.platformConversationId,
+						})
+						.from(inboxConversations)
+						.where(
+							and(
+								eq(inboxConversations.id, conversationId),
+								eq(inboxConversations.organizationId, orgId),
+							),
+						)
+						.limit(1);
+					recipientId = conv?.participantPlatformId ?? conv?.platformConversationId ?? undefined;
+				} else {
+					const convRes = await fetch(
+						`${GRAPH_BASE.facebook}/${conversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
+					);
+					if (!convRes.ok) return c.json({ success: true }, 200);
+					const convJson = (await convRes.json()) as {
+						participants?: { data: Array<{ id: string }> };
+					};
+					recipientId = convJson.participants?.data?.find(
+						(p) => p.id !== account.platformAccountId,
+					)?.id;
+				}
+				if (!recipientId) return c.json({ success: true }, 200);
 
 				await fetch(
 					`${GRAPH_BASE.facebook}/me/messages?access_token=${encodeURIComponent(account.accessToken)}`,
@@ -962,7 +1011,7 @@ app.openapi(sendTypingRoute, async (c) => {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
-							recipient: { id: recipient.id },
+							recipient: { id: recipientId },
 							sender_action: "typing_on",
 						}),
 					},

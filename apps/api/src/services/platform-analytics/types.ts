@@ -105,6 +105,16 @@ export interface PlatformAnalyticsFetcher {
 		limit?: number,
 	): Promise<PlatformPostMetrics[]>;
 
+	// Optional single-post metrics endpoint. When implemented, the internal
+	// metrics refresh fetches one post's metrics directly instead of pulling a
+	// 50-item window and discarding all but one. Fetchers without it fall back
+	// to the windowed getPostMetrics path.
+	getSinglePostMetrics?(
+		accessToken: string,
+		platformAccountId: string,
+		platformPostId: string,
+	): Promise<PlatformPostMetrics | null>;
+
 	getAudience(
 		accessToken: string,
 		platformAccountId: string,

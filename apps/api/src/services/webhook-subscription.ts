@@ -64,9 +64,23 @@ export async function subscribeFacebookPage(
 export async function subscribeYouTubeChannel(
 	channelId: string,
 	callbackUrl: string,
+	hubSecret?: string,
 ): Promise<{ success: boolean; error?: string }> {
 	try {
 		const topicUrl = `https://www.youtube.com/xml/feeds/videos.xml?channel_id=${channelId}`;
+		const params: Record<string, string> = {
+			"hub.callback": callbackUrl,
+			"hub.topic": topicUrl,
+			"hub.verify": "async",
+			"hub.mode": "subscribe",
+			"hub.lease_seconds": "864000", // 10 days
+		};
+		// Register a hub.secret so the hub signs deliveries with X-Hub-Signature.
+		// Without this, the /youtube handler's HMAC check can never succeed when
+		// YOUTUBE_HUB_SECRET is configured (no signature is ever sent).
+		if (hubSecret) {
+			params["hub.secret"] = hubSecret;
+		}
 		const res = await fetch(
 			"https://pubsubhubbub.appspot.com/subscribe",
 			{
@@ -74,13 +88,7 @@ export async function subscribeYouTubeChannel(
 				headers: {
 					"Content-Type": "application/x-www-form-urlencoded",
 				},
-				body: new URLSearchParams({
-					"hub.callback": callbackUrl,
-					"hub.topic": topicUrl,
-					"hub.verify": "async",
-					"hub.mode": "subscribe",
-					"hub.lease_seconds": "864000", // 10 days
-				}).toString(),
+				body: new URLSearchParams(params).toString(),
 			},
 		);
 		// PubSubHubbub returns 202 Accepted for async verification
@@ -324,7 +332,7 @@ export async function renewYouTubePubSubSubscriptions(
 ): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const youtubeAccounts = await db
-		.select({
+		.selectDistinct({
 			platformAccountId: socialAccounts.platformAccountId,
 		})
 		.from(socialAccounts)
@@ -332,18 +340,39 @@ export async function renewYouTubePubSubSubscriptions(
 
 	const apiBaseUrl = env.API_BASE_URL || "https://api.relayapi.dev";
 	const callbackUrl = `${apiBaseUrl}/webhooks/platform/youtube`;
+	const hubSecret = env.YOUTUBE_HUB_SECRET;
 
-	for (const account of youtubeAccounts) {
-		if (!account.platformAccountId) continue;
-		const result = await subscribeYouTubeChannel(
-			account.platformAccountId,
-			callbackUrl,
+	// Dedupe channel IDs (same channel can appear in multiple workspaces) and
+	// process them in bounded-concurrency chunks instead of one serial POST per
+	// row, so a few hundred accounts don't take minutes or blow the Workers
+	// subrequest budget.
+	const channelIds = [
+		...new Set(
+			youtubeAccounts
+				.map((a) => a.platformAccountId)
+				.filter((id): id is string => Boolean(id)),
+		),
+	];
+
+	const CHUNK_SIZE = 10;
+	for (let i = 0; i < channelIds.length; i += CHUNK_SIZE) {
+		const slice = channelIds.slice(i, i + CHUNK_SIZE);
+		const results = await Promise.allSettled(
+			slice.map((id) => subscribeYouTubeChannel(id, callbackUrl, hubSecret)),
 		);
-		if (!result.success) {
-			console.error(
-				`[webhook-sub] YouTube renewal failed for ${account.platformAccountId}:`,
-				result.error,
-			);
-		}
+		results.forEach((result, idx) => {
+			const id = slice[idx];
+			if (result.status === "rejected") {
+				console.error(
+					`[webhook-sub] YouTube renewal threw for ${id}:`,
+					result.reason,
+				);
+			} else if (!result.value.success) {
+				console.error(
+					`[webhook-sub] YouTube renewal failed for ${id}:`,
+					result.value.error,
+				);
+			}
+		});
 	}
 }

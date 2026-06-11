@@ -8,6 +8,7 @@ import {
 } from "@relayapi/db";
 import { and, eq, inArray, count } from "drizzle-orm";
 import { maybeDecrypt, maybeEncrypt } from "../lib/crypto";
+import { fetchWithTimeout } from "../lib/fetch-timeout";
 import { createStripeClient } from "../services/stripe";
 import {
 	searchAvailableNumbers,
@@ -469,7 +470,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 		.limit(1);
 
 	if (orgSub?.stripeSubscriptionId && c.env.STRIPE_WA_PHONE_PRICE_ID) {
-		const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
+		const stripe = await createStripeClient(c.env.STRIPE_SECRET_KEY);
 		const item = await stripe.subscriptionItems.create(
 			{
 				subscription: orgSub.stripeSubscriptionId,
@@ -486,7 +487,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 			.where(eq(whatsappPhoneNumbers.id, phoneNumberId));
 	} else if (orgSub?.stripeCustomerId && c.env.STRIPE_WA_PHONE_PRICE_ID) {
 		// No active subscription — create a checkout session
-		const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
+		const stripe = await createStripeClient(c.env.STRIPE_SECRET_KEY);
 		const session = await stripe.checkout.sessions.create(
 			{
 				customer: orgSub.stripeCustomerId,
@@ -513,7 +514,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 	const phoneOnly = purchasedNumber.replace(/^\+1/, "");
 
 	try {
-		const metaRes = await fetch(`${WA_API_BASE}/${wabaId}/phone_numbers`, {
+		const metaRes = await fetchWithTimeout(`${WA_API_BASE}/${wabaId}/phone_numbers`, {
 			method: "POST",
 			headers: {
 				Authorization: `Bearer ${account.accessToken}`,
@@ -524,6 +525,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 				phone_number: phoneOnly,
 				verified_name: account.displayName ?? "Business",
 			}),
+			timeout: 5_000,
 		});
 
 		if (metaRes.ok) {
@@ -648,7 +650,7 @@ app.openapi(requestCode, async (c) => {
 
 	// Meta WhatsApp API: Request verification code
 	// https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-phone-number/phone-number-verification-request-code-api
-	const metaRes = await fetch(`${WA_API_BASE}/${row.waPhoneNumberId}/request_code`, {
+	const metaRes = await fetchWithTimeout(`${WA_API_BASE}/${row.waPhoneNumberId}/request_code`, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${accessToken}`,
@@ -658,6 +660,7 @@ app.openapi(requestCode, async (c) => {
 			code_method: body.method.toUpperCase(),
 			language: "en_US",
 		}),
+		timeout: 5_000,
 	});
 
 	if (!metaRes.ok) {
@@ -735,11 +738,12 @@ app.openapi(verifyCode, async (c) => {
 	// Step 1: Verify the code with Meta
 	// https://developers.facebook.com/docs/graph-api/reference/whats-app-business-account-to-number-current-status/verify_code
 	// Official docs: code is passed as a query parameter
-	const verifyRes = await fetch(
+	const verifyRes = await fetchWithTimeout(
 		`${WA_API_BASE}/${row.waPhoneNumberId}/verify_code?code=${encodeURIComponent(body.code)}`,
 		{
 			method: "POST",
 			headers: { Authorization: `Bearer ${accessToken}` },
+			timeout: 5_000,
 		},
 	);
 
@@ -761,7 +765,7 @@ app.openapi(verifyCode, async (c) => {
 	// Step 2: Register the number for Cloud API
 	// https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-phone-number/register-api
 	const pin = String(Math.floor(100000 + Math.random() * 900000));
-	const registerRes = await fetch(`${WA_API_BASE}/${row.waPhoneNumberId}/register`, {
+	const registerRes = await fetchWithTimeout(`${WA_API_BASE}/${row.waPhoneNumberId}/register`, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${accessToken}`,
@@ -771,6 +775,7 @@ app.openapi(verifyCode, async (c) => {
 			messaging_product: "whatsapp",
 			pin,
 		}),
+		timeout: 5_000,
 	});
 
 	if (!registerRes.ok) {
@@ -876,7 +881,7 @@ app.openapi(releasePhoneNumber, async (c) => {
 	// 1. Cancel Stripe subscription item
 	if (row.stripeSubscriptionItemId) {
 		try {
-			const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
+			const stripe = await createStripeClient(c.env.STRIPE_SECRET_KEY);
 			await stripe.subscriptionItems.del(row.stripeSubscriptionItemId);
 		} catch (err) {
 			console.error("Failed to cancel Stripe subscription item:", err);

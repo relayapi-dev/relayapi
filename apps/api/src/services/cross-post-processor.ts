@@ -12,7 +12,7 @@ import {
 	posts,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, isNull, lte } from "drizzle-orm";
 import type { Env } from "../types";
 import { getPublisher } from "../publishers";
 import type { EngagementAccount } from "../publishers/types";
@@ -22,26 +22,37 @@ import { dispatchWebhookEvent } from "./webhook-delivery";
 export async function processCrossPostActions(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
-	// Find pending actions whose execution time has arrived
+	// Find pending, not-yet-claimed actions whose execution time has arrived.
+	// executedAt IS NULL is part of the predicate so a row already claimed by a
+	// concurrent (overlapping) cron tick is not re-selected.
 	const due = await db
 		.select()
 		.from(crossPostActions)
 		.where(
 			and(
 				eq(crossPostActions.status, "pending"),
+				isNull(crossPostActions.executedAt),
 				lte(crossPostActions.executeAt, new Date()),
 			),
 		)
 		.limit(10);
 
 	for (const action of due) {
-		// Atomic claim: prevent concurrent cron runs from double-processing.
-		// Set executedAt as a claim marker; only one worker can succeed since
-		// the WHERE ensures status is still "pending".
+		// Atomic claim: prevent concurrent cron runs from double-executing reposts/
+		// comments/quotes. This is a real compare-and-swap — the WHERE requires
+		// executedAt to still be NULL, so when two overlapping cron ticks both reach
+		// this row, the second UPDATE re-evaluates the predicate after acquiring the
+		// row lock, sees executed_at IS NOT NULL, matches 0 rows, and skips.
 		const [claimed] = await db
 			.update(crossPostActions)
 			.set({ executedAt: new Date() })
-			.where(and(eq(crossPostActions.id, action.id), eq(crossPostActions.status, "pending")))
+			.where(
+				and(
+					eq(crossPostActions.id, action.id),
+					eq(crossPostActions.status, "pending"),
+					isNull(crossPostActions.executedAt),
+				),
+			)
 			.returning({ id: crossPostActions.id });
 		if (!claimed) continue;
 
@@ -52,6 +63,8 @@ export async function processCrossPostActions(env: Env): Promise<void> {
 					id: posts.id,
 					organizationId: posts.organizationId,
 					workspaceId: posts.workspaceId,
+					status: posts.status,
+					scheduledAt: posts.scheduledAt,
 				})
 				.from(posts)
 				.where(eq(posts.id, action.postId))
@@ -73,6 +86,33 @@ export async function processCrossPostActions(env: Env): Promise<void> {
 				)
 				.limit(1);
 			if (!sourceTarget || !sourceTarget.platformPostId) {
+				// The parent post has no published target yet. If the post is still in a
+				// non-terminal state (e.g. it was rescheduled later, moved to draft, or is
+				// mid-publish), this is NOT a terminal failure — the post simply has not
+				// gone live. markFailed here would permanently strand the action (the due
+				// query never retries failed rows), so the repost/comment/quote would never
+				// run even after the post publishes. Instead, release the claim and defer:
+				// push executeAt to (max(now, scheduledAt) + delayMinutes) and keep status
+				// "pending" so a later tick retries once the post is live. Only posts in a
+				// genuinely terminal state (published/failed) with no published target are a
+				// real failure.
+				const postPending = ["scheduled", "draft", "publishing"].includes(
+					post.status,
+				);
+				if (postPending) {
+					const anchor =
+						post.scheduledAt && post.scheduledAt.getTime() > Date.now()
+							? post.scheduledAt
+							: new Date();
+					const nextExecuteAt = new Date(
+						anchor.getTime() + (action.delayMinutes ?? 0) * 60000,
+					);
+					await db
+						.update(crossPostActions)
+						.set({ executedAt: null, executeAt: nextExecuteAt })
+						.where(eq(crossPostActions.id, action.id));
+					continue;
+				}
 				await markFailed(db, action.id, "No published post target found");
 				continue;
 			}
@@ -138,14 +178,15 @@ export async function processCrossPostActions(env: Env): Promise<void> {
 				})
 				.where(eq(crossPostActions.id, action.id));
 
-			// Dispatch webhook
+			// Await delivery so it completes before this cron item returns (a
+			// detached promise would be cancelled after the handler resolves).
 			await dispatchWebhookEvent(env, db, post.organizationId, "cross_post_action.executed", {
 				action_id: action.id,
 				post_id: action.postId,
 				action_type: action.actionType,
 				target_account_id: action.targetAccountId,
 				result_post_id: resultPostId,
-			}, post.workspaceId);
+			}, post.workspaceId).catch(console.error);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : "Unknown error";
 			await markFailed(db, action.id, errorMessage);
@@ -158,13 +199,15 @@ export async function processCrossPostActions(env: Env): Promise<void> {
 					.where(eq(posts.id, action.postId))
 					.limit(1);
 				if (post) {
+					// Await delivery so it completes before the cron item returns (dedicated
+			// webhook-delivery queue is the planned non-blocking follow-up).
 					await dispatchWebhookEvent(env, db, post.organizationId, "cross_post_action.failed", {
 						action_id: action.id,
 						post_id: action.postId,
 						action_type: action.actionType,
 						target_account_id: action.targetAccountId,
 						error: errorMessage,
-					}, post.workspaceId);
+					}, post.workspaceId).catch(console.error);
 				}
 			} catch {
 				// Non-fatal

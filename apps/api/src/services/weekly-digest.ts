@@ -3,7 +3,7 @@
  * Runs every Monday at 9am UTC via cron.
  */
 
-import { eq, and, gte, lte, sql, inArray } from "drizzle-orm";
+import { and, sql, inArray } from "drizzle-orm";
 import {
 	createDb,
 	member,
@@ -13,26 +13,21 @@ import {
 import { sendNotification } from "./notification-manager";
 import type { Env } from "../types";
 
-interface ChannelPrefs {
-	push: boolean;
-	email: boolean;
-}
-
 export async function processWeeklyDigest(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
-	// Get all users who have weekly digest enabled (push or email)
-	const prefs = await db
+	// Get all users who have weekly digest enabled (push or email). Push the
+	// opt-in filter into SQL via jsonb containment so the result set scales with
+	// opted-in users rather than the whole user base (default is both false).
+	const enabledUsers = await db
 		.select({
 			userId: notificationPreferences.userId,
 			weeklyDigest: notificationPreferences.weeklyDigest,
 		})
-		.from(notificationPreferences);
-
-	const enabledUsers = prefs.filter((p) => {
-		const wd = p.weeklyDigest as ChannelPrefs | null;
-		return wd && (wd.push || wd.email);
-	});
+		.from(notificationPreferences)
+		.where(
+			sql`${notificationPreferences.weeklyDigest} @> '{"push":true}'::jsonb or ${notificationPreferences.weeklyDigest} @> '{"email":true}'::jsonb`,
+		);
 
 	if (enabledUsers.length === 0) return;
 
@@ -48,19 +43,22 @@ export async function processWeeklyDigest(env: Env): Promise<void> {
 
 	// Get unique org IDs and batch-fetch stats for all of them in one query
 	const orgIds = [...new Set(allMemberships.map((m) => m.orgId))];
+	// Count by actual publish time (published_at), not creation time, so a post
+	// scheduled weeks ago but published this week is correctly attributed to this
+	// week and a post merely created this week is not double-counted. Failed/partial
+	// posts have no dedicated timestamp, so they fall back to updated_at (approximate).
 	const allStats = orgIds.length > 0
 		? await db
 				.select({
 					orgId: posts.organizationId,
-					published: sql<number>`count(*) filter (where ${posts.status} = 'published')`,
-					failed: sql<number>`count(*) filter (where ${posts.status} = 'failed' or ${posts.status} = 'partial')`,
+					published: sql<number>`count(*) filter (where ${posts.status} = 'published' and ${posts.publishedAt} >= ${weekAgo} and ${posts.publishedAt} <= ${now})`,
+					failed: sql<number>`count(*) filter (where (${posts.status} = 'failed' or ${posts.status} = 'partial') and ${posts.updatedAt} >= ${weekAgo} and ${posts.updatedAt} <= ${now})`,
 				})
 				.from(posts)
 				.where(
 					and(
 						inArray(posts.organizationId, orgIds),
-						gte(posts.createdAt, weekAgo),
-						lte(posts.createdAt, now),
+						sql`(${posts.publishedAt} >= ${weekAgo} or ${posts.updatedAt} >= ${weekAgo})`,
 					),
 				)
 				.groupBy(posts.organizationId)

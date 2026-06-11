@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { inboxMessages } from "@relayapi/db";
-import { desc, eq } from "drizzle-orm";
+import { desc, inArray } from "drizzle-orm";
 import { ErrorResponse } from "../schemas/common";
 import {
 	ClassifyBody,
@@ -297,29 +297,44 @@ app.openapi(prioritiesRoute, async (c) => {
 		labels: parsedLabels,
 		cursor,
 		limit,
+		workspaceScope: c.get("workspaceScope"),
 	});
 
-	// For each conversation, fetch the latest inbound message to get sentiment/classification
-	const withPriority = await Promise.all(
-		result.data.map(async (conv) => {
-			const [latestMessage] = await db
-				.select({
-					sentimentScore: inboxMessages.sentimentScore,
-					classification: inboxMessages.classification,
-				})
-				.from(inboxMessages)
-				.where(eq(inboxMessages.conversationId, conv.id))
-				.orderBy(desc(inboxMessages.createdAt))
-				.limit(1);
+	// Fetch the latest message's sentiment/classification for every conversation
+	// in ONE query (DISTINCT ON keyed on conversation_id) instead of N+1
+	// per-conversation SELECTs. Uses the existing inbox_msg_conv_created_idx.
+	const convIds = result.data.map((conv) => conv.id);
+	const latestByConversation = new Map<
+		string,
+		{ sentimentScore: number | null; classification: string | null }
+	>();
+	if (convIds.length > 0) {
+		const latestRows = await db
+			.selectDistinctOn([inboxMessages.conversationId], {
+				conversationId: inboxMessages.conversationId,
+				sentimentScore: inboxMessages.sentimentScore,
+				classification: inboxMessages.classification,
+			})
+			.from(inboxMessages)
+			.where(inArray(inboxMessages.conversationId, convIds))
+			.orderBy(inboxMessages.conversationId, desc(inboxMessages.createdAt));
+		for (const row of latestRows) {
+			latestByConversation.set(row.conversationId, {
+				sentimentScore: row.sentimentScore,
+				classification: row.classification,
+			});
+		}
+	}
 
-			const priorityScore = calculatePriorityScore(conv, latestMessage);
+	const withPriority = result.data.map((conv) => {
+		const latestMessage = latestByConversation.get(conv.id);
+		const priorityScore = calculatePriorityScore(conv, latestMessage);
 
-			return {
-				...serializeConversation(conv),
-				priority_score: priorityScore,
-			};
-		}),
-	);
+		return {
+			...serializeConversation(conv),
+			priority_score: priorityScore,
+		};
+	});
 
 	// Sort by priority score descending
 	withPriority.sort((a, b) => b.priority_score - a.priority_score);

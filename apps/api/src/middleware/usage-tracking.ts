@@ -62,12 +62,49 @@ type UsageWrite = {
 	orgId: string;
 	callsIncluded: number;
 	units: number;
+	periodStart: Date;
+	periodEnd: Date;
 };
 
 type UsageTrackingContext = Context<{
 	Bindings: Env;
 	Variables: Variables;
 }>;
+
+/**
+ * Resolve the billing window a usage record belongs to.
+ *
+ * Pro orgs with a known Stripe subscription period bill on that period (so the
+ * included-call allowance resets on the same anniversary the base charge lands,
+ * per the maintainer's billing decision). Free orgs — and pro subs missing
+ * period bounds — fall back to the calendar month in UTC. The result is stable
+ * within a period, so every billable write in that window upserts the same
+ * usage_records row (target is organizationId + periodStart).
+ *
+ * Pass the period bounds from the auth context (c.get("periodStart"/"periodEnd")).
+ */
+export function resolveBillingPeriod(
+	periodStartIso?: string | null,
+	periodEndIso?: string | null,
+	at: Date = new Date(),
+): { periodStart: Date; periodEnd: Date } {
+	if (periodStartIso && periodEndIso) {
+		const periodStart = new Date(periodStartIso);
+		const periodEnd = new Date(periodEndIso);
+		if (
+			!Number.isNaN(periodStart.getTime()) &&
+			!Number.isNaN(periodEnd.getTime()) &&
+			periodEnd.getTime() > periodStart.getTime()
+		) {
+			return { periodStart, periodEnd };
+		}
+	}
+	// Calendar-month fallback (UTC).
+	return {
+		periodStart: new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1)),
+		periodEnd: new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1)),
+	};
+}
 
 const JSON_BULK_USAGE_FIELDS: Record<string, string> = {
 	"/v1/posts/bulk": "posts",
@@ -156,21 +193,13 @@ async function persistUsageAndLogs(
 	];
 
 	if (usage) {
-		const now = new Date();
-		const periodStart = new Date(
-			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
-		);
-		const periodEnd = new Date(
-			Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1),
-		);
-
 		tasks.push(
 			db
 				.insert(usageRecords)
 				.values({
 					organizationId: usage.orgId,
-					periodStart,
-					periodEnd,
+					periodStart: usage.periodStart,
+					periodEnd: usage.periodEnd,
 					postsCount: 0,
 					postsIncluded: usage.callsIncluded,
 					apiCallsCount: usage.units,
@@ -181,9 +210,17 @@ async function persistUsageAndLogs(
 				.onConflictDoUpdate({
 					target: [usageRecords.organizationId, usageRecords.periodStart],
 					set: {
+						// Refresh apiCallsIncluded on every write so a mid-month plan
+						// change (free<->pro) is reflected immediately instead of being
+						// frozen at whatever the first writer of the month inserted.
+						apiCallsIncluded: usage.callsIncluded,
 						apiCallsCount: sql`${usageRecords.apiCallsCount} + ${usage.units}`,
-						overageCalls: sql`GREATEST(0, ${usageRecords.apiCallsCount} + ${usage.units} - ${usageRecords.apiCallsIncluded})`,
-						overageCallsCostCents: sql`GREATEST(0, CEIL((${usageRecords.apiCallsCount} + ${usage.units} - ${usageRecords.apiCallsIncluded}) / 1000.0)) * ${PRICING.pricePerThousandCallsCents}`,
+						overageCalls: sql`GREATEST(0, ${usageRecords.apiCallsCount} + ${usage.units} - ${usage.callsIncluded})`,
+						// Pro-rated to the cent, matching the amount actually charged
+						// via Stripe (invoice-generator.ts) and GET /v1/usage. The prior
+						// CEIL(.../1000) * 100 rounded every started block up to a full
+						// dollar, overstating owed amounts up to 100x.
+						overageCallsCostCents: sql`CEIL(GREATEST(0, ${usageRecords.apiCallsCount} + ${usage.units} - ${usage.callsIncluded}) * ${PRICING.pricePerThousandCallsCents} / 1000.0)`,
 						updatedAt: new Date(),
 					},
 				}),
@@ -229,10 +266,20 @@ export const usageTrackingMiddleware = createMiddleware<{
 	const keyId = c.get("keyId");
 	const plan = c.get("plan");
 	const callsIncluded = c.get("callsIncluded");
+	// Bill against the org's actual Stripe period when known; calendar month otherwise.
+	const billingPeriod = resolveBillingPeriod(
+		c.get("periodStart"),
+		c.get("periodEnd"),
+	);
 
 	// Determine how many units this request costs.
 	// Multi-item endpoints cost 1 per item, not 1 per request.
-	const units = await getUsageUnits(c);
+	// Cap per-request units so a single oversized bulk upload can't consume an
+	// entire month's quota in one shot (and can't be used to blow past the free
+	// hard limit by an arbitrary amount). The cap is well above realistic bulk
+	// sizes, so it only bites pathological payloads.
+	const MAX_UNITS_PER_REQUEST = 1000;
+	const units = Math.min(await getUsageUnits(c), MAX_UNITS_PER_REQUEST);
 
 	// Read the counter synchronously (needed for free-plan gate + threshold detection),
 	// then defer the KV write via waitUntil — the handler no longer blocks on it.
@@ -300,8 +347,11 @@ export const usageTrackingMiddleware = createMiddleware<{
 		}
 	}
 
-	// Free plan: hard limit
-	if (plan === "free" && countBefore >= callsIncluded) {
+	// Free plan: hard limit. Account for the in-flight request's full unit cost
+	// (newCount = countBefore + units) so a single bulk request can't slip
+	// under the cap when countBefore is just below it and then process far
+	// beyond the advertised limit in one shot.
+	if (plan === "free" && newCount > callsIncluded) {
 		// Already over limit — don't process. The counter is slightly inflated
 		// but that's safe (it resets monthly).
 		c.header("X-Usage-Count", String(newCount));
@@ -335,6 +385,14 @@ export const usageTrackingMiddleware = createMiddleware<{
 
 	await next();
 
+	// Don't bill client/server errors. getUsageUnits counts raw request-body
+	// items before validation, so a rejected bulk payload (400) or a 404 would
+	// otherwise be charged the full unit count for work that never ran. Log the
+	// request for abuse detection but mark it non-billable and skip the usage
+	// record write so quota/overage only reflect successful calls.
+	const statusCode = c.res.status;
+	const isBillable = statusCode < 400;
+
 	c.executionCtx.waitUntil(
 		persistUsageAndLogs(
 			c.get("db"),
@@ -343,15 +401,19 @@ export const usageTrackingMiddleware = createMiddleware<{
 				keyId,
 				method: c.req.method,
 				path: c.req.path,
-				statusCode: c.res.status,
+				statusCode,
 				responseTimeMs: Date.now() - start,
-				billable: true,
+				billable: isBillable,
 			},
-			{
-				orgId,
-				callsIncluded,
-				units,
-			},
+			isBillable
+				? {
+						orgId,
+						callsIncluded,
+						units,
+						periodStart: billingPeriod.periodStart,
+						periodEnd: billingPeriod.periodEnd,
+					}
+				: undefined,
 		),
 	);
 });

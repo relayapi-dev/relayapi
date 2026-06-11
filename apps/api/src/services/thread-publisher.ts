@@ -55,6 +55,7 @@ interface ThreadTarget {
 	socialAccountId: string;
 	platform: string;
 	status: string;
+	platformPostId: string | null;
 }
 
 /**
@@ -78,6 +79,7 @@ export async function publishThreadPosition(
 			threadDelayMs: posts.threadDelayMs,
 			platformOverrides: posts.platformOverrides,
 			status: posts.status,
+			updatedAt: posts.updatedAt,
 			organizationId: posts.organizationId,
 			workspaceId: posts.workspaceId,
 		})
@@ -101,6 +103,7 @@ export async function publishThreadPosition(
 			socialAccountId: postTargets.socialAccountId,
 			platform: postTargets.platform,
 			status: postTargets.status,
+			platformPostId: postTargets.platformPostId,
 		})
 		.from(postTargets)
 		.where(inArray(postTargets.postId, postIds));
@@ -161,21 +164,17 @@ export async function publishThreadPosition(
 		(p) => positionsToPublish.includes(p.threadPosition ?? 0),
 	);
 
-	// Collect previous positions' platform post IDs for reply chaining
+	// Collect previous positions' platform post IDs for reply chaining.
+	// The platformPostId is already loaded in the targets query above, so read it
+	// from memory instead of issuing one SELECT per previous-position target (N+1).
 	const previousPlatformPostIds = new Map<string, string>(); // accountId -> platformPostId
 	if (startPosition > 0) {
 		const prevPost = threadPosts.find((p) => (p.threadPosition ?? 0) === startPosition - 1);
 		if (prevPost) {
 			const prevTargets = targetsByPost.get(prevPost.id) ?? [];
 			for (const pt of prevTargets) {
-				// Fetch the platformPostId for this target
-				const [targetRow] = await db
-					.select({ platformPostId: postTargets.platformPostId })
-					.from(postTargets)
-					.where(eq(postTargets.id, pt.id))
-					.limit(1);
-				if (targetRow?.platformPostId) {
-					previousPlatformPostIds.set(pt.socialAccountId, targetRow.platformPostId);
+				if (pt.platformPostId) {
+					previousPlatformPostIds.set(pt.socialAccountId, pt.platformPostId);
 				}
 			}
 		}
@@ -187,17 +186,53 @@ export async function publishThreadPosition(
 		const overrides = (post.platformOverrides ?? {}) as Record<string, unknown>;
 		const mediaItems = (overrides._media as MediaAttachment[]) ?? [];
 
-		// Update post status to publishing
-		await db
+		// Atomically claim this thread item before any platform calls. Cloudflare Queues
+		// are at-least-once and handleThreadPublish retries the whole position on any
+		// escaped error, so without a claim a redelivery/retry re-publishes already-live
+		// items (duplicate tweets/posts). Compare-and-swap on (status, updatedAt): the CAS
+		// only succeeds when the post is still "scheduled"/"publishing" AND its updatedAt
+		// matches what we read, so two concurrent deliveries cannot both claim the same
+		// item. If another worker advanced it (terminal status, or bumped updatedAt), skip
+		// its platform calls entirely.
+		const claimed = await db
 			.update(posts)
 			.set({ status: "publishing", updatedAt: new Date() })
-			.where(eq(posts.id, post.id));
+			.where(
+				and(
+					eq(posts.id, post.id),
+					inArray(posts.status, ["scheduled", "publishing"]),
+					eq(posts.updatedAt, post.updatedAt),
+				),
+			)
+			.returning({ id: posts.id });
+		if (claimed.length === 0) {
+			// Already finalized by another delivery. Still surface its published targets'
+			// platformPostId into the reply chain so subsequent positions can chain.
+			for (const t of postTargetList) {
+				if (t.status === "published" && t.platformPostId) {
+					previousPlatformPostIds.set(t.socialAccountId, t.platformPostId);
+				}
+			}
+			continue;
+		}
 
 		let successCount = 0;
 		let failCount = 0;
 		let skipCount = 0;
 
 		for (const target of postTargetList) {
+			// Idempotency: a target already marked "published" was published on a prior
+			// (possibly retried/redelivered) run. Do not re-publish it — that would create
+			// a duplicate post on the platform. Reuse its stored platformPostId for the
+			// reply chain and count it as a success.
+			if (target.status === "published") {
+				if (target.platformPostId) {
+					previousPlatformPostIds.set(target.socialAccountId, target.platformPostId);
+				}
+				successCount++;
+				continue;
+			}
+
 			const account = accountMap.get(target.socialAccountId);
 			if (!account) {
 				await db
@@ -300,10 +335,16 @@ export async function publishThreadPosition(
 			}
 		}
 
-		// Update post status — exclude skipped targets from the success/fail calculation
+		// Update post status — exclude skipped targets from the success/fail calculation.
+		// When every target was skipped (non-threadable platforms on a non-root item),
+		// the item published nothing, so it must NOT be marked "published" (that would
+		// contradict its own target rows, all "failed", and set a bogus publishedAt that
+		// makes thread.published fire). The post_status enum has no "skipped" value, so
+		// mark it "failed" (accurate: nothing went live) and leave publishedAt unset.
+		// failCount is 0 here, so the chain-abort guard below does not trigger.
 		const attemptedCount = successCount + failCount;
 		const finalStatus = attemptedCount === 0
-			? "published" // all targets were skipped (non-threadable) — not a failure
+			? "failed" // all targets were skipped (non-threadable) — nothing published
 			: successCount === attemptedCount
 				? "published"
 				: successCount === 0
@@ -332,9 +373,18 @@ export async function publishThreadPosition(
 	);
 
 	if (!nextPost) {
-		// Thread is complete - dispatch webhook
+		// Thread is complete. Only dispatch thread.published if at least one target
+		// across the whole thread actually went live — otherwise a thread whose items
+		// were all skipped/failed would emit a success event. Re-read the persisted
+		// target statuses (the in-memory `targets` snapshot predates this run's writes).
+		const finalTargets = await db
+			.select({ status: postTargets.status })
+			.from(postTargets)
+			.where(inArray(postTargets.postId, postIds));
+		const hasRealSuccess = finalTargets.some((t) => t.status === "published");
+
 		const rootPost = threadPosts[0];
-		if (rootPost) {
+		if (rootPost && hasRealSuccess) {
 			void dispatchWebhookEvent(
 				env,
 				db,

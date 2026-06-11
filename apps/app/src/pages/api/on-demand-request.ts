@@ -2,7 +2,26 @@ import type { APIRoute } from "astro";
 import { env } from "cloudflare:workers";
 import { Resend } from "resend";
 
+/** Escape HTML-significant characters to prevent markup injection into the email. */
+function escapeHtml(value: unknown): string {
+	return String(value ?? "")
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+}
+
 export const POST: APIRoute = async (context) => {
+	// AUTH: require an authenticated dashboard user so anonymous callers can't
+	// drive the support mailbox.
+	if (!context.locals.user) {
+		return Response.json(
+			{ error: { message: "Unauthorized" } },
+			{ status: 401 },
+		);
+	}
+
 	try {
 		const body = await context.request.json();
 		const { platform, name, email, message } = body;
@@ -18,14 +37,14 @@ export const POST: APIRoute = async (context) => {
 
 		const html = `
 			<h2>New On-Demand Platform Request</h2>
-			<p><strong>Platform:</strong> ${platform}</p>
-			<p><strong>Name:</strong> ${name || "Not provided"}</p>
-			<p><strong>Email:</strong> ${email}</p>
-			<p><strong>Message:</strong> ${message || "No message"}</p>
+			<p><strong>Platform:</strong> ${escapeHtml(platform)}</p>
+			<p><strong>Name:</strong> ${name ? escapeHtml(name) : "Not provided"}</p>
+			<p><strong>Email:</strong> ${escapeHtml(email)}</p>
+			<p><strong>Message:</strong> ${message ? escapeHtml(message) : "No message"}</p>
 			<hr />
 			<p style="color: #666; font-size: 12px;">
 				Sent from the RelayAPI dashboard connections page.
-				${context.locals.user ? `User: ${context.locals.user.email}` : ""}
+				${context.locals.user ? `User: ${escapeHtml(context.locals.user.email)}` : ""}
 			</p>
 		`;
 

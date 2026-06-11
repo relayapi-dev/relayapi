@@ -154,6 +154,7 @@ export function DashboardShell({
 										<DashboardPageGuard
 											requiresApiKey={requiresApiKey}
 											adminOnly={adminOnly}
+											orgId={organization?.id ?? null}
 										>
 											{children}
 										</DashboardPageGuard>

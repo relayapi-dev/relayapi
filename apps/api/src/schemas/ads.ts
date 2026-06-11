@@ -399,6 +399,14 @@ export const SyncResponse = z.object({
 	metrics_updated: z.number(),
 });
 
+// Manual sync now runs asynchronously on the ADS queue (the full Graph
+// fetch + per-ad upserts + metrics refresh can exceed the request window).
+// The endpoint acknowledges with 202 + { status: "queued" }; clients poll the
+// ad sync logs / list endpoints for completion counts.
+export const SyncQueuedResponse = z.object({
+	status: z.literal("queued"),
+});
+
 // ---------------------------------------------------------------------------
 // Paginated responses
 // ---------------------------------------------------------------------------

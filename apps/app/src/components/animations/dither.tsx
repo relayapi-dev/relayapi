@@ -158,11 +158,14 @@ class RetroEffectImpl extends Effect {
 }
 
 // NOTE: RetroEffectImpl is a valid postprocessing Effect subclass and works
-// correctly at runtime. This previously needed a `@ts-expect-error` for an
-// over-strict wrapEffect generic constraint; the current @react-three/fiber /
-// @react-three/postprocessing type defs accept it, so the directive was removed
-// (tsc now flags it as unused).
-const WrappedRetroEffect = wrapEffect(RetroEffectImpl);
+// correctly at runtime. Whether tsc accepts it directly flip-flops with the
+// resolved @types/three / @react-three/postprocessing versions (two copies of
+// postprocessing's `Effect` in the tree make the protected `renderer` field
+// "incompatible"), which made a bare `@ts-expect-error` here alternate between
+// required and "unused". The cast is stable under both resolutions.
+const WrappedRetroEffect = wrapEffect(
+	RetroEffectImpl as unknown as Parameters<typeof wrapEffect>[0],
+);
 
 const RetroEffect = forwardRef<
 	RetroEffectImpl,

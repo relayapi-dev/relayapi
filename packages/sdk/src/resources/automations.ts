@@ -96,8 +96,33 @@ export interface AutomationResponse {
 	updated_at: string;
 }
 
+/**
+ * List-item shape returned by `automations.list()`. The heavy `graph`,
+ * `template_config`, and `validation_errors` fields are OMITTED on the list
+ * endpoint — fetch a single automation with `automations.get(id)`
+ * (AutomationResponse) to retrieve the full graph.
+ */
+export interface AutomationListItem {
+	id: string;
+	organization_id: string;
+	workspace_id: string | null;
+	name: string;
+	description: string | null;
+	channel: AutomationChannel;
+	status: AutomationStatus;
+	created_from_template: string | null;
+	total_enrolled: number;
+	total_completed: number;
+	total_exited: number;
+	total_failed: number;
+	last_validated_at: string | null;
+	created_by: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
 export interface AutomationListResponse {
-	data: AutomationResponse[];
+	data: AutomationListItem[];
 	next_cursor: string | null;
 	has_more: boolean;
 }

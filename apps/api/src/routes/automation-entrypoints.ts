@@ -251,6 +251,11 @@ const createEntrypoint = createRoute({
 			description: "Automation not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		409: {
+			description:
+				"A webhook_inbound entrypoint with this slug already exists",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -305,6 +310,41 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 			: plaintextSecret;
 	}
 
+	const db = c.get("db");
+
+	// Webhook slugs are global identifiers (they live in an unauthenticated URL
+	// /v1/webhooks/automation-trigger/:slug). The slug lives inside the config
+	// jsonb so no DB constraint enforces uniqueness — reject a collision here so
+	// one tenant cannot shadow another's webhook (or break their own) by reusing
+	// an existing active slug.
+	if (body.kind === "webhook_inbound") {
+		const slug = config.webhook_slug;
+		if (typeof slug === "string" && slug.length > 0) {
+			const [conflict] = await db
+				.select({ id: automationEntrypoints.id })
+				.from(automationEntrypoints)
+				.where(
+					and(
+						eq(automationEntrypoints.kind, "webhook_inbound"),
+						sql`${automationEntrypoints.config}->>'webhook_slug' = ${slug}`,
+					),
+				)
+				.limit(1);
+			if (conflict) {
+				return c.json(
+					{
+						error: {
+							code: "CONFLICT",
+							message:
+								"A webhook_inbound entrypoint with this slug already exists",
+						},
+					},
+					409,
+				);
+			}
+		}
+	}
+
 	const specificity = computeSpecificity(
 		body.kind,
 		config,
@@ -312,7 +352,6 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 		body.social_account_id ?? null,
 	);
 
-	const db = c.get("db");
 	const [inserted] = await db
 		.insert(automationEntrypoints)
 		.values({
@@ -458,6 +497,23 @@ app.openapi(updateEntrypoint, async (c) => {
 		const kind = body.kind ?? existing.kind;
 		const config = (body.config ??
 			(existing.config as Record<string, unknown>)) as Record<string, unknown>;
+		// Restore the stored (encrypted) webhook secret when the client echoes
+		// back the public mask. GET/list responses replace webhook_secret with
+		// SECRET_MASK, so a normal read-modify-write PATCH would otherwise persist
+		// the literal mask as the HMAC key — making inbound webhooks forgeable and
+		// breaking the org's own legitimate integration. Preserve the existing
+		// secret unless the caller supplied a genuinely new value.
+		if (
+			kind === "webhook_inbound" &&
+			config.webhook_secret === SECRET_MASK
+		) {
+			const existingCfg = (existing.config ?? {}) as Record<string, unknown>;
+			if (typeof existingCfg.webhook_secret === "string") {
+				config.webhook_secret = existingCfg.webhook_secret;
+			} else {
+				delete config.webhook_secret;
+			}
+		}
 		const parsed = validateEntrypointConfig(kind, config);
 		if (!parsed.success) {
 			return c.json(
@@ -495,6 +551,41 @@ app.openapi(updateEntrypoint, async (c) => {
 	}
 
 	const db = c.get("db");
+
+	// If this PATCH results in a webhook_inbound entrypoint with a slug, ensure
+	// it doesn't collide with another entrypoint — mirror the create-path guard
+	// so a clash returns 409 instead of surfacing the new partial-unique index's
+	// 23505 as a 500.
+	if (resolvedConfig) {
+		const kind = body.kind ?? existing.kind;
+		const slug = resolvedConfig.webhook_slug;
+		if (kind === "webhook_inbound" && typeof slug === "string" && slug.length > 0) {
+			const [conflict] = await db
+				.select({ id: automationEntrypoints.id })
+				.from(automationEntrypoints)
+				.where(
+					and(
+						eq(automationEntrypoints.kind, "webhook_inbound"),
+						sql`${automationEntrypoints.config}->>'webhook_slug' = ${slug}`,
+						sql`${automationEntrypoints.id} <> ${id}`,
+					),
+				)
+				.limit(1);
+			if (conflict) {
+				return c.json(
+					{
+						error: {
+							code: "CONFLICT",
+							message:
+								"A webhook_inbound entrypoint with this slug already exists",
+						},
+					},
+					409,
+				);
+			}
+		}
+	}
+
 	const [updated] = await db
 		.update(automationEntrypoints)
 		.set(patch)

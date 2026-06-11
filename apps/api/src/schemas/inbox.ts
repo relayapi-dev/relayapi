@@ -45,6 +45,17 @@ export const CommentIdParams = z.object({
 	comment_id: z.string().describe("Comment ID"),
 });
 
+// Optional account targeting for comment moderation endpoints. When the caller
+// already knows which account owns the comment (e.g. from listComments, which
+// returns account_id per result), supplying it avoids fanning the platform
+// write out to every org account.
+export const CommentModerationQuery = z.object({
+	account_id: z
+		.string()
+		.optional()
+		.describe("Target a specific account instead of fanning out to all org accounts"),
+});
+
 export const CommentsResponse = z.object({
 	data: z.array(CommentItem),
 	post_id: z.string().optional().describe("Post ID if filtered by post"),

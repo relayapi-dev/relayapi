@@ -81,13 +81,15 @@ export function DashboardPageGuard({
 	adminOnly = false,
 	children,
 	requiresApiKey = true,
+	orgId,
 }: {
 	adminOnly?: boolean;
 	children: ReactNode;
 	requiresApiKey?: boolean;
+	orgId?: string | null;
 }) {
 	const user = useUser();
-	const { hasApiKey, loading } = useDashboardApiKeyStatus(requiresApiKey);
+	const { hasApiKey, loading } = useDashboardApiKeyStatus(requiresApiKey, orgId);
 
 	if (adminOnly && user?.role !== "admin") {
 		return <AccessDenied />;

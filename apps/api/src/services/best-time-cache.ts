@@ -27,6 +27,7 @@ function cacheKey(orgId: string): string {
 export async function getCachedBestTimes(
 	env: Env,
 	orgId: string,
+	executionCtx?: ExecutionContext,
 ): Promise<BestTimeSlot[]> {
 	// Try KV cache first
 	const cached = await env.KV.get<BestTimeSlot[]>(cacheKey(orgId), "json");
@@ -35,10 +36,14 @@ export async function getCachedBestTimes(
 	// Compute from DB
 	const result = await computeBestTimes(env, orgId);
 
-	// Write to cache (non-blocking)
-	void env.KV.put(cacheKey(orgId), JSON.stringify(result), {
+	// Persist the cache write via waitUntil so it cannot be cancelled when the
+	// response returns — otherwise a request that finishes before the floating
+	// put resolves forces the next request to redo the full-history scan.
+	const write = env.KV.put(cacheKey(orgId), JSON.stringify(result), {
 		expirationTtl: CACHE_TTL_SECONDS,
-	});
+	}).catch(() => {});
+	if (executionCtx) executionCtx.waitUntil(write);
+	else void write;
 
 	return result;
 }

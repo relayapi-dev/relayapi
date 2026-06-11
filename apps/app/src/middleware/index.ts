@@ -63,10 +63,6 @@ function shouldResolveSession(path: string): boolean {
 	);
 }
 
-function isInternalApiPath(path: string): boolean {
-	return path.startsWith("/api/") && !path.startsWith("/api/auth/");
-}
-
 function shouldLoadOrganizationSummary(path: string): boolean {
 	return path.startsWith("/app");
 }
@@ -236,6 +232,33 @@ async function userHasOrganizations(
 	return rows.length > 0;
 }
 
+/**
+ * Authoritative membership check. better-auth's removeMember does not revoke
+ * the removed user's session or clear their `activeOrganizationId`, so a stale
+ * session (or the signed cookie cache used for internal /api/* routes) can keep
+ * pointing at an org the user no longer belongs to. We re-verify membership on
+ * every request that resolves an organization so removed members lose access
+ * immediately instead of for the lifetime of their session.
+ */
+async function userIsMemberOfOrganization(
+	db: Database,
+	userId: string,
+	organizationId: string,
+): Promise<boolean> {
+	const rows = await db
+		.select({ id: member.id })
+		.from(member)
+		.where(
+			and(
+				eq(member.userId, userId),
+				eq(member.organizationId, organizationId),
+			),
+		)
+		.limit(1);
+
+	return rows.length > 0;
+}
+
 async function userHasPendingInvitations(
 	db: Database,
 	email: string,
@@ -326,7 +349,12 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	if (shouldResolveSession(path)) {
 		let sessionState: SessionState | null = null;
 
-		if (isInternalApiPath(path) && cfEnv.BETTER_AUTH_SECRET) {
+		// Fast path: resolve the session from the signed cookie cache (HMAC
+		// verify, no DB round trip or auth-instance construction) for ALL
+		// session-resolving paths, including /app/* page views. The fallback
+		// to getSession() below still runs whenever the 5-minute cookie cache
+		// is absent or expired, preserving cookie refresh and revocation.
+		if (cfEnv.BETTER_AUTH_SECRET) {
 			const cached = (await getCookieCache(context.request, {
 				secret: cfEnv.BETTER_AUTH_SECRET,
 			})) as SessionState | null;
@@ -351,21 +379,33 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
 			const activeOrganizationId = session.activeOrganizationId ?? null;
 			if (activeOrganizationId) {
-				organization = {
-					id: activeOrganizationId,
-					name: null,
-					slug: null,
-					logo: null,
-				};
+				// SECURITY: re-verify the user is still a member of the active org.
+				// The session (and the signed cookie cache for internal /api/* routes)
+				// can outlive a removeMember, so trusting activeOrganizationId blindly
+				// lets a removed member keep reading/writing the org's tenant data.
+				const isMember = await userIsMemberOfOrganization(
+					getDb(),
+					user.id,
+					activeOrganizationId,
+				);
 
-				if (shouldLoadOrganizationSummary(path)) {
-					organization =
-						(await getOrganizationSummary(
-							getDb(),
-							cfEnv.KV,
-							waitUntil,
-							activeOrganizationId,
-						)) ?? organization;
+				if (isMember) {
+					organization = {
+						id: activeOrganizationId,
+						name: null,
+						slug: null,
+						logo: null,
+					};
+
+					if (shouldLoadOrganizationSummary(path)) {
+						organization =
+							(await getOrganizationSummary(
+								getDb(),
+								cfEnv.KV,
+								waitUntil,
+								activeOrganizationId,
+							)) ?? organization;
+					}
 				}
 			}
 		}

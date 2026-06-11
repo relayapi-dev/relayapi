@@ -110,6 +110,10 @@ export class AutomationEntrypoints extends APIResource {
 	 * Create an entrypoint under an automation. For `webhook_inbound` kinds the
 	 * server auto-generates slug + HMAC secret and returns the plaintext secret
 	 * inline — capture it on the response or call `rotateSecret` later.
+	 *
+	 * Throws `409 CONFLICT` when a `webhook_inbound` entrypoint's
+	 * `config.webhook_slug` collides with an existing active `webhook_inbound`
+	 * entrypoint's slug.
 	 */
 	create(
 		automationId: string,
@@ -129,6 +133,12 @@ export class AutomationEntrypoints extends APIResource {
 		return this._client.get(path`/v1/automation-entrypoints/${id}`, options);
 	}
 
+	/**
+	 * Update an entrypoint. For `webhook_inbound` configs, the server treats a
+	 * `webhook_secret` equal to the public mask `••••` as "unchanged" and
+	 * restores the previously-stored secret, so a read-modify-write of the
+	 * masked config is safe.
+	 */
 	update(
 		id: string,
 		body: AutomationEntrypointUpdateParams,

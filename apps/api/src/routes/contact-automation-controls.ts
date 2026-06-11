@@ -15,6 +15,7 @@ import {
 } from "@relayapi/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
+import { resumeExternalEventRuns } from "../services/automations/runner";
 import { ErrorResponse } from "../schemas/common";
 import type { Env, Variables } from "../types";
 
@@ -322,6 +323,15 @@ app.openapi(resumeContact, async (c) => {
 				),
 			);
 	}
+
+	// Wake runs parked on the pause (best-effort; the helper swallows per-run
+	// errors so a wake failure never fails the unpause).
+	await resumeExternalEventRuns(db, {
+		organizationId: orgId,
+		contactId: id,
+		automationId: body.automation_id ?? null,
+		env: c.env as unknown as Record<string, unknown>,
+	});
 
 	return c.body(null, 204);
 });

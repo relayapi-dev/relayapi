@@ -85,6 +85,11 @@ export interface AutomationBindingUpdateParams
 // ---------------------------------------------------------------------------
 
 export class AutomationBindings extends APIResource {
+	/**
+	 * List bindings. The hydrated `social_account` is scoped to the caller's org
+	 * — a binding pointing at a foreign account hydrates to `null` rather than
+	 * leaking its handle/display_name/avatar.
+	 */
 	list(
 		query: AutomationBindingListParams | null | undefined = {},
 		options?: RequestOptions,
@@ -95,6 +100,10 @@ export class AutomationBindings extends APIResource {
 		});
 	}
 
+	/**
+	 * Create a binding. Throws `404 NOT_FOUND` when `social_account_id`
+	 * references a social account not owned by the caller's org.
+	 */
 	create(
 		body: AutomationBindingCreateParams,
 		options?: RequestOptions,
@@ -109,6 +118,10 @@ export class AutomationBindings extends APIResource {
 		return this._client.get(path`/v1/automation-bindings/${id}`, options);
 	}
 
+	/**
+	 * Update a binding. Throws `404 NOT_FOUND` when `social_account_id` or
+	 * `automation_id` references a resource not owned by the caller's org.
+	 */
 	update(
 		id: string,
 		body: AutomationBindingUpdateParams,

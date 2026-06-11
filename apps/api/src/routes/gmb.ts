@@ -1,6 +1,7 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { createDb } from "@relayapi/db";
 import { getOwnedAccount } from "../lib/accounts";
+import { fetchWithTimeout } from "../lib/fetch-timeout";
 import { isBlockedUrl } from "../lib/ssrf-guard";
 import { IdParam, ErrorResponse } from "../schemas/common";
 import {
@@ -55,13 +56,14 @@ async function gmbFetch(
 	method: string,
 	body?: unknown,
 ): Promise<{ ok: true; data: unknown } | { ok: false; status: number; code: string; message: string }> {
-	const res = await fetch(url, {
+	const res = await fetchWithTimeout(url, {
 		method,
 		headers: {
 			Authorization: `Bearer ${accessToken}`,
 			"Content-Type": "application/json",
 		},
 		body: body ? JSON.stringify(body) : undefined,
+		timeout: 5_000,
 	});
 
 	if (res.ok) {

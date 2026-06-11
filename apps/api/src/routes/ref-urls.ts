@@ -121,15 +121,19 @@ app.openapi(listRefUrls, async (c) => {
 	if (workspace_id) conditions.push(eq(refUrls.workspaceId, workspace_id));
 	if (automation_id) conditions.push(eq(refUrls.automationId, automation_id));
 
+	// Keyset pagination on (createdAt, id). Read the cursor row's created_at as raw
+	// text so it isn't round-tripped through a JS Date, which truncates Postgres
+	// microseconds to millisecond precision and would skip rows sharing the cursor's
+	// millisecond. Bind it back with an explicit ::timestamptz cast.
 	if (cursor) {
 		const cursorRow = await db
-			.select({ createdAt: refUrls.createdAt })
+			.select({ createdAt: sql<string>`${refUrls.createdAt}::text` })
 			.from(refUrls)
 			.where(eq(refUrls.id, cursor))
 			.limit(1);
 		if (cursorRow[0]) {
 			conditions.push(
-				sql`(${refUrls.createdAt}, ${refUrls.id}) < (${cursorRow[0].createdAt}, ${cursor})`,
+				sql`(${refUrls.createdAt}, ${refUrls.id}) < (${cursorRow[0].createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}
@@ -356,66 +360,76 @@ app.openapi(recordRefUrlClick, async (c) => {
 	const db = c.get("db");
 	const orgId = c.get("orgId");
 
-	const row = await db.query.refUrls.findFirst({
-		where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
-	});
-	if (!row)
+	// Collapse the fetch + increment into a single round trip: UPDATE ... RETURNING
+	// scoped to the org, then run the workspace-scope check on the returned row.
+	const [updated] = await db
+		.update(refUrls)
+		.set({ uses: sql`${refUrls.uses} + 1` })
+		.where(and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)))
+		.returning();
+
+	if (!updated)
 		return c.json(
 			{ error: { code: "not_found", message: "Ref URL not found" } },
 			404,
 		);
-	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+	if (isWorkspaceScopeDenied(c, updated.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
-	const [updated] = await db
-		.update(refUrls)
-		.set({ uses: sql`${refUrls.uses} + 1` })
-		.where(eq(refUrls.id, id))
-		.returning();
+	// The automation-channel lookup, contact validation, and event emit are all
+	// best-effort and the HTTP response depends only on the updated row, so defer
+	// them past the response. The request-scoped Drizzle client survives the
+	// response (same pattern as the KV write-back in middleware/auth.ts).
+	c.executionCtx.waitUntil(
+		(async () => {
+			try {
+				// Look up the bound automation's channel (if any) so `ref_link_click`
+				// entrypoints for that channel match; fall back to "instagram".
+				let channel: InboundEvent["channel"] = "instagram";
+				const [auto, contact] = await Promise.all([
+					updated.automationId
+						? db.query.automations.findFirst({
+								where: eq(automationsTable.id, updated.automationId),
+							})
+						: Promise.resolve(undefined),
+					db.query.contacts.findFirst({
+						where: and(
+							eq(contacts.id, body.contact_id),
+							eq(contacts.organizationId, orgId),
+						),
+					}),
+				]);
+				if (auto?.channel) channel = auto.channel as InboundEvent["channel"];
 
-	// Best-effort event emit. Look up the bound automation's channel (if any)
-	// so `ref_link_click` entrypoints for that channel match. If the ref URL
-	// isn't bound to an automation, fall back to "instagram" — the matcher
-	// filters on channel+kind, so a cross-channel entrypoint can still miss
-	// but we shouldn't crash here.
-	let channel: InboundEvent["channel"] = "instagram";
-	if (row.automationId) {
-		const auto = await db.query.automations.findFirst({
-			where: eq(automationsTable.id, row.automationId),
-		});
-		if (auto?.channel) channel = auto.channel as InboundEvent["channel"];
-	}
+				// Validate the contact belongs to the same org before emitting.
+				if (contact) {
+					await emitInternalEvent(
+						db,
+						{
+							kind: "ref_link_click",
+							channel,
+							organizationId: orgId,
+							socialAccountId: null,
+							contactId: body.contact_id,
+							conversationId: null,
+							refUrlId: updated.id,
+							payload: {
+								source: "ref_url_click",
+								slug: updated.slug,
+								ref_url_id: updated.id,
+							},
+						},
+						c.env as unknown as Record<string, unknown>,
+					);
+				}
+			} catch (err) {
+				console.error("[ref-urls] deferred click emit failed:", err);
+			}
+		})(),
+	);
 
-	// Validate the contact belongs to the same org before emitting.
-	const contact = await db.query.contacts.findFirst({
-		where: and(
-			eq(contacts.id, body.contact_id),
-			eq(contacts.organizationId, orgId),
-		),
-	});
-	if (contact) {
-		await emitInternalEvent(
-			db,
-			{
-				kind: "ref_link_click",
-				channel,
-				organizationId: orgId,
-				socialAccountId: null,
-				contactId: body.contact_id,
-				conversationId: null,
-				refUrlId: row.id,
-				payload: {
-					source: "ref_url_click",
-					slug: row.slug,
-					ref_url_id: row.id,
-				},
-			},
-			c.env as unknown as Record<string, unknown>,
-		);
-	}
-
-	return c.json(serialize(updated!), 200);
+	return c.json(serialize(updated), 200);
 });
 
 export default app;

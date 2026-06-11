@@ -144,7 +144,7 @@ async function fetchAndStoreFacebookComments(
 	let page = 0;
 
 	while (page < MAX_PAGES) {
-		let url = `${GRAPH_BASE.facebook}/${postId}/comments?access_token=${encodeURIComponent(token)}&limit=50&fields=id,from{name,picture},message,created_time`;
+		let url = `${GRAPH_BASE.facebook}/${postId}/comments?access_token=${encodeURIComponent(token)}&limit=50&fields=id,from{id,name,picture},message,created_time`;
 		if (cursor) {
 			url += `&after=${encodeURIComponent(cursor)}`;
 		}
@@ -155,7 +155,7 @@ async function fetchAndStoreFacebookComments(
 		const json = (await res.json()) as {
 			data: Array<{
 				id: string;
-				from?: { name: string; picture?: { data?: { url?: string } } };
+				from?: { id?: string; name: string; picture?: { data?: { url?: string } } };
 				message: string;
 				created_time: string;
 			}>;
@@ -175,7 +175,7 @@ async function fetchAndStoreFacebookComments(
 					platformConversationId: postId,
 					postPlatformId: postId,
 					participantName: comment.from?.name ?? null,
-					participantPlatformId: comment.from ? comment.from.name : null,
+					participantPlatformId: comment.from?.id ?? null,
 					participantAvatar:
 						comment.from?.picture?.data?.url ?? null,
 					lastMessageText: comment.message,
@@ -188,7 +188,7 @@ async function fetchAndStoreFacebookComments(
 					organizationId,
 					platformMessageId: comment.id,
 					authorName: comment.from?.name ?? null,
-					authorPlatformId: comment.from ? comment.from.name : null,
+					authorPlatformId: comment.from?.id ?? null,
 					authorAvatarUrl:
 						comment.from?.picture?.data?.url ?? null,
 					text: comment.message,

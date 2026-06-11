@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { tags } from "@relayapi/db";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, lt, sql } from "drizzle-orm";
 import { ErrorResponse, IdParam } from "../schemas/common";
 import {
 	CreateTagBody,
@@ -60,15 +60,27 @@ app.openapi(listTags, async (c) => {
 	if (workspace_id) {
 		conditions.push(eq(tags.workspaceId, workspace_id));
 	}
+	// Composite keyset pagination on (created_at, id). The cursor is the id of the
+	// last row from the previous page; resolve its (created_at, id) entirely in SQL
+	// so microsecond-precision ties are preserved and rows sharing a millisecond are
+	// never silently skipped. Legacy timestamp cursors still parse as dates and fall
+	// back to the old lt(created_at) behavior for transition compatibility.
 	if (cursor) {
-		conditions.push(lt(tags.createdAt, new Date(cursor)));
+		const asDate = new Date(cursor);
+		if (!Number.isNaN(asDate.getTime())) {
+			conditions.push(lt(tags.createdAt, asDate));
+		} else {
+			conditions.push(
+				sql`(${tags.createdAt}, ${tags.id}) < (select t.created_at, t.id from tags t where t.id = ${cursor})`,
+			);
+		}
 	}
 
 	const rows = await db
 		.select()
 		.from(tags)
 		.where(and(...conditions))
-		.orderBy(desc(tags.createdAt))
+		.orderBy(desc(tags.createdAt), desc(tags.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -77,9 +89,7 @@ app.openapi(listTags, async (c) => {
 	return c.json(
 		{
 			data: data.map(serialize),
-			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
-				: null,
+			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
 			has_more: hasMore,
 		},
 		200,

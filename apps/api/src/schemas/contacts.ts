@@ -170,6 +170,7 @@ export const MergeContactResponse = z.object({
 	fields_moved: z.number().describe("Number of custom field values moved"),
 	recipients_updated: z.number().describe("Number of broadcast recipients updated"),
 	conversations_updated: z.number().describe("Number of inbox conversations updated"),
+	enrollments_updated: z.number().describe("Number of automation enrollments (runs) re-parented"),
 });
 
 export const SetContactFieldBody = z.object({

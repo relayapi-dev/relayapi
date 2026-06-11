@@ -129,8 +129,16 @@ export async function upsertConversation(
 				inboxConversations.platformConversationId,
 			],
 			set: {
-				participantName: sql`COALESCE(${data.participantName ?? null}, ${inboxConversations.participantName})`,
-				participantAvatar: sql`COALESCE(${data.participantAvatar ?? null}, ${inboxConversations.participantAvatar})`,
+				// COALESCE(existing, new): keep an already-stored participant
+				// name/avatar and only fill from the raw event when nothing is
+				// stored yet. The Instagram/Facebook DM normalizers set
+				// `author.name = scopedId` because the webhook carries no display
+				// name, so `COALESCE(new, existing)` would clobber the enriched
+				// profile name with the numeric scoped ID on every inbound DM.
+				// The dedicated profile-enrichment UPDATE in the event processor is
+				// the only path allowed to overwrite these with a real name/avatar.
+				participantName: sql`COALESCE(${inboxConversations.participantName}, ${data.participantName ?? null})`,
+				participantAvatar: sql`COALESCE(${inboxConversations.participantAvatar}, ${data.participantAvatar ?? null})`,
 				updatedAt: sql`${now.toISOString()}`,
 			},
 		})
@@ -209,19 +217,34 @@ export async function insertMessage(
 		return null;
 	}
 
-	// Update parent conversation preview + counts
+	// Update parent conversation preview + counts.
+	//
+	// The preview fields (lastMessageText/At/Direction) must be MONOTONIC: backfill
+	// and out-of-order live deliveries call this with historical platform
+	// timestamps in raw API order, so an older message inserted after a newer one
+	// must NOT rewind the preview to stale content. We only overwrite the preview
+	// when the new message is at least as new as the stored lastMessageAt.
+	//
+	// `updatedAt` is set to actual wall-clock insertion time (new Date()) rather
+	// than the message's createdAt so that backfilling historical rows does not
+	// regress conversation list ordering (listConversations orders by updatedAt
+	// desc). The unreadCount increment is likewise gated on the message being
+	// newer, so backfilling months-old inbound messages can't inflate unread.
+	const nowTs = sql`${now.toISOString()}::timestamptz`;
+	const insertedAt = new Date();
+	const isNewer = sql`(${inboxConversations.lastMessageAt} IS NULL OR ${inboxConversations.lastMessageAt} <= ${nowTs})`;
 	await db
 		.update(inboxConversations)
 		.set({
-			lastMessageText: data.text ?? null,
-			lastMessageAt: now,
-			lastMessageDirection: data.direction,
+			lastMessageText: sql`CASE WHEN ${isNewer} THEN ${data.text ?? null} ELSE ${inboxConversations.lastMessageText} END`,
+			lastMessageAt: sql`GREATEST(COALESCE(${inboxConversations.lastMessageAt}, ${nowTs}), ${nowTs})`,
+			lastMessageDirection: sql`CASE WHEN ${isNewer} THEN ${data.direction} ELSE ${inboxConversations.lastMessageDirection} END`,
 			messageCount: sql`${inboxConversations.messageCount} + 1`,
 			unreadCount:
 				data.direction === "inbound"
-					? sql`${inboxConversations.unreadCount} + 1`
+					? sql`${inboxConversations.unreadCount} + CASE WHEN ${isNewer} THEN 1 ELSE 0 END`
 					: inboxConversations.unreadCount,
-			updatedAt: now,
+			updatedAt: insertedAt,
 		})
 		.where(eq(inboxConversations.id, data.conversationId));
 
@@ -330,22 +353,26 @@ export async function getConversationWithMessages(
 		);
 	}
 
-	const [conversation] = await db
-		.select()
-		.from(inboxConversations)
-		.where(and(...conditions))
-		.limit(1);
+	// Both queries are keyed on conversationId — one parallel round trip.
+	// Messages are discarded when the conversation lookup fails the org /
+	// workspace-scope filter.
+	const [[conversation], messages] = await Promise.all([
+		db
+			.select()
+			.from(inboxConversations)
+			.where(and(...conditions))
+			.limit(1),
+		db
+			.select()
+			.from(inboxMessages)
+			.where(eq(inboxMessages.conversationId, conversationId))
+			.orderBy(asc(inboxMessages.createdAt))
+			.limit(200),
+	]);
 
 	if (!conversation) {
 		return null;
 	}
-
-	const messages = await db
-		.select()
-		.from(inboxMessages)
-		.where(eq(inboxMessages.conversationId, conversationId))
-		.orderBy(asc(inboxMessages.createdAt))
-		.limit(200);
 
 	return { conversation, messages };
 }
@@ -365,6 +392,15 @@ export async function searchMessages(
 	has_more: boolean;
 }> {
 	const limit = Math.min(Math.max(filters?.limit ?? 20, 1), 100);
+
+	// A leading-wildcard ILIKE is served by the pg_trgm GIN index
+	// (inbox_msg_text_trgm_idx, see packages/db/src/schema.ts). Trigram indexes
+	// cannot help queries shorter than 3 chars, so a 1-2 char term would force a
+	// full heap scan of the org's message history — short-circuit to empty
+	// instead. (Callers can paginate larger terms normally.)
+	if (query.trim().length < 3) {
+		return { data: [], next_cursor: null, has_more: false };
+	}
 
 	const conditions = [
 		eq(inboxMessages.organizationId, orgId),

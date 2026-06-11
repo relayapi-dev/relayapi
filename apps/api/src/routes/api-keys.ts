@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { apikey, generateId, organizationSubscriptions, workspaces } from "@relayapi/db";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import {
 	ApiKeyCreatedResponse,
 	ApiKeyListResponse,
@@ -106,8 +106,18 @@ const deleteApiKey = createRoute({
 
 app.openapi(listApiKeys, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit } = c.req.valid("query");
+	const { limit, cursor } = c.req.valid("query");
 	const db = c.get("db");
+
+	// Keyset pagination on createdAt (the sort key). The cursor is the
+	// created_at of the last item from the previous page.
+	const conditions = [eq(apikey.organizationId, orgId)];
+	if (cursor) {
+		const cursorDate = new Date(cursor);
+		if (!Number.isNaN(cursorDate.getTime())) {
+			conditions.push(lt(apikey.createdAt, cursorDate));
+		}
+	}
 
 	const keys = await db
 		.select({
@@ -122,7 +132,7 @@ app.openapi(listApiKeys, async (c) => {
 			metadata: apikey.metadata,
 		})
 		.from(apikey)
-		.where(eq(apikey.organizationId, orgId))
+		.where(and(...conditions))
 		.orderBy(desc(apikey.createdAt))
 		.limit(limit + 1);
 
@@ -146,7 +156,9 @@ app.openapi(listApiKeys, async (c) => {
 					(k.metadata as Record<string, unknown>)?.workspace_scope ??
 					("all" as "all" | string[]),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: hasMore
+				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				: null,
 			has_more: hasMore,
 		},
 		200,
@@ -225,6 +237,11 @@ app.openapi(createApiKey, async (c) => {
 		calls_included: callsIncluded,
 		ai_enabled: c.get("aiEnabled"),
 		daily_tool_limit: c.get("dailyToolLimit"),
+		// Carry the org's current billing period (from the creating request's auth
+		// context) so a new key on a pro org keys usage on the Stripe window
+		// immediately rather than the calendar-month fallback until first refresh.
+		period_start: c.get("periodStart") ?? null,
+		period_end: c.get("periodEnd") ?? null,
 	};
 	await c.env.KV.put(`apikey:${hashedKey}`, JSON.stringify(kvData), {
 		expirationTtl: kvTtlForKey(expiresAt),

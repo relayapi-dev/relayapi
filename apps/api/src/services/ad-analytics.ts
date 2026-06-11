@@ -21,9 +21,8 @@ export async function fetchAndStoreAdMetrics(
 	adId: string,
 	startDate: string,
 	endDate: string,
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ): Promise<AdMetricPoint[]> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
 	// Fetch ad + account details
 	const [ad] = await db
 		.select({
@@ -53,27 +52,15 @@ export async function fetchAndStoreAdMetrics(
 		{ startDate, endDate },
 	);
 
-	// Upsert daily metrics
-	for (const point of result.daily) {
+	// Upsert daily metrics in a single multi-row statement (collapses ~30
+	// sequential round trips per ad into one).
+	if (result.daily.length > 0) {
 		await db
 			.insert(adMetrics)
-			.values({
-				adId,
-				date: new Date(point.date),
-				impressions: point.impressions,
-				reach: point.reach,
-				clicks: point.clicks,
-				spendCents: point.spendCents,
-				conversions: point.conversions,
-				videoViews: point.videoViews,
-				engagement: point.engagement,
-				ctr: point.ctr ? Math.round(point.ctr * 10000) : null,
-				cpcCents: point.cpcCents ?? null,
-				cpmCents: point.cpmCents ?? null,
-			})
-			.onConflictDoUpdate({
-				target: [adMetrics.adId, adMetrics.date],
-				set: {
+			.values(
+				result.daily.map((point) => ({
+					adId,
+					date: new Date(point.date),
 					impressions: point.impressions,
 					reach: point.reach,
 					clicks: point.clicks,
@@ -84,6 +71,21 @@ export async function fetchAndStoreAdMetrics(
 					ctr: point.ctr ? Math.round(point.ctr * 10000) : null,
 					cpcCents: point.cpcCents ?? null,
 					cpmCents: point.cpmCents ?? null,
+				})),
+			)
+			.onConflictDoUpdate({
+				target: [adMetrics.adId, adMetrics.date],
+				set: {
+					impressions: sql`excluded.impressions`,
+					reach: sql`excluded.reach`,
+					clicks: sql`excluded.clicks`,
+					spendCents: sql`excluded.spend_cents`,
+					conversions: sql`excluded.conversions`,
+					videoViews: sql`excluded.video_views`,
+					engagement: sql`excluded.engagement`,
+					ctr: sql`excluded.ctr`,
+					cpcCents: sql`excluded.cpc_cents`,
+					cpmCents: sql`excluded.cpm_cents`,
 					collectedAt: new Date(),
 				},
 			});

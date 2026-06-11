@@ -23,6 +23,12 @@ function generateRawKey(): string {
 
 // PRICING imported from @relayapi/config
 
+// Mirror the API's apikey:* KV TTL convention (apps/api/src/middleware/auth.ts
+// API_KEY_KV_TTL_SECONDS = 600). The short TTL is a deliberate revocation
+// backstop: a key disabled/mutated in the DB stops authenticating within 10 min,
+// and the API middleware rehydrates an expired entry from the DB on first use.
+const APIKEY_KV_TTL_SECONDS = 600; // 10 min
+
 export const POST: APIRoute = async (context) => {
   const user = context.locals.user;
   const org = context.locals.organization;
@@ -41,10 +47,17 @@ export const POST: APIRoute = async (context) => {
   // Check if dashboard key already exists and is still valid
   const existing = await kv.get(`dashboard-key:${orgId}`);
   if (existing) {
-    // Verify the key is still valid by checking its auth KV entry
+    // Verify the key is still valid by checking the DB apikey row (exists +
+    // enabled) rather than KV presence. The apikey:* KV cache has a 10 min TTL,
+    // so a naturally-expired-but-still-valid entry would otherwise trigger needless
+    // key rotation; the API middleware re-hydrates expired entries on first use.
     const existingHash = await hashKey(existing);
-    const authEntry = await kv.get(`apikey:${existingHash}`);
-    if (authEntry) {
+    const [row] = await db
+      .select({ enabled: apikey.enabled })
+      .from(apikey)
+      .where(eq(apikey.key, existingHash))
+      .limit(1);
+    if (row?.enabled) {
       // Key still valid
       return new Response(
         JSON.stringify({ ok: true }),
@@ -63,7 +76,11 @@ export const POST: APIRoute = async (context) => {
     .where(eq(organizationSubscriptions.organizationId, orgId))
     .limit(1);
 
-  const plan: "free" | "pro" = sub?.status === "active" ? "pro" : "free";
+  // A subscription in `trialing` status is a Pro trial — treat it as pro so the
+  // org is not silently throttled to the free plan (200 calls / 100 rpm). This
+  // matches billing/sync.ts (isPro = active || trialing) and status reporting.
+  const plan: "free" | "pro" =
+    sub?.status === "active" || sub?.status === "trialing" ? "pro" : "free";
   const callsIncluded = plan === "pro" ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded;
 
   // Generate key
@@ -98,7 +115,7 @@ export const POST: APIRoute = async (context) => {
     calls_included: callsIncluded,
   };
   await kv.put(`apikey:${hashedKey}`, JSON.stringify(kvData), {
-    expirationTtl: 86400 * 365,
+    expirationTtl: APIKEY_KV_TTL_SECONDS,
   });
 
   // Store raw key for dashboard retrieval

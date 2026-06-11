@@ -41,13 +41,17 @@ import {
 	hasAnalyticsScopes,
 	type DateRange,
 	type PlatformOverview,
+	type PlatformPostMetrics,
 } from "../services/platform-analytics/types";
 import { getPlatformFetcher } from "../services/platform-analytics";
+import { getCachedBestTimes } from "../services/best-time-cache";
 import type { Env, Variables } from "../types";
 import { mapConcurrently } from "../lib/concurrency";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 const ANALYTICS_OVERVIEW_CACHE_TTL_SECONDS = 300;
+/** Post-level metrics are expensive (N per-media insights calls); cache longer. */
+const ANALYTICS_POSTS_CACHE_TTL_SECONDS = 900; // 15 minutes
 
 // --- Route definitions ---
 
@@ -209,6 +213,8 @@ const MAX_TARGETS_LIMIT = 5000;
  * Pass `limit` to cap the returned rows; callers that need overflow detection
  * should request `limit + 1` and check the length. Default cap is
  * DEFAULT_TARGETS_LIMIT to bound memory on orgs with many published posts.
+ * Pass `offset` to page through targets (keyset would be better but the caller
+ * surface here is a simple validated offset).
  */
 async function getOrgPostTargetIds(
 	db: ReturnType<typeof createDb>,
@@ -217,6 +223,7 @@ async function getOrgPostTargetIds(
 	endDate?: string,
 	platform?: string,
 	limit: number = DEFAULT_TARGETS_LIMIT,
+	offset = 0,
 ) {
 	const conditions = [eq(posts.organizationId, orgId)];
 	if (startDate) conditions.push(gte(posts.publishedAt, new Date(startDate)));
@@ -224,8 +231,9 @@ async function getOrgPostTargetIds(
 	if (platform) conditions.push(eq(postTargets.platform, platform as never));
 
 	const effectiveLimit = Math.min(Math.max(limit, 1), MAX_TARGETS_LIMIT);
+	const effectiveOffset = Math.max(offset, 0);
 
-	const targets = await db
+	const query = db
 		.select({
 			id: postTargets.id,
 			postId: postTargets.postId,
@@ -238,6 +246,10 @@ async function getOrgPostTargetIds(
 		.where(and(...conditions))
 		.orderBy(desc(posts.publishedAt))
 		.limit(effectiveLimit);
+
+	const targets = await (effectiveOffset > 0
+		? query.offset(effectiveOffset)
+		: query);
 
 	return targets;
 }
@@ -365,9 +377,10 @@ app.openapi(getAnalytics, async (c) => {
 	const query = c.req.valid("query");
 	const db = c.get("db");
 
-	// `data` is bounded by MAX_TARGETS_LIMIT so a single response can't explode
-	// memory / JSON for very active orgs. `overview` is computed separately via
-	// a SQL aggregate, so totals stay accurate even when `data` is truncated.
+	// `data` is bounded by the validated `limit` (1-100, default 20) so a single
+	// response can't explode memory / JSON for very active orgs. `overview` is
+	// computed separately via a SQL aggregate, so totals stay accurate even when
+	// `data` is truncated. We request `limit + 1` to detect overflow precisely.
 	const [targets, overview] = await Promise.all([
 		getOrgPostTargetIds(
 			db,
@@ -375,6 +388,8 @@ app.openapi(getAnalytics, async (c) => {
 			query.from_date,
 			query.to_date,
 			query.platform,
+			query.limit + 1,
+			query.offset,
 		),
 		getOrgAnalyticsOverview(
 			db,
@@ -385,7 +400,11 @@ app.openapi(getAnalytics, async (c) => {
 		),
 	]);
 
-	const truncated = overview.total_posts > targets.length;
+	// Trim the overflow sentinel row before serializing.
+	const hasMore = targets.length > query.limit;
+	if (hasMore) targets.length = query.limit;
+
+	const truncated = hasMore || overview.total_posts > targets.length;
 
 	if (targets.length === 0) {
 		return c.json({ data: [], overview, truncated }, 200);
@@ -525,71 +544,13 @@ app.openapi(getDailyMetrics, async (c) => {
 
 app.openapi(getBestTime, async (c) => {
 	const orgId = c.get("orgId");
-	const db = c.get("db");
 
-	// Single JOIN: published posts + targets
-	const rows = await db
-		.select({
-			publishedAt: posts.publishedAt,
-			targetId: postTargets.id,
-		})
-		.from(posts)
-		.innerJoin(postTargets, eq(postTargets.postId, posts.id))
-		.where(
-			and(
-				eq(posts.organizationId, orgId),
-				eq(posts.status, "published"),
-			),
-		);
-
-	if (rows.length === 0) return c.json({ data: [] }, 200);
-
-	// Batch fetch latest analytics
-	const targetIds = [...new Set(rows.map((r) => r.targetId))];
-	const analyticsRows = await getLatestAnalyticsForTargets(db, targetIds);
-	const analyticsMap = new Map(
-		analyticsRows.map((a) => [a.postTargetId, a]),
-	);
-
-	// Group engagement by day_of_week + hour
-	const timeMap = new Map<
-		string,
-		{ totalEngagement: number; count: number }
-	>();
-
-	for (const row of rows) {
-		if (!row.publishedAt) continue;
-		const dow = row.publishedAt.getUTCDay();
-		const hour = row.publishedAt.getUTCHours();
-		const key = `${dow}:${hour}`;
-
-		const analytics = analyticsMap.get(row.targetId);
-		const engagement = analytics
-			? (analytics.likes ?? 0) +
-				(analytics.comments ?? 0) +
-				(analytics.shares ?? 0)
-			: 0;
-
-		const existing = timeMap.get(key) ?? { totalEngagement: 0, count: 0 };
-		existing.totalEngagement += engagement;
-		existing.count++;
-		timeMap.set(key, existing);
-	}
-
-	const data = Array.from(timeMap.entries())
-		.map(([key, val]) => {
-			const [dow, hour] = key.split(":") as [string, string];
-			return {
-				day_of_week: parseInt(dow),
-				hour_utc: parseInt(hour),
-				avg_engagement:
-					val.count > 0
-						? Math.round((val.totalEngagement / val.count) * 10) / 10
-						: 0,
-				post_count: val.count,
-			};
-		})
-		.sort((a, b) => b.avg_engagement - a.avg_engagement);
+	// Route through the shared 6h KV cache instead of duplicating an unbounded
+	// full-history scan on every request. The cached path bounds the scan to a
+	// recent window and persists the write-back via executionCtx.waitUntil.
+	// Response shape (BestTimeSlot[]) is identical; values may be up to 6h stale,
+	// consistent with the slot-finder consumer of the same cache.
+	const data = await getCachedBestTimes(c.env, orgId, c.executionCtx);
 
 	return c.json({ data }, 200);
 });
@@ -597,7 +558,7 @@ app.openapi(getBestTime, async (c) => {
 // @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(getContentDecay, async (c) => {
 	const orgId = c.get("orgId");
-	const { post_id } = c.req.valid("query");
+	const { post_id, days } = c.req.valid("query");
 	const db = c.get("db");
 
 	// Verify post ownership
@@ -620,7 +581,11 @@ app.openapi(getContentDecay, async (c) => {
 	}
 
 	const [target] = await db
-		.select({ id: postTargets.id, platform: postTargets.platform })
+		.select({
+			id: postTargets.id,
+			platform: postTargets.platform,
+			publishedAt: postTargets.publishedAt,
+		})
 		.from(postTargets)
 		.where(eq(postTargets.postId, post_id))
 		.limit(1);
@@ -637,11 +602,23 @@ app.openapi(getContentDecay, async (c) => {
 		);
 	}
 
+	// Honor the documented `days` window: only consider snapshots collected
+	// within `days` of publication. Default (30) exceeds the 14-day collection
+	// horizon, so default responses are unchanged; smaller values now narrow.
+	const decayWindowEnd = new Date(
+		(target.publishedAt ?? new Date(0)).getTime() + days * 86400_000,
+	);
 	const snapshots = await db
 		.select()
 		.from(postAnalytics)
-		.where(eq(postAnalytics.postTargetId, target.id))
-		.orderBy(postAnalytics.collectedAt);
+		.where(
+			and(
+				eq(postAnalytics.postTargetId, target.id),
+				lte(postAnalytics.collectedAt, decayWindowEnd),
+			),
+		)
+		.orderBy(postAnalytics.collectedAt)
+		.limit(500);
 
 	let cumulativeImpressions = 0;
 	let cumulativeEngagement = 0;
@@ -678,7 +655,7 @@ app.openapi(getContentDecay, async (c) => {
 
 app.openapi(getPostTimeline, async (c) => {
 	const orgId = c.get("orgId");
-	const { post_id } = c.req.valid("query");
+	const { post_id, from_date, to_date } = c.req.valid("query");
 	const db = c.get("db");
 
 	const [post] = await db
@@ -702,11 +679,27 @@ app.openapi(getPostTimeline, async (c) => {
 		return c.json({ post_id, data: [] }, 200);
 	}
 
-	// Single query for all snapshots across all targets
+	// Single query for all snapshots across all targets. Honor the documented
+	// from_date/to_date window and project only the columns aggregated below
+	// (the (post_target_id, collected_at) index covers this).
+	const snapshotConditions = [inArray(postAnalytics.postTargetId, targetIds)];
+	if (from_date)
+		snapshotConditions.push(gte(postAnalytics.collectedAt, new Date(from_date)));
+	if (to_date)
+		snapshotConditions.push(lte(postAnalytics.collectedAt, new Date(to_date)));
+
 	const snapshots = await db
-		.select()
+		.select({
+			collectedAt: postAnalytics.collectedAt,
+			impressions: postAnalytics.impressions,
+			likes: postAnalytics.likes,
+			comments: postAnalytics.comments,
+			shares: postAnalytics.shares,
+			clicks: postAnalytics.clicks,
+			views: postAnalytics.views,
+		})
 		.from(postAnalytics)
-		.where(inArray(postAnalytics.postTargetId, targetIds));
+		.where(and(...snapshotConditions));
 
 	// Aggregate by date in memory
 	const dateMap = new Map<
@@ -749,72 +742,90 @@ app.openapi(getPostTimeline, async (c) => {
 
 app.openapi(getPostingFrequency, async (c) => {
 	const orgId = c.get("orgId");
+	const query = c.req.valid("query");
 	const db = c.get("db");
 
-	// Single JOIN: published posts + targets
-	const rows = await db
-		.select({
-			postId: posts.id,
-			publishedAt: posts.publishedAt,
-			targetId: postTargets.id,
-		})
-		.from(posts)
-		.innerJoin(postTargets, eq(postTargets.postId, posts.id))
-		.where(
-			and(
-				eq(posts.organizationId, orgId),
-				eq(posts.status, "published"),
-			),
-		)
-		.orderBy(posts.publishedAt);
+	// Bucket by ISO week entirely in SQL so the Worker only receives ~one row
+	// per week, never the org's full publish history. Engagement is summed from
+	// the latest snapshot per target (DISTINCT ON ... ORDER BY collected_at DESC),
+	// counting DISTINCT posts per week. Wires up the documented filters.
+	const startCond = query.from_date
+		? sql`AND p.published_at >= ${new Date(query.from_date)}`
+		: sql``;
+	const endCond = query.to_date
+		? sql`AND p.published_at <= ${new Date(query.to_date)}`
+		: sql``;
+	const platformCond = query.platform
+		? sql`AND pt.platform = ${query.platform}`
+		: sql``;
 
-	if (rows.length === 0) {
+	const weekRows = await db.execute<{
+		post_count: string | number;
+		total_engagement: string | number | null;
+		total_impressions: string | number | null;
+	}>(sql`
+		WITH latest AS (
+			SELECT DISTINCT ON (pa.post_target_id)
+				pa.post_target_id,
+				pt.post_id,
+				p.published_at,
+				pa.impressions,
+				pa.likes,
+				pa.comments,
+				pa.shares
+			FROM post_analytics pa
+			JOIN post_targets pt ON pt.id = pa.post_target_id
+			JOIN posts p ON p.id = pt.post_id
+			WHERE p.organization_id = ${orgId}
+				AND p.status = 'published'
+				AND p.published_at IS NOT NULL
+				${startCond}
+				${endCond}
+				${platformCond}
+			ORDER BY pa.post_target_id, pa.collected_at DESC
+		),
+		posts_in_scope AS (
+			SELECT DISTINCT p.id AS post_id, p.published_at
+			FROM posts p
+			JOIN post_targets pt ON pt.post_id = p.id
+			WHERE p.organization_id = ${orgId}
+				AND p.status = 'published'
+				AND p.published_at IS NOT NULL
+				${startCond}
+				${endCond}
+				${platformCond}
+		),
+		weekly AS (
+			SELECT
+				date_trunc('week', pis.published_at) AS week,
+				COUNT(DISTINCT pis.post_id) AS post_count,
+				COALESCE(SUM(l.likes + l.comments + l.shares), 0) AS total_engagement,
+				COALESCE(SUM(l.impressions), 0) AS total_impressions
+			FROM posts_in_scope pis
+			LEFT JOIN latest l ON l.post_id = pis.post_id
+			GROUP BY date_trunc('week', pis.published_at)
+		)
+		SELECT post_count, total_engagement, total_impressions FROM weekly
+	`);
+
+	const rawWeeks = ((weekRows as any).rows ?? (weekRows as any)) as Array<{
+		post_count: string | number;
+		total_engagement: string | number | null;
+		total_impressions: string | number | null;
+	}>;
+
+	if (rawWeeks.length === 0) {
 		return c.json({ data: [], optimal_frequency: 0 }, 200);
 	}
 
-	// Batch fetch latest analytics
-	const targetIds = [...new Set(rows.map((r) => r.targetId))];
-	const analyticsRows = await getLatestAnalyticsForTargets(db, targetIds);
-	const analyticsMap = new Map(
-		analyticsRows.map((a) => [a.postTargetId, a]),
-	);
+	const toNum = (v: string | number | null | undefined) =>
+		v == null ? 0 : typeof v === "number" ? v : Number(v);
 
-	// Group by ISO week
-	const weekMap = new Map<
-		string,
-		{ count: number; totalEngagement: number; totalImpressions: number; postIds: Set<string> }
-	>();
-
-	for (const row of rows) {
-		if (!row.publishedAt) continue;
-		const date = row.publishedAt;
-		const weekStart = new Date(date);
-		weekStart.setDate(date.getDate() - date.getDay());
-		const weekKey = weekStart.toISOString().split("T")[0]!;
-
-		let existing = weekMap.get(weekKey);
-		if (!existing) {
-			existing = { count: 0, totalEngagement: 0, totalImpressions: 0, postIds: new Set() };
-			weekMap.set(weekKey, existing);
-		}
-
-		// Count unique posts per week (not targets)
-		if (!existing.postIds.has(row.postId)) {
-			existing.postIds.add(row.postId);
-			existing.count++;
-		}
-
-		const analytics = analyticsMap.get(row.targetId);
-		if (analytics) {
-			existing.totalEngagement +=
-				(analytics.likes ?? 0) +
-				(analytics.comments ?? 0) +
-				(analytics.shares ?? 0);
-			existing.totalImpressions += analytics.impressions ?? 0;
-		}
-	}
-
-	const weekData = Array.from(weekMap.values());
+	const weekData = rawWeeks.map((w) => ({
+		count: toNum(w.post_count),
+		totalEngagement: toNum(w.total_engagement),
+		totalImpressions: toNum(w.total_impressions),
+	}));
 
 	// Group by posts_per_week frequency
 	const freqMap = new Map<
@@ -976,6 +987,18 @@ async function getAccountWithToken(
 	};
 }
 
+/** Long retention for the stale-while-revalidate envelope (24h). */
+const ANALYTICS_OVERVIEW_CACHE_RETENTION_SECONDS = 24 * 60 * 60;
+
+interface CachedOverviewEnvelope {
+	data: PlatformOverview;
+	fetchedAt: number; // epoch ms
+}
+
+function overviewCacheKey(accountId: string, dateRange: DateRange): string {
+	return `analytics:overview:${accountId}:${dateRange.from}:${dateRange.to}`;
+}
+
 async function getCachedPlatformOverview(
 	env: Env,
 	executionCtx: ExecutionContext,
@@ -986,26 +1009,49 @@ async function getCachedPlatformOverview(
 		accessToken: string;
 	},
 	dateRange: DateRange,
+	// Optional pre-read cache envelope, when the caller started the KV read
+	// concurrently with its DB fetch (avoids a second KV round trip).
+	prefetched?: CachedOverviewEnvelope | null,
 ): Promise<PlatformOverview | null> {
 	const fetcher = getPlatformFetcher(account.platform);
 	if (!fetcher) return null;
 
-	const cacheKey =
-		`analytics:overview:${account.id}:${dateRange.from}:${dateRange.to}`;
-	const cached = await env.KV.get<PlatformOverview>(cacheKey, "json");
-	if (cached) return cached;
+	const cacheKey = overviewCacheKey(account.id, dateRange);
 
-	const overview = await fetcher.getOverview(
-		account.accessToken,
-		account.platformAccountId,
-		dateRange,
-	);
-	executionCtx.waitUntil(
-		env.KV.put(cacheKey, JSON.stringify(overview), {
-			expirationTtl: ANALYTICS_OVERVIEW_CACHE_TTL_SECONDS,
-		}),
-	);
-	return overview;
+	const refresh = async (): Promise<PlatformOverview> => {
+		const fresh = await fetcher.getOverview(
+			account.accessToken,
+			account.platformAccountId,
+			dateRange,
+		);
+		const envelope: CachedOverviewEnvelope = {
+			data: fresh,
+			fetchedAt: Date.now(),
+		};
+		await env.KV.put(cacheKey, JSON.stringify(envelope), {
+			expirationTtl: ANALYTICS_OVERVIEW_CACHE_RETENTION_SECONDS,
+		});
+		return fresh;
+	};
+
+	const cached =
+		prefetched !== undefined
+			? prefetched
+			: await env.KV.get<CachedOverviewEnvelope>(cacheKey, "json");
+	if (cached?.data && typeof cached.fetchedAt === "number") {
+		const ageSeconds = (Date.now() - cached.fetchedAt) / 1000;
+		if (ageSeconds < ANALYTICS_OVERVIEW_CACHE_TTL_SECONDS) {
+			// Fresh enough — serve directly.
+			return cached.data;
+		}
+		// Stale-while-revalidate: serve the stale value immediately and refresh
+		// in the background so the next request is warm.
+		executionCtx.waitUntil(refresh().catch(() => undefined));
+		return cached.data;
+	}
+
+	// Cold miss — must fetch synchronously.
+	return refresh();
 }
 
 const getChannels = createRoute({
@@ -1130,7 +1176,7 @@ app.openapi(getChannels, async (c) => {
 		})
 		.from(socialAccounts)
 		.where(and(...conditions));
-	const channelResults = await mapConcurrently(rawAccounts, 4, async (account) => {
+	const channelResults = await mapConcurrently(rawAccounts, 8, async (account) => {
 		const hasAnalytics = PLATFORMS_WITH_ANALYTICS.includes(account.platform);
 		let needsReconnect =
 			hasAnalytics && !hasAnalyticsScopes(account.platform, account.scopes);
@@ -1219,6 +1265,16 @@ app.openapi(getPlatformOverview, async (c) => {
 	const query = c.req.valid("query");
 	const db = c.get("db");
 
+	// The overview cache key needs only account_id + date range, so start the KV
+	// read concurrently with the DB account fetch instead of strictly after it.
+	// All ownership/scope checks below still run on the DB row before any cached
+	// value is returned, so this cannot leak analytics across tenants.
+	const dateRange = getPlatformDateRange(query.from_date, query.to_date);
+	const cachedPromise = c.env.KV.get<CachedOverviewEnvelope>(
+		overviewCacheKey(query.account_id, dateRange),
+		"json",
+	);
+
 	const account = await getAccountWithToken(db, query.account_id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
 		return c.json(
@@ -1263,8 +1319,8 @@ app.openapi(getPlatformOverview, async (c) => {
 		);
 	}
 
-	const dateRange = getPlatformDateRange(query.from_date, query.to_date);
 	try {
+		const prefetched = await cachedPromise;
 		const overview = await getCachedPlatformOverview(
 			c.env,
 			c.executionCtx,
@@ -1275,6 +1331,7 @@ app.openapi(getPlatformOverview, async (c) => {
 				accessToken: account.accessToken,
 			},
 			dateRange,
+			prefetched,
 		);
 		if (!overview) {
 			return c.json(
@@ -1327,12 +1384,28 @@ app.openapi(getPlatformPosts, async (c) => {
 	}
 
 	const dateRange = getPlatformDateRange(query.from_date, query.to_date);
+
+	// Short-TTL KV cache: getPostMetrics fans out into N per-media insights
+	// calls (one per post), so an uncached request can block for seconds.
+	// Cache the result per account + date range + limit, mirroring the
+	// overview cache. Ownership/scope checks above run on every request.
+	const cacheKey = `analytics:posts:${query.account_id}:${dateRange.from}:${dateRange.to}:${query.limit}`;
+	const cached = await c.env.KV.get<PlatformPostMetrics[]>(cacheKey, "json");
+	if (cached) {
+		return c.json({ data: cached }, 200);
+	}
+
 	try {
 		const platformPosts = await fetcher.getPostMetrics(
 			account.accessToken,
 			account.platformAccountId,
 			dateRange,
 			query.limit,
+		);
+		c.executionCtx.waitUntil(
+			c.env.KV.put(cacheKey, JSON.stringify(platformPosts), {
+				expirationTtl: ANALYTICS_POSTS_CACHE_TTL_SECONDS,
+			}),
 		);
 		return c.json({ data: platformPosts }, 200);
 	} catch (err) {

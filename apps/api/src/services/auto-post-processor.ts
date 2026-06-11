@@ -267,6 +267,8 @@ export async function processAutoPostRules(env: Env): Promise<void> {
 				.where(eq(autoPostRules.id, rule.id));
 
 			if (shouldPause) {
+				// Await delivery so it completes before the cron item returns (dedicated
+			// webhook-delivery queue is the planned non-blocking follow-up).
 				await dispatchWebhookEvent(
 					env,
 					db,
@@ -280,7 +282,7 @@ export async function processAutoPostRules(env: Env): Promise<void> {
 								: String(err),
 					},
 					rule.workspaceId,
-				);
+				).catch(console.error);
 			}
 		}
 	}
@@ -347,7 +349,13 @@ async function processRule(
 		return;
 	}
 
-	// 4. Create posts for each new item (oldest first so they publish in order)
+	// 4. Create posts for each new item (oldest first so they publish in order).
+	// Advance the dedup cursor incrementally after each item is fully enqueued, so
+	// a mid-loop failure (DB insert, PUBLISH_QUEUE.send, KV) does not re-publish
+	// items that were already sent to social platforms on the next poll. Because we
+	// iterate oldest -> newest, lastProcessedUrl always points at the most recent
+	// successfully-processed item.
+	let lastProcessedUrl = rule.lastProcessedUrl;
 	for (const item of [...newItems].reverse()) {
 		const content = renderTemplate(
 			rule.contentTemplate,
@@ -390,7 +398,17 @@ async function processRule(
 			usage_tracked: true,
 		});
 
-		// Dispatch webhook
+		// The item is now enqueued; advance the dedup cursor before doing any
+		// further (non-essential) work so a later failure cannot re-publish it.
+		lastProcessedUrl = item.url;
+		await db
+			.update(autoPostRules)
+			.set({ lastProcessedUrl, updatedAt: new Date() })
+			.where(eq(autoPostRules.id, rule.id));
+
+		// Dispatch webhook (best-effort; cursor already advanced above).
+		// Await delivery so it completes before the cron item returns (dedicated
+			// webhook-delivery queue is the planned non-blocking follow-up).
 		await dispatchWebhookEvent(
 			env,
 			db,
@@ -403,14 +421,14 @@ async function processRule(
 				feed_item_title: item.title,
 			},
 			rule.workspaceId,
-		);
+		).catch(console.error);
 	}
 
-	// 5. Update dedup state
+	// 5. Finalize dedup state (cursor already advanced incrementally above)
 	await db
 		.update(autoPostRules)
 		.set({
-			lastProcessedUrl: newItems[0]!.url,
+			lastProcessedUrl: lastProcessedUrl ?? newItems[0]!.url,
 			lastProcessedAt: new Date(),
 			consecutiveErrors: 0,
 			lastError: null,

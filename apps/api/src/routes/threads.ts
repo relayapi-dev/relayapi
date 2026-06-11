@@ -25,6 +25,46 @@ import type { MediaAttachment } from "../publishers/types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
+// Matches an explicit UTC offset or "Z" at the end of an ISO datetime string.
+const ISO_HAS_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * Resolve a scheduled-at wall-clock string to a UTC Date, honouring the thread's IANA
+ * timezone. An offset-less string like "2026-06-15T10:00:00" is parsed as UTC by
+ * `new Date(...)`, so "10:00 America/New_York" would publish hours early. When the
+ * string has no explicit offset and a timezone is given, interpret it as local to that
+ * zone (DST-aware via Intl) and convert to the correct UTC instant.
+ */
+function resolveScheduledAt(value: string, timezone?: string | null): Date {
+	if (!timezone || ISO_HAS_OFFSET.test(value)) return new Date(value);
+	const asUtc = new Date(`${value}Z`);
+	if (Number.isNaN(asUtc.getTime())) return new Date(value);
+	const parts = new Intl.DateTimeFormat("en-US", {
+		timeZone: timezone,
+		hourCycle: "h23",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+	}).formatToParts(asUtc);
+	const get = (type: string) =>
+		Number(parts.find((p) => p.type === type)?.value ?? "0");
+	const asLocalUtc = Date.UTC(
+		get("year"),
+		get("month") - 1,
+		get("day"),
+		get("hour"),
+		get("minute"),
+		get("second"),
+	);
+	let offset = Math.round((asLocalUtc - asUtc.getTime()) / 60_000);
+	if (offset > 720) offset -= 1440;
+	if (offset < -720) offset += 1440;
+	return new Date(asUtc.getTime() - offset * 60_000);
+}
+
 // --- Route definitions ---
 
 const createThread = createRoute({
@@ -259,7 +299,7 @@ app.openapi(createThread, async (c) => {
 		}
 		scheduledAt = new Date(slot.slot_at);
 	} else {
-		scheduledAt = new Date(body.scheduled_at);
+		scheduledAt = resolveScheduledAt(body.scheduled_at, body.timezone);
 	}
 
 	const threadGroupId = generateId("thg_");
@@ -269,8 +309,13 @@ app.openapi(createThread, async (c) => {
 	const allAccounts = resolved.flatMap((r) => r.accounts.map((a) => ({ ...a, platform: r.platform })));
 	const uniqueAccounts = [...new Map(allAccounts.map((a) => [a.id, a])).values()];
 
-	// Create post rows for each thread item
-	const createdPostIds: string[] = [];
+	// Build all post + target rows in memory, then persist them in a single transaction
+	// with two multi-row inserts. The old code awaited one INSERT per item and one INSERT
+	// per account per item (N + N*M sequential round trips on a remote DB) with no
+	// transaction, so a transient failure mid-loop left a truncated thread persisted —
+	// which the scheduler would then publish (wrong item_count) or strand in "publishing".
+	const postRows: Array<typeof posts.$inferInsert> = [];
+	const targetRows: Array<typeof postTargets.$inferInsert> = [];
 	for (let i = 0; i < body.items.length; i++) {
 		const item = body.items[i]!;
 		const postId = generateId("post_");
@@ -280,7 +325,7 @@ app.openapi(createThread, async (c) => {
 			...(item.media && item.media.length > 0 ? { _media: item.media } : {}),
 		};
 
-		await db.insert(posts).values({
+		postRows.push({
 			id: postId,
 			organizationId: orgId,
 			workspaceId: body.workspace_id ?? null,
@@ -294,9 +339,8 @@ app.openapi(createThread, async (c) => {
 			threadDelayMs: (item.delay_minutes ?? 0) * 60000,
 		});
 
-		// Create post targets for each account
 		for (const account of uniqueAccounts) {
-			await db.insert(postTargets).values({
+			targetRows.push({
 				id: generateId(""),
 				postId,
 				socialAccountId: account.id,
@@ -304,11 +348,17 @@ app.openapi(createThread, async (c) => {
 				status: postStatus as any,
 			});
 		}
-
-		createdPostIds.push(postId);
 	}
 
-	// Enqueue for publishing if immediate
+	await db.transaction(async (tx) => {
+		await tx.insert(posts).values(postRows);
+		if (targetRows.length > 0) {
+			await tx.insert(postTargets).values(targetRows);
+		}
+	});
+
+	// Enqueue for publishing if immediate (only after the transaction commits, so a
+	// rollback never enqueues a publish for non-persisted posts).
 	if (isNow) {
 		await c.env.PUBLISH_QUEUE.send({
 			type: "publish_thread",

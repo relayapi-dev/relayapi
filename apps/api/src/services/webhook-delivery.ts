@@ -41,6 +41,7 @@ export async function deliverWebhook(
 	webhook: WebhookEndpointRow,
 	event: string,
 	data: unknown,
+	db?: Database,
 ): Promise<void> {
 	const deliveryId = generateId("whd_");
 	const timestamp = new Date().toISOString();
@@ -52,9 +53,21 @@ export async function deliverWebhook(
 		timestamp,
 	});
 
-	// Fetch raw secret from KV for HMAC signing
-	// DB stores the hashed secret, KV stores the encrypted raw secret
-	const encryptedSecret = await env.KV.get(`webhook-secret:${webhook.id}`);
+	// The raw secret fetch (KV) and the SSRF DNS re-check are independent —
+	// run them concurrently to avoid serializing two network round trips.
+	// DB stores the hashed secret, KV stores the encrypted raw secret.
+	const [encryptedSecret, blocked] = await Promise.all([
+		env.KV.get(`webhook-secret:${webhook.id}`),
+		// SECURITY: Re-validate URL at delivery time to prevent SSRF via DNS rebinding
+		isBlockedUrlWithDns(webhook.url),
+	]);
+
+	// SECURITY: bail before any delivery if the URL now resolves to a blocked address
+	if (blocked) {
+		console.error(`[webhook-delivery] Blocked SSRF attempt to ${webhook.url} for webhook ${webhook.id}`);
+		return;
+	}
+
 	const rawSecret = encryptedSecret ? await maybeDecrypt(encryptedSecret, env.ENCRYPTION_KEY) : null;
 
 	const headers: Record<string, string> = {
@@ -67,12 +80,13 @@ export async function deliverWebhook(
 	if (rawSecret) {
 		const signature = await signPayload(payload, rawSecret);
 		headers["X-RelayAPI-Signature"] = `sha256=${signature}`;
-	}
-
-	// SECURITY: Re-validate URL at delivery time to prevent SSRF via DNS rebinding
-	if (await isBlockedUrlWithDns(webhook.url)) {
-		console.error(`[webhook-delivery] Blocked SSRF attempt to ${webhook.url} for webhook ${webhook.id}`);
-		return;
+	} else {
+		// Observability: the signing secret should always be present. A null here
+		// means the KV copy is missing/expired and the delivery goes out UNSIGNED,
+		// which consumers that verify signatures will reject. Surface it loudly.
+		console.error(
+			`[webhook-delivery] Missing signing secret for webhook ${webhook.id}; delivering UNSIGNED`,
+		);
 	}
 
 	const maxAttempts = 3;
@@ -108,10 +122,12 @@ export async function deliverWebhook(
 		}
 	}
 
-	// Log the delivery attempt
+	// Log the delivery attempt. Reuse the caller's db handle when provided to
+	// avoid opening (and leaking) a fresh postgres client per delivery; only
+	// direct callers that lack a handle pay for a new connection.
 	try {
-		const db = createDb(env.HYPERDRIVE.connectionString);
-		await db.insert(webhookLogs).values({
+		const logDb = db ?? createDb(env.HYPERDRIVE.connectionString);
+		await logDb.insert(webhookLogs).values({
 			webhookId: webhook.id,
 			organizationId: webhook.organizationId,
 			event,
@@ -157,7 +173,7 @@ export async function dispatchWebhookEvent(
 				return eventMatch;
 			})
 			.map((w) =>
-				deliverWebhook(env, w, event, data).catch((err) =>
+				deliverWebhook(env, w, event, data, db).catch((err) =>
 					console.error(`Webhook delivery failed for ${w.id}:`, err),
 				),
 			),

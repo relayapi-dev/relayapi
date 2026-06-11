@@ -87,8 +87,25 @@ export const BroadcastIdParams = z.object({
 	broadcast_id: z.string().describe("Broadcast ID"),
 });
 
+// Dedicated query for the deprecated GET /v1/whatsapp/broadcasts list so it can
+// paginate (keyset on createdAt,id) without changing the shared AccountIdQuery
+// used by the other WhatsApp routes.
+export const BroadcastListQuery = z.object({
+	account_id: z.string().describe("WhatsApp account ID"),
+	cursor: z.string().optional().describe("Pagination cursor"),
+	limit: z.coerce
+		.number()
+		.int()
+		.min(1)
+		.max(100)
+		.default(50)
+		.describe("Number of items per page"),
+});
+
 export const BroadcastListResponse = z.object({
 	data: z.array(BroadcastResponse),
+	next_cursor: z.string().nullable().optional().describe("Cursor for next page"),
+	has_more: z.boolean().optional().describe("Whether more items exist"),
 });
 
 // =====================

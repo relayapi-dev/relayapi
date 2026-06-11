@@ -6,6 +6,23 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"vars": {
+		// Emit Server-Timing headers + structured per-request timing logs (lib/perf.ts).
+		// Disabled by default in production now that the performance audit is complete —
+		// the always-on Server-Timing header leaked internal middleware names/timings and
+		// SQL prefixes to every client, and 100%-sampled per-request logs scaled Workers
+		// Logs billing with traffic. Re-enable ad hoc when profiling, e.g.
+		// `wrangler deploy --var PERF_LOGS:1`.
+		"PERF_LOGS": "0"
+	},
+	// Minify the bundle — without this the worker ships ~8 MB unminified JS,
+	// which inflates cold-start parse time.
+	"minify": true,
+	// Smart Placement: every handler is DB-bound against a single origin
+	// (Hyperdrive -> db.relayapi.dev), so running the worker near the DB
+	// instead of at the requester's edge cuts each query round trip.
+	// Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/
+	"placement": { "mode": "smart" },
 	"observability": {
 		"enabled": true,
 		"head_sampling_rate": 1,

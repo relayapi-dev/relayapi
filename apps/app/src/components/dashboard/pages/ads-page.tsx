@@ -284,19 +284,21 @@ export function AdsPage({
         const json = await res.json().catch(() => null) as { error?: { message?: string } } | null;
         throw new Error(json?.error?.message || "Failed to sync ad account.");
       }
-      const json = await res.json().catch(() => null) as {
-        ads_created?: number;
-        ads_updated?: number;
-        metrics_updated?: number;
-      } | null;
+      // The sync now runs asynchronously: the endpoint returns 202 { status: "queued" }
+      // instead of created/updated counts. Results land later, so show a queued state
+      // and refresh the lists shortly after to pick up imported ads/campaigns/metrics.
       setAccountActionSuccess(
-        `Sync finished: ${json?.ads_created ?? 0} imported, ${json?.ads_updated ?? 0} updated, ${json?.metrics_updated ?? 0} metrics refreshed.`,
+        "Sync queued. Imported ads, campaigns, and metrics will appear shortly.",
       );
-      accountsRefetch();
+      window.setTimeout(() => {
+        accountsRefetch();
+        adsRefetch();
+        campaignsRefetch();
+      }, 4000);
     } catch (err) {
       setAccountActionError(err instanceof Error ? err.message : "Failed to sync ad account.");
     }
-  }, [accountsRefetch]);
+  }, [accountsRefetch, adsRefetch, campaignsRefetch]);
 
   const handleDiscoverAccounts = useCallback(async (socialAccountId: string) => {
     setDiscovering(true);

@@ -265,7 +265,12 @@ app.openapi(listBindings, async (c) => {
 		.from(automationBindings)
 		.leftJoin(
 			socialAccounts,
-			eq(automationBindings.socialAccountId, socialAccounts.id),
+			and(
+				eq(automationBindings.socialAccountId, socialAccounts.id),
+				// Scope the joined account to this org so a binding pointing at a
+				// foreign account id hydrates to null instead of leaking identity.
+				eq(socialAccounts.organizationId, orgId),
+			),
 		)
 		.where(and(...conditions))
 		.orderBy(desc(automationBindings.createdAt));
@@ -352,6 +357,26 @@ app.openapi(createBinding, async (c) => {
 	const denied = assertWorkspaceScope(c, automation.workspaceId);
 	if (denied) return denied;
 
+	// Verify the social account belongs to this org. Without this, a caller can
+	// bind to another org's account id and then read its handle/display name/
+	// avatar back via GET /{id} (account-identity disclosure).
+	const [boundAccount] = await db
+		.select({ id: socialAccounts.id })
+		.from(socialAccounts)
+		.where(
+			and(
+				eq(socialAccounts.id, body.social_account_id),
+				eq(socialAccounts.organizationId, orgId),
+			),
+		)
+		.limit(1);
+	if (!boundAccount) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Social account not found" } },
+			404,
+		);
+	}
+
 	try {
 		const [inserted] = await db
 			.insert(automationBindings)
@@ -418,10 +443,13 @@ const getBinding = createRoute({
 
 app.openapi(getBinding, async (c) => {
 	const { id } = c.req.valid("param");
+	const orgId = c.get("orgId");
 	const scoped = await loadScopedBinding(c, id);
 	if (!scoped) return notFound(c);
 	if ("denied" in scoped) return scoped.denied as never;
 	const db = c.get("db");
+	// Scope the account hydration to this org so a binding that (via legacy data)
+	// points at a foreign account never leaks that account's identity.
 	const [account] = await db
 		.select({
 			id: socialAccounts.id,
@@ -430,7 +458,12 @@ app.openapi(getBinding, async (c) => {
 			avatarUrl: socialAccounts.avatarUrl,
 		})
 		.from(socialAccounts)
-		.where(eq(socialAccounts.id, scoped.row.socialAccountId))
+		.where(
+			and(
+				eq(socialAccounts.id, scoped.row.socialAccountId),
+				eq(socialAccounts.organizationId, orgId),
+			),
+		)
 		.limit(1);
 	return c.json(serializeBinding(scoped.row, { account: account ?? null }), 200);
 });
@@ -469,6 +502,8 @@ app.openapi(updateBinding, async (c) => {
 	if (!scoped) return notFound(c);
 	if ("denied" in scoped) return scoped.denied as never;
 	const existing = scoped.row;
+	const orgId = c.get("orgId");
+	const db = c.get("db");
 
 	const patch: Partial<typeof automationBindings.$inferInsert> = {
 		updatedAt: new Date(),
@@ -476,9 +511,47 @@ app.openapi(updateBinding, async (c) => {
 	if (body.channel !== undefined) patch.channel = body.channel;
 	if (body.binding_type !== undefined) patch.bindingType = body.binding_type;
 	if (body.social_account_id !== undefined) {
+		// Re-validate account ownership on update too — otherwise a PATCH can
+		// repoint a binding at another org's account id and leak its identity.
+		const [acct] = await db
+			.select({ id: socialAccounts.id })
+			.from(socialAccounts)
+			.where(
+				and(
+					eq(socialAccounts.id, body.social_account_id),
+					eq(socialAccounts.organizationId, orgId),
+				),
+			)
+			.limit(1);
+		if (!acct) {
+			return c.json(
+				{ error: { code: "NOT_FOUND", message: "Social account not found" } },
+				404,
+			);
+		}
 		patch.socialAccountId = body.social_account_id;
 	}
-	if (body.automation_id !== undefined) patch.automationId = body.automation_id;
+	if (body.automation_id !== undefined) {
+		// Re-validate automation ownership too — the original code patched
+		// automationId straight from the body with no org check.
+		const [auto] = await db
+			.select({ id: automations.id })
+			.from(automations)
+			.where(
+				and(
+					eq(automations.id, body.automation_id),
+					eq(automations.organizationId, orgId),
+				),
+			)
+			.limit(1);
+		if (!auto) {
+			return c.json(
+				{ error: { code: "NOT_FOUND", message: "Automation not found" } },
+				404,
+			);
+		}
+		patch.automationId = body.automation_id;
+	}
 	if (body.status !== undefined) patch.status = body.status;
 	if (body.workspace_id !== undefined) {
 		patch.workspaceId = body.workspace_id ?? null;
@@ -503,7 +576,6 @@ app.openapi(updateBinding, async (c) => {
 		patch.config = parsed.data as Record<string, unknown>;
 	}
 
-	const db = c.get("db");
 	const [updated] = await db
 		.update(automationBindings)
 		.set(patch)

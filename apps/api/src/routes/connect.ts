@@ -632,8 +632,28 @@ export async function exchangeAndSaveAccount(params: {
 	redirectUri: string;
 	codeVerifier?: string;
 	method?: string;
+	/**
+	 * Optional execution-context deferral. When provided, all best-effort
+	 * post-upsert side effects (avatar re-host, webhook dispatch, connection log,
+	 * queue sends, Instagram webhook subscriptions, sync-state init, ad-account
+	 * discovery) run via waitUntil AFTER the response is returned, so the
+	 * user-facing OAuth redirect / JSON response is not blocked on external HTTP
+	 * round-trips. When absent (e.g. tests), the work runs fire-and-forget.
+	 */
+	waitUntil?: (p: Promise<unknown>) => void;
 }): Promise<OAuthExchangeResult> {
 	const { env, orgId, platform, code, redirectUri, codeVerifier, method } = params;
+	// Defer helper: run post-response side effects without blocking the response.
+	const defer = (p: Promise<unknown>): void => {
+		const safe = Promise.resolve(p).catch((err) =>
+			console.error(`[oauth][${platform}] Deferred side-effect failed:`, err),
+		);
+		if (params.waitUntil) {
+			params.waitUntil(safe);
+		} else {
+			void safe;
+		}
+	};
 
 	const isInstagramDirect = platform === "instagram" && method === "direct";
 	const oauthConfig = isInstagramDirect
@@ -854,12 +874,18 @@ export async function exchangeAndSaveAccount(params: {
 
 	// Multi-select platforms: store token for secondary selection step
 	if (SECONDARY_SELECTION_PLATFORMS.has(platform)) {
-		// SECURITY: Encrypt access token before storing in KV (consistent with DB encryption at rest)
+		// SECURITY: Encrypt access token AND refresh token before storing in KV
+		// (consistent with DB encryption at rest). The refresh_token and expires_at
+		// MUST be carried through to the select handler — without them the saved
+		// account has no way to auto-refresh and dies when the short-lived access
+		// token expires (Google/Snapchat ~1h, Pinterest ~30d).
 		const encryptedToken = await maybeEncrypt(tokens.access_token, env.ENCRYPTION_KEY);
+		const encryptedRefreshToken = await maybeEncrypt(tokens.refresh_token, env.ENCRYPTION_KEY);
 		await env.KV.put(
 			`pending-secondary:${orgId}:${platform}`,
 			JSON.stringify({
 				access_token: encryptedToken,
+				refresh_token: encryptedRefreshToken,
 				profile_id: profileId,
 				expires_at: tokenExpiresAt?.toISOString() ?? null,
 			}),
@@ -875,6 +901,14 @@ export async function exchangeAndSaveAccount(params: {
 	const encKey = env.ENCRYPTION_KEY;
 	const encAccessToken = await maybeEncrypt(tokens.access_token, encKey);
 	const encRefreshToken = await maybeEncrypt(tokens.refresh_token, encKey);
+	// Record the Instagram connection method so the token-refresh cron can pick
+	// the correct refresh grant. Instagram via Facebook Login stores a Facebook
+	// user token that the ig_refresh_token grant can never refresh — flagging it
+	// here lets refreshToken() skip the doomed call instead of looping on it.
+	const igMetadata: { ig_login_method: "direct" | "facebook" } | null =
+		platform === "instagram"
+			? { ig_login_method: isInstagramDirect ? "direct" : "facebook" }
+			: null;
 	let account;
 	try {
 		[account] = await db
@@ -890,6 +924,7 @@ export async function exchangeAndSaveAccount(params: {
 				refreshToken: encRefreshToken,
 				tokenExpiresAt,
 				scopes: oauthConfig.scopes,
+				...(igMetadata ? { metadata: igMetadata } : {}),
 				...(igAppScopedId ? { webhookAccountId: igAppScopedId } : {}),
 			})
 			.onConflictDoUpdate({
@@ -903,6 +938,7 @@ export async function exchangeAndSaveAccount(params: {
 					tokenExpiresAt,
 					scopes: oauthConfig.scopes,
 					updatedAt: new Date(),
+					...(igMetadata ? { metadata: igMetadata } : {}),
 					...(igAppScopedId ? { webhookAccountId: igAppScopedId } : {}),
 				},
 			})
@@ -918,126 +954,146 @@ export async function exchangeAndSaveAccount(params: {
 		return { status: "error", code: "INTERNAL_ERROR", message: "Failed to save account" };
 	}
 
-	// Re-host the avatar to R2 so the stored URL is durable (platform CDN URLs
-	// expire). Best-effort — falls back to the raw CDN URL already stored above.
-	if (avatarUrl) {
-		const stableAvatar = await rehostAvatar(env, account.id, avatarUrl);
-		if (stableAvatar) {
-			await db
-				.update(socialAccounts)
-				.set({ avatarUrl: stableAvatar, updatedAt: new Date() })
-				.where(eq(socialAccounts.id, account.id));
-			account.avatarUrl = stableAvatar;
-		}
-	}
-
-	// Detect whether this was a new insert or an update to an existing account
+	// Detect whether this was a new insert or an update to an existing account.
+	// (Synchronous — the timestamps are already on the returned row.)
 	const isNewAccount = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-	if (isNewAccount) {
-		console.log(`[oauth][${platform}] Inserted new account ${account.id}`);
-		await dispatchWebhookEvent(env, db, orgId, "account.connected", {
-			account_id: account.id,
-			platform: account.platform,
-			username: account.username,
-			display_name: account.displayName,
-		});
-		await logConnectionEvent(env, orgId, {
-			account_id: account.id,
-			platform: account.platform,
-			event: "connected",
-			message: `Connected ${account.displayName || account.username || platform} account`,
-		});
-	} else {
-		console.log(`[oauth][${platform}] Updated existing account ${account.id}`);
-		await logConnectionEvent(env, orgId, {
-			account_id: account.id,
-			platform: account.platform,
-			event: "connected",
-			message: `Reconnected ${account.displayName || account.username || platform} account`,
-		});
-	}
+	const accessTokenForSubs = tokens.access_token;
 
-	// Subscribe YouTube channels to PubSubHubbub for video upload notifications
-	if (platform === "youtube" && profileId) {
-		const apiBaseUrl = env.API_BASE_URL || "https://api.relayapi.dev";
-		await env.INBOX_QUEUE.send({
-			type: "youtube_subscribe" as const,
-			platform: "youtube",
-			platform_account_id: profileId,
-			organization_id: orgId,
-			account_id: account.id,
-			event_type: "subscribe",
-			payload: { callback_url: `${apiBaseUrl}/webhooks/platform/youtube` },
-			received_at: new Date().toISOString(),
-		});
-	}
+	// Defer ALL best-effort post-upsert side effects so the user-facing OAuth
+	// response (browser 302 / JSON) returns immediately instead of blocking on
+	// external HTTP round-trips (avatar CDN fetch + R2 put, customer webhook
+	// delivery, queue sends, Instagram Graph subscriptions, ad-account discovery).
+	// The account row is already fully persisted; the response carries the raw CDN
+	// avatar URL as the documented best-effort fallback until the re-host completes.
+	defer(
+		(async () => {
+			// Run the independent side effects concurrently; each logs its own errors.
+			await Promise.allSettled([
+				// Avatar re-host to R2 (external fetch + R2 put + DB update).
+				(async () => {
+					if (!avatarUrl) return;
+					const stableAvatar = await rehostAvatar(env, account.id, avatarUrl);
+					if (stableAvatar) {
+						await db
+							.update(socialAccounts)
+							.set({ avatarUrl: stableAvatar, updatedAt: new Date() })
+							.where(eq(socialAccounts.id, account.id));
+					}
+				})(),
 
-	// Subscribe Instagram app and user account to receive webhook events (messages, comments)
-	if (platform === "instagram") {
-		const igAppId = env.INSTAGRAM_LOGIN_APP_ID;
-		const igAppSecret = env.INSTAGRAM_LOGIN_APP_SECRET;
-		const verifyToken = env.FACEBOOK_WEBHOOK_VERIFY_TOKEN;
-		if (igAppId && igAppSecret && verifyToken) {
-			const apiBaseUrl = env.API_BASE_URL || "https://api.relayapi.dev";
-			const result = await verifyInstagramWebhookSubscription(
-				igAppId,
-				igAppSecret,
-				`${apiBaseUrl}/webhooks/platform/facebook`,
-				verifyToken,
-			);
-			if (!result.success) {
-				console.error("[webhook-sub] Instagram subscription failed:", result.error);
-			}
-		}
+				// Customer webhook + connection log.
+				(async () => {
+					if (isNewAccount) {
+						console.log(`[oauth][${platform}] Inserted new account ${account.id}`);
+						await dispatchWebhookEvent(env, db, orgId, "account.connected", {
+							account_id: account.id,
+							platform: account.platform,
+							username: account.username,
+							display_name: account.displayName,
+						});
+						await logConnectionEvent(env, orgId, {
+							account_id: account.id,
+							platform: account.platform,
+							event: "connected",
+							message: `Connected ${account.displayName || account.username || platform} account`,
+						}, db);
+					} else {
+						console.log(`[oauth][${platform}] Updated existing account ${account.id}`);
+						await logConnectionEvent(env, orgId, {
+							account_id: account.id,
+							platform: account.platform,
+							event: "connected",
+							message: `Reconnected ${account.displayName || account.username || platform} account`,
+						}, db);
+					}
+				})(),
 
-		// Per-user subscription — required by Meta to deliver webhooks for this account
-		// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/webhooks
-		if (tokens.access_token) {
-			const userSubResult = await subscribeInstagramAccount(profileId, tokens.access_token);
-			if (!userSubResult.success) {
-				console.error("[webhook-sub] Instagram user subscription failed:", userSubResult.error);
-			}
-		}
-	}
+				// Subscribe YouTube channels to PubSubHubbub for video upload notifications.
+				(async () => {
+					if (platform === "youtube" && profileId) {
+						const apiBaseUrl = env.API_BASE_URL || "https://api.relayapi.dev";
+						await env.INBOX_QUEUE.send({
+							type: "youtube_subscribe" as const,
+							platform: "youtube",
+							platform_account_id: profileId,
+							organization_id: orgId,
+							account_id: account.id,
+							event_type: "subscribe",
+							payload: { callback_url: `${apiBaseUrl}/webhooks/platform/youtube` },
+							received_at: new Date().toISOString(),
+						});
+					}
+				})(),
 
-	// Initialize external post sync state and enqueue immediate sync
-	if (getSupportedSyncPlatforms().includes(platform)) {
-		await db
-			.insert(socialAccountSyncState)
-			.values({
-				socialAccountId: account.id,
-				organizationId: orgId,
-				platform: account.platform,
-				nextSyncAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: socialAccountSyncState.socialAccountId,
-				set: {
-					enabled: true,
-					nextSyncAt: new Date(),
-					updatedAt: new Date(),
-				},
-			});
+				// Subscribe Instagram app + user account to receive webhook events.
+				(async () => {
+					if (platform !== "instagram") return;
+					const igAppId = env.INSTAGRAM_LOGIN_APP_ID;
+					const igAppSecret = env.INSTAGRAM_LOGIN_APP_SECRET;
+					const verifyToken = env.FACEBOOK_WEBHOOK_VERIFY_TOKEN;
+					if (igAppId && igAppSecret && verifyToken) {
+						const apiBaseUrl = env.API_BASE_URL || "https://api.relayapi.dev";
+						const result = await verifyInstagramWebhookSubscription(
+							igAppId,
+							igAppSecret,
+							`${apiBaseUrl}/webhooks/platform/facebook`,
+							verifyToken,
+						);
+						if (!result.success) {
+							console.error("[webhook-sub] Instagram subscription failed:", result.error);
+						}
+					}
+					// Per-user subscription — required by Meta to deliver webhooks for this account.
+					// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/webhooks
+					if (accessTokenForSubs) {
+						const userSubResult = await subscribeInstagramAccount(profileId, accessTokenForSubs);
+						if (!userSubResult.success) {
+							console.error("[webhook-sub] Instagram user subscription failed:", userSubResult.error);
+						}
+					}
+				})(),
 
-		// Enqueue immediately — don't wait for the 5-min cron
-		await env.SYNC_QUEUE.send({
-			type: "sync_posts",
-			social_account_id: account.id,
-			organization_id: orgId,
-			platform,
-		} satisfies SyncPostsMessage);
-	}
+				// Initialize external post sync state and enqueue immediate sync.
+				(async () => {
+					if (!getSupportedSyncPlatforms().includes(platform)) return;
+					await db
+						.insert(socialAccountSyncState)
+						.values({
+							socialAccountId: account.id,
+							organizationId: orgId,
+							platform: account.platform,
+							nextSyncAt: new Date(),
+						})
+						.onConflictDoUpdate({
+							target: socialAccountSyncState.socialAccountId,
+							set: {
+								enabled: true,
+								nextSyncAt: new Date(),
+								updatedAt: new Date(),
+							},
+						});
+					// Enqueue immediately — don't wait for the 5-min cron
+					await env.SYNC_QUEUE.send({
+						type: "sync_posts",
+						social_account_id: account.id,
+						organization_id: orgId,
+						platform,
+					} satisfies SyncPostsMessage);
+				})(),
 
-	// Auto-discover ad accounts for platforms that support ads
-	if (socialPlatformToAdPlatform(platform)) {
-		try {
-			await discoverAdAccounts(env, orgId, account.id);
-			console.log(`[oauth][${platform}] Auto-discovered ad accounts for ${account.id}`);
-		} catch (err) {
-			// Non-critical — don't fail the connect flow if ad discovery fails
-			console.error(`[oauth][${platform}] Ad account discovery failed (non-critical):`, err);
-		}
-	}
+				// Auto-discover ad accounts for platforms that support ads.
+				(async () => {
+					if (!socialPlatformToAdPlatform(platform)) return;
+					try {
+						await discoverAdAccounts(env, orgId, account.id);
+						console.log(`[oauth][${platform}] Auto-discovered ad accounts for ${account.id}`);
+					} catch (err) {
+						console.error(`[oauth][${platform}] Ad account discovery failed (non-critical):`, err);
+					}
+				})(),
+			]);
+		})(),
+	);
 
 	return { status: "success", account: formatAccountResponse(account).account };
 }
@@ -1788,6 +1844,40 @@ app.openapi(whatsappCredentials, async (c) => {
 });
 
 // --- Secondary selection: Facebook Pages ---
+
+interface FacebookPage {
+	id: string;
+	name: string;
+	access_token: string;
+	category?: string;
+}
+
+/**
+ * Fetch ALL pages the user administers, following Graph API `paging.next` cursors.
+ * Graph API returns 25 pages per call by default; an agency user can administer
+ * far more, so a single un-paginated call truncates the list and makes pages
+ * beyond #25 impossible to select. We request limit=100 and follow next links
+ * (capped at 20 pages = up to 2000 Pages) to bound worst-case latency.
+ */
+async function fetchAllFacebookPages(accessToken: string): Promise<FacebookPage[]> {
+	const pages: FacebookPage[] = [];
+	let url: string | null =
+		`${GRAPH_BASE.facebook}/me/accounts?fields=id,name,category,access_token&limit=100&access_token=${accessToken}`;
+	let guard = 0;
+	while (url && guard < 20) {
+		guard++;
+		const res: Response = await fetch(url);
+		if (!res.ok) break;
+		const json = (await res.json()) as {
+			data?: FacebookPage[];
+			paging?: { next?: string };
+		};
+		if (Array.isArray(json.data)) pages.push(...json.data);
+		url = json.paging?.next ?? null;
+	}
+	return pages;
+}
+
 app.openapi(listFacebookPages, async (c) => {
 	const orgId = c.get("orgId");
 	const pendingData = await c.env.KV.get<{
@@ -1803,25 +1893,13 @@ app.openapi(listFacebookPages, async (c) => {
 	const accessToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
 
 	try {
-		// Facebook Pages API: List pages managed by the authenticated user
+		// Facebook Pages API: List pages managed by the authenticated user.
+		// Follows paging.next so users with more than 25 pages see all of them.
 		// https://developers.facebook.com/docs/pages-api/overview
-		const res = await fetch(
-			`${GRAPH_BASE.facebook}/me/accounts?fields=id,name,category,access_token&access_token=${accessToken}`,
-		);
-		if (!res.ok) {
-			return c.json({ pages: [] } as never, 200 as never);
-		}
-		const json = (await res.json()) as {
-			data: Array<{
-				id: string;
-				name: string;
-				access_token: string;
-				category: string;
-			}>;
-		};
+		const allPages = await fetchAllFacebookPages(accessToken);
 		return c.json(
 			{
-				pages: json.data.map((p) => ({
+				pages: allPages.map((p) => ({
 					id: p.id,
 					name: p.name,
 					category: p.category,
@@ -1861,19 +1939,11 @@ app.openapi(selectFacebookPage, async (c) => {
 
 	// Fetch page access token
 	try {
-		// Facebook Pages API: List pages to find the selected page's access token
+		// Facebook Pages API: List pages to find the selected page's access token.
+		// Follows paging.next so a page beyond #25 can still be selected.
 		// https://developers.facebook.com/docs/pages-api/overview
-		const res = await fetch(
-			`${GRAPH_BASE.facebook}/me/accounts?access_token=${decryptedFbToken}`,
-		);
-		const json = (await res.json()) as {
-			data: Array<{
-				id: string;
-				name: string;
-				access_token: string;
-			}>;
-		};
-		const page = json.data?.find((p) => p.id === body.page_id);
+		const allPages = await fetchAllFacebookPages(decryptedFbToken);
+		const page = allPages.find((p) => p.id === body.page_id);
 
 		if (!page) {
 			return c.json(
@@ -2080,7 +2150,9 @@ app.openapi(selectLinkedInOrg, async (c) => {
 
 	const pendingData = await c.env.KV.get<{
 		access_token: string;
+		refresh_token?: string | null;
 		profile_id?: string;
+		expires_at?: string | null;
 	}>(`pending-secondary:${orgId}:linkedin`, "json");
 
 	if (!pendingData?.access_token) {
@@ -2097,6 +2169,15 @@ app.openapi(selectLinkedInOrg, async (c) => {
 	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
 	const decryptedLiSetToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
 	const encLinkedinToken = await maybeEncrypt(decryptedLiSetToken, c.env.ENCRYPTION_KEY);
+	// Carry through the refresh token + expiry so accounts with programmatic-refresh
+	// approval can auto-refresh (LinkedIn access tokens expire in ~60 days).
+	const decryptedLiRefreshToken = pendingData.refresh_token
+		? await maybeDecrypt(pendingData.refresh_token, c.env.ENCRYPTION_KEY)
+		: null;
+	const encLiRefreshToken = decryptedLiRefreshToken
+		? await maybeEncrypt(decryptedLiRefreshToken, c.env.ENCRYPTION_KEY)
+		: null;
+	const liTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
 	// For org accounts, use the org URN. For personal accounts, use the stable profile ID from OAuth.
 	const linkedinPlatformId = body.organization_urn ?? pendingData.profile_id ?? `linkedin_${Date.now()}`;
 	let account;
@@ -2109,6 +2190,8 @@ app.openapi(selectLinkedInOrg, async (c) => {
 				platformAccountId: linkedinPlatformId,
 				displayName: `LinkedIn Org ${body.organization_urn ?? "personal"}`,
 				accessToken: encLinkedinToken,
+				refreshToken: encLiRefreshToken,
+				tokenExpiresAt: liTokenExpiresAt,
 				metadata: {
 					account_type: body.account_type ?? "organization",
 					organization_urn: body.organization_urn,
@@ -2120,6 +2203,8 @@ app.openapi(selectLinkedInOrg, async (c) => {
 				set: {
 					displayName: `LinkedIn Org ${body.organization_urn ?? "personal"}`,
 					accessToken: encLinkedinToken,
+					refreshToken: encLiRefreshToken,
+					tokenExpiresAt: liTokenExpiresAt,
 					metadata: {
 						account_type: body.account_type ?? "organization",
 						organization_urn: body.organization_urn,
@@ -2224,7 +2309,9 @@ app.openapi(selectPinterestBoard, async (c) => {
 
 	const pendingData = await c.env.KV.get<{
 		access_token: string;
+		refresh_token?: string | null;
 		profile_id?: string;
+		expires_at?: string | null;
 	}>(`pending-secondary:${orgId}:pinterest`, "json");
 
 	if (!pendingData?.access_token) {
@@ -2241,6 +2328,15 @@ app.openapi(selectPinterestBoard, async (c) => {
 
 	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
 	const decryptedPinSetToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
+	// Carry through the refresh token + expiry so the account can auto-refresh
+	// (Pinterest access tokens expire in ~30 days).
+	const decryptedPinRefreshToken = pendingData.refresh_token
+		? await maybeDecrypt(pendingData.refresh_token, c.env.ENCRYPTION_KEY)
+		: null;
+	const encPinRefreshToken = decryptedPinRefreshToken
+		? await maybeEncrypt(decryptedPinRefreshToken, c.env.ENCRYPTION_KEY)
+		: null;
+	const pinTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
 
 	// Fetch user profile for account creation
 	let username = "Pinterest User";
@@ -2278,6 +2374,8 @@ app.openapi(selectPinterestBoard, async (c) => {
 				username,
 				displayName: username,
 				accessToken: encPinterestToken,
+				refreshToken: encPinRefreshToken,
+				tokenExpiresAt: pinTokenExpiresAt,
 				metadata: { default_board_id: body.board_id },
 				scopes: OAUTH_CONFIGS.pinterest!.scopes,
 			})
@@ -2287,6 +2385,8 @@ app.openapi(selectPinterestBoard, async (c) => {
 					username,
 					displayName: username,
 					accessToken: encPinterestToken,
+					refreshToken: encPinRefreshToken,
+					tokenExpiresAt: pinTokenExpiresAt,
 					metadata: { default_board_id: body.board_id },
 					scopes: OAUTH_CONFIGS.pinterest!.scopes,
 					updatedAt: new Date(),
@@ -2338,8 +2438,14 @@ app.openapi(selectPinterestBoard, async (c) => {
 // --- Secondary selection: Google Business Locations ---
 app.openapi(listGBPLocations, async (c) => {
 	const orgId = c.get("orgId");
+	// Note: refresh_token / expires_at are also present in this KV entry (written
+	// by exchangeAndSaveAccount) and are preserved by the spread when we re-put
+	// the entry below with google_account_name — required so the select handler
+	// can persist them and the account can auto-refresh.
 	const pendingData = await c.env.KV.get<{
 		access_token: string;
+		refresh_token?: string | null;
+		expires_at?: string | null;
 	}>(`pending-secondary:${orgId}:googlebusiness`, "json");
 
 	if (!pendingData?.access_token) {
@@ -2417,6 +2523,8 @@ app.openapi(selectGBPLocation, async (c) => {
 
 	const pendingData = await c.env.KV.get<{
 		access_token: string;
+		refresh_token?: string | null;
+		expires_at?: string | null;
 		google_account_name?: string;
 	}>(`pending-secondary:${orgId}:googlebusiness`, "json");
 
@@ -2448,6 +2556,16 @@ app.openapi(selectGBPLocation, async (c) => {
 	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
 	const decryptedGbpSetToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
 	const encGbpToken = await maybeEncrypt(decryptedGbpSetToken, c.env.ENCRYPTION_KEY);
+	// Carry through the refresh token + expiry so the account can auto-refresh
+	// (Google access tokens expire in ~1 hour — without the refresh token the
+	// account dies almost immediately).
+	const decryptedGbpRefreshToken = pendingData.refresh_token
+		? await maybeDecrypt(pendingData.refresh_token, c.env.ENCRYPTION_KEY)
+		: null;
+	const encGbpRefreshToken = decryptedGbpRefreshToken
+		? await maybeEncrypt(decryptedGbpRefreshToken, c.env.ENCRYPTION_KEY)
+		: null;
+	const gbpTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
 	let account;
 	try {
 		[account] = await db
@@ -2458,6 +2576,8 @@ app.openapi(selectGBPLocation, async (c) => {
 				platformAccountId: body.location_id,
 				displayName: `Google Business ${body.location_id}`,
 				accessToken: encGbpToken,
+				refreshToken: encGbpRefreshToken,
+				tokenExpiresAt: gbpTokenExpiresAt,
 				metadata: { location_id: body.location_id, google_account_name: pendingData.google_account_name },
 				scopes: OAUTH_CONFIGS.googlebusiness!.scopes,
 			})
@@ -2466,6 +2586,8 @@ app.openapi(selectGBPLocation, async (c) => {
 				set: {
 					displayName: `Google Business ${body.location_id}`,
 					accessToken: encGbpToken,
+					refreshToken: encGbpRefreshToken,
+					tokenExpiresAt: gbpTokenExpiresAt,
 					metadata: { location_id: body.location_id, google_account_name: pendingData.google_account_name },
 					scopes: OAUTH_CONFIGS.googlebusiness!.scopes,
 					updatedAt: new Date(),
@@ -2570,6 +2692,8 @@ app.openapi(selectSnapchatProfile, async (c) => {
 
 	const pendingData = await c.env.KV.get<{
 		access_token: string;
+		refresh_token?: string | null;
+		expires_at?: string | null;
 	}>(`pending-secondary:${orgId}:snapchat`, "json");
 
 	if (!pendingData?.access_token) {
@@ -2587,6 +2711,15 @@ app.openapi(selectSnapchatProfile, async (c) => {
 	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
 	const decryptedSnapSetToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
 	const encSnapToken = await maybeEncrypt(decryptedSnapSetToken, c.env.ENCRYPTION_KEY);
+	// Carry through the refresh token + expiry so the account can auto-refresh
+	// (Snapchat access tokens expire in ~1 hour).
+	const decryptedSnapRefreshToken = pendingData.refresh_token
+		? await maybeDecrypt(pendingData.refresh_token, c.env.ENCRYPTION_KEY)
+		: null;
+	const encSnapRefreshToken = decryptedSnapRefreshToken
+		? await maybeEncrypt(decryptedSnapRefreshToken, c.env.ENCRYPTION_KEY)
+		: null;
+	const snapTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
 	let account;
 	try {
 		[account] = await db
@@ -2597,6 +2730,8 @@ app.openapi(selectSnapchatProfile, async (c) => {
 				platformAccountId: body.profile_id,
 				displayName: `Snapchat ${body.profile_id}`,
 				accessToken: encSnapToken,
+				refreshToken: encSnapRefreshToken,
+				tokenExpiresAt: snapTokenExpiresAt,
 				scopes: OAUTH_CONFIGS.snapchat!.scopes,
 			})
 			.onConflictDoUpdate({
@@ -2604,6 +2739,8 @@ app.openapi(selectSnapchatProfile, async (c) => {
 				set: {
 					displayName: `Snapchat ${body.profile_id}`,
 					accessToken: encSnapToken,
+					refreshToken: encSnapRefreshToken,
+					tokenExpiresAt: snapTokenExpiresAt,
 					scopes: OAUTH_CONFIGS.snapchat!.scopes,
 					updatedAt: new Date(),
 				},
@@ -2657,9 +2794,12 @@ app.openapi(startOAuth, async (c) => {
 	const { platform } = c.req.valid("param");
 	const query = c.req.valid("query");
 	const method = query.method ?? undefined;
-	// Customer's redirect URL — where we redirect after the OAuth exchange completes
+	const headless = query.headless === "true";
+	// Customer's redirect URL — where we redirect after the OAuth exchange completes.
+	// Default to app.relayapi.dev (which is in the redirect allowlist); api.relayapi.dev
+	// is intentionally NOT allowlisted, so it cannot be used as a fallback.
 	const customerRedirectUrl =
-		query.redirect_url ?? "https://api.relayapi.dev/connect/callback";
+		query.redirect_url ?? "https://app.relayapi.dev/connect/callback";
 
 	// SECURITY: Validate redirect_url against allowed domains and protocols.
 	if (!isAllowedCustomerRedirectUrl(customerRedirectUrl)) {
@@ -2714,7 +2854,9 @@ app.openapi(startOAuth, async (c) => {
 		codeVerifier = pkce.codeVerifier;
 	}
 
-	// Store the customer's redirect URL in KV — the server-side callback will redirect here
+	// Store the customer's redirect URL in KV — the server-side callback will redirect here.
+	// When `headless` is set, the callback instead writes the exchange result to
+	// `pending-oauth:{state}` (polled via GET /connect/pending-data) and skips the redirect.
 	await c.env.KV.put(
 		`oauth-state:${state}`,
 		JSON.stringify({
@@ -2723,6 +2865,7 @@ app.openapi(startOAuth, async (c) => {
 			method: method ?? null,
 			redirect_url: customerRedirectUrl,
 			code_verifier: codeVerifier ?? null,
+			headless,
 		}),
 		{ expirationTtl: 600 }, // 10 minutes
 	);
@@ -2736,6 +2879,12 @@ app.openapi(startOAuth, async (c) => {
 		codeChallenge,
 	);
 
+	// In headless mode, also return the temp token the caller polls with after the
+	// user finishes the provider authorization in a browser/webview.
+	if (headless) {
+		return c.json({ auth_url: authUrl, temp_token: state } as never, 200 as never);
+	}
+
 	return c.json({ auth_url: authUrl } as never, 200 as never);
 });
 
@@ -2744,8 +2893,10 @@ app.openapi(completeOAuth, async (c) => {
 	const { platform } = c.req.valid("param");
 	const body = c.req.valid("json");
 
+	// Default to app.relayapi.dev (allowlisted); api.relayapi.dev is intentionally
+	// not in the redirect allowlist, so it cannot be used as a fallback.
 	const customerRedirectUrl =
-		body.redirect_url ?? "https://api.relayapi.dev/connect/callback";
+		body.redirect_url ?? "https://app.relayapi.dev/connect/callback";
 
 	// SECURITY: Validate redirect_url against allowed domains and protocols.
 	if (!isAllowedCustomerRedirectUrl(customerRedirectUrl)) {
@@ -2849,6 +3000,7 @@ app.openapi(completeOAuth, async (c) => {
 			redirectUri: oauthRedirectUri,
 			codeVerifier,
 			method,
+			waitUntil: (p) => c.executionCtx.waitUntil(p),
 		});
 
 		if (result.status === "error") {

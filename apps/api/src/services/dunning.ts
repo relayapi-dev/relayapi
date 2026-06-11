@@ -140,7 +140,7 @@ export async function processDunning(env: Env): Promise<void> {
 					continue;
 				}
 
-				const stripe = createStripeClient(env.STRIPE_SECRET_KEY);
+				const stripe = await createStripeClient(env.STRIPE_SECRET_KEY);
 				await stripe.subscriptions.cancel(sub.stripeSubscriptionId);
 
 				// Only send deactivation email and record event after confirmed cancellation

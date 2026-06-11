@@ -106,15 +106,19 @@ app.openapi(listSegments, async (c) => {
 	applyWorkspaceScope(c, conditions, segments.workspaceId);
 	if (workspace_id) conditions.push(eq(segments.workspaceId, workspace_id));
 
+	// Keyset pagination on (createdAt, id). Read the cursor row's created_at as raw
+	// text so it isn't round-tripped through a JS Date, which truncates Postgres
+	// microseconds to millisecond precision and would skip rows sharing the cursor's
+	// millisecond. Bind it back with an explicit ::timestamptz cast.
 	if (cursor) {
 		const cursorRow = await db
-			.select({ createdAt: segments.createdAt })
+			.select({ createdAt: sql<string>`${segments.createdAt}::text` })
 			.from(segments)
 			.where(eq(segments.id, cursor))
 			.limit(1);
 		if (cursorRow[0]) {
 			conditions.push(
-				sql`(${segments.createdAt}, ${segments.id}) < (${cursorRow[0].createdAt}, ${cursor})`,
+				sql`(${segments.createdAt}, ${segments.id}) < (${cursorRow[0].createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}

@@ -8,7 +8,6 @@ import { maybeDecrypt } from "../lib/crypto";
 import { getProvider, createRelayApiProvider } from "./short-link-providers";
 import type { ShortLinkProvider } from "./short-link-providers";
 import type { Env } from "../types";
-import { mapConcurrently } from "../lib/concurrency";
 
 /**
  * Sync click counts for recently-created short links.
@@ -83,13 +82,24 @@ export async function syncShortLinkClicks(env: Env): Promise<void> {
 			const counts = await provider.getClickCounts(apiKey, shortUrls);
 
 			const now = new Date();
-			await mapConcurrently(links, 20, async (link) => {
-				const count = counts.get(link.shortUrl) ?? link.clickCount;
-				await db
-					.update(shortLinks)
-					.set({ clickCount: count, lastClickSyncAt: now })
-					.where(eq(shortLinks.id, link.id));
-			});
+			// One batched UPDATE ... FROM (VALUES) per org instead of up to 200
+			// per-row UPDATEs (which the pool's max:5 throttles into ~40 sequential
+			// waves). Each row carries its own new count.
+			const rows = links.map((link) => ({
+				id: link.id,
+				count: counts.get(link.shortUrl) ?? link.clickCount,
+			}));
+			if (rows.length === 0) continue;
+			const valuesList = sql.join(
+				rows.map((r) => sql`(${r.id}::text, ${r.count}::int)`),
+				sql`, `,
+			);
+			await db.execute(sql`
+				UPDATE short_links AS s
+				SET click_count = v.count, last_click_sync_at = ${now}
+				FROM (VALUES ${valuesList}) AS v(id, count)
+				WHERE s.id = v.id
+			`);
 		} catch {
 			// Per-org failure should not block other orgs
 		}

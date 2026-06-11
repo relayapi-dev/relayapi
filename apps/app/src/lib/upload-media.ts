@@ -24,7 +24,26 @@ export async function uploadMedia(file: File): Promise<UploadedMedia> {
 				body: file,
 			});
 			if (put.ok) {
-				return { url, type: file.type, filename: file.name, size: file.size };
+				// Confirm the upload so the media row flips pending -> ready
+				// (otherwise it stays size=0 and never appears in the library,
+				// and confirm-time MIME/size re-verification never runs).
+				// The storage key is the URL path after the host, taken from the
+				// raw string (not URL.pathname) to avoid percent-encoding the key,
+				// since the API stores and looks it up in its un-encoded form.
+				const parsed = new URL(url);
+				const storageKey = url
+					.slice(parsed.origin.length)
+					.replace(/^\/+/, "");
+				const confirmRes = await fetch("/api/media/confirm", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ storage_key: storageKey }),
+				});
+				if (confirmRes.ok) {
+					return { url, type: file.type, filename: file.name, size: file.size };
+				}
+				// Confirm failed (e.g. rejected MIME/size) — fall through to the
+				// direct upload proxy rather than returning an unconfirmed URL.
 			}
 		}
 	} catch {

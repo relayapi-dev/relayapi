@@ -56,11 +56,20 @@ const apikey = {
 	toString: () => "apikey",
 };
 
+const whatsappPhoneNumbers = {
+	id: { name: "id" },
+	status: { name: "status" },
+	stripeSubscriptionId: { name: "stripeSubscriptionId" },
+	updatedAt: { name: "updatedAt" },
+	toString: () => "whatsapp_phone_numbers",
+};
+
 mock.module("@relayapi/db", () => ({
 	createDb: () => mockDb,
 	organizationSubscriptions,
 	invoices,
 	apikey,
+	whatsappPhoneNumbers,
 }));
 
 mock.module("drizzle-orm", () => ({

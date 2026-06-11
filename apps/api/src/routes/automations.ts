@@ -22,6 +22,7 @@ import {
 	AutomationCreateSchema,
 	AutomationEnrollSchema,
 	AutomationGraphUpdateSchema,
+	AutomationListItemSchema,
 	AutomationResponseSchema,
 	AutomationSimulateSchema,
 	AutomationStatusSchema,
@@ -90,6 +91,37 @@ function serializeAutomation(row: AutomationRow): AutomationResponse {
 	};
 }
 
+type AutomationListItem = z.infer<typeof AutomationListItemSchema>;
+
+/**
+ * List serializer — omits the heavy `graph` / `template_config` /
+ * `validation_errors` JSONB blobs (BREAKING: GET /v1/automations no longer
+ * returns these). Clients needing the graph must call GET /v1/automations/{id}.
+ * Pairs with the column projection in listAutomations that never fetches them.
+ */
+function serializeAutomationListItem(
+	row: Omit<AutomationRow, "graph" | "templateConfig" | "validationErrors">,
+): AutomationListItem {
+	return {
+		id: row.id,
+		organization_id: row.organizationId,
+		workspace_id: row.workspaceId,
+		name: row.name,
+		description: row.description,
+		channel: row.channel as AutomationListItem["channel"],
+		status: row.status as AutomationListItem["status"],
+		created_from_template: row.createdFromTemplate,
+		total_enrolled: row.totalEnrolled,
+		total_completed: row.totalCompleted,
+		total_exited: row.totalExited,
+		total_failed: row.totalFailed,
+		last_validated_at: row.lastValidatedAt?.toISOString() ?? null,
+		created_by: row.createdBy,
+		created_at: row.createdAt.toISOString(),
+		updated_at: row.updatedAt.toISOString(),
+	};
+}
+
 function notFound(c: any) {
 	return c.json(
 		{ error: { code: "NOT_FOUND", message: "Automation not found" } },
@@ -112,7 +144,7 @@ const ListQuery = PaginationParams.extend({
 });
 
 const ListResponse = z.object({
-	data: z.array(AutomationResponseSchema),
+	data: z.array(AutomationListItemSchema),
 	next_cursor: z.string().nullable(),
 	has_more: z.boolean(),
 });
@@ -193,21 +225,46 @@ app.openapi(listAutomations, async (c) => {
 		conditions.push(ilike(automations.name, `%${escaped}%`));
 	}
 
+	// Keyset pagination (composite: createdAt DESC, id DESC). Read the cursor row's
+	// created_at as raw text so it isn't round-tripped through a JS Date, which
+	// truncates Postgres microseconds to millisecond precision and would skip rows
+	// sharing the cursor's millisecond. Bind it back with an explicit ::timestamptz
+	// cast to keep the keyset comparison exact.
 	if (query.cursor) {
 		const [cursorRow] = await db
-			.select({ createdAt: automations.createdAt })
+			.select({ createdAt: sql<string>`${automations.createdAt}::text` })
 			.from(automations)
 			.where(eq(automations.id, query.cursor))
 			.limit(1);
 		if (cursorRow) {
 			conditions.push(
-				sql`(${automations.createdAt} < ${cursorRow.createdAt} OR (${automations.createdAt} = ${cursorRow.createdAt} AND ${automations.id} < ${query.cursor}))`,
+				sql`(${automations.createdAt}, ${automations.id}) < (${cursorRow.createdAt}::timestamptz, ${query.cursor})`,
 			);
 		}
 	}
 
+	// Explicit column projection — never SELECT the heavy graph / template_config
+	// / validation_errors JSONB on the list path (BREAKING change vs. the old
+	// full-row response; the full graph is available on GET /{id}).
 	const rows = await db
-		.select()
+		.select({
+			id: automations.id,
+			organizationId: automations.organizationId,
+			workspaceId: automations.workspaceId,
+			name: automations.name,
+			description: automations.description,
+			channel: automations.channel,
+			status: automations.status,
+			createdFromTemplate: automations.createdFromTemplate,
+			totalEnrolled: automations.totalEnrolled,
+			totalCompleted: automations.totalCompleted,
+			totalExited: automations.totalExited,
+			totalFailed: automations.totalFailed,
+			lastValidatedAt: automations.lastValidatedAt,
+			createdBy: automations.createdBy,
+			createdAt: automations.createdAt,
+			updatedAt: automations.updatedAt,
+		})
 		.from(automations)
 		.where(and(...conditions))
 		.orderBy(desc(automations.createdAt), desc(automations.id))
@@ -218,7 +275,7 @@ app.openapi(listAutomations, async (c) => {
 
 	return c.json(
 		{
-			data: data.map(serializeAutomation),
+			data: data.map((row) => serializeAutomationListItem(row)),
 			next_cursor:
 				hasMore && data.length > 0 ? (data[data.length - 1]?.id ?? null) : null,
 			has_more: hasMore,

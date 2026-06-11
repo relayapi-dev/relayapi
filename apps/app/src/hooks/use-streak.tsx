@@ -116,13 +116,20 @@ export function StreakProvider({
       if (cached) {
         setStreak(cached);
         setLoading(false);
+        // Warm-cache refresh via the shared dashboard bootstrap so the sidebar's
+        // single bootstrap call serves the streak too (org-keyed for cache reuse).
         return scheduleIdleTask(() => {
-          void fetchStreak({ background: true });
+          void fetchDashboardBootstrap({ orgId }).then((data) => {
+            if (data?.streak) {
+              setStreak(data.streak);
+              writeStreakCache(cacheKey, data.streak);
+            }
+          });
         }, 2000);
       }
 
       return scheduleAfterPaint(() => {
-        void fetchDashboardBootstrap().then((data) => {
+        void fetchDashboardBootstrap({ orgId }).then((data) => {
           if (data?.streak) {
             setStreak(data.streak);
             writeStreakCache(cacheKey, data.streak);

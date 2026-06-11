@@ -69,9 +69,23 @@ export async function consumeAdsQueue(
 			message.ack();
 		} catch (err) {
 			console.error(`[Ads] Queue processing failed for ${body.type}:`, err);
+			// create_ad / boost_post are NOT idempotent: createAd/boostPost create a
+			// live campaign + ad on the platform (spending real budget) before the DB
+			// rows are written, with no idempotency key. A retry after a transient
+			// failure would create a SECOND active campaign that spends money while the
+			// first is orphaned. Until ad-service.ts adds a check-before-create /
+			// idempotency key (see coordination note), never auto-retry these — drop so
+			// the operation can be re-driven explicitly rather than duplicated silently.
+			const isNonIdempotent =
+				body.type === "create_ad" || body.type === "boost_post";
 			if (err instanceof AdPlatformError && err.code === "INVALID_STATE") {
 				console.warn(
 					`[Ads] ${body.type} requires reconnect; dropping without retry`,
+				);
+				message.ack();
+			} else if (isNonIdempotent) {
+				console.error(
+					`[Ads] ${body.type} failed and is not idempotent; dropping without retry to avoid duplicate paid campaigns`,
 				);
 				message.ack();
 			} else if (message.attempts < 3) {

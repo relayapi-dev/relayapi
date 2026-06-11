@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { webhookEndpoints, webhookLogs } from "@relayapi/db";
-import { and, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, or } from "drizzle-orm";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
 	CreateWebhookBody,
@@ -18,6 +18,7 @@ import { assertScopedCreateWorkspace } from "../lib/request-access";
 
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import { maybeEncrypt } from "../lib/crypto";
+import { fetchWithTimeout } from "../lib/fetch-timeout";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -229,13 +230,21 @@ const getWebhookLogs = createRoute({
 
 app.openapi(listWebhooks, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit, workspace_id } = c.req.valid("query");
+	const { limit, workspace_id, cursor } = c.req.valid("query");
 	const db = c.get("db");
 
 	const conditions = [eq(webhookEndpoints.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, webhookEndpoints.workspaceId);
 	if (workspace_id) {
 		conditions.push(eq(webhookEndpoints.workspaceId, workspace_id));
+	}
+	// Keyset pagination on createdAt (the sort key). The cursor is the
+	// created_at of the last item from the previous page.
+	if (cursor) {
+		const cursorDate = new Date(cursor);
+		if (!Number.isNaN(cursorDate.getTime())) {
+			conditions.push(lt(webhookEndpoints.createdAt, cursorDate));
+		}
 	}
 
 	const rows = await db
@@ -265,7 +274,9 @@ app.openapi(listWebhooks, async (c) => {
 				created_at: w.createdAt.toISOString(),
 				updated_at: w.updatedAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: hasMore
+				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				: null,
 			has_more: hasMore,
 		},
 		200,
@@ -316,12 +327,12 @@ app.openapi(createWebhookRoute, async (c) => {
 		);
 	}
 
-	// Store raw secret in KV for HMAC signing (DB only has the hash)
-	// TTL of 1 year — cleaned up on webhook deletion, TTL prevents orphans
+	// Store raw secret in KV for HMAC signing (DB only has the hash).
+	// No expirationTtl: the encrypted raw secret is the sole recoverable copy
+	// used to sign every delivery, so it must outlive the endpoint. The key is
+	// explicitly deleted when the webhook is deleted, so it cannot orphan.
 	const encryptedSecret = await maybeEncrypt(rawSecret, c.env.ENCRYPTION_KEY);
-	await c.env.KV.put(`webhook-secret:${webhook.id}`, encryptedSecret ?? rawSecret, {
-		expirationTtl: 86400 * 365,
-	});
+	await c.env.KV.put(`webhook-secret:${webhook.id}`, encryptedSecret ?? rawSecret);
 
 	return c.json(
 		{
@@ -471,7 +482,7 @@ app.openapi(testWebhookRoute, async (c) => {
 	let success = false;
 
 	try {
-		const response = await fetch(webhook.url, {
+		const response = await fetchWithTimeout(webhook.url, {
 			method: "POST",
 			redirect: "error",
 			headers: { "Content-Type": "application/json" },
@@ -480,6 +491,7 @@ app.openapi(testWebhookRoute, async (c) => {
 				data: { test: true },
 				timestamp: new Date().toISOString(),
 			}),
+			timeout: 5_000,
 		});
 		statusCode = response.status;
 		success = response.ok;
@@ -517,22 +529,30 @@ app.openapi(testWebhookRoute, async (c) => {
 
 app.openapi(getWebhookLogs, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit } = c.req.valid("query");
+	const { limit, cursor } = c.req.valid("query");
 	const db = c.get("db");
 	const workspaceScope = c.get("workspaceScope");
 
 	const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
+	// Keyset pagination on createdAt (the sort key). The cursor is the
+	// created_at of the last item from the previous page.
+	const logConditions = [
+		eq(webhookLogs.organizationId, orgId),
+		gte(webhookLogs.createdAt, sevenDaysAgo),
+	];
+	if (cursor) {
+		const cursorDate = new Date(cursor);
+		if (!Number.isNaN(cursorDate.getTime())) {
+			logConditions.push(lt(webhookLogs.createdAt, cursorDate));
+		}
+	}
+
 	const rows = workspaceScope === "all"
 		? await db
 			.select()
 			.from(webhookLogs)
-			.where(
-				and(
-					eq(webhookLogs.organizationId, orgId),
-					gte(webhookLogs.createdAt, sevenDaysAgo),
-				),
-			)
+			.where(and(...logConditions))
 			.orderBy(desc(webhookLogs.createdAt))
 			.limit(limit + 1)
 		: await db
@@ -551,8 +571,7 @@ app.openapi(getWebhookLogs, async (c) => {
 			.innerJoin(webhookEndpoints, eq(webhookLogs.webhookId, webhookEndpoints.id))
 			.where(
 				and(
-					eq(webhookLogs.organizationId, orgId),
-					gte(webhookLogs.createdAt, sevenDaysAgo),
+					...logConditions,
 					or(
 						inArray(webhookEndpoints.workspaceId, workspaceScope),
 						isNull(webhookEndpoints.workspaceId),
@@ -578,7 +597,9 @@ app.openapi(getWebhookLogs, async (c) => {
 				payload: l.payload,
 				created_at: l.createdAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: hasMore
+				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				: null,
 			has_more: hasMore,
 		},
 		200,

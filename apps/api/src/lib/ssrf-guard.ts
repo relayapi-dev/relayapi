@@ -273,8 +273,19 @@ export function isBlockedUrl(url: string): boolean {
 		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return true;
 		if (!hostname) return true;
 
+		// Standard dotted-decimal private IPv4 (e.g. 192.168.1.1) — caught here
+		// regardless of any userinfo prefix that defeats the anchored regexes.
+		if (isIPv4Address(hostname)) {
+			const n = ipv4ToInt(hostname);
+			if (n !== null && isPrivateIPv4(n)) return true;
+		}
+
 		if (isPrivateIPDecimal(hostname)) return true;
 		if (isIPv6MappedPrivate(hostname)) return true;
+
+		// Non-canonical private/loopback IPv6 literals (e.g. [0::1], [0:0:0:0:0:0:0:1])
+		// that the WHATWG parser normalizes but the raw-string regexes miss.
+		if (hostname.includes(":") && isPrivateIPv6(hostname)) return true;
 	} catch {
 		// Invalid URL — block it to be safe
 		return true;

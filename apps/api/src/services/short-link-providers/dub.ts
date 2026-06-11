@@ -2,6 +2,7 @@
  * Dub.co short link provider
  * Docs: https://dub.co/docs/api-reference
  */
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 import type { ShortLinkProvider } from "./types";
 
 const DUB_API = "https://api.dub.co";
@@ -10,7 +11,7 @@ export const dubProvider: ShortLinkProvider = {
 	shortLinkDomain: "dub.sh",
 
 	async shorten(apiKey, domain, url) {
-		const res = await fetch(`${DUB_API}/links`, {
+		const res = await fetchWithTimeout(`${DUB_API}/links`, {
 			method: "POST",
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
@@ -20,6 +21,7 @@ export const dubProvider: ShortLinkProvider = {
 				url,
 				...(domain ? { domain } : {}),
 			}),
+			timeout: 5_000,
 		});
 
 		if (!res.ok) {
@@ -46,10 +48,11 @@ export const dubProvider: ShortLinkProvider = {
 				const domain = linkUrl.hostname;
 				const key = linkUrl.pathname.slice(1); // remove leading /
 
-				const res = await fetch(
+				const res = await fetchWithTimeout(
 					`${DUB_API}/links/info?domain=${encodeURIComponent(domain)}&key=${encodeURIComponent(key)}`,
 					{
 						headers: { Authorization: `Bearer ${apiKey}` },
+						timeout: 5_000,
 					},
 				);
 

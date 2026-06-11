@@ -26,22 +26,28 @@ export async function handleScheduled(
 	env: Env,
 	ctx: ExecutionContext,
 ): Promise<void> {
-	// Every minute: scheduled posts + cross-post actions + automation schedule
-	ctx.waitUntil(processScheduledPosts(env));
-	ctx.waitUntil(processRecyclingPosts(env));
-	ctx.waitUntil(processScheduledBroadcasts(env));
-	ctx.waitUntil(processScheduledWhatsAppBroadcasts(env));
-	ctx.waitUntil(processCrossPostActions(env));
-	ctx.waitUntil(processAutomationSchedule(env));
-	ctx.waitUntil(processAutomationInputTimeouts(env));
-
-	// 1st of month at midnight: report metered usage to Stripe + downgrade expired subs
-	if (event.cron === "0 0 1 * *") {
-		ctx.waitUntil(generateInvoices(env));
+	// Every minute: scheduled posts + cross-post actions + automation schedule.
+	// MUST be gated on the exact cron — handleScheduled fires for ALL six
+	// triggers, and an unguarded block would re-run the every-minute work on
+	// every */5, */30, monthly, daily and weekly invocation too (duplicate
+	// ticks racing each other whenever schedules overlap, e.g. at :00).
+	if (event.cron === "*/1 * * * *") {
+		ctx.waitUntil(processScheduledPosts(env));
+		ctx.waitUntil(processRecyclingPosts(env));
+		ctx.waitUntil(processScheduledBroadcasts(env));
+		ctx.waitUntil(processScheduledWhatsAppBroadcasts(env));
+		ctx.waitUntil(processCrossPostActions(env));
+		ctx.waitUntil(processAutomationSchedule(env));
+		ctx.waitUntil(processAutomationInputTimeouts(env));
 	}
 
-	// Daily at 9am UTC: process dunning + token refresh + YouTube PubSub renewal + inbox cleanup
+	// Daily at 9am UTC: bill closed Stripe usage periods + downgrade expired subs
+	// + dunning + token refresh + YouTube PubSub renewal + inbox cleanup.
+	// generateInvoices runs daily (not monthly) because usage periods are keyed
+	// on each org's Stripe billing window, which closes on arbitrary calendar
+	// days; it bills any closed, unbilled period idempotently.
 	if (event.cron === "0 9 * * *") {
+		ctx.waitUntil(generateInvoices(env));
 		ctx.waitUntil(processDunning(env));
 		ctx.waitUntil(enqueueExpiringTokenRefresh(env));
 		ctx.waitUntil(renewYouTubePubSubSubscriptions(env));

@@ -294,7 +294,13 @@ export async function refreshInternalPostMetrics(
 	};
 	let totalEngagement = 0;
 	let totalFollowers = 0;
+	let anyMatch = false;
 	const now = new Date();
+
+	// Cache the windowed list-fetch per (account, date-window) so a multi-target
+	// post (or multiple targets on the same account) doesn't re-fetch up to 50
+	// media items — plus per-item insights calls — once for every target.
+	const windowedCache = new Map<string, PlatformPostMetrics[]>();
 
 	for (const target of targets) {
 		if (!target.platformPostId) continue;
@@ -325,19 +331,38 @@ export async function refreshInternalPostMetrics(
 				.toISOString()
 				.slice(0, 10);
 
-			const allMetrics = await fetcher.getPostMetrics(
-				accessToken,
-				target.accountPlatformId,
-				{ from, to },
-				50,
-			);
-
-			// Find metrics for this specific post
-			const match = allMetrics.find(
-				(m) => m.platform_post_id === target.platformPostId,
-			);
+			// Prefer a direct single-post lookup when the platform fetcher
+			// exposes one (e.g. Instagram /{media-id}/insights) — this avoids
+			// listing up to 50 items + N per-item insights calls just to pull
+			// one post. Fall back to the windowed list otherwise, cached per
+			// account+window so we never re-list for sibling targets.
+			let match: PlatformPostMetrics | undefined;
+			if (fetcher.getSinglePostMetrics) {
+				match =
+					(await fetcher.getSinglePostMetrics(
+						accessToken,
+						target.accountPlatformId,
+						target.platformPostId,
+					)) ?? undefined;
+			} else {
+				const cacheKey = `${target.accountId}:${from}:${to}`;
+				let allMetrics = windowedCache.get(cacheKey);
+				if (!allMetrics) {
+					allMetrics = await fetcher.getPostMetrics(
+						accessToken,
+						target.accountPlatformId,
+						{ from, to },
+						50,
+					);
+					windowedCache.set(cacheKey, allMetrics);
+				}
+				match = allMetrics.find(
+					(m) => m.platform_post_id === target.platformPostId,
+				);
+			}
 
 			if (match) {
+				anyMatch = true;
 				// Write to postAnalytics (time-series)
 				await db.insert(postAnalytics).values({
 					postTargetId: target.targetId,
@@ -370,6 +395,13 @@ export async function refreshInternalPostMetrics(
 			);
 		}
 	}
+
+	// If no target produced metrics this run (every platform fetch failed, a
+	// token refresh failed, or the post fell outside the windowed list), do NOT
+	// overwrite the stored snapshot with all-zeros — that would wipe a valid
+	// non-zero snapshot on a transient outage and, because metricsCollectedAt is
+	// bumped, could freeze zeros permanently for posts near the 14-day cutoff.
+	if (!anyMatch) return;
 
 	// Calculate engagement rate if we have data
 	const engagementRate =

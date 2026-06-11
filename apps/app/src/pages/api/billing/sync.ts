@@ -146,8 +146,11 @@ async function syncKeysToKV(
       const data = JSON.parse(raw);
       data.plan = plan;
       data.calls_included = callsIncluded;
+      // Mirror the API's apikey:* KV TTL convention (24h). The short TTL is a
+      // deliberate revocation backstop so a key disabled/mutated in the DB stops
+      // authenticating within a day; the API middleware re-hydrates on first use.
       await kv.put(`apikey:${k.key}`, JSON.stringify(data), {
-        expirationTtl: 86400 * 365,
+        expirationTtl: 86400,
       });
     }
   }

@@ -68,12 +68,30 @@ function calculateUpcomingSlots(
 		const [hoursStr, minutesStr] = slot.time.split(":");
 		const hours = Number.parseInt(hoursStr as string, 10);
 		const minutes = Number.parseInt(minutesStr as string, 10);
+		// Guard against invalid HH:MM persisted in KV from older schedules.
+		if (
+			!Number.isFinite(hours) ||
+			!Number.isFinite(minutes) ||
+			hours < 0 ||
+			hours > 23 ||
+			minutes < 0 ||
+			minutes > 59
+		) {
+			continue;
+		}
 
-		// Use Intl.DateTimeFormat to resolve the current day-of-week in the slot's timezone
-		const tzDayFormat = new Intl.DateTimeFormat("en-US", {
-			timeZone: slot.timezone,
-			weekday: "short",
-		});
+		// Use Intl.DateTimeFormat to resolve the current day-of-week in the slot's timezone.
+		// A bad IANA timezone persisted in KV throws RangeError — skip that slot rather
+		// than letting it 500 the entire endpoint.
+		let tzDayFormat: Intl.DateTimeFormat;
+		try {
+			tzDayFormat = new Intl.DateTimeFormat("en-US", {
+				timeZone: slot.timezone,
+				weekday: "short",
+			});
+		} catch {
+			continue;
+		}
 		const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
 		for (let weekOffset = 0; weekOffset < weeksToCheck; weekOffset++) {
@@ -311,11 +329,19 @@ app.openapi(updateSlots, async (c) => {
 	}
 
 	const existing = schedules[idx] as StoredSchedule;
+	// Never let set_as_default:false demote the only default schedule without
+	// promoting another — otherwise findIndex(is_default) returns -1 on every
+	// subsequent update and this endpoint 404s forever. With no other schedule to
+	// promote, the sole schedule must stay the default.
+	const hasOtherSchedule = schedules.some((s, i) => i !== idx);
+	const nextIsDefault = hasOtherSchedule
+		? (body.set_as_default ?? existing.is_default)
+		: true;
 	const updated: StoredSchedule = {
 		id: existing.id,
 		name: body.name ?? existing.name,
 		slots: body.slots ?? existing.slots,
-		is_default: body.set_as_default ?? existing.is_default,
+		is_default: nextIsDefault,
 		created_at: existing.created_at,
 		updated_at: new Date().toISOString(),
 	};

@@ -223,15 +223,20 @@ automationScopedRuns.openapi(listRuns, async (c) => {
 			sql`${automationRuns.startedAt} <= ${query.started_before}`,
 		);
 	}
+	// Keyset pagination (composite: startedAt DESC, id DESC). Read the cursor row's
+	// started_at as raw text so it isn't round-tripped through a JS Date, which
+	// truncates Postgres microseconds to millisecond precision and would skip rows
+	// sharing the cursor's millisecond. Bind it back with an explicit ::timestamptz
+	// cast to keep the keyset comparison exact.
 	if (query.cursor) {
 		const [cursorRow] = await db
-			.select({ startedAt: automationRuns.startedAt })
+			.select({ startedAt: sql<string>`${automationRuns.startedAt}::text` })
 			.from(automationRuns)
 			.where(eq(automationRuns.id, query.cursor))
 			.limit(1);
 		if (cursorRow) {
 			conditions.push(
-				sql`(${automationRuns.startedAt} < ${cursorRow.startedAt} OR (${automationRuns.startedAt} = ${cursorRow.startedAt} AND ${automationRuns.id} < ${query.cursor}))`,
+				sql`(${automationRuns.startedAt}, ${automationRuns.id}) < (${cursorRow.startedAt}::timestamptz, ${query.cursor})`,
 			);
 		}
 	}
@@ -334,9 +339,27 @@ app.openapi(listSteps, async (c) => {
 	const db = c.get("db");
 
 	const conditions: SQL[] = [eq(automationStepRuns.runId, id)];
-	if (query.cursor) {
-		// cursor is the serialized bigint id. Use id > cursor for ASC ordering.
-		conditions.push(sql`${automationStepRuns.id} > ${query.cursor}`);
+	// The query orders by (executedAt ASC, id ASC), so the cursor must be applied
+	// as a composite keyset on those same columns — comparing on id alone would not
+	// match the sort order when steps share an executed_at. cursor is the serialized
+	// bigint id; ignore a non-numeric cursor instead of throwing.
+	const cursorId =
+		query.cursor && /^\d+$/.test(query.cursor) ? BigInt(query.cursor) : null;
+	if (cursorId !== null) {
+		// Read the cursor row's executed_at as raw text so it isn't round-tripped
+		// through a JS Date (which truncates Postgres microseconds and would skip
+		// rows sharing the millisecond); bind it back with an explicit ::timestamptz
+		// cast to keep the keyset comparison exact.
+		const [cursorRow] = await db
+			.select({ executedAt: sql<string>`${automationStepRuns.executedAt}::text` })
+			.from(automationStepRuns)
+			.where(eq(automationStepRuns.id, cursorId))
+			.limit(1);
+		if (cursorRow) {
+			conditions.push(
+				sql`(${automationStepRuns.executedAt}, ${automationStepRuns.id}) > (${cursorRow.executedAt}::timestamptz, ${cursorId})`,
+			);
+		}
 	}
 
 	const rows = await db

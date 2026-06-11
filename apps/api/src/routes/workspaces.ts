@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { workspaces, socialAccounts } from "@relayapi/db";
-import { eq, and, ilike, gt, inArray, sql } from "drizzle-orm";
+import { workspaces, socialAccounts, posts } from "@relayapi/db";
+import { eq, and, ilike, inArray, sql } from "drizzle-orm";
 import {
 	WorkspaceListQuery,
 	WorkspaceListResponse,
@@ -152,8 +152,13 @@ app.openapi(listWorkspaces, async (c) => {
 		conditions.push(ilike(workspaces.name, `%${search.replace(/[%_\\]/g, "\\$&")}%`));
 	}
 
+	// Keyset pagination on the actual sort key (name, id). The cursor is the id
+	// of the last row from the previous page; resolve its name in SQL so the
+	// predicate matches orderBy(name, id) and no rows are skipped or duplicated.
 	if (cursor) {
-		conditions.push(gt(workspaces.id, cursor));
+		conditions.push(
+			sql`(${workspaces.name}, ${workspaces.id}) > ((select w.name from workspaces w where w.id = ${cursor}), ${cursor})`,
+		);
 	}
 
 	const rows = await db
@@ -299,6 +304,22 @@ app.openapi(deleteWorkspace, async (c) => {
 			404,
 		);
 	}
+
+	// Revert scheduled posts in this workspace back to drafts BEFORE deleting it.
+	// posts.workspace_id is ON DELETE SET NULL, so without this the cron scheduler
+	// (which only filters by status='scheduled') would still publish them after the
+	// workspace is gone, and a workspace-scoped key could no longer cancel them
+	// (assertWorkspaceScope denies access once workspace_id is null).
+	await db
+		.update(posts)
+		.set({ status: "draft", updatedAt: new Date() })
+		.where(
+			and(
+				eq(posts.workspaceId, id),
+				eq(posts.organizationId, orgId),
+				eq(posts.status, "scheduled"),
+			),
+		);
 
 	// FK ON DELETE SET NULL handles unassigning accounts automatically
 	await db.delete(workspaces).where(eq(workspaces.id, id));

@@ -345,11 +345,13 @@ export function Sidebar({
 
 	useEffect(() => {
 		return scheduleIdleTask(() => {
-			void fetchDashboardBootstrap().then((data) => {
+			// Org-key the bootstrap result cache so the usage/streak/key-status hooks
+			// share this single call instead of re-firing under a "__default__" key.
+			void fetchDashboardBootstrap({ orgId: organization?.id ?? null }).then((data) => {
 				if (data?.notif_count != null) setNotifCount(data.notif_count);
 			});
 		}, 1500);
-	}, []);
+	}, [organization?.id]);
 
 	// --- User menu ---
 	const [userMenuOpen, setUserMenuOpen] = useState(false);

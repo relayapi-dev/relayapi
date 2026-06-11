@@ -2,40 +2,48 @@ import {
 	createDb,
 	organizationSubscriptions,
 	usageRecords,
+	apiRequestLogs,
 	apikey,
 } from "@relayapi/db";
-import { and, desc, eq, lte, inArray, isNotNull, gt } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, gt, lt } from "drizzle-orm";
 import { createStripeClient } from "./stripe";
 import { kvTtlForKey } from "../middleware/auth";
 import { PRICING } from "../types";
 import type { Env, KVKeyData } from "../types";
 
 /**
- * Report metered usage to Stripe for active subscriptions whose billing
- * period has ended, and downgrade cancelled/expired subscriptions to free.
- * Called from the cron trigger in index.ts on the 1st of each month.
+ * Report metered usage to Stripe for active subscriptions, and downgrade
+ * cancelled/expired subscriptions to free. Runs DAILY (index.ts), not only on
+ * the 1st: usage_records are keyed on each org's actual Stripe billing period
+ * (see resolveBillingPeriod in usage-tracking.ts), which closes on arbitrary
+ * calendar days, so the overage item must be added shortly after the period
+ * ends — before Stripe finalizes the next invoice.
  *
- * Overage is added as an invoice item on the customer's upcoming invoice.
- * Stripe generates a single unified invoice with the $5 base + any overage.
+ * Overage is added as an invoice item on the customer's upcoming invoice;
+ * Stripe rolls it into the single unified invoice with the $5 base charge.
+ *
+ * Idempotency is twofold: each usage_records row is marked `billedAt` after a
+ * successful invoice-item create (so no run re-bills it), and a deterministic
+ * Stripe idempotency key (org + periodStart) guards against a duplicate item if
+ * a run crashes between the Stripe call and the DB mark.
  */
 export async function generateInvoices(env: Env): Promise<void> {
 	const now = new Date();
 
-	// Only run on the 1st of the month to avoid unnecessary DB queries every minute
-	if (now.getUTCDate() !== 1) return;
-
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const stripe = createStripeClient(env.STRIPE_SECRET_KEY);
+	const stripe = await createStripeClient(env.STRIPE_SECRET_KEY);
 
-	// --- 1. Report overage usage to Stripe for active subscriptions ---
-	// Process in batches to handle any number of subscriptions
+	// --- 1. Report overage to Stripe for every closed, unbilled usage period ---
+	// Process active Stripe-backed subs in batches. For each, bill any usage
+	// record whose period has CLOSED (periodEnd <= now) and is not yet billed —
+	// this naturally covers both Stripe-anniversary periods and the calendar
+	// fallback, and catches a period missed by a skipped/failed prior run.
 	let lastId: string | null = null;
 	const BATCH_SIZE = 50;
 
 	while (true) {
 		const conditions = [
 			eq(organizationSubscriptions.status, "active"),
-			lte(organizationSubscriptions.currentPeriodEnd, now),
 			isNotNull(organizationSubscriptions.stripeSubscriptionId),
 			isNotNull(organizationSubscriptions.stripeCustomerId),
 		];
@@ -55,60 +63,64 @@ export async function generateInvoices(env: Env): Promise<void> {
 
 		for (const sub of dueSubs) {
 			try {
-				// Look up the usage record for the completed period.
-				// Query by periodEnd <= now to avoid race with webhooks that may
-				// have already updated the subscription's currentPeriodStart/End.
-				const [usage] = await db
+				// All closed, not-yet-billed usage windows for this org. Usually
+				// one; more only if a prior run was skipped. The settle buffer keeps
+				// us from billing-and-locking a period while a late write could
+				// still target it: after a period roll the cached billing period
+				// refreshes within the 10-min KV TTL (or immediately via the
+				// subscription.updated webhook), so a period closed > 30 min ago has
+				// no remaining writers and billedAt can safely become permanent.
+				const SETTLE_BUFFER_MS = 30 * 60 * 1000;
+				const settleCutoff = new Date(now.getTime() - SETTLE_BUFFER_MS);
+				const closedRecords = await db
 					.select()
 					.from(usageRecords)
 					.where(
 						and(
 							eq(usageRecords.organizationId, sub.organizationId),
-							lte(usageRecords.periodEnd, now),
-							eq(usageRecords.periodStart, sub.currentPeriodStart),
+							lt(usageRecords.periodEnd, settleCutoff),
+							isNull(usageRecords.billedAt),
 						),
 					)
-					.limit(1);
+					.orderBy(usageRecords.periodStart)
+					.limit(24);
 
-				// If no exact match on periodStart (webhook may have rolled it),
-				// fall back to the most recent completed period
-				const effectiveUsage = usage ?? (await db
-					.select()
-					.from(usageRecords)
-					.where(
-						and(
-							eq(usageRecords.organizationId, sub.organizationId),
-							lte(usageRecords.periodEnd, now),
-						),
-					)
-					.orderBy(desc(usageRecords.periodStart))
-					.limit(1)
-				)?.[0];
+				for (const usage of closedRecords) {
+					const apiCallsCount = usage.apiCallsCount ?? 0;
+					// Use the allowance stored on the record (refreshed on every
+					// write) rather than a constant, so a mid-period plan change is
+					// honored.
+					const apiCallsIncluded =
+						usage.apiCallsIncluded ?? PRICING.proCallsIncluded;
+					const overageCalls = Math.max(0, apiCallsCount - apiCallsIncluded);
 
-				const apiCallsCount = effectiveUsage?.apiCallsCount ?? 0;
-				const apiCallsIncluded = PRICING.proCallsIncluded;
-				const overageCalls = Math.max(0, apiCallsCount - apiCallsIncluded);
+					if (overageCalls > 0 && sub.stripeCustomerId) {
+						const overageCostCents = Math.ceil(
+							(overageCalls * PRICING.pricePerThousandCallsCents) / 1000,
+						);
 
-				// Add overage as an invoice item on the customer's next invoice
-				// Stripe will include this alongside the $5 base subscription charge
-				if (overageCalls > 0 && sub.stripeCustomerId) {
-					const overageCostCents = Math.ceil(
-						(overageCalls * PRICING.pricePerThousandCallsCents) / 1000,
-					);
+						// Skip (but still mark billed) if cost rounds below 1 cent.
+						if (overageCostCents >= 1) {
+							await stripe.invoiceItems.create(
+								{
+									customer: sub.stripeCustomerId,
+									amount: overageCostCents,
+									currency: "usd",
+									description: `API call overage: ${overageCalls.toLocaleString()} calls beyond ${apiCallsIncluded.toLocaleString()} included`,
+								},
+								{
+									idempotencyKey: `overage:${sub.organizationId}:${usage.periodStart.toISOString()}`,
+								},
+							);
+						}
+					}
 
-					// Skip if cost rounds to less than 1 cent
-					if (overageCostCents < 1) continue;
-
-					await stripe.invoiceItems.create({
-						customer: sub.stripeCustomerId,
-						amount: overageCostCents,
-						currency: "usd",
-						description: `API call overage: ${overageCalls.toLocaleString()} calls beyond ${apiCallsIncluded.toLocaleString()} included`,
-					});
+					// Mark billed so no future run re-invoices this period.
+					await db
+						.update(usageRecords)
+						.set({ billedAt: new Date(), updatedAt: new Date() })
+						.where(eq(usageRecords.id, usage.id));
 				}
-
-				// Stripe handles invoice creation + period rolling automatically
-				// Local invoice mirror is created via the invoice.finalized webhook
 			} catch (err) {
 				console.error(`Usage reporting failed for org ${sub.organizationId}:`, err);
 			}
@@ -152,6 +164,42 @@ export async function generateInvoices(env: Env): Promise<void> {
 
 		if (inactiveSubs.length < INACTIVE_BATCH_SIZE) break;
 	}
+
+	// --- 3. Retention: prune old api_request_logs ---
+	// The usage-tracking middleware writes one row per authenticated /v1/* call
+	// (including GETs) and nothing else deletes from this table, so it grows
+	// unboundedly — degrading its own indexes and the per-page COUNT in
+	// GET /v1/usage/logs. Delete rows older than the retention horizon on the
+	// monthly cron. Batch the delete so a large backlog can't blow the
+	// statement timeout in a single transaction.
+	const LOG_RETENTION_DAYS = 90;
+	const retentionCutoff = new Date(
+		now.getTime() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+	);
+	try {
+		// Bounded loop: each pass deletes up to DELETE_BATCH ids matched by a
+		// scoped subquery so the index range scan stays cheap.
+		const DELETE_BATCH = 5000;
+		const MAX_PASSES = 200; // hard cap (≤1M rows/run) to bound cron runtime
+		for (let pass = 0; pass < MAX_PASSES; pass++) {
+			const deleted = await db
+				.delete(apiRequestLogs)
+				.where(
+					inArray(
+						apiRequestLogs.id,
+						db
+							.select({ id: apiRequestLogs.id })
+							.from(apiRequestLogs)
+							.where(lt(apiRequestLogs.createdAt, retentionCutoff))
+							.limit(DELETE_BATCH),
+					),
+				)
+				.returning({ id: apiRequestLogs.id });
+			if (deleted.length < DELETE_BATCH) break;
+		}
+	} catch (err) {
+		console.error("api_request_logs retention prune failed:", err);
+	}
 }
 
 /**
@@ -174,6 +222,10 @@ async function syncOrgKeysToKV(
 		if (existing) {
 			existing.plan = plan;
 			existing.calls_included = callsIncluded;
+			// This path only downgrades to free; clear the Stripe billing period so
+			// usage falls back to calendar month (free orgs have no Stripe window).
+			existing.period_start = null;
+			existing.period_end = null;
 			await env.KV.put(`apikey:${k.key}`, JSON.stringify(existing), {
 				expirationTtl: kvTtlForKey(existing.expires_at),
 			});

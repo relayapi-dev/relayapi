@@ -50,10 +50,12 @@ export function CalendarView({
     timezone,
   );
 
-  // Refetch calendar data when post events arrive via WebSocket (silent — no loading spinner)
+  // Refetch calendar data when post events arrive via WebSocket (silent — no loading spinner).
+  // Defer the ws-info ticket fetch until after first paint, matching the posts-page and
+  // streak-toast pattern so realtime setup never blocks initial render.
   useRealtimeUpdates(useCallback((event) => {
     if (event.type.startsWith("post.")) silentRefetch();
-  }, [silentRefetch]));
+  }, [silentRefetch]), { defer: true });
 
   const handlePrev = useCallback(() => {
     onDateChange(period === "week" ? subWeeks(currentDate, 1) : subMonths(currentDate, 1));

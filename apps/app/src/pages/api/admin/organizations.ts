@@ -8,8 +8,13 @@ import {
   generateId,
   eq,
 } from "@relayapi/db";
-import { sql, desc, count } from "drizzle-orm";
+import { sql, desc, count, and, lte, gte } from "drizzle-orm";
 import { PRICING } from "@relayapi/config";
+
+// Mirror the API's apikey:* KV TTL convention (apps/api/src/middleware/auth.ts
+// API_KEY_KV_TTL_SECONDS = 24h) so out-of-band-revoked keys stop authenticating
+// within a day instead of persisting for a year.
+const APIKEY_KV_TTL_SECONDS = 86400; // 24h
 
 async function hashKey(key: string): Promise<string> {
   const encoded = new TextEncoder().encode(key);
@@ -225,13 +230,23 @@ export const PATCH: APIRoute = async (context) => {
         }
       }
 
-      // Update current usage record's apiCallsIncluded
+      // Update only the CURRENT usage record's apiCallsIncluded. Without the
+      // period filter this would retroactively overwrite the included-calls
+      // quota on all historical (closed) billing periods, corrupting past
+      // overage calculations and reconciliation.
       const newCallsIncluded =
         plan === "pro" ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded;
+      const nowDate = new Date();
       await db
         .update(usageRecords)
         .set({ apiCallsIncluded: newCallsIncluded, updatedAt: new Date() })
-        .where(eq(usageRecords.organizationId, organizationId));
+        .where(
+          and(
+            eq(usageRecords.organizationId, organizationId),
+            lte(usageRecords.periodStart, nowDate),
+            gte(usageRecords.periodEnd, nowDate),
+          ),
+        );
 
       // Update KV-cached API keys for this org
       const kv = context.locals.kv;
@@ -257,7 +272,7 @@ export const PATCH: APIRoute = async (context) => {
           const existing = raw ? JSON.parse(raw) as Record<string, any> : null;
           if (existing) {
             await kv.put(kvKey, JSON.stringify({ ...existing, ...newPlanData }), {
-              expirationTtl: 86400 * 365,
+              expirationTtl: APIKEY_KV_TTL_SECONDS,
             });
           }
         }
@@ -293,7 +308,7 @@ export const PATCH: APIRoute = async (context) => {
           const existingKv = rawKv ? JSON.parse(rawKv) as Record<string, any> : null;
           if (existingKv) {
             await kv.put(kvKey, JSON.stringify({ ...existingKv, ai_enabled: aiEnabled }), {
-              expirationTtl: 86400 * 365,
+              expirationTtl: APIKEY_KV_TTL_SECONDS,
             });
           }
         }

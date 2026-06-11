@@ -212,16 +212,20 @@ app.openapi(listFields, async (c) => {
 		conditions.push(eq(customFieldDefinitions.workspaceId, workspace_id));
 	}
 
-	// Cursor pagination (composite: createdAt DESC, id DESC to handle timestamp ties)
+	// Cursor pagination (composite: createdAt DESC, id DESC to handle timestamp ties).
+	// Read the cursor row's created_at as raw text so it isn't round-tripped through a
+	// JS Date, which truncates Postgres microseconds to millisecond precision and would
+	// skip rows sharing the cursor's millisecond. Bind it back with an explicit
+	// ::timestamptz cast to keep the keyset comparison exact.
 	if (cursor) {
 		const [cursorRow] = await db
-			.select({ createdAt: customFieldDefinitions.createdAt })
+			.select({ createdAt: sql<string>`${customFieldDefinitions.createdAt}::text` })
 			.from(customFieldDefinitions)
 			.where(eq(customFieldDefinitions.id, cursor))
 			.limit(1);
 		if (cursorRow) {
 			conditions.push(
-				sql`(${customFieldDefinitions.createdAt} < ${cursorRow.createdAt} OR (${customFieldDefinitions.createdAt} = ${cursorRow.createdAt} AND ${customFieldDefinitions.id} < ${cursor}))`,
+				sql`(${customFieldDefinitions.createdAt}, ${customFieldDefinitions.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}

@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { startOfMonth, endOfMonth, startOfWeek, endOfWeek } from "date-fns";
 
+// Page size for calendar fetches. Requires the posts list `limit` cap to be
+// raised to >=500 in apps/api/src/schemas/common.ts (PaginationParams) and the
+// SDK. At 500 a busy month collapses from up to 10 serialized two-worker round
+// trips to 2, while the default list limit (20) is unchanged for other clients.
+const CALENDAR_PAGE_LIMIT = 500;
+
 /** Get yyyy-MM-dd for a date in a specific timezone */
 function dateKeyInTz(date: Date, tz: string): string {
   return date.toLocaleDateString("en-CA", { timeZone: tz });
@@ -79,11 +85,11 @@ export function useCalendarPosts(
       let allPosts: CalendarPost[] = [];
       let cursor: string | null = null;
       let pages = 0;
-      const MAX_PAGES = 10; // safety valve: 10 * 100 = 1000 posts max
+      const MAX_PAGES = 10; // safety valve: 10 * 500 = 5000 posts max
 
       do {
         const url = new URL("/api/posts", window.location.origin);
-        url.searchParams.set("limit", "100");
+        url.searchParams.set("limit", String(CALENDAR_PAGE_LIMIT));
         if (cursor) url.searchParams.set("cursor", cursor);
         url.searchParams.set("from", from);
         url.searchParams.set("to", to);
@@ -184,7 +190,7 @@ export function useCalendarPosts(
 
       do {
         const url = new URL("/api/posts", window.location.origin);
-        url.searchParams.set("limit", "100");
+        url.searchParams.set("limit", String(CALENDAR_PAGE_LIMIT));
         if (cursor) url.searchParams.set("cursor", cursor);
         url.searchParams.set("status", "draft");
         url.searchParams.set("include", "media");

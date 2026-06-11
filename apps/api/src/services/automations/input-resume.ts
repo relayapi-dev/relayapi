@@ -13,7 +13,7 @@
 import { automationRuns, automations, type Database } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import type { Graph } from "../../schemas/automation-graph";
-import { runLoop } from "./runner";
+import { runLoop, updateRunOptimistic } from "./runner";
 
 export type InputResumeOutcome =
 	| { port: "captured"; capturedValue: unknown }
@@ -157,7 +157,19 @@ export function resolveInputResume(
 				return canRetry ? { port: "retry" } : { port: "invalid" };
 			}
 			const n = Number(trimmed);
-			if (Number.isNaN(n)) {
+			// Reject NaN and non-finite (e.g. "Infinity") values.
+			if (!Number.isFinite(n)) {
+				return canRetry ? { port: "retry" } : { port: "invalid" };
+			}
+			// Enforce the operator-configured min/max bounds. Previously these were
+			// declared on InputConfig.validation but never read, so out-of-range
+			// numbers were captured and flowed downstream as valid data.
+			const min = config.validation?.min;
+			const max = config.validation?.max;
+			if (
+				(min !== undefined && n < min) ||
+				(max !== undefined && n > max)
+			) {
 				return canRetry ? { port: "retry" } : { port: "invalid" };
 			}
 			return { port: "captured", capturedValue: n };
@@ -258,13 +270,13 @@ export async function resumeWaitingRunOnInput(
 			_input_retries: { ...retryMap, [node.key]: currentRetries + 1 },
 			last_input_value: inboundText ?? "",
 		};
-		await db
-			.update(automationRuns)
-			.set({
-				context: updatedContext,
-				updatedAt: new Date(),
-			})
-			.where(eq(automationRuns.id, runId));
+		// Guard on updatedAt: if the timeout job (or a duplicate inbound) won the
+		// race and advanced this run, don't clobber its state — report a race so
+		// the caller may fall through to entrypoint matching.
+		const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+			context: updatedContext,
+		});
+		if (!ok) return "race";
 		return "retried";
 	}
 
@@ -298,34 +310,33 @@ export async function resumeWaitingRunOnInput(
 	if (!edge) {
 		// Operator didn't wire this port — graceful completion. Matches the
 		// runner's behavior when an advance port has no outgoing edge.
-		await db
-			.update(automationRuns)
-			.set({
-				status: "completed",
-				exitReason: "completed",
-				completedAt: new Date(),
-				context: updatedContext,
-				currentPortKey: outcome.port,
-				waitingFor: null,
-				waitingUntil: null,
-				updatedAt: new Date(),
-			})
-			.where(eq(automationRuns.id, runId));
+		const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+			status: "completed",
+			exitReason: "completed",
+			completedAt: new Date(),
+			context: updatedContext,
+			currentPortKey: outcome.port,
+			waitingFor: null,
+			waitingUntil: null,
+		});
+		// Lost the race to the timeout job / a duplicate inbound — report a race.
+		if (!ok) return "race";
 		return "completed";
 	}
 
-	await db
-		.update(automationRuns)
-		.set({
-			status: "active",
-			waitingFor: null,
-			waitingUntil: null,
-			currentNodeKey: edge.to_node,
-			currentPortKey: edge.to_port,
-			context: updatedContext,
-			updatedAt: new Date(),
-		})
-		.where(eq(automationRuns.id, runId));
+	// Guard on updatedAt so a concurrent timeout-fire (which advances through a
+	// DIFFERENT port) and this reply path don't both advance the run and both
+	// invoke runLoop against the same pre-update snapshot (duplicate side
+	// effects). Exactly one wins; the loser reports a race.
+	const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+		status: "active",
+		waitingFor: null,
+		waitingUntil: null,
+		currentNodeKey: edge.to_node,
+		currentPortKey: edge.to_port,
+		context: updatedContext,
+	});
+	if (!ok) return "race";
 
 	// Ensure handlers find a `db` binding on env too, mirroring enrollContact.
 	await runLoop(db, runId, { db, ...env });

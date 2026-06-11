@@ -17,7 +17,6 @@ import { RateLimitError } from "./types";
 import { getExternalPostFetcher } from "./index";
 import { refreshTokenIfNeeded, fetchAvatarUrl } from "../token-refresh";
 import { rehostAvatar } from "../avatar-store";
-import { mapConcurrently } from "../../lib/concurrency";
 import type { Platform } from "../../schemas/common";
 
 type Database = ReturnType<typeof createDb>;
@@ -310,21 +309,30 @@ export async function refreshExternalPostMetrics(
 		platformPostIds,
 	);
 
-	// Batch-update metrics
+	// Batch-update metrics in a single statement (UPDATE ... FROM VALUES) instead
+	// of one UPDATE per post — up to 50 posts per message would otherwise be 50
+	// sequential round trips capped at the pool's max:5 concurrency.
 	const now = new Date();
-	await mapConcurrently(posts, 10, async (post) => {
+	const updates = posts.flatMap((post) => {
 		const metrics = metricsMap.get(post.platformPostId);
-		if (!metrics) return;
-
-		await db
-			.update(externalPosts)
-			.set({
-				metrics,
-				metricsUpdatedAt: now,
-				updatedAt: now,
-			})
-			.where(eq(externalPosts.id, post.id));
+		return metrics ? [{ id: post.id, metrics }] : [];
 	});
+	if (updates.length === 0) return;
+
+	const valuesList = sql.join(
+		updates.map(
+			(u) => sql`(${u.id}::text, ${JSON.stringify(u.metrics)}::jsonb)`,
+		),
+		sql`, `,
+	);
+	await db.execute(sql`
+		UPDATE external_posts AS ep
+		SET metrics = v.metrics,
+			metrics_updated_at = ${now},
+			updated_at = ${now}
+		FROM (VALUES ${valuesList}) AS v(id, metrics)
+		WHERE ep.id = v.id
+	`);
 }
 
 // ---------------------------------------------------------------------------
@@ -363,10 +371,17 @@ async function upsertExternalPosts(
 	platform: string,
 	posts: import("./types").ExternalPostData[],
 ): Promise<void> {
-	await mapConcurrently(posts, 10, async (post) => {
-		await db
-			.insert(externalPosts)
-			.values({
+	if (posts.length === 0) return;
+
+	// Single multi-row upsert instead of one INSERT per post: the per-row SET
+	// columns reference the rejected row via `excluded.*`, so a page of posts is
+	// written in one statement (≤25 rows/page) rather than ~25 sequential round
+	// trips capped at the pool's max:5 concurrency.
+	const now = new Date();
+	await db
+		.insert(externalPosts)
+		.values(
+			posts.map((post) => ({
 				organizationId,
 				workspaceId,
 				socialAccountId,
@@ -379,24 +394,24 @@ async function upsertExternalPosts(
 				thumbnailUrl: post.thumbnailUrl,
 				platformData: post.platformData,
 				metrics: post.metrics,
-				metricsUpdatedAt: new Date(),
+				metricsUpdatedAt: now,
 				publishedAt: post.publishedAt,
-			})
-			.onConflictDoUpdate({
-				target: [externalPosts.socialAccountId, externalPosts.platformPostId],
-				set: {
-					content: post.content,
-					mediaUrls: post.mediaUrls,
-					mediaType: post.mediaType,
-					thumbnailUrl: post.thumbnailUrl,
-					platformUrl: post.platformUrl,
-					platformData: post.platformData,
-					metrics: post.metrics,
-					metricsUpdatedAt: new Date(),
-					updatedAt: new Date(),
-				},
-			});
-	});
+			})),
+		)
+		.onConflictDoUpdate({
+			target: [externalPosts.socialAccountId, externalPosts.platformPostId],
+			set: {
+				content: sql`excluded.content`,
+				mediaUrls: sql`excluded.media_urls`,
+				mediaType: sql`excluded.media_type`,
+				thumbnailUrl: sql`excluded.thumbnail_url`,
+				platformUrl: sql`excluded.platform_url`,
+				platformData: sql`excluded.platform_data`,
+				metrics: sql`excluded.metrics`,
+				metricsUpdatedAt: now,
+				updatedAt: now,
+			},
+		});
 }
 
 /** Update sync state with error info and back off */
