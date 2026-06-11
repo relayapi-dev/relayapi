@@ -199,8 +199,8 @@ export async function processCrossPostActions(env: Env): Promise<void> {
 					.where(eq(posts.id, action.postId))
 					.limit(1);
 				if (post) {
-					// Await delivery so it completes before the cron item returns (dedicated
-			// webhook-delivery queue is the planned non-blocking follow-up).
+					// Await delivery so it completes before the cron item returns; a dedicated
+					// webhook-delivery queue is the planned non-blocking follow-up.
 					await dispatchWebhookEvent(env, db, post.organizationId, "cross_post_action.failed", {
 						action_id: action.id,
 						post_id: action.postId,

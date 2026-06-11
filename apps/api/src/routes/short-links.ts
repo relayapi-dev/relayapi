@@ -546,7 +546,10 @@ app.openapi(statsRoute, async (c) => {
 		);
 	}
 
-	// Try to fetch live click count from provider
+	// Built-in (relayapi) links count clicks directly in short_links.click_count
+	// (the redirect handler's atomic increment) — that DB value is authoritative,
+	// so don't overwrite it with the provider's KV counter (no longer written).
+	// Only external providers keep counts off-platform and need a live fetch.
 	let clickCount = link.clickCount;
 	try {
 		const [config] = await db
@@ -555,7 +558,7 @@ app.openapi(statsRoute, async (c) => {
 			.where(eq(shortLinkConfigs.organizationId, orgId))
 			.limit(1);
 
-		if (config?.provider) {
+		if (config?.provider && config.provider !== "relayapi") {
 			const resolved = await resolveProvider(config, c.env);
 
 			if (resolved) {

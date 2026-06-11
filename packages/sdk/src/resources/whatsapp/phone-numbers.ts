@@ -14,7 +14,7 @@ export class PhoneNumbers extends APIResource {
     query?: PhoneNumberListParams,
     options?: RequestOptions,
   ): APIPromise<PhoneNumberListResponse> {
-    return this._client.get('/v1/whatsapp/phone-numbers', { query, ...options });
+    return this._client.get('/v1/whatsapp/phone-numbers/provisioned', { query, ...options });
   }
 
   /**

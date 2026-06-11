@@ -97,6 +97,86 @@ delay-node no-edge completion increments `total_completed`.
 - **Deploy:** not done — these are production billing/tenancy changes; deploy
   with `wrangler deploy` after review and the migration. `PERF_LOGS` is `0`.
 
+## 3a. Post-deploy recheck (2026-06-11)
+
+After deploy + migration, a live read-only verification + a 5-area recheck of
+the review-response changes:
+
+- **Found + fixed a live pre-existing 500:** `GET /v1/posts` page 2 — the cursor
+  compared a JS Date against the raw `coalesce(published_at, created_at)`
+  expression, which Postgres rejects under Hyperdrive `prepare:true` /
+  `fetch_types:false`. Fixed with an explicit `::timestamptz` cast
+  (`posts.ts`). Not introduced by this audit; needs the next deploy to take
+  effect live.
+- **Found + fixed a billing regression in our own change:** the invoice
+  generator's "bill all closed unbilled periods" sweep could bill a leftover
+  *free-plan* calendar-month row as pro overage after an org upgrades. Re-scoped
+  to only sweep paid-tier rows (`apiCallsIncluded > freeCallsIncluded`,
+  `invoice-generator.ts`).
+- Verified correct: accounts cursor (composite keyset, live), billing-period
+  read (calendar fallback for non-Stripe subs is correct), the automation
+  resume/guard wiring, the webhook `await` revert.
+
+Two **pre-existing** issues surfaced by the recheck, left as documented
+follow-ups (neither introduced by this audit; both narrow):
+- **`GET /v1/posts` cursor tie-skip:** the cursor is a single `coalesce`
+  timestamp with a strict `<` and no id tiebreaker, so ≥2 posts sharing the
+  exact boundary timestamp (e.g. a multi-row insert) can be skipped at a page
+  boundary. A unique-id tiebreaker (as `media.ts` now uses) is the fix, but the
+  cursor must stay a timestamp to drive the merged internal+external-posts
+  pagination, so it needs a small merge-pagination redesign — not reworked here.
+- **Automation `external_event` park race:** if an unpause fires in the exact
+  window between `findActivePause` and the park CAS in `runLoop`, a run can park
+  after the wake ran and stay wedged (the scheduler only sweeps `delay`/`input`
+  waits). The new `resumeExternalEventRuns` wake is a strict improvement (before,
+  no wake existed); closing the residual window needs a re-verify-in-CAS or a
+  reconciliation sweep.
+
+## 3b. Final coverage sweep (2026-06-11)
+
+To answer "did you check *all* the changes": the earlier reviews were
+risk-targeted. A final 8-cluster sweep then covered the clusters that had only
+had typecheck + tests behind them (ads, analytics, media-infra,
+broadcast/whatsapp, crons-misc, middleware/webhooks, SDK, dashboard). It found
+17 issues (4 high, 3 medium, 10 low) — several real regressions the remediation
+introduced. **Fixed:**
+
+- **[HIGH] Calendar broken:** the dashboard set the posts page size to 500, but
+  the API caps `limit` at 100, so every calendar fetch 400'd. Reverted to 100.
+- **[HIGH] Dashboard key banner false-positive:** `dashboard-key-status.ts` /
+  `dashboard-bootstrap.ts` treated an absent `apikey:*` *cache* as revocation,
+  so the shortened (600s) TTL made them delete the key + show the bootstrap
+  banner on routine cache expiry. Both now validate against the DB `apikey.enabled`
+  row (cache-independent), mirroring `bootstrap-key.ts`.
+- **[HIGH] Short-link clicks wiped:** the redirect now increments the DB
+  `click_count`, but the sync cron + single-GET pulled the relayapi provider's
+  KV counter (always 0) and overwrote it. Built-in links are now treated as
+  DB-authoritative (sync skips them; GET reads the DB value); external
+  providers still sync.
+- **[HIGH] WhatsApp phone-numbers wrong data:** a mount-order change made the
+  typed SDK `whatsapp.listPhoneNumbers()` (Cloud-API) silently resolve to the
+  provisioning list (both sat on the bare `/v1/whatsapp/phone-numbers`). Fixed
+  properly by giving the provisioning list its own path
+  `/v1/whatsapp/phone-numbers/provisioned` (`whatsapp-phone-provisioning.ts`) and
+  pointing the SDK `phoneNumbers.list()` at it — both lists are now reachable and
+  the bare path unambiguously belongs to the Cloud-API list, independent of mount
+  order. (The SDK edit is forward-compatible with the Stainless regen.)
+- **[MED] Ads manual sync window:** a user-triggered sync inherited the cron's
+  hour-based 3-day window. Manual triggers now request the full 30 days; also
+  fixed the cron's 00:00+00:30 double-sweep.
+- **[MED] Avatar staleness:** the edge-cache Cache-Control was bumped to 24h
+  with no cross-colo purge. Bounded back to 1h while keeping the edge cache.
+- **[MED] Deprecated whatsapp broadcasts cursor** + **[LOW] analytics
+  empty-result caching** + **[LOW] content-decay null publishedAt**: fixed.
+
+**Documented as residual (drift / needs SDK regen / safe), not reworked:**
+analytics week bucketing now ISO/Monday-start (was Sunday); the `truncated`
+flag is conservative on the last offset page; two new SDK types
+(`AdSyncQueuedResponse`, `AutomationListItem`) need the Stainless regen to
+appear in the public namespace; the redirect's `LIKE %/r/{code}` is org-unscoped
+but safe given the globally-unique `[a-zA-Z0-9]` code; one webhook-delivery
+caller still opens a per-delivery client (minor perf).
+
 ## 4. Deferred by design (perf / architectural — not regressions)
 
 - **Webhook delivery → dedicated queue** with native retry/backoff. Today

@@ -605,18 +605,22 @@ app.openapi(getContentDecay, async (c) => {
 	// Honor the documented `days` window: only consider snapshots collected
 	// within `days` of publication. Default (30) exceeds the 14-day collection
 	// horizon, so default responses are unchanged; smaller values now narrow.
-	const decayWindowEnd = new Date(
-		(target.publishedAt ?? new Date(0)).getTime() + days * 86400_000,
-	);
+	// Only apply the upper bound when publishedAt is known — otherwise (nullable
+	// column, e.g. an imported/partially-published target that still accrued
+	// snapshots) anchoring on the epoch would exclude every real snapshot.
+	const snapshotConditions = [eq(postAnalytics.postTargetId, target.id)];
+	if (target.publishedAt) {
+		snapshotConditions.push(
+			lte(
+				postAnalytics.collectedAt,
+				new Date(target.publishedAt.getTime() + days * 86400_000),
+			),
+		);
+	}
 	const snapshots = await db
 		.select()
 		.from(postAnalytics)
-		.where(
-			and(
-				eq(postAnalytics.postTargetId, target.id),
-				lte(postAnalytics.collectedAt, decayWindowEnd),
-			),
-		)
+		.where(and(...snapshotConditions))
 		.orderBy(postAnalytics.collectedAt)
 		.limit(500);
 
@@ -1402,11 +1406,16 @@ app.openapi(getPlatformPosts, async (c) => {
 			dateRange,
 			query.limit,
 		);
-		c.executionCtx.waitUntil(
-			c.env.KV.put(cacheKey, JSON.stringify(platformPosts), {
-				expirationTtl: ANALYTICS_POSTS_CACHE_TTL_SECONDS,
-			}),
-		);
+		// Don't cache an empty result: some fetchers swallow transient errors
+		// (rate limit / 5xx) and return [], which would otherwise pin "no posts"
+		// for the full TTL. Only persist a non-empty success.
+		if (platformPosts.length > 0) {
+			c.executionCtx.waitUntil(
+				c.env.KV.put(cacheKey, JSON.stringify(platformPosts), {
+					expirationTtl: ANALYTICS_POSTS_CACHE_TTL_SECONDS,
+				}),
+			);
+		}
 		return c.json({ data: platformPosts }, 200);
 	} catch (err) {
 		if (err instanceof PlatformAnalyticsError) {

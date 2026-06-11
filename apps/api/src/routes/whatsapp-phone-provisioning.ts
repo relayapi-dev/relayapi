@@ -130,7 +130,10 @@ function formatPhoneNumber(row: typeof whatsappPhoneNumbers.$inferSelect) {
 const listPhoneNumbers = createRoute({
 	operationId: "whatsappListProvisionedPhoneNumbers",
 	method: "get",
-	path: "/",
+	// Distinct from the bare `/v1/whatsapp/phone-numbers` so it does not collide
+	// with the Cloud-API "registered numbers" list (whatsapp router). Resolves to
+	// /v1/whatsapp/phone-numbers/provisioned.
+	path: "/provisioned",
 	tags: ["WhatsApp Phone Provisioning"],
 	summary: "List purchased phone numbers",
 	security: [{ Bearer: [] }],

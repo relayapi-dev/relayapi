@@ -340,11 +340,10 @@ export async function publishToTargets(
 				? "post.failed"
 				: "post.partial";
 
-	// Customer webhook delivery can take seconds (retries + backoff sleeps) and would
-	// Await delivery so it completes before the consumer acks; a dedicated
-	// webhook-delivery queue is the planned non-blocking follow-up.
-	// realtime notification is a fast internal call and still awaits so the dashboard
-	// update is guaranteed before this invocation returns.
+	// Await customer webhook delivery so it completes before the consumer acks
+	// (a detached promise would be cancelled after the queue handler returns). A
+	// dedicated webhook-delivery queue is the planned non-blocking follow-up. The
+	// realtime notify below is a fast internal call and is also awaited.
 	await dispatchWebhookEvent(env, db, orgId, webhookEvent, {
 		post_id: postId,
 		status: finalStatus,

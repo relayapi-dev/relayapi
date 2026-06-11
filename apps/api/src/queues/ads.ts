@@ -12,6 +12,8 @@ interface AdsMessage {
 	ad_id?: string;
 	audience_id?: string;
 	params?: any;
+	/** Explicit metrics window for sync_external (manual full refresh = 30). */
+	window_days?: number;
 }
 
 export async function consumeAdsQueue(
@@ -48,7 +50,11 @@ export async function consumeAdsQueue(
 				}
 				case "sync_external": {
 					if (body.ad_account_id) {
-						await syncExternalAds(env, body.ad_account_id, body.org_id);
+						// window_days is set by manual triggers (full 30-day refresh);
+						// the recurring cron omits it and uses the time-based heuristic.
+						await syncExternalAds(env, body.ad_account_id, body.org_id, {
+							windowDays: body.window_days,
+						});
 					}
 					break;
 				}

@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { notifications, eq } from "@relayapi/db";
+import { apikey, notifications, eq } from "@relayapi/db";
 import { and, count } from "drizzle-orm";
 import { API_BASE_URL } from "@/lib/api-base-url";
 import { clearClientCache, getRelayClient } from "@/lib/relay";
@@ -49,9 +49,18 @@ export const GET: APIRoute = async (ctx) => {
 		const rawKey = await rawKeyPromise;
 		if (!rawKey) return { has_api_key: false };
 
+		// Validate against the DB apikey row, NOT the apikey:* KV auth cache: that
+		// cache has a short TTL and the API re-hydrates it from the DB on use, so
+		// its absence is not revocation. Treating a lapsed cache as revocation
+		// would spuriously delete a valid dashboard key and flash the bootstrap
+		// banner on routine cache expiry.
 		const hashedKey = await hashKey(rawKey);
-		const authEntry = await kv.get(`apikey:${hashedKey}`);
-		if (!authEntry) {
+		const [row] = await ctx.locals.db
+			.select({ enabled: apikey.enabled })
+			.from(apikey)
+			.where(eq(apikey.key, hashedKey))
+			.limit(1);
+		if (!row?.enabled) {
 			await kv.delete(`dashboard-key:${org.id}`);
 			clearClientCache(org.id!);
 			return { has_api_key: false };

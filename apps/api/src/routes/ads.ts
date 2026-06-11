@@ -1315,6 +1315,9 @@ app.openapi(triggerSync, async (c) => {
 			type: "sync_external",
 			org_id: orgId,
 			ad_account_id: id,
+			// Manual sync is a full refresh — pull the complete 30-day window
+			// regardless of the consumer's wall-clock hour.
+			window_days: 30,
 		});
 
 		return c.json({ status: "queued" as const }, 202);

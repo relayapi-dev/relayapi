@@ -5,8 +5,7 @@ import {
 } from "@relayapi/db";
 import { and, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
-import { getProvider, createRelayApiProvider } from "./short-link-providers";
-import type { ShortLinkProvider } from "./short-link-providers";
+import { getProvider } from "./short-link-providers";
 import type { Env } from "../types";
 
 /**
@@ -62,20 +61,22 @@ export async function syncShortLinkClicks(env: Env): Promise<void> {
 	for (const [, { config, links }] of byOrg) {
 		if (!config.provider) continue;
 
-		try {
-			let provider: ShortLinkProvider | null = null;
-			let apiKey = "builtin";
+		// Built-in (relayapi) links are counted directly in short_links.click_count
+		// by the redirect handler's atomic SQL increment — that column IS the
+		// source of truth. The provider's KV counter is no longer written, so
+		// syncing it here would overwrite real click counts back to 0. Only
+		// external providers (dub/short_io/bitly) keep their counts off-platform
+		// and need to be pulled.
+		if (config.provider === "relayapi") continue;
 
-			if (config.provider === "relayapi") {
-				const baseUrl = env.API_BASE_URL || "https://api.relayapi.dev";
-				provider = createRelayApiProvider(env.KV, baseUrl);
-			} else {
-				if (!config.apiKey) continue;
-				provider = getProvider(config.provider as "dub" | "short_io" | "bitly");
-				const decrypted = await maybeDecrypt(config.apiKey, env.ENCRYPTION_KEY);
-				if (!decrypted) continue;
-				apiKey = decrypted;
-			}
+		try {
+			if (!config.apiKey) continue;
+			const provider = getProvider(
+				config.provider as "dub" | "short_io" | "bitly",
+			);
+			const decrypted = await maybeDecrypt(config.apiKey, env.ENCRYPTION_KEY);
+			if (!decrypted) continue;
+			const apiKey = decrypted;
 			if (!provider) continue;
 
 			const shortUrls = links.map((l) => l.shortUrl);

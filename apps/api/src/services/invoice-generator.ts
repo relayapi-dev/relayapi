@@ -80,6 +80,12 @@ export async function generateInvoices(env: Env): Promise<void> {
 							eq(usageRecords.organizationId, sub.organizationId),
 							lt(usageRecords.periodEnd, settleCutoff),
 							isNull(usageRecords.billedAt),
+							// Only bill paid-tier rows. apiCallsIncluded records the
+							// plan allowance at write time, so a leftover calendar-month
+							// FREE row (included = freeCallsIncluded) — accrued before
+							// this org upgraded — is never converted into a pro overage
+							// invoice. Pro rows carry proCallsIncluded (> free).
+							gt(usageRecords.apiCallsIncluded, PRICING.freeCallsIncluded),
 						),
 					)
 					.orderBy(usageRecords.periodStart)

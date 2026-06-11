@@ -44,6 +44,7 @@ export async function syncExternalAds(
 	env: Env,
 	adAccountId: string,
 	orgId: string,
+	opts?: { windowDays?: number },
 ): Promise<{ adsCreated: number; adsUpdated: number; metricsUpdated: number }> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
@@ -306,13 +307,17 @@ export async function syncExternalAds(
 			)
 			.limit(200);
 
-		// The recurring */30 sync only needs a short window to catch Meta's
-		// attribution backfill; re-pulling the full 30 days every cycle re-fetches
-		// 29+ days of unchanged history and burns Meta's rate limit. Sweep the full
-		// 30-day window once per day (at the midnight UTC run) and use a 3-day
-		// window for every other run.
+		// An explicit windowDays (e.g. a user-triggered full sync) always wins.
+		// Otherwise the recurring */30 cron only needs a short window to catch
+		// Meta's attribution backfill; re-pulling the full 30 days every cycle
+		// re-fetches 29+ days of unchanged history and burns Meta's rate limit.
+		// Sweep the full 30-day window once per day (the single 00:00 UTC run —
+		// gated on minutes so the 00:30 run doesn't double-sweep) and use a 3-day
+		// window otherwise.
 		const now = new Date();
-		const windowDays = now.getUTCHours() === 0 ? 30 : 3;
+		const windowDays =
+			opts?.windowDays ??
+			(now.getUTCHours() === 0 && now.getUTCMinutes() < 30 ? 30 : 3);
 		const windowStart = new Date(now);
 		windowStart.setDate(windowStart.getDate() - windowDays);
 		const endDate = now.toISOString().split("T")[0]!;

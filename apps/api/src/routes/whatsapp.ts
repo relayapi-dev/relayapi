@@ -840,14 +840,18 @@ app.openapi(listBroadcasts, async (c) => {
 	// Keyset pagination (composite: createdAt DESC, id DESC to handle ties),
 	// mirroring the canonical GET /v1/broadcasts route.
 	if (cursor) {
+		// Read the boundary createdAt as ::text (full microsecond precision) and
+		// bind it back with an explicit ::timestamptz cast. Selecting it as a JS
+		// Date truncates to milliseconds, so the `= cursorCreatedAt` tie branch
+		// would miss rows sharing the boundary millisecond and silently skip them.
 		const [cursorRow] = await db
-			.select({ createdAt: whatsappBroadcasts.createdAt })
+			.select({ createdAt: sql<string>`${whatsappBroadcasts.createdAt}::text` })
 			.from(whatsappBroadcasts)
 			.where(eq(whatsappBroadcasts.id, cursor))
 			.limit(1);
 		if (cursorRow) {
 			conditions.push(
-				sql`(${whatsappBroadcasts.createdAt} < ${cursorRow.createdAt} OR (${whatsappBroadcasts.createdAt} = ${cursorRow.createdAt} AND ${whatsappBroadcasts.id} < ${cursor}))`,
+				sql`(${whatsappBroadcasts.createdAt}, ${whatsappBroadcasts.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
 			);
 		}
 	}

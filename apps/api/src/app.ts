@@ -218,10 +218,8 @@ app.route("/v1/inbox", inbox);
 app.route("/v1/inbox", inboxAi);
 app.route("/v1/inbox", inboxFeed);
 app.route("/v1/reddit", reddit);
-// Mount the more-specific provisioning router first so its GET /phone-numbers
-// handler is matched before the broader Cloud-API GET /v1/whatsapp/phone-numbers.
-app.route("/v1/whatsapp/phone-numbers", whatsappPhoneProvisioning);
 app.route("/v1/whatsapp", whatsapp);
+app.route("/v1/whatsapp/phone-numbers", whatsappPhoneProvisioning);
 app.route("/v1/contacts", contactsRouter);
 app.route("/v1/custom-fields", customFields);
 app.route("/v1/broadcasts", broadcastsRouter);

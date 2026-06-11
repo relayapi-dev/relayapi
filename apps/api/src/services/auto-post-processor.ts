@@ -267,8 +267,8 @@ export async function processAutoPostRules(env: Env): Promise<void> {
 				.where(eq(autoPostRules.id, rule.id));
 
 			if (shouldPause) {
-				// Await delivery so it completes before the cron item returns (dedicated
-			// webhook-delivery queue is the planned non-blocking follow-up).
+				// Await delivery so it completes before the cron item returns; a dedicated
+				// webhook-delivery queue is the planned non-blocking follow-up.
 				await dispatchWebhookEvent(
 					env,
 					db,
@@ -407,8 +407,8 @@ async function processRule(
 			.where(eq(autoPostRules.id, rule.id));
 
 		// Dispatch webhook (best-effort; cursor already advanced above).
-		// Await delivery so it completes before the cron item returns (dedicated
-			// webhook-delivery queue is the planned non-blocking follow-up).
+		// Await delivery so it completes before the cron item returns; a dedicated
+		// webhook-delivery queue is the planned non-blocking follow-up.
 		await dispatchWebhookEvent(
 			env,
 			db,

@@ -3,10 +3,13 @@ import type { Env } from "../types";
 
 const app = new Hono<{ Bindings: Env }>();
 
-// Avatars are written once under a stable key and rarely change, so they are
-// served for a day and stored in the Workers edge cache. max-age alone never
-// populates Cloudflare's cache on Workers — it must be written explicitly.
-const AVATAR_CACHE_CONTROL = "public, max-age=86400";
+// Avatars are stored in the Workers edge cache (max-age alone never populates
+// Cloudflare's cache on Workers — it must be written explicitly). The key
+// `avatars/{id}` is stable but its CONTENT changes when an account re-hosts its
+// avatar or is reconnected, and there is no reliable cross-colo cache purge on
+// Workers — so bound staleness to 1h rather than a day. The edge-cache hit
+// still removes the R2 GET + body stream on the hot path.
+const AVATAR_CACHE_CONTROL = "public, max-age=3600";
 
 // Minimal Workers Cache surface. The ambient DOM `CacheStorage` (pulled in by the
 // default lib) has no `.default`, so we narrow `caches` to the Workers shape.
