@@ -6,19 +6,19 @@ title: Automations
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `GET` | [Get an automation with its full graph](/api-reference/automations/getAutomation) | Get an automation with its full graph |
+| `GET` | [>-](/api-reference/automations/getAutomationInsightsAll) | >- |
+| `POST` | [Unarchive an automation (returns it to paused state)](/api-reference/automations/unarchiveAutomation) | Unarchive an automation (returns it to paused state) |
+| `POST` | [Activate an automation](/api-reference/automations/activateAutomation) | Activate an automation |
+| `POST` | [Archive an automation](/api-reference/automations/archiveAutomation) | Archive an automation |
+| `PATCH` | [Update automation metadata (name, description)](/api-reference/automations/updateAutomation) | Update automation metadata (name, description) |
+| `GET` | [Aggregate run metrics scoped to a single automation](/api-reference/automations/getAutomationInsights) | Aggregate run metrics scoped to a single automation |
+| `POST` | [Pause an automation](/api-reference/automations/pauseAutomation) | Pause an automation |
+| `PUT` | [Replace the automation's graph](/api-reference/automations/replaceAutomationGraph) | Replace the automation's graph |
+| `POST` | [Manually enroll a contact into an automation](/api-reference/automations/enrollAutomationContact) | Manually enroll a contact into an automation |
+| `POST` | [Create an automation (optionally expanding a template)](/api-reference/automations/createAutomation) | Create an automation (optionally expanding a template) |
+| `POST` | [Dry-run the graph without any side effects](/api-reference/automations/simulateAutomation) | Dry-run the graph without any side effects |
+| `POST` | [Resume a paused automation (equivalent to activate)](/api-reference/automations/resumeAutomation) | Resume a paused automation (equivalent to activate) |
+| `GET` | [>-](/api-reference/automations/getAutomationCatalog) | >- |
 | `GET` | [List automations](/api-reference/automations/listAutomations) | List automations |
 | `DELETE` | [Delete an automation (hard delete — cascades to entrypoints and runs)](/api-reference/automations/deleteAutomation) | Delete an automation (hard delete — cascades to entrypoints and runs) |
-| `POST` | [Manually enroll a contact into an automation](/api-reference/automations/enrollAutomationContact) | Manually enroll a contact into an automation |
-| `GET` | [>-](/api-reference/automations/getAutomationInsightsAll) | >- |
-| `GET` | [Aggregate run metrics scoped to a single automation](/api-reference/automations/getAutomationInsights) | Aggregate run metrics scoped to a single automation |
-| `POST` | [Activate an automation](/api-reference/automations/activateAutomation) | Activate an automation |
-| `GET` | [>-](/api-reference/automations/getAutomationCatalog) | >- |
-| `POST` | [Create an automation (optionally expanding a template)](/api-reference/automations/createAutomation) | Create an automation (optionally expanding a template) |
-| `PUT` | [Replace the automation's graph](/api-reference/automations/replaceAutomationGraph) | Replace the automation's graph |
-| `POST` | [Archive an automation](/api-reference/automations/archiveAutomation) | Archive an automation |
-| `POST` | [Resume a paused automation (equivalent to activate)](/api-reference/automations/resumeAutomation) | Resume a paused automation (equivalent to activate) |
-| `PATCH` | [Update automation metadata (name, description)](/api-reference/automations/updateAutomation) | Update automation metadata (name, description) |
-| `GET` | [Get an automation with its full graph](/api-reference/automations/getAutomation) | Get an automation with its full graph |
-| `POST` | [Unarchive an automation (returns it to paused state)](/api-reference/automations/unarchiveAutomation) | Unarchive an automation (returns it to paused state) |
-| `POST` | [Pause an automation](/api-reference/automations/pauseAutomation) | Pause an automation |
-| `POST` | [Dry-run the graph without any side effects](/api-reference/automations/simulateAutomation) | Dry-run the graph without any side effects |
