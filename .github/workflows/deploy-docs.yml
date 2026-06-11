@@ -1,8 +1,11 @@
 name: Deploy Docs
 
-# The API reference is regenerated fresh from the live OpenAPI spec at deploy
-# time (apps/docs/scripts/generate-docs.ts) and is NOT committed to the repo —
-# content/docs/api-reference/ is gitignored. A typecheck gates the deploy.
+# The API reference is regenerated fresh from the live OpenAPI spec at build
+# time — `build:next` runs `generate-docs` before `next build`, so generation
+# happens on every build path (this workflow, Cloudflare Workers Builds, local
+# `bun run build`). It is NOT committed to the repo — content/docs/api-reference/
+# is gitignored. generate-docs fails the build if the spec is unreachable/empty,
+# so broken or empty docs can never be published. A typecheck gates the deploy.
 #
 # Triggers:
 # - push to main touching apps/docs (code/content changes)
@@ -66,13 +69,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Regenerate the API reference from the live spec. This fails the deploy
-      # (leaving the previous deployment live) if the spec is unreachable or
-      # empty, so broken/empty docs can never be published.
-      - name: Generate API reference from live OpenAPI spec
-        run: bun run generate-docs
-        working-directory: apps/docs
-
+      # `build` -> `build:next` regenerates the API reference from the live spec
+      # before `next build`. A failed/empty spec fails the build here, leaving the
+      # previous deployment live rather than publishing broken docs.
       - name: Build Docs (OpenNext)
         run: bun run build
         working-directory: apps/docs

@@ -5,7 +5,7 @@
     "dev": "bun run docs:ensure && next dev",
     "docs:ensure": "test -d content/docs/api-reference || bun run generate-docs",
     "build": "opennextjs-cloudflare build",
-    "build:next": "fumadocs-mdx && next build",
+    "build:next": "bun run generate-docs && fumadocs-mdx && next build",
     "build:worker": "bun run build",
     "start": "next start",
     "generate-docs": "bun ./scripts/generate-docs.ts",
