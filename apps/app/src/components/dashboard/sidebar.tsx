@@ -421,7 +421,7 @@ export function Sidebar({
 				onMouseEnter={() => onPrefetch?.(item.href)}
 				onFocus={() => onPrefetch?.(item.href)}
 				className={cn(
-					"flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] transition-colors",
+					"flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 text-[13px] transition-colors md:py-1.5",
 					isActive
 						? "bg-accent/80 text-foreground font-medium"
 						: "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
@@ -444,7 +444,7 @@ export function Sidebar({
 					onMouseEnter={() => prefetchItem(item)}
 					onFocus={() => prefetchItem(item)}
 					className={cn(
-						"flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] transition-colors",
+						"flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 text-[13px] transition-colors md:py-1.5",
 						hasActiveChild
 							? "text-foreground font-medium"
 							: "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
@@ -486,7 +486,7 @@ export function Sidebar({
 											onMouseEnter={() => onPrefetch?.(child.href)}
 											onFocus={() => onPrefetch?.(child.href)}
 											className={cn(
-												"flex w-full items-center gap-2 rounded-md px-2 py-1 text-[12.5px] transition-colors",
+												"flex w-full items-center gap-2 rounded-md px-2 py-2 text-[12.5px] transition-colors md:py-1",
 												isActive
 													? "text-foreground font-medium bg-accent/60"
 													: "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
@@ -525,7 +525,7 @@ export function Sidebar({
 
 			<aside
 				className={cn(
-					"fixed top-0 left-0 z-60 h-dvh w-56 shrink-0 border-r border-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:translate-x-0",
+					"fixed top-0 left-0 z-60 h-dvh w-[85vw] max-w-[320px] shrink-0 border-r border-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:w-56 md:max-w-none md:translate-x-0",
 					isOpen ? "translate-x-0" : "-translate-x-full",
 				)}
 			>
@@ -708,8 +708,9 @@ export function Sidebar({
 
 						{/* Notification button */}
 						<button
+							type="button"
 							onClick={() => onNavigate("notifications")}
-							className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+							className="flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors md:py-1.5"
 						>
 							<Bell className="size-4 shrink-0" />
 							<span className="flex-1 text-left">Notifications</span>
@@ -723,8 +724,9 @@ export function Sidebar({
 						{/* User block */}
 						<div ref={userMenuRef} className="relative">
 							<button
+								type="button"
 								onClick={() => setUserMenuOpen(!userMenuOpen)}
-								className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent/40 transition-colors"
+								className="flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 hover:bg-accent/40 transition-colors md:py-1.5"
 							>
 								{user?.image ? (
 									<img

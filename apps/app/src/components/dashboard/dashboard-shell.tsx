@@ -64,12 +64,20 @@ export function DashboardShell({
 	};
 
 	const navigate = (page: string) => {
-		setSidebarOpen(false);
-
 		const currentPath = window.location.pathname.replace(/\/$/, "");
 		const nextPath = `/app/${page}`;
-		if (currentPath === nextPath) return;
 
+		// Same page: nothing to load, just close the drawer.
+		if (currentPath === nextPath) {
+			setSidebarOpen(false);
+			return;
+		}
+
+		// Different page: navigate WITHOUT animating the drawer closed in the same
+		// tick. Sliding the drawer off-screen (transition-transform) mid-tap makes
+		// iOS Safari (and some Android WebViews) drop the navigation — the original
+		// "tap just refreshes the page" bug. The full-document load tears the drawer
+		// down anyway, so there's nothing to clean up here.
 		const absoluteUrl = new URL(
 			buildPageUrl(page),
 			window.location.origin,
