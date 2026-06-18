@@ -142,9 +142,9 @@ export function ScheduleCreateDialog({ open, onOpenChange, onCreated }: Schedule
             {/* Slots */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-medium text-muted-foreground">
+                <span className="text-xs font-medium text-muted-foreground">
                   Time Slots <span className="text-destructive">*</span>
-                </label>
+                </span>
                 <Button type="button" variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={addSlot}>
                   <Plus className="size-3" />
                   Add Slot

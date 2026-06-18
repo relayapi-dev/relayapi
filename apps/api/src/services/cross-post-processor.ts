@@ -16,6 +16,7 @@ import { and, eq, isNull, lte } from "drizzle-orm";
 import type { Env } from "../types";
 import { getPublisher } from "../publishers";
 import type { EngagementAccount } from "../publishers/types";
+import type { Platform } from "../schemas/common";
 import { refreshTokenIfNeeded } from "./token-refresh";
 import { dispatchWebhookEvent } from "./webhook-delivery";
 
@@ -129,7 +130,7 @@ export async function processCrossPostActions(env: Env): Promise<void> {
 			}
 
 			const accessToken = await refreshTokenIfNeeded(env, targetAccount);
-			const publisher = getPublisher(sourceTarget.platform as any);
+			const publisher = getPublisher(sourceTarget.platform as Platform);
 			if (!publisher) {
 				await markFailed(db, action.id, `No publisher for platform ${sourceTarget.platform}`);
 				continue;

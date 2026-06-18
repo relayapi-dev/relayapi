@@ -15,13 +15,13 @@ export function createMockStripe(overrides?: Record<string, unknown>) {
 		},
 		subscriptions: {
 			retrieve: async (_id: string) => createMockSubscription(),
-			list: async (_params?: unknown) => ({ data: [] as any[] }),
+			list: async (_params?: unknown) => ({ data: [] as unknown[] }),
 			update: async (_id: string, _params?: unknown) =>
 				createMockSubscription(),
 			cancel: async (_id: string) => createMockSubscription(),
 		},
 		invoices: {
-			list: async (_params?: unknown) => ({ data: [] as any[] }),
+			list: async (_params?: unknown) => ({ data: [] as unknown[] }),
 		},
 		invoiceItems: {
 			create: async (_params?: unknown) => ({ id: "ii_mock" }),

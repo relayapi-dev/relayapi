@@ -292,9 +292,10 @@ describe("resumeWaitingRunOnInteractive", () => {
 		let run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.waitingFor).toBe("input");
-		expect(run!.currentNodeKey).toBe("ask");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("waiting");
+		expect(run.waitingFor).toBe("input");
+		expect(run.currentNodeKey).toBe("ask");
 		expect(sendCalls.length).toBe(1);
 
 		const outcome = await resumeWaitingRunOnInteractive(db, runId, "yes", {
@@ -306,9 +307,10 @@ describe("resumeWaitingRunOnInteractive", () => {
 		run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		expect(run!.currentNodeKey).toBe("yes_end");
-		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("completed");
+		expect(run.currentNodeKey).toBe("yes_end");
+		const ctxJson = (run.context as Record<string, unknown>) ?? {};
 		expect(ctxJson.last_input_value).toBe("yes");
 		expect(ctxJson.last_interactive_port).toBe("button.yes");
 	}, 30_000);
@@ -334,7 +336,8 @@ describe("resumeWaitingRunOnInteractive", () => {
 		let run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("waiting");
 
 		const outcome = await resumeWaitingRunOnInteractive(
 			db,
@@ -347,9 +350,10 @@ describe("resumeWaitingRunOnInteractive", () => {
 		run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		expect(run!.currentNodeKey).toBe("support_end");
-		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("completed");
+		expect(run.currentNodeKey).toBe("support_end");
+		const ctxJson = (run.context as Record<string, unknown>) ?? {};
 		expect(ctxJson.last_interactive_port).toBe("quick_reply.topic_support");
 	}, 30_000);
 
@@ -384,8 +388,9 @@ describe("resumeWaitingRunOnInteractive", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.currentNodeKey).toBe("ask");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("waiting");
+		expect(run.currentNodeKey).toBe("ask");
 	}, 30_000);
 
 	it("returns race when the run is no longer waiting", async () => {
@@ -474,7 +479,8 @@ describe("resumeWaitingRunOnInteractive", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		expect(run!.currentPortKey).toBe("button.maybe");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("completed");
+		expect(run.currentPortKey).toBe("button.maybe");
 	}, 30_000);
 });

@@ -67,10 +67,14 @@ export function ButtonEditor({
 			</div>
 
 			<div>
-				<label className="mb-1 block text-[10px] font-medium text-[#64748b]">
+				<label
+					htmlFor={`button-label-${button.id}`}
+					className="mb-1 block text-[10px] font-medium text-[#64748b]"
+				>
 					Label
 				</label>
 				<input
+					id={`button-label-${button.id}`}
 					type="text"
 					value={button.label}
 					onChange={(e) =>
@@ -86,10 +90,14 @@ export function ButtonEditor({
 			</div>
 
 			<div>
-				<label className="mb-1 block text-[10px] font-medium text-[#64748b]">
+				<label
+					htmlFor={`button-type-${button.id}`}
+					className="mb-1 block text-[10px] font-medium text-[#64748b]"
+				>
 					Type
 				</label>
 				<select
+					id={`button-type-${button.id}`}
 					value={button.type}
 					onChange={(e) =>
 						onChange({
@@ -118,10 +126,14 @@ export function ButtonEditor({
 
 			{button.type === "url" ? (
 				<div>
-					<label className="mb-1 block text-[10px] font-medium text-[#64748b]">
+					<label
+						htmlFor={`button-url-${button.id}`}
+						className="mb-1 block text-[10px] font-medium text-[#64748b]"
+					>
 						URL
 					</label>
 					<input
+						id={`button-url-${button.id}`}
 						type="url"
 						value={button.url ?? ""}
 						onChange={(e) => onChange({ ...button, url: e.target.value })}
@@ -133,10 +145,14 @@ export function ButtonEditor({
 
 			{button.type === "call" ? (
 				<div>
-					<label className="mb-1 block text-[10px] font-medium text-[#64748b]">
+					<label
+						htmlFor={`button-phone-${button.id}`}
+						className="mb-1 block text-[10px] font-medium text-[#64748b]"
+					>
 						Phone number
 					</label>
 					<input
+						id={`button-phone-${button.id}`}
 						type="tel"
 						value={button.phone ?? ""}
 						onChange={(e) => onChange({ ...button, phone: e.target.value })}

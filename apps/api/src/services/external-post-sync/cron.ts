@@ -163,7 +163,9 @@ async function enqueueMetricsRefresh(
 			byAccount.set(post.socialAccountId, data);
 		}
 		totalStale += page.length;
-		cursorId = page[page.length - 1]!.id;
+		const lastRow = page[page.length - 1];
+		if (!lastRow) break;
+		cursorId = lastRow.id;
 		if (page.length < METRICS_PAGE_SIZE) break;
 	}
 

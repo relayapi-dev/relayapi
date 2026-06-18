@@ -2,7 +2,7 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	broadcasts,
 	broadcastRecipients,
-	createDb,
+	type createDb,
 	socialAccounts,
 	whatsappBroadcasts,
 	whatsappBroadcastRecipients,
@@ -776,13 +776,15 @@ app.openapi(bulkSend, async (c) => {
 		})
 		.returning();
 
+	if (!broadcast) throw new Error("Failed to create broadcast");
+
 	// Bulk insert recipients (onConflictDoNothing dedups repeated phones within
 	// the same broadcast); recipientCount reflects rows actually added.
 	const insertResult = await db
 		.insert(broadcastRecipients)
 		.values(
 			body.recipients.map((recipient) => ({
-				broadcastId: broadcast!.id,
+				broadcastId: broadcast.id,
 				contactIdentifier: recipient.phone,
 			})),
 		)
@@ -792,10 +794,11 @@ app.openapi(bulkSend, async (c) => {
 	const [updated] = await db
 		.update(broadcasts)
 		.set({ recipientCount: insertResult.length, updatedAt: new Date() })
-		.where(eq(broadcasts.id, broadcast!.id))
+		.where(eq(broadcasts.id, broadcast.id))
 		.returning();
 
-	const b = updated!;
+	if (!updated) throw new Error("Failed to update broadcast");
+	const b = updated;
 	return c.json(
 		{
 			id: b.id,
@@ -879,7 +882,7 @@ app.openapi(listBroadcasts, async (c) => {
 				scheduled_at: b.scheduledAt?.toISOString() ?? null,
 				created_at: b.createdAt.toISOString(),
 			})),
-			next_cursor: hasMore ? page[page.length - 1]!.id : null,
+			next_cursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
 			has_more: hasMore,
 		},
 		200,
@@ -906,11 +909,13 @@ app.openapi(createBroadcast, async (c) => {
 		})
 		.returning();
 
+	if (!broadcast) throw new Error("Failed to create broadcast");
+
 	// Insert recipients
 	if (body.recipients.length > 0) {
 		await db.insert(whatsappBroadcastRecipients).values(
 			body.recipients.map((r) => ({
-				broadcastId: broadcast!.id,
+				broadcastId: broadcast.id,
 				phone: r.phone,
 				variables: r.variables ?? null,
 			})),
@@ -919,15 +924,15 @@ app.openapi(createBroadcast, async (c) => {
 
 	return c.json(
 		{
-			id: broadcast!.id,
-			name: broadcast!.name,
-			status: broadcast!.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
-			template: broadcast!.templateName,
-			recipient_count: broadcast!.recipientCount,
-			sent: broadcast!.sentCount,
-			failed: broadcast!.failedCount,
-			scheduled_at: broadcast!.scheduledAt?.toISOString() ?? null,
-			created_at: broadcast!.createdAt.toISOString(),
+			id: broadcast.id,
+			name: broadcast.name,
+			status: broadcast.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
+			template: broadcast.templateName,
+			recipient_count: broadcast.recipientCount,
+			sent: broadcast.sentCount,
+			failed: broadcast.failedCount,
+			scheduled_at: broadcast.scheduledAt?.toISOString() ?? null,
+			created_at: broadcast.createdAt.toISOString(),
 		},
 		201,
 	);
@@ -1040,17 +1045,18 @@ app.openapi(sendBroadcast, async (c) => {
 		.where(eq(whatsappBroadcasts.id, broadcast_id))
 		.returning();
 
+	if (!updated) throw new Error("Failed to update broadcast");
 	return c.json(
 		{
-			id: updated!.id,
-			name: updated!.name,
-			status: updated!.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
-			template: updated!.templateName,
-			recipient_count: updated!.recipientCount,
-			sent: updated!.sentCount,
-			failed: updated!.failedCount,
-			scheduled_at: updated!.scheduledAt?.toISOString() ?? null,
-			created_at: updated!.createdAt.toISOString(),
+			id: updated.id,
+			name: updated.name,
+			status: updated.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
+			template: updated.templateName,
+			recipient_count: updated.recipientCount,
+			sent: updated.sentCount,
+			failed: updated.failedCount,
+			scheduled_at: updated.scheduledAt?.toISOString() ?? null,
+			created_at: updated.createdAt.toISOString(),
 		},
 		200,
 	);
@@ -1092,17 +1098,18 @@ app.openapi(scheduleBroadcast, async (c) => {
 		.where(eq(whatsappBroadcasts.id, broadcast_id))
 		.returning();
 
+	if (!updated) throw new Error("Failed to update broadcast");
 	return c.json(
 		{
-			id: updated!.id,
-			name: updated!.name,
-			status: updated!.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
-			template: updated!.templateName,
-			recipient_count: updated!.recipientCount,
-			sent: updated!.sentCount,
-			failed: updated!.failedCount,
-			scheduled_at: updated!.scheduledAt?.toISOString() ?? null,
-			created_at: updated!.createdAt.toISOString(),
+			id: updated.id,
+			name: updated.name,
+			status: updated.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
+			template: updated.templateName,
+			recipient_count: updated.recipientCount,
+			sent: updated.sentCount,
+			failed: updated.failedCount,
+			scheduled_at: updated.scheduledAt?.toISOString() ?? null,
+			created_at: updated.createdAt.toISOString(),
 		},
 		200,
 	);

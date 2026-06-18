@@ -1,8 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	createDb,
 	customFieldDefinitions,
-	customFieldValues,
 } from "@relayapi/db";
 import { and, eq, desc, sql } from "drizzle-orm";
 import { ErrorResponse } from "../schemas/common";
@@ -243,7 +241,7 @@ app.openapi(listFields, async (c) => {
 	return c.json(
 		{
 			data,
-			next_cursor: hasMore ? data[data.length - 1]!.id : null,
+			next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
 			has_more: hasMore,
 		},
 		200,

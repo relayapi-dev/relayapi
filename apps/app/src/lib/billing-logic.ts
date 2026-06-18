@@ -37,34 +37,78 @@ export interface InvoiceData {
 	createdAt: string;
 }
 
+export interface StripeSubscriptionItem {
+	current_period_start: number;
+	current_period_end: number;
+}
+
+export interface StripeSubscription {
+	id: string;
+	status: string;
+	cancel_at_period_end: boolean;
+	items?: { data?: StripeSubscriptionItem[] };
+}
+
+export interface StripeInvoice {
+	id: string;
+	status: string | null;
+	period_start: number;
+	period_end: number;
+	amount_due: number;
+	hosted_invoice_url?: string | null;
+	status_transitions?: { paid_at?: number | null };
+	created: number;
+}
+
 export interface StripeLike {
 	subscriptions: {
-		retrieve: (id: string) => Promise<any>;
-		list: (params: any) => Promise<{ data: any[] }>;
+		retrieve: (id: string) => Promise<StripeSubscription>;
+		list: (params: Record<string, unknown>) => Promise<{
+			data: StripeSubscription[];
+		}>;
 	};
 	invoices: {
-		list: (params: any) => Promise<{ data: any[] }>;
+		list: (params: Record<string, unknown>) => Promise<{
+			data: StripeInvoice[];
+		}>;
 	};
 	customers: {
-		create: (params: any) => Promise<{ id: string }>;
+		create: (params: Record<string, unknown>) => Promise<{ id: string }>;
 	};
 	checkout: {
 		sessions: {
-			create: (params: any) => Promise<{ url: string }>;
+			create: (params: Record<string, unknown>) => Promise<{ url: string }>;
 		};
 	};
 }
 
 export interface DbLike {
-	select: (fields?: any) => any;
-	update: (table: any) => any;
-	insert: (table: any) => any;
+	select: (fields?: unknown) => DbQuery;
+	update: (table: unknown) => DbQuery;
+	insert: (table: unknown) => DbQuery;
+}
+
+// Loose fluent query builder shape: each step returns a thenable/awaitable
+// builder, matching Drizzle's chained API closely enough for these helpers.
+// `then` makes the builder awaitable; awaiting resolves to the row array.
+export interface DbQuery {
+	from: (table: unknown) => DbQuery;
+	where: (cond: unknown) => DbQuery;
+	set: (values: Record<string, unknown>) => DbQuery;
+	then: (resolve: (rows: unknown[]) => void) => void;
 }
 
 export interface KVLike {
-	get: (key: string, opts?: any) => Promise<any>;
-	put: (key: string, value: string, opts?: any) => Promise<void>;
+	get: (key: string, opts?: unknown) => Promise<unknown>;
+	put: (key: string, value: string, opts?: unknown) => Promise<void>;
 }
+
+// Drizzle tables expose their columns as dynamic properties (e.g.
+// `table.organizationId`), so a string-indexed record is the closest portable
+// shape without depending on the concrete schema types here.
+export type TableLike = Record<string, unknown>;
+
+export type EqFn = (col: unknown, val: unknown) => unknown;
 
 // ── Status mapping ──
 
@@ -86,8 +130,8 @@ export async function getSubscriptionStatus(deps: {
 	stripe: StripeLike;
 	orgId: string;
 	sub: SubscriptionRow | null;
-	orgSubsTable: any;
-	eqFn: (col: any, val: any) => any;
+	orgSubsTable: TableLike;
+	eqFn: EqFn;
 }): Promise<{ subscription: SubscriptionData | null; invoices: InvoiceData[] }> {
 	const { db, stripe, orgId, sub, orgSubsTable, eqFn } = deps;
 
@@ -123,7 +167,7 @@ export async function getSubscriptionStatus(deps: {
 			: null;
 
 		// Update DB if drifted
-		const dbUpdates: Record<string, any> = {};
+		const dbUpdates: Record<string, unknown> = {};
 		if (sub.status !== newStatus) dbUpdates.status = newStatus;
 		if (sub.cancelAtPeriodEnd !== stripeSub.cancel_at_period_end)
 			dbUpdates.cancelAtPeriodEnd = stripeSub.cancel_at_period_end;
@@ -175,7 +219,7 @@ export async function getSubscriptionStatus(deps: {
 		limit: 12,
 	});
 
-	invoices = stripeInvoices.data.map((inv: any) => ({
+	invoices = stripeInvoices.data.map((inv) => ({
 		id: inv.id,
 		status:
 			inv.status === "paid"
@@ -209,9 +253,9 @@ export async function syncSubscription(deps: {
 	kv: KVLike;
 	orgId: string;
 	sub: SubscriptionRow;
-	orgSubsTable: any;
-	apikeyTable: any;
-	eqFn: (col: any, val: any) => any;
+	orgSubsTable: TableLike;
+	apikeyTable: TableLike;
+	eqFn: EqFn;
 }): Promise<{ plan: "free" | "pro" }> {
 	const { db, stripe, kv, orgId, sub, orgSubsTable, apikeyTable, eqFn } = deps;
 
@@ -262,8 +306,13 @@ export async function syncSubscription(deps: {
 			const callsIncluded = isPro ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded;
 			await syncKeysToKV(db, kv, orgId, plan, callsIncluded, apikeyTable, eqFn);
 			return { plan: plan as "free" | "pro" };
-		} catch (err: any) {
-			if (err?.statusCode === 404) {
+		} catch (err) {
+			if (
+				err &&
+				typeof err === "object" &&
+				"statusCode" in err &&
+				(err as { statusCode?: number }).statusCode === 404
+			) {
 				await db
 					.update(orgSubsTable)
 					.set({
@@ -325,18 +374,21 @@ async function syncKeysToKV(
 	orgId: string,
 	plan: string,
 	callsIncluded: number,
-	apikeyTable: any,
-	eqFn: (col: any, val: any) => any,
+	apikeyTable: TableLike,
+	eqFn: EqFn,
 ) {
-	const orgKeys = await db
+	const orgKeys = (await db
 		.select({ key: apikeyTable.key })
 		.from(apikeyTable)
-		.where(eqFn(apikeyTable.organizationId, orgId));
+		.where(eqFn(apikeyTable.organizationId, orgId))) as Array<{
+		key: string;
+	}>;
 
 	for (const k of orgKeys) {
 		const raw = await kv.get(`apikey:${k.key}`);
 		if (raw) {
-			const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+			const data: Record<string, unknown> =
+				typeof raw === "string" ? JSON.parse(raw) : (raw as Record<string, unknown>);
 			data.plan = plan;
 			data.calls_included = callsIncluded;
 			// Mirror the API's apikey:* KV TTL convention (24h) so a rewritten auth

@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useMemo, memo } from "react";
+import { useRef, useState, useEffect, memo } from "react";
 import { motion, AnimatePresence, useInView } from "motion/react";
 import { Check, Loader2, Link2 } from "lucide-react";
 import { cn } from "../../../lib/utils";
@@ -158,7 +158,7 @@ const AccountRow = memo(function AccountRow({
                         </div>
                     )}
                     {status === "idle" && (
-                        <button className={cn(
+                        <button type="button" className={cn(
                             "rounded-full px-3 py-1 text-xs font-medium",
                             "bg-white/[0.06] border border-white/[0.08] text-muted-foreground",
                             "hover:bg-white/[0.1] transition-colors"

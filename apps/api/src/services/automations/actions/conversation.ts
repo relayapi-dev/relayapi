@@ -4,9 +4,10 @@
 // live in `inbox_conversations`. These actions are no-ops when the run has no
 // conversationId set.
 
-import { inboxConversations, member } from "@relayapi/db";
+import { type Database, inboxConversations, member } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
+import type { RunContext } from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type AssignConversationAction = Extract<
@@ -25,7 +26,7 @@ type ConversationSnoozeAction = Extract<
 >;
 
 async function resolveRoundRobinUserId(
-	db: any,
+	db: Database,
 	organizationId: string,
 ): Promise<string | null> {
 	// v1 "round robin": pick the first user in the organization by member row
@@ -37,7 +38,9 @@ async function resolveRoundRobinUserId(
 	return row?.userId ?? null;
 }
 
-async function requireConversationId(ctx: any): Promise<string | null> {
+async function requireConversationId(
+	ctx: RunContext,
+): Promise<string | null> {
 	return ctx.conversationId ?? null;
 }
 

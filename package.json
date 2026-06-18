@@ -99,7 +99,9 @@
 		"db:generate": "cd packages/db && bunx drizzle-kit generate",
 		"db:studio": "cd packages/db && bunx drizzle-kit studio",
 		"db:migrate": "cd packages/db && bunx drizzle-kit migrate",
-		"deps:upgrade": "bun run scripts/upgrade-catalog.ts"
+		"deps:upgrade": "bun run scripts/upgrade-catalog.ts",
+		"lint": "biome lint .",
+		"lint:fix": "biome lint --write ."
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.12"

@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import type { Command } from "commander";
 import * as prompts from "@clack/prompts";
 import { createClient } from "../client.js";
 import {
@@ -14,7 +14,7 @@ export function registerPostCommands(program: Command): void {
 	const posts = program
 		.command("posts")
 		.description("Manage posts")
-		.action(function () {
+		.action(() => {
 			posts.help();
 		});
 
@@ -82,11 +82,14 @@ export function registerPostCommands(program: Command): void {
 			}
 
 			await withErrorHandler(async () => {
+				if (!targets || !schedule) {
+					throw new Error("Targets and schedule are required");
+				}
 				const client = createClient();
 				const result = await client.posts.create({
 					content,
-					targets: targets!,
-					scheduled_at: schedule!,
+					targets,
+					scheduled_at: schedule,
 					media: opts.media
 						? (opts.media as string)
 								.split(",")

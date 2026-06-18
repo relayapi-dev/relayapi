@@ -875,13 +875,14 @@ function StatusBadge({
 }: {
 	status: "draft" | "active" | "paused" | "archived";
 }) {
+	const draft = { label: "Draft", classes: "text-neutral-500" };
 	const map: Record<string, { label: string; classes: string }> = {
-		draft: { label: "Draft", classes: "text-neutral-500" },
+		draft,
 		active: { label: "Active", classes: "text-emerald-600" },
 		paused: { label: "Paused", classes: "text-amber-500" },
 		archived: { label: "Archived", classes: "text-neutral-500" },
 	};
-	const cfg = map[status] ?? map.draft!;
+	const cfg = map[status] ?? draft;
 	return (
 		<span
 			className={cn("inline-flex items-center gap-1 font-medium", cfg.classes)}

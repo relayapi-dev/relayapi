@@ -53,7 +53,7 @@ const db = createDb(CONN);
 let dbAvailable = false;
 let orgId = "";
 let workspaceId = "";
-let socialAccountId = "";
+let _socialAccountId = "";
 let contactId = "";
 let fieldDefinitionId = "";
 
@@ -82,7 +82,7 @@ async function seedFixture() {
 		})
 		.returning();
 	if (!sa) throw new Error("social account insert failed");
-	socialAccountId = sa.id;
+	_socialAccountId = sa.id;
 
 	// Contact is pre-seeded with the `lead` tag so we can verify the
 	// hydration preserves existing tags AND that tag_add appends rather
@@ -243,8 +243,9 @@ describe("automation integration — ctx.db wiring + context hydration", () => {
 			where: eq(automationRuns.id, runId),
 		});
 		expect(run).toBeTruthy();
-		expect(run!.status).toBe("completed");
-		expect(run!.exitReason).toBe("completed");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("completed");
+		expect(run.exitReason).toBe("completed");
 
 		// 2. step_runs captures action_group + end.
 		const steps = await db
@@ -261,8 +262,9 @@ describe("automation integration — ctx.db wiring + context hydration", () => {
 			where: eq(contacts.id, contactId),
 		});
 		expect(refreshedContact).toBeTruthy();
-		expect(refreshedContact!.tags).toContain("lead");
-		expect(refreshedContact!.tags).toContain("qualified");
+		if (!refreshedContact) throw new Error("expected refreshedContact to exist");
+		expect(refreshedContact.tags).toContain("lead");
+		expect(refreshedContact.tags).toContain("qualified");
 
 		// 4. field_set updated the existing custom field value. Again, would
 		//    have blown up if ctx.db weren't populated.
@@ -273,10 +275,12 @@ describe("automation integration — ctx.db wiring + context hydration", () => {
 			),
 		});
 		expect(fieldValue).toBeTruthy();
-		expect(fieldValue!.value).toBe("Alice Updated");
+		if (!fieldValue) throw new Error("expected fieldValue to exist");
+		expect(fieldValue.value).toBe("Alice Updated");
 
 		// 5. The run's JSONB context was hydrated at enrollment.
-		const ctxJson = (run!.context ?? {}) as Record<string, any>;
+		// biome-ignore lint/suspicious/noExplicitAny: test reads dynamic JSONB context fields
+		const ctxJson = (run.context ?? {}) as Record<string, any>;
 		expect(ctxJson.contact).toBeTruthy();
 		expect(ctxJson.contact.id).toBe(contactId);
 		expect(Array.isArray(ctxJson.tags)).toBe(true);

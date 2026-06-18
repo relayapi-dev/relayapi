@@ -68,7 +68,9 @@ export function InputEditor({
 
 	const patchChoice = (idx: number, p: Partial<Choice>) => {
 		const next = choices.slice();
-		next[idx] = { ...next[idx]!, ...p };
+		const current = next[idx];
+		if (!current) return;
+		next[idx] = { ...current, ...p };
 		patch({ choices: next });
 	};
 

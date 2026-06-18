@@ -23,18 +23,18 @@ export function saveConfig(config: CLIConfig): void {
 	if (!existsSync(CONFIG_DIR)) {
 		mkdirSync(CONFIG_DIR, { recursive: true });
 	}
-	writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
+	writeFileSync(CONFIG_FILE, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 export function resolveApiKey(): string | undefined {
-	return process.env["RELAYAPI_API_KEY"] ?? loadConfig().api_key;
+	return process.env.RELAYAPI_API_KEY ?? loadConfig().api_key;
 }
 
 export function resolveBaseUrl(): string | undefined {
-	return process.env["RELAYAPI_API_URL"] ?? loadConfig().base_url;
+	return process.env.RELAYAPI_API_URL ?? loadConfig().base_url;
 }
 
 export function maskKey(key: string): string {
-	if (key.length <= 12) return key.slice(0, 4) + "****";
-	return key.slice(0, 10) + "****" + key.slice(-4);
+	if (key.length <= 12) return `${key.slice(0, 4)}****`;
+	return `${key.slice(0, 10)}****${key.slice(-4)}`;
 }

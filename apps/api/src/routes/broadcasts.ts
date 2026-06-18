@@ -1,13 +1,13 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import {
-	createDb,
+	type createDb,
 	socialAccounts,
 	broadcasts,
 	broadcastRecipients,
 	contacts,
 	contactChannels,
 } from "@relayapi/db";
-import { and, eq, desc, inArray, sql, lte, count } from "drizzle-orm";
+import { and, eq, desc, inArray, sql, } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
 import { ErrorResponse } from "../schemas/common";
 import {
@@ -20,7 +20,6 @@ import {
 	CreateBroadcastBody,
 	RecipientListQuery,
 	RecipientListResponse,
-	RecipientResponse,
 	ScheduleBroadcastBody,
 	UpdateBroadcastBody,
 } from "../schemas/broadcasts";
@@ -368,7 +367,8 @@ app.openapi(createBroadcast, async (c) => {
 		})
 		.returning();
 
-	return c.json(serializeBroadcast(row!), 201);
+	if (!row) throw new Error("Failed to create broadcast");
+	return c.json(serializeBroadcast(row), 201);
 });
 
 app.openapi(listBroadcasts, async (c) => {
@@ -412,7 +412,7 @@ app.openapi(listBroadcasts, async (c) => {
 
 	return c.json({
 		data,
-		next_cursor: hasMore ? data[data.length - 1]!.id : null,
+		next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
 		has_more: hasMore,
 	});
 });
@@ -487,7 +487,8 @@ app.openapi(updateBroadcast, async (c) => {
 		.where(eq(broadcasts.id, id))
 		.returning();
 
-	return c.json(serializeBroadcast(updated!));
+	if (!updated) throw new Error("Failed to update broadcast");
+	return c.json(serializeBroadcast(updated));
 });
 
 app.openapi(deleteBroadcast, async (c) => {
@@ -703,7 +704,7 @@ app.openapi(listRecipients, async (c) => {
 
 	return c.json({
 		data,
-		next_cursor: hasMore ? data[data.length - 1]!.id : null,
+		next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
 		has_more: hasMore,
 	});
 });
@@ -776,7 +777,8 @@ app.openapi(sendBroadcastRoute, async (c) => {
 		.where(eq(broadcasts.id, id))
 		.returning();
 
-	return c.json(serializeBroadcast(updated!), 202);
+	if (!updated) throw new Error("Failed to update broadcast");
+	return c.json(serializeBroadcast(updated), 202);
 });
 
 // @ts-expect-error — Hono strict return types
@@ -834,7 +836,8 @@ app.openapi(scheduleBroadcastRoute, async (c) => {
 		.where(eq(broadcasts.id, id))
 		.returning();
 
-	return c.json(serializeBroadcast(updated!));
+	if (!updated) throw new Error("Failed to update broadcast");
+	return c.json(serializeBroadcast(updated));
 });
 
 // @ts-expect-error — Hono strict return types
@@ -878,7 +881,8 @@ app.openapi(cancelBroadcast, async (c) => {
 		.where(eq(broadcasts.id, id))
 		.returning();
 
-	return c.json(serializeBroadcast(updated!));
+	if (!updated) throw new Error("Failed to update broadcast");
+	return c.json(serializeBroadcast(updated));
 });
 
 export default app;

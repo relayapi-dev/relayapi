@@ -43,8 +43,7 @@ export function useSilentRefresh<T>(opts: {
 
       setData((prev) => {
         const existingMap = new Map<string, { item: T; index: number }>();
-        for (let i = 0; i < prev.length; i++) {
-          const item = prev[i]!;
+        for (const [i, item] of prev.entries()) {
           existingMap.set(getId(item), { item, index: i });
         }
 
@@ -67,7 +66,8 @@ export function useSilentRefresh<T>(opts: {
         const updatedPrev = prev.map((item) => {
           const id = getId(item);
           if (updatedIds.has(id)) {
-            return existingMap.get(id)!.item;
+            const updated = existingMap.get(id);
+            if (updated) return updated.item;
           }
           return item;
         });

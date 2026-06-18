@@ -13,7 +13,7 @@ import { useFilterQuery } from "@/components/dashboard/filter-context";
 import { WorkspaceGuard } from "@/components/dashboard/workspace-guard";
 
 import type { InboxComment, PostWithComments } from "@/components/dashboard/inbox/shared";
-import { stagger, fadeUp, newItemEnter, groupCommentsByThread, formatTimeAgo, platformColors } from "@/components/dashboard/inbox/shared";
+import { newItemEnter, groupCommentsByThread, formatTimeAgo, platformColors } from "@/components/dashboard/inbox/shared";
 import { Avatar } from "@/components/dashboard/inbox/avatar";
 import { AuthorAvatar, PlatformBadge, ReplyProgressBar } from "@/components/dashboard/inbox/shared-components";
 import { LikeButton, CommentActions } from "@/components/dashboard/inbox/comment-actions";
@@ -49,13 +49,13 @@ export function InboxCommentsPage({
     loadMore,
     loadingMore,
     setData: setItems,
-    refetch: refetchInbox,
-  } = usePaginatedApi<any>(
+    refetch: _refetchInbox,
+  } = usePaginatedApi<InboxComment | PostWithComments>(
     isPro ? endpoint : null,
     { query: filterQuery },
   );
 
-  const getItemId = useCallback((item: any) =>
+  const getItemId = useCallback((item: InboxComment | PostWithComments) =>
     viewMode === "by-post" ? `${item.id}-${item.account_id}` : item.id,
   [viewMode]);
 
@@ -80,15 +80,15 @@ export function InboxCommentsPage({
   }, [silentRefresh]);
 
   const handleListDelete = useCallback((commentId: string) => {
-    setItems((prev: any[]) => prev.filter((c) => c.id !== commentId));
+    setItems((prev) => prev.filter((c) => c.id !== commentId));
   }, [setItems]);
 
   const handleListHideToggle = useCallback((commentId: string, hidden: boolean) => {
-    setItems((prev: any[]) => prev.map((c) => c.id === commentId ? { ...c, hidden } : c));
+    setItems((prev) => prev.map((c) => c.id === commentId ? { ...c, hidden } : c));
   }, [setItems]);
 
   const handleListReplyAdded = useCallback((newComment: InboxComment) => {
-    setItems((prev: any[]) => [newComment, ...prev]);
+    setItems((prev) => [newComment, ...prev]);
   }, [setItems]);
 
   if (!isPro && usage !== null) {
@@ -104,7 +104,10 @@ export function InboxCommentsPage({
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
             Upgrade to the Pro plan to access your unified social media inbox with comments, messages, and reviews.
           </p>
-          <button className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+          <button
+            type="button"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
             Upgrade to Pro
           </button>
         </div>
@@ -121,6 +124,7 @@ export function InboxCommentsPage({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
+            type="button"
             onClick={() => switchView("list")}
             className={cn(
               "inline-flex items-center gap-1.5 text-xs font-medium h-7 rounded-md transition-colors",
@@ -132,6 +136,7 @@ export function InboxCommentsPage({
             {viewMode === "list" && "List"}
           </button>
           <button
+            type="button"
             onClick={() => switchView("by-post")}
             className={cn(
               "inline-flex items-center gap-1.5 text-xs font-medium h-7 rounded-md transition-colors",
@@ -306,7 +311,12 @@ function CommentsListView({
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                {/* biome-ignore lint/a11y/noStaticElementInteractions: wrapper only stops click propagation to the parent card; it is not itself an interactive widget and contains nested buttons */}
+                <div
+                  className="flex items-center gap-1 shrink-0"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
                   <LikeButton comment={c} />
                   <CommentActions
                     comment={c}
@@ -337,7 +347,12 @@ function CommentsListView({
                           </div>
                           <p className="text-xs mt-0.5 text-foreground/80">{r.text}</p>
                         </div>
-                        <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        {/* biome-ignore lint/a11y/noStaticElementInteractions: wrapper only stops click propagation to the parent card; it is not itself an interactive widget and contains nested buttons */}
+                        <div
+                          className="flex items-center gap-1 shrink-0"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
                           <LikeButton comment={r} />
                           <CommentActions
                             comment={r}
@@ -357,7 +372,7 @@ function CommentsListView({
 
               {isExpanded && (() => {
                 const target = replyTarget || c;
-                const targetId = expandedCommentId!;
+                const targetId = expandedCommentId ?? c.id;
                 return (
                   <InlineReplyBox
                     comment={target}
@@ -565,6 +580,7 @@ function ByPostView({
         {selectedPostKey && selectedPost ? (
           <div className="space-y-3">
             <button
+              type="button"
               onClick={() => setSelectedPostKey(null)}
               className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >

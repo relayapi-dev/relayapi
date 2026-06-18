@@ -17,7 +17,7 @@ export const GET: APIRoute = async (context) => {
   }
 
   const db = context.locals.db;
-  const orgId = (org as any).id as string;
+  const orgId = org.id as string;
 
   const [sub] = await db
     .select()
@@ -54,13 +54,17 @@ export const GET: APIRoute = async (context) => {
 
       // Retrieve subscription directly by ID first (works for any status including past_due),
       // fall back to listing by customer only if no subscription ID is stored.
-      let stripeSub: any = null;
+      let stripeSub: Stripe.Subscription | null = null;
 
       const [directSub, invoicesResult] = await Promise.all([
         sub.stripeSubscriptionId
-          ? stripe.subscriptions.retrieve(sub.stripeSubscriptionId).catch((err: any) => {
+          ? stripe.subscriptions.retrieve(sub.stripeSubscriptionId).catch((err: unknown) => {
               // 404 = subscription deleted in Stripe
-              if (err?.statusCode === 404) return null;
+              const statusCode =
+                err && typeof err === "object" && "statusCode" in err
+                  ? (err as { statusCode?: number }).statusCode
+                  : undefined;
+              if (statusCode === 404) return null;
               throw err;
             })
           : stripe.subscriptions.list({
@@ -99,7 +103,8 @@ export const GET: APIRoute = async (context) => {
         const isCancelling = stripeSub.cancel_at_period_end || !!stripeSub.cancel_at;
 
         // Update DB if state drifted
-        const dbUpdates: Record<string, any> = {};
+        const dbUpdates: Partial<typeof organizationSubscriptions.$inferInsert> =
+          {};
         if (sub.status !== newStatus) dbUpdates.status = newStatus;
         if (sub.cancelAtPeriodEnd !== isCancelling)
           dbUpdates.cancelAtPeriodEnd = isCancelling;

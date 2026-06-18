@@ -1,5 +1,4 @@
 import { z } from "@hono/zod-openapi";
-import { PlatformEnum } from "./common";
 
 export const PlatformAnalyticsQuery = z.object({
 	account_id: z.string().describe("Social account ID"),

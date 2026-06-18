@@ -61,7 +61,7 @@ export interface EditPostData {
 	timezone: string | null;
 	media: Array<{ url: string; type?: string }> | null;
 	targets: Record<string, { platform: string; accounts?: Array<{ id: string }> }>;
-	target_options: Record<string, Record<string, any>> | null;
+	target_options: Record<string, Record<string, unknown>> | null;
 }
 
 interface ConvertFromIdea {
@@ -73,6 +73,7 @@ interface ConvertFromIdea {
 interface NewPostDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
+	// biome-ignore lint/suspicious/noExplicitAny: callers (e.g. posts-page) consume the raw API response shape directly; narrowing here breaks their inferred objects
 	onCreated: (post?: any) => void;
 	initialDate?: string;
 	initialPublishMode?: PublishMode;
@@ -142,7 +143,7 @@ export function NewPostDialog({
 
 	// Platform options
 	const [targetOptions, setTargetOptions] = useState<
-		Record<string, Record<string, any>>
+		Record<string, Record<string, unknown>>
 	>({});
 
 	// Active tab
@@ -190,7 +191,7 @@ export function NewPostDialog({
 		: templates;
 
 	const applyTemplate = (tmpl: { content: string }) => {
-		if (sharedContent && sharedContent.trim()) {
+		if (sharedContent?.trim()) {
 			if (!confirm("Replace current content with template?")) return;
 		}
 		setSharedContent(tmpl.content);
@@ -239,7 +240,7 @@ export function NewPostDialog({
 
 			// Restore target_options, channel overrides, and unlinked fields
 			if (editPostData.target_options) {
-				const platformOpts: Record<string, Record<string, any>> = {};
+				const platformOpts: Record<string, Record<string, unknown>> = {};
 				const overrides: Record<string, { content?: string; media?: Array<{ url: string; type?: string; previewUrl?: string }> }> = {};
 				const unlinked: Record<string, Set<string>> = {};
 
@@ -248,12 +249,15 @@ export function NewPostDialog({
 						// Per-account overrides
 						const { content, media, ...rest } = opts;
 						if (content !== undefined) {
-							overrides[key] = { ...overrides[key], content };
+							overrides[key] = { ...overrides[key], content: content as string };
 							unlinked[key] = unlinked[key] ?? new Set();
 							unlinked[key].add("content");
 						}
 						if (media !== undefined) {
-							overrides[key] = { ...overrides[key], media };
+							overrides[key] = {
+								...overrides[key],
+								media: media as Array<{ url: string; type?: string; previewUrl?: string }>,
+							};
 							unlinked[key] = unlinked[key] ?? new Set();
 							unlinked[key].add("media");
 						}
@@ -381,7 +385,7 @@ export function NewPostDialog({
 	);
 
 	const getOption = useCallback(
-		(platform: string, key: string, fallback: any = "") => {
+		(platform: string, key: string, fallback: unknown = ""): unknown => {
 			return targetOptions[platform]?.[key] ?? fallback;
 		},
 		[targetOptions],

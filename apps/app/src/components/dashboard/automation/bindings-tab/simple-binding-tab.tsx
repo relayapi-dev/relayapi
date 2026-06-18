@@ -354,9 +354,9 @@ export function SimpleAutomationBindingTab({
 					</div>
 
 					<div>
-						<label className="text-[11px] font-medium text-muted-foreground">
+						<span className="block text-[11px] font-medium text-muted-foreground">
 							Automation
-						</label>
+						</span>
 						<AutomationPicker
 							channel={channel}
 							value={binding.automation_id}
@@ -429,9 +429,9 @@ export function SimpleAutomationBindingTab({
 						Not configured.
 					</p>
 					<div className="mt-3">
-						<label className="text-[11px] font-medium text-muted-foreground">
+						<span className="block text-[11px] font-medium text-muted-foreground">
 							Bind an automation
-						</label>
+						</span>
 						<AutomationPicker
 							channel={channel}
 							value={null}

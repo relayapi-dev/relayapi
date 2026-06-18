@@ -121,7 +121,7 @@ type WalkResult =
 	  };
 
 function walkNode(
-	graph: Graph,
+	_graph: Graph,
 	node: GraphNode,
 	branchChoices: Record<string, string>,
 	ctx: Record<string, unknown>,
@@ -269,8 +269,15 @@ function walkNode(
 				}
 				pick -= w;
 			}
-			// Fallback — pick last variant.
-			const last = variants[variants.length - 1]!;
+			// Fallback — pick last variant (variants is non-empty per the guard above).
+			const last = variants[variants.length - 1];
+			if (!last) {
+				return {
+					outcome: "fail",
+					exitPort: null,
+					reason: "randomizer_missing_variants",
+				};
+			}
 			const key = last.key ?? last.label ?? "1";
 			return {
 				outcome: "advance",
@@ -616,7 +623,7 @@ function pickLegacyBranchLabel(
 			| Array<Array<{ callback_data?: string; text?: string }>>
 			| undefined;
 		const firstButton = rows
-			?.flatMap((row) => row)
+			?.flat()
 			.find((button) => button.callback_data);
 		return firstButton?.callback_data ?? firstButton?.text ?? "next";
 	}

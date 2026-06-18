@@ -12,6 +12,7 @@
 import {
 	customFieldDefinitions,
 	customFieldValues,
+	type Database,
 	generateId,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
@@ -19,12 +20,13 @@ import type { Action } from "../../../schemas/automation-actions";
 import { emitInternalEvent } from "../internal-events";
 import { applyMergeTags } from "../merge-tags";
 import type { InboundEvent } from "../trigger-matcher";
+import type { RunContext } from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type FieldSetAction = Extract<Action, { type: "field_set" }>;
 type FieldClearAction = Extract<Action, { type: "field_clear" }>;
 
-function buildMergeCtx(ctx: any) {
+function buildMergeCtx(ctx: RunContext) {
 	return {
 		contact:
 			(ctx.context?.contact as Record<string, unknown> | undefined) ?? null,
@@ -33,7 +35,7 @@ function buildMergeCtx(ctx: any) {
 }
 
 function internalFieldEvent(
-	ctx: any,
+	ctx: RunContext,
 	fieldKey: string,
 	before: unknown,
 	after: unknown,
@@ -64,7 +66,7 @@ function internalFieldEvent(
 }
 
 async function resolveDefinitionId(
-	db: any,
+	db: Database,
 	organizationId: string,
 	slug: string,
 ): Promise<string | null> {

@@ -1,7 +1,7 @@
 export function CircuitLines() {
     return (
         <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
-            <svg className="absolute w-full h-full" xmlns="http://www.w3.org/2000/svg">
+            <svg className="absolute w-full h-full" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 {/* Top-right area lines */}
                 <g className="text-foreground" stroke="currentColor" fill="currentColor" opacity="0.05">
                     {/* Line 1: horizontal with right-angle turn down */}

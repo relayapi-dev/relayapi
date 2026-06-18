@@ -151,10 +151,13 @@ export function useRealtimeUpdates(
     const deferMs =
       typeof options?.defer === "number" ? options.defer : options?.defer ? 2500 : 0;
 
-    const cancelDeferredSubscribe =
-      deferMs > 0
-        ? scheduleAfterPaint(subscribeNow, deferMs)
-        : (subscribeNow(), () => {});
+    let cancelDeferredSubscribe: () => void;
+    if (deferMs > 0) {
+      cancelDeferredSubscribe = scheduleAfterPaint(subscribeNow, deferMs);
+    } else {
+      subscribeNow();
+      cancelDeferredSubscribe = () => {};
+    }
 
     return () => {
       cancelDeferredSubscribe();

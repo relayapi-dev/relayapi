@@ -6,7 +6,7 @@ export const GET: APIRoute = async (ctx) => {
   if (client instanceof Response) return client;
   try {
     const url = new URL(ctx.request.url);
-    const params: Record<string, any> = {
+    const params: Record<string, unknown> = {
       limit: Number(url.searchParams.get("limit")) || 20,
       cursor: url.searchParams.get("cursor") || undefined,
     };
@@ -14,7 +14,9 @@ export const GET: APIRoute = async (ctx) => {
     if (url.searchParams.get("platform")) params.platform = url.searchParams.get("platform");
     if (url.searchParams.get("min_rating")) params.min_rating = Number(url.searchParams.get("min_rating"));
     if (url.searchParams.get("max_rating")) params.max_rating = Number(url.searchParams.get("max_rating"));
-    const data = await client.inbox.reviews.list(params);
+    const data = await client.inbox.reviews.list(
+      params as Parameters<typeof client.inbox.reviews.list>[0],
+    );
     return Response.json(data);
   } catch (e) {
     return handleSdkError(e);

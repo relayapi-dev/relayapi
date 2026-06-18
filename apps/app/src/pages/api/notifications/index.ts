@@ -11,7 +11,7 @@ export const GET: APIRoute = async (context) => {
 		return Response.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const userId = (user as any).id as string;
+	const userId = user.id as string;
 	const db = context.locals.db;
 	const url = new URL(context.request.url);
 	const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 20, 1), 100);
@@ -35,8 +35,9 @@ export const GET: APIRoute = async (context) => {
 
 	const hasMore = rows.length > limit;
 	const data = hasMore ? rows.slice(0, limit) : rows;
-	const nextCursor = hasMore && data.length > 0
-		? data[data.length - 1]!.createdAt.toISOString()
+	const lastRow = data[data.length - 1];
+	const nextCursor = hasMore && lastRow
+		? lastRow.createdAt.toISOString()
 		: null;
 
 	return Response.json({
@@ -53,7 +54,7 @@ export const POST: APIRoute = async (context) => {
 		return Response.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const userId = (user as any).id as string;
+	const userId = user.id as string;
 	const db = context.locals.db;
 
 	await db

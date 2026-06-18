@@ -311,15 +311,15 @@ export function ContactEditDialog({
                 </div>
 
                 {/* Opted in */}
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <Checkbox checked={optedIn} onCheckedChange={(c) => setOptedIn(!!c)} />
+                <label htmlFor="contact-opted-in" className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox id="contact-opted-in" checked={optedIn} onCheckedChange={(c) => setOptedIn(!!c)} />
                   <span className="text-xs text-foreground">Opted in to communications</span>
                 </label>
 
                 {/* Channels */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs font-medium text-muted-foreground">Channels</label>
+                    <span className="text-xs font-medium text-muted-foreground">Channels</span>
                     <Button
                       type="button"
                       variant="ghost"
@@ -383,7 +383,7 @@ export function ContactEditDialog({
                   {showAddChannel && (
                     <div className="mt-2 space-y-2 rounded-md border border-border bg-accent/10 p-3">
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground">Account</label>
+                        <span className="block text-xs font-medium text-muted-foreground">Account</span>
                         <div className="mt-1">
                           <AccountSearchCombobox
                             value={newAccountId || null}

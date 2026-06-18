@@ -153,6 +153,7 @@ export function WebhooksPage({
           const tabKey = tab.toLowerCase() as typeof initialTab;
           return (
             <button
+              type="button"
               key={tab}
               onClick={() => switchTab(tabKey)}
               className={cn(
@@ -184,19 +185,24 @@ export function WebhooksPage({
               animate={{ opacity: 1, y: 0 }}
             >
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Webhook URL</label>
+                <label
+                  htmlFor="webhook-url"
+                  className="text-xs font-medium text-muted-foreground"
+                >
+                  Webhook URL
+                </label>
                 <input
+                  id="webhook-url"
                   type="url"
                   value={newUrl}
                   onChange={(e) => setNewUrl(e.target.value)}
                   placeholder="https://example.com/webhook"
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring font-mono"
-                  autoFocus
                 />
               </div>
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-muted-foreground">Events</label>
+                  <span className="text-xs font-medium text-muted-foreground">Events</span>
                   <button
                     type="button"
                     className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
@@ -217,6 +223,7 @@ export function WebhooksPage({
                       </p>
                       <div className="space-y-1">
                         {group.events.map((event) => (
+                          // biome-ignore lint/a11y/noLabelWithoutControl: label wraps the Radix Checkbox control, which Biome cannot detect
                           <label
                             key={event.value}
                             className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent/30 transition-colors cursor-pointer"
@@ -314,6 +321,7 @@ export function WebhooksPage({
                         </div>
                       </div>
                       <button
+                        type="button"
                         className="rounded-lg p-1.5 hover:bg-red-500/10 transition-colors shrink-0"
                         onClick={() => handleDelete(webhook.id)}
                         title="Delete webhook"
@@ -400,8 +408,9 @@ export function WebhooksPage({
                     i !== logs.length - 1 && "border-b border-border"
                   )}
                 >
-                  <div
-                    className="grid md:grid-cols-[1.5fr_1fr_0.8fr_0.8fr_1fr] gap-3 md:gap-4 p-4 md:py-3 items-center hover:bg-accent/30 transition-colors cursor-pointer"
+                  <button
+                    type="button"
+                    className="w-full text-left grid md:grid-cols-[1.5fr_1fr_0.8fr_0.8fr_1fr] gap-3 md:gap-4 p-4 md:py-3 items-center hover:bg-accent/30 transition-colors cursor-pointer"
                     onClick={() => setExpandedLog(expandedLog === log.id ? null : log.id)}
                   >
                     <code className="text-xs font-mono text-muted-foreground truncate">
@@ -437,7 +446,7 @@ export function WebhooksPage({
                         expandedLog === log.id && "rotate-180"
                       )} />
                     </div>
-                  </div>
+                  </button>
                   {expandedLog === log.id && (
                     <div className="px-4 pb-4 space-y-2">
                       <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Request Body</p>

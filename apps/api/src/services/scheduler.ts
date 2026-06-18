@@ -124,9 +124,11 @@ export async function processScheduledPosts(env: Env): Promise<void> {
 	await Promise.allSettled(
 		orgsWithDuePosts.map((orgId) => {
 			const orgPosts = claimedPosts.filter((p) => p.organizationId === orgId);
+			const firstPost = orgPosts[0];
+			if (!firstPost) return Promise.resolve();
 			return notifyRealtime(env, orgId, {
 				type: "post.updated",
-				post_id: orgPosts[0]!.id,
+				post_id: firstPost.id,
 				status: "publishing",
 			});
 		}),

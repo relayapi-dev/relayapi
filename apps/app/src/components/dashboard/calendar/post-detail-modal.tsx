@@ -8,7 +8,6 @@ import {
   Loader2,
   MoreHorizontal,
   Trash2,
-  RotateCw,
   Pencil,
 } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -60,7 +59,18 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
 
         const mappedTargets: Record<string, { platform: string; username: string | null; displayName: string | null; avatarUrl: string | null; platformUrl: string | null; platformPostId: string | null; status: string; error?: { code: string; message: string; detail?: string } }> = {};
         for (const [key, target] of Object.entries(data.targets || {})) {
-          const t = target as any;
+          const t = target as {
+            platform: string;
+            status: string;
+            error?: { code: string; message: string; detail?: string };
+            accounts?: Array<{
+              username?: string | null;
+              display_name?: string | null;
+              avatar_url?: string | null;
+              url?: string | null;
+              platform_post_id?: string | null;
+            }>;
+          };
           const account = t.accounts?.[0];
           mappedTargets[key] = {
             platform: t.platform,
@@ -95,7 +105,15 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
                 const analytics = await analyticsRes.json();
                 if (analytics.data?.length > 0) {
                   const agg = analytics.data.reduce(
-                    (acc: PostEngagement, item: any) => ({
+                    (
+                      acc: PostEngagement,
+                      item: {
+                        likes?: number;
+                        comments?: number;
+                        impressions?: number;
+                        engagement_rate?: number;
+                      },
+                    ) => ({
                       likes: acc.likes + (item.likes || 0),
                       comments: acc.comments + (item.comments || 0),
                       impressions: acc.impressions + (item.impressions || 0),
@@ -188,12 +206,12 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
                 hasVideo ? (
                   <div className="relative mt-3 rounded-lg overflow-hidden">
                     <video
-                      src={thumbUrl!}
+                      src={thumbUrl}
                       controls
                       muted
                       preload="metadata"
                       className="w-full max-h-[400px] rounded-lg"
-                      onError={(e) => { const vid = e.target as HTMLVideoElement; const img = document.createElement("img"); img.src = thumbUrl!; img.alt = ""; img.className = "w-full max-h-[400px] object-cover rounded-lg"; img.onerror = () => { img.style.display = "none"; }; vid.replaceWith(img); }}
+                      onError={(e) => { const vid = e.target as HTMLVideoElement; const img = document.createElement("img"); img.src = thumbUrl; img.alt = ""; img.className = "w-full max-h-[400px] object-cover rounded-lg"; img.onerror = () => { img.style.display = "none"; }; vid.replaceWith(img); }}
                     />
                   </div>
                 ) : platformUrl ? (
@@ -278,7 +296,7 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
                 {(onDelete || onEdit) && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button className="rounded p-1.5 hover:bg-accent transition-colors border border-border">
+                      <button type="button" className="rounded p-1.5 hover:bg-accent transition-colors border border-border">
                         <MoreHorizontal className="size-3.5 text-muted-foreground" />
                       </button>
                     </DropdownMenuTrigger>

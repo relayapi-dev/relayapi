@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { type ConnectionStatus } from "@/components/animations/sections/connection-status-indicator";
+import type { ConnectionStatus } from "@/components/animations/sections/connection-status-indicator";
 
 export function useConnectionStatus(inView: boolean): ConnectionStatus {
     const [status, setStatus] = useState<ConnectionStatus>("idle");
@@ -16,7 +16,9 @@ export function useConnectionStatus(inView: boolean): ConnectionStatus {
             cleanups.push(() => clearTimeout(connectTimer));
         }
         return () => {
-            cleanups.forEach((cleanup) => cleanup());
+            cleanups.forEach((cleanup) => {
+                cleanup();
+            });
         };
     }, [inView]);
 

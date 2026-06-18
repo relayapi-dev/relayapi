@@ -316,10 +316,14 @@ function PanelFooter({
 			</div>
 			<div className="mt-4 space-y-4">
 				<div>
-					<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
+					<label
+						htmlFor="property-panel-key"
+						className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+					>
 						Key <span className="text-destructive">*</span>
 					</label>
 					<input
+						id="property-panel-key"
 						type="text"
 						value={localKey}
 						onChange={(e) => onLocalKeyChange(e.target.value)}
@@ -342,10 +346,14 @@ function PanelFooter({
 				</div>
 
 				<div>
-					<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
+					<label
+						htmlFor="property-panel-notes"
+						className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+					>
 						Notes
 					</label>
 					<input
+						id="property-panel-notes"
 						type="text"
 						value={node.notes ?? ""}
 						onChange={(e) => onChange({ notes: e.target.value })}

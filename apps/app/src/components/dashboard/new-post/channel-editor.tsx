@@ -10,7 +10,7 @@ import {
 	Upload,
 	X,
 } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Select,
@@ -62,8 +62,9 @@ interface ChannelEditorProps {
 	onFileUpload: (file: File) => void;
 	uploading: boolean;
 	// Platform options
-	targetOptions: Record<string, Record<string, any>>;
+	targetOptions: Record<string, Record<string, unknown>>;
 	onSetOption: (platform: string, key: string, value: unknown) => void;
+	// biome-ignore lint/suspicious/noExplicitAny: dynamic option getter must return any so per-platform values flow into typed value/checked props without narrowing at ~40 call sites; the source getOption in new-post-dialog.tsx (out of this file's scope) is typed the same way
 	onGetOption: (platform: string, key: string, fallback?: any) => any;
 	// Textarea ref for emoji/hashtag insertion
 	textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -87,10 +88,10 @@ function FieldLabel({
 	required?: boolean;
 }) {
 	return (
-		<label className="text-[11px] font-medium text-muted-foreground flex items-center gap-1">
+		<span className="text-[11px] font-medium text-muted-foreground flex items-center gap-1">
 			{children}
 			{required && <span className="text-destructive">*</span>}
-		</label>
+		</span>
 	);
 }
 
@@ -152,9 +153,10 @@ function FieldCheckbox({
 	onChange: (v: boolean) => void;
 	label: string;
 }) {
+	const id = useId();
 	return (
-		<label className="flex items-center gap-2 cursor-pointer">
-			<Checkbox checked={checked} onCheckedChange={(c) => onChange(!!c)} />
+		<label htmlFor={id} className="flex items-center gap-2 cursor-pointer">
+			<Checkbox id={id} checked={checked} onCheckedChange={(c) => onChange(!!c)} />
 			<span className="text-xs text-foreground">{label}</span>
 		</label>
 	);
@@ -206,7 +208,9 @@ function MediaThumbnail({
 					controls
 					playsInline
 					onError={() => setVideoError(true)}
-				/>
+				>
+					<track kind="captions" />
+				</video>
 			) : isVideo && videoError ? (
 				<div className="w-full h-32 flex flex-col items-center justify-center gap-2 bg-accent/10">
 					<Film className="size-8 text-muted-foreground/50" />
@@ -254,7 +258,6 @@ export function ChannelEditor({
 	onRemoveMedia,
 	onFileUpload,
 	uploading,
-	targetOptions,
 	onSetOption,
 	onGetOption,
 	textareaRef,
@@ -420,7 +423,7 @@ function ContentMediaEditor({
 	activePlatform: string;
 	activePlatforms: Set<string>;
 	activeTabId: string;
-	activeAccount: any;
+	activeAccount: Account | undefined;
 	igContentType: string;
 	uploading: boolean;
 	fileInputRef: React.RefObject<HTMLInputElement | null>;
@@ -459,6 +462,7 @@ function ContentMediaEditor({
 	const hasCustomization = isContentUnlinked || isMediaUnlinked;
 
 	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop drop target wraps interactive controls and has no clickable/keyboard semantics
 		<div
 			className={cn(
 				"rounded-lg border transition-colors overflow-hidden",
@@ -662,6 +666,7 @@ function PlatformOptions({
 }: {
 	platform: string;
 	onSetOption: (platform: string, key: string, value: unknown) => void;
+	// biome-ignore lint/suspicious/noExplicitAny: dynamic option getter must return any so per-platform values flow into typed value/checked props without narrowing at ~40 call sites; the source getOption in new-post-dialog.tsx (out of this file's scope) is typed the same way
 	onGetOption: (platform: string, key: string, fallback?: any) => any;
 	igContentType: string;
 }) {

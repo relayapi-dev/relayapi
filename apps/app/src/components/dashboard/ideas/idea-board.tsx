@@ -254,18 +254,21 @@ export function IdeaBoard({
 
 		if (!targetGroupId || sourceGroupId === targetGroupId) return;
 
+		const fromGroupId = sourceGroupId;
+		const toGroupId = targetGroupId;
+
 		// Move card across columns optimistically
 		setLocalIdeasByGroup((prev) => {
 			const next = new Map(prev);
-			const sourceIdeas = [...(next.get(sourceGroupId!) ?? [])];
-			const targetIdeas = [...(next.get(targetGroupId!) ?? [])];
+			const sourceIdeas = [...(next.get(fromGroupId) ?? [])];
+			const targetIdeas = [...(next.get(toGroupId) ?? [])];
 			const idx = sourceIdeas.findIndex((i) => i.id === activeCardId);
 			if (idx === -1) return prev;
 			const [movedIdea] = sourceIdeas.splice(idx, 1);
 			if (!movedIdea) return prev;
-			targetIdeas.push({ ...movedIdea, group_id: targetGroupId! });
-			next.set(sourceGroupId!, sourceIdeas);
-			next.set(targetGroupId!, targetIdeas);
+			targetIdeas.push({ ...movedIdea, group_id: toGroupId });
+			next.set(fromGroupId, sourceIdeas);
+			next.set(toGroupId, targetIdeas);
 			return next;
 		});
 	};
@@ -366,9 +369,10 @@ export function IdeaBoard({
 			}
 
 			const reordered = arrayMove(currentIdeas, activeIndex, overIndex);
+			const reorderGroupId = originalGroupId;
 			setLocalIdeasByGroup((prev) => {
 				const next = new Map(prev);
-				next.set(originalGroupId!, reordered);
+				next.set(reorderGroupId, reordered);
 				return next;
 			});
 			const nextAfterIdeaId =

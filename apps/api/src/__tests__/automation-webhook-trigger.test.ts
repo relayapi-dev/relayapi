@@ -414,8 +414,9 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				where: eq(automationRuns.id, result.runId),
 			});
 			expect(run?.contactId).toBeTruthy();
+			if (!run?.contactId) throw new Error("expected run with contactId");
 			const created = await db.query.contacts.findFirst({
-				where: eq(contacts.id, run!.contactId),
+				where: eq(contacts.id, run.contactId),
 			});
 			expect(created).toBeTruthy();
 			expect(created?.email).toBe(email);

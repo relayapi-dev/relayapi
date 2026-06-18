@@ -71,21 +71,6 @@ function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
-function timeAgo(dateStr: string): string {
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays === 1) return "1 day ago";
-  if (diffDays < 30) return `${diffDays} days ago`;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
 function formatTime(dateStr: string | null): string {
   if (!dateStr) return "";
   const d = new Date(dateStr);
@@ -182,6 +167,7 @@ export function SentPostCard({
             <Popover>
               <PopoverTrigger asChild>
                 <button
+                  type="button"
                   className="size-7 rounded-full border border-border bg-card flex items-center justify-center hover:bg-accent transition-colors"
                   title="Notes"
                 >
@@ -243,7 +229,7 @@ export function SentPostCard({
                 {hasVideo && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="size-9 rounded-full bg-black/60 flex items-center justify-center">
-                      <svg viewBox="0 0 24 24" fill="white" className="size-4 ml-0.5">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="white" className="size-4 ml-0.5">
                         <polygon points="5,3 19,12 5,21" />
                       </svg>
                     </div>
@@ -256,11 +242,16 @@ export function SentPostCard({
 
         {/* Media preview overlay */}
         {previewOpen && thumbUrl && (
+          // biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop that closes on click; it contains a close button so it cannot be a <button> itself
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
             onClick={() => setPreviewOpen(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" || e.key === "Enter" || e.key === " ") setPreviewOpen(false);
+            }}
           >
             <button
+              type="button"
               onClick={() => setPreviewOpen(false)}
               className="absolute top-4 right-4 text-white/80 hover:text-white"
             >
@@ -273,13 +264,18 @@ export function SentPostCard({
                 autoPlay
                 className="max-w-[90vw] max-h-[90vh] rounded-lg"
                 onClick={(e) => e.stopPropagation()}
-              />
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <track kind="captions" />
+              </video>
             ) : (
+              // biome-ignore lint/a11y/noStaticElementInteractions: preview image only stops backdrop-close propagation; it is not an interactive control
               <img
                 src={thumbUrl}
                 alt=""
                 className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain"
                 onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
               />
             )}
           </div>
@@ -333,13 +329,13 @@ export function SentPostCard({
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="rounded p-1.5 hover:bg-accent transition-colors">
+                <button type="button" className="rounded p-1.5 hover:bg-accent transition-colors">
                   <MoreVertical className="size-3.5 text-muted-foreground" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-44">
                 {target.platformUrl && (
-                  <DropdownMenuItem onClick={() => navigator.clipboard.writeText(target.platformUrl!)}>
+                  <DropdownMenuItem onClick={() => { if (target.platformUrl) navigator.clipboard.writeText(target.platformUrl); }}>
                     <Link className="size-3.5 mr-2" />
                     Copy Link
                   </DropdownMenuItem>
@@ -379,6 +375,7 @@ export function SentPostCard({
         <Popover>
           <PopoverTrigger asChild>
             <button
+              type="button"
               className="size-8 rounded-full border border-border bg-card flex items-center justify-center hover:bg-accent transition-colors"
               title="Notes"
             >

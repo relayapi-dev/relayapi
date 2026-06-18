@@ -1,12 +1,14 @@
 import type { APIRoute } from "astro";
-import { requireClient, handleSdkError } from "@/lib/api-utils";
+import { requireClient, requireParam, handleSdkError } from "@/lib/api-utils";
 
 export const DELETE: APIRoute = async (ctx) => {
   const client = await requireClient(ctx);
   if (client instanceof Response) return client;
+  const id = requireParam(ctx.params, "id");
+  if (id instanceof Response) return id;
+  const mediaId = requireParam(ctx.params, "media_id");
+  if (mediaId instanceof Response) return mediaId;
   try {
-    const id = ctx.params.id!;
-    const mediaId = ctx.params.media_id!;
     await client.ideas.deleteMedia(id, mediaId);
     return new Response(null, { status: 204 });
   } catch (e) {

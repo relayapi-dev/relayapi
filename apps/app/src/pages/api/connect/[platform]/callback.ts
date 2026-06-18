@@ -6,7 +6,10 @@ export const POST: APIRoute = async (ctx) => {
   if (client instanceof Response) return client;
   try {
     const body = await ctx.request.json();
-    const data = await client.connect.completeOAuthCallback(ctx.params.platform as any, body);
+    const data = await client.connect.completeOAuthCallback(
+      ctx.params.platform as Parameters<typeof client.connect.completeOAuthCallback>[0],
+      body,
+    );
     return Response.json(data);
   } catch (e) {
     return handleSdkError(e);

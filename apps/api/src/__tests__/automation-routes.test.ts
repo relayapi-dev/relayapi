@@ -251,6 +251,7 @@ describe("automations router registration order", () => {
 
 		// biome-ignore lint/suspicious/noExplicitAny: test harness stub for context vars
 		const app: any = new OpenAPIHono();
+		// biome-ignore lint/suspicious/noExplicitAny: test harness middleware stub sets loosely-typed context vars
 		app.use("*", async (c: any, next: any) => {
 			// Minimal stub context so the `/{id}` handler — if erroneously hit —
 			// would return a 404 body we can distinguish from the catalog body.
@@ -331,13 +332,15 @@ describe("entrypoint config validation", () => {
 
 describe("binding config validation", () => {
 	it("accepts an empty default_reply config", () => {
-		const schema = BindingConfigByType.default_reply!;
+		const schema = BindingConfigByType.default_reply;
+		if (!schema) throw new Error("expected default_reply schema");
 		const parsed = schema.safeParse({});
 		expect(parsed.success).toBe(true);
 	});
 
 	it("accepts a conversation_starter config with ≤4 starters", () => {
-		const schema = BindingConfigByType.conversation_starter!;
+		const schema = BindingConfigByType.conversation_starter;
+		if (!schema) throw new Error("expected conversation_starter schema");
 		const parsed = schema.safeParse({
 			starters: [{ label: "Hi", payload: "greet" }],
 		});
@@ -345,7 +348,8 @@ describe("binding config validation", () => {
 	});
 
 	it("rejects >4 conversation_starter items", () => {
-		const schema = BindingConfigByType.conversation_starter!;
+		const schema = BindingConfigByType.conversation_starter;
+		if (!schema) throw new Error("expected conversation_starter schema");
 		const parsed = schema.safeParse({
 			starters: Array(5).fill({ label: "x", payload: "y" }),
 		});
@@ -358,9 +362,12 @@ describe("binding config validation", () => {
 		for (const stubbed of ["main_menu", "conversation_starter", "ice_breaker"]) {
 			const w = buildBindingWarnings(stubbed);
 			expect(Array.isArray(w)).toBe(true);
-			expect(w!.length).toBe(1);
-			expect(w![0]!.code).toBe("binding_pending_sync");
-			expect(w![0]!.message).toMatch(/v1\.1/);
+			if (!w) throw new Error("expected warnings array");
+			expect(w.length).toBe(1);
+			const w0 = w[0];
+			if (!w0) throw new Error("expected a warning");
+			expect(w0.code).toBe("binding_pending_sync");
+			expect(w0.message).toMatch(/v1\.1/);
 		}
 
 		// Wired types — no warning; these go live immediately.
@@ -535,6 +542,7 @@ describe("automation-runs stop (integration)", () => {
 			})
 			.returning();
 		expect(run?.status).toBe("active");
+		if (!run) throw new Error("expected run to exist");
 
 		// Simulate what the route does on /stop.
 		const [stopped] = await db
@@ -545,7 +553,7 @@ describe("automation-runs stop (integration)", () => {
 				completedAt: new Date(),
 				updatedAt: new Date(),
 			})
-			.where(eq(automationRuns.id, run!.id))
+			.where(eq(automationRuns.id, run.id))
 			.returning();
 		expect(stopped?.status).toBe("exited");
 		expect(stopped?.exitReason).toBe("admin_stopped");
@@ -654,14 +662,16 @@ describe("automation create from template", () => {
 			})
 			.returning();
 		expect(row).toBeDefined();
+		if (!row) throw new Error("expected row to exist");
 
 		const [fetched] = await db
 			.select()
 			.from(automations)
-			.where(eq(automations.id, row!.id))
+			.where(eq(automations.id, row.id))
 			.limit(1);
 		expect(fetched).toBeDefined();
-		const g = fetched!.graph as {
+		if (!fetched) throw new Error("expected fetched to exist");
+		const g = fetched.graph as {
 			nodes: Array<{
 				key: string;
 				ports: unknown[];

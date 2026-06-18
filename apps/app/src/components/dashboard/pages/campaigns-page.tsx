@@ -50,8 +50,9 @@ interface AutoPostRuleResponse {
 }
 
 function broadcastStatusBadge(status: BroadcastResponse["status"]) {
+  const draft = { label: "Draft", classes: "text-neutral-400 bg-neutral-400/10" };
   const map: Record<string, { label: string; classes: string }> = {
-    draft: { label: "Draft", classes: "text-neutral-400 bg-neutral-400/10" },
+    draft,
     scheduled: { label: "Scheduled", classes: "text-blue-400 bg-blue-400/10" },
     sending: { label: "Sending", classes: "text-amber-400 bg-amber-400/10" },
     sent: { label: "Sent", classes: "text-emerald-400 bg-emerald-400/10" },
@@ -59,7 +60,7 @@ function broadcastStatusBadge(status: BroadcastResponse["status"]) {
     failed: { label: "Failed", classes: "text-red-400 bg-red-400/10" },
     cancelled: { label: "Cancelled", classes: "text-neutral-400 bg-neutral-400/10" },
   };
-  const cfg = map[status] ?? map.draft!;
+  const cfg = map[status] ?? draft;
   return (
     <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium", cfg.classes)}>
       {cfg.label}
@@ -173,6 +174,7 @@ export function CampaignsPage({
       <div className="flex gap-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         {tabs.map((tab) => (
           <button
+            type="button"
             key={tab.key}
             onClick={() => switchTab(tab.key)}
             className={cn(

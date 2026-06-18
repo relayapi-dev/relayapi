@@ -18,7 +18,7 @@ export const GET: APIRoute = async (context) => {
 		return Response.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const userId = (user as any).id as string;
+	const userId = user.id as string;
 	const db = context.locals.db;
 
 	const [row] = await db
@@ -39,7 +39,7 @@ export const PUT: APIRoute = async (context) => {
 		return Response.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const userId = (user as any).id as string;
+	const userId = user.id as string;
 	const db = context.locals.db;
 	const body = await context.request.json();
 

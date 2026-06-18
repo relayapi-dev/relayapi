@@ -253,8 +253,9 @@ async function publishCarousel(
 		}
 
 		// Alt text for carousel children
-		if ((item as any).alt_text) {
-			childParams.alt_text = ((item as any).alt_text as string).slice(0, 1000);
+		const itemAltText = (item as { alt_text?: string }).alt_text;
+		if (itemAltText) {
+			childParams.alt_text = itemAltText.slice(0, 1000);
 		}
 
 		const childId = await createMediaContainer(auth, childParams);
@@ -375,8 +376,10 @@ export const instagramPublisher: Publisher = {
 			}
 			// Pass alt text from first media item
 			const firstMedia = media[0];
-			if (firstMedia && (firstMedia as any).alt_text) {
-				extraParams.alt_text = (firstMedia as any).alt_text;
+			const firstMediaAltText = (firstMedia as { alt_text?: string } | undefined)
+				?.alt_text;
+			if (firstMediaAltText) {
+				extraParams.alt_text = firstMediaAltText;
 			}
 
 			// Story

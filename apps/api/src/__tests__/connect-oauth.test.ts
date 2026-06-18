@@ -111,15 +111,15 @@ mock.module("@relayapi/db", () => {
 		createDb: () => activeDb,
 		socialAccounts,
 		socialAccountSyncState,
-		eq: (col: any, val: any) => mockEq(col, val),
+		eq: (col: unknown, val: unknown) => mockEq(col, val),
 	};
 });
 
 mock.module("drizzle-orm", () => {
 	const { mockEq } = require("./__mocks__/db");
-	const noop = (...args: any[]) => args[0];
+	const noop = (...args: unknown[]) => args[0];
 	return {
-		eq: (col: any, val: any) => mockEq(col, val),
+		eq: (col: unknown, val: unknown) => mockEq(col, val),
 		and: noop,
 		or: noop,
 		sql: noop,
@@ -178,7 +178,7 @@ mock.module("../services/ad-service", () => ({
 // ── Import the function under test (AFTER all mocks) ──
 
 const { exchangeAndSaveAccount } = await import("../routes/connect");
-import { createMockEnv, MockKV } from "./__mocks__/env";
+import { createMockEnv, type MockKV } from "./__mocks__/env";
 import { createMockDb } from "./__mocks__/db";
 
 // ── Global fetch mock ──
@@ -368,9 +368,12 @@ describe("exchangeAndSaveAccount", () => {
 			expect(result.platform).toBe("facebook");
 
 			// Token should be stored in KV
-			const stored = await kv.get("pending-secondary:ws_test123:facebook", "json") as any;
+			const stored = (await kv.get(
+				"pending-secondary:ws_test123:facebook",
+				"json",
+			)) as { access_token?: unknown } | null;
 			expect(stored).toBeTruthy();
-			expect(stored.access_token).toBeTruthy();
+			expect(stored?.access_token).toBeTruthy();
 		});
 	});
 
@@ -459,21 +462,22 @@ describe("exchangeAndSaveAccount", () => {
 		it("returns error when insert throws", async () => {
 			// Override the mock DB's insert to throw
 			const failDb = createMockDb();
-			const origInsert = failDb.insert.bind(failDb);
-			failDb.insert = (table: unknown) => {
-				const chain = origInsert(table);
-				const origThen = chain.values({}).onConflictDoUpdate({}).returning().then;
+			failDb.insert = (_table: unknown) => {
 				return {
 					values: () => ({
 						onConflictDoUpdate: () => ({
 							returning: () => ({
-								then: (_resolve: any, reject: any) => {
+								// biome-ignore lint/suspicious/noThenProperty: intentional thenable to simulate an awaitable query that rejects
+								then: (
+									_resolve: (value: unknown) => void,
+									reject?: (err: unknown) => void,
+								) => {
 									reject?.(new Error("DB connection error"));
 								},
 							}),
 						}),
 					}),
-				} as any;
+				} as unknown as ReturnType<typeof failDb.insert>;
 			};
 			activeDb = failDb;
 

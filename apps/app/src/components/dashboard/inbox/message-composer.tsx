@@ -118,7 +118,8 @@ export function MessageComposer({
 
     await Promise.all(
       list.map(async (file, i) => {
-        const placeholder = placeholders[i]!;
+        const placeholder = placeholders[i];
+        if (!placeholder) return;
         try {
           const uploaded = await uploadMedia(file);
           URL.revokeObjectURL(placeholder.url);

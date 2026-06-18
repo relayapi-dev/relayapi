@@ -73,7 +73,10 @@ export function PostSearchCombobox({
             } else {
               // Internal post — extract platform_post_id from targets
               const targets = post.targets ?? {};
-              for (const [platform, target] of Object.entries(targets) as [string, any][]) {
+              for (const [platform, target] of Object.entries(targets) as [
+                string,
+                { accounts?: Array<{ id?: string; platform_post_id?: string }> },
+              ][]) {
                 const accounts = target.accounts ?? [];
                 for (const acc of accounts) {
                   if (acc.id === accountId && acc.platform_post_id) {
@@ -250,6 +253,7 @@ export function PostSearchCombobox({
           <div className="max-h-56 overflow-y-auto py-1">
             {showAllOption && (
               <button
+                type="button"
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 transition-colors",
                   value === null && "bg-accent/20 font-medium",
@@ -269,6 +273,7 @@ export function PostSearchCombobox({
 
             {posts.map((post) => (
               <button
+                type="button"
                 key={post.platformPostId}
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent/30 transition-colors",

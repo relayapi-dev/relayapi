@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, mock } from "bun:test";
-import { createMockDb, mockEq, type MockDb } from "./__mocks__/db";
-import { createMockEnv, seedApiKeyInKV, MockKV } from "./__mocks__/env";
+import { createMockDb, type MockDb } from "./__mocks__/db";
+import { createMockEnv, seedApiKeyInKV, type MockKV } from "./__mocks__/env";
 import {
 	createMockStripe,
 	createMockSubscription,
@@ -192,7 +192,7 @@ describe("Stripe webhook handler", () => {
 			subscriptions: {
 				retrieve: async () => createMockSubscription(),
 			},
-		}) as any;
+		});
 		notificationCalls.length = 0;
 	});
 
@@ -213,11 +213,13 @@ describe("Stripe webhook handler", () => {
 			await handleEvent(event, env);
 
 			// DB should be updated to active with Stripe IDs
-			const subs = mockDb._getData("organizationSubscriptions");
-			expect(subs[0].status).toBe("active");
-			expect(subs[0].stripeCustomerId).toBe(CUSTOMER_ID);
-			expect(subs[0].stripeSubscriptionId).toBe(SUB_ID);
-			expect(subs[0].updatedAt).toBeInstanceOf(Date);
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.status).toBe("active");
+			expect(sub.stripeCustomerId).toBe(CUSTOMER_ID);
+			expect(sub.stripeSubscriptionId).toBe(SUB_ID);
+			expect(sub.updatedAt).toBeInstanceOf(Date);
 
 			// KV key should be upgraded to pro
 			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
@@ -237,7 +239,7 @@ describe("Stripe webhook handler", () => {
 							metadata: { organizationId: ORG_ID },
 						}),
 				},
-			}) as any;
+			});
 
 			const event = createCheckoutCompletedEvent({
 				metadata: {}, // no orgId in session
@@ -245,8 +247,10 @@ describe("Stripe webhook handler", () => {
 
 			await handleEvent(event, env);
 
-			const subs = mockDb._getData("organizationSubscriptions");
-			expect(subs[0].status).toBe("active");
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.status).toBe("active");
 
 			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
 			expect(kvData.plan).toBe("pro");
@@ -265,7 +269,7 @@ describe("Stripe webhook handler", () => {
 					retrieve: async () =>
 						createMockSubscription({ metadata: {} }),
 				},
-			}) as any;
+			});
 
 			const event = createCheckoutCompletedEvent({
 				metadata: {}, // no orgId anywhere
@@ -274,9 +278,11 @@ describe("Stripe webhook handler", () => {
 
 			await handleEvent(event, env);
 
-			const subs = mockDb._getData("organizationSubscriptions");
-			expect(subs[0].status).toBe("active");
-			expect(subs[0].stripeSubscriptionId).toBe(SUB_ID);
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.status).toBe("active");
+			expect(sub.stripeSubscriptionId).toBe(SUB_ID);
 
 			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
 			expect(kvData.plan).toBe("pro");
@@ -299,7 +305,7 @@ describe("Stripe webhook handler", () => {
 					retrieve: async () =>
 						createMockSubscription({ metadata: {} }),
 				},
-			}) as any;
+			});
 
 			const event = createCheckoutCompletedEvent({
 				metadata: {}, // no orgId
@@ -361,9 +367,11 @@ describe("Stripe webhook handler", () => {
 
 			await handleEvent(event, env);
 
-			const subs = mockDb._getData("organizationSubscriptions");
-			expect(subs[0].cancelAtPeriodEnd).toBe(true);
-			expect(subs[0].status).toBe("active");
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.cancelAtPeriodEnd).toBe(true);
+			expect(sub.status).toBe("active");
 
 			// KV should stay pro (still active, just scheduled to cancel)
 			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
@@ -380,8 +388,10 @@ describe("Stripe webhook handler", () => {
 
 			await handleEvent(event, env);
 
-			const subs = mockDb._getData("organizationSubscriptions");
-			expect(subs[0].cancelAtPeriodEnd).toBe(false);
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.cancelAtPeriodEnd).toBe(false);
 		});
 
 		it("downgrades KV keys when subscription moves to past_due", async () => {
@@ -399,8 +409,10 @@ describe("Stripe webhook handler", () => {
 
 			await handleEvent(event, env);
 
-			const subs = mockDb._getData("organizationSubscriptions");
-			expect(subs[0].status).toBe("past_due");
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.status).toBe("past_due");
 
 			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
 			expect(kvData.plan).toBe("free");
@@ -438,8 +450,10 @@ describe("Stripe webhook handler", () => {
 			await handleEvent(event, env);
 
 			// DB should be updated to active
-			const subs = mockDb._getData("organizationSubscriptions");
-			expect(subs[0].status).toBe("active");
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.status).toBe("active");
 
 			// The handler checks `sub.status !== "active"` to decide whether to
 			// upgrade KV. Because the mock DB mutates rows in-place (unlike a real
@@ -451,7 +465,8 @@ describe("Stripe webhook handler", () => {
 				(u) => u.table === "organizationSubscriptions",
 			);
 			expect(subUpdate).toBeDefined();
-			expect(subUpdate!.set.status).toBe("active");
+			if (!subUpdate) throw new Error("expected a subscription update");
+			expect(subUpdate.set.status).toBe("active");
 		});
 
 		it("skips update when subscription is not found in DB", async () => {
@@ -484,10 +499,12 @@ describe("Stripe webhook handler", () => {
 
 			await handleEvent(event, env);
 
-			const subs = mockDb._getData("organizationSubscriptions");
-			expect(subs[0].status).toBe("cancelled");
-			expect(subs[0].stripeSubscriptionId).toBeNull();
-			expect(subs[0].cancelAtPeriodEnd).toBe(false);
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.status).toBe("cancelled");
+			expect(sub.stripeSubscriptionId).toBeNull();
+			expect(sub.cancelAtPeriodEnd).toBe(false);
 
 			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
 			expect(kvData.plan).toBe("free");
@@ -566,7 +583,7 @@ describe("Stripe webhook handler", () => {
 				subscriptionId: undefined,
 			});
 			// Override the event to have no subscription_details
-			(event.data.object as any).parent = null;
+			(event.data.object as { parent: unknown }).parent = null;
 
 			await handleEvent(event, env);
 
@@ -591,8 +608,9 @@ describe("Stripe webhook handler", () => {
 			// First update is the invoice status
 			const invoiceUpdate = mockDb._updates.find((u) => u.table === "invoices");
 			expect(invoiceUpdate).toBeDefined();
-			expect(invoiceUpdate!.set.status).toBe("paid");
-			expect(invoiceUpdate!.set.paidAt).toBeInstanceOf(Date);
+			if (!invoiceUpdate) throw new Error("expected an invoice update");
+			expect(invoiceUpdate.set.status).toBe("paid");
+			expect(invoiceUpdate.set.paidAt).toBeInstanceOf(Date);
 		});
 
 		it("clears past_due status and upgrades KV when sub was past_due", async () => {
@@ -614,7 +632,8 @@ describe("Stripe webhook handler", () => {
 				(u) => u.table === "organizationSubscriptions",
 			);
 			expect(subUpdate).toBeDefined();
-			expect(subUpdate!.set.status).toBe("active");
+			if (!subUpdate) throw new Error("expected a subscription update");
+			expect(subUpdate.set.status).toBe("active");
 
 			// KV should be upgraded back to pro
 			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
@@ -671,8 +690,10 @@ describe("Stripe webhook handler", () => {
 			await handleEvent(event, env);
 
 			// Subscription should be past_due
-			const subs = mockDb._getData("organizationSubscriptions");
-			expect(subs[0].status).toBe("past_due");
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.status).toBe("past_due");
 
 			// KV should be downgraded
 			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
@@ -681,7 +702,10 @@ describe("Stripe webhook handler", () => {
 
 			// Notification should have been sent
 			expect(notificationCalls).toHaveLength(1);
-			const [notifEnv, notifPayload] = notificationCalls[0] as [Env, any];
+			const [_notifEnv, notifPayload] = notificationCalls[0] as [
+				Env,
+				Record<string, unknown>,
+			];
 			expect(notifPayload.type).toBe("payment_failed");
 			expect(notifPayload.orgId).toBe(ORG_ID);
 		});
@@ -701,7 +725,7 @@ describe("Stripe webhook handler", () => {
 		it("skips when invoice has no subscription ID", async () => {
 			const event = createInvoicePaymentFailedEvent();
 			// Override the event to have no subscription_details
-			(event.data.object as any).parent = null;
+			(event.data.object as { parent: unknown }).parent = null;
 
 			await handleEvent(event, env);
 
@@ -723,7 +747,13 @@ describe("Stripe webhook handler", () => {
 			await seedApiKeyInKV(kv, HASHED_KEY_1, makeKVData());
 			await seedApiKeyInKV(kv, HASHED_KEY_2, makeKVData({ key_id: "key_test_2" }));
 
-			await syncOrgKeysToKV(env, mockDb, ORG_ID, "pro", PRICING.proCallsIncluded);
+			await syncOrgKeysToKV(
+				env,
+				mockDb as never,
+				ORG_ID,
+				"pro",
+				PRICING.proCallsIncluded,
+			);
 
 			const kv1 = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
 			expect(kv1.plan).toBe("pro");
@@ -742,7 +772,13 @@ describe("Stripe webhook handler", () => {
 			// Only seed one key in KV, the other is missing
 			await seedApiKeyInKV(kv, HASHED_KEY_1, makeKVData());
 
-			await syncOrgKeysToKV(env, mockDb, ORG_ID, "pro", PRICING.proCallsIncluded);
+			await syncOrgKeysToKV(
+				env,
+				mockDb as never,
+				ORG_ID,
+				"pro",
+				PRICING.proCallsIncluded,
+			);
 
 			// First key should be updated
 			const kv1 = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
@@ -755,7 +791,13 @@ describe("Stripe webhook handler", () => {
 
 		it("handles org with no API keys", async () => {
 			// No apikey rows seeded
-			await syncOrgKeysToKV(env, mockDb, ORG_ID, "pro", PRICING.proCallsIncluded);
+			await syncOrgKeysToKV(
+				env,
+				mockDb as never,
+				ORG_ID,
+				"pro",
+				PRICING.proCallsIncluded,
+			);
 
 			// Should complete without error and not modify KV
 			const allKeys = await kv.list();
@@ -773,7 +815,7 @@ describe("Stripe webhook handler", () => {
 				id: "evt_test_unknown",
 				type: "charge.succeeded",
 				data: { object: {} },
-			} as any;
+			} as unknown as Parameters<typeof handleEvent>[0];
 
 			await handleEvent(event, env);
 

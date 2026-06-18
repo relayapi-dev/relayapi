@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from '@jest/globals';
+import type { ZObject } from 'zapier-platform-core';
 
 // Minimal mock of zapier-platform-core's createAppTester and tools
 const zapier = require('zapier-platform-core');
@@ -6,7 +7,7 @@ zapier.tools = zapier.tools || { env: { inject: () => {} } };
 
 import App from '../src/index';
 
-const appTester = zapier.createAppTester(App);
+zapier.createAppTester(App);
 
 describe('Authentication', () => {
   beforeAll(() => {
@@ -23,7 +24,7 @@ describe('Authentication', () => {
     // Test the beforeRequest middleware directly
     const { addAuthHeader } = require('../src/lib/requestHelper');
     const request = { headers: {} };
-    const result = addAuthHeader(request, {} as any, bundle);
+    const result = addAuthHeader(request, {} as unknown as ZObject, bundle);
 
     expect(result.headers).toHaveProperty('Authorization');
     expect(result.headers.Authorization).toBe('Bearer rlay_live_test123');
@@ -46,7 +47,7 @@ describe('Authentication', () => {
           }
         },
         Error: class ZapierError extends Error {
-          constructor(message: string, code?: string, status?: number) {
+          constructor(message: string, _code?: string, _status?: number) {
             super(message);
             this.name = 'ZapierError';
           }
@@ -54,7 +55,9 @@ describe('Authentication', () => {
       },
     };
 
-    expect(() => handleErrors(mockResponse, mockZ as any)).toThrow('Invalid API key');
+    expect(() => handleErrors(mockResponse, mockZ as unknown as ZObject)).toThrow(
+      'Invalid API key',
+    );
   });
 
   it('should handle generic errors with status code', () => {
@@ -74,7 +77,7 @@ describe('Authentication', () => {
           }
         },
         Error: class ZapierError extends Error {
-          constructor(message: string, code?: string, status?: number) {
+          constructor(message: string, _code?: string, _status?: number) {
             super(message);
             this.name = 'ZapierError';
           }
@@ -82,7 +85,9 @@ describe('Authentication', () => {
       },
     };
 
-    expect(() => handleErrors(mockResponse, mockZ as any)).toThrow('Content is required');
+    expect(() => handleErrors(mockResponse, mockZ as unknown as ZObject)).toThrow(
+      'Content is required',
+    );
   });
 
   it('should pass through successful responses', () => {
@@ -93,7 +98,7 @@ describe('Authentication', () => {
       data: { plan: 'pro', requests_used: 150, requests_limit: 10000 },
     };
 
-    const result = handleErrors(mockResponse, {} as any);
+    const result = handleErrors(mockResponse, {} as unknown as ZObject);
     expect(result).toBe(mockResponse);
     expect(result.data.plan).toBe('pro');
   });

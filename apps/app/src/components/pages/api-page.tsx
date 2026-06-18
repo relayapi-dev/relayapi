@@ -16,7 +16,7 @@ import {
 
 // ---------- Syntax highlighting helpers ----------
 
-function highlightCode(code: string, language: string) {
+function highlightCode(code: string, _language: string) {
     const keywords =
         /\b(const|let|var|function|return|import|from|export|default|if|else|async|await|new|class|try|catch|throw|for|while|of|in|typeof|instanceof|void|null|undefined|true|false)\b/g;
     const strings = /(["'`])(?:(?=(\\?))\2.)*?\1/g;
@@ -132,7 +132,7 @@ function HeroSection({ api }: { api: ApiData }) {
                         size="lg"
                         className="w-full sm:w-auto rounded-full px-8"
                     >
-                        <a href="#">Start Building Free</a>
+                        <a href="/signup">Start Building Free</a>
                     </Button>
                     <Button
                         asChild
@@ -293,6 +293,7 @@ function CodeExamplesSection({ api }: { api: ApiData }) {
                     <div className="flex flex-wrap gap-2">
                         {api.codeExamples.map((example, index) => (
                             <button
+                                type="button"
                                 key={example.label}
                                 onClick={() => setActiveTab(index)}
                                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -401,7 +402,7 @@ function FooterCta() {
                     variant="outline"
                     className="border-white text-white hover:bg-white/10 rounded-full px-8"
                 >
-                    <a href="#">Start Building Free</a>
+                    <a href="/signup">Start Building Free</a>
                 </Button>
             </div>
         </section>

@@ -531,20 +531,31 @@ export function AdminOrganizationsPage() {
             <h3 className="text-sm font-medium">Edit Organization</h3>
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">Name</label>
+                <label
+                  htmlFor="admin-org-edit-name"
+                  className="text-xs text-muted-foreground"
+                >
+                  Name
+                </label>
                 <input
+                  id="admin-org-edit-name"
                   type="text"
                   value={editForm.name}
                   onChange={(e) =>
                     setEditForm({ ...editForm, name: e.target.value })
                   }
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-                  autoFocus
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">Slug</label>
+                <label
+                  htmlFor="admin-org-edit-slug"
+                  className="text-xs text-muted-foreground"
+                >
+                  Slug
+                </label>
                 <input
+                  id="admin-org-edit-slug"
                   type="text"
                   value={editForm.slug}
                   onChange={(e) =>

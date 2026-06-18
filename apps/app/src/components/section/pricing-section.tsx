@@ -196,6 +196,7 @@ function FeatureRow({
         <div className="flex items-start gap-2">
             {included ? (
                 <svg
+                    aria-hidden="true"
                     className={`mt-0.5 h-4 w-4 shrink-0 ${highlight ? "text-primary" : "text-muted-foreground"}`}
                     fill="none"
                     stroke="currentColor"
@@ -210,6 +211,7 @@ function FeatureRow({
                 </svg>
             ) : (
                 <svg
+                    aria-hidden="true"
                     className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/40"
                     fill="none"
                     stroke="currentColor"
@@ -469,7 +471,7 @@ export function PricingSection() {
                                     variant="outline"
                                     className="mt-8 w-full cursor-pointer rounded-full border-border bg-transparent text-secondary-foreground transition-all duration-300 ease-in-out hover:bg-accent hover:scale-[1.02]"
                                 >
-                                    <a href="#">Sign Up Free</a>
+                                    <a href="/signup">Sign Up Free</a>
                                 </Button>
                             </div>
 
@@ -530,7 +532,7 @@ export function PricingSection() {
                                     asChild
                                     className="mt-8 w-full cursor-pointer rounded-full bg-primary text-primary-foreground transition-all duration-300 ease-in-out hover:bg-primary/80 hover:scale-[1.02]"
                                 >
-                                    <a href="#">
+                                    <a href={isCustom ? "/contact" : "/signup"}>
                                         {isCustom
                                             ? "Contact Us"
                                             : "Get Started"}

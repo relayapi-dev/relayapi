@@ -33,7 +33,7 @@ export type RunContext = {
 	conversationId: string | null;
 	channel: string;
 	graph: Graph;
-	context: Record<string, any>;
+	context: Record<string, unknown>;
 	now: Date;
 	/**
 	 * DB handle for the current run. Populated by `runLoop`/`enrollContact` at
@@ -43,17 +43,17 @@ export type RunContext = {
 	 */
 	db: Database;
 	// Remaining env bindings (KV, Queue, R2, encryption keys, etc.) flow here.
-	env: Record<string, any>;
+	env: Record<string, unknown>;
 };
 
 export type HandlerResult =
-	| { result: "advance"; via_port: string; payload?: any }
-	| { result: "wait_input"; timeout_at?: Date; payload?: any }
-	| { result: "wait_delay"; resume_at: Date; payload?: any }
-	| { result: "end"; exit_reason: string; payload?: any }
-	| { result: "fail"; error: Error; payload?: any };
+	| { result: "advance"; via_port: string; payload?: unknown }
+	| { result: "wait_input"; timeout_at?: Date; payload?: unknown }
+	| { result: "wait_delay"; resume_at: Date; payload?: unknown }
+	| { result: "end"; exit_reason: string; payload?: unknown }
+	| { result: "fail"; error: Error; payload?: unknown };
 
-export interface NodeHandler<TConfig = any> {
+export interface NodeHandler<TConfig = unknown> {
 	kind: string;
 	handle(
 		node: { key: string; kind: string; config: TConfig },

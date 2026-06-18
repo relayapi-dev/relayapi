@@ -49,8 +49,9 @@ interface BroadcastsEditDialogProps {
 }
 
 function statusBadge(status: string) {
+  const draft = { label: "Draft", classes: "text-neutral-400 bg-neutral-400/10" };
   const map: Record<string, { label: string; classes: string }> = {
-    draft: { label: "Draft", classes: "text-neutral-400 bg-neutral-400/10" },
+    draft,
     scheduled: { label: "Scheduled", classes: "text-blue-400 bg-blue-400/10" },
     sending: { label: "Sending", classes: "text-amber-400 bg-amber-400/10" },
     sent: { label: "Sent", classes: "text-emerald-400 bg-emerald-400/10" },
@@ -58,10 +59,10 @@ function statusBadge(status: string) {
     failed: { label: "Failed", classes: "text-red-400 bg-red-400/10" },
     cancelled: { label: "Cancelled", classes: "text-neutral-400 bg-neutral-400/10" },
   };
-  const cfg = map[status] ?? map.draft!;
+  const cfg = map[status] ?? draft;
   return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium", cfg!.classes)}>
-      {cfg!.label}
+    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium", cfg.classes)}>
+      {cfg.label}
     </span>
   );
 }
@@ -200,7 +201,7 @@ export function BroadcastsEditDialog({
               <>
                 {/* Status */}
                 <div className="flex items-center gap-2">
-                  <label className="text-xs font-medium text-muted-foreground">Status</label>
+                  <span className="text-xs font-medium text-muted-foreground">Status</span>
                   {statusBadge(broadcast.status)}
                 </div>
 
@@ -227,7 +228,7 @@ export function BroadcastsEditDialog({
 
                 {/* Account (read-only) */}
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Account</label>
+                  <span className="text-xs font-medium text-muted-foreground">Account</span>
                   <div className="mt-1 rounded-md border border-border bg-accent/20 px-3 py-2 text-sm text-muted-foreground font-mono text-xs">
                     {broadcast.account_id}
                   </div>

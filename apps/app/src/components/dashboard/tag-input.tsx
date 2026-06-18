@@ -34,12 +34,21 @@ export function TagInput({ value, onChange, placeholder, className }: TagInputPr
   };
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: interactive wrapper cannot be a button due to nested controls
     <div
+      role="button"
+      tabIndex={0}
       className={cn(
         "flex flex-wrap items-center gap-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs cursor-text",
         className,
       )}
       onClick={() => inputRef.current?.focus()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          inputRef.current?.focus();
+        }
+      }}
     >
       {value.map((tag, i) => (
         <span

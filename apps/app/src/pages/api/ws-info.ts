@@ -25,7 +25,7 @@ export const GET: APIRoute = async (ctx) => {
 
   const data = await client.wsTicket.retrieve();
 
-  const wsUrl = API_BASE_URL.replace(/^http/, "ws") + "/v1/ws";
+  const wsUrl = `${API_BASE_URL.replace(/^http/, "ws")}/v1/ws`;
 
   return Response.json(
     { url: wsUrl, ticket: data.ticket, expires_at: data.expires_at },

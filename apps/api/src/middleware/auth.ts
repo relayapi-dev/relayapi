@@ -150,8 +150,12 @@ export async function hydrateApiKey(
 		calls_included: callsIncluded,
 		ai_enabled: sub?.aiEnabled ?? false,
 		daily_tool_limit: sub?.dailyToolLimit ?? (plan === "pro" ? 10 : 2),
-		period_start: hasStripePeriod ? joined.subPeriodStart!.toISOString() : null,
-		period_end: hasStripePeriod ? joined.subPeriodEnd!.toISOString() : null,
+		period_start: hasStripePeriod
+			? (joined.subPeriodStart?.toISOString() ?? null)
+			: null,
+		period_end: hasStripePeriod
+			? (joined.subPeriodEnd?.toISOString() ?? null)
+			: null,
 	};
 
 	const kvWrite = env.KV.put(`apikey:${hashedKey}`, JSON.stringify(data), {

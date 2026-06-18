@@ -1,4 +1,5 @@
 import type {
+	IDataObject,
 	IExecuteFunctions,
 	ILoadOptionsFunctions,
 	INodeExecutionData,
@@ -360,9 +361,9 @@ export class RelayApi implements INodeType {
 					return [];
 				}
 
-				return accounts.map((account: any) => ({
+				return (accounts as IDataObject[]).map((account: IDataObject) => ({
 					name: `${account.display_name ?? account.username ?? account.id} (${account.platform})`,
-					value: account.id,
+					value: account.id as string,
 				}));
 			},
 		},
@@ -376,7 +377,7 @@ export class RelayApi implements INodeType {
 			try {
 				const resource = this.getNodeParameter('resource', i) as string;
 				const operation = this.getNodeParameter('operation', i) as string;
-				let response: any;
+				let response: IDataObject | undefined;
 
 				// ── Post ──
 				if (resource === 'post') {
@@ -384,9 +385,9 @@ export class RelayApi implements INodeType {
 						const content = this.getNodeParameter('content', i) as string;
 						const targets = this.getNodeParameter('targets', i) as string[];
 						const scheduledAt = this.getNodeParameter('scheduledAt', i) as string;
-						const mediaCollection = this.getNodeParameter('media', i) as any;
+						const mediaCollection = this.getNodeParameter('media', i) as IDataObject;
 
-						const body: Record<string, any> = {
+						const body: Record<string, unknown> = {
 							content,
 							targets,
 						};
@@ -400,8 +401,9 @@ export class RelayApi implements INodeType {
 							body.timezone = this.getNodeParameter('timezone', i) as string;
 						}
 
-						if (mediaCollection?.items?.length) {
-							body.media = mediaCollection.items.map((item: any) => ({
+						const mediaItems = mediaCollection?.items as IDataObject[] | undefined;
+						if (mediaItems?.length) {
+							body.media = mediaItems.map((item: IDataObject) => ({
 								url: item.url,
 								type: item.type,
 							}));
@@ -421,7 +423,7 @@ export class RelayApi implements INodeType {
 						response = await relayApiRequest.call(this, 'GET', '/v1/posts', undefined, qs);
 					} else if (operation === 'update') {
 						const postId = this.getNodeParameter('postId', i) as string;
-						const body: Record<string, any> = {};
+						const body: Record<string, unknown> = {};
 						const content = this.getNodeParameter('updateContent', i) as string;
 						const scheduledAt = this.getNodeParameter('updateScheduledAt', i) as string;
 						if (content) body.content = content;
@@ -492,7 +494,7 @@ export class RelayApi implements INodeType {
 				}
 
 				const executionData = this.helpers.constructExecutionMetaData(
-					this.helpers.returnJsonArray(response),
+					this.helpers.returnJsonArray(response as IDataObject),
 					{ itemData: { item: i } },
 				);
 				returnData.push(...executionData);

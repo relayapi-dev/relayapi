@@ -97,7 +97,7 @@ export function stylesForPort(port: AutomationPort): PortStyle {
 }
 
 function labelFor(port: AutomationPort): string {
-	if (port.label && port.label.trim()) return port.label;
+	if (port.label?.trim()) return port.label;
 	return port.key;
 }
 

@@ -1,8 +1,7 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { createDb, socialAccounts } from "@relayapi/db";
+import { type createDb, socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
-import { ErrorResponse } from "../schemas/common";
 import {
 	BookmarkBody,
 	EngagementResponse,

@@ -63,8 +63,8 @@ function getDateRange(preset: DatePreset): { from: string; to: string } {
       break;
   }
   return {
-    from: from.toISOString().split("T")[0]!,
-    to: to.toISOString().split("T")[0]!,
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
   };
 }
 
@@ -247,7 +247,10 @@ export function AnalyticsPageNew({
             Upgrade to the Pro plan to access cross-platform analytics,
             engagement metrics, and performance insights.
           </p>
-          <button className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+          <button
+            type="button"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
             Upgrade to Pro
           </button>
         </div>

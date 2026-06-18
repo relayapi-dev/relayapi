@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import {
   Plus,
@@ -18,7 +18,6 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
 
@@ -154,10 +153,14 @@ function TemplateDialog({
 
         <div className="space-y-4">
           <div>
-            <label className="text-xs font-medium text-foreground/70">
+            <label
+              htmlFor="template-name"
+              className="text-xs font-medium text-foreground/70"
+            >
               Name
             </label>
             <input
+              id="template-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -167,11 +170,15 @@ function TemplateDialog({
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground/70">
+            <label
+              htmlFor="template-description"
+              className="text-xs font-medium text-foreground/70"
+            >
               Description{" "}
               <span className="text-foreground/40">(optional)</span>
             </label>
             <input
+              id="template-description"
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -182,7 +189,10 @@ function TemplateDialog({
 
           <div>
             <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-foreground/70">
+              <label
+                htmlFor="template-content"
+                className="text-xs font-medium text-foreground/70"
+              >
                 Content
               </label>
               <span className="text-[11px] text-foreground/40">
@@ -190,6 +200,7 @@ function TemplateDialog({
               </span>
             </div>
             <textarea
+              id="template-content"
               value={content}
               onChange={(e) => setContent(e.target.value)}
               rows={6}
@@ -211,10 +222,14 @@ function TemplateDialog({
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground/70">
+            <label
+              htmlFor="template-tags"
+              className="text-xs font-medium text-foreground/70"
+            >
               Tags <span className="text-foreground/40">(comma-separated)</span>
             </label>
             <input
+              id="template-tags"
               type="text"
               value={tags}
               onChange={(e) => setTags(e.target.value)}
@@ -331,6 +346,7 @@ function TemplateCard({
           </div>
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
+              type="button"
               onClick={handleCopy}
               className="rounded p-1 hover:bg-accent/50 transition-colors"
               title="Copy content"
@@ -342,6 +358,7 @@ function TemplateCard({
               )}
             </button>
             <button
+              type="button"
               onClick={onEdit}
               className="rounded p-1 hover:bg-accent/50 transition-colors"
               title="Edit"
@@ -349,6 +366,7 @@ function TemplateCard({
               <Pencil className="size-3.5 text-foreground/50" />
             </button>
             <button
+              type="button"
               onClick={onDelete}
               className="rounded p-1 hover:bg-accent/50 transition-colors"
               title="Delete"

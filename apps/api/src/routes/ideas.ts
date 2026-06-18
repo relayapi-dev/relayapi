@@ -1,8 +1,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	createDb,
+	type createDb,
 	ideas,
-	ideaGroups,
 	ideaMedia,
 	ideaTags,
 	ideaComments,
@@ -23,7 +22,6 @@ import {
 	IdeaListQuery,
 	IdeaListResponse,
 	IdeaMediaResponse,
-	IdeaActivityResponse,
 	IdeaActivityListQuery,
 	IdeaActivityListResponse,
 	IdeaCommentResponse,
@@ -265,7 +263,6 @@ app.openapi(listIdeas, async (c) => {
 	}
 
 	// When filtering by tag_id, join through idea_tags
-	let rows: (typeof ideas.$inferSelect)[];
 	if (tag_id) {
 		const taggedIdeaIds = await db
 			.select({ ideaId: ideaTags.ideaId })
@@ -278,7 +275,7 @@ app.openapi(listIdeas, async (c) => {
 		conditions.push(inArray(ideas.id, ids));
 	}
 
-	rows = await db
+	const rows = await db
 		.select()
 		.from(ideas)
 		.where(and(...conditions))
@@ -323,14 +320,22 @@ app.openapi(listIdeas, async (c) => {
 	const tagsByIdeaId = new Map<string, (typeof tags.$inferSelect)[]>();
 	for (const row of allTagRows) {
 		const { ideaId, ...tagRow } = row;
-		if (!tagsByIdeaId.has(ideaId)) tagsByIdeaId.set(ideaId, []);
-		tagsByIdeaId.get(ideaId)!.push(tagRow as typeof tags.$inferSelect);
+		let group = tagsByIdeaId.get(ideaId);
+		if (!group) {
+			group = [];
+			tagsByIdeaId.set(ideaId, group);
+		}
+		group.push(tagRow as typeof tags.$inferSelect);
 	}
 
 	const mediaByIdeaId = new Map<string, (typeof ideaMedia.$inferSelect)[]>();
 	for (const row of allMediaRows) {
-		if (!mediaByIdeaId.has(row.ideaId)) mediaByIdeaId.set(row.ideaId, []);
-		mediaByIdeaId.get(row.ideaId)!.push(row);
+		let group = mediaByIdeaId.get(row.ideaId);
+		if (!group) {
+			group = [];
+			mediaByIdeaId.set(row.ideaId, group);
+		}
+		group.push(row);
 	}
 
 	return c.json(
@@ -472,24 +477,24 @@ app.openapi(createIdea, async (c) => {
 		);
 	}
 
-	const hasTags = Boolean(body.tag_ids && body.tag_ids.length > 0);
-	const hasMedia = Boolean(body.media && body.media.length > 0);
+	const tagIds = body.tag_ids && body.tag_ids.length > 0 ? body.tag_ids : null;
+	const mediaItems = body.media && body.media.length > 0 ? body.media : null;
 
 	// The tag insert, media insert, and both activity-log inserts are mutually
 	// independent once the idea row exists, so run them in one parallel batch
 	// instead of a sequential chain. Capture inserted media via .returning() so
 	// the response is built without a follow-up fetch.
 	const [, insertedMedia] = await Promise.all([
-		hasTags
+		tagIds
 			? db
 					.insert(ideaTags)
-					.values(body.tag_ids!.map((tagId) => ({ ideaId: row.id, tagId })))
+					.values(tagIds.map((tagId) => ({ ideaId: row.id, tagId })))
 			: Promise.resolve(undefined),
-		hasMedia
+		mediaItems
 			? db
 					.insert(ideaMedia)
 					.values(
-						body.media!.map((item, index) => ({
+						mediaItems.map((item, index) => ({
 							ideaId: row.id,
 							url: item.url,
 							type: item.type ?? inferMediaTypeFromUrl(item.url),
@@ -500,16 +505,16 @@ app.openapi(createIdea, async (c) => {
 					.returning()
 			: Promise.resolve([] as (typeof ideaMedia.$inferSelect)[]),
 		logActivity(db, row.id, keyId, "created"),
-		hasMedia
+		mediaItems
 			? logActivity(db, row.id, keyId, "media_added", {
-					count: body.media!.length,
+					count: mediaItems.length,
 				})
 			: Promise.resolve(undefined),
 	]);
 
 	// Tags were just inserted; fetch their details (the insert above returns only
 	// the join rows). Media rows come straight from the insert's .returning().
-	const tagRows = hasTags ? await fetchIdeaTags(db, row.id) : [];
+	const tagRows = tagIds ? await fetchIdeaTags(db, row.id) : [];
 
 	return c.json(
 		await serializeIdeaWithMedia(c.env, row, tagRows, insertedMedia ?? []),

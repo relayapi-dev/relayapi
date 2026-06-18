@@ -13,4 +13,8 @@ export type ActionHandler<A extends Action = Action> = (
 	ctx: RunContext,
 ) => Promise<void>;
 
-export type ActionRegistry = Record<string, ActionHandler<any>>;
+// Registry values are handlers for specific Action subtypes. `never` is the
+// broadest assignable parameter type (contravariance), so any concrete
+// ActionHandler<SpecificAction> is assignable here. dispatchAction casts back
+// to ActionHandler<Action> before invoking.
+export type ActionRegistry = Record<string, ActionHandler<never>>;

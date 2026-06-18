@@ -24,7 +24,8 @@ export const GET: APIRoute = async (ctx) => {
 		);
 	}
 
-	const rawKeyPromise = kv.get(`dashboard-key:${org.id}`);
+	const orgId = org.id;
+	const rawKeyPromise = kv.get(`dashboard-key:${orgId}`);
 	const clientPromise = getRelayClient(ctx.locals, API_BASE_URL);
 
 	const notifCountPromise = (async () => {
@@ -61,8 +62,8 @@ export const GET: APIRoute = async (ctx) => {
 			.where(eq(apikey.key, hashedKey))
 			.limit(1);
 		if (!row?.enabled) {
-			await kv.delete(`dashboard-key:${org.id}`);
-			clearClientCache(org.id!);
+			await kv.delete(`dashboard-key:${orgId}`);
+			clearClientCache(orgId);
 			return { has_api_key: false };
 		}
 		return { has_api_key: true };

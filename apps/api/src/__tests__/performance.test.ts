@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll } from "bun:test";
-import { PLATFORMS, type Platform } from "../schemas/common";
+import { PLATFORMS, } from "../schemas/common";
 import { CreatePostBody, UpdatePostBody } from "../schemas/posts";
 import { CreateApiKeyBody } from "../schemas/api-keys";
 import {
@@ -47,9 +47,9 @@ function benchmark(name: string, fn: () => void, iterations = ITERATIONS): Bench
 	const totalMs = performance.now() - start;
 
 	times.sort((a, b) => a - b);
-	const p50 = times[Math.floor(iterations * 0.5)]!;
-	const p95 = times[Math.floor(iterations * 0.95)]!;
-	const p99 = times[Math.floor(iterations * 0.99)]!;
+	const p50 = times[Math.floor(iterations * 0.5)] ?? 0;
+	const p95 = times[Math.floor(iterations * 0.95)] ?? 0;
+	const p99 = times[Math.floor(iterations * 0.99)] ?? 0;
 
 	return {
 		name,
@@ -81,9 +81,9 @@ async function benchmarkAsync(
 	const totalMs = performance.now() - start;
 
 	times.sort((a, b) => a - b);
-	const p50 = times[Math.floor(iterations * 0.5)]!;
-	const p95 = times[Math.floor(iterations * 0.95)]!;
-	const p99 = times[Math.floor(iterations * 0.99)]!;
+	const p50 = times[Math.floor(iterations * 0.5)] ?? 0;
+	const p95 = times[Math.floor(iterations * 0.95)] ?? 0;
+	const p99 = times[Math.floor(iterations * 0.99)] ?? 0;
 
 	return {
 		name,
@@ -137,29 +137,10 @@ class MockKV {
 	}
 }
 
-class MockR2Bucket {
-	async put(_key: string, _body: unknown, _opts?: unknown) {
-		return {};
-	}
-	async get(_key: string) {
-		return null;
-	}
-	async delete(_key: string) {}
-	async createMultipartUpload(_key: string, _opts?: unknown) {
-		return { uploadId: "mock-upload-id" };
-	}
-}
 
 // ===========================================================================
 // Setup mock app
 // ===========================================================================
-
-let app: Awaited<ReturnType<typeof createApp>>;
-
-async function createApp() {
-	const { default: appModule } = await import("../app");
-	return appModule;
-}
 
 function createMockEnv(): Env {
 	return createSharedMockEnv().env;
@@ -392,11 +373,12 @@ describe("Platform limits performance", () => {
 			for (const platform of PLATFORMS) {
 				const limits = PLATFORM_LIMITS[platform];
 				const chars = countChars(content, platform);
-				const withinLimit = chars <= limits.chars.maxChars;
-				const nearLimit = chars > limits.chars.maxChars * 0.9;
+				// Simulate validation work (results intentionally discarded — benchmark only)
+				void (chars <= limits.chars.maxChars);
+				void (chars > limits.chars.maxChars * 0.9);
 				// Simulate media check
 				const imageSize = 2 * 1024 * 1024;
-				const withinMediaLimit = imageSize <= limits.media.maxImageSize;
+				void (imageSize <= limits.media.maxImageSize);
 			}
 		});
 		printResult(r);
@@ -445,7 +427,7 @@ describe("Cryptographic operations performance", () => {
 			const hex = Array.from(bytes)
 				.map((b) => b.toString(16).padStart(2, "0"))
 				.join("");
-			const key = `rlay_live_${hex}`;
+			void `rlay_live_${hex}`;
 		});
 		printResult(r);
 		expect(r.avgMs).toBeLessThan(0.05);
@@ -458,7 +440,7 @@ describe("Cryptographic operations performance", () => {
 			const hex = Array.from(bytes)
 				.map((b) => b.toString(16).padStart(2, "0"))
 				.join("");
-			const secret = `whsec_${hex}`;
+			void `whsec_${hex}`;
 		});
 		printResult(r);
 		expect(r.avgMs).toBeLessThan(0.05);
@@ -489,7 +471,7 @@ describe("ID generation performance", () => {
 			const hex = Array.from(bytes)
 				.map((b) => b.toString(16).padStart(2, "0"))
 				.join("");
-			const id = `post_${hex}`;
+			void `post_${hex}`;
 		});
 		printResult(r);
 		expect(r.avgMs).toBeLessThan(0.05);
@@ -608,7 +590,7 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  GET /health: ${avg.toFixed(3)}ms avg | P50=${times[Math.floor(iterations * 0.5)]!.toFixed(3)}ms P95=${times[Math.floor(iterations * 0.95)]!.toFixed(3)}ms P99=${times[Math.floor(iterations * 0.99)]!.toFixed(3)}ms | ${Math.round((iterations / (avg * iterations)) * 1000000)} ops/s`,
+			`  GET /health: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms | ${Math.round((iterations / (avg * iterations)) * 1000000)} ops/s`,
 		);
 		expect(avg).toBeLessThan(5);
 	});
@@ -627,7 +609,7 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  Auth middleware: ${avg.toFixed(3)}ms avg | P50=${times[Math.floor(iterations * 0.5)]!.toFixed(3)}ms P95=${times[Math.floor(iterations * 0.95)]!.toFixed(3)}ms P99=${times[Math.floor(iterations * 0.99)]!.toFixed(3)}ms`,
+			`  Auth middleware: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
 		expect(avg).toBeLessThan(10);
 	});
@@ -653,7 +635,7 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  Auth reject (401): ${avg.toFixed(3)}ms avg | P50=${times[Math.floor(iterations * 0.5)]!.toFixed(3)}ms P95=${times[Math.floor(iterations * 0.95)]!.toFixed(3)}ms P99=${times[Math.floor(iterations * 0.99)]!.toFixed(3)}ms`,
+			`  Auth reject (401): ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
 		expect(avg).toBeLessThan(10);
 	});
@@ -671,7 +653,7 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  GET /v1/queue/next-slot: ${avg.toFixed(3)}ms avg | P50=${times[Math.floor(iterations * 0.5)]!.toFixed(3)}ms P95=${times[Math.floor(iterations * 0.95)]!.toFixed(3)}ms P99=${times[Math.floor(iterations * 0.99)]!.toFixed(3)}ms`,
+			`  GET /v1/queue/next-slot: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
 		expect(avg).toBeLessThan(10);
 	});
@@ -698,7 +680,7 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  POST /v1/queue/slots: ${avg.toFixed(3)}ms avg | P50=${times[Math.floor(iterations * 0.5)]!.toFixed(3)}ms P95=${times[Math.floor(iterations * 0.95)]!.toFixed(3)}ms P99=${times[Math.floor(iterations * 0.99)]!.toFixed(3)}ms`,
+			`  POST /v1/queue/slots: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
 		expect(avg).toBeLessThan(10);
 	});
@@ -716,7 +698,7 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  GET /v1/queue/slots: ${avg.toFixed(3)}ms avg | P50=${times[Math.floor(iterations * 0.5)]!.toFixed(3)}ms P95=${times[Math.floor(iterations * 0.95)]!.toFixed(3)}ms P99=${times[Math.floor(iterations * 0.99)]!.toFixed(3)}ms`,
+			`  GET /v1/queue/slots: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
 		expect(avg).toBeLessThan(10);
 	});
@@ -738,7 +720,7 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  GET /v1/queue/preview: ${avg.toFixed(3)}ms avg | P50=${times[Math.floor(iterations * 0.5)]!.toFixed(3)}ms P95=${times[Math.floor(iterations * 0.95)]!.toFixed(3)}ms P99=${times[Math.floor(iterations * 0.99)]!.toFixed(3)}ms`,
+			`  GET /v1/queue/preview: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
 		expect(avg).toBeLessThan(10);
 	});
@@ -762,7 +744,7 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  GET /openapi.json: ${avg.toFixed(3)}ms avg | P50=${times[Math.floor(iterations * 0.5)]!.toFixed(3)}ms P95=${times[Math.floor(iterations * 0.95)]!.toFixed(3)}ms P99=${times[Math.floor(iterations * 0.99)]!.toFixed(3)}ms`,
+			`  GET /openapi.json: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
 		expect(avg).toBeLessThan(250);
 	});

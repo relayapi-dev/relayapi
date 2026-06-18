@@ -1,6 +1,33 @@
 // apps/api/src/services/automations/ports.ts
 import type { GraphNode, Port } from "../../schemas/automation-graph";
 
+// Loose shapes for node config parsed from JSON. Fields are optional because
+// the config is untrusted at this layer; all access is guarded at runtime.
+interface ConfigButton {
+	type?: string;
+	id?: string;
+	label?: string;
+}
+interface ConfigBlock {
+	type?: string;
+	buttons?: ConfigButton[];
+	cards?: ConfigCard[];
+}
+interface ConfigCard {
+	buttons?: ConfigButton[];
+}
+interface ConfigQuickReply {
+	id?: string;
+	label?: string;
+}
+interface ConfigVariant {
+	key?: string;
+	label?: string;
+}
+interface ConfigAction {
+	on_error?: string;
+}
+
 /**
  * Derives the canonical port array for a node from its kind + config.
  * Pure function. Always returns a fresh array.
@@ -12,7 +39,7 @@ export function derivePorts(node: Pick<GraphNode, "kind" | "config">): Port[] {
       const ports: Port[] = [{ key: "in", direction: "input" }];
       ports.push({ key: "next", direction: "output", role: "default" });
       // branch buttons (across all text/card blocks) + quick replies
-      const blocks: any[] = Array.isArray(cfg.blocks) ? cfg.blocks : [];
+      const blocks: ConfigBlock[] = Array.isArray(cfg.blocks) ? cfg.blocks : [];
       for (const b of blocks) {
         if (Array.isArray(b?.buttons)) {
           for (const btn of b.buttons) {
@@ -55,7 +82,9 @@ export function derivePorts(node: Pick<GraphNode, "kind" | "config">): Port[] {
           }
         }
       }
-      const qrs: any[] = Array.isArray(cfg.quick_replies) ? cfg.quick_replies : [];
+      const qrs: ConfigQuickReply[] = Array.isArray(cfg.quick_replies)
+        ? cfg.quick_replies
+        : [];
       for (const qr of qrs) {
         if (typeof qr?.id === "string") {
           ports.push({
@@ -92,7 +121,9 @@ export function derivePorts(node: Pick<GraphNode, "kind" | "config">): Port[] {
       ];
     case "randomizer": {
       const ports: Port[] = [{ key: "in", direction: "input" }];
-      const variants: any[] = Array.isArray(cfg.variants) ? cfg.variants : [];
+      const variants: ConfigVariant[] = Array.isArray(cfg.variants)
+        ? cfg.variants
+        : [];
       for (const v of variants) {
         if (typeof v?.key === "string") {
           ports.push({
@@ -110,7 +141,9 @@ export function derivePorts(node: Pick<GraphNode, "kind" | "config">): Port[] {
         { key: "in", direction: "input" },
         { key: "next", direction: "output", role: "default" },
       ];
-      const actions: any[] = Array.isArray(cfg.actions) ? cfg.actions : [];
+      const actions: ConfigAction[] = Array.isArray(cfg.actions)
+        ? cfg.actions
+        : [];
       if (actions.some((a) => a?.on_error === "abort" || a?.on_error === undefined)) {
         ports.push({ key: "error", direction: "output", role: "error" });
       }

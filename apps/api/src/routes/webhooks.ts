@@ -11,7 +11,6 @@ import {
 	WebhookListResponse,
 	WebhookResponse,
 } from "../schemas/webhooks";
-import { deliverWebhook } from "../services/webhook-delivery";
 import type { Env, Variables } from "../types";
 import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
 import { assertScopedCreateWorkspace } from "../lib/request-access";

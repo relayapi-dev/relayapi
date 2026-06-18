@@ -247,6 +247,9 @@ export async function discoverAdAccounts(
 		return platformAccounts;
 	}
 
+	// Narrowed past the guard above: listPromotablePages is defined here.
+	const listPromotablePages = adapter.listPromotablePages;
+
 	// Match each ad account's promotable Pages/IG accounts against ALL of the
 	// org's connected Meta accounts (not just the one that triggered discovery).
 	const connected = await db
@@ -288,10 +291,7 @@ export async function discoverAdAccounts(
 		const results = await Promise.all(
 			batch.map(async (pa) => {
 				try {
-					const promotable = await adapter.listPromotablePages!(
-						accessToken,
-						pa.id,
-					);
+					const promotable = await listPromotablePages(accessToken, pa.id);
 					return { pa, promotable };
 				} catch {
 					// A throttled/unauthorized account is treated as "no matches".
@@ -319,12 +319,15 @@ export async function discoverAdAccounts(
 			}
 
 			const matched = [...matches.values()];
+			// matches.size > 0 was asserted above, so matched is non-empty.
+			const firstMatch = matched[0];
+			if (!firstMatch) continue;
 			// Primary = a connected Facebook Page (carries the Meta ads user
 			// token) when available, else the triggering account, else any match.
 			const primary =
 				matched.find((m) => m.platform === "facebook") ??
 				triggering ??
-				matched[0]!;
+				firstMatch;
 
 			toUpsert.push({
 				pa,
@@ -407,7 +410,7 @@ export async function createCampaign(
 			platform: ctx.adPlatform,
 			platformCampaignId: result.platformCampaignId,
 			name: params.name,
-			objective: params.objective as any,
+			objective: params.objective as typeof adCampaigns.$inferInsert.objective,
 			status: "active",
 			dailyBudgetCents: params.dailyBudgetCents,
 			lifetimeBudgetCents: params.lifetimeBudgetCents,
@@ -489,7 +492,9 @@ export async function createAd(
 				platform: ctx.adPlatform,
 				platformCampaignId: campaignResult.platformCampaignId,
 				name: params.name,
-				objective: (params.objective as any) ?? "engagement",
+				objective:
+					(params.objective as typeof adCampaigns.$inferInsert.objective) ??
+					"engagement",
 				status: "active",
 				dailyBudgetCents: params.dailyBudgetCents,
 				lifetimeBudgetCents: params.lifetimeBudgetCents,
@@ -497,7 +502,10 @@ export async function createAd(
 			})
 			.returning();
 
-		campaignId = newCampaign!.id;
+		if (!newCampaign) {
+			throw new AdPlatformError("DB_ERROR", "Failed to create campaign");
+		}
+		campaignId = newCampaign.id;
 		platformCampaignId = campaignResult.platformCampaignId;
 		platformAdSetId = campaignResult.platformAdSetId;
 	} else {
@@ -516,7 +524,19 @@ export async function createAd(
 		if (!existing) throw new AdPlatformError("NOT_FOUND", "Campaign not found");
 
 		platformCampaignId = existing.platformCampaignId ?? undefined;
-		platformAdSetId = (existing.metadata as any)?.platformAdSetId;
+		platformAdSetId = (
+			existing.metadata as { platformAdSetId?: string } | null
+		)?.platformAdSetId;
+	}
+
+	if (!platformCampaignId) {
+		throw new AdPlatformError(
+			"MISSING_CAMPAIGN",
+			"Could not resolve platform campaign id",
+		);
+	}
+	if (!campaignId) {
+		throw new AdPlatformError("MISSING_CAMPAIGN", "Could not resolve campaign id");
 	}
 
 	// Create ad on platform
@@ -524,7 +544,7 @@ export async function createAd(
 		ctx.accessToken,
 		ctx.adAccount.platformAdAccountId,
 		{
-			campaignId: platformCampaignId!,
+			campaignId: platformCampaignId,
 			adSetId: platformAdSetId,
 			name: params.name,
 			headline: params.headline,
@@ -548,19 +568,19 @@ export async function createAd(
 		.values({
 			organizationId: orgId,
 			workspaceId: ctx.adAccount.workspaceId,
-			campaignId: campaignId!,
+			campaignId,
 			adAccountId: params.adAccountId,
 			platform: ctx.adPlatform,
 			platformAdId: adResult.platformAdId,
 			name: params.name,
-			status: adResult.status as any,
+			status: adResult.status as typeof ads.$inferInsert.status,
 			headline: params.headline,
 			body: params.body,
 			callToAction: params.callToAction,
 			linkUrl: params.linkUrl,
 			imageUrl: params.imageUrl,
 			videoUrl: params.videoUrl,
-			targeting: params.targeting as any,
+			targeting: params.targeting as typeof ads.$inferInsert.targeting,
 			dailyBudgetCents: params.dailyBudgetCents,
 			lifetimeBudgetCents: params.lifetimeBudgetCents,
 			startDate: params.startDate ? new Date(params.startDate) : null,
@@ -625,6 +645,11 @@ export async function boostPost(
 		boostExternalPostId = ext.id;
 		postSocialAccountId = ext.socialAccountId;
 	} else {
+		// Exactly one of externalPostId/postTargetId is provided (enforced by
+		// BoostPostBody); in this branch postTargetId must be present.
+		if (!params.postTargetId) {
+			throw new AdPlatformError("NOT_FOUND", "Post target not found");
+		}
 		// Verify the post target exists, is published, and belongs to this org
 		const [target] = await db
 			.select()
@@ -632,7 +657,7 @@ export async function boostPost(
 			.innerJoin(posts, eq(postTargets.postId, posts.id))
 			.where(
 				and(
-					eq(postTargets.id, params.postTargetId!),
+					eq(postTargets.id, params.postTargetId),
 					eq(posts.organizationId, orgId),
 				),
 			)
@@ -718,13 +743,18 @@ export async function boostPost(
 			platform: ctx.adPlatform,
 			platformCampaignId: result.platformCampaignId,
 			name: adName,
-			objective: (params.objective ?? "engagement") as any,
+			objective: (params.objective ??
+				"engagement") as typeof adCampaigns.$inferInsert.objective,
 			status: "active",
 			dailyBudgetCents: params.dailyBudgetCents,
 			lifetimeBudgetCents: params.lifetimeBudgetCents,
 			metadata: { platformAdSetId: result.platformAdSetId },
 		})
 		.returning();
+
+	if (!campaign) {
+		throw new AdPlatformError("DB_ERROR", "Failed to create campaign");
+	}
 
 	const endDate = params.endDate
 		? new Date(params.endDate)
@@ -735,7 +765,7 @@ export async function boostPost(
 		.values({
 			organizationId: orgId,
 			workspaceId: ctx.adAccount.workspaceId,
-			campaignId: campaign!.id,
+			campaignId: campaign.id,
 			adAccountId: params.adAccountId,
 			platform: ctx.adPlatform,
 			platformAdId: result.platformAdId,
@@ -744,7 +774,7 @@ export async function boostPost(
 			boostPostTargetId,
 			boostExternalPostId,
 			boostPlatformPostId: platformPostId,
-			targeting: params.targeting as any,
+			targeting: params.targeting as typeof ads.$inferInsert.targeting,
 			dailyBudgetCents: params.dailyBudgetCents,
 			lifetimeBudgetCents: params.lifetimeBudgetCents,
 			endDate,

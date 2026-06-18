@@ -6,7 +6,7 @@
  * - inbox-feed.ts (conversations, messaging)
  */
 
-import { createDb, socialAccounts } from "@relayapi/db";
+import { type createDb, socialAccounts } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { maybeDecrypt } from "../lib/crypto";
 
@@ -72,7 +72,12 @@ export async function getAccountsForOrg(
 	}
 	const conditions = [eq(socialAccounts.organizationId, orgId)];
 	if (opts?.platform) {
-		conditions.push(eq(socialAccounts.platform, opts.platform as any));
+		conditions.push(
+			eq(
+				socialAccounts.platform,
+				opts.platform as typeof socialAccounts.$inferSelect.platform,
+			),
+		);
 	}
 	if (workspaceScope !== "all") {
 		conditions.push(inArray(socialAccounts.workspaceId, workspaceScope));

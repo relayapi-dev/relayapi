@@ -14,7 +14,8 @@ export function outputTable(
 		return;
 	}
 
-	const cols = columns ?? Object.keys(rows[0]!);
+	const firstRow = rows[0];
+	const cols = columns ?? (firstRow ? Object.keys(firstRow) : []);
 	const widths = cols.map((col) =>
 		Math.max(
 			col.length,
@@ -22,14 +23,14 @@ export function outputTable(
 		),
 	);
 
-	const header = cols.map((col, i) => col.padEnd(widths[i]!)).join("  ");
+	const header = cols.map((col, i) => col.padEnd(widths[i] ?? 0)).join("  ");
 	const separator = widths.map((w) => "-".repeat(w)).join("  ");
 
 	console.log(pc.bold(header));
 	console.log(pc.dim(separator));
 	for (const row of rows) {
 		const line = cols
-			.map((col, i) => String(row[col] ?? "").padEnd(widths[i]!))
+			.map((col, i) => String(row[col] ?? "").padEnd(widths[i] ?? 0))
 			.join("  ");
 		console.log(line);
 	}
@@ -65,5 +66,5 @@ export function isTableMode(opts: { table?: boolean }): boolean {
 
 export function truncate(str: string, max: number): string {
 	if (str.length <= max) return str;
-	return str.slice(0, max - 1) + "…";
+	return `${str.slice(0, max - 1)}…`;
 }

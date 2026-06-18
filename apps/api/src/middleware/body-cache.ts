@@ -3,7 +3,7 @@ import type { Env, Variables } from "../types";
 
 function isJsonContentType(contentType: string | undefined): boolean {
 	if (!contentType) return false;
-	const mimeType = contentType.split(";")[0]!.trim().toLowerCase();
+	const mimeType = (contentType.split(";")[0] ?? "").trim().toLowerCase();
 	return mimeType === "application/json" || mimeType.endsWith("+json");
 }
 

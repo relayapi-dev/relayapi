@@ -4,7 +4,6 @@ import {
 	CalendarDays,
 	CheckCircle,
 	CreditCard,
-	Mail,
 	Megaphone,
 	Unplug,
 } from "lucide-react";
@@ -63,14 +62,14 @@ export const ORG_COLORS = [
 	"bg-violet-600",
 	"bg-orange-600",
 	"bg-teal-600",
-];
+] as const;
 
 export function getOrgColor(id: string): string {
 	let hash = 0;
 	for (let i = 0; i < id.length; i++) {
 		hash = (hash * 31 + id.charCodeAt(i)) | 0;
 	}
-	return ORG_COLORS[Math.abs(hash) % ORG_COLORS.length]!;
+	return ORG_COLORS[Math.abs(hash) % ORG_COLORS.length] ?? ORG_COLORS[0];
 }
 
 export function slugify(text: string): string {

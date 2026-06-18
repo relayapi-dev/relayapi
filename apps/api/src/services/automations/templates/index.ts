@@ -37,7 +37,7 @@ export type TemplateEntrypoint = {
 export type TemplateBuildInput = {
 	kind: TemplateKind;
 	channel: string;
-	config: Record<string, any>;
+	config: Record<string, unknown>;
 	socialAccountId?: string;
 };
 

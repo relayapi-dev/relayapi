@@ -23,6 +23,21 @@ type CapturedCall = {
 	body: unknown;
 };
 
+// Captured request bodies are platform-specific JSON whose deeply-nested shape
+// differs per platform. A single helper centralizes the dynamic access so the
+// assertions can chain (body.message.attachment.payload...) without repeating a
+// dozen one-off interfaces.
+// biome-ignore lint/suspicious/noExplicitAny: dynamic per-platform JSON request body inspected by assertions
+function asJson(body: unknown): any {
+	return body;
+}
+
+function firstCall(calls: CapturedCall[]): CapturedCall {
+	const call = calls[0];
+	if (!call) throw new Error("expected at least one captured call");
+	return call;
+}
+
 function mockFetchCapture(): { calls: CapturedCall[] } {
 	const calls: CapturedCall[] = [];
 	globalThis.fetch = mock(async (input: unknown, init?: RequestInit) => {
@@ -31,7 +46,7 @@ function mockFetchCapture(): { calls: CapturedCall[] } {
 		const headers: Record<string, string> = {};
 		if (init?.headers) {
 			const h = init.headers as Record<string, string>;
-			for (const k of Object.keys(h)) headers[k] = h[k]!;
+			for (const k of Object.keys(h)) headers[k] = h[k] ?? "";
 		}
 		let parsedBody: unknown = null;
 		if (init?.body) {
@@ -91,7 +106,7 @@ describe("Instagram DM encoding", () => {
 		});
 		expect(res.success).toBe(true);
 		expect(calls).toHaveLength(1);
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		expect(body.recipient.id).toBe("recip_456");
 		expect(body.message.attachment.type).toBe("template");
 		expect(body.message.attachment.payload.template_type).toBe("button");
@@ -115,7 +130,7 @@ describe("Instagram DM encoding", () => {
 				{ id: "q2", label: "Bad" },
 			],
 		});
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		expect(body.message.text).toBe("How are you?");
 		expect(body.message.quick_replies).toHaveLength(2);
 		expect(body.message.quick_replies[0]).toEqual({
@@ -140,7 +155,7 @@ describe("Instagram DM encoding", () => {
 				},
 			],
 		});
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		expect(body.message.attachment.payload.template_type).toBe("generic");
 		expect(body.message.attachment.payload.elements).toHaveLength(3);
 		expect(body.message.attachment.payload.elements[0].title).toBe("Card 1");
@@ -166,7 +181,7 @@ describe("Instagram DM encoding", () => {
 				{ id: "u", type: "url", label: "Visit", url: "https://ex.com" },
 			],
 		});
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		const btns = body.message.attachment.payload.buttons;
 		expect(btns).toHaveLength(1);
 		expect(btns[0].type).toBe("web_url");
@@ -180,7 +195,7 @@ describe("Instagram DM encoding", () => {
 			text: "",
 			attachments: [{ type: "image", url: "https://ex.com/photo.jpg" }],
 		});
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		expect(body.message.attachment.type).toBe("image");
 		expect(body.message.attachment.payload.url).toBe("https://ex.com/photo.jpg");
 	});
@@ -199,7 +214,7 @@ describe("Facebook Messenger encoding", () => {
 			text: "Choose:",
 			buttons: [{ id: "yes", type: "branch", label: "Yes" }],
 		});
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		expect(body.messaging_type).toBe("UPDATE");
 		expect(body.message.attachment.payload.template_type).toBe("button");
 		expect(body.message.attachment.payload.text).toBe("Choose:");
@@ -214,7 +229,7 @@ describe("Facebook Messenger encoding", () => {
 			text: "Call us",
 			buttons: [{ id: "c", type: "call", label: "Call", phone: "+15551234" }],
 		});
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		const btn = body.message.attachment.payload.buttons[0];
 		expect(btn.type).toBe("phone_number");
 		expect(btn.payload).toBe("+15551234");
@@ -238,7 +253,7 @@ describe("WhatsApp encoding", () => {
 			],
 		});
 		expect(res.success).toBe(true);
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		expect(body.messaging_product).toBe("whatsapp");
 		expect(body.type).toBe("interactive");
 		expect(body.interactive.type).toBe("button");
@@ -260,7 +275,7 @@ describe("WhatsApp encoding", () => {
 			gallery: [{ title: "X" }],
 		});
 		expect(res.success).toBe(true);
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		// Text with no buttons → plain text payload. No `interactive` or
 		// `template` keys produced for quick_replies / card / gallery.
 		expect(body.type).toBe("text");
@@ -277,7 +292,7 @@ describe("WhatsApp encoding", () => {
 				{ type: "image", url: "https://ex.com/pic.jpg", caption: "nice" },
 			],
 		});
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		expect(body.type).toBe("image");
 		expect(body.image.link).toBe("https://ex.com/pic.jpg");
 		expect(body.image.caption).toBe("nice");
@@ -300,8 +315,8 @@ describe("Telegram encoding", () => {
 				{ id: "b", type: "branch", label: "B" },
 			],
 		});
-		expect(calls[0]!.url).toContain("/sendMessage");
-		const body = calls[0]!.body as any;
+		expect(firstCall(calls).url).toContain("/sendMessage");
+		const body = asJson(firstCall(calls).body);
 		expect(body.text).toBe("Pick one:");
 		expect(body.reply_markup.inline_keyboard).toEqual([
 			[{ text: "A", callback_data: "a" }],
@@ -317,7 +332,7 @@ describe("Telegram encoding", () => {
 			text: "Visit:",
 			buttons: [{ id: "u", type: "url", label: "Site", url: "https://ex.com" }],
 		});
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		expect(body.reply_markup.inline_keyboard[0][0]).toEqual({
 			text: "Site",
 			url: "https://ex.com",
@@ -335,7 +350,7 @@ describe("Telegram encoding", () => {
 				{ id: "b", label: "Bad", icon: "😢" },
 			],
 		});
-		const body = calls[0]!.body as any;
+		const body = asJson(firstCall(calls).body);
 		expect(body.reply_markup.one_time_keyboard).toBe(true);
 		expect(body.reply_markup.keyboard).toEqual([
 			[{ text: "Good" }],
@@ -351,8 +366,8 @@ describe("Telegram encoding", () => {
 			text: "",
 			attachments: [{ type: "video", url: "https://ex.com/v.mp4" }],
 		});
-		expect(calls[0]!.url).toContain("/sendVideo");
-		const body = calls[0]!.body as any;
+		expect(firstCall(calls).url).toContain("/sendVideo");
+		const body = asJson(firstCall(calls).body);
 		expect(body.video).toBe("https://ex.com/v.mp4");
 	});
 
@@ -368,8 +383,8 @@ describe("Telegram encoding", () => {
 				image_url: "https://ex.com/px.png",
 			},
 		});
-		expect(calls[0]!.url).toContain("/sendPhoto");
-		const body = calls[0]!.body as any;
+		expect(firstCall(calls).url).toContain("/sendPhoto");
+		const body = asJson(firstCall(calls).body);
 		expect(body.photo).toBe("https://ex.com/px.png");
 		expect(body.caption).toContain("Product X");
 		expect(body.caption).toContain("Best product");

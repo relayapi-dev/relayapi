@@ -126,7 +126,9 @@ describe("derivePorts x port-handles", () => {
 		expect(inputs.length).toBe(1);
 		expect(outputs.length).toBe(2);
 		expect(outputs.map((p) => p.key).sort()).toEqual(["false", "true"]);
-		expect(stylesForPort(outputs[0]!).dot).toMatch(/#1fa971|#d64545/);
+		const firstOutput = outputs[0];
+		if (!firstOutput) throw new Error("expected at least one output port");
+		expect(stylesForPort(firstOutput).dot).toMatch(/#1fa971|#d64545/);
 	});
 
 	it("a message node with two branch buttons yields 3 output handles", () => {

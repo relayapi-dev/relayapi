@@ -127,13 +127,23 @@ export function ContactSearchPicker({ accountId, selected, onSelectionChange }: 
   return (
     <div ref={containerRef} className="relative">
       {/* Trigger area */}
+      {/* biome-ignore lint/a11y/useSemanticElements: interactive wrapper cannot be a button due to nested controls */}
       <div
+        role="button"
+        tabIndex={0}
         className={cn(
           "min-h-[38px] w-full rounded-md border bg-background px-2 py-1.5 text-sm cursor-pointer transition-colors",
           open ? "border-ring ring-1 ring-ring" : "border-border hover:border-ring/50",
           !accountId && "opacity-50 pointer-events-none"
         )}
         onClick={() => { setOpen(!open); setTimeout(() => inputRef.current?.focus(), 50); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen(!open);
+            setTimeout(() => inputRef.current?.focus(), 50);
+          }
+        }}
       >
         {selected.length === 0 ? (
           <span className="text-muted-foreground px-1 py-0.5 text-sm">

@@ -84,7 +84,9 @@ describe("PerfTracker", () => {
 		const longSql = "select ".padEnd(500, "x");
 		for (let i = 0; i < 60; i++) t.recordQuery(longSql);
 		expect(t.dbQueries.length).toBe(50);
-		expect(t.dbQueries[0]!.sql.length).toBeLessThanOrEqual(120);
+		const firstQuery = t.dbQueries[0];
+		if (!firstQuery) throw new Error("expected a recorded query");
+		expect(firstQuery.sql.length).toBeLessThanOrEqual(120);
 	});
 });
 

@@ -62,7 +62,7 @@ export function WeekTimeGrid({ currentDate, postsByHour, onClickDateTime, onEdit
     if (!scrollRef.current) return;
     const now = new Date();
     const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false }).formatToParts(now);
-    const currentHour = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0");
+    const currentHour = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
     if (currentHour >= 8 && currentHour <= 19) {
       const rowIndex = currentHour - 8;
       scrollRef.current.scrollTop = Math.max(rowIndex - 1, 0) * 144;
@@ -121,6 +121,7 @@ export function WeekTimeGrid({ currentDate, postsByHour, onClickDateTime, onEdit
         {earlyPostCount > 0 && (
           <>
             <button
+              type="button"
               onClick={() => setShowEarlyHours((v) => !v)}
               className="grid grid-cols-[48px_1fr] w-full border-b border-border bg-muted/30 hover:bg-muted/50 transition-colors"
             >
@@ -155,6 +156,7 @@ export function WeekTimeGrid({ currentDate, postsByHour, onClickDateTime, onEdit
         {eveningPostCount > 0 && (
           <>
             <button
+              type="button"
               onClick={() => setShowEveningHours((v) => !v)}
               className="grid grid-cols-[48px_1fr] w-full border-b border-border bg-muted/30 hover:bg-muted/50 transition-colors"
             >

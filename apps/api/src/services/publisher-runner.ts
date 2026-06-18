@@ -93,17 +93,18 @@ export async function publishToTargets(
 	for (const target of targets) {
 		const publisher = getPublisher(target.platform);
 
-		if (!responseTargets[target.key]) {
-			responseTargets[target.key] = {
+		let entry = responseTargets[target.key];
+		if (!entry) {
+			entry = {
 				status: "published",
 				platform: target.platform,
 				accounts: [],
 			};
+			responseTargets[target.key] = entry;
 		}
 
 		for (const account of target.accounts) {
 			if (!publisher) {
-				const entry = responseTargets[target.key]!;
 				entry.accounts.push({ id: account.id, username: account.username, url: null });
 				failureCounts[target.key] = (failureCounts[target.key] ?? 0) + 1;
 				entry.status = "failed";
@@ -210,10 +211,11 @@ export async function publishToTargets(
 	const publishResults = await Promise.allSettled(publishTasks.map((t) => t.task()));
 
 	// Process results
-	for (let i = 0; i < publishTasks.length; i++) {
-		const { targetKey, accountId, username } = publishTasks[i]!;
-		const settled = publishResults[i]!;
-		const entry = responseTargets[targetKey]!;
+	for (const [i, task] of publishTasks.entries()) {
+		const { targetKey, accountId, username } = task;
+		const settled = publishResults[i];
+		const entry = responseTargets[targetKey];
+		if (!settled || !entry) continue;
 
 		const result = settled.status === "fulfilled"
 			? settled.value

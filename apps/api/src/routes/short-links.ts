@@ -327,7 +327,8 @@ app.openapi(updateConfigRoute, async (c) => {
 		})
 		.returning();
 
-	const config = rows[0]!;
+	const config = rows[0];
+	if (!config) throw new Error("Failed to upsert short link config");
 
 	return c.json(
 		{

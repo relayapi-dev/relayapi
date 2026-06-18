@@ -42,7 +42,7 @@ export function CalendarView({
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
 
-  const { postsByDate, postsByHour, drafts, loading, error, refetch, silentRefetch, optimisticMove, truncated } = useCalendarPosts(
+  const { postsByDate, postsByHour, drafts, loading, error, silentRefetch, optimisticMove, truncated } = useCalendarPosts(
     currentDate,
     filterQuery,
     statusFilter,

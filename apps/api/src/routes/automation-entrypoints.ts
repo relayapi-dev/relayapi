@@ -21,18 +21,20 @@ import {
 	EntrypointUpdateSchema,
 	validateEntrypointConfig,
 } from "../schemas/automation-entrypoints";
-import { ErrorResponse, PaginationParams } from "../schemas/common";
+import { ErrorResponse, } from "../schemas/common";
 import { armScheduleEntrypoint } from "../services/automations/scheduler";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
+import type { Context } from "hono";
 import type { Env, Variables } from "../types";
 import {
 	aggregateInsights,
 	EntrypointInsightsQuery,
 	InsightsResponseSchema,
-	type InsightsResponse,
 } from "./_automation-insights";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,14 +112,14 @@ function serializeEntrypoint(
 	return base;
 }
 
-function notFound(c: any, label = "Entrypoint") {
+function notFound(c: AppContext, label = "Entrypoint") {
 	return c.json(
 		{ error: { code: "NOT_FOUND", message: `${label} not found` } },
 		404,
 	);
 }
 
-async function loadScopedAutomation(c: any, id: string) {
+async function loadScopedAutomation(c: AppContext, id: string) {
 	const orgId = c.get("orgId");
 	const db = c.get("db");
 	const [row] = await db
@@ -131,7 +133,7 @@ async function loadScopedAutomation(c: any, id: string) {
 	return { row };
 }
 
-async function loadScopedEntrypoint(c: any, id: string) {
+async function loadScopedEntrypoint(c: AppContext, id: string) {
 	const orgId = c.get("orgId");
 	const db = c.get("db");
 	const [result] = await db
@@ -304,7 +306,7 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 		// Store an encrypted secret at rest. If ENCRYPTION_KEY is missing we fall
 		// back to plaintext so local dev without a key still works — the on-wire
 		// response has already captured the plaintext separately.
-		const envKey = (c.env as any).ENCRYPTION_KEY as string | undefined;
+		const envKey = c.env.ENCRYPTION_KEY as string | undefined;
 		config.webhook_secret = envKey
 			? await encryptToken(plaintextSecret, envKey)
 			: plaintextSecret;
@@ -459,6 +461,10 @@ const updateEntrypoint = createRoute({
 		},
 		404: {
 			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Conflict",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -708,7 +714,7 @@ app.openapi(rotateSecret, async (c) => {
 	}
 
 	const plaintext = randomSecretHex(32);
-	const envKey = (c.env as any).ENCRYPTION_KEY as string | undefined;
+	const envKey = c.env.ENCRYPTION_KEY as string | undefined;
 	const stored = envKey ? await encryptToken(plaintext, envKey) : plaintext;
 
 	const nextConfig = {

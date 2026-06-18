@@ -13,10 +13,35 @@ import { parseRateLimitHeaders } from "../rate-limits";
 
 const DEFAULT_LIMIT = 50;
 
-async function liFetch(
+interface LinkedInRawPost {
+	id?: string;
+	urn?: string;
+	commentary?: string;
+	createdAt?: number;
+	publishedAt?: number;
+	lifecycleState?: string;
+	visibility?: string;
+	distribution?: unknown;
+	content?: {
+		media?: { type?: string; id?: string };
+		multiImage?: { images?: Array<{ url?: string }> };
+	};
+}
+
+interface LinkedInPostsResponse {
+	elements?: LinkedInRawPost[];
+	paging?: { total?: number };
+}
+
+interface LinkedInSocialActionsResponse {
+	likesSummary?: { totalLikes?: number };
+	commentsSummary?: { totalFirstLevelComments?: number };
+}
+
+async function liFetch<T = unknown>(
 	url: string,
 	accessToken: string,
-): Promise<{ data: any; headers: Headers }> {
+): Promise<{ data: T; headers: Headers }> {
 	const res = await fetch(url, {
 		headers: getLinkedInRestHeaders(accessToken, {
 			"X-RestLi-Method": "FINDER",
@@ -33,13 +58,13 @@ async function liFetch(
 		const body = await res.text();
 		throw new Error(`LinkedIn API ${res.status}: ${body}`);
 	}
-	return { data: await res.json(), headers: res.headers };
+	return { data: (await res.json()) as T, headers: res.headers };
 }
 
-function parsePost(raw: any): ExternalPostData {
+function parsePost(raw: LinkedInRawPost): ExternalPostData {
 	const mediaUrls: string[] = [];
 	let mediaType: string | null = "text";
-	let thumbnailUrl: string | null = null;
+	const thumbnailUrl: string | null = null;
 
 	const content = raw.content ?? {};
 	if (content.media) {
@@ -62,7 +87,7 @@ function parsePost(raw: any): ExternalPostData {
 	const commentary = raw.commentary ?? "";
 
 	return {
-		platformPostId: raw.id ?? raw.urn,
+		platformPostId: raw.id ?? raw.urn ?? "",
 		// Construct permalink from post URN: urn:li:share:123 or urn:li:ugcPost:123
 		platformUrl: raw.id
 			? `https://www.linkedin.com/feed/update/${raw.id}/`
@@ -89,9 +114,12 @@ export const linkedinPostFetcher: ExternalPostFetcher = {
 		const start = options.cursor ? Number.parseInt(options.cursor, 10) : 0;
 
 		const authorUrn = `urn:li:organization:${platformAccountId}`;
-		let url = `${LINKEDIN_API_BASE}/rest/posts?author=${encodeURIComponent(authorUrn)}&q=author&count=${limit}&start=${start}&sortBy=LAST_MODIFIED`;
+		const url = `${LINKEDIN_API_BASE}/rest/posts?author=${encodeURIComponent(authorUrn)}&q=author&count=${limit}&start=${start}&sortBy=LAST_MODIFIED`;
 
-		const { data: json, headers } = await liFetch(url, accessToken);
+		const { data: json, headers } = await liFetch<LinkedInPostsResponse>(
+			url,
+			accessToken,
+		);
 		const elements = json.elements ?? [];
 
 		const posts: ExternalPostData[] = elements.map(parsePost);
@@ -112,7 +140,7 @@ export const linkedinPostFetcher: ExternalPostFetcher = {
 		for (const postId of platformPostIds) {
 			try {
 				const urn = postId.startsWith("urn:") ? postId : `urn:li:share:${postId}`;
-				const { data: json } = await liFetch(
+				const { data: json } = await liFetch<LinkedInSocialActionsResponse>(
 					`${LINKEDIN_API_BASE}/rest/socialActions/${encodeURIComponent(urn)}`,
 					accessToken,
 				);

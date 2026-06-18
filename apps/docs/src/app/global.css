@@ -25,11 +25,13 @@
 
 /* Ensure sidebar footer never shrinks — always pinned at bottom */
 aside>div:last-child {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui flex utilities with higher specificity */
 	flex-shrink: 0 !important;
 }
 
 /* Hide the dot at the end of the clerk TOC indicator */
 div.size-1.rounded-full.bg-fd-primary {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui TOC indicator styles with higher specificity */
 	display: none !important;
 }
 
@@ -57,24 +59,33 @@ div.size-1.rounded-full.bg-fd-primary {
 }
 
 article h1 {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui prose heading styles with higher specificity */
 	font-size: 1.75rem !important;
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui prose heading styles with higher specificity */
 	line-height: 2.625rem !important;
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui prose heading styles with higher specificity */
 	font-weight: 600 !important;
 }
 
 article h2 {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui prose heading styles with higher specificity */
 	font-size: 1.2rem !important;
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui prose heading styles with higher specificity */
 	line-height: 1.6rem !important;
 }
 
 article h3 {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui prose heading styles with higher specificity */
 	font-size: 1rem !important;
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui prose heading styles with higher specificity */
 	line-height: 1.6rem !important;
 }
 
 /* ─── Response body status code labels ─── */
 article h3.not-prose {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui prose heading styles with higher specificity */
 	font-size: 0.875rem !important;
+	/* biome-ignore lint/complexity/noImportantStyles: overrides fumadocs-ui prose heading styles with higher specificity */
 	line-height: 1.25rem !important;
 }
 

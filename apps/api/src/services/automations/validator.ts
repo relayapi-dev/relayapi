@@ -1,6 +1,6 @@
 // apps/api/src/services/automations/validator.ts
 import { applyDerivedPorts } from "./ports";
-import type { Graph, GraphNode } from "../../schemas/automation-graph";
+import type { Graph, } from "../../schemas/automation-graph";
 
 export type ValidationIssue = {
   code: string;
@@ -152,8 +152,12 @@ export function validateGraph(graph: Graph): ValidationResult {
   // 6. warnings: orphan output ports with no outgoing edge
   const outgoing = new Map<string, Set<string>>();
   for (const e of canonical.edges) {
-    if (!outgoing.has(e.from_node)) outgoing.set(e.from_node, new Set());
-    outgoing.get(e.from_node)!.add(e.from_port);
+    let ports = outgoing.get(e.from_node);
+    if (!ports) {
+      ports = new Set();
+      outgoing.set(e.from_node, ports);
+    }
+    ports.add(e.from_port);
   }
   for (const n of canonical.nodes) {
     for (const p of n.ports) {
@@ -174,8 +178,12 @@ export function validateGraph(graph: Graph): ValidationResult {
 function findCycles(graph: Graph): string[][] {
   const adj = new Map<string, string[]>();
   for (const e of graph.edges) {
-    if (!adj.has(e.from_node)) adj.set(e.from_node, []);
-    adj.get(e.from_node)!.push(e.to_node);
+    let targets = adj.get(e.from_node);
+    if (!targets) {
+      targets = [];
+      adj.set(e.from_node, targets);
+    }
+    targets.push(e.to_node);
   }
   const cycles: string[][] = [];
   const color = new Map<string, 0 | 1 | 2>(); // 0=unvisited, 1=in-stack, 2=done

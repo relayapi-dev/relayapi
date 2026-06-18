@@ -40,7 +40,7 @@ export const POST: APIRoute = async (context) => {
     );
   }
 
-  const orgId = (org as any).id as string;
+  const orgId = org.id as string;
   const kv = context.locals.kv;
   const db = context.locals.db;
 
@@ -98,7 +98,7 @@ export const POST: APIRoute = async (context) => {
     start,
     prefix,
     organizationId: orgId,
-    referenceId: (user as any).id as string,
+    referenceId: user.id as string,
     enabled: true,
   });
 

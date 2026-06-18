@@ -367,8 +367,8 @@ function nodePreview(node: AutomationNode): string | null {
 		const blocks = Array.isArray(config.blocks)
 			? (config.blocks as Array<Record<string, unknown>>)
 			: [];
-		if (blocks.length === 0) return null;
-		const first = blocks[0]!;
+		const first = blocks[0];
+		if (!first) return null;
 		const blockType = typeof first.type === "string" ? first.type : "";
 		if (blockType === "text") {
 			const text = typeof first.text === "string" ? first.text.trim() : "";
@@ -734,6 +734,7 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 	const channel = data.channel;
 
 	return (
+		// biome-ignore lint/a11y/useSemanticElements: interactive wrapper cannot be a button due to nested controls
 		<div
 			className={cn(
 				"group relative w-[390px] overflow-visible rounded-[22px] border bg-white shadow-[0_2px_10px_rgba(34,44,66,0.08)] transition-all duration-150",
@@ -1066,8 +1067,12 @@ function isCycleWithoutPauseForEdge(
 	// no input/delay/goto node? We replay server-style cycle detection.
 	const adj = new Map<string, string[]>();
 	for (const e of edges.concat([candidate])) {
-		if (!adj.has(e.from_node)) adj.set(e.from_node, []);
-		adj.get(e.from_node)!.push(e.to_node);
+		let list = adj.get(e.from_node);
+		if (!list) {
+			list = [];
+			adj.set(e.from_node, list);
+		}
+		list.push(e.to_node);
 	}
 	const byKey = new Map(nodes.map((n) => [n.key, n]));
 	const PAUSE = new Set(["input", "delay", "goto"]);
@@ -1573,7 +1578,7 @@ function CanvasInner({
 					if (change.id.startsWith(`${TRIGGER_NODE_ID}→`)) continue;
 					// `change.id` format matches rfEdges.id
 					const idx = graph.edges.findIndex(
-						(e, i) =>
+						(e, _i) =>
 							`${e.from_node}.${e.from_port}→${e.to_node}.${e.to_port}` ===
 							change.id,
 					);
@@ -1951,12 +1956,18 @@ function CanvasInner({
 		}
 
 		// Rewrite nodes with fresh keys + offset.
-		const newNodes: AutomationNode[] = payload.nodes.map((n) => ({
-			...n,
-			key: keyMap.get(n.key)!,
-			canvas_x: (n.canvas_x ?? 0) + offset,
-			canvas_y: (n.canvas_y ?? 0) + offset,
-		}));
+		const newNodes: AutomationNode[] = payload.nodes.flatMap((n) => {
+			const key = keyMap.get(n.key);
+			if (!key) return [];
+			return [
+				{
+					...n,
+					key,
+					canvas_x: (n.canvas_x ?? 0) + offset,
+					canvas_y: (n.canvas_y ?? 0) + offset,
+				},
+			];
+		});
 
 		const newEdges: AutomationEdge[] = (payload.edges ?? [])
 			.map((e) => {
@@ -1990,12 +2001,18 @@ function CanvasInner({
 		const keyMap = new Map<string, string>();
 		for (const n of nodes) keyMap.set(n.key, generateNodeKey());
 
-		const newNodes: AutomationNode[] = nodes.map((n) => ({
-			...n,
-			key: keyMap.get(n.key)!,
-			canvas_x: (n.canvas_x ?? 0) + 40,
-			canvas_y: (n.canvas_y ?? 0) + 40,
-		}));
+		const newNodes: AutomationNode[] = nodes.flatMap((n) => {
+			const key = keyMap.get(n.key);
+			if (!key) return [];
+			return [
+				{
+					...n,
+					key,
+					canvas_x: (n.canvas_x ?? 0) + 40,
+					canvas_y: (n.canvas_y ?? 0) + 40,
+				},
+			];
+		});
 		const newEdges: AutomationEdge[] = edges
 			.map((e) => {
 				const from = keyMap.get(e.from_node);

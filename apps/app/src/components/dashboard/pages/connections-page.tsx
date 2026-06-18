@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Plus, Loader2, MoreHorizontal, Link2Off, Link2, Activity, FileText, FolderOpen, Trash2, ArrowRightLeft, Search, BookOpen, CheckCircle2, XCircle, Clock, Shield, RefreshCw } from "lucide-react";
+import { Plus, Loader2, MoreHorizontal, Link2Off, Link2, Activity, FileText, FolderOpen, Trash2, ArrowRightLeft, Search, BookOpen, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import {
@@ -128,7 +128,7 @@ export function ConnectionsPage({
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [newWorkspaceDescription, setNewWorkspaceDescription] = useState("");
   const [workspacesSearch, setWorkspacesSearch] = useState("");
-  const [workspacesSearchKey, setWorkspacesSearchKey] = useState(0);
+  const [_workspacesSearchKey, _setWorkspacesSearchKey] = useState(0);
 
   const switchTab = (tab: typeof initialTab) => {
     setActiveTab(tab);
@@ -225,10 +225,6 @@ export function ConnectionsPage({
 
   const createWorkspaceMutation = useMutation<WorkspaceItem>("workspaces", "POST");
 
-  const handleWorkspaceFilterChange = (id: string | null) => {
-    setWorkspaceFilterId(id);
-  };
-
   const handleDisconnect = async () => {
     if (!disconnectTarget) return;
     setDisconnecting(true);
@@ -316,6 +312,7 @@ export function ConnectionsPage({
             const tabKey = tab.toLowerCase() as typeof initialTab;
             return (
               <button
+                type="button"
                 key={tab}
                 onClick={() => switchTab(tabKey)}
                 className={cn(
@@ -423,7 +420,7 @@ export function ConnectionsPage({
 
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button className="rounded-lg p-1.5 opacity-0 group-hover:opacity-100 hover:bg-accent/50 transition-all">
+                            <button type="button" className="rounded-lg p-1.5 opacity-0 group-hover:opacity-100 hover:bg-accent/50 transition-all">
                               <MoreHorizontal className="size-4 text-muted-foreground" />
                             </button>
                           </DropdownMenuTrigger>
@@ -476,9 +473,9 @@ export function ConnectionsPage({
 
                       <div className="mt-3">
                         <h3 className="text-sm font-medium truncate">{title}</h3>
-                        {showUsername && (
+                        {showUsername && acc.username && (
                           <p className="text-xs text-muted-foreground truncate">
-                            {acc.username!.startsWith("@") ? acc.username : `@${acc.username}`}
+                            {acc.username.startsWith("@") ? acc.username : `@${acc.username}`}
                           </p>
                         )}
                         <p className="text-xs text-muted-foreground">
@@ -533,20 +530,31 @@ export function ConnectionsPage({
               animate={{ opacity: 1, y: 0 }}
             >
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Workspace name</label>
+                <label
+                  htmlFor="connections-workspace-name"
+                  className="text-xs font-medium text-muted-foreground"
+                >
+                  Workspace name
+                </label>
                 <input
+                  id="connections-workspace-name"
                   type="text"
                   value={newWorkspaceName}
                   onChange={(e) => setNewWorkspaceName(e.target.value)}
                   placeholder="e.g. Client A"
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-                  autoFocus
                   onKeyDown={(e) => e.key === "Enter" && handleCreateWorkspace()}
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Description (optional)</label>
+                <label
+                  htmlFor="connections-workspace-description"
+                  className="text-xs font-medium text-muted-foreground"
+                >
+                  Description (optional)
+                </label>
                 <input
+                  id="connections-workspace-description"
                   type="text"
                   value={newWorkspaceDescription}
                   onChange={(e) => setNewWorkspaceDescription(e.target.value)}
@@ -639,6 +647,7 @@ export function ConnectionsPage({
                         </div>
                       </div>
                       <button
+                        type="button"
                         className="rounded-lg p-1.5 hover:bg-red-500/10 transition-colors"
                         onClick={() => handleDeleteWorkspace(group.id)}
                         title="Delete workspace"

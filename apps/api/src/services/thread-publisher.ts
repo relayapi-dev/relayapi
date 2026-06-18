@@ -31,34 +31,6 @@ export function isThreadable(platform: string): boolean {
 }
 
 /**
- * Platforms that support native thread publishing (array of items in one call).
- * For these, we pass the full thread as target_options.thread.
- */
-const NATIVE_THREAD_PLATFORMS = new Set<string>([
-	"twitter",
-	"threads",
-	"bluesky",
-]);
-
-interface ThreadPost {
-	id: string;
-	content: string | null;
-	threadPosition: number | null;
-	threadDelayMs: number | null;
-	platformOverrides: Record<string, unknown> | null;
-	status: string;
-}
-
-interface ThreadTarget {
-	id: string;
-	postId: string;
-	socialAccountId: string;
-	platform: string;
-	status: string;
-	platformPostId: string | null;
-}
-
-/**
  * Publish all thread items for a given position (and subsequent zero-delay items).
  * Returns the next position that needs a delayed publish, or null if done.
  */
@@ -142,8 +114,7 @@ export async function publishThreadPosition(
 	// Start at startPosition, continue until we hit a position with delay > 0
 	const positionsToPublish: number[] = [];
 
-	for (let i = 0; i < threadPosts.length; i++) {
-		const post = threadPosts[i]!;
+	for (const post of threadPosts) {
 		if ((post.threadPosition ?? 0) < startPosition) continue;
 		if ((post.threadPosition ?? 0) === startPosition) {
 			positionsToPublish.push(post.threadPosition ?? 0);
@@ -218,7 +189,6 @@ export async function publishThreadPosition(
 
 		let successCount = 0;
 		let failCount = 0;
-		let skipCount = 0;
 
 		for (const target of postTargetList) {
 			// Idempotency: a target already marked "published" was published on a prior
@@ -249,7 +219,6 @@ export async function publishThreadPosition(
 					.update(postTargets)
 					.set({ status: "failed", error: "Platform does not support threading", updatedAt: new Date() })
 					.where(eq(postTargets.id, target.id));
-				skipCount++;
 				continue;
 			}
 

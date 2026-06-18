@@ -42,7 +42,7 @@ export async function getRelayClient(
   const org = locals.organization;
   if (!org) return null;
 
-  const orgId = (org as any).id as string;
+  const orgId = org.id as string;
   const now = Date.now();
 
   const cached = clientCache.get(orgId);

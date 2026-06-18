@@ -71,8 +71,16 @@ export const convertkitPublisher: Publisher = {
 			});
 
 			if (!createRes.ok) {
-				const err = await createRes.json().catch(() => ({}));
-				const detail = (err as any)?.errors?.[0]?.message ?? (err as any)?.error ?? (err as any)?.message ?? createRes.statusText;
+				const err = (await createRes.json().catch(() => ({}))) as {
+					errors?: Array<{ message?: string }>;
+					error?: string;
+					message?: string;
+				};
+				const detail =
+					err?.errors?.[0]?.message ??
+					err?.error ??
+					err?.message ??
+					createRes.statusText;
 				const raw = `HTTP ${createRes.status}\n${JSON.stringify(err)}`;
 
 				if (createRes.status === 401) {

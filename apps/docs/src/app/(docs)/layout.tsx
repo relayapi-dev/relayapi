@@ -12,6 +12,7 @@ function RelayLogo() {
       width="32"
       height="32"
       style={{ minWidth: 32, minHeight: 32 }}
+      aria-hidden="true"
     >
       <path
         fillRule="evenodd"

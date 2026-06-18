@@ -212,6 +212,8 @@ export function PostDetailPanel({
                     </div>
                     <p className="text-sm mt-1 text-foreground/80">{c.text}</p>
                   </div>
+                  {/* biome-ignore lint/a11y/noStaticElementInteractions: onClick only stops propagation; this wrapper is not itself interactive */}
+                  {/* biome-ignore lint/a11y/useKeyWithClickEvents: onClick only stops propagation, so no keyboard handler is needed */}
                   <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <LikeButton comment={c} />
                     <CommentActions
@@ -241,6 +243,8 @@ export function PostDetailPanel({
                           </div>
                           <p className="text-xs mt-0.5 text-foreground/80">{r.text}</p>
                         </div>
+                        {/* biome-ignore lint/a11y/noStaticElementInteractions: onClick only stops propagation; this wrapper is not itself interactive */}
+                        {/* biome-ignore lint/a11y/useKeyWithClickEvents: onClick only stops propagation, so no keyboard handler is needed */}
                         <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                           <LikeButton comment={r} />
                           <CommentActions
@@ -260,7 +264,7 @@ export function PostDetailPanel({
 
                 {isExpanded && (() => {
                   const target = replyTarget || c;
-                  const targetId = expandedCommentId!;
+                  const targetId = expandedCommentId ?? c.id;
                   return (
                     <InlineReplyBox
                       comment={target}
@@ -283,6 +287,7 @@ export function PostDetailPanel({
 
       {hasMore && (
         <button
+          type="button"
           onClick={loadMore}
           disabled={loadingMore}
           className="w-full text-xs text-muted-foreground hover:text-foreground py-1.5 transition-colors"

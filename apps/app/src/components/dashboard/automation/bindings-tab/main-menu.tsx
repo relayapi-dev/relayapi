@@ -18,6 +18,8 @@ interface Props {
 const ED = BINDING_CONFIG_EDITORS.main_menu;
 
 export function MainMenuTab({ socialAccountId, channel }: Props) {
+	const renderEditor = ED.renderEditor;
+	if (!renderEditor) return null;
 	return (
 		<StubbedBindingShell
 			socialAccountId={socialAccountId}
@@ -29,7 +31,7 @@ export function MainMenuTab({ socialAccountId, channel }: Props) {
 			emptyConfig={ED.emptyConfig}
 			parseConfig={ED.parseConfig}
 			validateConfig={ED.validateConfig}
-			renderEditor={ED.renderEditor!}
+			renderEditor={renderEditor}
 		/>
 	);
 }

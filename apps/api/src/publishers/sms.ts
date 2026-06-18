@@ -107,7 +107,6 @@ export const smsPublisher: Publisher = {
 			}
 
 			const sent = results.filter((r) => r.sid !== null).length;
-			const failed = results.filter((r) => r.sid === null).length;
 
 			if (sent === 0) {
 				throw new Error(

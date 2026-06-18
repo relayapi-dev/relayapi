@@ -10,7 +10,14 @@ export const ConversationStarterConfig = z.object({
   })).max(4),
 });
 
-export const MainMenuItemSchema: z.ZodType<any> = z.lazy(() =>
+export interface MainMenuItem {
+  label: string;
+  action: "postback" | "url";
+  payload: string;
+  sub_items?: MainMenuItem[];
+}
+
+export const MainMenuItemSchema: z.ZodType<MainMenuItem> = z.lazy(() =>
   z.object({
     label: z.string().max(30),
     action: z.enum(["postback", "url"]),

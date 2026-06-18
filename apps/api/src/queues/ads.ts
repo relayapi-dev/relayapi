@@ -11,7 +11,7 @@ interface AdsMessage {
 	ad_account_id?: string;
 	ad_id?: string;
 	audience_id?: string;
-	params?: any;
+	params?: Record<string, unknown>;
 	/** Explicit metrics window for sync_external (manual full refresh = 30). */
 	window_days?: number;
 }
@@ -26,11 +26,19 @@ export async function consumeAdsQueue(
 		try {
 			switch (body.type) {
 				case "create_ad": {
-					await createAd(env, body.org_id, body.params);
+					await createAd(
+						env,
+						body.org_id,
+						body.params as Parameters<typeof createAd>[2],
+					);
 					break;
 				}
 				case "boost_post": {
-					await boostPost(env, body.org_id, body.params);
+					await boostPost(
+						env,
+						body.org_id,
+						body.params as Parameters<typeof boostPost>[2],
+					);
 					break;
 				}
 				case "sync_metrics": {
@@ -42,8 +50,8 @@ export async function consumeAdsQueue(
 						await fetchAndStoreAdMetrics(
 							env,
 							body.ad_id,
-							thirtyDaysAgo.toISOString().split("T")[0]!,
-							now.toISOString().split("T")[0]!,
+							thirtyDaysAgo.toISOString().split("T")[0] ?? "",
+							now.toISOString().split("T")[0] ?? "",
 						);
 					}
 					break;
@@ -64,7 +72,7 @@ export async function consumeAdsQueue(
 							env,
 							body.org_id,
 							body.audience_id,
-							body.params.users,
+							body.params.users as Parameters<typeof addUsersToAudience>[3],
 						);
 					}
 					break;

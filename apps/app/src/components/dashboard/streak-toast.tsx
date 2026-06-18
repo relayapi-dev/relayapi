@@ -38,11 +38,11 @@ export function StreakToastContainer() {
     useCallback(
       (event) => {
         if (event.type === "streak.milestone") {
-          const days = (event as any).current_streak_days as number;
+          const days = (event as { current_streak_days?: number }).current_streak_days as number;
           const msg = MILESTONE_MESSAGES[days] || `${days}-day posting streak!`;
           addToast(msg, "milestone");
         } else if (event.type === "streak.broken") {
-          const days = (event as any).broken_streak_days as number;
+          const days = (event as { broken_streak_days?: number }).broken_streak_days as number;
           addToast(
             `Your ${days}-day streak ended. Start a new one today!`,
             "broken",
@@ -81,6 +81,7 @@ export function StreakToastContainer() {
             />
             <p className="text-sm flex-1">{toast.message}</p>
             <button
+              type="button"
               onClick={() => dismissToast(toast.id)}
               className="shrink-0 mt-0.5 text-current opacity-50 hover:opacity-100 transition-opacity"
             >

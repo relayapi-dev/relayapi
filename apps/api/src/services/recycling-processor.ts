@@ -49,6 +49,11 @@ async function processOneConfig(
 	db: ReturnType<typeof createDb>,
 	config: typeof postRecyclingConfigs.$inferSelect,
 ): Promise<void> {
+	// Callers only pass configs selected via `lte(nextRecycleAt, now)`, which
+	// excludes NULL rows, so nextRecycleAt is always set here.
+	const currentNextRecycleAt = config.nextRecycleAt;
+	if (!currentNextRecycleAt) return;
+
 	// Atomic claim: update nextRecycleAt to future value WHERE it matches current.
 	// If another worker already processed this, rowCount === 0.
 	const futureNextRecycle = computeNextRecycleAt(
@@ -63,7 +68,7 @@ async function processOneConfig(
 		.where(
 			and(
 				eq(postRecyclingConfigs.id, config.id),
-				eq(postRecyclingConfigs.nextRecycleAt, config.nextRecycleAt!),
+				eq(postRecyclingConfigs.nextRecycleAt, currentNextRecycleAt),
 			),
 		)
 		.returning({ id: postRecyclingConfigs.id });

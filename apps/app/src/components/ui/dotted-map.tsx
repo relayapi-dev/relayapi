@@ -67,6 +67,7 @@ export function DottedMap({
 
   return (
     <svg
+      aria-hidden="true"
       viewBox={`0 0 ${width} ${height}`}
       className={cn("text-gray-500", className)}
       style={{ width: "100%", height: "100%", ...style }}

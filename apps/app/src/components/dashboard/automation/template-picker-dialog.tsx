@@ -16,7 +16,7 @@
 // `AutomationTemplatePickerDialog` export is kept as an alias pointing at the
 // same component for any callers not yet migrated.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
 	ArrowLeft,
 	Bot,
@@ -223,8 +223,9 @@ export function CreateAutomationDialog({
 	// Clamp channel to template-supported options when template changes.
 	useEffect(() => {
 		if (!template) return;
-		if (!template.channels.includes(form.channel)) {
-			setForm((f) => ({ ...f, channel: template.channels[0]! }));
+		const fallbackChannel = template.channels[0];
+		if (fallbackChannel && !template.channels.includes(form.channel)) {
+			setForm((f) => ({ ...f, channel: fallbackChannel }));
 		}
 	}, [template, form.channel]);
 
@@ -418,10 +419,14 @@ export function CreateAutomationDialog({
 					<ScrollArea className="max-h-[60dvh]">
 						<div className="space-y-3 py-2 pr-4">
 							<div>
-								<label className="text-xs font-medium text-muted-foreground">
+								<label
+									htmlFor="template-form-name"
+									className="text-xs font-medium text-muted-foreground"
+								>
 									Name
 								</label>
 								<input
+									id="template-form-name"
 									type="text"
 									value={form.name}
 									onChange={(e) =>
@@ -433,10 +438,14 @@ export function CreateAutomationDialog({
 							</div>
 
 							<div>
-								<label className="text-xs font-medium text-muted-foreground">
+								<label
+									htmlFor="template-form-channel"
+									className="text-xs font-medium text-muted-foreground"
+								>
 									Channel
 								</label>
 								<select
+									id="template-form-channel"
 									value={form.channel}
 									onChange={(e) =>
 										setForm((f) => ({
@@ -456,9 +465,9 @@ export function CreateAutomationDialog({
 
 							{!blank && template.slug !== "welcome_flow" && template.slug !== "faq_bot" && template.slug !== "lead_capture" && (
 								<div>
-									<label className="text-xs font-medium text-muted-foreground">
+									<span className="block text-xs font-medium text-muted-foreground">
 										Account
-									</label>
+									</span>
 									<div className="mt-1">
 										<AccountSearchCombobox
 											value={form.social_account_id ?? null}
@@ -615,9 +624,9 @@ function CommentToDmFields({
 	return (
 		<>
 			<div>
-				<label className="text-xs font-medium text-muted-foreground">
+				<span className="block text-xs font-medium text-muted-foreground">
 					Posts (optional)
-				</label>
+				</span>
 				<div className="mt-1">
 					<PostSearchCombobox
 						value={form.post_ids?.[0] ?? null}
@@ -689,10 +698,14 @@ function StoryLeadsFields({
 				placeholder="Thanks for replying! Share your email and we'll follow up."
 			/>
 			<div>
-				<label className="text-xs font-medium text-muted-foreground">
+				<label
+					htmlFor="template-capture-field"
+					className="text-xs font-medium text-muted-foreground"
+				>
 					Capture field
 				</label>
 				<select
+					id="template-capture-field"
 					value={form.capture_field ?? "email"}
 					onChange={(e) =>
 						setForm((f) => ({
@@ -725,9 +738,9 @@ function FollowerGrowthFields({
 	return (
 		<>
 			<div>
-				<label className="text-xs font-medium text-muted-foreground">
+				<span className="block text-xs font-medium text-muted-foreground">
 					Contest post
-				</label>
+				</span>
 				<div className="mt-1">
 					<PostSearchCombobox
 						value={form.contest_post_id ?? null}
@@ -880,10 +893,17 @@ function TextField({
 	placeholder?: string;
 	type?: string;
 }) {
+	const fieldId = useId();
 	return (
 		<div>
-			<label className="text-xs font-medium text-muted-foreground">{label}</label>
+			<label
+				htmlFor={fieldId}
+				className="text-xs font-medium text-muted-foreground"
+			>
+				{label}
+			</label>
 			<input
+				id={fieldId}
 				type={type}
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
@@ -907,10 +927,17 @@ function TextAreaField({
 	placeholder?: string;
 	rows?: number;
 }) {
+	const fieldId = useId();
 	return (
 		<div>
-			<label className="text-xs font-medium text-muted-foreground">{label}</label>
+			<label
+				htmlFor={fieldId}
+				className="text-xs font-medium text-muted-foreground"
+			>
+				{label}
+			</label>
 			<textarea
+				id={fieldId}
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
 				placeholder={placeholder}

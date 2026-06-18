@@ -53,6 +53,7 @@ export function CalendarHeader({
         {/* Week/Month toggle — styled like the Drafts button */}
         <div className="inline-flex items-center rounded-md border border-border bg-background h-7 p-0.5 text-xs">
           <button
+            type="button"
             onClick={() => onPeriodChange("week")}
             className={cn(
               "inline-flex items-center justify-center rounded-sm px-2.5 h-full font-medium transition-colors",
@@ -64,6 +65,7 @@ export function CalendarHeader({
             Week
           </button>
           <button
+            type="button"
             onClick={() => onPeriodChange("month")}
             className={cn(
               "inline-flex items-center justify-center rounded-sm px-2.5 h-full font-medium transition-colors",

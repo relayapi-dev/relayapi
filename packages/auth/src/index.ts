@@ -14,7 +14,7 @@ import {
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin, organization as organizationPlugin } from "better-auth/plugins";
-import { ac, adminRole, type ownerRole, roles } from "./permissions";
+import { ac, type ownerRole, roles } from "./permissions";
 
 export interface InvitationEmailData {
 	id: string;
@@ -33,6 +33,7 @@ export interface AuthEnv {
 }
 
 export function createAuth(db: Database, env: AuthEnv) {
+	const { sendInvitationEmail } = env;
 	const config: Parameters<typeof betterAuth>[0] = {
 		secret: env.BETTER_AUTH_SECRET,
 		baseURL: env.BETTER_AUTH_URL,
@@ -69,11 +70,12 @@ export function createAuth(db: Database, env: AuthEnv) {
 								.where(eq(member.userId, sessionData.userId))
 								.limit(1);
 
-							if (membership.length > 0) {
+							const firstMembership = membership[0];
+							if (firstMembership) {
 								return {
 									data: {
 										...sessionData,
-										activeOrganizationId: membership[0]!.organizationId,
+										activeOrganizationId: firstMembership.organizationId,
 									},
 								};
 							}
@@ -98,9 +100,9 @@ export function createAuth(db: Database, env: AuthEnv) {
 				organizationLimit: 2,
 				creatorRole: "owner",
 				membershipLimit: 50,
-				sendInvitationEmail: env.sendInvitationEmail
+				sendInvitationEmail: sendInvitationEmail
 					? async (data) => {
-							await env.sendInvitationEmail!({
+							await sendInvitationEmail({
 								id: data.id,
 								email: data.email,
 								role: data.role,

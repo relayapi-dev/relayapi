@@ -8,12 +8,18 @@ export const POST: APIRoute = async (context) => {
   const forbidden = await requireBillingAdmin(context);
   if (forbidden) return forbidden;
 
-  const user = context.locals.user!;
-  const org = context.locals.organization!;
+  const user = context.locals.user;
+  const org = context.locals.organization;
+  if (!user || !org) {
+    return Response.json(
+      { error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+      { status: 401 },
+    );
+  }
 
   const db = context.locals.db;
-  const orgId = (org as any).id as string;
-  const userEmail = (user as any).email as string;
+  const orgId = org.id as string;
+  const userEmail = user.email as string;
 
   const stripe = new Stripe(env.STRIPE_SECRET_KEY as string, {
     httpClient: Stripe.createFetchHttpClient(),

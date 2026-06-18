@@ -78,7 +78,7 @@ function calculateUpcomingSlots(
 			const localDateStr = `${year}-${month}-${day}T${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00`;
 
 			// Compute the UTC offset for this timezone at this date/time
-			const tempUtc = new Date(localDateStr + "Z");
+			const tempUtc = new Date(`${localDateStr}Z`);
 			const tzOffsetParts = new Intl.DateTimeFormat("en-US", {
 				timeZone: slot.timezone,
 				hour: "2-digit",
@@ -204,7 +204,6 @@ export async function findBestSlots(
 	}
 
 	// Load account preferences if accountId provided
-	let minGapMinutes = 0;
 	let postingWindows: Array<{ day_of_week: number; start_hour: number; end_hour: number }> = [];
 	if (accountId) {
 		const [account] = await db
@@ -218,7 +217,6 @@ export async function findBestSlots(
 				min_gap_minutes?: number;
 			};
 			postingWindows = prefs.posting_windows ?? [];
-			minGapMinutes = prefs.min_gap_minutes ?? 0;
 		}
 	}
 

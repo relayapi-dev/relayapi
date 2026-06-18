@@ -9,6 +9,13 @@ import { actionRegistry } from "../services/automations/actions";
 import { actionGroupHandler } from "../services/automations/nodes/action-group";
 import type { RunContext } from "../services/automations/types";
 
+// Action-group handlers return their per-action results under `payload`. The
+// HandlerResult.payload is typed `unknown`; this narrows it for assertions.
+type ActionResult = { id: string; ok: boolean; error?: string };
+function actionResults(payload: unknown): ActionResult[] {
+	return (payload as { action_results: ActionResult[] }).action_results;
+}
+
 // Back up and restore the real registry so we don't leak test handlers across
 // suites. The registry object itself is mutated in-place.
 const snapshot: Record<string, unknown> = {};
@@ -70,7 +77,7 @@ describe("action_group handler", () => {
 		expect(result.result).toBe("advance");
 		if (result.result === "advance") expect(result.via_port).toBe("next");
 		expect(calls).toEqual(["a", "b"]);
-		expect(result.payload.action_results).toEqual([
+		expect(actionResults(result.payload)).toEqual([
 			{ id: "a1", ok: true },
 			{ id: "a2", ok: true },
 		]);
@@ -97,7 +104,7 @@ describe("action_group handler", () => {
 		expect(result.result).toBe("advance");
 		if (result.result === "advance") expect(result.via_port).toBe("error");
 		expect(calls).toEqual(["boom"]); // second action NOT called
-		expect(result.payload.action_results).toEqual([
+		expect(actionResults(result.payload)).toEqual([
 			{ id: "a1", ok: false, error: "kaboom" },
 		]);
 	});
@@ -123,7 +130,7 @@ describe("action_group handler", () => {
 		expect(result.result).toBe("advance");
 		if (result.result === "advance") expect(result.via_port).toBe("next");
 		expect(calls).toEqual(["fail", "ok"]);
-		expect(result.payload.action_results).toEqual([
+		expect(actionResults(result.payload)).toEqual([
 			{ id: "a1", ok: false, error: "meh" },
 			{ id: "a2", ok: true },
 		]);
@@ -139,8 +146,8 @@ describe("action_group handler", () => {
 
 		expect(result.result).toBe("advance");
 		if (result.result === "advance") expect(result.via_port).toBe("error");
-		expect(result.payload.action_results[0].ok).toBe(false);
-		expect(result.payload.action_results[0].error).toContain("unknown action");
+		expect(actionResults(result.payload)[0]?.ok).toBe(false);
+		expect(actionResults(result.payload)[0]?.error).toContain("unknown action");
 	});
 
 	it("webhook_out surfaces missing hmac secret through on_error routing", async () => {
@@ -150,7 +157,9 @@ describe("action_group handler", () => {
 		const { webhookHandlers } = await import(
 			"../services/automations/actions/webhook"
 		);
-		actionRegistry.webhook_out = webhookHandlers.webhook_out!;
+		const webhookOut = webhookHandlers.webhook_out;
+		if (!webhookOut) throw new Error("expected webhook_out handler");
+		actionRegistry.webhook_out = webhookOut;
 
 		const result = await actionGroupHandler.handle(
 			makeNode([
@@ -168,8 +177,8 @@ describe("action_group handler", () => {
 
 		expect(result.result).toBe("advance");
 		if (result.result === "advance") expect(result.via_port).toBe("error");
-		expect(result.payload.action_results[0].ok).toBe(false);
-		expect(result.payload.action_results[0].error).toContain(
+		expect(actionResults(result.payload)[0]?.ok).toBe(false);
+		expect(actionResults(result.payload)[0]?.error).toContain(
 			"hmac auth requires secret",
 		);
 	});

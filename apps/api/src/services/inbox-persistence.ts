@@ -13,7 +13,7 @@ import {
 	inboxMessages,
 } from "@relayapi/db";
 import { findMatchingContact } from "./contact-linker";
-import { and, desc, eq, gte, ilike, inArray, isNull, lt, lte, or, sql, asc, count } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, inArray, isNull, lt, lte, or, sql, asc, count, type SQL } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +34,7 @@ export interface UpsertConversationData {
 	participantName?: string | null;
 	participantPlatformId?: string | null;
 	participantAvatar?: string | null;
+	participantMetadata?: Record<string, unknown> | null;
 	lastMessageText?: string | null;
 	lastMessageAt?: Date | null;
 	lastMessageDirection?: string | null;
@@ -145,7 +146,10 @@ export async function upsertConversation(
 		.returning();
 
 	// An upsert always returns a row (INSERT or UPDATE path)
-	const conversation = row!;
+	if (!row) {
+		throw new Error("upsertConversation: insert returned no row");
+	}
+	const conversation = row;
 
 	// Auto-link to contact if no contact is already linked
 	if (!conversation.contactId) {
@@ -156,7 +160,7 @@ export async function upsertConversation(
 				data.accountId,
 				data.participantPlatformId ?? null,
 				data.participantName ?? null,
-				(data as any).participantMetadata ?? null,
+				data.participantMetadata ?? null,
 			);
 
 			// Auto-link for high-confidence matches (not name suggestions)
@@ -266,7 +270,9 @@ export async function listConversations(
 }> {
 	const limit = Math.min(Math.max(filters?.limit ?? 20, 1), 100);
 
-	const conditions = [eq(inboxConversations.organizationId, orgId)];
+	const conditions: (SQL | undefined)[] = [
+		eq(inboxConversations.organizationId, orgId),
+	];
 
 	// Workspace scope enforcement — include org-level (NULL workspace) resources
 	if (filters?.workspaceScope && filters.workspaceScope !== "all") {
@@ -274,7 +280,7 @@ export async function listConversations(
 			or(
 				inArray(inboxConversations.workspaceId, filters.workspaceScope),
 				isNull(inboxConversations.workspaceId),
-			)!,
+			),
 		);
 	}
 
@@ -305,7 +311,7 @@ export async function listConversations(
 		const labelConditions = filters.labels.map((label) =>
 			sql`${label} = ANY(${inboxConversations.labels})`,
 		);
-		conditions.push(or(...labelConditions)!);
+		conditions.push(or(...labelConditions));
 	}
 
 	if (filters?.cursor) {
@@ -340,7 +346,7 @@ export async function getConversationWithMessages(
 	orgId: string,
 	workspaceScope?: "all" | string[],
 ): Promise<{ conversation: Conversation; messages: Message[] } | null> {
-	const conditions = [
+	const conditions: (SQL | undefined)[] = [
 		eq(inboxConversations.id, conversationId),
 		eq(inboxConversations.organizationId, orgId),
 	];
@@ -349,7 +355,7 @@ export async function getConversationWithMessages(
 			or(
 				inArray(inboxConversations.workspaceId, workspaceScope),
 				isNull(inboxConversations.workspaceId),
-			)!,
+			),
 		);
 	}
 
@@ -473,7 +479,9 @@ export async function getInboxStats(
 	unread_messages: number;
 	by_platform: Record<string, { conversations: number; unread: number }>;
 }> {
-	const conditions = [eq(inboxConversations.organizationId, orgId)];
+	const conditions: (SQL | undefined)[] = [
+		eq(inboxConversations.organizationId, orgId),
+	];
 
 	// Workspace scope enforcement — include org-level (NULL workspace) resources
 	if (filters?.workspaceScope && filters.workspaceScope !== "all") {
@@ -481,7 +489,7 @@ export async function getInboxStats(
 			or(
 				inArray(inboxConversations.workspaceId, filters.workspaceScope),
 				isNull(inboxConversations.workspaceId),
-			)!,
+			),
 		);
 	}
 
@@ -573,7 +581,7 @@ export async function updateConversation(
 		setClause.assignedUserId = updates.assignedUserId;
 	}
 
-	const updateConditions = [
+	const updateConditions: (SQL | undefined)[] = [
 		eq(inboxConversations.id, conversationId),
 		eq(inboxConversations.organizationId, orgId),
 	];
@@ -582,7 +590,7 @@ export async function updateConversation(
 			or(
 				inArray(inboxConversations.workspaceId, workspaceScope),
 				isNull(inboxConversations.workspaceId),
-			)!,
+			),
 		);
 	}
 

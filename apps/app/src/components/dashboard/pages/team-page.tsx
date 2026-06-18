@@ -87,10 +87,11 @@ export function TeamPage() {
   const fetchMembers = async () => {
     try {
       const result = await organization.listMembers();
-      const raw = result.data;
-      const list = Array.isArray(raw) ? raw : Array.isArray((raw as any)?.members) ? (raw as any).members : [];
+      const raw = result.data as unknown;
+      const rawMembers = (raw as { members?: unknown })?.members;
+      const list = Array.isArray(raw) ? raw : Array.isArray(rawMembers) ? rawMembers : [];
       setMembers(list as unknown as Member[]);
-    } catch (e) {
+    } catch (_e) {
       setError("Failed to load members");
     }
   };
@@ -163,8 +164,8 @@ export function TeamPage() {
       }
       const inv = invitations.find((i) => i.id === invitationId);
       setSuccess(`Invitation email resent to ${inv?.email ?? "recipient"}`);
-    } catch (e: any) {
-      setError(e.message || "Failed to resend invitation");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to resend invitation");
     } finally {
       setResendingId(null);
     }
@@ -236,19 +237,30 @@ export function TeamPage() {
           animate={{ opacity: 1, y: 0 }}
         >
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Email address</label>
+            <label
+              htmlFor="team-invite-email"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Email address
+            </label>
             <input
+              id="team-invite-email"
               type="email"
               value={inviteEmail}
               onChange={(e) => setInviteEmail(e.target.value)}
               placeholder="colleague@company.com"
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-              autoFocus
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Role</label>
+            <label
+              htmlFor="team-invite-role"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Role
+            </label>
             <select
+              id="team-invite-role"
               value={inviteRole}
               onChange={(e) => setInviteRole(e.target.value)}
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
@@ -341,7 +353,7 @@ export function TeamPage() {
                 {member.role !== "owner" && canManageMembers && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors">
+                      <button type="button" className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors">
                         {(removingMemberId === member.id || updatingRoleId === member.id) ? (
                           <Loader2 className="size-4 animate-spin text-muted-foreground" />
                         ) : (
@@ -421,6 +433,7 @@ export function TeamPage() {
                 </span>
                 <div className="flex items-center gap-1 justify-self-end">
                   <button
+                    type="button"
                     onClick={() => handleResendInvitation(inv.id)}
                     disabled={resendingId === inv.id}
                     className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors text-muted-foreground disabled:opacity-50"
@@ -433,6 +446,7 @@ export function TeamPage() {
                     )}
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleCancelInvitation(inv.id)}
                     disabled={cancellingId === inv.id}
                     className="rounded-lg p-1.5 hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive disabled:opacity-50"

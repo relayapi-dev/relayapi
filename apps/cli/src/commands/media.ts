@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import type { Command } from "commander";
 import { basename } from "node:path";
 import * as prompts from "@clack/prompts";
 import { createClient } from "../client.js";
@@ -15,7 +15,7 @@ export function registerMediaCommands(program: Command): void {
 	const media = program
 		.command("media")
 		.description("Manage media files")
-		.action(function () {
+		.action(() => {
 			media.help();
 		});
 

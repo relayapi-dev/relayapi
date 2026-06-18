@@ -55,7 +55,6 @@ import {
 } from "../services/automations/templates";
 import {
 	matchAndEnroll,
-	type InboundEvent,
 } from "../services/automations/trigger-matcher";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
 import type { SendMessageRequest } from "../services/message-sender";
@@ -425,11 +424,14 @@ describe("11.1 lead capture flow", () => {
 		let run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.waitingFor).toBe("input");
-		expect(run!.currentNodeKey).toBe("ask_email");
+		if (!run) throw new Error("expected an automation run");
+		expect(run.status).toBe("waiting");
+		expect(run.waitingFor).toBe("input");
+		expect(run.currentNodeKey).toBe("ask_email");
 		expect(sendCalls.length).toBe(1);
-		expect(sendCalls[0]!.text).toBe("hi, what's your email?");
+		const firstSend = sendCalls[0];
+		if (!firstSend) throw new Error("expected a send call");
+		expect(firstSend.text).toBe("hi, what's your email?");
 
 		// Simulate inbound email via the resume helper.
 		const { resumeWaitingRunOnInput } = await import(
@@ -448,15 +450,17 @@ describe("11.1 lead capture flow", () => {
 		run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		if (!run) throw new Error("expected an automation run after resume");
+		expect(run.status).toBe("completed");
+		const ctxJson = (run.context as Record<string, unknown>) ?? {};
 		expect(ctxJson.captured_email).toBe("alice@example.com");
 
 		// Tag added to contact.
 		const refreshed = await db.query.contacts.findFirst({
 			where: eq(contacts.id, ct.id),
 		});
-		expect(refreshed!.tags).toContain("lead");
+		if (!refreshed) throw new Error("expected the refreshed contact");
+		expect(refreshed.tags).toContain("lead");
 
 		// Field set to the captured email value.
 		const fv = await db
@@ -476,7 +480,9 @@ describe("11.1 lead capture flow", () => {
 
 		// Two sent messages: prompt + thanks.
 		expect(sendCalls.length).toBe(2);
-		expect(sendCalls[1]!.text).toBe("Thanks — all set!");
+		const secondSend = sendCalls[1];
+		if (!secondSend) throw new Error("expected a second send call");
+		expect(secondSend.text).toBe("Thanks — all set!");
 	}, 30_000);
 });
 
@@ -547,7 +553,8 @@ describe("11.2 keyword DM trigger", () => {
 		const hitRun = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, hit.runId),
 		});
-		expect(hitRun!.status).toBe("completed");
+		if (!hitRun) throw new Error("expected an automation run for the hit");
+		expect(hitRun.status).toBe("completed");
 		expect(sendCalls.some((c) => c.text === "Here's a pizza menu")).toBe(true);
 
 		// Negative: non-matching text.
@@ -685,7 +692,8 @@ describe("11.3 comment-to-DM template", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, match.runId),
 		});
-		expect(["completed", "exited"]).toContain(run!.status);
+		if (!run) throw new Error("expected an automation run for the match");
+		expect(["completed", "exited"]).toContain(run.status);
 
 		// At least one step_run for the message node must have been recorded.
 		const steps = await db
@@ -982,9 +990,10 @@ describe("11.4b interactive button resume", () => {
 		let run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.waitingFor).toBe("input");
-		expect(run!.currentNodeKey).toBe("ask");
+		if (!run) throw new Error("expected an automation run");
+		expect(run.status).toBe("waiting");
+		expect(run.waitingFor).toBe("input");
+		expect(run.currentNodeKey).toBe("ask");
 		// Only the "Ready?" prompt has been sent so far.
 		expect(sendCalls.length).toBe(1);
 
@@ -1000,7 +1009,8 @@ describe("11.4b interactive button resume", () => {
 		run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
+		if (!run) throw new Error("expected an automation run after resume");
+		expect(run.status).toBe("completed");
 		// The yes-branch message should have been sent on the way to the end.
 		expect(sendCalls.some((c) => c.text === "Great — let's go!")).toBe(true);
 		// No-branch message should NOT have been sent.
@@ -1228,7 +1238,9 @@ describe("11.6 scheduled_trigger", () => {
 				),
 			);
 		expect(pending.length).toBe(1);
-		expect(pending[0]!.runAt.getTime()).toBeGreaterThan(Date.now());
+		const pendingJob = pending[0];
+		if (!pendingJob) throw new Error("expected a pending scheduled job");
+		expect(pendingJob.runAt.getTime()).toBeGreaterThan(Date.now());
 	}, 30_000);
 });
 
@@ -1448,14 +1460,16 @@ describe("11.8 per-action error handling (continue)", () => {
 			const run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, runId),
 			});
-			expect(run!.status).toBe("completed");
+			if (!run) throw new Error("expected an automation run");
+			expect(run.status).toBe("completed");
 
 			// Tag was added despite the first action failing, because
 			// on_error=continue suppressed the abort route.
 			const refreshed = await db.query.contacts.findFirst({
 				where: eq(contacts.id, ct.id),
 			});
-			expect(refreshed!.tags).toContain("completed");
+			if (!refreshed) throw new Error("expected the refreshed contact");
+			expect(refreshed.tags).toContain("completed");
 
 			// The action_group step exited via `next`, not `error`.
 			const steps = await db
@@ -1464,7 +1478,8 @@ describe("11.8 per-action error handling (continue)", () => {
 				.where(eq(automationStepRuns.runId, runId));
 			const agStep = steps.find((s) => s.nodeKind === "action_group");
 			expect(agStep).toBeTruthy();
-			expect(agStep!.exitedViaPortKey).toBe("next");
+			if (!agStep) throw new Error("expected an action_group step");
+			expect(agStep.exitedViaPortKey).toBe("next");
 		} finally {
 			if (prior === undefined) delete actionRegistry.fake_http_500;
 			else actionRegistry.fake_http_500 = prior;

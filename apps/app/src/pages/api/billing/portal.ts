@@ -9,9 +9,15 @@ export const POST: APIRoute = async (context) => {
     const forbidden = await requireBillingAdmin(context);
     if (forbidden) return forbidden;
 
-    const org = context.locals.organization!;
+    const org = context.locals.organization;
+    if (!org) {
+      return Response.json(
+        { error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+        { status: 401 },
+      );
+    }
     const db = context.locals.db;
-    const orgId = (org as any).id as string;
+    const orgId = org.id as string;
 
     const [sub] = await db
       .select()

@@ -421,10 +421,11 @@ export const facebookAnalytics: PlatformAnalyticsFetcher = {
 		for (const [key, count] of Object.entries(ageGenderMap)) {
 			const [genderPrefix, ageRange] = key.split(".");
 			if (!ageRange) continue;
-			if (!ageGroups.has(ageRange)) {
-				ageGroups.set(ageRange, { male: 0, female: 0, other: 0 });
+			let group = ageGroups.get(ageRange);
+			if (!group) {
+				group = { male: 0, female: 0, other: 0 };
+				ageGroups.set(ageRange, group);
 			}
-			const group = ageGroups.get(ageRange)!;
 			switch (genderPrefix) {
 				case "M":
 					group.male += count;

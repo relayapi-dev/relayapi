@@ -78,8 +78,9 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
 
   // Set default ad account
   useEffect(() => {
-    if (adAccounts.length > 0 && !adAccountId) {
-      setAdAccountId(adAccounts[0]!.id);
+    const firstAccount = adAccounts[0];
+    if (firstAccount && !adAccountId) {
+      setAdAccountId(firstAccount.id);
     }
   }, [adAccounts, adAccountId]);
 
@@ -207,7 +208,7 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
         <div className="space-y-4 pl-0.5 pr-6">
           {/* Ad Account */}
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Ad Account</label>
+            <span className="text-xs text-muted-foreground mb-1 block">Ad Account</span>
             <AdAccountCombobox
               value={adAccountId}
               onSelect={setAdAccountId}
@@ -221,7 +222,7 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
           {/* Boost: Post picker */}
           {boostMode && (
             <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Post to boost</label>
+              <span className="text-xs text-muted-foreground mb-1 block">Post to boost</span>
               <PostTargetCombobox
                 value={postTargetId || null}
                 onSelect={(id) => setPostTargetId(id ?? "")}
@@ -234,14 +235,14 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
 
           {/* Name */}
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Name</label>
-            <input className={inputClass} placeholder="Ad name" value={name} onChange={(e) => setName(e.target.value)} />
+            <label htmlFor="ad-name" className="text-xs text-muted-foreground mb-1 block">Name</label>
+            <input id="ad-name" className={inputClass} placeholder="Ad name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
 
           {/* Objective */}
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Objective</label>
-            <select value={objective} onChange={(e) => setObjective(e.target.value)} className={inputClass}>
+            <label htmlFor="ad-objective" className="text-xs text-muted-foreground mb-1 block">Objective</label>
+            <select id="ad-objective" value={objective} onChange={(e) => setObjective(e.target.value)} className={inputClass}>
               {objectives.map((o) => (
                 <option key={o} value={o}>{o.charAt(0).toUpperCase() + o.slice(1).replace("_", " ")}</option>
               ))}
@@ -250,9 +251,8 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
 
           {/* Creative (non-boost only) */}
           {!boostMode && (
-            <>
-              <div className="border-t border-border pt-4">
-                <p className="text-xs font-medium text-muted-foreground mb-3">Creative</p>
+            <div className="border-t border-border pt-4">
+              <p className="text-xs font-medium text-muted-foreground mb-3">Creative</p>
                 <div className="space-y-3">
                   <input className={inputClass} placeholder="Headline" value={headline} onChange={(e) => setHeadline(e.target.value)} />
                   <textarea
@@ -263,8 +263,8 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
                   />
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[10px] text-muted-foreground mb-1 block">Call to Action</label>
-                      <select value={callToAction} onChange={(e) => setCallToAction(e.target.value)} className={inputClass}>
+                      <label htmlFor="ad-cta" className="text-[10px] text-muted-foreground mb-1 block">Call to Action</label>
+                      <select id="ad-cta" value={callToAction} onChange={(e) => setCallToAction(e.target.value)} className={inputClass}>
                         <option value="">None</option>
                         {ctaOptions.map((c) => (
                           <option key={c} value={c}>{c.replace(/_/g, " ")}</option>
@@ -272,8 +272,8 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
                       </select>
                     </div>
                     <div>
-                      <label className="text-[10px] text-muted-foreground mb-1 block">Link URL</label>
-                      <input className={inputClass} placeholder="https://..." value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} />
+                      <label htmlFor="ad-link-url" className="text-[10px] text-muted-foreground mb-1 block">Link URL</label>
+                      <input id="ad-link-url" className={inputClass} placeholder="https://..." value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -281,8 +281,7 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
                     <input className={inputClass} placeholder="Video URL" value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} />
                   </div>
                 </div>
-              </div>
-            </>
+            </div>
           )}
 
           {/* Budget */}
@@ -290,29 +289,29 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
             <p className="text-xs font-medium text-muted-foreground mb-3">Budget</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[10px] text-muted-foreground mb-1 block">Daily ($)</label>
-                <input className={inputClass} type="number" step="0.01" min="0" placeholder="0.00" value={dailyBudget} onChange={(e) => setDailyBudget(e.target.value)} />
+                <label htmlFor="ad-daily-budget" className="text-[10px] text-muted-foreground mb-1 block">Daily ($)</label>
+                <input id="ad-daily-budget" className={inputClass} type="number" step="0.01" min="0" placeholder="0.00" value={dailyBudget} onChange={(e) => setDailyBudget(e.target.value)} />
               </div>
               {!boostMode && (
                 <div>
-                  <label className="text-[10px] text-muted-foreground mb-1 block">Lifetime ($)</label>
-                  <input className={inputClass} type="number" step="0.01" min="0" placeholder="0.00" value={lifetimeBudget} onChange={(e) => setLifetimeBudget(e.target.value)} />
+                  <label htmlFor="ad-lifetime-budget" className="text-[10px] text-muted-foreground mb-1 block">Lifetime ($)</label>
+                  <input id="ad-lifetime-budget" className={inputClass} type="number" step="0.01" min="0" placeholder="0.00" value={lifetimeBudget} onChange={(e) => setLifetimeBudget(e.target.value)} />
                 </div>
               )}
               <div>
-                <label className="text-[10px] text-muted-foreground mb-1 block">Duration (days)</label>
-                <input className={inputClass} type="number" min="1" max="365" value={durationDays} onChange={(e) => setDurationDays(e.target.value)} />
+                <label htmlFor="ad-duration" className="text-[10px] text-muted-foreground mb-1 block">Duration (days)</label>
+                <input id="ad-duration" className={inputClass} type="number" min="1" max="365" value={durationDays} onChange={(e) => setDurationDays(e.target.value)} />
               </div>
             </div>
             {!boostMode && (
               <div className="grid grid-cols-2 gap-3 mt-3">
                 <div>
-                  <label className="text-[10px] text-muted-foreground mb-1 block">Start Date</label>
-                  <input className={inputClass} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                  <label htmlFor="ad-start-date" className="text-[10px] text-muted-foreground mb-1 block">Start Date</label>
+                  <input id="ad-start-date" className={inputClass} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
                 </div>
                 <div>
-                  <label className="text-[10px] text-muted-foreground mb-1 block">End Date</label>
-                  <input className={inputClass} type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                  <label htmlFor="ad-end-date" className="text-[10px] text-muted-foreground mb-1 block">End Date</label>
+                  <input id="ad-end-date" className={inputClass} type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
                 </div>
               </div>
             )}
@@ -325,18 +324,18 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
               {/* Age */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] text-muted-foreground mb-1 block">Min Age</label>
-                  <input className={inputClass} type="number" min="13" max="65" value={ageMin} onChange={(e) => setAgeMin(e.target.value)} />
+                  <label htmlFor="ad-age-min" className="text-[10px] text-muted-foreground mb-1 block">Min Age</label>
+                  <input id="ad-age-min" className={inputClass} type="number" min="13" max="65" value={ageMin} onChange={(e) => setAgeMin(e.target.value)} />
                 </div>
                 <div>
-                  <label className="text-[10px] text-muted-foreground mb-1 block">Max Age</label>
-                  <input className={inputClass} type="number" min="13" max="65" value={ageMax} onChange={(e) => setAgeMax(e.target.value)} />
+                  <label htmlFor="ad-age-max" className="text-[10px] text-muted-foreground mb-1 block">Max Age</label>
+                  <input id="ad-age-max" className={inputClass} type="number" min="13" max="65" value={ageMax} onChange={(e) => setAgeMax(e.target.value)} />
                 </div>
               </div>
 
               {/* Gender */}
               <div>
-                <label className="text-[10px] text-muted-foreground mb-1 block">Gender</label>
+                <span className="text-[10px] text-muted-foreground mb-1 block">Gender</span>
                 <div className="flex gap-2">
                   {["male", "female", "all"].map((g) => (
                     <button
@@ -358,10 +357,11 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
 
               {/* Interests */}
               <div>
-                <label className="text-[10px] text-muted-foreground mb-1 block">Interests</label>
+                <label htmlFor="ad-interests" className="text-[10px] text-muted-foreground mb-1 block">Interests</label>
                 <div className="relative">
                   <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
                   <input
+                    id="ad-interests"
                     className={cn(inputClass, "pl-8")}
                     placeholder="Search interests..."
                     value={interestQuery}

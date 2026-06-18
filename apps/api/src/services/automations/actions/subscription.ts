@@ -15,6 +15,7 @@ import {
 	contactSubscriptions,
 	customFieldDefinitions,
 	customFieldValues,
+	type Database,
 	generateId,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
@@ -79,7 +80,7 @@ const unsubscribeList: ActionHandler<UnsubscribeListAction> = async (
 // ---------------------------------------------------------------------------
 
 async function ensureOptOutDefinition(
-	db: any,
+	db: Database,
 	organizationId: string,
 	channel: string,
 ): Promise<string> {

@@ -15,8 +15,8 @@ export function NowIndicator({ timezone, startHour = 0, totalHours = 24 }: { tim
     minute: "numeric",
     hour12: false,
   }).formatToParts(now);
-  const h = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0");
-  const m = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0");
+  const h = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
+  const m = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
   const minutes = h * 60 + m;
   const startMinute = startHour * 60;
   const totalMinutes = totalHours * 60;

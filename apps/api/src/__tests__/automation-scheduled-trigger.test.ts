@@ -169,19 +169,22 @@ describe("computeNextCronRun", () => {
 	it("parses daily `0 9 * * *` to 9:00 UTC next day when already past", () => {
 		const next = computeNextCronRun("0 9 * * *", anchor);
 		expect(next).not.toBeNull();
-		expect(next!.toISOString()).toBe("2026-04-21T09:00:00.000Z");
+		if (!next) throw new Error("expected next to be non-null");
+		expect(next.toISOString()).toBe("2026-04-21T09:00:00.000Z");
 	});
 
 	it("parses daily `30 15 * * *` to 15:30 UTC today when still future", () => {
 		const next = computeNextCronRun("30 15 * * *", anchor);
 		expect(next).not.toBeNull();
-		expect(next!.toISOString()).toBe("2026-04-20T15:30:00.000Z");
+		if (!next) throw new Error("expected next to be non-null");
+		expect(next.toISOString()).toBe("2026-04-20T15:30:00.000Z");
 	});
 
 	it("parses hourly `0 * * * *`", () => {
 		const next = computeNextCronRun("0 * * * *", anchor);
 		expect(next).not.toBeNull();
-		expect(next!.toISOString()).toBe("2026-04-20T13:00:00.000Z");
+		if (!next) throw new Error("expected next to be non-null");
+		expect(next.toISOString()).toBe("2026-04-20T13:00:00.000Z");
 	});
 
 	it("parses every-15-minutes `*/15 * * * *`", () => {
@@ -190,7 +193,8 @@ describe("computeNextCronRun", () => {
 			new Date("2026-04-20T12:07:00.000Z"),
 		);
 		expect(next).not.toBeNull();
-		expect(next!.toISOString()).toBe("2026-04-20T12:15:00.000Z");
+		if (!next) throw new Error("expected next to be non-null");
+		expect(next.toISOString()).toBe("2026-04-20T12:15:00.000Z");
 	});
 
 	it("returns null for unsupported patterns", () => {
@@ -207,8 +211,10 @@ describe("computeNextCronRun", () => {
 		const fromUtc = new Date("2026-04-22T12:00:00.000Z");
 		const a = computeNextCronRun("0 9 * * *", fromUtc);
 		const b = computeNextCronRun("0 9 * * *", fromUtc, "UTC");
-		expect(a!.toISOString()).toBe("2026-04-23T09:00:00.000Z");
-		expect(b!.toISOString()).toBe("2026-04-23T09:00:00.000Z");
+		if (!a) throw new Error("expected a to be non-null");
+		if (!b) throw new Error("expected b to be non-null");
+		expect(a.toISOString()).toBe("2026-04-23T09:00:00.000Z");
+		expect(b.toISOString()).toBe("2026-04-23T09:00:00.000Z");
 	});
 
 	it("resolves `0 9 * * *` in America/New_York to 13:00 UTC during EDT", () => {
@@ -216,9 +222,10 @@ describe("computeNextCronRun", () => {
 		const from = new Date("2026-04-22T12:00:00.000Z");
 		const next = computeNextCronRun("0 9 * * *", from, "America/New_York");
 		expect(next).not.toBeNull();
+		if (!next) throw new Error("expected next to be non-null");
 		// 9am NY on 2026-04-22 is 13:00 UTC; since that's still after `from`
 		// (12:00 UTC), it's today rather than tomorrow.
-		expect(next!.toISOString()).toBe("2026-04-22T13:00:00.000Z");
+		expect(next.toISOString()).toBe("2026-04-22T13:00:00.000Z");
 	});
 
 	it("resolves `0 10 * * *` in Europe/London on a spring-forward day", () => {
@@ -228,7 +235,8 @@ describe("computeNextCronRun", () => {
 		const from = new Date("2026-04-01T05:00:00.000Z");
 		const next = computeNextCronRun("0 10 * * *", from, "Europe/London");
 		expect(next).not.toBeNull();
-		expect(next!.toISOString()).toBe("2026-04-01T09:00:00.000Z");
+		if (!next) throw new Error("expected next to be non-null");
+		expect(next.toISOString()).toBe("2026-04-01T09:00:00.000Z");
 	});
 
 	it("returns null for an unknown IANA timezone", () => {
@@ -331,7 +339,9 @@ describe("scheduled_trigger dispatch", () => {
 			.orderBy(desc(automationScheduledJobs.runAt))
 			.limit(1);
 		expect(pending.length).toBe(1);
-		expect(pending[0]!.runAt.getTime()).toBeGreaterThan(Date.now());
+		const pending0 = pending[0];
+		if (!pending0) throw new Error("expected a pending job");
+		expect(pending0.runAt.getTime()).toBeGreaterThan(Date.now());
 	});
 
 	it("fails with unsupported cron pattern", async () => {
@@ -401,7 +411,9 @@ describe("scheduled_trigger dispatch", () => {
 					),
 				);
 			expect(pending.length).toBe(1);
-			expect(pending[0]!.runAt.getTime()).toBeGreaterThan(Date.now());
+			const pending0 = pending[0];
+			if (!pending0) throw new Error("expected a pending job");
+			expect(pending0.runAt.getTime()).toBeGreaterThan(Date.now());
 		},
 	);
 
@@ -484,7 +496,9 @@ describe("armScheduleEntrypoint (F1)", () => {
 				),
 			);
 		expect(pending.length).toBe(1);
-		expect(pending[0]!.runAt.getTime()).toBeGreaterThan(Date.now());
+		const pending0 = pending[0];
+		if (!pending0) throw new Error("expected a pending job");
+		expect(pending0.runAt.getTime()).toBeGreaterThan(Date.now());
 	});
 
 	it("skips arming when the entrypoint's automation is not active", async () => {

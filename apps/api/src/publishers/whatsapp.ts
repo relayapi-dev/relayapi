@@ -174,8 +174,8 @@ export const whatsappPublisher: Publisher = {
 				(opts.media as Array<{ url: string; type?: string }>) ?? request.media;
 
 			// Media message
-			if (media && media.length > 0) {
-				const m = media[0]!;
+			const m = media?.[0];
+			if (m) {
 				const mediaType = (
 					["image", "video", "document", "audio"] as const
 				).includes(m.type as never)

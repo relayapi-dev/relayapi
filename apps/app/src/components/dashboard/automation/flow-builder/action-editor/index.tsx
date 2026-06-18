@@ -175,6 +175,7 @@ function AddActionButton({ onAdd }: { onAdd(type: ActionType): void }) {
 			</Button>
 			{open ? (
 				<div
+					role="menu"
 					className="absolute z-20 mt-1 max-h-[360px] w-full overflow-auto rounded-lg border border-[#e6e9ef] bg-white p-1 shadow-lg"
 					onMouseLeave={() => setOpen(false)}
 				>

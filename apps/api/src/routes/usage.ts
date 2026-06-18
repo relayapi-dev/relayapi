@@ -1,6 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	createDb,
 	organizationSubscriptions,
 	usageRecords,
 	apiRequestLogs,

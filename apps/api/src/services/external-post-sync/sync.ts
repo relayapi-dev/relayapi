@@ -385,7 +385,7 @@ async function upsertExternalPosts(
 				organizationId,
 				workspaceId,
 				socialAccountId,
-				platform: platform as any,
+				platform: platform as typeof externalPosts.$inferInsert.platform,
 				platformPostId: post.platformPostId,
 				platformUrl: post.platformUrl,
 				content: post.content,

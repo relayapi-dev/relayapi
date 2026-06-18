@@ -16,7 +16,7 @@ import {
 	organization,
 	workspaces,
 } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Graph } from "../schemas/automation-graph";
 import { enrollContact, runLoop } from "../services/automations/runner";
 
@@ -167,8 +167,9 @@ describe("automation runner", () => {
 			where: eq(automationRuns.id, runId),
 		});
 		expect(run).toBeTruthy();
-		expect(run!.status).toBe("completed");
-		expect(run!.exitReason).toBe("completed");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("completed");
+		expect(run.exitReason).toBe("completed");
 
 		const steps = await db
 			.select()
@@ -182,8 +183,9 @@ describe("automation runner", () => {
 		const autoAfter = await db.query.automations.findFirst({
 			where: eq(automations.id, auto.id),
 		});
-		expect(autoAfter!.totalEnrolled).toBe(1);
-		expect(autoAfter!.totalCompleted).toBe(1);
+		if (!autoAfter) throw new Error("expected autoAfter to exist");
+		expect(autoAfter.totalEnrolled).toBe(1);
+		expect(autoAfter.totalCompleted).toBe(1);
 	});
 
 	it("parks a run in waiting state when a pause row exists", async () => {
@@ -247,8 +249,9 @@ describe("automation runner", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.waitingFor).toBe("external_event");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("waiting");
+		expect(run.waitingFor).toBe("external_event");
 	});
 
 	it(
@@ -300,13 +303,15 @@ describe("automation runner", () => {
 			const run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, runId),
 			});
-			expect(run!.status).toBe("failed");
-			expect(run!.exitReason).toBe("infinite_loop_cap");
+			if (!run) throw new Error("expected run to exist");
+			expect(run.status).toBe("failed");
+			expect(run.exitReason).toBe("infinite_loop_cap");
 
 			const autoAfter = await db.query.automations.findFirst({
 				where: eq(automations.id, auto.id),
 			});
-			expect(autoAfter!.totalFailed).toBeGreaterThanOrEqual(1);
+			if (!autoAfter) throw new Error("expected autoAfter to exist");
+			expect(autoAfter.totalFailed).toBeGreaterThanOrEqual(1);
 		},
 		30_000,
 	);
@@ -354,8 +359,9 @@ describe("automation runner", () => {
 		let run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.currentNodeKey).toBe("wait");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("waiting");
+		expect(run.currentNodeKey).toBe("wait");
 
 		// 2. Remove the "wait" node from the graph and flip run back to active.
 		const prunedGraph: Graph = {
@@ -381,8 +387,9 @@ describe("automation runner", () => {
 			run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, runId),
 			});
-			expect(run!.status).toBe("exited");
-			expect(run!.exitReason).toBe("graph_changed");
+			if (!run) throw new Error("expected run to exist");
+			expect(run.status).toBe("exited");
+			expect(run.exitReason).toBe("graph_changed");
 		},
 		30_000,
 	);
@@ -467,10 +474,11 @@ describe("automation runner", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
+		if (!run) throw new Error("expected run to exist");
 		// The start_automation node returns `fail` because the target isn't
 		// active. The runner treats a bare `fail` (no `error` port wired up)
 		// as a `failed` status with `handler_failure` exit_reason.
-		expect(run!.status).toBe("failed");
-		expect(run!.exitReason).toBe("handler_failure");
+		expect(run.status).toBe("failed");
+		expect(run.exitReason).toBe("handler_failure");
 	});
 });

@@ -137,8 +137,11 @@ async function createMultiImagePost(
 	if (message) {
 		params.append("message", message);
 	}
-	for (let i = 0; i < uploads.length; i++) {
-		params.append(`attached_media[${i}]`, JSON.stringify({ media_fbid: uploads[i]!.id }));
+	for (const [i, upload] of uploads.entries()) {
+		params.append(
+			`attached_media[${i}]`,
+			JSON.stringify({ media_fbid: upload.id }),
+		);
 	}
 
 	const res = await fetch(`${GRAPH_API}/${auth.page_id}/feed?fields=id,permalink_url`, {
@@ -281,7 +284,6 @@ async function createReel(
 		);
 	}
 	const videoBlob = await videoRes.arrayBuffer();
-	const contentType = videoRes.headers.get("content-type") ?? "video/mp4";
 
 	// Facebook Graph API: Upload reel video binary (phase 2)
 	// Method must be POST, Content-Type must be application/octet-stream, offset header required

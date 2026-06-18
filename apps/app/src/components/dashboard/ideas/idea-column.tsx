@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MoreHorizontal, Pencil, Trash2, Plus } from "lucide-react";
 import {
 	DropdownMenu,
@@ -34,6 +34,11 @@ export function IdeaColumn({
 }: IdeaColumnProps) {
 	const [editing, setEditing] = useState(false);
 	const [editName, setEditName] = useState(name);
+	const editInputRef = useRef<HTMLInputElement>(null);
+
+	useEffect(() => {
+		if (editing) editInputRef.current?.focus();
+	}, [editing]);
 
 	const handleRenameSubmit = () => {
 		const trimmed = editName.trim();
@@ -57,6 +62,7 @@ export function IdeaColumn({
 				)}
 				{editing ? (
 					<input
+						ref={editInputRef}
 						className="text-sm font-medium bg-transparent border-b border-foreground outline-none flex-1 min-w-0"
 						value={editName}
 						onChange={(e) => setEditName(e.target.value)}
@@ -68,7 +74,6 @@ export function IdeaColumn({
 								setEditing(false);
 							}
 						}}
-						autoFocus
 						onClick={(e) => e.stopPropagation()}
 					/>
 				) : (

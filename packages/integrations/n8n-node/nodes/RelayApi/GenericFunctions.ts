@@ -1,5 +1,7 @@
 import type {
+	IDataObject,
 	IExecuteFunctions,
+	IHookFunctions,
 	ILoadOptionsFunctions,
 	IHttpRequestMethods,
 	IRequestOptions,
@@ -10,12 +12,12 @@ import { NodeApiError } from 'n8n-workflow';
 const BASE_URL = 'https://api.relayapi.dev';
 
 export async function relayApiRequest(
-	this: IExecuteFunctions | ILoadOptionsFunctions,
+	this: IExecuteFunctions | ILoadOptionsFunctions | IHookFunctions,
 	method: IHttpRequestMethods,
 	endpoint: string,
 	body?: object,
 	qs?: Record<string, string | number>,
-): Promise<any> {
+): Promise<IDataObject> {
 	const credentials = await this.getCredentials('relayApi');
 
 	const options: IRequestOptions = {
@@ -53,8 +55,8 @@ export async function relayApiRequestAllItems(
 	endpoint: string,
 	body?: object,
 	qs?: Record<string, string | number>,
-): Promise<any[]> {
-	const allItems: any[] = [];
+): Promise<IDataObject[]> {
+	const allItems: IDataObject[] = [];
 	let cursor: string | undefined;
 
 	do {
@@ -65,14 +67,15 @@ export async function relayApiRequestAllItems(
 
 		const response = await relayApiRequest.call(this, method, endpoint, body, queryParams);
 
-		if (Array.isArray(response.data)) {
-			allItems.push(...response.data);
+		const data = response.data;
+		if (Array.isArray(data)) {
+			allItems.push(...(data as IDataObject[]));
 		} else {
 			allItems.push(response);
 			break;
 		}
 
-		cursor = response.has_more ? response.next_cursor : undefined;
+		cursor = response.has_more ? (response.next_cursor as string | undefined) : undefined;
 	} while (cursor);
 
 	return allItems;

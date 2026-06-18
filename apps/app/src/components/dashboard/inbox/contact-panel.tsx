@@ -100,7 +100,7 @@ export function ContactPanel({
       <div className="flex items-center justify-between px-4 h-14 border-b border-border shrink-0">
         <span className="text-xs font-medium text-muted-foreground">Contact Details</span>
         {onClose && (
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+          <button type="button" onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
             <X className="size-3.5" />
           </button>
         )}

@@ -59,7 +59,9 @@ export async function generateInvoices(env: Env): Promise<void> {
 			.limit(BATCH_SIZE);
 
 		if (dueSubs.length === 0) break;
-		lastId = dueSubs[dueSubs.length - 1]!.id;
+		const lastSub = dueSubs[dueSubs.length - 1];
+		if (!lastSub) break;
+		lastId = lastSub.id;
 
 		for (const sub of dueSubs) {
 			try {
@@ -158,7 +160,9 @@ export async function generateInvoices(env: Env): Promise<void> {
 			.limit(INACTIVE_BATCH_SIZE);
 
 		if (inactiveSubs.length === 0) break;
-		lastInactiveId = inactiveSubs[inactiveSubs.length - 1]!.id;
+		const lastInactive = inactiveSubs[inactiveSubs.length - 1];
+		if (!lastInactive) break;
+		lastInactiveId = lastInactive.id;
 
 		for (const sub of inactiveSubs) {
 			try {

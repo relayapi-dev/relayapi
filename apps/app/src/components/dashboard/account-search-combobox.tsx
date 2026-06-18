@@ -178,6 +178,7 @@ export function AccountSearchCombobox({
           <div className="max-h-48 overflow-y-auto py-1">
             {showAllOption && (
               <button
+                type="button"
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 transition-colors",
                   value === null && "bg-accent/20 font-medium"
@@ -193,6 +194,7 @@ export function AccountSearchCombobox({
               const platform = acc.platform?.toLowerCase() || "";
               return (
                 <button
+                  type="button"
                   key={acc.id}
                   className={cn(
                     "w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 transition-colors",

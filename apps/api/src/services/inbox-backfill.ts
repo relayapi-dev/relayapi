@@ -39,7 +39,13 @@ export async function processBackfill(
 	}
 
 	const platform = account.platform;
-	const token = (await maybeDecrypt(account.accessToken, env.ENCRYPTION_KEY))!;
+	const token = await maybeDecrypt(account.accessToken, env.ENCRYPTION_KEY);
+	if (!token) {
+		console.log(
+			`[backfill] Account ${message.account_id} token failed to decrypt, skipping`,
+		);
+		return;
+	}
 
 	console.log(
 		`[backfill] Starting backfill for ${platform} account ${account.id}`,

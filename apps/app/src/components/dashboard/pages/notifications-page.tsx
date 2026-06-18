@@ -113,6 +113,7 @@ export function NotificationsPage() {
       <motion.div variants={fadeUp} className="flex items-center justify-between">
         <h1 className="text-lg font-medium">Notifications</h1>
         <button
+          type="button"
           onClick={handleMarkAllRead}
           className="text-[12px] text-muted-foreground hover:text-foreground transition-colors"
         >
@@ -122,6 +123,7 @@ export function NotificationsPage() {
 
       <motion.div variants={fadeUp} className="flex gap-1">
         <button
+          type="button"
           onClick={() => setFilter("all")}
           className={cn(
             "rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors",
@@ -133,6 +135,7 @@ export function NotificationsPage() {
           All
         </button>
         <button
+          type="button"
           onClick={() => setFilter("unread")}
           className={cn(
             "rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors",
@@ -164,6 +167,7 @@ export function NotificationsPage() {
               const iconColor = NOTIF_TYPE_COLOR[notif.type] || "text-muted-foreground";
               return (
                 <button
+                  type="button"
                   key={notif.id}
                   onClick={() => handleMarkRead(notif)}
                   className={cn(
@@ -197,6 +201,7 @@ export function NotificationsPage() {
         {hasMore && (
           <div className="flex justify-center pt-4">
             <button
+              type="button"
               onClick={loadMore}
               disabled={loadingMore}
               className="text-[12px] text-muted-foreground hover:text-foreground transition-colors"

@@ -1,7 +1,7 @@
 /// <reference types="astro/client" />
 
 declare module "cloudflare:workers" {
-  const env: Record<string, any>;
+  const env: Record<string, unknown>;
   export { env };
 }
 

@@ -239,6 +239,7 @@ export function Timeline({ runId, onShowOnCanvas }: Props) {
 							</div>
 							<div className="flex items-center gap-1">
 								{onShowOnCanvas && (
+									// biome-ignore lint/a11y/useSemanticElements: interactive wrapper cannot be a button due to nested controls
 									<span
 										role="button"
 										tabIndex={0}

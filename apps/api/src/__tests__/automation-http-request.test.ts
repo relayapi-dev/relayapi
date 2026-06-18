@@ -7,6 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { httpRequestHandler } from "../services/automations/nodes/http-request";
 import type { RunContext } from "../services/automations/types";
 
+// The http_request node stores its response under ctx.context as `unknown`.
+// This narrows it for assertions.
+type StoredHttpResponse = {
+	status: number;
+	body: { user?: string; id?: number } & Record<string, unknown>;
+	headers: Record<string, string>;
+	error: string;
+};
+function asStoredResponse(value: unknown): StoredHttpResponse {
+	return value as StoredHttpResponse;
+}
+
 const originalFetch = globalThis.fetch;
 
 function makeCtx(overrides: Partial<RunContext> = {}): RunContext {
@@ -67,7 +79,7 @@ describe("http_request handler", () => {
 
 		expect(result.result).toBe("advance");
 		if (result.result === "advance") expect(result.via_port).toBe("success");
-		const stored = ctx.context.last_http_response as any;
+		const stored = asStoredResponse(ctx.context.last_http_response);
 		expect(stored.status).toBe(200);
 		expect(stored.body.user).toBe("alice");
 		expect(stored.headers["x-req-id"]).toBe("abc");
@@ -86,9 +98,9 @@ describe("http_request handler", () => {
 
 		expect(result.result).toBe("advance");
 		if (result.result === "advance") expect(result.via_port).toBe("error");
-		const stored = ctx.context.last_http_response as any;
+		const stored = asStoredResponse(ctx.context.last_http_response);
 		expect(stored.status).toBe(500);
-		expect(stored.body).toBe("boom");
+		expect(stored.body as unknown).toBe("boom");
 	});
 
 	it("writes response to a custom response_key", async () => {
@@ -112,7 +124,7 @@ describe("http_request handler", () => {
 		expect(result.result).toBe("advance");
 		expect(ctx.context.my_custom_key).toBeTruthy();
 		expect(ctx.context.last_http_response).toBeUndefined();
-		expect((ctx.context.my_custom_key as any).body.id).toBe(42);
+		expect(asStoredResponse(ctx.context.my_custom_key).body.id).toBe(42);
 	});
 
 	it("classifies an aborted fetch as timeout and routes via error", async () => {
@@ -139,7 +151,7 @@ describe("http_request handler", () => {
 
 		expect(result.result).toBe("advance");
 		if (result.result === "advance") expect(result.via_port).toBe("error");
-		const stored = ctx.context.last_http_response as any;
+		const stored = asStoredResponse(ctx.context.last_http_response);
 		expect(stored.error).toBe("timeout");
 	});
 
@@ -156,7 +168,7 @@ describe("http_request handler", () => {
 
 		expect(result.result).toBe("advance");
 		if (result.result === "advance") expect(result.via_port).toBe("error");
-		const stored = ctx.context.last_http_response as any;
+		const stored = asStoredResponse(ctx.context.last_http_response);
 		expect(stored.error).toBe("ECONNREFUSED");
 	});
 

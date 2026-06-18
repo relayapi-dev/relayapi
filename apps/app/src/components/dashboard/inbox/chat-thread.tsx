@@ -94,7 +94,17 @@ function normalizeAttachments(value: unknown): Array<{ type: string; url: string
   });
 }
 
-function mapApiMessage(message: any): MessageItem {
+interface ApiMessage {
+  id: string;
+  direction?: string | null;
+  author_name?: string | null;
+  author_avatar_url?: string | null;
+  text?: string | null;
+  attachments?: unknown;
+  created_at: string;
+}
+
+function mapApiMessage(message: ApiMessage): MessageItem {
   return {
     id: message.id,
     sender: message.direction === "outbound" ? "user" : "participant",

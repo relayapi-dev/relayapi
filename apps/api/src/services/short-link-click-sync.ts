@@ -52,10 +52,12 @@ export async function syncShortLinkClicks(env: Env): Promise<void> {
 
 	for (const row of linksToSync) {
 		const orgId = row.link.organizationId;
-		if (!byOrg.has(orgId)) {
-			byOrg.set(orgId, { config: row.config, links: [] });
+		let group = byOrg.get(orgId);
+		if (!group) {
+			group = { config: row.config, links: [] };
+			byOrg.set(orgId, group);
 		}
-		byOrg.get(orgId)!.links.push(row.link);
+		group.links.push(row.link);
 	}
 
 	for (const [, { config, links }] of byOrg) {

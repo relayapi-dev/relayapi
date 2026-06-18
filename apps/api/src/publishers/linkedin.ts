@@ -416,15 +416,16 @@ export function escapeLinkedInCommentary(text: string): string {
 	const segments = text.split(mentionPattern);
 
 	const escapedSegments = segments.map((segment) =>
-		segment.replace(/([|{}@\[\]()<>#\\*_~])/g, "\\$1"),
+		segment.replace(/([|{}@[\]()<>#\\*_~])/g, "\\$1"),
 	);
 
 	// Interleave escaped segments with preserved mentions
 	const result: string[] = [];
-	for (let i = 0; i < escapedSegments.length; i++) {
-		result.push(escapedSegments[i]!);
-		if (i < mentions.length) {
-			result.push(mentions[i]!);
+	for (const [i, segment] of escapedSegments.entries()) {
+		result.push(segment);
+		const mention = mentions[i];
+		if (mention !== undefined) {
+			result.push(mention);
 		}
 	}
 	return result.join("");
@@ -573,7 +574,12 @@ export const linkedinPublisher: Publisher = {
 						multiImage: {
 							images: imageUrns.map((urn, idx) => ({
 								id: urn,
-								altText: (media.filter((m) => !m.type || m.type === "image")[idx] as any)?.alt_text ?? "",
+								altText:
+									(
+										media.filter((m) => !m.type || m.type === "image")[idx] as
+											| { alt_text?: string }
+											| undefined
+									)?.alt_text ?? "",
 							})),
 						},
 					};

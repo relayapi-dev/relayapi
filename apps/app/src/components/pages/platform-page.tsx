@@ -1,5 +1,4 @@
 import { Shield, Wrench, Zap } from "lucide-react";
-import type { PlatformData } from "../../lib/platform-data";
 import { getPlatformBySlug, platforms } from "../../lib/platform-data";
 import { Navbar } from "../section/navbar";
 import {
@@ -24,19 +23,6 @@ export function PlatformPage({ slug }: { slug: string }) {
 	}
 
 	const otherPlatforms = platforms.filter((p) => p.slug !== platform.slug);
-
-	const codeSnippet = `const response = await fetch('https://api.relayapi.dev/v1/posts', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer rlay_live_xxxxxxxxxx',
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    content: 'Check out our latest update!',
-    platforms: ['${platform.slug}'],
-    media: ['https://cdn.example.com/image.jpg'],
-  }),
-});`;
 
 	return (
 		<div className="max-w-7xl mx-auto border-x border-border">
@@ -178,7 +164,7 @@ export function PlatformPage({ slug }: { slug: string }) {
 								<ul className="space-y-4">
 									{platform.painPoints.map((point, index) => (
 										<li key={index} className="flex items-start gap-3">
-											<svg
+											<svg aria-hidden="true"
 												xmlns="http://www.w3.org/2000/svg"
 												width="20"
 												height="20"
@@ -207,7 +193,7 @@ export function PlatformPage({ slug }: { slug: string }) {
 								<ul className="space-y-4">
 									{platform.solutions.map((solution, index) => (
 										<li key={index} className="flex items-start gap-3">
-											<svg
+											<svg aria-hidden="true"
 												xmlns="http://www.w3.org/2000/svg"
 												width="20"
 												height="20"

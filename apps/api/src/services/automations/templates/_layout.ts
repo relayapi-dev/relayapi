@@ -85,7 +85,9 @@ export function autoLayoutGraph(graph: Graph): Graph {
 
 	const updatedNodes: GraphNode[] = graph.nodes.map((node) => {
 		const laid = g.node(node.key);
-		const size = sizes.get(node.key)!;
+		// Every node was inserted into `sizes` above; fall back to recomputing
+		// the same estimate so behavior is unchanged if a key is ever missing.
+		const size = sizes.get(node.key) ?? estimateNodeSize(node);
 		// dagre returns the node centre; the canvas stores the top-left corner.
 		return {
 			...node,

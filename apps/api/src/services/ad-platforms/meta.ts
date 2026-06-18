@@ -698,7 +698,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 	): Promise<AdMetricsWithDemographics> {
 		const fields =
 			"impressions,reach,clicks,spend,actions,ctr,cpc,cpm";
-		let url = `${GRAPH_API}/${platformAdId}/insights?fields=${fields}&time_range={"since":"${dateRange.startDate}","until":"${dateRange.endDate}"}&time_increment=1`;
+		const url = `${GRAPH_API}/${platformAdId}/insights?fields=${fields}&time_range={"since":"${dateRange.startDate}","until":"${dateRange.endDate}"}&time_increment=1`;
 
 		const data = await metaFetch<{
 			data: {

@@ -61,7 +61,9 @@ export function PendingInvitations({ userEmail }: PendingInvitationsProps) {
         setAcceptingId(null);
         return;
       }
-      const orgId = (result.data as any)?.member?.organizationId;
+      const orgId = (
+        result.data as { member?: { organizationId?: string } } | null
+      )?.member?.organizationId;
       if (orgId) {
         await organization.setActive({ organizationId: orgId });
       }
@@ -200,6 +202,7 @@ export function PendingInvitations({ userEmail }: PendingInvitationsProps) {
           <p className="text-sm text-muted-foreground">
             Signed in as {userEmail}.{" "}
             <button
+              type="button"
               onClick={handleSignOut}
               className="font-medium text-primary hover:underline"
             >

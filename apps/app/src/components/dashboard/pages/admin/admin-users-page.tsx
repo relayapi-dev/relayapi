@@ -101,7 +101,7 @@ export function AdminUsersPage() {
     try {
       setLoading(true);
       setError(null);
-      const query: Record<string, any> = {
+      const query: Record<string, string | number> = {
         limit: pageSize,
         offset: pageIndex * pageSize,
         sortBy: "createdAt",
@@ -114,8 +114,9 @@ export function AdminUsersPage() {
       }
       const result = await authClient.admin.listUsers({ query });
       if (result.data) {
-        setUsers((result.data as any).users || []);
-        setTotal((result.data as any).total || 0);
+        const data = result.data as unknown as { users?: AdminUser[]; total?: number };
+        setUsers(data.users || []);
+        setTotal(data.total || 0);
       }
     } catch {
       setError("Failed to load users");
@@ -511,16 +512,19 @@ export function AdminUsersPage() {
           <div className="w-full max-w-sm rounded-lg border border-border bg-background p-6 shadow-lg space-y-4">
             <h3 className="text-sm font-medium">Ban User</h3>
             <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">
+              <label
+                htmlFor="admin-user-ban-reason"
+                className="text-xs text-muted-foreground"
+              >
                 Reason (optional)
               </label>
               <input
+                id="admin-user-ban-reason"
                 type="text"
                 value={banReason}
                 onChange={(e) => setBanReason(e.target.value)}
                 placeholder="Spamming, abuse, etc."
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-                autoFocus
               />
             </div>
             <div className="flex gap-2 justify-end">

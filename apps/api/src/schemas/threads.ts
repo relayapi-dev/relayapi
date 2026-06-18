@@ -1,5 +1,5 @@
 import { z } from "@hono/zod-openapi";
-import { ErrorResponse, paginatedResponse } from "./common";
+import { paginatedResponse } from "./common";
 
 function isHttpOrHttpsUrl(url: string): boolean {
 	try {
@@ -58,7 +58,7 @@ export const CreateThreadBody = z.object({
 			(val) => {
 				if (val === "now" || val === "draft" || val === "auto") return true;
 				const date = new Date(val);
-				return !isNaN(date.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(val);
+				return !Number.isNaN(date.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(val);
 			},
 			{
 				message:
@@ -163,7 +163,7 @@ export const UpdateThreadBody = z.object({
 			(val) => {
 				if (val === "draft" || val === "auto") return true;
 				const date = new Date(val);
-				return !isNaN(date.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(val);
+				return !Number.isNaN(date.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(val);
 			},
 			{
 				message:

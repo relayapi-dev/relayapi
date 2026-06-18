@@ -11,7 +11,7 @@ export const GET: APIRoute = async (context) => {
 		return new Response("Unauthorized", { status: 401 });
 	}
 
-	const userId = (user as any).id as string;
+	const userId = user.id as string;
 	const db = context.locals.db;
 
 	let lastCheck = new Date();
@@ -67,11 +67,12 @@ export const GET: APIRoute = async (context) => {
 						db.select({ count: count() }).from(notifications).where(and(eq(notifications.userId, userId), eq(notifications.read, false))),
 					]);
 
-					if (newNotifs.length > 0) {
+					const firstNotif = newNotifs[0];
+					if (firstNotif) {
 						for (const notif of newNotifs) {
 							if (!send("notification", notif)) return;
 						}
-						lastCheck = newNotifs[0]!.createdAt;
+						lastCheck = firstNotif.createdAt;
 					}
 
 					if (!send("count", { count: countResult?.count ?? 0 })) return;

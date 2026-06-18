@@ -484,13 +484,14 @@ app.openapi(listContacts, async (c) => {
 
 	if (search) {
 		const escaped = search.replace(/[%_\\]/g, "\\$&");
-		conditions.push(
-			or(
-				ilike(contacts.name, `%${escaped}%`),
-				ilike(contacts.phone, `%${escaped}%`),
-				ilike(contacts.email, `%${escaped}%`),
-			)!,
+		const searchCondition = or(
+			ilike(contacts.name, `%${escaped}%`),
+			ilike(contacts.phone, `%${escaped}%`),
+			ilike(contacts.email, `%${escaped}%`),
 		);
+		if (searchCondition) {
+			conditions.push(searchCondition);
+		}
 	}
 
 	if (tag) {
@@ -607,7 +608,9 @@ app.openapi(listContacts, async (c) => {
 				),
 			),
 			next_cursor:
-				hasMore && data.length > 0 ? data[data.length - 1]!.id : null,
+				hasMore && data.length > 0
+					? (data[data.length - 1]?.id ?? null)
+					: null,
 			has_more: hasMore,
 		},
 		200,
@@ -862,7 +865,8 @@ app.openapi(addChannel, async (c) => {
 			})
 			.returning();
 
-		return c.json(serializeChannel(ch!), 201);
+		if (!ch) throw new Error("Failed to create channel");
+		return c.json(serializeChannel(ch), 201);
 	} catch {
 		return c.json(
 			{ error: { code: "CONFLICT", message: "Channel already exists for this account and identifier" } },
@@ -1099,9 +1103,10 @@ app.openapi(bulkCreate, async (c) => {
 			platform: typeof contactChannels.$inferInsert.platform;
 			identifier: string;
 		}> = [];
-		for (let j = 0; j < batch.length; j++) {
-			const item = batch[j]!;
-			const contactId = values[j]!.id;
+		for (const [j, item] of batch.entries()) {
+			const insertedValue = values[j];
+			if (!insertedValue) continue;
+			const contactId = insertedValue.id;
 			if (
 				insertedIdSet.has(contactId) &&
 				item.account_id &&

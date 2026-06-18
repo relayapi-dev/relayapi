@@ -274,6 +274,12 @@ export function Sidebar({
 
 	const orgMenuRef = useRef<HTMLDivElement>(null);
 	const userMenuRef = useRef<HTMLDivElement>(null);
+	const orgSearchRef = useRef<HTMLInputElement>(null);
+
+	// Focus the org search field when the menu opens
+	useEffect(() => {
+		if (orgMenuOpen) orgSearchRef.current?.focus();
+	}, [orgMenuOpen]);
 
 	// Click-outside handler for org menu
 	useEffect(() => {
@@ -297,7 +303,7 @@ export function Sidebar({
 			const { organization: orgClient } = await loadAuthClient();
 			const { data } = await orgClient.list();
 			if (data) {
-				const items: OrgListItem[] = data.map((o: any) => ({
+				const items: OrgListItem[] = data.map((o: { id: string; name: string; slug: string; logo?: string | null }) => ({
 					id: o.id,
 					name: o.name,
 					slug: o.slug,
@@ -440,6 +446,7 @@ export function Sidebar({
 		return (
 			<div key={item.label}>
 				<button
+					type="button"
 					onClick={() => toggleExpand(item)}
 					onMouseEnter={() => prefetchItem(item)}
 					onFocus={() => prefetchItem(item)}
@@ -517,7 +524,9 @@ export function Sidebar({
 	return (
 		<>
 			{isOpen && (
-				<div
+				<button
+					type="button"
+					aria-label="Close menu"
 					className="fixed inset-0 z-40 bg-black/50 md:hidden"
 					onClick={onClose}
 				/>
@@ -535,6 +544,7 @@ export function Sidebar({
 						<div className="flex items-center justify-between">
 							<div ref={orgMenuRef} className="relative flex-1 min-w-0">
 								<button
+									type="button"
 									onClick={() => {
 										const nextOpen = !orgMenuOpen;
 										setOrgMenuOpen(nextOpen);
@@ -588,12 +598,12 @@ export function Sidebar({
 													{orgs.length > 5 && (
 														<div className="px-1 pb-1">
 															<input
+																ref={orgSearchRef}
 																type="text"
 																placeholder="Search organizations..."
 																value={orgSearch}
 																onChange={(e) => setOrgSearch(e.target.value)}
 																className="w-full rounded border border-border bg-background px-2 py-1 text-[12px] outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-																autoFocus
 															/>
 														</div>
 													)}
@@ -608,6 +618,7 @@ export function Sidebar({
 															)
 															.map((org) => (
 																<button
+																	type="button"
 																	key={org.id}
 																	onClick={() => handleSwitchOrg(org)}
 																	className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] hover:bg-accent/40 transition-colors"
@@ -641,6 +652,7 @@ export function Sidebar({
 											)}
 											<div className="my-1 border-t border-border" />
 											<button
+												type="button"
 												onClick={() => {
 													setOrgMenuOpen(false);
 													setCreateOrgOpen(true);
@@ -656,6 +668,7 @@ export function Sidebar({
 							</div>
 
 							<button
+								type="button"
 								className="rounded p-1 hover:bg-accent/50 md:hidden ml-1"
 								onClick={onClose}
 							>
@@ -768,6 +781,7 @@ export function Sidebar({
 											<>
 												<div className="my-1 border-t border-border" />
 												<button
+													type="button"
 													onClick={() => {
 														onNavigate("settings");
 														setUserMenuOpen(false);
@@ -833,6 +847,7 @@ export function Sidebar({
 												{plan !== "pro" && (
 													<div className="px-2 pb-1">
 														<button
+															type="button"
 															onClick={() => {
 																onNavigate("billing");
 																setUserMenuOpen(false);
@@ -860,6 +875,7 @@ export function Sidebar({
 											Documentation
 										</a>
 										<button
+											type="button"
 											onClick={() => {
 												onNavigate("profile");
 												setUserMenuOpen(false);
@@ -870,6 +886,7 @@ export function Sidebar({
 											Profile
 										</button>
 										<button
+											type="button"
 											onClick={() => {
 												const prevParams = new URLSearchParams(
 													window.location.search,
@@ -890,6 +907,7 @@ export function Sidebar({
 										</button>
 										{user?.role === "admin" && (
 											<button
+												type="button"
 												onClick={() => {
 													onNavigate("admin-users");
 													setUserMenuOpen(false);
@@ -903,6 +921,7 @@ export function Sidebar({
 
 										<div className="my-1 border-t border-border" />
 										<button
+											type="button"
 											onClick={handleSignOut}
 											className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
 										>

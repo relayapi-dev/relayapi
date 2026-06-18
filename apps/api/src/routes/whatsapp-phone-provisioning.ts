@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	createDb,
+	type createDb,
 	organizationSubscriptions,
 	socialAccounts,
 	whatsappPhoneNumbers,
@@ -360,7 +360,8 @@ app.openapi(purchasePhoneNumber, async (c) => {
 	}
 
 	// 2. Require Telnyx API key
-	if (!c.env.TELNYX_API_KEY) {
+	const telnyxApiKey = c.env.TELNYX_API_KEY;
+	if (!telnyxApiKey) {
 		return c.json(
 			{ error: { code: "CONFIG_ERROR", message: "Phone number provisioning is not configured" } },
 			403,
@@ -434,7 +435,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 	}
 
 	// 7. Search + order from Telnyx
-	const telnyxKey = c.env.TELNYX_API_KEY!;
+	const telnyxKey = telnyxApiKey;
 	const available = await searchAvailableNumbers(telnyxKey, {
 		countryCode: body.country,
 		areaCode: body.area_code,
@@ -559,11 +560,12 @@ app.openapi(purchasePhoneNumber, async (c) => {
 		.where(eq(whatsappPhoneNumbers.id, phoneNumberId))
 		.limit(1);
 
+	if (!updated) throw new Error("Failed to load provisioned phone number");
 	return c.json(
 		{
-			id: updated!.id,
-			phone_number: updated!.phoneNumber,
-			status: updated!.status,
+			id: updated.id,
+			phone_number: updated.phoneNumber,
+			status: updated.status,
 			checkout_url: checkoutUrl,
 		},
 		201,
@@ -805,7 +807,7 @@ app.openapi(verifyCode, async (c) => {
 	// Step 3: Create or update social account for this number (atomic upsert)
 	const encryptedToken = await maybeEncrypt(accessToken, c.env.ENCRYPTION_KEY);
 
-	let upsertedAccount;
+	let upsertedAccount: typeof socialAccounts.$inferSelect | undefined;
 	try {
 		[upsertedAccount] = await db.insert(socialAccounts).values({
 			organizationId: orgId,
@@ -916,7 +918,8 @@ app.openapi(releasePhoneNumber, async (c) => {
 		.where(eq(whatsappPhoneNumbers.id, phone_number_id))
 		.limit(1);
 
-	return c.json(formatPhoneNumber(updated!), 200);
+	if (!updated) throw new Error("Failed to load phone number");
+	return c.json(formatPhoneNumber(updated), 200);
 });
 
 export default app;

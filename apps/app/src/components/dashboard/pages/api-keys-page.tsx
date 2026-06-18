@@ -28,12 +28,6 @@ interface ApiKey {
   workspace_scope: "all" | string[];
 }
 
-interface ApiKeyListResponse {
-  data: ApiKey[];
-  next_cursor: string | null;
-  has_more: boolean;
-}
-
 interface CreatedKey {
   id: string;
   key: string;
@@ -59,7 +53,7 @@ export function ApiKeysPage() {
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const deleteMutation = useMutation("", "DELETE");
+  const _deleteMutation = useMutation("", "DELETE");
 
   // Scope state
   const [permission, setPermission] = useState<"read_write" | "read_only">("read_write");
@@ -184,6 +178,7 @@ export function ApiKeysPage() {
                   {createdKey}
                 </code>
                 <button
+                  type="button"
                   onClick={() => handleCopy(createdKey, "new")}
                   className="rounded p-2 hover:bg-accent/50 transition-colors shrink-0"
                 >
@@ -202,20 +197,25 @@ export function ApiKeysPage() {
             <>
               {/* Key Name */}
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Key name</label>
+                <label
+                  htmlFor="api-key-name"
+                  className="text-xs font-medium text-muted-foreground"
+                >
+                  Key name
+                </label>
                 <input
+                  id="api-key-name"
                   type="text"
                   value={newKeyName}
                   onChange={(e) => setNewKeyName(e.target.value)}
                   placeholder="e.g. Production, Development"
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-                  autoFocus
                 />
               </div>
 
               {/* Permission */}
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Permission</label>
+                <span className="block text-xs font-medium text-muted-foreground">Permission</span>
                 <div className="flex gap-0 w-fit rounded-md border border-border overflow-hidden">
                   <button
                     type="button"
@@ -246,7 +246,8 @@ export function ApiKeysPage() {
 
               {/* Workspace Access */}
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Workspace Access</label>
+                <span className="block text-xs font-medium text-muted-foreground">Workspace Access</span>
+                {/* biome-ignore lint/a11y/noLabelWithoutControl: label wraps the Radix Checkbox control, which Biome cannot detect */}
                 <label className="flex items-center gap-2 cursor-pointer">
                   <Checkbox
                     checked={allWorkspaces}
@@ -284,6 +285,7 @@ export function ApiKeysPage() {
                       ) : (
                         <>
                           {filteredWorkspaces.map((ws) => (
+                            // biome-ignore lint/a11y/noLabelWithoutControl: label wraps the Radix Checkbox control, which Biome cannot detect
                             <label
                               key={ws.id}
                               className="flex items-center gap-2 px-3 py-2 hover:bg-accent/30 transition-colors cursor-pointer"
@@ -451,6 +453,7 @@ export function ApiKeysPage() {
                   })}
                 </span>
                 <button
+                  type="button"
                   className="rounded-lg p-1.5 hover:bg-red-500/10 transition-colors justify-self-end"
                   onClick={() => setDeleteId(key.id)}
                   title="Delete key"

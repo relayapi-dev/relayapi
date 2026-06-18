@@ -427,8 +427,14 @@ export function AdminPlansPage() {
             </h3>
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">Status</label>
+                <label
+                  htmlFor="admin-plan-edit-status"
+                  className="text-xs text-muted-foreground"
+                >
+                  Status
+                </label>
                 <select
+                  id="admin-plan-edit-status"
                   value={editForm.status}
                   onChange={(e) =>
                     setEditForm({ ...editForm, status: e.target.value })
@@ -442,10 +448,14 @@ export function AdminPlansPage() {
                 </select>
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">
+                <label
+                  htmlFor="admin-plan-edit-price"
+                  className="text-xs text-muted-foreground"
+                >
                   Monthly Price ($)
                 </label>
                 <input
+                  id="admin-plan-edit-price"
                   type="number"
                   value={editForm.monthlyPriceCents / 100}
                   onChange={(e) =>

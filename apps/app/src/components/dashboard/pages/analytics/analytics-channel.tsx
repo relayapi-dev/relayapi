@@ -297,6 +297,7 @@ export function AnalyticsChannel({
         <div className="flex gap-4 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           {tabs.map((tab) => (
             <button
+              type="button"
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
@@ -424,9 +425,8 @@ export function AnalyticsChannel({
       )}
 
       {/* ===== Posts Tab ===== */}
-      {activeTab === "posts" && (
-        <>
-          {postsLoading ? (
+      {activeTab === "posts" &&
+        (postsLoading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
@@ -578,14 +578,11 @@ export function AnalyticsChannel({
                 </div>
               )}
             </>
-          )}
-        </>
-      )}
+          ))}
 
       {/* ===== Audience Tab ===== */}
-      {activeTab === "audience" && (
-        <>
-          {audienceLoading ? (
+      {activeTab === "audience" &&
+        (audienceLoading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
@@ -675,9 +672,7 @@ export function AnalyticsChannel({
                   </div>
                 )}
             </motion.div>
-          )}
-        </>
-      )}
+          ))}
     </div>
   );
 }
@@ -771,6 +766,7 @@ function SortButton({
 }) {
   return (
     <button
+      type="button"
       onClick={() => onSort(sortKey)}
       className={cn(
         "text-left hover:text-foreground transition-colors",

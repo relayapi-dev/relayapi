@@ -1,7 +1,6 @@
 import { createDb, socialAccounts, member } from "@relayapi/db";
-import { eq, and, isNotNull, lt, notInArray, gt, sql } from "drizzle-orm";
+import { eq, and, isNotNull, lt, notInArray, gt, } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
-import { OAUTH_CONFIGS } from "../config/oauth";
 import { decryptAccountTokens, maybeDecrypt, maybeEncrypt } from "../lib/crypto";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
 import type { Platform } from "../schemas/common";
@@ -84,7 +83,9 @@ export async function enqueueExpiringTokenRefresh(env: Env): Promise<void> {
 		}
 
 		totalEnqueued += accounts.length;
-		cursor = accounts[accounts.length - 1]!.id;
+		const lastAccount = accounts[accounts.length - 1];
+		if (!lastAccount) break;
+		cursor = lastAccount.id;
 
 		if (accounts.length < BATCH_SIZE) break;
 	}

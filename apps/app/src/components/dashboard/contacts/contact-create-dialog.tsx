@@ -169,8 +169,8 @@ export function ContactCreateDialog({ open, onOpenChange, onCreated }: ContactCr
           </div>
 
           {/* Link to platform toggle */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox checked={linkPlatform} onCheckedChange={(c) => setLinkPlatform(!!c)} />
+          <label htmlFor="contact-link-platform" className="flex items-center gap-2 cursor-pointer">
+            <Checkbox id="contact-link-platform" checked={linkPlatform} onCheckedChange={(c) => setLinkPlatform(!!c)} />
             <Link2 className="size-3.5 text-muted-foreground" />
             <span className="text-xs text-foreground">Link to a platform</span>
           </label>
@@ -179,9 +179,9 @@ export function ContactCreateDialog({ open, onOpenChange, onCreated }: ContactCr
             <div className="space-y-3 rounded-md border border-border bg-accent/10 p-3">
               {/* Account */}
               <div>
-                <label className="text-xs font-medium text-muted-foreground">
+                <span className="block text-xs font-medium text-muted-foreground">
                   Account
-                </label>
+                </span>
                 <div className="mt-1">
                   <AccountSearchCombobox
                     value={accountId || null}

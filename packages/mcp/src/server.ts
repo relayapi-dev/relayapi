@@ -425,7 +425,7 @@ export function registerTools(mcp: McpServer, client: RelayLike): void {
 		async ({ template_id, input }) => {
 			try {
 				const t = client.automations.templates;
-				let result;
+				let result: unknown;
 				switch (template_id) {
 					case "comment-to-dm":
 						result = await t.commentToDm(input);

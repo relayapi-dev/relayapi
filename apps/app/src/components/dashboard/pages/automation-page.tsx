@@ -83,8 +83,9 @@ interface ApiEntrypoint {
 // ---------------------------------------------------------------------------
 
 function statusBadge(status: AutomationRow["status"]) {
+	const draft = { label: "Draft", classes: "text-neutral-400 bg-neutral-400/10" };
 	const map: Record<string, { label: string; classes: string }> = {
-		draft: { label: "Draft", classes: "text-neutral-400 bg-neutral-400/10" },
+		draft,
 		active: { label: "Active", classes: "text-emerald-500 bg-emerald-500/10" },
 		paused: { label: "Paused", classes: "text-amber-500 bg-amber-500/10" },
 		archived: {
@@ -92,7 +93,7 @@ function statusBadge(status: AutomationRow["status"]) {
 			classes: "text-neutral-500 bg-neutral-500/10",
 		},
 	};
-	const cfg = map[status] ?? map.draft!;
+	const cfg = map[status] ?? draft;
 	return (
 		<span
 			className={cn(
@@ -173,14 +174,15 @@ function useTriggerSummary(automationId: string): string {
 				const json = (await res.json()) as { data: ApiEntrypoint[] };
 				if (cancelled) return;
 				const entries = json.data ?? [];
-				if (entries.length === 0) {
+				const firstEntry = entries[0];
+				if (!firstEntry) {
 					setSummary("No entrypoints");
 				} else if (entries.length === 1) {
-					setSummary(humanizeKind(entries[0]!.kind));
+					setSummary(humanizeKind(firstEntry.kind));
 				} else {
 					const uniqueKinds = new Set(entries.map((e) => e.kind));
 					if (uniqueKinds.size === 1) {
-						setSummary(`${humanizeKind(entries[0]!.kind)} ×${entries.length}`);
+						setSummary(`${humanizeKind(firstEntry.kind)} ×${entries.length}`);
 					} else {
 						setSummary(`${entries.length} entrypoints`);
 					}
@@ -383,8 +385,14 @@ export function AutomationPage() {
 
 			{/* Filter bar */}
 			<div className="flex items-center gap-2">
-				<label className="text-xs text-muted-foreground">Template:</label>
+				<label
+					htmlFor="automation-template-filter"
+					className="text-xs text-muted-foreground"
+				>
+					Template:
+				</label>
 				<select
+					id="automation-template-filter"
 					value={templateFilter}
 					onChange={(e) => setTemplateFilter(e.target.value)}
 					className="h-7 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
@@ -520,6 +528,7 @@ export function AutomationPage() {
 										<td
 											className="px-2 py-3 text-right"
 											onClick={(e) => e.stopPropagation()}
+											onKeyDown={(e) => e.stopPropagation()}
 										>
 											<DropdownMenu>
 												<DropdownMenuTrigger asChild>

@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { requireClient, handleSdkError } from "@/lib/api-utils";
+import { requireClient, requireParam, handleSdkError } from "@/lib/api-utils";
 
 export const PATCH: APIRoute = async (ctx) => {
   const client = await requireClient(ctx);
@@ -11,6 +11,8 @@ export const PATCH: APIRoute = async (ctx) => {
       { status: 401 },
     );
   }
+  const noteId = requireParam(ctx.params, "noteId");
+  if (noteId instanceof Response) return noteId;
   try {
     const body = (await ctx.request.json()) as { text?: string };
     if (!body.text || !body.text.trim()) {
@@ -20,7 +22,7 @@ export const PATCH: APIRoute = async (ctx) => {
       );
     }
     const data = await client.inbox.conversations.updateNote(
-      ctx.params.noteId!,
+      noteId,
       { text: body.text, user_id: user.id },
     );
     return Response.json(data);
@@ -39,9 +41,11 @@ export const DELETE: APIRoute = async (ctx) => {
       { status: 401 },
     );
   }
+  const noteId = requireParam(ctx.params, "noteId");
+  if (noteId instanceof Response) return noteId;
   try {
     const data = await client.inbox.conversations.deleteNote(
-      ctx.params.noteId!,
+      noteId,
       { user_id: user.id },
     );
     return Response.json(data);

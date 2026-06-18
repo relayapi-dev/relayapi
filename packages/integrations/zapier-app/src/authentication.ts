@@ -1,6 +1,6 @@
-import { Bundle, ZObject } from 'zapier-platform-core';
+import type { Bundle, ZObject } from 'zapier-platform-core';
 
-const test = async (z: ZObject, bundle: Bundle) => {
+const test = async (z: ZObject, _bundle: Bundle) => {
   const response = await z.request({
     url: 'https://api.relayapi.dev/v1/usage',
     method: 'GET',
@@ -23,7 +23,7 @@ const authentication = {
     },
   ],
   test,
-  connectionLabel: (z: ZObject, bundle: Bundle) => {
+  connectionLabel: (_z: ZObject, bundle: Bundle) => {
     return `RelayAPI (${(bundle.inputData as Record<string, string>).plan || 'connected'})`;
   },
 };

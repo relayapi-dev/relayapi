@@ -1,5 +1,5 @@
-import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, ideaGroups, ideas } from "@relayapi/db";
+import { createRoute, OpenAPIHono, } from "@hono/zod-openapi";
+import { type createDb, ideaGroups, } from "@relayapi/db";
 import { and, asc, eq, max, sql } from "drizzle-orm";
 import { ErrorResponse, IdParam } from "../schemas/common";
 import {
@@ -66,7 +66,8 @@ async function ensureDefaultGroup(
 		})
 		.returning({ id: ideaGroups.id });
 
-	return created!.id;
+	if (!created) throw new Error("Failed to create default idea group");
+	return created.id;
 }
 
 // ── List idea groups ──────────────────────────────────────────────────────────

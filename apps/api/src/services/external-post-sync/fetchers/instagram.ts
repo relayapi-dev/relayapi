@@ -6,7 +6,6 @@
 import type {
 	ExternalPostFetcher,
 	ExternalPostData,
-	FetchPostsResult,
 } from "../types";
 import { RateLimitError } from "../types";
 import { parseRateLimitHeaders } from "../rate-limits";
@@ -26,10 +25,30 @@ const MEDIA_FIELDS = [
 	"children{media_url,media_type,thumbnail_url}",
 ].join(",");
 
-async function igFetch(
+interface InstagramRawPost {
+	id: string;
+	caption?: string;
+	timestamp?: string;
+	media_url?: string;
+	thumbnail_url?: string;
+	permalink?: string;
+	media_type?: string;
+	children?: { data?: Array<{ media_url?: string }> };
+}
+
+interface InstagramMediaResponse {
+	data?: InstagramRawPost[];
+	paging?: { next?: string };
+}
+
+interface InstagramInsightsResponse {
+	data?: Array<{ name: string; values?: Array<{ value?: number }> }>;
+}
+
+async function igFetch<T = unknown>(
 	url: string,
 	accessToken: string,
-): Promise<{ data: any; headers: Headers }> {
+): Promise<{ data: T; headers: Headers }> {
 	const sep = url.includes("?") ? "&" : "?";
 	const res = await fetch(`${url}${sep}access_token=${accessToken}`);
 	if (res.status === 429) {
@@ -43,7 +62,7 @@ async function igFetch(
 		const body = await res.text();
 		throw new Error(`Instagram API ${res.status}: ${body}`);
 	}
-	return { data: await res.json(), headers: res.headers };
+	return { data: (await res.json()) as T, headers: res.headers };
 }
 
 function parseMediaType(raw: string | undefined): string | null {
@@ -63,7 +82,7 @@ function parseMediaType(raw: string | undefined): string | null {
 	}
 }
 
-function parsePost(raw: any): ExternalPostData {
+function parsePost(raw: InstagramRawPost): ExternalPostData {
 	const mediaUrls: string[] = [];
 	const mediaType = parseMediaType(raw.media_type);
 
@@ -102,7 +121,10 @@ export const instagramPostFetcher: ExternalPostFetcher = {
 			url = `${BASE}/${platformAccountId}/media?fields=${MEDIA_FIELDS}&limit=${limit}`;
 		}
 
-		const { data: json, headers } = await igFetch(url, accessToken);
+		const { data: json, headers } = await igFetch<InstagramMediaResponse>(
+			url,
+			accessToken,
+		);
 		const posts: ExternalPostData[] = (json.data ?? []).map(parsePost);
 
 		const nextCursor = json.paging?.next ?? null;
@@ -116,7 +138,7 @@ export const instagramPostFetcher: ExternalPostFetcher = {
 
 		for (const postId of platformPostIds) {
 			try {
-				const { data: json } = await igFetch(
+				const { data: json } = await igFetch<InstagramInsightsResponse>(
 					`${BASE}/${postId}/insights?metric=impressions,reach,likes,comments,shares,saved`,
 					accessToken,
 				);

@@ -22,7 +22,7 @@ export function InboxReviewsPage() {
   const { usage } = useUsage();
   const isPro = usage?.plan === "pro";
 
-  const query: Record<string, any> = { ...filterQuery };
+  const query: Record<string, string | number | undefined> = { ...filterQuery };
   if (minRating) query.min_rating = minRating;
 
   const {
@@ -56,7 +56,10 @@ export function InboxReviewsPage() {
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
             Upgrade to the Pro plan to access your unified social media inbox with comments, messages, and reviews.
           </p>
-          <button className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+          <button
+            type="button"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
             Upgrade to Pro
           </button>
         </div>
@@ -75,6 +78,7 @@ export function InboxReviewsPage() {
         <div className="pb-2 flex items-center gap-1">
           {[1, 2, 3, 4, 5].map((rating) => (
             <button
+              type="button"
               key={rating}
               onClick={() => setMinRating(minRating === rating ? null : rating)}
               className={cn(
@@ -246,6 +250,7 @@ function ReviewCard({
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">Your reply</span>
             <button
+              type="button"
               onClick={() => setShowDeleteConfirm(true)}
               className="text-muted-foreground/40 hover:text-destructive transition-colors"
             >
@@ -260,6 +265,7 @@ function ReviewCard({
       {!review.reply && !showReplyBox && (
         <div className="ml-11">
           <button
+            type="button"
             onClick={() => setShowReplyBox(true)}
             className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
@@ -295,12 +301,14 @@ function ReviewCard({
           )}
           <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-border">
             <button
+              type="button"
               onClick={() => { setShowReplyBox(false); setReplyText(""); }}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               Cancel
             </button>
             <button
+              type="button"
               onClick={handleSendReply}
               disabled={!replyText.trim() || sending}
               className={cn(

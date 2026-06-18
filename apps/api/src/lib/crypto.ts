@@ -21,9 +21,11 @@ const keyCache = new Map<string, Promise<CryptoKey>>();
 function importKey(hexKey: string): Promise<CryptoKey> {
 	let cached = keyCache.get(hexKey);
 	if (!cached) {
-		const raw = new Uint8Array(
-			hexKey.match(/.{2}/g)!.map((b) => Number.parseInt(b, 16)),
-		);
+		const hexPairs = hexKey.match(/.{2}/g);
+		if (!hexPairs) {
+			throw new Error("Invalid encryption key: expected a hex string");
+		}
+		const raw = new Uint8Array(hexPairs.map((b) => Number.parseInt(b, 16)));
 		cached = crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
 			"encrypt",
 			"decrypt",

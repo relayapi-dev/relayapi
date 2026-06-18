@@ -302,8 +302,8 @@ function buildTelegramRequest(req: SendMessageRequest): {
 	}
 
 	// Gallery → pick the first card (best-effort; Telegram has no carousel).
-	if (req.gallery && req.gallery.length > 0) {
-		const first = req.gallery[0]!;
+	const first = req.gallery?.[0];
+	if (first) {
 		const captionLines = [first.title];
 		if (first.subtitle) captionLines.push(first.subtitle);
 		if (req.text) captionLines.unshift(req.text);
@@ -543,11 +543,13 @@ function buildMessengerMessage(
 			},
 		};
 	} else if (req.attachments && req.attachments.length > 0) {
-		const first = req.attachments[0]!;
-		message.attachment = {
-			type: first.type,
-			payload: { url: first.url, is_reusable: true },
-		};
+		const first = req.attachments[0];
+		if (first) {
+			message.attachment = {
+				type: first.type,
+				payload: { url: first.url, is_reusable: true },
+			};
+		}
 	} else {
 		message.text = req.text;
 	}

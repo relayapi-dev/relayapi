@@ -198,6 +198,7 @@ function AddBlockButton({
 			</Button>
 			{open ? (
 				<div
+					role="menu"
 					className="absolute z-10 mt-1 w-full rounded-lg border border-[#e6e9ef] bg-white p-1 shadow-lg"
 					onMouseLeave={() => setOpen(false)}
 				>
@@ -285,10 +286,14 @@ function MessageSettings({
 
 			{waitForReply ? (
 				<div>
-					<label className="mb-1 block text-[11px] font-medium text-[#475569]">
+					<label
+						htmlFor="mc-no-response-timeout"
+						className="mb-1 block text-[11px] font-medium text-[#475569]"
+					>
 						No-response timeout (minutes)
 					</label>
 					<input
+						id="mc-no-response-timeout"
 						type="number"
 						min={0}
 						value={timeout ?? ""}
@@ -310,10 +315,14 @@ function MessageSettings({
 			) : null}
 
 			<div>
-				<label className="mb-1 block text-[11px] font-medium text-[#475569]">
+				<label
+					htmlFor="mc-typing-indicator"
+					className="mb-1 block text-[11px] font-medium text-[#475569]"
+				>
 					Typing indicator ({typingDelay.toFixed(1)}s)
 				</label>
 				<input
+					id="mc-typing-indicator"
 					type="range"
 					min={0}
 					max={5}

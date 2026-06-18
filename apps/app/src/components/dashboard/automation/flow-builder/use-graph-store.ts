@@ -91,8 +91,8 @@ export function generateNodeKey(): string {
 		const buf = new Uint8Array(8);
 		globalThis.crypto.getRandomValues(buf);
 		let out = "";
-		for (let i = 0; i < buf.length; i++) {
-			out += ID_ALPHABET[buf[i]! % ID_ALPHABET.length];
+		for (const byte of buf) {
+			out += ID_ALPHABET[byte % ID_ALPHABET.length];
 		}
 		return out;
 	}
@@ -132,8 +132,9 @@ function validationIssuesEqual(
 	if (a === b) return true;
 	if (a.length !== b.length) return false;
 	for (let i = 0; i < a.length; i++) {
-		const x = a[i]!;
-		const y = b[i]!;
+		const x = a[i];
+		const y = b[i];
+		if (!x || !y) return false;
 		if (
 			x.code !== y.code ||
 			x.message !== y.message ||
@@ -279,7 +280,9 @@ function reducer(state: GraphStoreState, action: Action): GraphStoreState {
 			const idx = state.graph.nodes.findIndex((n) => n.key === action.key);
 			if (idx < 0) return state;
 			const nodes = state.graph.nodes.slice();
-			nodes[idx] = { ...nodes[idx]!, config: action.config };
+			const target = nodes[idx];
+			if (!target) return state;
+			nodes[idx] = { ...target, config: action.config };
 			return {
 				...state,
 				graph: { ...state.graph, nodes },
@@ -292,7 +295,9 @@ function reducer(state: GraphStoreState, action: Action): GraphStoreState {
 			const idx = state.graph.nodes.findIndex((n) => n.key === action.key);
 			if (idx < 0) return state;
 			const nodes = state.graph.nodes.slice();
-			nodes[idx] = { ...nodes[idx]!, title: action.title };
+			const target = nodes[idx];
+			if (!target) return state;
+			nodes[idx] = { ...target, title: action.title };
 			return {
 				...state,
 				graph: { ...state.graph, nodes },
@@ -330,7 +335,9 @@ function reducer(state: GraphStoreState, action: Action): GraphStoreState {
 				return state;
 			}
 			const edges = state.graph.edges.slice();
-			edges[action.index] = { ...edges[action.index]!, ...action.patch };
+			const existing = edges[action.index];
+			if (!existing) return state;
+			edges[action.index] = { ...existing, ...action.patch };
 			return {
 				...state,
 				graph: { ...state.graph, edges },
@@ -386,7 +393,8 @@ function reducer(state: GraphStoreState, action: Action): GraphStoreState {
 		case "UNDO": {
 			const { past, future } = state.history;
 			if (past.length === 0) return state;
-			const previous = past[past.length - 1]!;
+			const previous = past[past.length - 1];
+			if (!previous) return state;
 			return {
 				...state,
 				graph: previous,
@@ -401,7 +409,8 @@ function reducer(state: GraphStoreState, action: Action): GraphStoreState {
 		case "REDO": {
 			const { past, future } = state.history;
 			if (future.length === 0) return state;
-			const next = future[future.length - 1]!;
+			const next = future[future.length - 1];
+			if (!next) return state;
 			return {
 				...state,
 				graph: next,
@@ -470,11 +479,11 @@ function planAddNode(
 			e.from_node === connect.sourceNodeKey &&
 			e.from_port === connect.sourcePortKey,
 	);
-	if (replaceEdgeIndex < 0) {
+	const existingEdge =
+		replaceEdgeIndex < 0 ? undefined : graph.edges[replaceEdgeIndex];
+	if (!existingEdge) {
 		return { type: "ADD_NODE", node, edge };
 	}
-
-	const existingEdge = graph.edges[replaceEdgeIndex]!;
 	const downstreamPortKey = singleOutputPortKey(node);
 	if (downstreamPortKey) {
 		return {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -15,12 +15,17 @@ const PRESET_COLORS = [
 	"#a855f7",
 	"#ef4444",
 	"#eab308",
-];
+] as const;
 
 export function GroupCreateInline({ onSubmit }: GroupCreateInlineProps) {
 	const [active, setActive] = useState(false);
 	const [name, setName] = useState("");
-	const [color, setColor] = useState(PRESET_COLORS[0]!);
+	const [color, setColor] = useState<string>(PRESET_COLORS[0]);
+	const inputRef = useRef<HTMLInputElement>(null);
+
+	useEffect(() => {
+		if (active) inputRef.current?.focus();
+	}, [active]);
 
 	const handleSubmit = () => {
 		const trimmed = name.trim();
@@ -48,6 +53,7 @@ export function GroupCreateInline({ onSubmit }: GroupCreateInlineProps) {
 	return (
 		<div className="shrink-0 w-72 rounded-md border border-border bg-accent/10 p-3 space-y-2">
 			<input
+				ref={inputRef}
 				className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary"
 				placeholder="Group name"
 				value={name}
@@ -56,7 +62,6 @@ export function GroupCreateInline({ onSubmit }: GroupCreateInlineProps) {
 					if (e.key === "Enter") handleSubmit();
 					if (e.key === "Escape") setActive(false);
 				}}
-				autoFocus
 			/>
 			<div className="flex gap-1">
 				{PRESET_COLORS.map((c) => (

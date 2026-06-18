@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { apikey, generateId, organizationSubscriptions, workspaces } from "@relayapi/db";
+import { apikey, generateId, workspaces } from "@relayapi/db";
 import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import {
 	ApiKeyCreatedResponse,

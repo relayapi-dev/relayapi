@@ -49,6 +49,21 @@ interface OrganizationSummary {
 	[key: string]: unknown;
 }
 
+interface CfEnv {
+	EMAIL_QUEUE?: { send(message: unknown): Promise<void> };
+	RESEND_API_KEY?: string;
+	HYPERDRIVE?: { connectionString?: string };
+	// One of HYPERDRIVE.connectionString / DATABASE_URL is always provided by
+	// the Wrangler bindings; BETTER_AUTH_SECRET is a required Worker secret.
+	DATABASE_URL: string;
+	BETTER_AUTH_SECRET: string;
+	BETTER_AUTH_URL?: string;
+	GOOGLE_CLIENT_ID?: string;
+	GOOGLE_CLIENT_SECRET?: string;
+	KV?: KVNamespace;
+	[key: string]: unknown;
+}
+
 function isStaticAssetPath(path: string): boolean {
 	const ext = path.split(".").pop();
 	return !!ext && STATIC_ASSET_EXTENSIONS.test(ext);
@@ -103,7 +118,7 @@ function mergeHeaders(target: Headers, source: Headers | null): void {
 }
 
 function createInvitationEmailSender(
-	cfEnv: Record<string, any>,
+	cfEnv: CfEnv,
 	baseUrl: string,
 ): NonNullable<AuthEnv["sendInvitationEmail"]> {
 	return async (data) => {
@@ -279,7 +294,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		return next();
 	}
 
-	const cfEnv = env as Record<string, any>;
+	const cfEnv = env as unknown as CfEnv;
 	let db: Database | undefined;
 	let auth: AuthInstance | undefined;
 	const cfContext = (

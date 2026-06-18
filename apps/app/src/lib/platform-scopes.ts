@@ -93,12 +93,6 @@ const PLATFORM_SCOPE_MAP: Record<string, ScopeInfo[]> = {
   ],
 };
 
-function getScopeInfo(platform: string, scope: string): ScopeInfo | null {
-  const map = PLATFORM_SCOPE_MAP[platform];
-  if (!map) return null;
-  return map.find((s) => s.scope === scope) ?? null;
-}
-
 export function categorizeScopeList(
   platform: string,
   grantedScopes: string[],
@@ -148,8 +142,12 @@ export function hasPostingCapability(platform: string, grantedScopes: string[]):
   const groups = new Map<string, ScopeInfo[]>();
   for (const s of postingScopes) {
     const key = s.group ?? "_";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(s);
+    let group = groups.get(key);
+    if (!group) {
+      group = [];
+      groups.set(key, group);
+    }
+    group.push(s);
   }
 
   // Any one group being fully satisfied means posting is possible

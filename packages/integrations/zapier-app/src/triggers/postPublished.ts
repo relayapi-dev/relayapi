@@ -1,4 +1,4 @@
-import { Bundle, ZObject } from 'zapier-platform-core';
+import type { Bundle, ZObject } from 'zapier-platform-core';
 
 const performSubscribe = async (z: ZObject, bundle: Bundle) => {
   const response = await z.request({
@@ -27,11 +27,11 @@ const performUnsubscribe = async (z: ZObject, bundle: Bundle) => {
   return response.data;
 };
 
-const perform = (z: ZObject, bundle: Bundle) => {
+const perform = (_z: ZObject, bundle: Bundle) => {
   return [bundle.cleanedRequest];
 };
 
-const performList = async (z: ZObject, bundle: Bundle) => {
+const performList = async (z: ZObject, _bundle: Bundle) => {
   const response = await z.request({
     url: 'https://api.relayapi.dev/v1/posts',
     method: 'GET',

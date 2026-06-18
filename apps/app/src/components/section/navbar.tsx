@@ -31,6 +31,7 @@ function HamburgerButton({
 }) {
 	return (
 		<button
+			type="button"
 			onClick={onClick}
 			className="md:hidden relative z-50 flex size-8 items-center justify-center rounded-full border border-border bg-background transition-colors hover:bg-accent"
 			aria-label="Toggle menu"
@@ -168,11 +169,13 @@ function MobileNav({
 									<span>RelayAPI</span>
 								</a>
 								<button
+									type="button"
 									onClick={onClose}
 									className="flex size-8 items-center justify-center rounded-full border border-border bg-background transition-colors hover:bg-accent"
 									aria-label="Close menu"
 								>
 									<svg
+										aria-hidden="true"
 										width="14"
 										height="14"
 										viewBox="0 0 14 14"
@@ -531,8 +534,8 @@ export function Navbar() {
 							target="_blank"
 							rel="noopener noreferrer"
 							className="hidden md:inline-flex pr-2 items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
-							aria-label="GitHub"
 						>
+							<span className="sr-only">GitHub</span>
 							<svg
 								className="w-5 h-5"
 								fill="currentColor"

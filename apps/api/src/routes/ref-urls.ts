@@ -92,7 +92,8 @@ app.openapi(createRefUrl, async (c) => {
 			enabled: body.enabled,
 		})
 		.returning();
-	return c.json(serialize(row!), 201);
+	if (!row) throw new Error("Failed to create ref URL");
+	return c.json(serialize(row), 201);
 });
 
 const listRefUrls = createRoute({
@@ -270,7 +271,8 @@ app.openapi(updateRefUrl, async (c) => {
 		.set(updates)
 		.where(eq(refUrls.id, id))
 		.returning();
-	return c.json(serialize(updated!), 200);
+	if (!updated) throw new Error("Failed to update ref URL");
+	return c.json(serialize(updated), 200);
 });
 
 const deleteRefUrl = createRoute({

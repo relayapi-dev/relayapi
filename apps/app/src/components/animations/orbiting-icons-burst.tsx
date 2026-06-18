@@ -52,11 +52,10 @@ export function OrbitingIconsBurst({
 
     const itemsGroupedByRay = normalizedItems.reduce(
         (acc, item) => {
-            if (!acc[item.normalizedRay]) {
-                acc[item.normalizedRay] = [];
-            }
-            acc[item.normalizedRay]!.push(item);
-            acc[item.normalizedRay]!.sort((a, b) => a.distance - b.distance);
+            const group = acc[item.normalizedRay] ?? [];
+            acc[item.normalizedRay] = group;
+            group.push(item);
+            group.sort((a, b) => a.distance - b.distance);
             return acc;
         },
         {} as Record<number, Array<typeof normalizedItems[number]>>,
@@ -122,7 +121,10 @@ export function OrbitingIconsBurst({
 
             {/* Orbiting Icons */}
             {normalizedItems.map((icon) => {
-                const ray = rays[icon.normalizedRay]!;
+                const ray = rays[icon.normalizedRay];
+                if (!ray) {
+                    return null;
+                }
                 const angleInRadians = (ray.angle * Math.PI) / 180;
                 const iconDistance = icon.distance;
                 // Calculate position and offset by half icon size (20px for size-10)

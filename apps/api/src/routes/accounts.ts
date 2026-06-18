@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { socialAccounts, socialAccountSyncState, workspaces } from "@relayapi/db";
-import { and, desc, eq, isNull, gt, lt, or, ilike, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, gt, or, ilike, inArray, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { getOwnedAccount } from "../lib/accounts";
 import {
@@ -417,7 +417,7 @@ app.openapi(healthCheck, async (c) => {
 	return c.json(
 		{
 			data,
-			next_cursor: hasMore ? data[data.length - 1]!.id : null,
+			next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
 			has_more: hasMore,
 		},
 		200,
@@ -438,12 +438,13 @@ app.openapi(listAccounts, async (c) => {
 		conditions.push(isNull(socialAccounts.workspaceId));
 	}
 	if (search) {
-		conditions.push(
-			or(
-				ilike(socialAccounts.displayName, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
-				ilike(socialAccounts.username, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
-			)!,
+		const searchCondition = or(
+			ilike(socialAccounts.displayName, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
+			ilike(socialAccounts.username, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
 		);
+		if (searchCondition) {
+			conditions.push(searchCondition);
+		}
 	}
 	if (platforms) {
 		const platformList = platforms.split(",").map((p) => p.trim()).filter(Boolean) as (typeof socialAccounts.platform.enumValues)[number][];
@@ -2038,7 +2039,8 @@ app.openapi(singleSync, async (c) => {
     .values({
       socialAccountId: account.id,
       organizationId: orgId,
-      platform: account.platform as any,
+      platform:
+        account.platform as typeof socialAccountSyncState.$inferInsert.platform,
       enabled: true,
       nextSyncAt: new Date(),
       consecutiveErrors: 0,
@@ -2136,7 +2138,8 @@ app.openapi(forceSync, async (c) => {
 			syncable.map((account) => ({
 				socialAccountId: account.id,
 				organizationId: orgId,
-				platform: account.platform as any,
+				platform:
+					account.platform as typeof socialAccountSyncState.$inferInsert.platform,
 				nextSyncAt: now,
 			})),
 		)
@@ -2220,9 +2223,9 @@ app.openapi(getNewsletterLists, async (c) => {
 	const db = c.get("db");
 
 	const [account] = await db.select().from(socialAccounts).where(and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId))).limit(1);
-	if (!account) return c.json({ error: { code: "NOT_FOUND", message: "Account not found" } }, 404 as any);
+	if (!account) return c.json({ error: { code: "NOT_FOUND", message: "Account not found" } }, 404);
 	if (!NEWSLETTER_PLATFORMS.has(account.platform)) {
-		return c.json({ error: { code: "BAD_REQUEST", message: "This endpoint is only for newsletter platforms" } }, 400 as any);
+		return c.json({ error: { code: "BAD_REQUEST", message: "This endpoint is only for newsletter platforms" } }, 400);
 	}
 
 	const token = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY) ?? "";
@@ -2268,9 +2271,9 @@ app.openapi(getNewsletterTemplates, async (c) => {
 	const db = c.get("db");
 
 	const [account] = await db.select().from(socialAccounts).where(and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId))).limit(1);
-	if (!account) return c.json({ error: { code: "NOT_FOUND", message: "Account not found" } }, 404 as any);
+	if (!account) return c.json({ error: { code: "NOT_FOUND", message: "Account not found" } }, 404);
 	if (!NEWSLETTER_PLATFORMS.has(account.platform)) {
-		return c.json({ error: { code: "BAD_REQUEST", message: "This endpoint is only for newsletter platforms" } }, 400 as any);
+		return c.json({ error: { code: "BAD_REQUEST", message: "This endpoint is only for newsletter platforms" } }, 400);
 	}
 
 	const token = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY) ?? "";

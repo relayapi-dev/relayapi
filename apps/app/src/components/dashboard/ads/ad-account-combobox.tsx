@@ -175,6 +175,7 @@ export function AdAccountCombobox({
           <div className="max-h-48 overflow-y-auto py-1">
             {showAllOption && (
               <button
+                type="button"
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 transition-colors",
                   !value && "bg-accent/20 font-medium",
@@ -188,6 +189,7 @@ export function AdAccountCombobox({
 
             {accounts.map((acc) => (
               <button
+                type="button"
                 key={acc.id}
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 transition-colors",
@@ -221,6 +223,7 @@ export function AdAccountCombobox({
 
             {hasMore && (
               <button
+                type="button"
                 className="w-full px-3 py-1.5 text-xs text-primary hover:bg-accent/30 transition-colors text-center font-medium"
                 onClick={loadMore}
                 disabled={loadingMore}

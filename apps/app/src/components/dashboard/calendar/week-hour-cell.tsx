@@ -13,7 +13,7 @@ function isTodayInTz(date: Date, tz: string): boolean {
 
 function currentHourInTz(tz: string): number {
   return parseInt(
-    new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false }).format(new Date()),
+    new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false }).format(new Date()), 10
   );
 }
 
@@ -64,10 +64,25 @@ export function WeekHourCell({ date, hour, posts, onClickDateTime, onEdit, onDel
     onClickDateTime(clickDate);
   };
 
+  const isDisabled = isPast || isPastHourToday || isTooFar;
+
   return (
+    // biome-ignore lint/a11y/useSemanticElements: interactive wrapper cannot be a button due to nested controls (post cards and popover trigger)
     <div
       ref={setNodeRef}
+      role="button"
+      tabIndex={isDisabled ? -1 : 0}
       onClick={handleClick}
+      onKeyDown={(e) => {
+        if (isDisabled) return;
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          const clickDate = new Date(date);
+          clickDate.setHours(hour, 0, 0, 0);
+          onClickDateTime(clickDate);
+        }
+      }}
       className={cn(
         "min-h-full min-w-0 overflow-hidden border-b border-r border-border px-0.5 pt-1 pb-0.5 transition-colors bg-white dark:bg-background",
         !(isPast || isPastHourToday || isTooFar) && "cursor-pointer hover:bg-accent/20",
@@ -84,6 +99,7 @@ export function WeekHourCell({ date, hour, posts, onClickDateTime, onEdit, onDel
           <Popover>
             <PopoverTrigger asChild>
               <button
+                type="button"
                 className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground pl-1 pt-0.5"
                 onClick={(e) => e.stopPropagation()}
               >

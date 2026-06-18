@@ -171,9 +171,8 @@ function StepRow({
 	const payload = step.payload as
 		| { actions?: Array<{ id: string; would_fire: boolean; resolved?: unknown; error?: string }> }
 		| undefined;
-	const actionResults = Array.isArray(payload?.actions)
-		? payload!.actions
-		: [];
+	const actionResults =
+		payload && Array.isArray(payload.actions) ? payload.actions : [];
 
 	return (
 		<div className="rounded-lg border border-[#eef2f7] bg-[#fbfcfe] p-2">

@@ -1,19 +1,31 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import {
 	getSubscriptionStatus,
 	syncSubscription,
 	type SubscriptionRow,
 	type StripeLike,
+	type StripeSubscription,
+	type DbLike,
 	type KVLike,
 } from "../lib/billing-logic";
 
 // ── Minimal mock DB ──
 
-function createMockDb() {
+interface MockChain {
+	from: () => MockChain;
+	where: () => MockChain;
+	limit: () => MockChain;
+	set: (vals: Record<string, unknown>) => MockChain;
+	then: (resolve: (v: unknown[]) => void) => void;
+}
+
+function createMockDb(): DbLike & {
+	_updates: Array<{ set: Record<string, unknown> }>;
+} {
 	const updates: Array<{ set: Record<string, unknown> }> = [];
 
-	function chain() {
-		const c: any = {
+	function chain(): MockChain {
+		const c: MockChain = {
 			from: () => c,
 			where: () => c,
 			limit: () => c,
@@ -21,25 +33,16 @@ function createMockDb() {
 				updates.push({ set: vals });
 				return c;
 			},
-			then: (resolve: (v: any) => void) => resolve([]),
+			// biome-ignore lint/suspicious/noThenProperty: mock mimics Drizzle's awaitable query builder; the production code awaits this chain.
+			then: (resolve: (v: unknown[]) => void) => resolve([]),
 		};
 		return c;
 	}
 
 	return {
-		select: (fields?: any) => {
-			if (fields) {
-				// For select with fields (apikey lookup), return empty by default
-				return {
-					from: () => ({
-						where: () => ({
-							then: (resolve: (v: any) => void) => resolve([]),
-						}),
-					}),
-				};
-			}
-			return chain();
-		},
+		// Every branch resolves to an empty result set ([]) via the chain's
+		// `then`, matching the apikey lookup's "no keys" default.
+		select: () => chain(),
 		update: () => chain(),
 		insert: () => chain(),
 		_updates: updates,
@@ -51,7 +54,7 @@ function createMockDb() {
 function createMockStripe(overrides?: Partial<StripeLike>): StripeLike {
 	return {
 		subscriptions: {
-			retrieve: async () => ({}),
+			retrieve: async () => mockStripeSubscription(),
 			list: async () => ({ data: [] }),
 		},
 		invoices: {
@@ -94,8 +97,14 @@ const apikeyTable = {
 	organizationId: { name: "organizationId" },
 };
 
-const eqFn = (col: any, val: any) => ({
-	_filter: (row: any) => row[col?.name || col] === val,
+const eqFn = (col: unknown, val: unknown) => ({
+	_filter: (row: Record<string, unknown>) => {
+		const key =
+			col && typeof col === "object" && "name" in col
+				? (col as { name: string }).name
+				: String(col);
+		return row[key] === val;
+	},
 });
 
 // ── Helpers ──
@@ -116,7 +125,9 @@ function baseSub(overrides?: Partial<SubscriptionRow>): SubscriptionRow {
 
 const now = Math.floor(Date.now() / 1000);
 
-function mockStripeSubscription(overrides?: Record<string, unknown>) {
+function mockStripeSubscription(
+	overrides?: Partial<StripeSubscription>,
+): StripeSubscription {
 	return {
 		id: "sub_test",
 		status: "active",
@@ -157,7 +168,7 @@ describe("getSubscriptionStatus", () => {
 		const db = createMockDb();
 		const stripe = createMockStripe({
 			subscriptions: {
-				retrieve: async () => ({}),
+				retrieve: async () => mockStripeSubscription(),
 				list: async () => ({
 					data: [
 						mockStripeSubscription({
@@ -181,19 +192,22 @@ describe("getSubscriptionStatus", () => {
 		});
 
 		// Should detect drift and return cancelled
-		expect(result.subscription!.status).toBe("cancelled");
-		expect(result.subscription!.cancelAtPeriodEnd).toBe(false);
+		if (!result.subscription) throw new Error("expected subscription");
+		expect(result.subscription.status).toBe("cancelled");
+		expect(result.subscription.cancelAtPeriodEnd).toBe(false);
 
 		// Should have triggered a DB update
 		expect(db._updates.length).toBeGreaterThan(0);
-		expect(db._updates[0]!.set.status).toBe("cancelled");
+		const update0 = db._updates[0];
+		if (!update0) throw new Error("expected DB update");
+		expect(update0.set.status).toBe("cancelled");
 	});
 
 	it("detects cancel_at_period_end from Stripe", async () => {
 		const db = createMockDb();
 		const stripe = createMockStripe({
 			subscriptions: {
-				retrieve: async () => ({}),
+				retrieve: async () => mockStripeSubscription(),
 				list: async () => ({
 					data: [
 						mockStripeSubscription({
@@ -216,17 +230,20 @@ describe("getSubscriptionStatus", () => {
 			eqFn,
 		});
 
-		expect(result.subscription!.status).toBe("active");
-		expect(result.subscription!.cancelAtPeriodEnd).toBe(true);
+		if (!result.subscription) throw new Error("expected subscription");
+		expect(result.subscription.status).toBe("active");
+		expect(result.subscription.cancelAtPeriodEnd).toBe(true);
 		expect(db._updates.length).toBeGreaterThan(0);
-		expect(db._updates[0]!.set.cancelAtPeriodEnd).toBe(true);
+		const update0 = db._updates[0];
+		if (!update0) throw new Error("expected DB update");
+		expect(update0.set.cancelAtPeriodEnd).toBe(true);
 	});
 
 	it("handles empty Stripe subscription list (fully cancelled)", async () => {
 		const db = createMockDb();
 		const stripe = createMockStripe({
 			subscriptions: {
-				retrieve: async () => ({}),
+				retrieve: async () => mockStripeSubscription(),
 				list: async () => ({ data: [] }),
 			},
 		});
@@ -242,20 +259,23 @@ describe("getSubscriptionStatus", () => {
 			eqFn,
 		});
 
-		expect(result.subscription!.status).toBe("cancelled");
-		expect(result.subscription!.hasStripeSubscription).toBe(false);
+		if (!result.subscription) throw new Error("expected subscription");
+		expect(result.subscription.status).toBe("cancelled");
+		expect(result.subscription.hasStripeSubscription).toBe(false);
 
 		// Should update DB to cancelled
 		expect(db._updates.length).toBeGreaterThan(0);
-		expect(db._updates[0]!.set.status).toBe("cancelled");
-		expect(db._updates[0]!.set.stripeSubscriptionId).toBeNull();
+		const update0 = db._updates[0];
+		if (!update0) throw new Error("expected DB update");
+		expect(update0.set.status).toBe("cancelled");
+		expect(update0.set.stripeSubscriptionId).toBeNull();
 	});
 
 	it("returns mapped invoices from Stripe", async () => {
 		const db = createMockDb();
 		const stripe = createMockStripe({
 			subscriptions: {
-				retrieve: async () => ({}),
+				retrieve: async () => mockStripeSubscription(),
 				list: async () => ({
 					data: [mockStripeSubscription()],
 				}),
@@ -290,12 +310,12 @@ describe("getSubscriptionStatus", () => {
 		});
 
 		expect(result.invoices).toHaveLength(1);
-		expect(result.invoices[0]!.id).toBe("in_123");
-		expect(result.invoices[0]!.status).toBe("paid");
-		expect(result.invoices[0]!.totalCents).toBe(500);
-		expect(result.invoices[0]!.stripeHostedUrl).toBe(
-			"https://stripe.com/inv/123",
-		);
+		const invoice0 = result.invoices[0];
+		if (!invoice0) throw new Error("expected invoice");
+		expect(invoice0.id).toBe("in_123");
+		expect(invoice0.status).toBe("paid");
+		expect(invoice0.totalCents).toBe(500);
+		expect(invoice0.stripeHostedUrl).toBe("https://stripe.com/inv/123");
 	});
 });
 
@@ -333,7 +353,9 @@ describe("syncSubscription", () => {
 		const stripe = createMockStripe({
 			subscriptions: {
 				retrieve: async () => {
-					const err = new Error("Not found") as any;
+					const err = new Error("Not found") as Error & {
+						statusCode?: number;
+					};
 					err.statusCode = 404;
 					throw err;
 				},
@@ -357,8 +379,10 @@ describe("syncSubscription", () => {
 		expect(result.plan).toBe("free");
 		// Should have updated DB to cancelled
 		expect(db._updates.length).toBeGreaterThan(0);
-		expect(db._updates[0]!.set.status).toBe("cancelled");
-		expect(db._updates[0]!.set.stripeSubscriptionId).toBeNull();
+		const update0 = db._updates[0];
+		if (!update0) throw new Error("expected DB update");
+		expect(update0.set.status).toBe("cancelled");
+		expect(update0.set.stripeSubscriptionId).toBeNull();
 	});
 
 	it("finds new active subscription when no ID stored", async () => {
@@ -366,7 +390,7 @@ describe("syncSubscription", () => {
 		const kv = createMockKV();
 		const stripe = createMockStripe({
 			subscriptions: {
-				retrieve: async () => ({}),
+				retrieve: async () => mockStripeSubscription(),
 				list: async () => ({
 					data: [mockStripeSubscription({ id: "sub_new" })],
 				}),
@@ -388,7 +412,9 @@ describe("syncSubscription", () => {
 
 		expect(result.plan).toBe("pro");
 		expect(db._updates.length).toBeGreaterThan(0);
-		expect(db._updates[0]!.set.stripeSubscriptionId).toBe("sub_new");
+		const update0 = db._updates[0];
+		if (!update0) throw new Error("expected DB update");
+		expect(update0.set.stripeSubscriptionId).toBe("sub_new");
 	});
 
 	it("returns free when no subscription at all", async () => {

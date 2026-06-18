@@ -143,9 +143,9 @@ function PredicateGroupField({
 	return (
 		<div>
 			<div className="flex items-center justify-between mb-1">
-				<label className="text-[10px] font-medium text-muted-foreground">
+				<span className="text-[10px] font-medium text-muted-foreground">
 					{label}
-				</label>
+				</span>
 				{value.length > 0 && (
 					<span className="text-[10px] text-muted-foreground/70">
 						{value.length}
@@ -261,7 +261,7 @@ function PredicateRow({
 					disabled={readOnly}
 					onChange={(e) => onChange({ ...value, field: e.target.value })}
 					placeholder="field (e.g. tags, state.reply_text)"
-					className={INPUT_CLS + " h-6 flex-1 disabled:opacity-60"}
+					className={`${INPUT_CLS} h-6 flex-1 disabled:opacity-60`}
 				/>
 				<select
 					value={value.op}
@@ -292,7 +292,7 @@ function PredicateRow({
 					type="text"
 					defaultValue={displayedValue}
 					disabled={readOnly}
-					key={value.op + "-" + displayedValue}
+					key={`${value.op}-${displayedValue}`}
 					onBlur={(e) => commitValue(e.currentTarget.value)}
 					onKeyDown={(e) => {
 						if (e.key === "Enter") {
@@ -301,7 +301,7 @@ function PredicateRow({
 						}
 					}}
 					placeholder={isList ? "value1, value2, ..." : "value"}
-					className={INPUT_CLS + " h-6 disabled:opacity-60"}
+					className={`${INPUT_CLS} h-6 disabled:opacity-60`}
 				/>
 			)}
 		</div>

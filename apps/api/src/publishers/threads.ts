@@ -404,7 +404,6 @@ export const threadsPublisher: Publisher = {
 			if (opts.reply_control) extraParams.reply_control = opts.reply_control;
 			if (opts.link_attachment) extraParams.link_attachment = opts.link_attachment;
 
-			let postId: string;
 			const username =
 				request.account.username ?? request.account.platform_account_id;
 

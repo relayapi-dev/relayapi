@@ -1,9 +1,9 @@
-import { apiRequestLogs, createDb, usageRecords } from "@relayapi/db";
+import { apiRequestLogs, usageRecords } from "@relayapi/db";
 import { sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { parseCsv } from "../lib/csv-parser";
-import { getRequestDb } from "../lib/request-db";
+import type { getRequestDb } from "../lib/request-db";
 import { sendNotificationToOrg } from "../services/notification-manager";
 import type { Env, Variables } from "../types";
 import { PRICING } from "../types";
@@ -116,7 +116,7 @@ const JSON_BULK_USAGE_FIELDS: Record<string, string> = {
 
 function isJsonContentType(contentType: string | undefined): boolean {
 	if (!contentType) return false;
-	const mimeType = contentType.split(";")[0]!.trim().toLowerCase();
+	const mimeType = (contentType.split(";")[0] ?? "").trim().toLowerCase();
 	return mimeType === "application/json" || mimeType.endsWith("+json");
 }
 

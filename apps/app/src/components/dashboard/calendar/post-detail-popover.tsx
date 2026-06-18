@@ -109,7 +109,18 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
 
         const mappedTargets: Record<string, PostTarget> = {};
         for (const [key, target] of Object.entries(data.targets || {})) {
-          const t = target as any;
+          const t = target as {
+            platform: string;
+            status: string;
+            error?: { code: string; message: string; detail?: string };
+            accounts?: Array<{
+              username?: string | null;
+              display_name?: string | null;
+              avatar_url?: string | null;
+              url?: string | null;
+              platform_post_id?: string | null;
+            }>;
+          };
           const account = t.accounts?.[0];
           mappedTargets[key] = {
             platform: t.platform,
@@ -145,7 +156,15 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
                 const analytics = await analyticsRes.json();
                 if (analytics.data?.length > 0) {
                   const agg = analytics.data.reduce(
-                    (acc: PostEngagement, item: any) => ({
+                    (
+                      acc: PostEngagement,
+                      item: {
+                        likes?: number;
+                        comments?: number;
+                        impressions?: number;
+                        engagement_rate?: number;
+                      },
+                    ) => ({
                       likes: acc.likes + (item.likes || 0),
                       comments: acc.comments + (item.comments || 0),
                       impressions: acc.impressions + (item.impressions || 0),
@@ -237,6 +256,7 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
         </span>
         {onExpand && (
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               e.preventDefault();
@@ -313,11 +333,11 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
                     if (v.videoWidth > v.videoHeight * 1.3) setIsLandscape(true);
                   }}
                   className="w-20 h-20 object-cover"
-                  onError={(e) => { const vid = e.target as HTMLVideoElement; const img = document.createElement("img"); img.src = thumbUrl!; img.alt = ""; img.className = vid.className; img.onload = () => { if (img.naturalWidth > img.naturalHeight * 1.3) setIsLandscape(true); }; img.onerror = () => { img.style.display = "none"; }; vid.replaceWith(img); }}
+                  onError={(e) => { const vid = e.target as HTMLVideoElement; const img = document.createElement("img"); img.src = thumbUrl; img.alt = ""; img.className = vid.className; img.onload = () => { if (img.naturalWidth > img.naturalHeight * 1.3) setIsLandscape(true); }; img.onerror = () => { img.style.display = "none"; }; vid.replaceWith(img); }}
                 />
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="size-6 rounded-full bg-black/60 flex items-center justify-center">
-                    <svg viewBox="0 0 24 24" fill="white" className="size-3 ml-0.5"><polygon points="5,3 19,12 5,21" /></svg>
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="white" className="size-3 ml-0.5"><polygon points="5,3 19,12 5,21" /></svg>
                   </div>
                 </div>
               </button>
@@ -357,11 +377,11 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
                 preload="metadata"
                 onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
                 className="w-full max-h-48 object-cover"
-                onError={(e) => { const vid = e.target as HTMLVideoElement; const img = document.createElement("img"); img.src = thumbUrl!; img.alt = ""; img.className = vid.className; img.onerror = () => { img.style.display = "none"; }; vid.replaceWith(img); }}
+                onError={(e) => { const vid = e.target as HTMLVideoElement; const img = document.createElement("img"); img.src = thumbUrl; img.alt = ""; img.className = vid.className; img.onerror = () => { img.style.display = "none"; }; vid.replaceWith(img); }}
               />
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className="size-8 rounded-full bg-black/60 flex items-center justify-center">
-                  <svg viewBox="0 0 24 24" fill="white" className="size-4 ml-0.5"><polygon points="5,3 19,12 5,21" /></svg>
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="white" className="size-4 ml-0.5"><polygon points="5,3 19,12 5,21" /></svg>
                 </div>
               </div>
             </button>
@@ -475,7 +495,7 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
           {(onDelete || onRetry || onEdit) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="rounded p-1.5 hover:bg-accent transition-colors border border-border">
+                <button type="button" className="rounded p-1.5 hover:bg-accent transition-colors border border-border">
                   <MoreHorizontal className="size-3.5 text-muted-foreground" />
                 </button>
               </DropdownMenuTrigger>

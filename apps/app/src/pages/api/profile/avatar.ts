@@ -1,6 +1,22 @@
 import type { APIRoute } from "astro";
 import { env } from "cloudflare:workers";
 
+// Minimal structural type for the R2 binding operations used here. The full
+// `R2Bucket` ambient type from @cloudflare/workers-types isn't loaded in this
+// app's tsconfig, so we describe only the surface we touch.
+interface MediaObject {
+  key: string;
+}
+interface MediaBucket {
+  list(options: { prefix?: string }): Promise<{ objects: MediaObject[] }>;
+  delete(keys: string[]): Promise<void>;
+  put(
+    key: string,
+    value: ArrayBuffer,
+    options?: { httpMetadata?: { contentType?: string } },
+  ): Promise<unknown>;
+}
+
 const ALLOWED_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -35,12 +51,12 @@ export const POST: APIRoute = async (ctx) => {
     );
   }
 
-  const bucket = (env as any).AVATARS_BUCKET as any;
+  const bucket = env.AVATARS_BUCKET as MediaBucket;
 
   // Delete any existing avatar for this user
   const existing = await bucket.list({ prefix: `${user.id}.` });
   if (existing.objects.length > 0) {
-    await bucket.delete(existing.objects.map((o: any) => o.key));
+    await bucket.delete(existing.objects.map((o: MediaObject) => o.key));
   }
 
   // Upload new avatar
@@ -62,11 +78,11 @@ export const DELETE: APIRoute = async (ctx) => {
     );
   }
 
-  const bucket = (env as any).AVATARS_BUCKET as any;
+  const bucket = env.AVATARS_BUCKET as MediaBucket;
 
   const existing = await bucket.list({ prefix: `${user.id}.` });
   if (existing.objects.length > 0) {
-    await bucket.delete(existing.objects.map((o: any) => o.key));
+    await bucket.delete(existing.objects.map((o: MediaObject) => o.key));
   }
 
   return new Response(null, { status: 204 });

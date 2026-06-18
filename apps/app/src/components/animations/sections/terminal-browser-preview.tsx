@@ -62,7 +62,11 @@ export function TerminalBrowserPreviewBlock() {
                 return;
             }
 
-            const { status: nextStatus, delay } = STATUS_SEQUENCE[sequenceIndexRef.current]!;
+            const current = STATUS_SEQUENCE[sequenceIndexRef.current];
+            if (!current) {
+                return;
+            }
+            const { status: nextStatus, delay } = current;
             sequenceIndexRef.current += 1;
 
             timerRef.current = setTimeout(() => {

@@ -247,7 +247,8 @@ describe("automation e2e", () => {
 			where: eq(automationRuns.id, match.runId),
 		});
 		expect(runAfter).toBeTruthy();
-		expect(["completed", "exited", "failed"]).toContain(runAfter!.status);
+		if (!runAfter) throw new Error("expected runAfter to exist");
+		expect(["completed", "exited", "failed"]).toContain(runAfter.status);
 
 		// Step 6 — step_run entries should be appended for each executed node,
 		// regardless of whether the send succeeded or failed.

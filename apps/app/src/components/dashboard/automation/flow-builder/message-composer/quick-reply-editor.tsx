@@ -65,10 +65,14 @@ export function QuickReplyEditor({
 						className="flex items-start gap-2 rounded-lg border border-[#e6e9ef] bg-[#fbfcfe] p-2"
 					>
 						<div className="w-7">
-							<label className="mb-1 block text-[10px] font-medium text-[#64748b]">
+							<label
+								htmlFor={`qr-icon-${qr.id}`}
+								className="mb-1 block text-[10px] font-medium text-[#64748b]"
+							>
 								Icon
 							</label>
 							<input
+								id={`qr-icon-${qr.id}`}
 								type="text"
 								value={qr.icon ?? ""}
 								maxLength={2}
@@ -86,10 +90,14 @@ export function QuickReplyEditor({
 							/>
 						</div>
 						<div className="flex-1">
-							<label className="mb-1 block text-[10px] font-medium text-[#64748b]">
+							<label
+								htmlFor={`qr-label-${qr.id}`}
+								className="mb-1 block text-[10px] font-medium text-[#64748b]"
+							>
 								Label
 							</label>
 							<input
+								id={`qr-label-${qr.id}`}
 								type="text"
 								value={qr.label}
 								maxLength={MAX_LABEL}

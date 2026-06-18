@@ -27,10 +27,30 @@ const THREAD_FIELDS = [
 	"username",
 ].join(",");
 
-async function threadsFetch(
+interface ThreadsRawPost {
+	id: string;
+	text?: string;
+	timestamp?: string;
+	media_url?: string;
+	thumbnail_url?: string;
+	permalink?: string;
+	media_type?: string;
+	username?: string;
+}
+
+interface ThreadsListResponse {
+	data?: ThreadsRawPost[];
+	paging?: { next?: string };
+}
+
+interface ThreadsInsightsResponse {
+	data?: Array<{ name: string; values?: Array<{ value?: number }> }>;
+}
+
+async function threadsFetch<T = unknown>(
 	url: string,
 	accessToken: string,
-): Promise<{ data: any; headers: Headers }> {
+): Promise<{ data: T; headers: Headers }> {
 	const sep = url.includes("?") ? "&" : "?";
 	const res = await fetch(`${url}${sep}access_token=${accessToken}`);
 	if (res.status === 429) {
@@ -44,7 +64,7 @@ async function threadsFetch(
 		const body = await res.text();
 		throw new Error(`Threads API ${res.status}: ${body}`);
 	}
-	return { data: await res.json(), headers: res.headers };
+	return { data: (await res.json()) as T, headers: res.headers };
 }
 
 function parseMediaType(raw: string | undefined): string | null {
@@ -68,7 +88,7 @@ function parseSafeDate(value: unknown): Date {
 	return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
-function parseThread(raw: any): ExternalPostData {
+function parseThread(raw: ThreadsRawPost): ExternalPostData {
 	const mediaUrls: string[] = [];
 	const mediaType = parseMediaType(raw.media_type);
 
@@ -92,7 +112,7 @@ function parseThread(raw: any): ExternalPostData {
 export const threadsPostFetcher: ExternalPostFetcher = {
 	platform: "threads",
 
-	async fetchPosts(accessToken, platformAccountId, options) {
+	async fetchPosts(accessToken, _platformAccountId, options) {
 		const limit = options.limit ?? DEFAULT_LIMIT;
 		let url: string;
 
@@ -105,7 +125,10 @@ export const threadsPostFetcher: ExternalPostFetcher = {
 			}
 		}
 
-		const { data: json, headers } = await threadsFetch(url, accessToken);
+		const { data: json, headers } = await threadsFetch<ThreadsListResponse>(
+			url,
+			accessToken,
+		);
 		const posts: ExternalPostData[] = (json.data ?? []).map(parseThread);
 
 		const nextCursor = json.paging?.next ?? null;
@@ -119,7 +142,7 @@ export const threadsPostFetcher: ExternalPostFetcher = {
 
 		for (const postId of platformPostIds) {
 			try {
-				const { data: json } = await threadsFetch(
+				const { data: json } = await threadsFetch<ThreadsInsightsResponse>(
 					`${BASE}/${postId}/insights?metric=views,likes,replies,reposts`,
 					accessToken,
 				);

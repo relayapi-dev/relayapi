@@ -22,8 +22,9 @@ const external = [
 	{ id: "ext_x", published_at: "2026-06-06T09:00:00.000Z", created_at: "2026-06-06T09:00:00.000Z" },
 ];
 
-const sortKey = (item: { published_at: string | null; created_at: string }) =>
-	new Date(item.published_at ?? item.created_at).getTime();
+const sortKey = (
+	item: { published_at?: string | null; created_at?: string | null } | undefined,
+) => new Date(item?.published_at ?? item?.created_at ?? 0).getTime();
 
 describe("mergeByPublishedAt", () => {
 	it("interleaves internal and external descending by published_at ?? created_at", () => {
@@ -42,7 +43,8 @@ describe("mergeByPublishedAt", () => {
 
 	it("derives a next_cursor that is a valid date, not an id", () => {
 		const merged = mergeByPublishedAt(internal, external, 2);
-		const last = merged.at(-1)!;
+		const last = merged.at(-1);
+		if (!last) throw new Error("expected a merged row");
 		const cursor = last.published_at ?? last.created_at;
 		// The bug returned `last.id` (e.g. "ext_y") here, which is an Invalid Date.
 		expect(Number.isNaN(new Date(cursor).getTime())).toBe(false);

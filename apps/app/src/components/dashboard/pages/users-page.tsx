@@ -68,7 +68,7 @@ export function UsersPage() {
       if (result.data) {
         setMembers(result.data as unknown as Member[]);
       }
-    } catch (e) {
+    } catch (_e) {
       setError("Failed to load members");
     } finally {
       setLoading(false);
@@ -128,19 +128,30 @@ export function UsersPage() {
           animate={{ opacity: 1, y: 0 }}
         >
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Email address</label>
+            <label
+              htmlFor="users-invite-email"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Email address
+            </label>
             <input
+              id="users-invite-email"
               type="email"
               value={inviteEmail}
               onChange={(e) => setInviteEmail(e.target.value)}
               placeholder="colleague@company.com"
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-              autoFocus
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Role</label>
+            <label
+              htmlFor="users-invite-role"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Role
+            </label>
             <select
+              id="users-invite-role"
               value={inviteRole}
               onChange={(e) => setInviteRole(e.target.value)}
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
@@ -223,10 +234,10 @@ export function UsersPage() {
                 })}
               </span>
               <div className="flex items-center gap-1 justify-self-end">
-                <button className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors">
+                <button type="button" className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors">
                   <Mail className="size-4 text-muted-foreground" />
                 </button>
-                <button className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors">
+                <button type="button" className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors">
                   <MoreHorizontal className="size-4 text-muted-foreground" />
                 </button>
               </div>

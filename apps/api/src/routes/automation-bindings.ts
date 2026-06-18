@@ -14,7 +14,8 @@ import {
 	automations,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, type SQL } from "drizzle-orm";
+import type { Context } from "hono";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
@@ -33,6 +34,8 @@ import {
 } from "./_automation-insights";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -155,14 +158,14 @@ function serializeBinding(
 	return base;
 }
 
-function notFound(c: any) {
+function notFound(c: AppContext) {
 	return c.json(
 		{ error: { code: "NOT_FOUND", message: "Binding not found" } },
 		404,
 	);
 }
 
-async function loadScopedBinding(c: any, id: string) {
+async function loadScopedBinding(c: AppContext, id: string) {
 	const orgId = c.get("orgId");
 	const db = c.get("db");
 	const [row] = await db
@@ -330,7 +333,9 @@ app.openapi(createBinding, async (c) => {
 				error: {
 					code: "VALIDATION_ERROR",
 					message: `invalid config for binding_type ${body.binding_type}`,
-					details: { errors: (parsed as any).error?.issues ?? [] },
+					details: {
+						errors: "error" in parsed ? (parsed.error?.issues ?? []) : [],
+					},
 				},
 			},
 			400,
@@ -567,7 +572,9 @@ app.openapi(updateBinding, async (c) => {
 					error: {
 						code: "VALIDATION_ERROR",
 						message: `invalid config for binding_type ${bindingType}`,
-						details: { errors: (parsed as any).error?.issues ?? [] },
+						details: {
+							errors: "error" in parsed ? (parsed.error?.issues ?? []) : [],
+						},
 					},
 				},
 				400,

@@ -15,8 +15,17 @@ export const GET: APIRoute = async (ctx) => {
       period_start: data.usage.cycle_start,
       period_end: data.usage.cycle_end,
     }, { headers: { "Cache-Control": "private, no-store" } });
-  } catch (e: any) {
-    const headers = e?.headers as Headers | undefined;
+  } catch (e: unknown) {
+    const err = (e ?? {}) as {
+      headers?: Headers;
+      error?: {
+        error?: { code?: string; message?: string };
+        code?: string;
+        message?: string;
+      };
+      message?: string;
+    };
+    const headers = err.headers;
     const usageCount = headers?.get("x-usage-count");
     const usageLimit = headers?.get("x-usage-limit");
 
@@ -30,10 +39,10 @@ export const GET: APIRoute = async (ctx) => {
       });
     }
 
-    const body = e?.error;
+    const body = err.error;
     const code = body?.error?.code || body?.code;
     if (code === "FREE_LIMIT_REACHED") {
-      const msg = body?.error?.message || body?.message || e?.message || "";
+      const msg = body?.error?.message || body?.message || err.message || "";
       const match = msg.match(/\((\d+)/);
       const limit = match ? Number(match[1]) : 200;
       return Response.json({

@@ -13,10 +13,41 @@ import { parseRateLimitHeaders } from "../rate-limits";
 const BASE = "https://api.pinterest.com/v5";
 const DEFAULT_LIMIT = 25;
 
-async function pinFetch(
+type PinImageMap = Record<string, { url?: string } | undefined>;
+
+interface PinMetrics {
+	save?: number;
+	pin_click?: number;
+	impression?: number;
+	comment?: number;
+}
+
+interface PinterestRawPin {
+	id: string;
+	link?: string;
+	title?: string;
+	description?: string;
+	created_at: string;
+	board_id?: string;
+	dominant_color?: string;
+	images?: PinImageMap;
+	media?: {
+		media_type?: string;
+		cover_image_url?: string;
+		images?: PinImageMap;
+	};
+	pin_metrics?: PinMetrics;
+}
+
+interface PinterestPinsResponse {
+	items?: PinterestRawPin[];
+	bookmark?: string;
+}
+
+async function pinFetch<T = unknown>(
 	url: string,
 	accessToken: string,
-): Promise<{ data: any; headers: Headers }> {
+): Promise<{ data: T; headers: Headers }> {
 	const res = await fetch(url, {
 		headers: { Authorization: `Bearer ${accessToken}` },
 	});
@@ -31,10 +62,10 @@ async function pinFetch(
 		const body = await res.text();
 		throw new Error(`Pinterest API ${res.status}: ${body}`);
 	}
-	return { data: await res.json(), headers: res.headers };
+	return { data: (await res.json()) as T, headers: res.headers };
 }
 
-function parsePin(raw: any): ExternalPostData {
+function parsePin(raw: PinterestRawPin): ExternalPostData {
 	const mediaUrls: string[] = [];
 	let mediaType: string | null = null;
 	let thumbnailUrl: string | null = null;
@@ -94,14 +125,18 @@ export const pinterestPostFetcher: ExternalPostFetcher = {
 			url += `&bookmark=${options.cursor}`;
 		}
 
-		const { data: json, headers } = await pinFetch(url, accessToken);
+		const { data: json, headers } = await pinFetch<PinterestPinsResponse>(
+			url,
+			accessToken,
+		);
 		const items = json.items ?? [];
 
 		let posts: ExternalPostData[] = items.map(parsePin);
 
 		// Filter by since if provided (Pinterest doesn't support since param)
-		if (options.since) {
-			posts = posts.filter((p) => p.publishedAt >= options.since!);
+		const since = options.since;
+		if (since) {
+			posts = posts.filter((p) => p.publishedAt >= since);
 		}
 
 		const nextCursor = json.bookmark ?? null;
@@ -121,7 +156,7 @@ export const pinterestPostFetcher: ExternalPostFetcher = {
 		// Pinterest: fetch each pin individually for metrics
 		for (const pinId of platformPostIds) {
 			try {
-				const { data: json } = await pinFetch(
+				const { data: json } = await pinFetch<PinterestRawPin>(
 					`${BASE}/pins/${pinId}?pin_metrics=true`,
 					accessToken,
 				);

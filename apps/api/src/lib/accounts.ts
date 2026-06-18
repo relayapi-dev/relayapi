@@ -1,4 +1,4 @@
-import { createDb, socialAccounts } from "@relayapi/db";
+import { type createDb, socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import { maybeDecrypt } from "./crypto";
 

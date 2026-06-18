@@ -2,7 +2,6 @@ import { useState } from "react";
 import { motion } from "motion/react";
 import { Plus, Loader2, FolderOpen, Trash2, Edit2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { usePaginatedApi, useMutation } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
 
@@ -89,20 +88,31 @@ export function WorkspacesPage() {
           animate={{ opacity: 1, y: 0 }}
         >
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Workspace name</label>
+            <label
+              htmlFor="workspace-name"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Workspace name
+            </label>
             <input
+              id="workspace-name"
               type="text"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="e.g. Marketing Team"
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-              autoFocus
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Description (optional)</label>
+            <label
+              htmlFor="workspace-description"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              Description (optional)
+            </label>
             <input
+              id="workspace-description"
               type="text"
               value={newDescription}
               onChange={(e) => setNewDescription(e.target.value)}
@@ -176,12 +186,14 @@ export function WorkspacesPage() {
                   </div>
                   <div className="flex items-center gap-1">
                     <button
+                      type="button"
                       className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors"
                       title="Edit workspace"
                     >
                       <Edit2 className="size-4 text-muted-foreground" />
                     </button>
                     <button
+                      type="button"
                       className="rounded-lg p-1.5 hover:bg-red-500/10 transition-colors"
                       onClick={() => handleDelete(group.id)}
                       title="Delete workspace"

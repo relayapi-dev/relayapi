@@ -214,7 +214,17 @@ async function sendMediaGroup(
 ): Promise<PublishResult> {
 	// Telegram Bot API requires 2-10 items in a media group
 	if (mediaItems.length < 2) {
-		return sendSingleMedia(token, chatId, mediaItems[0]!, caption, opts);
+		const single = mediaItems[0];
+		if (!single) {
+			return {
+				success: false,
+				error: {
+					code: "INVALID_REQUEST",
+					message: "No media items provided.",
+				},
+			};
+		}
+		return sendSingleMedia(token, chatId, single, caption, opts);
 	}
 
 	if (caption && caption.length > 1024) {

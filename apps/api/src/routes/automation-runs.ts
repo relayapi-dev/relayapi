@@ -15,11 +15,14 @@ import {
 	automations,
 } from "@relayapi/db";
 import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import type { Context } from "hono";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
 import { ErrorResponse } from "../schemas/common";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -102,14 +105,14 @@ function serializeStep(row: StepRow): z.infer<typeof StepResponseSchema> {
 	};
 }
 
-function notFound(c: any, label = "Run") {
+function notFound(c: AppContext, label = "Run") {
 	return c.json(
 		{ error: { code: "NOT_FOUND", message: `${label} not found` } },
 		404,
 	);
 }
 
-async function loadScopedAutomation(c: any, id: string) {
+async function loadScopedAutomation(c: AppContext, id: string) {
 	const orgId = c.get("orgId");
 	const db = c.get("db");
 	const [row] = await db
@@ -123,7 +126,7 @@ async function loadScopedAutomation(c: any, id: string) {
 	return { row };
 }
 
-async function loadScopedRun(c: any, id: string) {
+async function loadScopedRun(c: AppContext, id: string) {
 	const orgId = c.get("orgId");
 	const db = c.get("db");
 	const [result] = await db

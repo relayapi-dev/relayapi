@@ -7,9 +7,9 @@ import {
 } from "@relayapi/db";
 import { sql, desc } from "drizzle-orm";
 
-function adminGuard(context: any): Response | null {
+function adminGuard(context: { locals: App.Locals }): Response | null {
   const user = context.locals.user;
-  if (!user || (user as any).role !== "admin") {
+  if (!user || user.role !== "admin") {
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
       headers: { "Content-Type": "application/json" },
@@ -104,7 +104,7 @@ export const PATCH: APIRoute = async (context) => {
       );
     }
 
-    const updates: Record<string, any> = {};
+    const updates: Partial<typeof organizationSubscriptions.$inferInsert> = {};
     if (status !== undefined) updates.status = status;
     if (monthlyPriceCents !== undefined)
       updates.monthlyPriceCents = monthlyPriceCents;

@@ -81,6 +81,7 @@ export function SchedulingPage({
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent/50 transition-colors"
             onClick={() => refetch()}
           >
@@ -88,6 +89,7 @@ export function SchedulingPage({
             Refresh
           </button>
           <button
+            type="button"
             className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent/50 transition-colors"
             onClick={() => setCreateOpen(true)}
           >
@@ -104,6 +106,7 @@ export function SchedulingPage({
               tab.toLowerCase().replace(" ", "-") as typeof initialTab;
             return (
               <button
+                type="button"
                 key={tab}
                 onClick={() => switchTab(tabKey)}
                 className={cn(
@@ -126,9 +129,8 @@ export function SchedulingPage({
         </div>
       )}
 
-      {activeTab === "queue-slots" && (
-        <>
-          {loading ? (
+      {activeTab === "queue-slots" &&
+        (loading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
@@ -222,13 +224,10 @@ export function SchedulingPage({
                 Create a queue schedule to auto-schedule posts at recurring times
               </p>
             </div>
-          )}
-        </>
-      )}
+          ))}
 
-      {activeTab === "preview" && (
-        <>
-          {previewLoading ? (
+      {activeTab === "preview" &&
+        (previewLoading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
@@ -277,9 +276,7 @@ export function SchedulingPage({
                 Configure queue schedules to see upcoming publishing times
               </p>
             </div>
-          )}
-        </>
-      )}
+          ))}
 
       <ScheduleCreateDialog
         open={createOpen}

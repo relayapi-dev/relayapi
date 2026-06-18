@@ -192,8 +192,12 @@ export function validateGraph(graph: AutomationGraph): GraphValidationResult {
 	// 6. Warnings: output ports with no outgoing edge.
 	const outgoing = new Map<string, Set<string>>();
 	for (const e of graph.edges) {
-		if (!outgoing.has(e.from_node)) outgoing.set(e.from_node, new Set());
-		outgoing.get(e.from_node)!.add(e.from_port);
+		let ports = outgoing.get(e.from_node);
+		if (!ports) {
+			ports = new Set();
+			outgoing.set(e.from_node, ports);
+		}
+		ports.add(e.from_port);
 	}
 	for (const n of canonicalNodes) {
 		for (const p of n.ports) {
@@ -216,8 +220,12 @@ export function validateGraph(graph: AutomationGraph): GraphValidationResult {
 function findCycles(nodes: AutomationNode[], edges: AutomationEdge[]): string[][] {
 	const adj = new Map<string, string[]>();
 	for (const e of edges) {
-		if (!adj.has(e.from_node)) adj.set(e.from_node, []);
-		adj.get(e.from_node)!.push(e.to_node);
+		let list = adj.get(e.from_node);
+		if (!list) {
+			list = [];
+			adj.set(e.from_node, list);
+		}
+		list.push(e.to_node);
 	}
 	const cycles: string[][] = [];
 	const color = new Map<string, 0 | 1 | 2>();

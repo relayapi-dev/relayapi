@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Loader2, Check, X, AlertTriangle, Users } from "lucide-react";
+import { Loader2, Check, X, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -111,7 +111,7 @@ export function SubredditInfoDialog({ open, onOpenChange }: SubredditInfoDialogP
             </div>
           )}
 
-          {result && result.exists && (
+          {result?.exists && (
             <div className="rounded-md border border-border divide-y divide-border">
               {/* Header */}
               <div className="px-3 py-3">

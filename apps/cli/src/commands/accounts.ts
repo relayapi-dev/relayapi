@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import type { Command } from "commander";
 import { createClient } from "../client.js";
 import {
 	isTableMode,
@@ -11,7 +11,7 @@ export function registerAccountCommands(program: Command): void {
 	const accounts = program
 		.command("accounts")
 		.description("Manage connected accounts")
-		.action(function () {
+		.action(() => {
 			accounts.help();
 		});
 
@@ -58,7 +58,7 @@ export function registerAccountCommands(program: Command): void {
 			});
 		});
 
-	const health = accounts
+	accounts
 		.command("health")
 		.description("Check account health")
 		.argument("[id]", "Account ID (omit for all)")

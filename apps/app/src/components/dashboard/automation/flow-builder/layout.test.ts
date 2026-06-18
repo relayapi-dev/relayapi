@@ -31,10 +31,12 @@ function assertNoOverlap(
 ): void {
 	for (let i = 0; i < nodes.length; i++) {
 		for (let j = i + 1; j < nodes.length; j++) {
-			const a = nodes[i]!;
-			const b = nodes[j]!;
-			const pa = positions.get(a.key)!;
-			const pb = positions.get(b.key)!;
+			const a = nodes[i];
+			const b = nodes[j];
+			if (!a || !b) throw new Error("expected nodes to be defined");
+			const pa = positions.get(a.key);
+			const pb = positions.get(b.key);
+			if (!pa || !pb) throw new Error("expected positions for every node");
 			const boxA = { x: pa.x, y: pa.y, w: a.width, h: a.height };
 			const boxB = { x: pb.x, y: pb.y, w: b.width, h: b.height };
 			expect({
@@ -43,6 +45,15 @@ function assertNoOverlap(
 			}).toEqual({ pair: `${a.key}/${b.key}`, overlap: false });
 		}
 	}
+}
+
+function requirePos(
+	positions: Map<string, { x: number; y: number }>,
+	key: string,
+): { x: number; y: number } {
+	const p = positions.get(key);
+	if (!p) throw new Error(`expected a position for "${key}"`);
+	return p;
 }
 
 describe("layoutGraph", () => {
@@ -60,8 +71,9 @@ describe("layoutGraph", () => {
 		for (const node of nodes) {
 			const p = pos.get(node.key);
 			expect(p).toBeDefined();
-			expect(Number.isFinite(p!.x)).toBe(true);
-			expect(Number.isFinite(p!.y)).toBe(true);
+			if (!p) throw new Error("expected a position for the node");
+			expect(Number.isFinite(p.x)).toBe(true);
+			expect(Number.isFinite(p.y)).toBe(true);
 		}
 	});
 
@@ -74,8 +86,8 @@ describe("layoutGraph", () => {
 		const pos = layoutGraph(nodes, edges);
 		assertNoOverlap(nodes, pos);
 		// Left-to-right: each downstream node sits strictly right of its parent.
-		expect(pos.get("a")!.x).toBeLessThan(pos.get("b")!.x);
-		expect(pos.get("b")!.x).toBeLessThan(pos.get("c")!.x);
+		expect(requirePos(pos, "a").x).toBeLessThan(requirePos(pos, "b").x);
+		expect(requirePos(pos, "b").x).toBeLessThan(requirePos(pos, "c").x);
 	});
 
 	it("separates sibling branches so they do not overlap", () => {
@@ -87,8 +99,8 @@ describe("layoutGraph", () => {
 		const pos = layoutGraph(nodes, edges);
 		assertNoOverlap(nodes, pos);
 		// Root sits left of both children.
-		expect(pos.get("root")!.x).toBeLessThan(pos.get("a")!.x);
-		expect(pos.get("root")!.x).toBeLessThan(pos.get("b")!.x);
+		expect(requirePos(pos, "root").x).toBeLessThan(requirePos(pos, "a").x);
+		expect(requirePos(pos, "root").x).toBeLessThan(requirePos(pos, "b").x);
 	});
 
 	it("keeps tall sibling cards from overlapping vertically", () => {

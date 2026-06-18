@@ -218,7 +218,8 @@ describe("automation message handler", () => {
 
 		// 1. sendTransport was invoked once with the rendered text + recipient.
 		expect(sendCalls).toHaveLength(1);
-		const call = sendCalls[0]!;
+		const call = sendCalls[0];
+		if (!call) throw new Error("expected a send call");
 		expect(call.platform).toBe("telegram");
 		expect(call.recipientId).toBe("tg_chat_42");
 		expect(call.text).toBe("hi alice, pick one:");
@@ -231,8 +232,9 @@ describe("automation message handler", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.waitingFor).toBe("input");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("waiting");
+		expect(run.waitingFor).toBe("input");
 	});
 
 	it("advances when the message has no interactive elements and no wait_for_reply", async () => {
@@ -310,8 +312,9 @@ describe("automation message handler", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		expect(run!.exitReason).toBe("completed");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("completed");
+		expect(run.exitReason).toBe("completed");
 	});
 
 	it("fails the run when no contact_channels row exists for the channel", async () => {
@@ -367,7 +370,8 @@ describe("automation message handler", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("failed");
-		expect(run!.exitReason).toBe("handler_failure");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("failed");
+		expect(run.exitReason).toBe("handler_failure");
 	});
 });

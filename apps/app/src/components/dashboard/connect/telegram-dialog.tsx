@@ -132,6 +132,7 @@ export function TelegramDialog({ open, onOpenChange, onConnected }: TelegramDial
               <div className="flex items-center justify-center gap-2">
                 <code className="text-2xl font-mono font-bold tracking-widest">{step.data.code}</code>
                 <button
+                  type="button"
                   onClick={() => handleCopy(step.data.code)}
                   className="rounded-md p-1.5 hover:bg-accent/50 transition-colors"
                   title="Copy code"

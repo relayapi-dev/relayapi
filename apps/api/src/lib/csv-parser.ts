@@ -5,19 +5,23 @@
  */
 export function parseCsv(text: string): Record<string, string>[] {
 	const rows = parseRows(text);
-	if (rows.length === 0) return [];
+	const headerRow = rows[0];
+	if (!headerRow) return [];
 
-	const headers = rows[0]!.map((h) => h.trim().toLowerCase());
+	const headers = headerRow.map((h) => h.trim().toLowerCase());
 	const results: Record<string, string>[] = [];
 
 	for (let i = 1; i < rows.length; i++) {
-		const row = rows[i]!;
+		const row = rows[i];
+		if (!row) continue;
 		// Skip completely empty rows
-		if (row.length === 1 && row[0]!.trim() === "") continue;
+		if (row.length === 1 && (row[0] ?? "").trim() === "") continue;
 
 		const obj: Record<string, string> = {};
 		for (let j = 0; j < headers.length; j++) {
-			obj[headers[j]!] = (row[j] ?? "").trim();
+			const header = headers[j];
+			if (header === undefined) continue;
+			obj[header] = (row[j] ?? "").trim();
 		}
 		results.push(obj);
 	}

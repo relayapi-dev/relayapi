@@ -1,7 +1,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	contentTemplates,
-	createDb,
+	type createDb,
 	crossPostActions,
 	externalPosts,
 	ideaActivity,
@@ -28,7 +28,6 @@ import {
 } from "../lib/workspace-scope";
 import { incrementUsage } from "../middleware/usage-tracking";
 import { addToPlaylist } from "../publishers/youtube";
-import type { Platform } from "../schemas/common";
 import {
 	ErrorResponse,
 	FilterParams,
@@ -37,7 +36,6 @@ import {
 } from "../schemas/common";
 import {
 	BulkCsvResponse,
-	BulkCsvRowResult,
 	CreatePostBody,
 	PostListResponse,
 	PostResponse,
@@ -51,7 +49,10 @@ import {
 	computeNextRecycleAt,
 	validateRecyclingConfig,
 } from "../services/recycling-validator";
-import { getProvider } from "../services/short-link-providers";
+import {
+	getProvider,
+	type ShortLinkProvider,
+} from "../services/short-link-providers";
 import { shortenUrlsInContent } from "../services/short-link-service";
 import { resolveTargets } from "../services/target-resolver";
 import { refreshTokenIfNeeded } from "../services/token-refresh";
@@ -59,8 +60,11 @@ import { dispatchWebhookEvent } from "../services/webhook-delivery";
 import type { Env, Variables } from "../types";
 import { PRICING } from "../types";
 import { resolveBillingPeriod } from "../middleware/usage-tracking";
+import type { Context } from "hono";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 const PRESIGN_GET_EXPIRES = 3600;
 
@@ -223,6 +227,10 @@ const createPostRoute = createRoute({
 		},
 		403: {
 			description: "Quota exceeded",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "No slot available",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -678,15 +686,23 @@ app.openapi(listPosts, async (c) => {
 
 	if (from) {
 		const fromDate = new Date(from);
-		conditions.push(
-			or(gte(posts.scheduledAt, fromDate), gte(posts.publishedAt, fromDate))!,
+		const fromCondition = or(
+			gte(posts.scheduledAt, fromDate),
+			gte(posts.publishedAt, fromDate),
 		);
+		if (fromCondition) {
+			conditions.push(fromCondition);
+		}
 	}
 	if (to) {
 		const toDate = new Date(to);
-		conditions.push(
-			or(lte(posts.scheduledAt, toDate), lte(posts.publishedAt, toDate))!,
+		const toCondition = or(
+			lte(posts.scheduledAt, toDate),
+			lte(posts.publishedAt, toDate),
 		);
+		if (toCondition) {
+			conditions.push(toCondition);
+		}
 	}
 
 	if (accountIdList.length > 0) {
@@ -698,12 +714,13 @@ app.openapi(listPosts, async (c) => {
 			sql`${posts.id} IN (SELECT ${postTargets.postId} FROM ${postTargets} WHERE ${postTargets.socialAccountId} = ${account_id})`,
 		);
 	} else if (workspace_id) {
-		conditions.push(
-			or(
-				eq(posts.workspaceId, workspace_id),
-				sql`${posts.id} IN (SELECT ${postTargets.postId} FROM ${postTargets} JOIN ${socialAccounts} ON ${postTargets.socialAccountId} = ${socialAccounts.id} WHERE ${socialAccounts.workspaceId} = ${workspace_id})`,
-			)!,
+		const workspaceCondition = or(
+			eq(posts.workspaceId, workspace_id),
+			sql`${posts.id} IN (SELECT ${postTargets.postId} FROM ${postTargets} JOIN ${socialAccounts} ON ${postTargets.socialAccountId} = ${socialAccounts.id} WHERE ${socialAccounts.workspaceId} = ${workspace_id})`,
 		);
+		if (workspaceCondition) {
+			conditions.push(workspaceCondition);
+		}
 	}
 
 	const allPosts = await db
@@ -820,7 +837,7 @@ app.openapi(listPosts, async (c) => {
 		const internalItems = await Promise.all(
 			data.map(async (p) => {
 				const pTargets = targetsByPost.get(p.id) ?? [];
-				const overrides = p.platformOverrides as Record<string, any> | null;
+				const overrides = p.platformOverrides as Record<string, unknown> | null;
 				const rawMedia =
 					includeMedia && overrides?._media
 						? (overrides._media as Array<{ url: string; type?: string }>)
@@ -879,8 +896,9 @@ app.openapi(listPosts, async (c) => {
 				internalItems.length + extPage.length > merged.length;
 			return c.json(
 				{
-					data: merged,
-					next_cursor: more && last ? (last.published_at ?? last.created_at) : null,
+					data: merged as unknown as z.infer<typeof PostListResponse>["data"],
+					next_cursor:
+						more && last ? (last.published_at ?? last.created_at ?? null) : null,
 					has_more: more,
 				},
 				200,
@@ -890,7 +908,9 @@ app.openapi(listPosts, async (c) => {
 		const lastInternal = data.at(-1);
 		return c.json(
 			{
-				data: internalItems,
+				data: internalItems as unknown as z.infer<
+					typeof PostListResponse
+				>["data"],
 				next_cursor: hasMore
 					? ((lastInternal?.publishedAt ?? lastInternal?.createdAt)?.toISOString() ??
 						null)
@@ -924,7 +944,7 @@ app.openapi(listPosts, async (c) => {
 		data.map(async (p) => {
 			let mediaArr: Array<{ url: string; type?: string }> | null = null;
 			if (includeMedia) {
-				const overrides = p.platformOverrides as Record<string, any> | null;
+				const overrides = p.platformOverrides as Record<string, unknown> | null;
 				const rawMedia = overrides?._media
 					? (overrides._media as Array<{ url: string; type?: string }>)
 					: null;
@@ -962,8 +982,9 @@ app.openapi(listPosts, async (c) => {
 			leanItems.length + extPage.length > merged.length;
 		return c.json(
 			{
-				data: merged,
-				next_cursor: more && last ? (last.published_at ?? last.created_at) : null,
+				data: merged as unknown as z.infer<typeof PostListResponse>["data"],
+				next_cursor:
+						more && last ? (last.published_at ?? last.created_at ?? null) : null,
 				has_more: more,
 			},
 			200,
@@ -973,7 +994,7 @@ app.openapi(listPosts, async (c) => {
 	const lastInternal = data.at(-1);
 	return c.json(
 		{
-			data: leanItems,
+			data: leanItems as unknown as z.infer<typeof PostListResponse>["data"],
 			next_cursor: hasMore
 				? ((lastInternal?.publishedAt ?? lastInternal?.createdAt)?.toISOString() ??
 					null)
@@ -991,7 +1012,7 @@ app.openapi(listPosts, async (c) => {
 async function fetchExternalPostItems(
 	db: ReturnType<typeof createDb>,
 	orgId: string,
-	c: any,
+	c: AppContext,
 	filters: {
 		workspace_id?: string;
 		account_id?: string;
@@ -1016,12 +1037,13 @@ async function fetchExternalPostItems(
 		// so a filtered timeline leaked external posts from every workspace the key can
 		// access). OR the account's workspace to cover external_posts rows whose own
 		// workspaceId was nulled by ON DELETE SET NULL — mirrors the internal-posts query.
-		conditions.push(
-			or(
-				eq(externalPosts.workspaceId, filters.workspace_id),
-				eq(socialAccounts.workspaceId, filters.workspace_id),
-			)!,
+		const workspaceCondition = or(
+			eq(externalPosts.workspaceId, filters.workspace_id),
+			eq(socialAccounts.workspaceId, filters.workspace_id),
 		);
+		if (workspaceCondition) {
+			conditions.push(workspaceCondition);
+		}
 	}
 	if (filters.from) {
 		conditions.push(gte(externalPosts.publishedAt, new Date(filters.from)));
@@ -1079,12 +1101,20 @@ async function fetchExternalPostItems(
 	}));
 }
 
-export function mergeByPublishedAt(
-	internal: any[],
-	external: any[],
+type MergeableItem = {
+	published_at?: string | null;
+	created_at?: string | null;
+};
+
+export function mergeByPublishedAt<
+	TInternal extends MergeableItem,
+	TExternal extends MergeableItem,
+>(
+	internal: TInternal[],
+	external: TExternal[],
 	limit: number,
-): any[] {
-	const merged: any[] = [];
+): Array<TInternal | TExternal> {
+	const merged: Array<TInternal | TExternal> = [];
 	let i = 0;
 	let e = 0;
 
@@ -1092,21 +1122,26 @@ export function mergeByPublishedAt(
 		merged.length < limit &&
 		(i < internal.length || e < external.length)
 	) {
-		const iDate =
-			i < internal.length
-				? new Date(internal[i].published_at ?? internal[i].created_at).getTime()
-				: -Infinity;
-		const eDate =
-			e < external.length
-				? new Date(external[e].published_at).getTime()
-				: -Infinity;
+		const internalItem = internal[i];
+		const externalItem = external[e];
+		const iDate = internalItem
+			? new Date(internalItem.published_at ?? internalItem.created_at ?? 0).getTime()
+			: -Infinity;
+		const eDate = externalItem
+			? new Date(externalItem.published_at ?? 0).getTime()
+			: -Infinity;
 
-		if (iDate >= eDate) {
-			merged.push(internal[i]);
+		if (iDate >= eDate && internalItem) {
+			merged.push(internalItem);
+			i++;
+		} else if (externalItem) {
+			merged.push(externalItem);
+			e++;
+		} else if (internalItem) {
+			merged.push(internalItem);
 			i++;
 		} else {
-			merged.push(external[e]);
-			e++;
+			break;
 		}
 	}
 
@@ -1240,7 +1275,7 @@ app.openapi(createPostRoute, async (c) => {
 							"No available slot found. Configure queue slots or try a specific time.",
 					},
 				},
-				409 as any,
+				409,
 			);
 		}
 		scheduledAt = new Date(slot.slot_at);
@@ -1358,7 +1393,7 @@ app.openapi(createPostRoute, async (c) => {
 				shouldShorten = true;
 
 			if (shouldShorten && slConfig?.provider) {
-				let provider;
+				let provider: ShortLinkProvider | null | undefined;
 				let apiKey: string | null = null;
 
 				if (slConfig.provider === "relayapi") {
@@ -1400,7 +1435,7 @@ app.openapi(createPostRoute, async (c) => {
 	};
 
 	// Sentinel type for early-exit error responses inside the transaction
-	type TxEarlyReturn = { __earlyReturn: true; body: any; status: number };
+	type TxEarlyReturn = { __earlyReturn: true; body: unknown; status: number };
 
 	let post: typeof posts.$inferSelect;
 	let recyclingResponse: ReturnType<typeof formatRecyclingConfig> | null = null;
@@ -1514,7 +1549,7 @@ app.openapi(createPostRoute, async (c) => {
 					} as TxEarlyReturn;
 				} else {
 					const validation = await validateRecyclingConfig(
-						tx as any,
+						tx as unknown as ReturnType<typeof createDb>,
 						orgId,
 						txPost.id,
 						postStatus,
@@ -1611,23 +1646,29 @@ app.openapi(createPostRoute, async (c) => {
 
 		post = txResult.post;
 		recyclingResponse = txResult.recyclingResponse;
-	} catch (err: any) {
-		if (err && err.__earlyReturn) {
-			return c.json(err.body as never, err.status as never);
+	} catch (err: unknown) {
+		const earlyErr = err as {
+			__earlyReturn?: boolean;
+			body?: unknown;
+			status?: unknown;
+		};
+		if (earlyErr?.__earlyReturn) {
+			return c.json(earlyErr.body as never, earlyErr.status as never);
 		}
 		throw err;
 	}
 
 	// --- Update idea reference if created from an idea ---
 	if (ideaSource) {
+		const ideaSourceId = ideaSource.id;
 		c.executionCtx.waitUntil(
 			(async () => {
 				await db
 					.update(ideas)
 					.set({ convertedToPostId: post.id, updatedAt: new Date() })
-					.where(eq(ideas.id, ideaSource!.id));
+					.where(eq(ideas.id, ideaSourceId));
 				await db.insert(ideaActivity).values({
-					ideaId: ideaSource!.id,
+					ideaId: ideaSourceId,
 					actorId: c.get("keyId"),
 					action: "converted",
 					metadata: { post_id: post.id },
@@ -1800,7 +1841,7 @@ app.openapi(getPost, async (c) => {
 	const denied = assertWorkspaceScope(c, post.workspaceId);
 	if (denied) return denied as never;
 
-	const overrides = post.platformOverrides as Record<string, any> | null;
+	const overrides = post.platformOverrides as Record<string, unknown> | null;
 	const rawMedia = overrides?._media
 		? (overrides._media as Array<{ url: string; type?: string }>)
 		: null;
@@ -1876,8 +1917,8 @@ app.openapi(updatePostRoute, async (c) => {
 
 	// Merge platformOverrides: preserve _media when updating target_options and vice versa
 	const existingOverrides =
-		(post.platformOverrides as Record<string, any>) ?? {};
-	const { _media: existingMedia, ...existingOpts } = existingOverrides;
+		(post.platformOverrides as Record<string, unknown>) ?? {};
+	const { _media: existingMedia } = existingOverrides;
 	let newOverrides = { ...existingOverrides };
 	let overridesChanged = false;
 
@@ -1986,8 +2027,8 @@ app.openapi(updatePostRoute, async (c) => {
 			target.accounts.map((account) => ({
 				postId: id,
 				socialAccountId: account.id,
-				platform: target.platform as any,
-				status: targetStatus as any,
+				platform: target.platform as typeof postTargets.$inferInsert.platform,
+				status: targetStatus as typeof postTargets.$inferInsert.status,
 			})),
 		);
 
@@ -2086,7 +2127,7 @@ app.openapi(updatePostRoute, async (c) => {
 	]);
 
 	const finalOverrides =
-		(updated.platformOverrides as Record<string, any>) ?? {};
+		(updated.platformOverrides as Record<string, unknown>) ?? {};
 	const responseMedia = await presignMediaUrls(
 		c.env,
 		finalOverrides._media
@@ -2369,7 +2410,7 @@ app.openapi(bulkCreatePosts, async (c) => {
 	const autoScheduledTimes: Date[] = []; // Accumulate auto-scheduled times to avoid collisions within batch
 	for (const item of postItems) {
 		try {
-			const { resolved, failed: failedTargets } = await resolveTargets(
+			const { resolved, failed: _failedTargets } = await resolveTargets(
 				db,
 				orgId,
 				item.targets,
@@ -2624,6 +2665,9 @@ app.openapi(unpublishPost, async (c) => {
 				const account = accountMap.get(target.socialAccountId);
 				if (!account?.accessToken)
 					return { targetId: target.id, success: false };
+				if (!target.platformPostId)
+					return { targetId: target.id, success: false };
+				const platformPostId = target.platformPostId;
 
 				let deleteSuccess = false;
 				try {
@@ -2677,7 +2721,7 @@ app.openapi(unpublishPost, async (c) => {
 						case "linkedin":
 							deleteSuccess = (
 								await fetch(
-									`${LINKEDIN_REST_BASE}/posts/${encodeURIComponent(target.platformPostId!)}`,
+									`${LINKEDIN_REST_BASE}/posts/${encodeURIComponent(platformPostId)}`,
 									{
 										method: "DELETE",
 										headers: getLinkedInRestHeaders(account.accessToken),
@@ -3024,6 +3068,17 @@ app.openapi(updateMetadata, async (c) => {
 	if (denied) return denied;
 
 	const token = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY);
+	if (!token) {
+		return c.json(
+			{
+				error: {
+					code: "NOT_FOUND",
+					message: "YouTube account not found or missing access token.",
+				},
+			},
+			404,
+		);
+	}
 
 	// Fetch current video data from YouTube
 	const listRes = await fetch(
@@ -3149,7 +3204,7 @@ app.openapi(updateMetadata, async (c) => {
 	// Add to playlist if requested
 	if (body.playlist_id) {
 		try {
-			await addToPlaylist({ access_token: token! }, body.playlist_id, videoId);
+			await addToPlaylist({ access_token: token }, body.playlist_id, videoId);
 			updatedFields.push("playlist_id");
 		} catch (err) {
 			console.warn(
@@ -3300,8 +3355,8 @@ app.openapi(bulkCsvUpload, async (c) => {
 	}
 
 	// --- Validate required columns ---
-	const firstRow = rows[0]!;
-	if (!("targets" in firstRow) || !("scheduled_at" in firstRow)) {
+	const firstRow = rows[0];
+	if (!firstRow || !("targets" in firstRow) || !("scheduled_at" in firstRow)) {
 		return c.json(
 			{
 				error: {
@@ -3344,8 +3399,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 	let postsCreated = 0;
 	const csvAutoScheduledTimes: Date[] = [];
 
-	for (let i = 0; i < rows.length; i++) {
-		const row = rows[i]!;
+	for (const [i, row] of rows.entries()) {
 		const rowNum = i + 1; // 1-based for user display
 
 		try {

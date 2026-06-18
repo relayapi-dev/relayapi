@@ -128,9 +128,9 @@ export function BroadcastsCreateDialog({ open, onOpenChange, onCreated }: Broadc
 
           {/* Account */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground">
+            <span className="text-xs font-medium text-muted-foreground">
               Account
-            </label>
+            </span>
             <div className="mt-1">
               <AccountSearchCombobox
                 value={accountId || null}
@@ -159,9 +159,9 @@ export function BroadcastsCreateDialog({ open, onOpenChange, onCreated }: Broadc
 
           {/* Recipients */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground">
+            <span className="text-xs font-medium text-muted-foreground">
               Recipients
-            </label>
+            </span>
             <div className="mt-1">
               <ContactSearchPicker
                 accountId={accountId}
@@ -172,8 +172,8 @@ export function BroadcastsCreateDialog({ open, onOpenChange, onCreated }: Broadc
           </div>
 
           {/* Schedule */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox checked={scheduleEnabled} onCheckedChange={(c) => setScheduleEnabled(!!c)} />
+          <label htmlFor="broadcast-schedule-enabled" className="flex items-center gap-2 cursor-pointer">
+            <Checkbox id="broadcast-schedule-enabled" checked={scheduleEnabled} onCheckedChange={(c) => setScheduleEnabled(!!c)} />
             <span className="text-xs text-foreground">Schedule for later</span>
           </label>
           {scheduleEnabled && (

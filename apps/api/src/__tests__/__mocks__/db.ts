@@ -16,16 +16,18 @@ interface QueryCall {
 	where?: unknown;
 }
 
+type Row = Record<string, unknown>;
+
 export function createMockDb() {
-	const data = new Map<string, any[]>();
+	const data = new Map<string, Row[]>();
 	const calls: QueryCall[] = [];
 	const updates: Array<{ table: string; set: Record<string, unknown>; where?: unknown }> = [];
 	const inserts: Array<{ table: string; values: Record<string, unknown> }> = [];
 
 	function resolveTable(tableRef: unknown): string {
 		// Drizzle table objects have a Symbol-keyed name. For our mock we use a simple mapping.
-		if (tableRef && typeof tableRef === "object" && "_.name" in (tableRef as any)) {
-			return (tableRef as any)["_.name"];
+		if (tableRef && typeof tableRef === "object" && "_.name" in tableRef) {
+			return (tableRef as { "_.name": string })["_.name"];
 		}
 		// Fallback: stringify
 		const s = String(tableRef);
@@ -43,7 +45,7 @@ export function createMockDb() {
 	// Chainable select builder
 	function selectChain(fields?: Record<string, unknown>) {
 		let tableName = "";
-		let filterFn: ((row: any) => boolean) | null = null;
+		let filterFn: ((row: Row) => boolean) | null = null;
 		let limitCount: number | null = null;
 		const joins: Array<{ table: string; cols: [string, string] | null }> = [];
 
@@ -54,16 +56,19 @@ export function createMockDb() {
 			},
 			leftJoin(table: unknown, condition: unknown) {
 				const cols =
-					condition && typeof condition === "object" && "_joinCols" in (condition as any)
-						? ((condition as any)._joinCols as [string, string])
+					condition && typeof condition === "object" && "_joinCols" in condition
+						? ((condition as { _joinCols: [string, string] })._joinCols as [
+								string,
+								string,
+							])
 						: null;
 				joins.push({ table: resolveTable(table), cols });
 				return chain;
 			},
 			where(condition: unknown) {
 				// condition is the result of eq() — we store a filter function
-				if (condition && typeof condition === "object" && "_filter" in (condition as any)) {
-					filterFn = (condition as any)._filter;
+				if (condition && typeof condition === "object" && "_filter" in condition) {
+					filterFn = (condition as { _filter: (row: Row) => boolean })._filter;
 				}
 				return chain;
 			},
@@ -75,7 +80,8 @@ export function createMockDb() {
 				return chain;
 			},
 			// Terminal: makes chain awaitable
-			then(resolve: (value: any[]) => void, reject?: (err: any) => void) {
+			// biome-ignore lint/suspicious/noThenProperty: intentional thenable to make the mock query builder awaitable
+			then(resolve: (value: Row[]) => void, reject?: (err: unknown) => void) {
 				try {
 					let rows = data.get(tableName) ?? [];
 					if (filterFn) rows = rows.filter(filterFn);
@@ -86,11 +92,12 @@ export function createMockDb() {
 							let merged = { ...row };
 							for (const j of joins) {
 								const joinRows = data.get(j.table) ?? [];
-								const match = j.cols
+								const cols = j.cols;
+								const match = cols
 									? joinRows.find(
 											(jr) =>
-												jr[j.cols![0]] === row[j.cols![1]] ||
-												jr[j.cols![1]] === row[j.cols![0]],
+												jr[cols[0]] === row[cols[1]] ||
+												jr[cols[1]] === row[cols[0]],
 										)
 									: undefined;
 								if (match) merged = { ...match, ...merged };
@@ -128,7 +135,7 @@ export function createMockDb() {
 	function updateChain(table: unknown) {
 		const tableName = resolveTable(table);
 		let setData: Record<string, unknown> = {};
-		let filterFn: ((row: any) => boolean) | null = null;
+		let filterFn: ((row: Row) => boolean) | null = null;
 
 		const chain = {
 			set(values: Record<string, unknown>) {
@@ -136,12 +143,13 @@ export function createMockDb() {
 				return chain;
 			},
 			where(condition: unknown) {
-				if (condition && typeof condition === "object" && "_filter" in (condition as any)) {
-					filterFn = (condition as any)._filter;
+				if (condition && typeof condition === "object" && "_filter" in condition) {
+					filterFn = (condition as { _filter: (row: Row) => boolean })._filter;
 				}
 				return chain;
 			},
-			then(resolve: (value: void) => void, reject?: (err: any) => void) {
+			// biome-ignore lint/suspicious/noThenProperty: intentional thenable to make the mock query builder awaitable
+			then(resolve: (value: undefined) => void, reject?: (err: unknown) => void) {
 				try {
 					// Apply updates to seeded data
 					const rows = data.get(tableName) ?? [];
@@ -152,7 +160,7 @@ export function createMockDb() {
 					}
 					updates.push({ table: tableName, set: setData, where: filterFn });
 					calls.push({ type: "update", table: tableName, set: setData });
-					resolve();
+					resolve(undefined);
 				} catch (err) {
 					reject?.(err);
 				}
@@ -180,7 +188,8 @@ export function createMockDb() {
 				shouldReturn = true;
 				return chain;
 			},
-			then(resolve: (value: any) => void, reject?: (err: any) => void) {
+			// biome-ignore lint/suspicious/noThenProperty: intentional thenable to make the mock query builder awaitable
+			then(resolve: (value: Row[] | undefined) => void, reject?: (err: unknown) => void) {
 				try {
 					const now = new Date();
 					const row = {
@@ -210,10 +219,10 @@ export function createMockDb() {
 		insert: (table: unknown) => insertChain(table),
 
 		// Test helpers
-		_seed(tableName: string, rows: any[]) {
+		_seed(tableName: string, rows: Row[]) {
 			data.set(tableName, [...rows]);
 		},
-		_getData(tableName: string): any[] {
+		_getData(tableName: string): Row[] {
 			return data.get(tableName) ?? [];
 		},
 		_calls: calls,
@@ -236,21 +245,21 @@ export function mockEq(column: unknown, value: unknown) {
 	const colName = getColName(column);
 	// Column-to-column comparison (a join condition): expose both column
 	// names so selectChain.leftJoin can match rows across tables.
-	if (value && typeof value === "object" && "name" in (value as any)) {
+	if (value && typeof value === "object" && "name" in value) {
 		return {
 			_filter: () => false,
-			_joinCols: [colName, (value as any).name] as [string, string],
+			_joinCols: [colName, (value as { name: string }).name] as [string, string],
 		};
 	}
 	return {
-		_filter: (row: any) => row[colName] === value,
+		_filter: (row: Record<string, unknown>) => row[colName] === value,
 	};
 }
 
 function getColName(colRef: unknown): string {
 	if (colRef && typeof colRef === "object") {
 		// Drizzle columns have a .name property
-		if ("name" in (colRef as any)) return (colRef as any).name;
+		if ("name" in colRef) return (colRef as { name: string }).name;
 	}
 	return String(colRef);
 }

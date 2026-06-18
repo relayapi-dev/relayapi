@@ -1,0 +1,22 @@
+name: CI — Lint
+
+# PR check — runs Biome lint across the whole repo (config in biome.json:
+# generated packages/sdk is excluded, .gitignore is respected).
+#
+# Fails the build on lint ERRORS. Biome warnings do not fail by default; to
+# also enforce a zero-warning baseline, change the run step to:
+#   bunx biome lint --error-on-warnings .
+
+on:
+  pull_request:
+
+jobs:
+  lint:
+    name: Biome Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Biome lint
+        run: bunx biome lint .

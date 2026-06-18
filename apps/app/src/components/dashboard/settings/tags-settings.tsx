@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { Plus, Pencil, Trash2, Check, X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ const fadeUp = {
 const PRESET_COLORS = [
 	"#6366f1", "#ec4899", "#f97316", "#22c55e",
 	"#3b82f6", "#a855f7", "#ef4444", "#eab308",
-];
+] as const;
 
 interface Tag {
 	id: string;
@@ -33,12 +33,22 @@ export function TagsSettings() {
 
 	const [creating, setCreating] = useState(false);
 	const [newName, setNewName] = useState("");
-	const [newColor, setNewColor] = useState(PRESET_COLORS[0]!);
+	const [newColor, setNewColor] = useState<string>(PRESET_COLORS[0]);
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [editName, setEditName] = useState("");
 	const [editColor, setEditColor] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+	const createInputRef = useRef<HTMLInputElement>(null);
+	const editInputRef = useRef<HTMLInputElement>(null);
+
+	useEffect(() => {
+		if (creating) createInputRef.current?.focus();
+	}, [creating]);
+
+	useEffect(() => {
+		if (editingId) editInputRef.current?.focus();
+	}, [editingId]);
 
 	const handleCreate = async () => {
 		if (!newName.trim()) return;
@@ -103,6 +113,7 @@ export function TagsSettings() {
 							<div className="flex gap-1">
 								{PRESET_COLORS.map((c) => (
 									<button
+										type="button"
 										key={c}
 										className={`size-5 rounded-full border-2 transition-colors ${newColor === c ? "border-foreground" : "border-transparent"}`}
 										style={{ backgroundColor: c }}
@@ -111,6 +122,7 @@ export function TagsSettings() {
 								))}
 							</div>
 							<input
+								ref={createInputRef}
 								className="flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary"
 								placeholder="Tag name"
 								value={newName}
@@ -119,7 +131,6 @@ export function TagsSettings() {
 									if (e.key === "Enter") handleCreate();
 									if (e.key === "Escape") setCreating(false);
 								}}
-								autoFocus
 							/>
 							<Button size="sm" className="h-7 text-xs" onClick={handleCreate} disabled={saving}>
 								{saving ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3.5" />}
@@ -150,6 +161,7 @@ export function TagsSettings() {
 									<div className="flex gap-1">
 										{PRESET_COLORS.map((c) => (
 											<button
+												type="button"
 												key={c}
 												className={`size-5 rounded-full border-2 transition-colors ${editColor === c ? "border-foreground" : "border-transparent"}`}
 												style={{ backgroundColor: c }}
@@ -158,6 +170,7 @@ export function TagsSettings() {
 										))}
 									</div>
 									<input
+										ref={editInputRef}
 										className="flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary"
 										value={editName}
 										onChange={(e) => setEditName(e.target.value)}
@@ -165,7 +178,6 @@ export function TagsSettings() {
 											if (e.key === "Enter") handleUpdate(tag.id);
 											if (e.key === "Escape") setEditingId(null);
 										}}
-										autoFocus
 									/>
 									<Button size="sm" className="h-7 text-xs" onClick={() => handleUpdate(tag.id)} disabled={saving}>
 										{saving ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3.5" />}
@@ -186,10 +198,10 @@ export function TagsSettings() {
 										</>
 									) : (
 										<>
-											<button className="rounded p-1 hover:bg-accent transition-colors" onClick={() => { setEditingId(tag.id); setEditName(tag.name); setEditColor(tag.color); }}>
+											<button type="button" className="rounded p-1 hover:bg-accent transition-colors" onClick={() => { setEditingId(tag.id); setEditName(tag.name); setEditColor(tag.color); }}>
 												<Pencil className="size-3.5 text-muted-foreground" />
 											</button>
-											<button className="rounded p-1 hover:bg-red-500/10 transition-colors" onClick={() => setDeleteConfirmId(tag.id)}>
+											<button type="button" className="rounded p-1 hover:bg-red-500/10 transition-colors" onClick={() => setDeleteConfirmId(tag.id)}>
 												<Trash2 className="size-3.5 text-muted-foreground hover:text-red-400" />
 											</button>
 										</>

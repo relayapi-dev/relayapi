@@ -7,13 +7,14 @@ export async function mapConcurrently<T, R>(
 
 	const concurrency = Math.max(1, Math.min(limit, items.length));
 	const results = new Array<R>(items.length);
-	let nextIndex = 0;
+	// Shared iterator over [index, item] entries so each worker pulls the next
+	// pending task; iterating preserves the original element (including any
+	// legitimately-undefined values) without index-based non-null assertions.
+	const entries = items.entries();
 
 	const worker = async () => {
-		while (true) {
-			const index = nextIndex++;
-			if (index >= items.length) return;
-			results[index] = await mapper(items[index]!, index);
+		for (const [index, item] of entries) {
+			results[index] = await mapper(item, index);
 		}
 	};
 

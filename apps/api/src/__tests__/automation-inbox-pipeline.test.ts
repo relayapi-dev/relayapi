@@ -618,8 +618,9 @@ describe("3.2 button postback resumes waiting run (pipeline)", () => {
 		let run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.currentNodeKey).toBe("ask");
+		if (!run) throw new Error("expected an automation run");
+		expect(run.status).toBe("waiting");
+		expect(run.currentNodeKey).toBe("ask");
 
 		// Fire the callback_query through the full pipeline.
 		const cbq = buildTelegramCallbackQuery({
@@ -632,8 +633,9 @@ describe("3.2 button postback resumes waiting run (pipeline)", () => {
 		run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		if (!run) throw new Error("expected an automation run after resume");
+		expect(run.status).toBe("completed");
+		const ctxJson = (run.context as Record<string, unknown>) ?? {};
 		expect(ctxJson.last_interactive_port).toBe("button.yes");
 	}, 45_000);
 });
@@ -731,8 +733,9 @@ describe("3.3 quick-reply resumes waiting run (pipeline)", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		if (!run) throw new Error("expected an automation run");
+		expect(run.status).toBe("completed");
+		const ctxJson = (run.context as Record<string, unknown>) ?? {};
 		expect(ctxJson.last_interactive_port).toBe("quick_reply.qr_abc");
 	}, 45_000);
 });
@@ -803,8 +806,9 @@ describe("3.4 text reply to input node (pipeline regression)", () => {
 		let run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.waitingFor).toBe("input");
+		if (!run) throw new Error("expected an automation run");
+		expect(run.status).toBe("waiting");
+		expect(run.waitingFor).toBe("input");
 
 		const textMsg = buildTelegramTextMessage({
 			chatId,
@@ -816,8 +820,9 @@ describe("3.4 text reply to input node (pipeline regression)", () => {
 		run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		if (!run) throw new Error("expected an automation run after resume");
+		expect(run.status).toBe("completed");
+		const ctxJson = (run.context as Record<string, unknown>) ?? {};
 		expect(ctxJson.captured_email).toBe("alice@example.com");
 	}, 45_000);
 });
@@ -988,8 +993,9 @@ describe("3.6 Meta quick-reply payload resumes waiting run (pipeline)", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		if (!run) throw new Error("expected an automation run");
+		expect(run.status).toBe("completed");
+		const ctxJson = (run.context as Record<string, unknown>) ?? {};
 		expect(ctxJson.last_interactive_port).toBe("quick_reply.qr_yes");
 	}, 45_000);
 });
@@ -1133,8 +1139,9 @@ describe("3.7 multi-account: run pins socialAccountId of triggering account (F2)
 		// Assertion: the outbound send used account A's token, not B's.
 		const outbound = sendCalls.find((c) => c.text === "Multi-account reply");
 		expect(outbound).toBeTruthy();
-		expect(outbound!.accessToken).toBe("token-account-A");
-		expect(outbound!.platformAccountId).toBe(igPlatformAccountId);
+		if (!outbound) throw new Error("expected an outbound send call");
+		expect(outbound.accessToken).toBe("token-account-A");
+		expect(outbound.platformAccountId).toBe(igPlatformAccountId);
 	}, 45_000);
 });
 
@@ -1234,9 +1241,10 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		let run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.currentNodeKey).toBe("ask");
-		expect(run!.conversationId).toBe(commentConv.id);
+		if (!run) throw new Error("expected an automation run");
+		expect(run.status).toBe("waiting");
+		expect(run.currentNodeKey).toBe("ask");
+		expect(run.conversationId).toBe(commentConv.id);
 
 		// Callback arrives on the DM thread (different chatId would be a
 		// different contact; same chatId but conversation row gets created
@@ -1252,8 +1260,9 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		const ctxJson = (run!.context as Record<string, unknown>) ?? {};
+		if (!run) throw new Error("expected an automation run after resume");
+		expect(run.status).toBe("completed");
+		const ctxJson = (run.context as Record<string, unknown>) ?? {};
 		expect(ctxJson.last_interactive_port).toBe("button.yes");
 	}, 60_000);
 
@@ -1300,8 +1309,10 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		const bobBefore = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, bobRunId),
 		});
-		expect(aliceBefore!.status).toBe("waiting");
-		expect(bobBefore!.status).toBe("waiting");
+		if (!aliceBefore) throw new Error("expected Alice's run before resume");
+		if (!bobBefore) throw new Error("expected Bob's run before resume");
+		expect(aliceBefore.status).toBe("waiting");
+		expect(bobBefore.status).toBe("waiting");
 
 		// Alice taps yes — only her run should advance.
 		const cbq = buildTelegramCallbackQuery({
@@ -1317,8 +1328,10 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		const bobAfter = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, bobRunId),
 		});
-		expect(aliceAfter!.status).toBe("completed");
-		expect(bobAfter!.status).toBe("waiting");
+		if (!aliceAfter) throw new Error("expected Alice's run after resume");
+		if (!bobAfter) throw new Error("expected Bob's run after resume");
+		expect(aliceAfter.status).toBe("completed");
+		expect(bobAfter.status).toBe("waiting");
 	}, 60_000);
 
 	it("one contact with two active runs: the older run advances, younger stays waiting (ordering)", async () => {
@@ -1384,8 +1397,10 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		const younger = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, youngerRunId),
 		});
-		expect(older!.status).toBe("completed");
-		expect(younger!.status).toBe("completed");
+		if (!older) throw new Error("expected the older run");
+		if (!younger) throw new Error("expected the younger run");
+		expect(older.status).toBe("completed");
+		expect(younger.status).toBe("completed");
 	}, 60_000);
 
 	it("port-mismatch: button payload resumes only the run whose node has that port", async () => {
@@ -1482,9 +1497,11 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		const fooRun = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, fooRunId),
 		});
+		if (!yesRun) throw new Error("expected the yes run");
+		if (!fooRun) throw new Error("expected the foo run");
 		// Only the run whose message-node has a `button.yes` port should
 		// advance; the `foo` run stays parked.
-		expect(yesRun!.status).toBe("completed");
-		expect(fooRun!.status).toBe("waiting");
+		expect(yesRun.status).toBe("completed");
+		expect(fooRun.status).toBe("waiting");
 	}, 60_000);
 });

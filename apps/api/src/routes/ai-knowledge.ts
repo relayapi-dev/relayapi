@@ -98,7 +98,8 @@ app.openapi(createKb, async (c) => {
 		})
 		.returning();
 
-	return c.json(serializeKb(row!), 201);
+	if (!row) throw new Error("Failed to create knowledge base");
+	return c.json(serializeKb(row), 201);
 });
 
 const listKbs = createRoute({
@@ -267,7 +268,8 @@ app.openapi(updateKb, async (c) => {
 		.set(updates)
 		.where(eq(aiKnowledgeBases.id, id))
 		.returning();
-	return c.json(serializeKb(updated!), 200);
+	if (!updated) throw new Error("Failed to update knowledge base");
+	return c.json(serializeKb(updated), 200);
 });
 
 const deleteKb = createRoute({
@@ -385,7 +387,8 @@ app.openapi(createDoc, async (c) => {
 		})
 		.returning();
 
-	return c.json(serializeDoc(row!), 201);
+	if (!row) throw new Error("Failed to create knowledge document");
+	return c.json(serializeDoc(row), 201);
 });
 
 const listDocs = createRoute({

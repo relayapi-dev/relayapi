@@ -92,7 +92,7 @@ export function buildCommentToDm(
 					include_replies: false,
 				},
 				socialAccountId: socialAccountId ?? null,
-				allowReentry: cfg.once_per_user === true ? false : true,
+				allowReentry: cfg.once_per_user !== true,
 			},
 		],
 	};

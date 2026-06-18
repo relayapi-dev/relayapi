@@ -112,8 +112,10 @@ export const listmonkPublisher: Publisher = {
 			});
 
 			if (!createRes.ok) {
-				const err = await createRes.json().catch(() => ({}));
-				const detail = (err as any)?.message ?? createRes.statusText;
+				const err = (await createRes.json().catch(() => ({}))) as {
+					message?: string;
+				};
+				const detail = err?.message ?? createRes.statusText;
 				const raw = `HTTP ${createRes.status}\n${JSON.stringify(err)}`;
 
 				if (createRes.status === 401) {
@@ -151,9 +153,11 @@ export const listmonkPublisher: Publisher = {
 			);
 
 			if (!statusRes.ok) {
-				const err = await statusRes.json().catch(() => ({}));
+				const err = (await statusRes.json().catch(() => ({}))) as {
+					message?: string;
+				};
 				const raw = `HTTP ${statusRes.status}\n${JSON.stringify(err)}`;
-				throw new PublishError(`ListMonk start campaign failed: ${(err as any)?.message ?? statusRes.statusText}`, { statusCode: statusRes.status, detail: raw });
+				throw new PublishError(`ListMonk start campaign failed: ${err?.message ?? statusRes.statusText}`, { statusCode: statusRes.status, detail: raw });
 			}
 
 			return {

@@ -118,6 +118,7 @@ export function MergeTagPicker({
 			</Button>
 			{open ? (
 				<div
+					role="menu"
 					className="absolute z-20 mt-1 max-h-[320px] w-[280px] overflow-auto rounded-lg border border-[#e6e9ef] bg-white p-2 shadow-lg"
 					onMouseLeave={() => setOpen(false)}
 				>

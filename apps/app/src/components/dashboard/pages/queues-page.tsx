@@ -70,6 +70,7 @@ export function QueuesPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-medium">Queues</h1>
         <button
+          type="button"
           className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent/50 transition-colors"
           onClick={() => refetch()}
         >

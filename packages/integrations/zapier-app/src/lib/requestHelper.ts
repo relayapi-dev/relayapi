@@ -1,11 +1,11 @@
-import { Bundle, HttpRequestOptions, HttpResponse, ZObject } from 'zapier-platform-core';
+import type { Bundle, HttpRequestOptions, HttpResponse, ZObject } from 'zapier-platform-core';
 
 /**
  * Adds the Authorization header with the user's API key to every outgoing request.
  */
 export const addAuthHeader = (
   request: HttpRequestOptions,
-  z: ZObject,
+  _z: ZObject,
   bundle: Bundle,
 ): HttpRequestOptions => {
   if (bundle.authData?.apiKey) {

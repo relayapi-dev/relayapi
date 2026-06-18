@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import type { Command } from "commander";
 import * as prompts from "@clack/prompts";
 import pc from "picocolors";
 import {
@@ -8,13 +8,13 @@ import {
 	maskKey,
 } from "../config.js";
 import { createClient } from "../client.js";
-import { outputJson, outputSuccess, withErrorHandler } from "../output.js";
+import { outputSuccess, withErrorHandler } from "../output.js";
 
 export function registerAuthCommands(program: Command): void {
 	const auth = program
 		.command("auth")
 		.description("Manage authentication")
-		.action(function () {
+		.action(() => {
 			auth.help();
 		});
 

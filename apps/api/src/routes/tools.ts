@@ -6,7 +6,6 @@ import { fetchPublicUrl } from "../lib/fetch-public-url";
 import { getLinkedInRestHeaders, LINKEDIN_REST_BASE } from "../lib/linkedin-rest";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import { PLATFORM_LIMITS, countChars } from "../config/platform-limits";
-import type { Platform } from "../schemas/common";
 import { PLATFORMS, ErrorResponse } from "../schemas/common";
 import { callDownloaderService } from "../services/tool-service";
 import { createToolJob, getToolJob } from "../services/tool-jobs";
@@ -33,9 +32,22 @@ import {
 import { escapeLinkedInCommentary } from "../publishers/linkedin";
 import { resolveTargets } from "../services/target-resolver";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
+import type { Context } from "hono";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+// Shared context for the download routes (all built by createDownloadRoute, so
+// they share the same validated body). Responses are returned via `as never`
+// so the shared helper slots into each route's typed response union.
+type DownloadContext = Context<
+	{ Bindings: Env; Variables: Variables },
+	string,
+	{
+		in: { json: z.input<typeof DownloadBody> };
+		out: { json: z.output<typeof DownloadBody> };
+	}
+>;
 
 // --- Route definitions ---
 
@@ -718,6 +730,10 @@ function createDownloadRoute(platform: string, summary: string) {
 				description: "Invalid URL or wrong platform",
 				content: { "application/json": { schema: ErrorResponse } },
 			},
+			404: {
+				description: "Content unavailable",
+				content: { "application/json": { schema: ErrorResponse } },
+			},
 			429: {
 				description: "Daily tool limit exceeded",
 				content: { "application/json": { schema: ErrorResponse } },
@@ -727,9 +743,9 @@ function createDownloadRoute(platform: string, summary: string) {
 }
 
 async function handleDownload(
-	c: any,
+	c: DownloadContext,
 	platform: string,
-) {
+): Promise<never> {
 	const { url, format } = c.req.valid("json");
 	const orgId = c.get("orgId");
 
@@ -737,7 +753,7 @@ async function handleDownload(
 		return c.json(
 			{ error: { code: "INVALID_URL", message: "Private or localhost URLs are not allowed" } },
 			400,
-		);
+		) as never;
 	}
 
 	if (!isAllowedDomain(url, platform)) {
@@ -749,7 +765,7 @@ async function handleDownload(
 				},
 			},
 			400,
-		);
+		) as never;
 	}
 
 	// Try sync path: call Python VPS with 20s timeout
@@ -761,7 +777,7 @@ async function handleDownload(
 	);
 
 	if (result.ok) {
-		return c.json({ success: true as const, ...result.data }, 200);
+		return c.json({ success: true as const, ...result.data }, 200) as never;
 	}
 
 	// If it was a real error (not timeout), return the error directly
@@ -770,8 +786,8 @@ async function handleDownload(
 		if (result.error.includes("private") || result.error.includes("unavailable")) {
 			return c.json(
 				{ error: { code: "CONTENT_UNAVAILABLE", message: result.error } },
-				404 as any,
-			);
+				404,
+			) as never;
 		}
 		// Service not configured or down — fall through to queue
 	}
@@ -795,7 +811,7 @@ async function handleDownload(
 			poll_url: `/v1/tools/jobs/${jobId}`,
 		},
 		202,
-	);
+	) as never;
 }
 
 // --- Download endpoints (7 platforms) ---
@@ -843,6 +859,10 @@ const getTranscript = createRoute({
 			description: "Invalid URL",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		404: {
+			description: "Transcript unavailable",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		429: {
 			description: "Daily tool limit exceeded",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -887,7 +907,7 @@ app.openapi(getTranscript, async (c) => {
 		if (result.error.includes("disabled") || result.error.includes("unavailable")) {
 			return c.json(
 				{ error: { code: "TRANSCRIPT_UNAVAILABLE", message: result.error } },
-				404 as any,
+				404,
 			);
 		}
 	}

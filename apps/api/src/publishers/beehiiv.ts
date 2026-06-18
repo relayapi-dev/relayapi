@@ -102,8 +102,12 @@ export const beehiivPublisher: Publisher = {
 			);
 
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
-				const detail = (err as any)?.errors?.[0]?.message ?? (err as any)?.message ?? res.statusText;
+				const err = (await res.json().catch(() => ({}))) as {
+					errors?: Array<{ message?: string }>;
+					message?: string;
+				};
+				const detail =
+					err?.errors?.[0]?.message ?? err?.message ?? res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 
 				if (res.status === 401) {

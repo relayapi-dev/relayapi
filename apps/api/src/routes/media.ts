@@ -1,8 +1,8 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { generateId, media, posts } from "@relayapi/db";
 import type { AwsClient } from "aws4fetch";
-import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
-import { ErrorResponse, IdParam, PaginationParams, FilterParams } from "../schemas/common";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { ErrorResponse, IdParam, FilterParams } from "../schemas/common";
 import {
 	MediaListResponse,
 	MediaPresignRequest,
@@ -249,7 +249,13 @@ app.openapi(listMedia, async (c) => {
 	applyWorkspaceScope(c, conditions, media.workspaceId);
 	if (workspace_id) {
 		// Show workspace-specific + shared org-level media
-		conditions.push(or(eq(media.workspaceId, workspace_id), isNull(media.workspaceId))!);
+		const workspaceCondition = or(
+			eq(media.workspaceId, workspace_id),
+			isNull(media.workspaceId),
+		);
+		if (workspaceCondition) {
+			conditions.push(workspaceCondition);
+		}
 	}
 	// Composite keyset on (created_at, id) — the full sort key. The cursor is the
 	// id of the last item from the previous page; we read that row's created_at
@@ -321,7 +327,7 @@ app.openapi(uploadMedia, async (c) => {
 		c.req.header("content-type") ?? "application/octet-stream";
 
 	// SECURITY: Validate MIME type against allowlist to prevent stored XSS
-	if (!ALLOWED_MIME_TYPES.has(contentType.split(";")[0]!.trim().toLowerCase())) {
+	if (!ALLOWED_MIME_TYPES.has((contentType.split(";")[0] ?? "").trim().toLowerCase())) {
 		return c.json(
 			{ error: { code: "INVALID_CONTENT_TYPE", message: `Content type '${contentType}' is not allowed. Supported types: images, videos, audio, and PDF.` } } as never,
 			400 as never,
@@ -419,7 +425,7 @@ app.openapi(presignMedia, async (c) => {
 	const { filename, content_type } = c.req.valid("json");
 
 	// SECURITY: Validate MIME type against allowlist to prevent stored XSS
-	if (!ALLOWED_MIME_TYPES.has(content_type.split(";")[0]!.trim().toLowerCase())) {
+	if (!ALLOWED_MIME_TYPES.has((content_type.split(";")[0] ?? "").trim().toLowerCase())) {
 		return c.json(
 			{ error: { code: "INVALID_CONTENT_TYPE", message: `Content type '${content_type}' is not allowed. Supported types: images, videos, audio, and PDF.` } } as never,
 			400 as never,
@@ -596,7 +602,7 @@ app.openapi(confirmMedia, async (c) => {
 
 	// SEC-02: Re-verify MIME type at confirm time (presigned uploads can bypass declared type)
 	const actualContentType = r2Object.httpMetadata?.contentType;
-	if (actualContentType && !ALLOWED_MIME_TYPES.has(actualContentType.split(";")[0]!.trim().toLowerCase())) {
+	if (actualContentType && !ALLOWED_MIME_TYPES.has((actualContentType.split(";")[0] ?? "").trim().toLowerCase())) {
 		await c.env.MEDIA_BUCKET.delete(storage_key);
 		return c.json(
 			{ error: { code: "INVALID_FILE_TYPE", message: `File type '${actualContentType}' is not allowed` } },

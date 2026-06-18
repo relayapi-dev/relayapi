@@ -120,8 +120,8 @@ export function generateBlockId(): string {
 		const buf = new Uint8Array(8);
 		globalThis.crypto.getRandomValues(buf);
 		let out = "";
-		for (let i = 0; i < buf.length; i++) {
-			out += ID_ALPHABET[buf[i]! % ID_ALPHABET.length];
+		for (const byte of buf) {
+			out += ID_ALPHABET[byte % ID_ALPHABET.length];
 		}
 		return out;
 	}

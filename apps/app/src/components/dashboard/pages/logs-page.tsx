@@ -69,19 +69,23 @@ const methodColors: Record<string, string> = {
   HEAD: "text-muted-foreground bg-muted",
 };
 
+const postStatusDraftStyle = { text: "text-muted-foreground", bg: "bg-muted" };
+
 const postStatusStyles: Record<string, { text: string; bg: string }> = {
   published: { text: "text-emerald-400", bg: "bg-emerald-400/10" },
   failed: { text: "text-red-400", bg: "bg-red-400/10" },
   publishing: { text: "text-blue-400", bg: "bg-blue-400/10" },
   partial: { text: "text-amber-400", bg: "bg-amber-400/10" },
-  draft: { text: "text-muted-foreground", bg: "bg-muted" },
+  draft: postStatusDraftStyle,
 };
+
+const connectionEventErrorStyle = { text: "text-red-400", bg: "bg-red-400/10" };
 
 const connectionEventStyles: Record<string, { text: string; bg: string }> = {
   connected: { text: "text-emerald-400", bg: "bg-emerald-400/10" },
   disconnected: { text: "text-amber-400", bg: "bg-amber-400/10" },
   token_refreshed: { text: "text-blue-400", bg: "bg-blue-400/10" },
-  error: { text: "text-red-400", bg: "bg-red-400/10" },
+  error: connectionEventErrorStyle,
 };
 
 // --- Helpers ---
@@ -187,6 +191,7 @@ export function LogsPage({
         <div className="flex gap-4 shrink-0">
           {tabs.map((tab) => (
             <button
+              type="button"
               key={tab.key}
               onClick={() => switchTab(tab.key)}
               className={cn(
@@ -209,6 +214,7 @@ export function LogsPage({
         <div className="flex gap-3">
           {levelFilters.map((f) => (
             <button
+              type="button"
               key={f}
               onClick={() => setLevelFilter(f)}
               className={cn(
@@ -224,15 +230,27 @@ export function LogsPage({
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="text-[13px] text-muted-foreground shrink-0">From</label>
+          <label
+            htmlFor="logs-date-from"
+            className="text-[13px] text-muted-foreground shrink-0"
+          >
+            From
+          </label>
           <input
+            id="logs-date-from"
             type="datetime-local"
             value={dateFrom}
             onChange={(e) => setDateFrom(e.target.value)}
             className="text-[13px] bg-transparent border border-border rounded-md px-2 py-1 text-foreground [&::-webkit-calendar-picker-indicator]:dark:invert"
           />
-          <label className="text-[13px] text-muted-foreground shrink-0">To</label>
+          <label
+            htmlFor="logs-date-to"
+            className="text-[13px] text-muted-foreground shrink-0"
+          >
+            To
+          </label>
           <input
+            id="logs-date-to"
             type="datetime-local"
             value={dateTo}
             onChange={(e) => setDateTo(e.target.value)}
@@ -240,6 +258,7 @@ export function LogsPage({
           />
           {(dateFrom || dateTo) && (
             <button
+              type="button"
               onClick={() => { setDateFrom(""); setDateTo(""); }}
               className="text-[13px] text-muted-foreground hover:text-foreground transition-colors"
             >
@@ -336,7 +355,7 @@ function RequestLogRow({ log }: { log: RequestLogEntry }) {
 }
 
 function PostLogRow({ log }: { log: PostLogEntry }) {
-  const style = postStatusStyles[log.status] ?? postStatusStyles.draft!;
+  const style = postStatusStyles[log.status] ?? postStatusDraftStyle;
   return (
     <motion.div
       variants={fadeUp}
@@ -365,7 +384,7 @@ function PostLogRow({ log }: { log: PostLogEntry }) {
 }
 
 function ConnectionLogRow({ log }: { log: ConnectionLogEntry }) {
-  const style = connectionEventStyles[log.event] ?? connectionEventStyles.error!;
+  const style = connectionEventStyles[log.event] ?? connectionEventErrorStyle;
   return (
     <motion.div
       variants={fadeUp}
@@ -416,6 +435,7 @@ function Pagination({ page, totalPages, goToPage }: { page: number; totalPages: 
   return (
     <div className="flex items-center justify-center gap-1">
       <button
+        type="button"
         onClick={() => goToPage(page - 1)}
         disabled={page === 0}
         className={cn(
@@ -434,6 +454,7 @@ function Pagination({ page, totalPages, goToPage }: { page: number; totalPages: 
           </span>
         ) : (
           <button
+            type="button"
             key={p}
             onClick={() => goToPage(p)}
             className={cn(
@@ -448,6 +469,7 @@ function Pagination({ page, totalPages, goToPage }: { page: number; totalPages: 
         )
       )}
       <button
+        type="button"
         onClick={() => goToPage(page + 1)}
         disabled={page >= totalPages - 1}
         className={cn(

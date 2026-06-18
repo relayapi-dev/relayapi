@@ -37,7 +37,7 @@ export interface QueuePostListProps {
 }
 
 function formatDateHeader(dateKey: string): string {
-  const d = new Date(dateKey + "T12:00:00");
+  const d = new Date(`${dateKey}T12:00:00`);
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today);
@@ -91,11 +91,13 @@ export function QueuePostList({
         : card.scheduledAt || card.createdAt;
       const dateKey = getDateKey(dateSource);
 
-      if (!grouped.has(dateKey)) {
-        grouped.set(dateKey, []);
+      let bucket = grouped.get(dateKey);
+      if (!bucket) {
+        bucket = [];
+        grouped.set(dateKey, bucket);
         dates.push(dateKey);
       }
-      grouped.get(dateKey)!.push(card);
+      bucket.push(card);
     }
 
     return { groups: grouped, orderedDates: dates };
@@ -129,7 +131,8 @@ export function QueuePostList({
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
       {orderedDates.map((dateKey) => {
-        const cards = groups.get(dateKey)!;
+        const cards = groups.get(dateKey);
+        if (!cards) return null;
         return (
           <div key={dateKey}>
             <h3 className="text-base font-semibold text-foreground mb-4">

@@ -28,16 +28,17 @@ export function PlanSearchCard({ rootRef, status, showDialog, showTyping, popove
             )}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                    <button className="p-2 hover:bg-muted rounded-lg transition-colors">
+                    <button type="button" className="p-2 hover:bg-muted rounded-lg transition-colors">
                         <Plus className="size-5" />
                     </button>
-                    <button className="p-2 hover:bg-muted rounded-lg transition-colors">
+                    <button type="button" className="p-2 hover:bg-muted rounded-lg transition-colors">
                         <Globe className="size-5" />
                     </button>
 
                     <div className="relative">
                         <IntegrationsPopover open={showDialog} position={popoverPosition} />
                         <button
+                            type="button"
                             className={cn(
                                 "flex items-center gap-2 w-fit h-9 px-2 rounded-3xl border border-transparent transition-colors",
                                 showDialog && "bg-muted border border-border"

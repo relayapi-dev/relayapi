@@ -8,9 +8,11 @@ mock.module("@relayapi/db", () => ({
 		insert: () => ({
 			values: () => ({
 				onConflictDoUpdate: () => ({
-					then: (resolve: (v: void) => void) => resolve(),
+					// biome-ignore lint/suspicious/noThenProperty: intentional thenable to mock an awaitable Drizzle query builder
+					then: (resolve: (v: undefined) => void) => resolve(undefined),
 				}),
-				then: (resolve: (v: void) => void) => resolve(),
+				// biome-ignore lint/suspicious/noThenProperty: intentional thenable to mock an awaitable Drizzle query builder
+				then: (resolve: (v: undefined) => void) => resolve(undefined),
 			}),
 		}),
 	}),

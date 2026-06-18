@@ -83,6 +83,8 @@ export function InlineReplyBox({
   };
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: onClick only stops propagation; this wrapper is not itself interactive
+    // biome-ignore lint/a11y/useKeyWithClickEvents: onClick only stops propagation, so no keyboard handler is needed
     <div className="mt-3 rounded-lg border border-border bg-muted/30 overflow-hidden" onClick={(e) => e.stopPropagation()}>
       <div className="px-3 pt-2.5 pb-1">
         <p className="text-xs text-muted-foreground">Replying to <span className="font-medium text-foreground">@{comment.author_name}</span></p>
@@ -118,6 +120,7 @@ export function InlineReplyBox({
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-muted-foreground">{draft.length}/{REPLY_MAX_CHARS}</span>
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={!draft.trim() || loading}
             className={cn(

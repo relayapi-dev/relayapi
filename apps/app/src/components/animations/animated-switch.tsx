@@ -61,6 +61,7 @@ export function SwitchItem({ value, label, disabled, badge, children }: SwitchIt
 
     return (
         <button
+            type="button"
             onClick={() => !disabled && onValueChange(value)}
             disabled={disabled}
             data-active={isActive ? 'true' : 'false'}

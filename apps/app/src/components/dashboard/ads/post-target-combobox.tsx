@@ -46,7 +46,6 @@ export function PostTargetCombobox({
   const [posts, setPosts] = useState<PostTargetOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [brokenThumbs, setBrokenThumbs] = useState<Set<string>>(new Set());
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -102,13 +101,24 @@ export function PostTargetCombobox({
           }
           // RelayAPI posts: boosted via post target id (pt_).
           const targets = post.targets ?? {};
-          for (const target of Object.values(targets) as any[]) {
+          type RawTarget = {
+            status?: string;
+            platform: string;
+            accounts?: Array<{
+              target_id?: string | null;
+              platform_post_id?: string | null;
+              id?: string;
+              display_name?: string | null;
+              username?: string | null;
+            }>;
+          };
+          for (const target of Object.values(targets) as RawTarget[]) {
             if (target?.status !== "published") continue;
             if (allowed && !allowed.has(target.platform)) continue;
             for (const acc of target.accounts ?? []) {
               if (!acc.target_id || !acc.platform_post_id) continue;
               // acc.id is the social account id; keep only boostable accounts.
-              if (accountFilter && !accountFilter.has(acc.id)) continue;
+              if (accountFilter && (!acc.id || !accountFilter.has(acc.id))) continue;
               items.push({
                 id: acc.target_id, // pt_
                 source: "internal",
@@ -264,6 +274,7 @@ export function PostTargetCombobox({
           <div className="max-h-56 overflow-y-auto py-1">
             {filtered.map((post) => (
               <button
+                type="button"
                 key={post.id}
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent/30 transition-colors",

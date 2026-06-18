@@ -87,7 +87,8 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
         return;
       }
       const orgId = invite?.organizationSlug
-        ? (result.data as any)?.member?.organizationId
+        ? (result.data as { member?: { organizationId?: string } } | null)
+            ?.member?.organizationId
         : undefined;
       if (orgId) {
         await organization.setActive({ organizationId: orgId });
@@ -136,7 +137,9 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
         window.location.href = `/invite/${invitationId}`;
         return;
       }
-      const orgId = (acceptResult.data as any)?.member?.organizationId;
+      const orgId = (
+        acceptResult.data as { member?: { organizationId?: string } } | null
+      )?.member?.organizationId;
       if (orgId) {
         await organization.setActive({ organizationId: orgId });
       }
@@ -472,7 +475,6 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Your name"
                     required
-                    autoFocus
                     autoComplete="name"
                     className="w-full rounded-lg border border-border bg-background py-2.5 pl-10 pr-3 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25"
                   />

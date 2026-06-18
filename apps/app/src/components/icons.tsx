@@ -2,56 +2,56 @@ import { cn } from "../lib/utils";
 
 export const Icons = {
     logo: ({ className }: { className?: string }) => (
-        <svg viewBox="0 0 150 150" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" viewBox="0 0 150 150" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <path fillRule="evenodd" d="M34.82,18.54C16.52,18.54,1.49,33.56,1.49,51.87s15.02,33.33,33.33,33.33h80.69c6.95,0,12.28,5.33,12.28,12.28s-5.33,12.28-12.28,12.28H33.07c-5.77-.01-10.52,4.74-10.52,10.51s4.76,10.52,10.52,10.52h82.44c18.31,0,33.33-15.02,33.33-33.33s-15.02-33.33-33.33-33.33H34.82c-6.95,0-12.28-5.33-12.28-12.28s5.33-12.28,12.28-12.28h82.45c5.77.01,10.52-4.74,10.52-10.51s-4.76-10.52-10.52-10.52H34.82Z" fill="currentColor" />
         </svg>
     ),
     stackedIcons: ({ className }: { className?: string }) => (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <path d="M7.62758 1.09876C7.74088 1.03404 7.8691 1 7.99958 1C8.13006 1 8.25828 1.03404 8.37158 1.09876L13.6216 4.09876C13.7363 4.16438 13.8316 4.25915 13.8979 4.37347C13.9642 4.48779 13.9992 4.6176 13.9992 4.74976C13.9992 4.88191 13.9642 5.01172 13.8979 5.12604C13.8316 5.24036 13.7363 5.33513 13.6216 5.40076L8.37158 8.40076C8.25828 8.46548 8.13006 8.49952 7.99958 8.49952C7.8691 8.49952 7.74088 8.46548 7.62758 8.40076L2.37758 5.40076C2.26287 5.33513 2.16753 5.24036 2.10123 5.12604C2.03492 5.01172 2 4.88191 2 4.74976C2 4.6176 2.03492 4.48779 2.10123 4.37347C2.16753 4.25915 2.26287 4.16438 2.37758 4.09876L7.62758 1.09876Z" fill="currentColor" />
             <path d="M2.56958 7.23928L2.37758 7.34928C2.26287 7.41491 2.16753 7.50968 2.10123 7.624C2.03492 7.73831 2 7.86813 2 8.00028C2 8.13244 2.03492 8.26225 2.10123 8.37657C2.16753 8.49089 2.26287 8.58566 2.37758 8.65128L7.62758 11.6513C7.74088 11.716 7.8691 11.75 7.99958 11.75C8.13006 11.75 8.25828 11.716 8.37158 11.6513L13.6216 8.65128C13.7365 8.58573 13.8321 8.49093 13.8986 8.3765C13.965 8.26208 14 8.13211 14 7.99978C14 7.86745 13.965 7.73748 13.8986 7.62306C13.8321 7.50864 13.7365 7.41384 13.6216 7.34828L13.4296 7.23828L9.11558 9.70328C8.77568 9.89744 8.39102 9.99956 7.99958 9.99956C7.60814 9.99956 7.22347 9.89744 6.88358 9.70328L2.56958 7.23928Z" fill="currentColor" />
             <path d="M2.37845 10.5993L2.57045 10.4893L6.88445 12.9533C7.22435 13.1474 7.60901 13.2496 8.00045 13.2496C8.39189 13.2496 8.77656 13.1474 9.11645 12.9533L13.4305 10.4883L13.6225 10.5983C13.7374 10.6638 13.833 10.7586 13.8994 10.8731C13.9659 10.9875 14.0009 11.1175 14.0009 11.2498C14.0009 11.3821 13.9659 11.5121 13.8994 11.6265C13.833 11.7409 13.7374 11.8357 13.6225 11.9013L8.37245 14.9013C8.25915 14.966 8.13093 15 8.00045 15C7.86997 15 7.74175 14.966 7.62845 14.9013L2.37845 11.9013C2.2635 11.8357 2.16795 11.7409 2.10148 11.6265C2.03501 11.5121 2 11.3821 2 11.2498C2 11.1175 2.03501 10.9875 2.10148 10.8731C2.16795 10.7586 2.2635 10.6638 2.37845 10.5983V10.5993Z" fill="currentColor" />
         </svg>
     ),
     arrowRight: ({ className }: { className?: string }) => (
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <path d="M5.83057 2.13867L9.13612 6.99978L5.83057 11.8609" stroke="#4A5565" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     ),
     terminal: ({ className }: { className?: string }) => (
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <path d="M6.66667 7.50065L9.16667 10.0007L6.66667 12.5007M10.8333 12.5007H13.3333M4.16667 16.6673H15.8333C16.2754 16.6673 16.6993 16.4917 17.0118 16.1792C17.3244 15.8666 17.5 15.4427 17.5 15.0006V5.00065C17.5 4.55862 17.3244 4.1347 17.0118 3.82214C16.6993 3.50958 16.2754 3.33398 15.8333 3.33398H4.16667C3.72464 3.33398 3.30072 3.50958 2.98816 3.82214C2.67559 4.1347 2.5 4.55862 2.5 5.00065V15.0006C2.5 15.4427 2.67559 15.8666 2.98816 16.1792C3.30072 16.4917 3.72464 16.6673 4.16667 16.6673Z" stroke="#6A7282" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     ),
     code: ({ className }: { className?: string }) => (
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <path d="M5.83333 6.66667L2.5 10L5.83333 13.3333M14.1667 6.66667L17.5 10L14.1667 13.3333M11.6667 3.33333L8.33333 16.6667" stroke="#6A7282" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     ),
     shock: ({ className }: { className?: string }) => (
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <path d="M10.8315 8.33333V2.5L3.33154 11.6667H9.16488V17.5L16.6649 8.33333H10.8315Z" stroke="#6A7282" strokeWidth="1.42857" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
 
     ),
     magicClick: ({ className }: { className?: string }) => (
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <path d="M12.4988 12.4994L10.8321 16.6661L7.49877 7.4994L16.6654 10.8327L12.4988 12.4994ZM12.4988 12.4994L16.6654 16.6661M5.98877 1.86523L6.63627 4.2794M4.27877 6.6369L1.86377 5.9894M11.6238 3.3744L9.85544 5.14273M5.14127 9.85607L3.3746 11.6244" stroke="#6A7282" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     ),
     magicStar: ({ className }: { className?: string }) => (
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <path d="M4.16667 2.5V5.83333M2.5 4.16667H5.83333M5 14.1667V17.5M3.33333 15.8333H6.66667M10.8333 2.5L12.7383 8.21417L17.5 10L12.7383 11.7858L10.8333 17.5L8.92833 11.7858L4.16667 10L8.92833 8.21417L10.8333 2.5Z" stroke="#6A7282" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     ),
     codeIcon: ({ className }: { className?: string }) => (
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <path d="M7.26055 14.5172L10.1638 2.9043M13.067 5.80752L15.9702 8.71075L13.067 11.614M4.35733 11.614L1.4541 8.71075L4.35733 5.80752" stroke="currentColor" strokeWidth="1.45161" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
 
     ),
     horizon: ({ className }: { className?: string }) => (
-        <svg width="92" height="105" viewBox="0 0 92 105" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="92" height="105" viewBox="0 0 92 105" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <g filter="url(#filter0_dddd_1155_53443)">
                 <rect x="7.97998" y="1.14062" width="75.24" height="75.24" rx="37.62" fill="#00A6F4" />
                 <path d="M47.8592 52.1937C47.8999 48.0031 46.8462 44.5953 45.506 44.5821C44.1656 44.5689 43.0461 47.9553 43.0055 52.1458C42.9649 56.3364 44.0185 59.7443 45.3588 59.7575C46.6992 59.7707 47.8186 56.3843 47.8592 52.1937Z" fill="#F9FAFB" />
@@ -97,7 +97,7 @@ export const Icons = {
     ),
 
     soc2: ({ className }: { className?: string }) => (
-        <svg
+        <svg aria-hidden="true"
             width="46"
             height="45"
             viewBox="0 0 46 45"
@@ -168,7 +168,7 @@ export const Icons = {
         </svg>
     ),
     soc2Dark: ({ className }: { className?: string }) => (
-        <svg
+        <svg aria-hidden="true"
             width="46"
             height="45"
             viewBox="0 0 46 45"
@@ -239,7 +239,7 @@ export const Icons = {
         </svg>
     ),
     hipaa: ({ className }: { className?: string }) => (
-        <svg
+        <svg aria-hidden="true"
             width="46"
             height="45"
             viewBox="0 0 46 45"
@@ -294,7 +294,7 @@ export const Icons = {
         </svg>
     ),
     hipaaDark: ({ className }: { className?: string }) => (
-        <svg
+        <svg aria-hidden="true"
             width="46"
             height="45"
             viewBox="0 0 46 45"
@@ -349,7 +349,7 @@ export const Icons = {
         </svg>
     ),
     gdpr: ({ className }: { className?: string }) => (
-        <svg
+        <svg aria-hidden="true"
             width="46"
             height="45"
             viewBox="0 0 46 45"
@@ -569,7 +569,7 @@ export const Icons = {
         </svg>
     ),
     gdprDark: ({ className }: { className?: string }) => (
-        <svg
+        <svg aria-hidden="true"
             width="46"
             height="45"
             viewBox="0 0 46 45"
@@ -787,7 +787,7 @@ export const Icons = {
         </svg>
     ),
     vercel: ({ className }: { className?: string }) => (
-        <svg width="60" height="69" viewBox="0 0 60 69" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="60" height="69" viewBox="0 0 60 69" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <g filter="url(#filter0_dddd_1155_46893)">
                 <path d="M5.70312 25.0796C5.70312 11.858 16.4214 1.13965 29.6431 1.13965C42.8648 1.13965 53.5831 11.858 53.5831 25.0796C53.5831 38.3013 42.8648 49.0196 29.6431 49.0196C16.4214 49.0196 5.70312 38.3013 5.70312 25.0796Z" fill="black" />
                 <g clipPath="url(#clip0_1155_46893)">
@@ -827,7 +827,7 @@ export const Icons = {
 
     ),
     replit: () => (
-        <svg
+        <svg aria-hidden="true"
             width="52"
             height="60"
             viewBox="0 0 52 60"
@@ -867,7 +867,7 @@ export const Icons = {
         </svg>
     ),
     posthog: () => (
-        <svg
+        <svg aria-hidden="true"
             width="52"
             height="60"
             viewBox="0 0 52 60"
@@ -904,7 +904,7 @@ export const Icons = {
         </svg>
     ),
     googleDrive: () => (
-        <svg
+        <svg aria-hidden="true"
             width="100"
             height="100"
             viewBox="0 0 87.3 78"
@@ -937,7 +937,7 @@ export const Icons = {
         </svg>
     ),
     workos: () => (
-        <svg
+        <svg aria-hidden="true"
             width="52"
             height="60"
             viewBox="0 0 52 60"
@@ -973,7 +973,7 @@ export const Icons = {
         </svg>
     ),
     runway: ({ className }: { className?: string }) => (
-        <svg width="60" height="69" viewBox="0 0 60 69" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="60" height="69" viewBox="0 0 60 69" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <g filter="url(#filter0_dddd_1155_46891)">
                 <path d="M5.70312 25.0796C5.70312 11.858 16.4214 1.13965 29.6431 1.13965C42.8648 1.13965 53.5831 11.858 53.5831 25.0796C53.5831 38.3013 42.8648 49.0196 29.6431 49.0196C16.4214 49.0196 5.70312 38.3013 5.70312 25.0796Z" fill="#101828" />
                 <path d="M42.9534 15.1249C43.7713 17.6685 43.5557 19.9919 41.8606 22.091C41.099 23.0343 40.0201 23.648 37.8836 24.195C38.4132 24.6886 38.8992 25.1147 39.3544 25.5716C40.2344 26.4551 41.1083 27.3452 41.9648 28.2515C43.9666 30.3696 43.8906 33.4292 42.5312 35.8488C40.736 39.0438 36.1603 40.0803 33.4012 37.7036C32.086 36.5707 30.8513 35.3441 29.586 34.1537C29.3318 33.9145 29.1035 33.6477 28.827 33.3551C28.6086 34.0293 28.4675 34.6656 28.204 35.2464C26.7362 38.4816 22.5952 39.7916 19.2209 38.1291C16.9299 37.0001 15.858 35.066 15.8219 32.623C15.7477 27.5997 15.7712 22.5744 15.8099 17.5502C15.8359 14.1737 18.5897 11.2755 21.9588 11.2178C27.0993 11.1299 32.2433 11.1423 37.3845 11.2163C40.0264 11.2543 41.8988 12.6129 42.9534 15.1249ZM23.9653 15.747C23.1207 15.0841 22.1995 14.846 21.2116 15.3687C20.2129 15.8972 19.7467 16.7351 19.7527 17.8996C19.7781 22.7068 19.7575 27.5139 19.7734 32.321C19.7749 32.7554 19.8328 33.2275 20.01 33.6156C20.4936 34.6742 21.7908 35.193 23.0076 34.8911C24.1713 34.6022 24.8534 33.7163 24.854 32.4665C24.857 27.5886 24.8449 22.7107 24.8657 17.8328C24.8692 17.0201 24.6176 16.3661 23.9653 15.747ZM29.4857 24.1605C29.2808 24.1702 29.0757 24.18 28.8233 24.1919C28.8233 25.3378 28.8115 26.4423 28.8348 27.546C28.8387 27.7301 28.952 27.9519 29.0853 28.087C31.1339 30.1634 33.1759 32.2475 35.2686 34.2788C35.6458 34.6452 36.2215 34.9158 36.7435 35.0018C37.8074 35.1772 38.8823 34.4639 39.4061 33.4031C39.843 32.5179 39.6372 31.4298 38.843 30.6203C37.0442 28.7874 35.215 26.9841 33.4366 25.1318C32.7406 24.4068 32.0009 23.9851 30.9655 24.149C30.5283 24.2182 30.071 24.1605 29.4857 24.1605ZM33.5659 15.0863C31.8366 15.0863 30.1072 15.0863 28.5103 15.0863C28.6548 16.8464 28.7933 18.5359 28.9351 20.262C31.5987 20.262 34.2794 20.2687 36.9602 20.2596C38.5521 20.2539 39.5606 19.2233 39.5511 17.6437C39.542 16.1401 38.4885 15.0978 36.9561 15.0878C35.8733 15.0806 34.7904 15.0863 33.5659 15.0863Z" fill="#FEFEFE" />
@@ -1008,7 +1008,7 @@ export const Icons = {
 
     ),
     supabase: ({ className }: { className?: string }) => (
-        <svg width="60" height="69" viewBox="0 0 60 69" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="60" height="69" viewBox="0 0 60 69" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <g filter="url(#filter0_dddd_1155_46919)">
                 <path d="M5.70312 25.0796C5.70312 11.858 16.4214 1.13965 29.6431 1.13965C42.8648 1.13965 53.5831 11.858 53.5831 25.0796C53.5831 38.3013 42.8648 49.0196 29.6431 49.0196C16.4214 49.0196 5.70312 38.3013 5.70312 25.0796Z" fill="#121212" />
                 <g clipPath="url(#clip0_1155_46919)">
@@ -1058,7 +1058,7 @@ export const Icons = {
 
     ),
     gemini: () => (
-        <svg
+        <svg aria-hidden="true"
             width="52"
             height="60"
             viewBox="0 0 52 60"
@@ -1187,7 +1187,7 @@ export const Icons = {
         </svg>
     ),
     boat: () => (
-        <svg
+        <svg aria-hidden="true"
             width="52"
             height="60"
             viewBox="0 0 52 60"
@@ -1211,7 +1211,7 @@ export const Icons = {
         </svg>
     ),
     figma: ({ className }: { className?: string }) => (
-        <svg width="15" height="23" viewBox="0 0 15 23" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="15" height="23" viewBox="0 0 15 23" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <mask id="mask0_1155_48895" maskUnits="userSpaceOnUse" x="0" y="0" width="15" height="23">
                 <path d="M14.7885 0H0V22.1827H14.7885V0Z" fill="white" />
             </mask>
@@ -1225,7 +1225,7 @@ export const Icons = {
         </svg>
     ),
     shadcn: ({ className }: { className?: string }) => (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <g clipPath="url(#clip0_1155_48910)">
                 <path d="M18.7216 11.5196L11.5216 18.7196M17.2816 3.59961L3.60156 17.2796" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" />
             </g>
@@ -1238,7 +1238,7 @@ export const Icons = {
 
     ),
     nextjs: ({ className }: { className?: string }) => (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <g clipPath="url(#clip0_1155_48917)">
                 <mask id="mask0_1155_48917" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24" style={{ maskType: "alpha" }}>
                     <path d="M11.52 23.04C17.8823 23.04 23.04 17.8823 23.04 11.52C23.04 5.15768 17.8823 0 11.52 0C5.15768 0 0 5.15768 0 11.52C0 17.8823 5.15768 23.04 11.52 23.04Z" fill="currentColor" />
@@ -1265,7 +1265,7 @@ export const Icons = {
         </svg>
     ),
     tailwind: ({ className }: { className?: string }) => (
-        <svg width="27" height="17" viewBox="0 0 27 17" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
+        <svg aria-hidden="true" width="27" height="17" viewBox="0 0 27 17" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)}>
             <g clipPath="url(#clip0_1155_48931)">
                 <mask id="mask0_1155_48931" maskUnits="userSpaceOnUse" x="0" y="0" width="27" height="16" style={{ maskType: "luminance" }}>
                     <path d="M0 0H26.3913V15.8348H0V0Z" fill="white" />
@@ -1282,12 +1282,12 @@ export const Icons = {
         </svg>
     ),
     puzzle: ({ className }: { className?: string }) => (
-        <svg width="17" height="17" viewBox="0 0 17 17" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)} >
+        <svg aria-hidden="true" width="17" height="17" viewBox="0 0 17 17" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)} >
             <path d="M8.25 2.41667C8.25 1.97464 8.42559 1.55072 8.73816 1.23816C9.05072 0.925595 9.47464 0.75 9.91667 0.75C10.3587 0.75 10.7826 0.925595 11.0952 1.23816C11.4077 1.55072 11.5833 1.97464 11.5833 2.41667V3.25C11.5833 3.47101 11.6711 3.68298 11.8274 3.83926C11.9837 3.99554 12.1957 4.08333 12.4167 4.08333H14.9167C15.1377 4.08333 15.3496 4.17113 15.5059 4.32741C15.6622 4.48369 15.75 4.69565 15.75 4.91667V7.41667C15.75 7.63768 15.6622 7.84964 15.5059 8.00592C15.3496 8.1622 15.1377 8.25 14.9167 8.25H14.0833C13.6413 8.25 13.2174 8.42559 12.9048 8.73816C12.5923 9.05072 12.4167 9.47464 12.4167 9.91667C12.4167 10.3587 12.5923 10.7826 12.9048 11.0952C13.2174 11.4077 13.6413 11.5833 14.0833 11.5833H14.9167C15.1377 11.5833 15.3496 11.6711 15.5059 11.8274C15.6622 11.9837 15.75 12.1957 15.75 12.4167V14.9167C15.75 15.1377 15.6622 15.3496 15.5059 15.5059C15.3496 15.6622 15.1377 15.75 14.9167 15.75H12.4167C12.1957 15.75 11.9837 15.6622 11.8274 15.5059C11.6711 15.3496 11.5833 15.1377 11.5833 14.9167V14.0833C11.5833 13.6413 11.4077 13.2174 11.0952 12.9048C10.7826 12.5923 10.3587 12.4167 9.91667 12.4167C9.47464 12.4167 9.05072 12.5923 8.73816 12.9048C8.42559 13.2174 8.25 13.6413 8.25 14.0833V14.9167C8.25 15.1377 8.1622 15.3496 8.00592 15.5059C7.84964 15.6622 7.63768 15.75 7.41667 15.75H4.91667C4.69565 15.75 4.48369 15.6622 4.32741 15.5059C4.17113 15.3496 4.08333 15.1377 4.08333 14.9167V12.4167C4.08333 12.1957 3.99554 11.9837 3.83926 11.8274C3.68298 11.6711 3.47101 11.5833 3.25 11.5833H2.41667C1.97464 11.5833 1.55072 11.4077 1.23816 11.0952C0.925595 10.7826 0.75 10.3587 0.75 9.91667C0.75 9.47464 0.925595 9.05072 1.23816 8.73816C1.55072 8.42559 1.97464 8.25 2.41667 8.25H3.25C3.47101 8.25 3.68298 8.1622 3.83926 8.00592C3.99554 7.84964 4.08333 7.63768 4.08333 7.41667V4.91667C4.08333 4.69565 4.17113 4.48369 4.32741 4.32741C4.48369 4.17113 4.69565 4.08333 4.91667 4.08333H7.41667C7.63768 4.08333 7.84964 3.99554 8.00592 3.83926C8.1622 3.68298 8.25 3.47101 8.25 3.25V2.41667Z" stroke="#6A7282" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     ),
     globe: ({ className }: { className?: string }) => (
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)} >
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={cn("size-4", className)} >
             <path d="M17.5 10C17.5 11.9891 16.7098 13.8968 15.3033 15.3033C13.8968 16.7098 11.9891 17.5 10 17.5M17.5 10C17.5 8.01088 16.7098 6.10322 15.3033 4.6967C13.8968 3.29018 11.9891 2.5 10 2.5M17.5 10H2.5M10 17.5C8.01088 17.5 6.10322 16.7098 4.6967 15.3033C3.29018 13.8968 2.5 11.9891 2.5 10M10 17.5C11.3808 17.5 12.5 14.1417 12.5 10C12.5 5.85833 11.3808 2.5 10 2.5M10 17.5C8.61917 17.5 7.5 14.1417 7.5 10C7.5 5.85833 8.61917 2.5 10 2.5M10 2.5C8.01088 2.5 6.10322 3.29018 4.6967 4.6967C3.29018 6.10322 2.5 8.01088 2.5 10" stroke="#6A7282" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     ),

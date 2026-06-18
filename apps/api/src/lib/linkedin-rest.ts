@@ -68,7 +68,8 @@ function readLinkedInOrganizationName(
 	const preferred = lookup.name?.preferredLocale;
 	if (preferred?.language && preferred?.country) {
 		const preferredKey = `${preferred.language}_${preferred.country}`;
-		if (localized[preferredKey]) return localized[preferredKey]!;
+		const preferredValue = localized[preferredKey];
+		if (preferredValue) return preferredValue;
 	}
 
 	const firstLocalized = Object.values(localized)[0];

@@ -140,9 +140,6 @@ export const snapchatPublisher: Publisher = {
 			}
 
 			const mediaBytes = await mediaRes.arrayBuffer();
-			const mediaMimeType =
-				mediaRes.headers.get("content-type") ??
-				(isVideo ? "video/mp4" : "image/jpeg");
 
 			// --- Step 1: Encrypt the media with AES-256-CBC ---
 			// Snap Public Profile API requires encrypted media uploads

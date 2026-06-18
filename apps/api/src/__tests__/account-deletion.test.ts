@@ -40,10 +40,12 @@ function createMockDeletionDb(adAccountIds: string[]): {
 		}),
 	};
 
+	type TxStub = typeof tx;
 	const db = {
-		transaction: async (callback: (tx: any) => Promise<void>): Promise<void> =>
-			callback(tx),
-	} as Database;
+		transaction: async (
+			callback: (txArg: TxStub) => Promise<void>,
+		): Promise<void> => callback(tx),
+	} as unknown as Database;
 
 	return { db, deletedTables };
 }

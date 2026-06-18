@@ -46,6 +46,31 @@ export async function requireBillingAdmin(
 }
 
 /**
+ * Read a required route parameter (e.g. `[id]`) from an Astro API context.
+ * Returns the value when present, or a 400 Response when missing. Astro only
+ * matches the route when the segment is filled, so this is effectively an
+ * invariant check that mirrors the previous non-null assertions.
+ */
+export function requireParam(
+  params: Record<string, string | undefined>,
+  name: string,
+): string | Response {
+  const value = params[name];
+  if (!value) {
+    return Response.json(
+      {
+        error: {
+          code: "INVALID_REQUEST",
+          message: `Missing ${name} parameter`,
+        },
+      },
+      { status: 400 },
+    );
+  }
+  return value;
+}
+
+/**
  * Get the SDK client from an Astro API context, or return an error Response.
  */
 export async function requireClient(
@@ -76,28 +101,36 @@ export function handleSdkError(err: unknown): Response {
   console.error("SDK error:", err);
 
   if (err && typeof err === "object" && "status" in err) {
-    const apiErr = err as { status: number; message?: string; error?: any };
+    const apiErr = err as { status: number; message?: string; error?: unknown };
 
     // Preserve specific error codes from the backend (e.g. FREE_LIMIT_REACHED)
     // SDK error.error is the JSON body: { error: { code, message } }
     let code = "API_ERROR";
     let message = apiErr.message || "API error";
-    const body = apiErr.error as any;
-    if (body?.error?.code) {
-      code = body.error.code;
-      message = body.error.message || message;
-    } else if (body?.code) {
-      code = body.code;
-      message = body.message || message;
+    const body = apiErr.error as
+      | string
+      | {
+          code?: string;
+          message?: string;
+          error?: { code?: string; message?: string; name?: string };
+        }
+      | undefined;
+    const bodyObj = typeof body === "object" ? body : undefined;
+    if (bodyObj?.error?.code) {
+      code = bodyObj.error.code;
+      message = bodyObj.error.message || message;
+    } else if (bodyObj?.code) {
+      code = bodyObj.code;
+      message = bodyObj.message || message;
     } else if (typeof body === "string") {
       message = body;
-    } else if (body?.error?.name === "ZodError") {
+    } else if (bodyObj?.error?.name === "ZodError") {
       // Hono's zod-openapi validation errors come through as
       // { success: false, error: { name: "ZodError", message: "<JSON array>" } }.
       // Parse the message and surface the first issue in a readable form.
       code = "VALIDATION_ERROR";
       try {
-        const issues = JSON.parse(body.error.message);
+        const issues = JSON.parse(bodyObj.error.message ?? "");
         if (Array.isArray(issues) && issues.length > 0) {
           const first = issues[0] as {
             path?: Array<string | number>;
@@ -109,7 +142,7 @@ export function handleSdkError(err: unknown): Response {
             : (first.message ?? "Validation failed");
         }
       } catch {
-        message = body.error.message || "Validation failed";
+        message = bodyObj.error.message || "Validation failed";
       }
     }
 

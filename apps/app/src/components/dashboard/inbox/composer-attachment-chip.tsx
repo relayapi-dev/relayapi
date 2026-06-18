@@ -36,7 +36,9 @@ export function ComposerAttachmentChip({
       ) : isVideo ? (
         <video src={url} className="h-10 w-10 rounded object-cover" muted />
       ) : isAudio ? (
-        <audio src={url} controls className="h-10 w-44" />
+        <audio src={url} controls className="h-10 w-44">
+          <track kind="captions" />
+        </audio>
       ) : (
         <div className="flex h-10 w-10 items-center justify-center rounded bg-white">
           <FileIcon className="size-4 text-slate-500" />

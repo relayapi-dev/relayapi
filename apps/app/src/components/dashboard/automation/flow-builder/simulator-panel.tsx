@@ -193,10 +193,14 @@ export function SimulatorPanel({
 			<ScrollArea className="flex-1">
 				<div className="px-3 py-3 space-y-3">
 					<div>
-						<label className="text-[10px] font-medium text-muted-foreground block mb-1">
+						<label
+							htmlFor="simulator-start-node"
+							className="text-[10px] font-medium text-muted-foreground block mb-1"
+						>
 							Start node
 						</label>
 						<select
+							id="simulator-start-node"
 							value={startNodeKey}
 							onChange={(e) => setStartNodeKey(e.target.value)}
 							className={INPUT_CLS}
@@ -217,9 +221,9 @@ export function SimulatorPanel({
 
 					{branchingNodes.length > 0 && (
 						<div>
-							<label className="text-[10px] font-medium text-muted-foreground block mb-1">
+							<span className="text-[10px] font-medium text-muted-foreground block mb-1">
 								Branch choices
-							</label>
+							</span>
 							<p className="text-[10px] text-muted-foreground/70 mb-1.5">
 								Force an output port on branching nodes. Blank = simulator
 								picks the default.

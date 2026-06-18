@@ -271,9 +271,9 @@ export function StubbedBindingShell<Config>({
 			) : (
 				<>
 					<div className="rounded-md border border-border bg-card/30 p-3">
-						<label className="text-[11px] font-medium text-muted-foreground">
+						<span className="block text-[11px] font-medium text-muted-foreground">
 							Linked automation
-						</label>
+						</span>
 						<AutomationPicker
 							channel={channel}
 							value={automationId}

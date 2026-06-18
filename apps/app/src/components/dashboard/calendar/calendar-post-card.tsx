@@ -49,7 +49,7 @@ function ExternalPostPopover({ post }: { post: CalendarPost }) {
         {thumbUrl && (
           <a href={post.platformUrl || undefined} target="_blank" rel="noopener noreferrer" onClick={(e) => { if (!post.platformUrl) e.preventDefault(); e.stopPropagation(); }} className={post.platformUrl ? "cursor-pointer hover:opacity-90 transition-opacity" : ""}>
             {popoverIsVideo ? (
-              <video src={thumbUrl} muted preload="metadata" onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }} className="mt-2 w-full max-h-48 rounded-md object-cover" onError={(e) => { const vid = e.target as HTMLVideoElement; const img = document.createElement("img"); img.src = thumbUrl!; img.alt = ""; img.className = vid.className; img.onerror = () => { img.style.display = "none"; }; vid.replaceWith(img); }} />
+              <video src={thumbUrl} muted preload="metadata" onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }} className="mt-2 w-full max-h-48 rounded-md object-cover" onError={(e) => { const vid = e.target as HTMLVideoElement; const img = document.createElement("img"); img.src = thumbUrl; img.alt = ""; img.className = vid.className; img.onerror = () => { img.style.display = "none"; }; vid.replaceWith(img); }} />
             ) : (
               <img src={thumbUrl} alt="" className="mt-2 w-full max-h-48 rounded-md object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
             )}
@@ -192,12 +192,22 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
     <>
       <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
         <PopoverTrigger asChild>
+          {/* biome-ignore lint/a11y/useSemanticElements: interactive wrapper cannot be a button — it is a dnd-kit draggable and a Radix PopoverTrigger asChild target */}
           <div
             ref={setNodeRef}
             {...(isDraggable ? { ...listeners, ...attributes } : {})}
+            role="button"
+            tabIndex={0}
             onPointerDown={(e) => { handlePointerDown(); listeners?.onPointerDown?.(e); }}
             onPointerMove={handlePointerMove}
             onClick={handleClick}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                setPopoverOpen(true);
+              }
+            }}
             className={cn(
               "group flex rounded-md border border-border/60 bg-background transition-all overflow-hidden",
               "hover:shadow-sm hover:border-border",
@@ -235,12 +245,12 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
             </div>
 
             {/* Media thumbnail (right side, like Buffer) */}
-            {hasMedia && (
+            {hasMedia && thumbUrl && (
               <div className={cn("relative shrink-0", compact ? "w-10" : "w-12")}>
                 {isVideo ? (
                   videoError ? (
                     <img
-                      src={thumbUrl!}
+                      src={thumbUrl}
                       alt=""
                       className="h-full w-full object-cover"
                       loading="lazy"
@@ -248,7 +258,7 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
                     />
                   ) : (
                     <video
-                      src={thumbUrl!}
+                      src={thumbUrl}
                       muted
                       preload="metadata"
                       onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
@@ -258,7 +268,7 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
                   )
                 ) : (
                   <img
-                    src={thumbUrl!}
+                    src={thumbUrl}
                     alt=""
                     className="h-full w-full object-cover"
                     loading="lazy"

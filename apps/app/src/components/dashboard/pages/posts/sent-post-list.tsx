@@ -25,7 +25,7 @@ interface SentPost {
   id: string;
   source?: "internal" | "external";
   content: string | null;
-  media: Array<{ url: string; type?: string; poster?: string }> | null;
+  media?: Array<{ url: string; type?: string; poster?: string }> | null;
   published_at: string | null;
   created_at: string;
   // Internal posts have targets
@@ -90,7 +90,7 @@ interface FlatCard {
 }
 
 function formatDateHeader(dateKey: string): string {
-  const d = new Date(dateKey + "T12:00:00"); // noon to avoid timezone shifts
+  const d = new Date(`${dateKey}T12:00:00`); // noon to avoid timezone shifts
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today);
@@ -150,7 +150,7 @@ export function SentPostList({
                     poster: post.thumbnail_url,
                   },
                 ]
-              : post.media,
+              : (post.media ?? null),
           target: {
             accountId: post.social_account_id || "",
             platform: post.platform || "",
@@ -189,7 +189,7 @@ export function SentPostList({
         cards.push({
           postId: post.id,
           content: post.content,
-          media: post.media,
+          media: post.media ?? null,
           target: {
             accountId,
             platform: target.platform,
@@ -223,11 +223,13 @@ export function SentPostList({
     const grouped = new Map<string, typeof cards>();
     const dates: string[] = [];
     for (const card of cards) {
-      if (!grouped.has(card.dateKey)) {
-        grouped.set(card.dateKey, []);
+      let bucket = grouped.get(card.dateKey);
+      if (!bucket) {
+        bucket = [];
+        grouped.set(card.dateKey, bucket);
         dates.push(card.dateKey);
       }
-      grouped.get(card.dateKey)!.push(card);
+      bucket.push(card);
     }
 
     return { groups: grouped, orderedDates: dates };
@@ -258,7 +260,8 @@ export function SentPostList({
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
       {orderedDates.map((dateKey) => {
-        const cards = groups.get(dateKey)!;
+        const cards = groups.get(dateKey);
+        if (!cards) return null;
         return (
           <div key={dateKey}>
             <h3 className="text-base font-semibold text-foreground mb-4">

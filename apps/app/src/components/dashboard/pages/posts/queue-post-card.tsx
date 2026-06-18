@@ -85,11 +85,13 @@ export interface QueuePostCardProps {
   onShowErrors?: (id: string) => void;
 }
 
+const draftStatusConfig = { label: "Draft", color: "text-violet-600", bgColor: "bg-violet-50 text-violet-600", icon: FileEdit };
+
 const statusConfig: Record<string, { label: string; color: string; bgColor: string; icon: React.ComponentType<{ className?: string }> }> = {
   scheduled: { label: "Scheduled", color: "text-blue-600", bgColor: "bg-blue-50 text-blue-600", icon: Clock },
   published: { label: "Published", color: "text-emerald-600", bgColor: "bg-emerald-50 text-emerald-600", icon: Check },
   publishing: { label: "Publishing", color: "text-amber-600", bgColor: "bg-amber-50 text-amber-600", icon: Loader2 },
-  draft: { label: "Draft", color: "text-violet-600", bgColor: "bg-violet-50 text-violet-600", icon: FileEdit },
+  draft: draftStatusConfig,
   failed: { label: "Failed", color: "text-red-600", bgColor: "bg-red-50 text-red-600", icon: AlertCircle },
   partial: { label: "Partial", color: "text-amber-600", bgColor: "bg-amber-50 text-amber-600", icon: AlertCircle },
 };
@@ -190,8 +192,7 @@ export function QueuePostCard({
   const thumbUrl = card.media ? getMediaThumbUrl(card.media) : null;
   const hasVideo = card.media ? isVideo(card.media) : false;
   const accountName = card.displayName || card.username || platformLabels[card.platform] || card.platform;
-  const platformLabel = platformLabels[card.platform] || card.platform;
-  const st = statusConfig[card.targetStatus] ?? statusConfig.draft!;
+  const st = statusConfig[card.targetStatus] ?? draftStatusConfig;
   const StIcon = st.icon;
   const isFailed = card.targetStatus === "failed";
   const time = isDraft ? null : formatTime(card.scheduledAt);
@@ -264,6 +265,7 @@ export function QueuePostCard({
             <Popover>
               <PopoverTrigger asChild>
                 <button
+                  type="button"
                   className="size-7 rounded-full border border-border bg-card flex items-center justify-center hover:bg-accent transition-colors"
                   title="Notes"
                 >
@@ -313,7 +315,7 @@ export function QueuePostCard({
                 {hasVideo && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="size-9 rounded-full bg-black/60 flex items-center justify-center">
-                      <svg viewBox="0 0 24 24" fill="white" className="size-4 ml-0.5">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="white" className="size-4 ml-0.5">
                         <polygon points="5,3 19,12 5,21" />
                       </svg>
                     </div>
@@ -326,11 +328,16 @@ export function QueuePostCard({
 
         {/* Media preview overlay */}
         {previewOpen && thumbUrl && (
+          // biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop that closes on click; it contains a close button so it cannot be a <button> itself
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
             onClick={() => setPreviewOpen(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" || e.key === "Enter" || e.key === " ") setPreviewOpen(false);
+            }}
           >
             <button
+              type="button"
               onClick={() => setPreviewOpen(false)}
               className="absolute top-4 right-4 text-white/80 hover:text-white"
             >
@@ -343,13 +350,18 @@ export function QueuePostCard({
                 autoPlay
                 className="max-w-[90vw] max-h-[90vh] rounded-lg"
                 onClick={(e) => e.stopPropagation()}
-              />
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <track kind="captions" />
+              </video>
             ) : (
+              // biome-ignore lint/a11y/noStaticElementInteractions: preview image only stops backdrop-close propagation; it is not an interactive control
               <img
                 src={thumbUrl}
                 alt=""
                 className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain"
                 onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
               />
             )}
           </div>
@@ -360,6 +372,7 @@ export function QueuePostCard({
           <span className="text-xs text-muted-foreground">
             {isFailed ? (
               <button
+                type="button"
                 onClick={() => onShowErrors?.(card.postId)}
                 className="text-red-500 hover:underline cursor-pointer"
               >
@@ -372,6 +385,7 @@ export function QueuePostCard({
           <div className="flex items-center gap-1">
             {onEdit && (
               <button
+                type="button"
                 onClick={() => onEdit(card._post)}
                 className="rounded p-1.5 hover:bg-accent transition-colors"
                 title="Edit"
@@ -381,7 +395,7 @@ export function QueuePostCard({
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="rounded p-1.5 hover:bg-accent transition-colors">
+                <button type="button" className="rounded p-1.5 hover:bg-accent transition-colors">
                   <MoreVertical className="size-3.5 text-muted-foreground" />
                 </button>
               </DropdownMenuTrigger>
@@ -421,6 +435,7 @@ export function QueuePostCard({
         <Popover>
           <PopoverTrigger asChild>
             <button
+              type="button"
               className="size-8 rounded-full border border-border bg-card flex items-center justify-center hover:bg-accent transition-colors"
               title="Notes"
             >

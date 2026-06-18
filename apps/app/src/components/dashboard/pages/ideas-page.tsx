@@ -92,11 +92,12 @@ function applyGroupPositions(
 		reordered.map((group) => [group.id, group.position]),
 	);
 
-	return list.map((group) =>
-		nextPositions.has(group.id)
-			? { ...group, position: nextPositions.get(group.id)! }
-			: group,
-	);
+	return list.map((group) => {
+		const nextPosition = nextPositions.get(group.id);
+		return nextPosition === undefined
+			? group
+			: { ...group, position: nextPosition };
+	});
 }
 
 function moveGroupIdeasToDefault(
@@ -254,7 +255,6 @@ export function IdeasPage() {
 		};
 	}, [updateScrollFades, sortedGroups.length]);
 
-	const loading = groupsLoading || ideasLoading;
 	const loadingInitial =
 		(groupsLoading && groups.length === 0) ||
 		(ideasLoading && ideas.length === 0 && groups.length === 0);

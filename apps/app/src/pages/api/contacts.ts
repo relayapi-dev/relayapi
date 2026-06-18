@@ -11,7 +11,9 @@ export const GET: APIRoute = async (ctx) => {
 			const val = url.searchParams.get(key);
 			if (val) params[key] = val;
 		}
-		const data = await client.contacts.list(params as any);
+		const data = await client.contacts.list(
+			params as Parameters<typeof client.contacts.list>[0],
+		);
 		return Response.json(data);
 	} catch (e) {
 		return handleSdkError(e);

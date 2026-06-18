@@ -108,8 +108,8 @@ async function computeBestTimes(
 		.map(([key, val]) => {
 			const [dow, hour] = key.split(":") as [string, string];
 			return {
-				day_of_week: Number.parseInt(dow),
-				hour_utc: Number.parseInt(hour),
+				day_of_week: Number.parseInt(dow, 10),
+				hour_utc: Number.parseInt(hour, 10),
 				avg_engagement:
 					val.count > 0
 						? Math.round((val.totalEngagement / val.count) * 10) / 10

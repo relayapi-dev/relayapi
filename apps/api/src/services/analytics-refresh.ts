@@ -19,16 +19,12 @@ import {
 } from "@relayapi/db";
 import {
 	and,
-	desc,
 	eq,
 	gt,
 	inArray,
-	isNull,
-	lt,
-	lte,
-	or,
 	sql,
 } from "drizzle-orm";
+import type { Platform } from "../schemas/common";
 import type { Env } from "../types";
 import { getPlatformFetcher } from "./platform-analytics";
 import type { PlatformPostMetrics } from "./platform-analytics/types";
@@ -113,7 +109,7 @@ export async function enqueueAnalyticsRefresh(env: Env): Promise<void> {
 async function enqueueInternalPostRefresh(
 	db: Database,
 	env: Env,
-	now: Date,
+	_now: Date,
 	maxAge: Date,
 ): Promise<void> {
 	// Find published internal posts within 14 days that need a metrics refresh
@@ -170,7 +166,7 @@ async function enqueueInternalPostRefresh(
 async function enqueueExternalPostRefresh(
 	db: Database,
 	env: Env,
-	now: Date,
+	_now: Date,
 	maxAge: Date,
 ): Promise<void> {
 	// Find external posts within 14 days needing metrics refresh
@@ -203,14 +199,16 @@ async function enqueueExternalPostRefresh(
 
 	for (const post of due) {
 		const key = post.socialAccountId;
-		if (!byAccount.has(key)) {
-			byAccount.set(key, {
+		let entry = byAccount.get(key);
+		if (!entry) {
+			entry = {
 				organizationId: post.organizationId,
 				platform: post.platform,
 				postIds: [],
-			});
+			};
+			byAccount.set(key, entry);
 		}
-		byAccount.get(key)!.postIds.push(post.id);
+		entry.postIds.push(post.id);
 	}
 
 	const messages: { body: RefreshExternalMetricsBatchMessage }[] = [];
@@ -293,7 +291,6 @@ export async function refreshInternalPostMetrics(
 		views: 0,
 	};
 	let totalEngagement = 0;
-	let totalFollowers = 0;
 	let anyMatch = false;
 	const now = new Date();
 
@@ -312,7 +309,7 @@ export async function refreshInternalPostMetrics(
 		try {
 			accessToken = await refreshTokenIfNeeded(env, {
 				id: target.accountId,
-				platform: target.accountPlatform as any,
+				platform: target.accountPlatform as Platform,
 				accessToken: target.accountAccessToken,
 				refreshToken: target.accountRefreshToken,
 				tokenExpiresAt: target.accountTokenExpiresAt,
@@ -366,7 +363,7 @@ export async function refreshInternalPostMetrics(
 				// Write to postAnalytics (time-series)
 				await db.insert(postAnalytics).values({
 					postTargetId: target.targetId,
-					platform: target.platform as any,
+					platform: target.platform as typeof postAnalytics.$inferInsert.platform,
 					impressions: match.impressions,
 					reach: match.reach,
 					likes: match.likes,

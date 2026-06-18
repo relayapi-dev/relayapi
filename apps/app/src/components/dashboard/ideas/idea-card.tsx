@@ -34,9 +34,18 @@ export function IdeaCard({
 	const hasFooter = mediaCount > 0 || commentCount > 0 || assignedTo;
 
 	return (
+		// biome-ignore lint/a11y/useSemanticElements: card contains block-level content and sits inside a drag wrapper, so it cannot be a button
 		<div
+			role="button"
+			tabIndex={0}
 			className="rounded-md border border-border bg-background p-3 cursor-pointer hover:bg-accent/20 transition-colors relative"
 			onClick={onClick}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					onClick();
+				}
+			}}
 		>
 			{convertedToPostId && (
 				<span

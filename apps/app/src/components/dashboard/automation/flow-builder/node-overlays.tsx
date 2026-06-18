@@ -26,7 +26,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-	formatSuccessRate,
 	rankPorts,
 	summarizeMetrics,
 	toneForMetrics,
@@ -234,7 +233,9 @@ export function NodeMetricBadge({ metrics, className }: NodeMetricBadgeProps) {
 			</button>
 
 			{open ? (
+				// biome-ignore lint/a11y/useKeyWithClickEvents: onClick only stops propagation to the draggable node; no keyboard equivalent applies
 				<div
+					role="menu"
 					className="absolute right-0 top-full z-20 mt-2 w-[15rem] rounded-lg border border-slate-200 bg-white p-2 text-[11px] shadow-lg"
 					onMouseDown={(e) => e.stopPropagation()}
 					onClick={(e) => e.stopPropagation()}

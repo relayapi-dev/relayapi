@@ -13,11 +13,12 @@
 
 import type { Action } from "../../../schemas/automation-actions";
 import { applyMergeTags } from "../merge-tags";
+import type { RunContext } from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type WebhookOutAction = Extract<Action, { type: "webhook_out" }>;
 
-function buildMergeCtx(ctx: any) {
+function buildMergeCtx(ctx: RunContext) {
 	return {
 		contact:
 			(ctx.context?.contact as Record<string, unknown> | undefined) ?? null,
@@ -28,8 +29,13 @@ function buildMergeCtx(ctx: any) {
 function base64(str: string): string {
 	if (typeof btoa === "function") return btoa(str);
 	// Fallback for non-browser runtimes.
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const B = (globalThis as any).Buffer;
+	const B = (
+		globalThis as {
+			Buffer?: {
+				from(data: string, encoding: string): { toString(enc: string): string };
+			};
+		}
+	).Buffer;
 	if (B) return B.from(str, "utf8").toString("base64");
 	throw new Error("no base64 encoder available");
 }

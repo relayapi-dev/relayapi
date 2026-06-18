@@ -49,7 +49,9 @@ export function AudioRecorderPopover({
       mediaRecorderRef.current.stop();
     }
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
+      for (const t of streamRef.current.getTracks()) {
+        t.stop();
+      }
       streamRef.current = null;
     }
     setRecording(false);
@@ -77,7 +79,9 @@ export function AudioRecorderPopover({
         }
       }
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
+        for (const t of streamRef.current.getTracks()) {
+          t.stop();
+        }
         streamRef.current = null;
       }
       setBlobUrl((prev) => {
@@ -92,7 +96,9 @@ export function AudioRecorderPopover({
       reset();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!openRef.current) {
-        stream.getTracks().forEach((t) => t.stop());
+        for (const t of stream.getTracks()) {
+          t.stop();
+        }
         return;
       }
       streamRef.current = stream;
@@ -154,7 +160,9 @@ export function AudioRecorderPopover({
             <p className="text-xs text-destructive">{error}</p>
           ) : blobUrl ? (
             <div className="flex flex-col gap-2">
-              <audio src={blobUrl} controls className="w-full" />
+              <audio src={blobUrl} controls className="w-full">
+                <track kind="captions" />
+              </audio>
               <div className="flex items-center justify-between">
                 <button
                   type="button"

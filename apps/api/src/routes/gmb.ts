@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { createDb } from "@relayapi/db";
+import type { createDb } from "@relayapi/db";
 import { getOwnedAccount } from "../lib/accounts";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
 import { isBlockedUrl } from "../lib/ssrf-guard";
@@ -19,9 +19,13 @@ import {
 	GmbPlaceActionDeleteQuery,
 	GmbPlaceActionsResponse,
 } from "../schemas/gmb";
+import type { Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -309,17 +313,23 @@ const deletePlaceAction = createRoute({
 // Route handlers
 // ---------------------------------------------------------------------------
 
-function notFound(c: any) {
-	return c.json({ error: { code: "NOT_FOUND", message: "Account not found or not a Google Business account" } }, 404);
+function notFound(c: AppContext) {
+	return c.json({ error: { code: "NOT_FOUND", message: "Account not found or not a Google Business account" } }, 404) as never;
 }
 
-function missingGoogleAccount(c: any) {
-	return c.json({ error: { code: "MISSING_GOOGLE_ACCOUNT", message: "Google Account ID not available. Please reconnect the account." } }, 400);
+function missingGoogleAccount(c: AppContext) {
+	return c.json({ error: { code: "MISSING_GOOGLE_ACCOUNT", message: "Google Account ID not available. Please reconnect the account." } }, 400) as never;
 }
 
-function googleError(c: any, err: { status: number; code: string; message: string }) {
+function googleError(
+	c: AppContext,
+	err: { status: number; code: string; message: string },
+) {
 	const httpStatus = err.status >= 400 && err.status < 600 ? err.status : 502;
-	return c.json({ error: { code: err.code, message: err.message } }, httpStatus as any);
+	return c.json(
+		{ error: { code: err.code, message: err.message } },
+		httpStatus as ContentfulStatusCode,
+	) as never;
 }
 
 // --- Food Menus (v4 — needs googleAccountName) ---

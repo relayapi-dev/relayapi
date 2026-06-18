@@ -522,7 +522,14 @@ export const twitterPublisher: Publisher = {
 
 			if (media && media.length > 0) {
 				mediaIds = await Promise.all(
-					media.map((m) => uploadMedia(auth, m.url, m.type ?? "image", (m as any).alt_text)),
+					media.map((m) =>
+						uploadMedia(
+							auth,
+							m.url,
+							m.type ?? "image",
+							(m as { alt_text?: string }).alt_text,
+						),
+					),
 				);
 			}
 
@@ -584,7 +591,14 @@ async function publishThread(
 		let mediaIds: string[] | undefined;
 		if (item.media && item.media.length > 0) {
 			mediaIds = await Promise.all(
-				item.media.map((m) => uploadMedia(auth, m.url, m.type ?? "image", (m as any).alt_text)),
+				item.media.map((m) =>
+					uploadMedia(
+						auth,
+						m.url,
+						m.type ?? "image",
+						(m as { alt_text?: string }).alt_text,
+					),
+				),
 			);
 		}
 

@@ -70,10 +70,16 @@ function TextBlockEditor({
 	return (
 		<div className="space-y-2">
 			<div className="flex items-center justify-between">
-				<label className="text-[11px] font-medium text-[#475569]">Text</label>
+				<label
+					htmlFor={`block-text-${block.id}`}
+					className="text-[11px] font-medium text-[#475569]"
+				>
+					Text
+				</label>
 				<MergeTagPicker onPick={merge.insertAtCursor} />
 			</div>
 			<textarea
+				id={`block-text-${block.id}`}
 				ref={merge.inputRef}
 				value={block.text}
 				onChange={(e) => onChange({ ...block, text: e.target.value })}
@@ -158,10 +164,14 @@ function MediaBlockEditor({
 	return (
 		<div className="space-y-2">
 			<div>
-				<label className="mb-1 block text-[11px] font-medium text-[#475569]">
+				<label
+					htmlFor={`block-media-url-${block.id}`}
+					className="mb-1 block text-[11px] font-medium text-[#475569]"
+				>
 					Media URL
 				</label>
 				<input
+					id={`block-media-url-${block.id}`}
 					type="url"
 					value={block.media_ref}
 					onChange={(e) => onChange({ ...block, media_ref: e.target.value })}
@@ -175,10 +185,14 @@ function MediaBlockEditor({
 			</div>
 			{captionSupported ? (
 				<div>
-					<label className="mb-1 block text-[11px] font-medium text-[#475569]">
+					<label
+						htmlFor={`block-caption-${block.id}`}
+						className="mb-1 block text-[11px] font-medium text-[#475569]"
+					>
 						Caption
 					</label>
 					<input
+						id={`block-caption-${block.id}`}
 						type="text"
 						value={
 							"caption" in block && block.caption !== undefined
@@ -236,10 +250,14 @@ function CardBlockEditor({
 	return (
 		<div className="space-y-2">
 			<div>
-				<label className="mb-1 block text-[11px] font-medium text-[#475569]">
+				<label
+					htmlFor={`card-image-url-${block.id}`}
+					className="mb-1 block text-[11px] font-medium text-[#475569]"
+				>
 					Image URL
 				</label>
 				<input
+					id={`card-image-url-${block.id}`}
 					type="url"
 					value={block.media_ref ?? ""}
 					onChange={(e) =>
@@ -251,10 +269,14 @@ function CardBlockEditor({
 			</div>
 
 			<div>
-				<label className="mb-1 block text-[11px] font-medium text-[#475569]">
+				<label
+					htmlFor={`card-title-${block.id}`}
+					className="mb-1 block text-[11px] font-medium text-[#475569]"
+				>
 					Title
 				</label>
 				<input
+					id={`card-title-${block.id}`}
 					type="text"
 					value={block.title}
 					maxLength={80}
@@ -267,10 +289,14 @@ function CardBlockEditor({
 			</div>
 
 			<div>
-				<label className="mb-1 block text-[11px] font-medium text-[#475569]">
+				<label
+					htmlFor={`card-subtitle-${block.id}`}
+					className="mb-1 block text-[11px] font-medium text-[#475569]"
+				>
 					Subtitle
 				</label>
 				<input
+					id={`card-subtitle-${block.id}`}
 					type="text"
 					value={block.subtitle ?? ""}
 					maxLength={80}
@@ -433,10 +459,14 @@ function DelayBlockEditor({
 }) {
 	return (
 		<div>
-			<label className="mb-1 block text-[11px] font-medium text-[#475569]">
+			<label
+				htmlFor={`delay-seconds-${block.id}`}
+				className="mb-1 block text-[11px] font-medium text-[#475569]"
+			>
 				Typing pause (seconds)
 			</label>
 			<input
+				id={`delay-seconds-${block.id}`}
 				type="number"
 				min={0.5}
 				max={10}

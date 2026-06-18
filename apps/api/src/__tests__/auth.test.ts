@@ -38,7 +38,7 @@ mock.module("drizzle-orm", () => {
 import { Hono } from "hono";
 import type { Env, Variables, KVKeyData } from "../types";
 import { authMiddleware } from "../middleware/auth";
-import { MockKV, createMockEnv, seedApiKeyInKV, hashKey } from "./__mocks__/env";
+import { type MockKV, createMockEnv, seedApiKeyInKV, hashKey } from "./__mocks__/env";
 import { createMockDb } from "./__mocks__/db";
 
 const TEST_KEY = "rlay_live_testauthkey0000000000000000000000000000000";

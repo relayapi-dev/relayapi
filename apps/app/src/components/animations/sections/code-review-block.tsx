@@ -101,7 +101,11 @@ export function CodeReviewBlock() {
                 return;
             }
 
-            const { action, delay } = SEQUENCE[sequenceIndexRef.current]!;
+            const current = SEQUENCE[sequenceIndexRef.current];
+            if (!current) {
+                return;
+            }
+            const { action, delay } = current;
             sequenceIndexRef.current += 1;
 
             timerRef.current = setTimeout(() => {

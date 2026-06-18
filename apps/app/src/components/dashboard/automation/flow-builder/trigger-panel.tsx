@@ -662,10 +662,14 @@ function TriggerDetailMode({
 							Allow the same contact to re-enter
 						</label>
 						<div className="mt-3">
-							<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
+							<label
+								htmlFor="trigger-reentry-cooldown"
+								className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+							>
 								Reentry cooldown (minutes)
 							</label>
 							<input
+								id="trigger-reentry-cooldown"
 								type="number"
 								min={0}
 								value={entrypoint.reentry_cooldown_min}
@@ -781,10 +785,14 @@ function KeywordConfig({
 				Comma-separated list. Case-insensitive.
 			</p>
 			<div className="mt-3">
-				<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
+				<label
+					htmlFor="trigger-match-mode"
+					className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+				>
 					Match mode
 				</label>
 				<select
+					id="trigger-match-mode"
 					value={matchMode}
 					disabled={readOnly}
 					onChange={(e) => onChange({ match_mode: e.target.value })}
@@ -827,9 +835,9 @@ function CommentConfig({
 			<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
 				Comment filter
 			</div>
-			<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
+			<span className="mb-1 block text-[11px] font-medium text-[#7e8695]">
 				Post (leave empty to match all)
-			</label>
+			</span>
 			<div className={cn(readOnly && "pointer-events-none opacity-60")}>
 				<PostSearchCombobox
 					value={selectedPostId}
@@ -843,10 +851,14 @@ function CommentConfig({
 				/>
 			</div>
 			<div className="mt-3">
-				<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
+				<label
+					htmlFor="trigger-keyword-filter"
+					className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+				>
 					Keyword filter (optional)
 				</label>
 				<input
+					id="trigger-keyword-filter"
 					type="text"
 					disabled={readOnly}
 					defaultValue={keywordFilter.join(", ")}
@@ -913,10 +925,14 @@ function WebhookConfig({
 			<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
 				Webhook
 			</div>
-			<label className="mb-1 block text-[11px] font-medium text-[#7e8695]">
+			<label
+				htmlFor="trigger-webhook-slug"
+				className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+			>
 				Slug
 			</label>
 			<input
+				id="trigger-webhook-slug"
 				type="text"
 				value={slug}
 				readOnly

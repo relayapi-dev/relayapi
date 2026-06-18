@@ -374,10 +374,14 @@ describe("generateNodeKey", () => {
 describe("cloneGraph", () => {
 	it("produces a deep copy", () => {
 		const g = graphWith([makeNode("a")], []);
-		g.nodes[0]!.config = { foo: { bar: 1 } };
+		const gNode = g.nodes[0];
+		if (!gNode) throw new Error("expected a node");
+		gNode.config = { foo: { bar: 1 } };
 		const copy = cloneGraph(g);
-		(copy.nodes[0]!.config as { foo: { bar: number } }).foo.bar = 42;
-		expect((g.nodes[0]!.config as { foo: { bar: number } }).foo.bar).toBe(1);
+		const copyNode = copy.nodes[0];
+		if (!copyNode) throw new Error("expected a cloned node");
+		(copyNode.config as { foo: { bar: number } }).foo.bar = 42;
+		expect((gNode.config as { foo: { bar: number } }).foo.bar).toBe(1);
 	});
 });
 

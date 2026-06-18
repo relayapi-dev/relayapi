@@ -17,8 +17,8 @@ export function collectPostErrors(
   targets: Record<string, { platform: string; error?: { message: string; detail?: string } }>,
 ): PostErrorEntry[] {
   return Object.values(targets)
-    .filter((t) => t.error)
-    .map((t) => ({ platform: t.platform, message: t.error!.message, detail: t.error!.detail }));
+    .filter((t): t is typeof t & { error: { message: string; detail?: string } } => Boolean(t.error))
+    .map((t) => ({ platform: t.platform, message: t.error.message, detail: t.error.detail }));
 }
 
 function ErrorRow({ entry }: { entry: PostErrorEntry }) {

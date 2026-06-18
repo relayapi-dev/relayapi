@@ -485,9 +485,10 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 		let run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("waiting");
-		expect(run!.waitingFor).toBe("input");
-		expect(run!.currentNodeKey).toBe("ask_email");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("waiting");
+		expect(run.waitingFor).toBe("input");
+		expect(run.currentNodeKey).toBe("ask_email");
 
 		const outcome = await resumeWaitingRunOnInput(
 			db,
@@ -501,10 +502,11 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 		run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		expect(run!.exitReason).toBe("completed");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("completed");
+		expect(run.exitReason).toBe("completed");
 		// Captured value should have landed in context under the configured field.
-		const context = (run!.context as Record<string, unknown>) ?? {};
+		const context = (run.context as Record<string, unknown>) ?? {};
 		expect(context.email).toBe("alice@example.com");
 		// And the retry counter for this node must be cleaned up — we just
 		// exited via `captured`, so nothing should be lingering in context.
@@ -549,10 +551,11 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 			let run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, runId),
 			});
-			expect(run!.status).toBe("waiting");
-			expect(run!.waitingFor).toBe("input");
-			expect(run!.currentNodeKey).toBe("ask_email");
-			const ctx = (run!.context as Record<string, unknown>) ?? {};
+			if (!run) throw new Error("expected run to exist");
+			expect(run.status).toBe("waiting");
+			expect(run.waitingFor).toBe("input");
+			expect(run.currentNodeKey).toBe("ask_email");
+			const ctx = (run.context as Record<string, unknown>) ?? {};
 			expect(
 				(ctx._input_retries as Record<string, number> | undefined)?.ask_email,
 			).toBe(1);
@@ -570,10 +573,11 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 			run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, runId),
 			});
-			expect(run!.status).toBe("completed");
+			if (!run) throw new Error("expected run to exist");
+			expect(run.status).toBe("completed");
 			// The `invalid` edge routes to the "fail" end node, so the run
 			// completes cleanly. Email must NOT be stored in context.
-			const finalCtx = (run!.context as Record<string, unknown>) ?? {};
+			const finalCtx = (run.context as Record<string, unknown>) ?? {};
 			expect(finalCtx.email).toBeUndefined();
 		},
 		30_000,
@@ -686,7 +690,8 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
-		expect(run!.status).toBe("completed");
-		expect(run!.currentPortKey).toBe("invalid");
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("completed");
+		expect(run.currentPortKey).toBe("invalid");
 	});
 });

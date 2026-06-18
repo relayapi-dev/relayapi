@@ -144,8 +144,9 @@ export function AutoPostCreateDialog({ open, onOpenChange, onCreated }: AutoPost
         <div className="space-y-4 overflow-y-auto flex-1 px-1">
           {/* Name */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
+            <label htmlFor="auto-post-name" className="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
             <input
+              id="auto-post-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -156,9 +157,10 @@ export function AutoPostCreateDialog({ open, onOpenChange, onCreated }: AutoPost
 
           {/* Feed URL */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Feed URL</label>
+            <label htmlFor="auto-post-feed-url" className="text-xs font-medium text-muted-foreground mb-1 block">Feed URL</label>
             <div className="flex gap-2">
               <input
+                id="auto-post-feed-url"
                 type="url"
                 value={feedUrl}
                 onChange={(e) => setFeedUrl(e.target.value)}
@@ -214,10 +216,11 @@ export function AutoPostCreateDialog({ open, onOpenChange, onCreated }: AutoPost
 
           {/* Content Template */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">
+            <label htmlFor="auto-post-content-template" className="text-xs font-medium text-muted-foreground mb-1 block">
               Content Template <span className="text-muted-foreground/60">(optional)</span>
             </label>
             <textarea
+              id="auto-post-content-template"
               value={contentTemplate}
               onChange={(e) => setContentTemplate(e.target.value)}
               placeholder="{{title}}"
@@ -240,8 +243,9 @@ export function AutoPostCreateDialog({ open, onOpenChange, onCreated }: AutoPost
 
           {/* Polling Interval */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Polling Interval</label>
+            <label htmlFor="auto-post-polling-interval" className="text-xs font-medium text-muted-foreground mb-1 block">Polling Interval</label>
             <select
+              id="auto-post-polling-interval"
               value={pollingInterval}
               onChange={(e) => setPollingInterval(Number(e.target.value))}
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"

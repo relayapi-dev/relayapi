@@ -16,18 +16,9 @@ import { PRICING } from "@relayapi/config";
 // within a day instead of persisting for a year.
 const APIKEY_KV_TTL_SECONDS = 86400; // 24h
 
-async function hashKey(key: string): Promise<string> {
-  const encoded = new TextEncoder().encode(key);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-  const hashArray = new Uint8Array(hashBuffer);
-  return Array.from(hashArray)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function adminGuard(context: any): Response | null {
+function adminGuard(context: { locals: App.Locals }): Response | null {
   const user = context.locals.user;
-  if (!user || (user as any).role !== "admin") {
+  if (!user || user.role !== "admin") {
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
       headers: { "Content-Type": "application/json" },
@@ -50,7 +41,7 @@ export const GET: APIRoute = async (context) => {
     // Get paginated organizations
     const conditions = [];
     if (search) {
-      conditions.push(sql`(${organization.name} ILIKE ${'%' + search + '%'} OR ${organization.slug} ILIKE ${'%' + search + '%'})`);
+      conditions.push(sql`(${organization.name} ILIKE ${`%${search}%`} OR ${organization.slug} ILIKE ${`%${search}%`})`);
     }
 
     const [totalResult] = await db
@@ -175,7 +166,7 @@ export const PATCH: APIRoute = async (context) => {
 
     // Update org fields if provided
     if (name !== undefined || slug !== undefined) {
-      const orgUpdates: Record<string, any> = {};
+      const orgUpdates: Partial<typeof organization.$inferInsert> = {};
       if (name !== undefined) orgUpdates.name = name;
       if (slug !== undefined) orgUpdates.slug = slug;
       await db
@@ -269,7 +260,7 @@ export const PATCH: APIRoute = async (context) => {
         for (const k of keys) {
           const kvKey = `apikey:${k.key}`;
           const raw = await kv.get(kvKey);
-          const existing = raw ? JSON.parse(raw) as Record<string, any> : null;
+          const existing = raw ? JSON.parse(raw) as Record<string, unknown> : null;
           if (existing) {
             await kv.put(kvKey, JSON.stringify({ ...existing, ...newPlanData }), {
               expirationTtl: APIKEY_KV_TTL_SECONDS,
@@ -305,7 +296,7 @@ export const PATCH: APIRoute = async (context) => {
         for (const k of keys) {
           const kvKey = `apikey:${k.key}`;
           const rawKv = await kv.get(kvKey);
-          const existingKv = rawKv ? JSON.parse(rawKv) as Record<string, any> : null;
+          const existingKv = rawKv ? JSON.parse(rawKv) as Record<string, unknown> : null;
           if (existingKv) {
             await kv.put(kvKey, JSON.stringify({ ...existingKv, ai_enabled: aiEnabled }), {
               expirationTtl: APIKEY_KV_TTL_SECONDS,

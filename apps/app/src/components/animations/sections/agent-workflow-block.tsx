@@ -10,7 +10,7 @@ type WorkflowStep = {
     step: string;
 };
 
-const workflowSteps: WorkflowStep[] = [
+const workflowSteps: [WorkflowStep, WorkflowStep, WorkflowStep] = [
     {
         id: "1",
         agent: "media-upload@relay",
@@ -60,7 +60,7 @@ export function AgentWorkflowBlock() {
                 <AnimatePresence>
                     {visibleSteps >= 1 && (
                         <StepCard
-                            step={workflowSteps[0]!}
+                            step={workflowSteps[0]}
                             className="relative z-10 w-fit -ml-2"
                             showConnector={visibleSteps >= 2}
                         />
@@ -70,7 +70,7 @@ export function AgentWorkflowBlock() {
                 <AnimatePresence>
                     {visibleSteps >= 2 && (
                         <StepCard
-                            step={workflowSteps[1]!}
+                            step={workflowSteps[1]}
                             className="relative z-10 mt-12 ml-auto w-fit -mr-4"
                             showConnector={visibleSteps >= 3}
                             connectorClassName="absolute -left-20 top-8"
@@ -82,7 +82,7 @@ export function AgentWorkflowBlock() {
                 <AnimatePresence>
                     {visibleSteps >= 3 && (
                         <StepCard
-                            step={workflowSteps[2]!}
+                            step={workflowSteps[2]}
                             className="relative z-10 mt-12 max-w-xl -ml-4"
                         />
                     )}
@@ -124,6 +124,7 @@ function StepCard({
 function ConnectorSVG({ className, flip = false }: { className?: string; flip?: boolean }) {
     return (
         <motion.svg
+            aria-hidden="true"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.4 }}

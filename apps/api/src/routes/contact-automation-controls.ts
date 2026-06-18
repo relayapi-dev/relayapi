@@ -13,13 +13,16 @@ import {
 	automations,
 	contacts,
 } from "@relayapi/db";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, } from "drizzle-orm";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
+import type { Context } from "hono";
 import { resumeExternalEventRuns } from "../services/automations/runner";
 import { ErrorResponse } from "../schemas/common";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,7 +58,7 @@ function serializeControl(
 	};
 }
 
-async function loadScopedContact(c: any, id: string) {
+async function loadScopedContact(c: AppContext, id: string) {
 	const orgId = c.get("orgId");
 	const db = c.get("db");
 	const [row] = await db

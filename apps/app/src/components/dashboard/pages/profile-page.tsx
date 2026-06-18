@@ -76,7 +76,7 @@ export function ProfilePage() {
   const [timezone, setTimezone] = useState(() =>
     typeof window !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC"
   );
-  const [timezoneLoading, setTimezoneLoading] = useState(true);
+  const [_timezoneLoading, setTimezoneLoading] = useState(true);
   const timezoneTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const allTimezones = typeof Intl !== "undefined" && Intl.supportedValuesOf
     ? Intl.supportedValuesOf("timeZone")
@@ -412,13 +412,17 @@ export function ProfilePage() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">
+            <label
+              htmlFor="profile-display-name"
+              className="text-xs font-medium text-muted-foreground"
+            >
               Display Name
             </label>
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <User className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                 <input
+                  id="profile-display-name"
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -446,12 +450,16 @@ export function ProfilePage() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">
+            <label
+              htmlFor="profile-email"
+              className="text-xs font-medium text-muted-foreground"
+            >
               Email Address
             </label>
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
               <input
+                id="profile-email"
                 type="email"
                 value={user?.email || ""}
                 disabled
@@ -485,10 +493,14 @@ export function ProfilePage() {
         </div>
         <div className="p-4">
           <div className="space-y-2 max-w-xs">
-            <label className="text-xs font-medium text-muted-foreground">
+            <label
+              htmlFor="profile-timezone"
+              className="text-xs font-medium text-muted-foreground"
+            >
               Timezone
             </label>
             <select
+              id="profile-timezone"
               value={timezone}
               onChange={(e) => {
                 setTimezone(e.target.value);
@@ -519,10 +531,14 @@ export function ProfilePage() {
         </div>
         <div className="p-4 space-y-3">
           <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">
+            <label
+              htmlFor="profile-current-password"
+              className="text-xs font-medium text-muted-foreground"
+            >
               Current Password
             </label>
             <input
+              id="profile-current-password"
               type="password"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
@@ -532,10 +548,14 @@ export function ProfilePage() {
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label
+                htmlFor="profile-new-password"
+                className="text-xs font-medium text-muted-foreground"
+              >
                 New Password
               </label>
               <input
+                id="profile-new-password"
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
@@ -544,10 +564,14 @@ export function ProfilePage() {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label
+                htmlFor="profile-confirm-password"
+                className="text-xs font-medium text-muted-foreground"
+              >
                 Confirm Password
               </label>
               <input
+                id="profile-confirm-password"
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}

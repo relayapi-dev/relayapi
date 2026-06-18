@@ -120,7 +120,7 @@ function calculateUpcomingSlots(
 			const localDateStr = `${year}-${month}-${day}T${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00`;
 
 			// Compute the UTC offset for this timezone at this date/time
-			const tempUtc = new Date(localDateStr + "Z");
+			const tempUtc = new Date(`${localDateStr}Z`);
 			const tzOffsetParts = new Intl.DateTimeFormat("en-US", {
 				timeZone: slot.timezone,
 				hour: "2-digit",
@@ -215,6 +215,10 @@ const updateSlots = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -248,6 +252,10 @@ const getNextSlot = createRoute({
 		},
 		401: {
 			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -324,7 +332,7 @@ app.openapi(updateSlots, async (c) => {
 					message: "No queue schedule found",
 				},
 			},
-			404 as any,
+			404,
 		);
 	}
 
@@ -333,7 +341,7 @@ app.openapi(updateSlots, async (c) => {
 	// promoting another — otherwise findIndex(is_default) returns -1 on every
 	// subsequent update and this endpoint 404s forever. With no other schedule to
 	// promote, the sole schedule must stay the default.
-	const hasOtherSchedule = schedules.some((s, i) => i !== idx);
+	const hasOtherSchedule = schedules.some((_s, i) => i !== idx);
 	const nextIsDefault = hasOtherSchedule
 		? (body.set_as_default ?? existing.is_default)
 		: true;
@@ -375,7 +383,7 @@ app.openapi(getNextSlot, async (c) => {
 					message: "No queue schedule or slots configured",
 				},
 			},
-			404 as any,
+			404,
 		);
 	}
 
@@ -390,7 +398,7 @@ app.openapi(getNextSlot, async (c) => {
 					message: "No upcoming slots found",
 				},
 			},
-			404 as any,
+			404,
 		);
 	}
 

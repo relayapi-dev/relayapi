@@ -15,7 +15,7 @@ function dateKeyInTz(date: Date, tz: string): string {
 /** Get hour (0-23) for a date in a specific timezone */
 function hourInTz(date: Date, tz: string): number {
   return parseInt(
-    new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false }).format(date),
+    new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false }).format(date), 10
   );
 }
 
@@ -38,6 +38,27 @@ export interface CalendarPost {
   platformUrl?: string | null;
   accountName?: string | null;
   accountAvatarUrl?: string | null;
+  metrics?: Record<string, number> | null;
+}
+
+/** Raw post shape returned by /api/posts (loosely typed — fields are optional). */
+interface RawCalendarPost {
+  id: string;
+  source?: string;
+  content?: string;
+  platform?: string;
+  platforms?: string[];
+  status?: CalendarPost["status"];
+  scheduled_at?: string | null;
+  published_at?: string | null;
+  created_at?: string | null;
+  media?: Array<{ url: string; type?: string }> | null;
+  media_type?: string;
+  media_urls?: string[];
+  thumbnail_url?: string | null;
+  platform_url?: string | null;
+  account_name?: string | null;
+  account_avatar_url?: string | null;
   metrics?: Record<string, number> | null;
 }
 
@@ -82,7 +103,7 @@ export function useCalendarPosts(
     setTruncated(false);
 
     try {
-      let allPosts: CalendarPost[] = [];
+      const allPosts: CalendarPost[] = [];
       let cursor: string | null = null;
       let pages = 0;
       const MAX_PAGES = 10; // safety valve: 10 * 100 = 1000 posts max
@@ -112,7 +133,7 @@ export function useCalendarPosts(
 
         const json = await res.json();
         // Split each post into per-platform cards (like Buffer)
-        for (const raw of (json.data || []) as any[]) {
+        for (const raw of (json.data || []) as RawCalendarPost[]) {
           if (raw.source === "external") {
             // External post — single platform, can't be edited
             allPosts.push({
@@ -120,7 +141,7 @@ export function useCalendarPosts(
               postId: raw.id,
               content: raw.content || "",
               platform: raw.platform || "",
-              platforms: [raw.platform].filter(Boolean),
+              platforms: [raw.platform].filter((p): p is string => Boolean(p)),
               status: "published",
               scheduled_at: null,
               published_at: raw.published_at || null,
@@ -183,7 +204,7 @@ export function useCalendarPosts(
   // Fetch drafts separately (no date range)
   const fetchDrafts = useCallback(async () => {
     try {
-      let allDrafts: CalendarPost[] = [];
+      const allDrafts: CalendarPost[] = [];
       let cursor: string | null = null;
       let pages = 0;
       const MAX_PAGES = 3;
@@ -202,7 +223,7 @@ export function useCalendarPosts(
         if (!res.ok) return;
 
         const json = await res.json();
-        for (const raw of (json.data || []) as any[]) {
+        for (const raw of (json.data || []) as RawCalendarPost[]) {
           allDrafts.push({
             id: raw.id,
             postId: raw.id,

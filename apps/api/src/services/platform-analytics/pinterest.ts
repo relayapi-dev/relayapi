@@ -91,13 +91,6 @@ async function pinterestFetch<T = unknown>(
 	}
 }
 
-function sumMetricsFromDaily(
-	dailyMetrics: Array<{ metrics: Record<string, number> }> | undefined,
-	metricName: string,
-): number {
-	if (!dailyMetrics) return 0;
-	return dailyMetrics.reduce((sum, day) => sum + (day.metrics?.[metricName] ?? 0), 0);
-}
 
 export const pinterestAnalytics: PlatformAnalyticsFetcher = {
 	async getOverview(

@@ -45,8 +45,16 @@ function isPrivateIPDecimal(hostname: string): boolean {
 				p.startsWith("0") && p.length > 1 ? parseInt(p, 8) : parseInt(p, 10),
 			);
 			if (octets.every((o) => o >= 0 && o <= 255)) {
-				const num = (octets[0]! << 24) | (octets[1]! << 16) | (octets[2]! << 8) | octets[3]!;
-				return isPrivateIPv4(num >>> 0);
+				const [o0, o1, o2, o3] = octets;
+				if (
+					o0 !== undefined &&
+					o1 !== undefined &&
+					o2 !== undefined &&
+					o3 !== undefined
+				) {
+					const num = (o0 << 24) | (o1 << 16) | (o2 << 8) | o3;
+					return isPrivateIPv4(num >>> 0);
+				}
 			}
 		}
 	}
@@ -195,7 +203,7 @@ async function lookupDnsRecords(
 	const payload = (await response.json()) as DnsResponse;
 	return (payload.Answer ?? [])
 		.filter((answer) => answer.type === expectedType && typeof answer.data === "string")
-		.map((answer) => answer.data!.trim());
+		.map((answer) => (answer.data ?? "").trim());
 }
 
 async function hasPrivateDnsResolution(hostname: string): Promise<boolean> {
@@ -227,7 +235,6 @@ async function hasPrivateDnsResolution(hostname: string): Promise<boolean> {
 			});
 			return blocked;
 		} catch {
-			continue;
 		}
 	}
 
@@ -245,8 +252,8 @@ async function hasPrivateDnsResolution(hostname: string): Promise<boolean> {
  */
 function isIPv6MappedPrivate(hostname: string): boolean {
 	const match = hostname.match(/^\[::ffff:(.+)\]$/i);
-	if (!match) return false;
-	const mapped = match[1]!;
+	const mapped = match?.[1];
+	if (mapped === undefined) return false;
 
 	// Dotted form: ::ffff:127.0.0.1
 	if (mapped.includes(".")) {
@@ -256,8 +263,11 @@ function isIPv6MappedPrivate(hostname: string): boolean {
 	// Hex form: ::ffff:7f00:0001
 	const hexParts = mapped.split(":");
 	if (hexParts.length === 2) {
-		const num = (parseInt(hexParts[0]!, 16) << 16) | parseInt(hexParts[1]!, 16);
-		return isPrivateIPv4(num >>> 0);
+		const [high, low] = hexParts;
+		if (high !== undefined && low !== undefined) {
+			const num = (parseInt(high, 16) << 16) | parseInt(low, 16);
+			return isPrivateIPv4(num >>> 0);
+		}
 	}
 
 	return false;

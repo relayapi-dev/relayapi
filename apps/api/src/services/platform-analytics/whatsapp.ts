@@ -270,7 +270,7 @@ export const whatsappAnalytics: PlatformAnalyticsFetcher = {
 		);
 
 		return points.map((point) => ({
-			date: new Date(point.start * 1000).toISOString().split("T")[0]!,
+			date: new Date(point.start * 1000).toISOString().split("T")[0] ?? "",
 			impressions: point.sent ?? 0,
 			engagement: point.delivered ?? 0,
 			reach: point.delivered ?? 0,

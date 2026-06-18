@@ -41,7 +41,7 @@ export const GET: APIRoute = async (ctx) => {
 		// in practice orgs won't have thousands of active automations, so we
 		// cap at 100 and iterate a couple of cursors max.
 		const automations: MinimalAutomation[] = [];
-		let cursor: string | null | undefined = undefined;
+		let cursor: string | null | undefined ;
 		let pages = 0;
 		do {
 			const page: Awaited<ReturnType<typeof client.automations.list>> =

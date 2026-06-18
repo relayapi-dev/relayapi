@@ -1,12 +1,14 @@
 import type { APIRoute } from "astro";
-import { requireClient, handleSdkError } from "@/lib/api-utils";
+import { requireClient, requireParam, handleSdkError } from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
   const client = await requireClient(ctx);
   if (client instanceof Response) return client;
+  const id = requireParam(ctx.params, "id");
+  if (id instanceof Response) return id;
   try {
     const url = new URL(ctx.request.url);
-    const data = await client.crossPostActions.listByPost(ctx.params.id!, {
+    const data = await client.crossPostActions.listByPost(id, {
       cursor: url.searchParams.get("cursor") || undefined,
       limit: Number(url.searchParams.get("limit")) || undefined,
     });

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Loader2, Check, X, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, X, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -111,7 +111,7 @@ export function PostValidatorDialog({ open, onOpenChange }: PostValidatorDialogP
           {/* Platform selection */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-muted-foreground">Target platforms</label>
+              <span className="text-xs font-medium text-muted-foreground">Target platforms</span>
               <button
                 type="button"
                 onClick={selectAll}

@@ -909,7 +909,7 @@ export async function exchangeAndSaveAccount(params: {
 		platform === "instagram"
 			? { ig_login_method: isInstagramDirect ? "direct" : "facebook" }
 			: null;
-	let account;
+	let account: typeof socialAccounts.$inferSelect | undefined;
 	try {
 		[account] = await db
 			.insert(socialAccounts)
@@ -1131,8 +1131,9 @@ app.openapi(connectBeehiiv, async (c) => {
 			set: { username: pubName, displayName: pubName, accessToken: encrypted, metadata: { publication_id, publication_name: pubName }, updatedAt: new Date() },
 		}).returning();
 
-		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account!.id, platform: "beehiiv", username: pubName }));
-		return c.json({ account_id: account!.id, platform: "beehiiv", username: pubName, display_name: pubName }, 200);
+		if (!account) throw new Error("Failed to upsert account");
+		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account.id, platform: "beehiiv", username: pubName }));
+		return c.json({ account_id: account.id, platform: "beehiiv", username: pubName, display_name: pubName }, 200);
 	} catch (err) {
 		console.error("[connect] Connection failed:", err instanceof Error ? err.message : err);
 		return c.json({ error: { code: "INTERNAL_ERROR", message: "Connection failed. Please try again." } } as never, 500 as never);
@@ -1165,8 +1166,9 @@ app.openapi(connectConvertKit, async (c) => {
 			set: { username: name, displayName: name, accessToken: encryptedKey, refreshToken: encryptedSecret, updatedAt: new Date() },
 		}).returning();
 
-		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account!.id, platform: "convertkit", username: name }));
-		return c.json({ account_id: account!.id, platform: "convertkit", username: name, display_name: name }, 200);
+		if (!account) throw new Error("Failed to upsert account");
+		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account.id, platform: "convertkit", username: name }));
+		return c.json({ account_id: account.id, platform: "convertkit", username: name, display_name: name }, 200);
 	} catch (err) {
 		console.error("[connect] Connection failed:", err instanceof Error ? err.message : err);
 		return c.json({ error: { code: "INTERNAL_ERROR", message: "Connection failed. Please try again." } } as never, 500 as never);
@@ -1201,8 +1203,9 @@ app.openapi(connectMailchimp, async (c) => {
 			set: { username: name, displayName: name, accessToken: encrypted, metadata: { datacenter, account_name: name }, updatedAt: new Date() },
 		}).returning();
 
-		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account!.id, platform: "mailchimp", username: name }));
-		return c.json({ account_id: account!.id, platform: "mailchimp", username: name, display_name: name }, 200);
+		if (!account) throw new Error("Failed to upsert account");
+		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account.id, platform: "mailchimp", username: name }));
+		return c.json({ account_id: account.id, platform: "mailchimp", username: name, display_name: name }, 200);
 	} catch (err) {
 		console.error("[connect] Connection failed:", err instanceof Error ? err.message : err);
 		return c.json({ error: { code: "INTERNAL_ERROR", message: "Connection failed. Please try again." } } as never, 500 as never);
@@ -1252,8 +1255,9 @@ app.openapi(connectListMonk, async (c) => {
 			set: { username: name, displayName: name, accessToken: encrypted, metadata: { instance_url: cleanUrl }, updatedAt: new Date() },
 		}).returning();
 
-		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account!.id, platform: "listmonk", username: name }));
-		return c.json({ account_id: account!.id, platform: "listmonk", username: name, display_name: name }, 200);
+		if (!account) throw new Error("Failed to upsert account");
+		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account.id, platform: "listmonk", username: name }));
+		return c.json({ account_id: account.id, platform: "listmonk", username: name, display_name: name }, 200);
 	} catch (err) {
 		console.error("[connect] Connection failed:", err instanceof Error ? err.message : err);
 		return c.json({ error: { code: "INTERNAL_ERROR", message: "Connection failed. Please try again." } } as never, 500 as never);
@@ -1302,7 +1306,7 @@ app.openapi(connectBluesky, async (c) => {
 
 		// Atomic upsert: update if already connected
 		const encryptedAppPw = await maybeEncrypt(app_password, c.env.ENCRYPTION_KEY);
-		let account;
+		let account: typeof socialAccounts.$inferSelect | undefined;
 		try {
 			[account] = await db
 				.insert(socialAccounts)
@@ -1452,7 +1456,7 @@ app.openapi(connectTelegramDirect, async (c) => {
 	const { chat_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	let account;
+	let account: typeof socialAccounts.$inferSelect | undefined;
 	try {
 		[account] = await db
 			.insert(socialAccounts)
@@ -1685,13 +1689,24 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 		);
 	}
 
-	const phone = phoneData.data![0]!;
+	const phone = phoneData.data?.[0];
+	if (!phone) {
+		return c.json(
+			{
+				error: {
+					code: "PHONE_NUMBER_NOT_FOUND",
+					message: "No phone numbers found for this WhatsApp Business Account",
+				},
+			} as never,
+			400 as never,
+		);
+	}
 	const phoneNumberId = phone.id;
 	const displayPhoneNumber = phone.display_phone_number;
 
 	// Step 4: Atomic upsert to handle re-connections gracefully
 	const encryptedWaToken = await maybeEncrypt(accessToken, c.env.ENCRYPTION_KEY);
-	let account;
+	let account: typeof socialAccounts.$inferSelect | undefined;
 	try {
 		[account] = await db
 			.insert(socialAccounts)
@@ -1770,7 +1785,7 @@ app.openapi(whatsappCredentials, async (c) => {
 	const db = c.get("db");
 
 	const encWaCredToken = await maybeEncrypt(body.access_token, c.env.ENCRYPTION_KEY);
-	let account;
+	let account: typeof socialAccounts.$inferSelect | undefined;
 	try {
 		[account] = await db
 			.insert(socialAccounts)
@@ -1987,7 +2002,11 @@ app.openapi(selectFacebookPage, async (c) => {
 			pendingData.profile_id,
 			pendingData.expires_at ?? null,
 		);
-		let account;
+		const facebookConfig = OAUTH_CONFIGS.facebook;
+		if (!facebookConfig) {
+			throw new Error("Facebook OAuth config is not registered");
+		}
+		let account: typeof socialAccounts.$inferSelect | undefined;
 		try {
 			[account] = await db
 				.insert(socialAccounts)
@@ -1999,7 +2018,7 @@ app.openapi(selectFacebookPage, async (c) => {
 					displayName: page.name,
 					avatarUrl: pageAvatarUrl,
 					accessToken: encryptedPageToken,
-					scopes: OAUTH_CONFIGS.facebook!.scopes,
+					scopes: facebookConfig.scopes,
 					metadata,
 				})
 				.onConflictDoUpdate({
@@ -2009,7 +2028,7 @@ app.openapi(selectFacebookPage, async (c) => {
 						displayName: page.name,
 						avatarUrl: pageAvatarUrl,
 						accessToken: encryptedPageToken,
-						scopes: OAUTH_CONFIGS.facebook!.scopes,
+						scopes: facebookConfig.scopes,
 						metadata,
 						updatedAt: new Date(),
 					},
@@ -2180,7 +2199,11 @@ app.openapi(selectLinkedInOrg, async (c) => {
 	const liTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
 	// For org accounts, use the org URN. For personal accounts, use the stable profile ID from OAuth.
 	const linkedinPlatformId = body.organization_urn ?? pendingData.profile_id ?? `linkedin_${Date.now()}`;
-	let account;
+	const linkedinConfig = OAUTH_CONFIGS.linkedin;
+	if (!linkedinConfig) {
+		throw new Error("LinkedIn OAuth config is not registered");
+	}
+	let account: typeof socialAccounts.$inferSelect | undefined;
 	try {
 		[account] = await db
 			.insert(socialAccounts)
@@ -2196,7 +2219,7 @@ app.openapi(selectLinkedInOrg, async (c) => {
 					account_type: body.account_type ?? "organization",
 					organization_urn: body.organization_urn,
 				},
-				scopes: OAUTH_CONFIGS.linkedin!.scopes,
+				scopes: linkedinConfig.scopes,
 			})
 			.onConflictDoUpdate({
 				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
@@ -2209,7 +2232,7 @@ app.openapi(selectLinkedInOrg, async (c) => {
 						account_type: body.account_type ?? "organization",
 						organization_urn: body.organization_urn,
 					},
-					scopes: OAUTH_CONFIGS.linkedin!.scopes,
+					scopes: linkedinConfig.scopes,
 					updatedAt: new Date(),
 				},
 			})
@@ -2363,7 +2386,11 @@ app.openapi(selectPinterestBoard, async (c) => {
 	}
 
 	const encPinterestToken = await maybeEncrypt(decryptedPinSetToken, c.env.ENCRYPTION_KEY);
-	let account;
+	const pinterestConfig = OAUTH_CONFIGS.pinterest;
+	if (!pinterestConfig) {
+		throw new Error("Pinterest OAuth config is not registered");
+	}
+	let account: typeof socialAccounts.$inferSelect | undefined;
 	try {
 		[account] = await db
 			.insert(socialAccounts)
@@ -2377,7 +2404,7 @@ app.openapi(selectPinterestBoard, async (c) => {
 				refreshToken: encPinRefreshToken,
 				tokenExpiresAt: pinTokenExpiresAt,
 				metadata: { default_board_id: body.board_id },
-				scopes: OAUTH_CONFIGS.pinterest!.scopes,
+				scopes: pinterestConfig.scopes,
 			})
 			.onConflictDoUpdate({
 				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
@@ -2388,7 +2415,7 @@ app.openapi(selectPinterestBoard, async (c) => {
 					refreshToken: encPinRefreshToken,
 					tokenExpiresAt: pinTokenExpiresAt,
 					metadata: { default_board_id: body.board_id },
-					scopes: OAUTH_CONFIGS.pinterest!.scopes,
+					scopes: pinterestConfig.scopes,
 					updatedAt: new Date(),
 				},
 			})
@@ -2566,7 +2593,11 @@ app.openapi(selectGBPLocation, async (c) => {
 		? await maybeEncrypt(decryptedGbpRefreshToken, c.env.ENCRYPTION_KEY)
 		: null;
 	const gbpTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
-	let account;
+	const googleBusinessConfig = OAUTH_CONFIGS.googlebusiness;
+	if (!googleBusinessConfig) {
+		throw new Error("Google Business OAuth config is not registered");
+	}
+	let account: typeof socialAccounts.$inferSelect | undefined;
 	try {
 		[account] = await db
 			.insert(socialAccounts)
@@ -2579,7 +2610,7 @@ app.openapi(selectGBPLocation, async (c) => {
 				refreshToken: encGbpRefreshToken,
 				tokenExpiresAt: gbpTokenExpiresAt,
 				metadata: { location_id: body.location_id, google_account_name: pendingData.google_account_name },
-				scopes: OAUTH_CONFIGS.googlebusiness!.scopes,
+				scopes: googleBusinessConfig.scopes,
 			})
 			.onConflictDoUpdate({
 				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
@@ -2589,7 +2620,7 @@ app.openapi(selectGBPLocation, async (c) => {
 					refreshToken: encGbpRefreshToken,
 					tokenExpiresAt: gbpTokenExpiresAt,
 					metadata: { location_id: body.location_id, google_account_name: pendingData.google_account_name },
-					scopes: OAUTH_CONFIGS.googlebusiness!.scopes,
+					scopes: googleBusinessConfig.scopes,
 					updatedAt: new Date(),
 				},
 			})
@@ -2720,7 +2751,11 @@ app.openapi(selectSnapchatProfile, async (c) => {
 		? await maybeEncrypt(decryptedSnapRefreshToken, c.env.ENCRYPTION_KEY)
 		: null;
 	const snapTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
-	let account;
+	const snapchatConfig = OAUTH_CONFIGS.snapchat;
+	if (!snapchatConfig) {
+		throw new Error("Snapchat OAuth config is not registered");
+	}
+	let account: typeof socialAccounts.$inferSelect | undefined;
 	try {
 		[account] = await db
 			.insert(socialAccounts)
@@ -2732,7 +2767,7 @@ app.openapi(selectSnapchatProfile, async (c) => {
 				accessToken: encSnapToken,
 				refreshToken: encSnapRefreshToken,
 				tokenExpiresAt: snapTokenExpiresAt,
-				scopes: OAUTH_CONFIGS.snapchat!.scopes,
+				scopes: snapchatConfig.scopes,
 			})
 			.onConflictDoUpdate({
 				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
@@ -2741,7 +2776,7 @@ app.openapi(selectSnapchatProfile, async (c) => {
 					accessToken: encSnapToken,
 					refreshToken: encSnapRefreshToken,
 					tokenExpiresAt: snapTokenExpiresAt,
-					scopes: OAUTH_CONFIGS.snapchat!.scopes,
+					scopes: snapchatConfig.scopes,
 					updatedAt: new Date(),
 				},
 			})
@@ -2922,7 +2957,7 @@ app.openapi(completeOAuth, async (c) => {
 			method?: string | null;
 			redirect_url?: string;
 			code_verifier: string | null;
-		}>("oauth-state:" + body.state, "json");
+		}>(`oauth-state:${body.state}`, "json");
 		if (
 			stateData?.org_id === orgId &&
 			stateData?.platform === platform
@@ -2943,7 +2978,7 @@ app.openapi(completeOAuth, async (c) => {
 			}
 			codeVerifier = stateData.code_verifier ?? undefined;
 			method = stateData.method ?? undefined;
-			await c.env.KV.delete("oauth-state:" + body.state);
+			await c.env.KV.delete(`oauth-state:${body.state}`);
 		} else {
 			return c.json(
 				{

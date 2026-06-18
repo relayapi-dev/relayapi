@@ -64,7 +64,6 @@ function makeStubDb(existingEmails: Set<string>) {
 		// biome-ignore lint/suspicious/noExplicitAny: drizzle table token
 		insert: (table: any) => {
 			const tableName = table?.[Symbol.for("drizzle:Name")] ?? "";
-			// biome-ignore lint/suspicious/noExplicitAny: chainable stub
 			return {
 				// biome-ignore lint/suspicious/noExplicitAny: chainable stub
 				values: (vals: any[]) =>

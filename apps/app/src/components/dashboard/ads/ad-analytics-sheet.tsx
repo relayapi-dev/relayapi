@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Loader2, TrendingUp, Eye, MousePointer, DollarSign, Users, BarChart3 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useApi } from "@/hooks/use-api";
-import { cn } from "@/lib/utils";
 
 interface AnalyticsData {
   summary: {
@@ -168,7 +167,8 @@ function DailyChart({ daily }: { daily: AnalyticsData["daily"] }) {
     <div>
       <h4 className="mb-2 text-sm font-medium">Daily Impressions</h4>
       <div className="overflow-x-auto">
-        <svg width={svgWidth} height={chartHeight} className="block">
+        <svg width={svgWidth} height={chartHeight} className="block" role="img">
+          <title>Daily impressions bar chart</title>
           {daily.map((d, i) => {
             const h = (d.impressions / max) * chartHeight;
             return (

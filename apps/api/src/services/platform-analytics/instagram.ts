@@ -10,6 +10,39 @@ import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 const API_VERSION = "v25.0";
 
+// Loose shapes for Instagram Graph API insights responses. All access is
+// runtime-guarded; fields are optional because the payload is untrusted here.
+interface IGInsightValue {
+	value?: number;
+	end_time?: string;
+}
+interface IGInsightMetric {
+	name: string;
+	values?: IGInsightValue[];
+	total_value?: { value?: number };
+}
+interface IGMediaItem {
+	id: string;
+	media_type?: string;
+	timestamp?: string;
+	caption?: string;
+	media_url?: string;
+	thumbnail_url?: string;
+	permalink?: string;
+}
+interface IGBreakdownResult {
+	dimension_values?: string[];
+	value?: number;
+}
+interface IGDemographicsResponse {
+	data?: Array<{
+		total_value?: {
+			value?: number;
+			breakdowns?: Array<{ results?: IGBreakdownResult[] }>;
+		};
+	}>;
+}
+
 function toUnix(dateStr: string): number {
 	return Math.floor(new Date(`${dateStr}T00:00:00Z`).getTime() / 1000);
 }
@@ -27,11 +60,11 @@ function getPreviousPeriod(range: DateRange): DateRange {
 	};
 }
 
-async function igFetch(
+async function igFetch<T = unknown>(
 	graphHost: string,
 	accessToken: string,
 	path: string,
-): Promise<any | null> {
+): Promise<T | null> {
 	const separator = path.includes("?") ? "&" : "?";
 	const url = `https://${graphHost}/${API_VERSION}${path}${separator}access_token=${accessToken}`;
 
@@ -44,7 +77,7 @@ async function igFetch(
 			);
 			return null;
 		}
-		return await res.json();
+		return (await res.json()) as T;
 	} catch (err) {
 		console.error(`[instagram-analytics] Fetch failed for ${path}:`, err);
 		return null;
@@ -56,14 +89,14 @@ async function igFetch(
  * The API returns `{ data: [{ name, values: [{ value, end_time }] }] }`.
  */
 function sumMetric(
-	insightsData: any[] | undefined,
+	insightsData: IGInsightMetric[] | undefined,
 	metricName: string,
 ): number {
 	if (!insightsData) return 0;
-	const metric = insightsData.find((m: any) => m.name === metricName);
+	const metric = insightsData.find((m) => m.name === metricName);
 	if (!metric?.values) return 0;
 	return metric.values.reduce(
-		(sum: number, v: any) => sum + (typeof v.value === "number" ? v.value : 0),
+		(sum, v) => sum + (typeof v.value === "number" ? v.value : 0),
 		0,
 	);
 }
@@ -73,11 +106,11 @@ function sumMetric(
  * Response shape: `{ data: [{ name, total_value: { value: number } }] }`.
  */
 function getTotalValue(
-	insightsData: any[] | undefined,
+	insightsData: IGInsightMetric[] | undefined,
 	metricName: string,
 ): number {
 	if (!insightsData) return 0;
-	const metric = insightsData.find((m: any) => m.name === metricName);
+	const metric = insightsData.find((m) => m.name === metricName);
 	if (typeof metric?.total_value?.value === "number")
 		return metric.total_value.value;
 	return 0;
@@ -94,12 +127,12 @@ async function fetchInsightsSums(
 
 	// reach supports time_series; total_interactions only supports total_value
 	const [reachData, engData] = await Promise.all([
-		igFetch(
+		igFetch<{ data?: IGInsightMetric[] }>(
 			graphHost,
 			accessToken,
 			`/${userId}/insights?metric=reach&period=day&metric_type=time_series&since=${since}&until=${until}`,
 		),
-		igFetch(
+		igFetch<{ data?: IGInsightMetric[] }>(
 			graphHost,
 			accessToken,
 			`/${userId}/insights?metric=total_interactions&period=day&metric_type=total_value&since=${since}&until=${until}`,
@@ -153,17 +186,17 @@ export function createInstagramAnalytics(
 							graphHost,
 							accessToken,
 							`/${platformAccountId}/insights?metric=reach&period=day&metric_type=time_series&since=${since}&until=${until}`,
-						),
+						) as Promise<{ data?: IGInsightMetric[] } | null>,
 						igFetch(
 							graphHost,
 							accessToken,
 							`/${platformAccountId}/insights?metric=total_interactions,accounts_engaged,follows_and_unfollows&period=day&metric_type=total_value&since=${since}&until=${until}`,
-						),
+						) as Promise<{ data?: IGInsightMetric[] } | null>,
 						igFetch(
 							graphHost,
 							accessToken,
 							`/${platformAccountId}?fields=followers_count`,
-						),
+						) as Promise<{ followers_count?: number } | null>,
 						fetchInsightsSums(
 							graphHost,
 							accessToken,
@@ -232,19 +265,21 @@ export function createInstagramAnalytics(
 				// Don't rely on since/until for IG /media edge — it can be
 				// unreliable on newer Graph API versions. Fetch recent media
 				// and filter client-side by timestamp (same approach as Facebook).
-				const mediaData = await igFetch(
+				const mediaData = await igFetch<{ data?: IGMediaItem[] }>(
 					graphHost,
 					accessToken,
 					`/${platformAccountId}/media?fields=id,caption,timestamp,media_type,media_url,thumbnail_url,permalink&limit=${limit}`,
 				);
 
-				const allItems: any[] = mediaData?.data ?? [];
+				const allItems: IGMediaItem[] = mediaData?.data ?? [];
 				if (allItems.length === 0) return [];
 
 				const fromTs = toUnix(dateRange.from);
 				const untilTs = toUnix(dateRange.to) + 86400; // include entire "to" day
-				const mediaItems = allItems.filter((item: any) => {
-					const ts = Math.floor(new Date(item.timestamp).getTime() / 1000);
+				const mediaItems = allItems.filter((item) => {
+					const ts = Math.floor(
+						new Date(item.timestamp ?? 0).getTime() / 1000,
+					);
 					return ts >= fromTs && ts < untilTs;
 				});
 
@@ -258,16 +293,18 @@ export function createInstagramAnalytics(
 				for (let i = 0; i < mediaItems.length; i += CONCURRENCY) {
 					const chunk = mediaItems.slice(i, i + CONCURRENCY);
 					const chunkResults = await Promise.all(
-						chunk.map(async (item: any) => {
-							const insightsData = await igFetch(
+						chunk.map(async (item) => {
+							const insightsData = await igFetch<{
+								data?: IGInsightMetric[];
+							}>(
 								graphHost,
 								accessToken,
 								`/${item.id}/insights?metric=reach,likes,comments,shares,saved,views,total_interactions`,
 							);
 
-							const metrics: any[] = insightsData?.data ?? [];
+							const metrics: IGInsightMetric[] = insightsData?.data ?? [];
 							const getValue = (name: string): number => {
-								const m = metrics.find((x: any) => x.name === name);
+								const m = metrics.find((x) => x.name === name);
 								// Media insights return a single value, not an array
 								if (m?.values?.[0]?.value != null)
 									return m.values[0].value;
@@ -299,7 +336,7 @@ export function createInstagramAnalytics(
 							return {
 								platform_post_id: item.id,
 								content: item.caption ?? null,
-								published_at: item.timestamp,
+								published_at: item.timestamp ?? "",
 								media_url: mediaUrl,
 								media_type: item.media_type ?? null,
 								impressions: postReach, // IG uses reach
@@ -339,12 +376,12 @@ export function createInstagramAnalytics(
 				// One media fetch + one insights fetch for the exact post,
 				// instead of listing up to 50 media items + N insights calls.
 				const [mediaData, insightsData] = await Promise.all([
-					igFetch(
+					igFetch<IGMediaItem>(
 						graphHost,
 						accessToken,
 						`/${platformPostId}?fields=id,caption,timestamp,media_type,media_url,thumbnail_url,permalink`,
 					),
-					igFetch(
+					igFetch<{ data?: IGInsightMetric[] }>(
 						graphHost,
 						accessToken,
 						`/${platformPostId}/insights?metric=reach,likes,comments,shares,saved,views,total_interactions`,
@@ -353,9 +390,9 @@ export function createInstagramAnalytics(
 
 				if (!mediaData?.id) return null;
 
-				const metrics: any[] = insightsData?.data ?? [];
+				const metrics: IGInsightMetric[] = insightsData?.data ?? [];
 				const getValue = (name: string): number => {
-					const m = metrics.find((x: any) => x.name === name);
+					const m = metrics.find((x) => x.name === name);
 					if (m?.values?.[0]?.value != null) return m.values[0].value;
 					if (typeof m?.total_value?.value === "number")
 						return m.total_value.value;
@@ -382,7 +419,7 @@ export function createInstagramAnalytics(
 				return {
 					platform_post_id: mediaData.id,
 					content: mediaData.caption ?? null,
-					published_at: mediaData.timestamp,
+					published_at: mediaData.timestamp ?? "",
 					media_url: mediaUrl,
 					media_type: mediaData.media_type ?? null,
 					impressions: postReach, // IG uses reach
@@ -415,17 +452,17 @@ export function createInstagramAnalytics(
 				// Fetch all three breakdowns in parallel
 				const [cityData, countryData, ageGenderData] =
 					await Promise.all([
-						igFetch(
+						igFetch<IGDemographicsResponse>(
 							graphHost,
 							accessToken,
 							`/${platformAccountId}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=city`,
 						),
-						igFetch(
+						igFetch<IGDemographicsResponse>(
 							graphHost,
 							accessToken,
 							`/${platformAccountId}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=country`,
 						),
-						igFetch(
+						igFetch<IGDemographicsResponse>(
 							graphHost,
 							accessToken,
 							`/${platformAccountId}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=age,gender`,
@@ -436,7 +473,7 @@ export function createInstagramAnalytics(
 				const cityBreakdown: Record<string, number> =
 					cityData?.data?.[0]?.total_value?.breakdowns?.[0]
 						?.results?.reduce(
-							(acc: Record<string, number>, r: any) => {
+							(acc: Record<string, number>, r: IGBreakdownResult) => {
 								const name =
 									r.dimension_values?.[0] ?? "Unknown";
 								acc[name] = r.value ?? 0;
@@ -454,7 +491,7 @@ export function createInstagramAnalytics(
 				const countryBreakdown: Record<string, number> =
 					countryData?.data?.[0]?.total_value?.breakdowns?.[0]
 						?.results?.reduce(
-							(acc: Record<string, number>, r: any) => {
+							(acc: Record<string, number>, r: IGBreakdownResult) => {
 								const code =
 									r.dimension_values?.[0] ?? "XX";
 								acc[code] = r.value ?? 0;
@@ -545,12 +582,12 @@ export function createInstagramAnalytics(
 
 				// reach supports time_series; total_interactions only supports total_value
 				const [reachData, engagementData] = await Promise.all([
-					igFetch(
+					igFetch<{ data?: IGInsightMetric[] }>(
 						graphHost,
 						accessToken,
 						`/${platformAccountId}/insights?metric=reach&period=day&metric_type=time_series&since=${since}&until=${until}`,
 					),
-					igFetch(
+					igFetch<{ data?: IGInsightMetric[] }>(
 						graphHost,
 						accessToken,
 						`/${platformAccountId}/insights?metric=total_interactions&period=day&metric_type=total_value&since=${since}&until=${until}`,
@@ -558,9 +595,9 @@ export function createInstagramAnalytics(
 				]);
 
 				const reachMetric = (reachData?.data ?? []).find(
-					(m: any) => m.name === "reach",
+					(m) => m.name === "reach",
 				);
-				const reachValues: any[] = reachMetric?.values ?? [];
+				const reachValues: IGInsightValue[] = reachMetric?.values ?? [];
 				if (reachValues.length === 0) return [];
 
 				const totalEngagement = getTotalValue(
@@ -568,12 +605,12 @@ export function createInstagramAnalytics(
 					"total_interactions",
 				);
 				const totalReach = reachValues.reduce(
-					(s: number, v: any) => s + (v.value ?? 0),
+					(s, v) => s + (v.value ?? 0),
 					0,
 				);
 
 				return reachValues
-					.map((v: any) => {
+					.map((v) => {
 						const date = v.end_time?.slice(0, 10) ?? "";
 						if (!date) return null;
 						const dailyReach = v.value ?? 0;

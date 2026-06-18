@@ -6,10 +6,9 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	automationEntrypoints,
-	automationRuns,
 	automations,
 } from "@relayapi/db";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, sql } from "drizzle-orm";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
@@ -34,15 +33,17 @@ import { armAllScheduleEntrypointsForAutomation } from "../services/automations/
 import { simulate } from "../services/automations/simulator";
 import {
 	buildGraphFromTemplate,
+	type TemplateBuildOutput,
 	type TemplateKind,
 } from "../services/automations/templates";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
 import { validateGraph } from "../services/automations/validator";
+import type { Graph } from "../schemas/automation-graph";
+import type { Context } from "hono";
 import type { Env, Variables } from "../types";
 import {
 	AUTOMATION_CATALOG,
 	AUTOMATION_CATALOG_ETAG,
-	AUTOMATION_CATALOG_JSON,
 } from "./_automation-catalog";
 import {
 	aggregateInsights,
@@ -52,6 +53,8 @@ import {
 } from "./_automation-insights";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -122,11 +125,11 @@ function serializeAutomationListItem(
 	};
 }
 
-function notFound(c: any) {
+function notFound(c: AppContext) {
 	return c.json(
 		{ error: { code: "NOT_FOUND", message: "Automation not found" } },
 		404,
-	);
+	) as never;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +318,7 @@ app.openapi(createAutomation, async (c) => {
 
 	let name = body.name;
 	const description = body.description ?? null;
-	let graph: any = {
+	let graph: Graph = {
 		schema_version: 1,
 		root_node_key: null,
 		nodes: [],
@@ -335,7 +338,7 @@ app.openapi(createAutomation, async (c) => {
 	let entrypoints: EntrypointRow[] = [];
 
 	if (body.template) {
-		let built;
+		let built: TemplateBuildOutput | undefined;
 		try {
 			built = buildGraphFromTemplate({
 				kind: body.template.kind as TemplateKind,
@@ -542,7 +545,7 @@ app.openapi(getAutomation, async (c) => {
 		.limit(1);
 	if (!row) return notFound(c);
 	const denied = assertWorkspaceScope(c, row.workspaceId);
-	if (denied) return denied;
+	if (denied) return denied as never;
 	return c.json(serializeAutomation(row), 200);
 });
 
@@ -584,7 +587,7 @@ app.openapi(updateAutomation, async (c) => {
 		.limit(1);
 	if (!existing) return notFound(c);
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied;
+	if (denied) return denied as never;
 
 	const patch: Partial<typeof automations.$inferInsert> = {
 		updatedAt: new Date(),
@@ -630,7 +633,7 @@ app.openapi(deleteAutomation, async (c) => {
 		.limit(1);
 	if (!existing) return notFound(c);
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied;
+	if (denied) return denied as never;
 
 	await db.delete(automations).where(eq(automations.id, id));
 	return c.body(null, 204);
@@ -641,7 +644,7 @@ app.openapi(deleteAutomation, async (c) => {
 // ---------------------------------------------------------------------------
 
 async function loadScopedAutomation(
-	c: any,
+	c: AppContext,
 	id: string,
 ): Promise<AutomationRow | null> {
 	const orgId = c.get("orgId");
@@ -663,7 +666,7 @@ function hasFatalErrors(row: AutomationRow): boolean {
 }
 
 async function setStatus(
-	c: any,
+	c: AppContext,
 	id: string,
 	status: "draft" | "active" | "paused" | "archived",
 ): Promise<AutomationRow | null> {
@@ -677,11 +680,11 @@ async function setStatus(
 }
 
 async function runValidation(
-	c: any,
+	c: AppContext,
 	row: AutomationRow,
 ): Promise<AutomationRow> {
 	const db = c.get("db");
-	const validation = validateGraph(row.graph as any);
+	const validation = validateGraph(row.graph as Graph);
 	const [updated] = await db
 		.update(automations)
 		.set({
@@ -922,7 +925,7 @@ app.openapi(replaceGraph, async (c) => {
 	if (!row) return notFound(c);
 
 	const db = c.get("db");
-	const validation = validateGraph(body.graph as any);
+	const validation = validateGraph(body.graph as Graph);
 
 	// Force-pause if the current row is active and we've introduced fatal errors.
 	const forcePause =
@@ -1073,7 +1076,7 @@ app.openapi(simulateAutomationRoute, async (c) => {
 	if (!row) return notFound(c);
 
 	const result = await simulate({
-		graph: row.graph as any,
+		graph: row.graph as Graph,
 		startNodeKey: body.start_node_key,
 		testContext: body.test_context,
 		branchChoices: body.branch_choices,

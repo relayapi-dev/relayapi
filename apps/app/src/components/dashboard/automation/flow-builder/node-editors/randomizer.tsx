@@ -6,7 +6,7 @@
 // adding/removing a variant updates the node's outputs live.
 
 import { AlertTriangle, Plus, Trash2 } from "lucide-react";
-import { Field, FormShell, INPUT_CLS, numberOrUndefined } from "./shared";
+import { Field, FormShell, numberOrUndefined } from "./shared";
 
 interface Variant {
 	key: string;
@@ -33,7 +33,9 @@ export function RandomizerEditor({
 
 	const patchVariant = (idx: number, p: Partial<Variant>) => {
 		const next = variants.slice();
-		next[idx] = { ...next[idx]!, ...p };
+		const current = next[idx];
+		if (!current) return;
+		next[idx] = { ...current, ...p };
 		setVariants(next);
 	};
 

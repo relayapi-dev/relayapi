@@ -14,13 +14,14 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
 import { emitInternalEvent } from "../internal-events";
 import type { InboundEvent } from "../trigger-matcher";
+import type { RunContext } from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type TagAddAction = Extract<Action, { type: "tag_add" }>;
 type TagRemoveAction = Extract<Action, { type: "tag_remove" }>;
 
 function internalEventFromCtx(
-	ctx: any,
+	ctx: RunContext,
 	kind: "tag_applied" | "tag_removed",
 	tag: string,
 	actionId: string,
@@ -62,8 +63,9 @@ const tagAdd: ActionHandler<TagAddAction> = async (action, ctx) => {
 			eq(contacts.organizationId, ctx.organizationId),
 		),
 	});
-	const wasPresent = Array.isArray(existing?.tags)
-		? (existing!.tags as string[]).includes(tag)
+	const existingTags = existing?.tags;
+	const wasPresent = Array.isArray(existingTags)
+		? (existingTags as string[]).includes(tag)
 		: false;
 
 	await db
@@ -127,8 +129,9 @@ const tagRemove: ActionHandler<TagRemoveAction> = async (action, ctx) => {
 			eq(contacts.organizationId, ctx.organizationId),
 		),
 	});
-	const wasPresent = Array.isArray(existing?.tags)
-		? (existing!.tags as string[]).includes(tag)
+	const existingTags = existing?.tags;
+	const wasPresent = Array.isArray(existingTags)
+		? (existingTags as string[]).includes(tag)
 		: false;
 
 	await db

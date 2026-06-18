@@ -139,7 +139,9 @@ describe("hasInteractiveElements", () => {
 	it("returns true for a gallery card with a branch button", () => {
 		const gallery = newBlock("gallery");
 		if (gallery.type !== "gallery") throw new Error("bad factory");
-		gallery.cards[0]!.buttons = [newButton("branch")];
+		const firstCard = gallery.cards[0];
+		if (!firstCard) throw new Error("expected a gallery card");
+		firstCard.buttons = [newButton("branch")];
 		const cfg: MessageConfig = { blocks: [gallery] };
 		expect(hasInteractiveElements(cfg)).toBe(true);
 	});

@@ -38,6 +38,7 @@ function Toggle({
 }) {
   return (
     <button
+      type="button"
       onClick={onToggle}
       disabled={disabled}
       className={cn(
@@ -559,6 +560,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
               const tabKey = tab.toLowerCase().replace(" ", "-") as NonNullable<SettingsPageProps["initialTab"]>;
               return (
                 <button
+                  type="button"
                   key={tab}
                   onClick={() => switchTab(tabKey)}
                   className={cn(
@@ -664,11 +666,15 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
             {/* Name */}
             <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label
+                htmlFor="settings-org-name"
+                className="text-xs font-medium text-muted-foreground"
+              >
                 Organization Name
               </label>
               <div className="flex gap-2">
                 <input
+                  id="settings-org-name"
                   type="text"
                   value={orgName}
                   onChange={(e) => setOrgName(e.target.value)}
@@ -696,11 +702,15 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
             {/* Slug */}
             <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label
+                htmlFor="settings-org-slug"
+                className="text-xs font-medium text-muted-foreground"
+              >
                 URL Slug
               </label>
               <div className="flex gap-2">
                 <input
+                  id="settings-org-slug"
                   type="text"
                   value={orgSlug}
                   onChange={(e) => setOrgSlug(slugify(e.target.value))}
@@ -761,6 +771,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
           <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
             <p className="text-[12px]">Failed to load notification preferences</p>
             <button
+              type="button"
               onClick={() => {
                 setPrefsError(false);
                 setPrefsLoading(true);
@@ -857,9 +868,9 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
           <div className="p-4 space-y-4">
             {/* Mode */}
             <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">
+              <span className="block text-xs font-medium text-muted-foreground">
                 URL Shortening Mode
-              </label>
+              </span>
               <div className="space-y-1.5">
                 {(["always", "ask", "never"] as const).map((mode) => (
                   <label
@@ -896,9 +907,9 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
             {slMode !== "never" && (
               <>
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-muted-foreground">
+                  <span className="block text-xs font-medium text-muted-foreground">
                     Provider
-                  </label>
+                  </span>
                   <Select value={slProvider} onValueChange={(v) => { setSlProvider(v); setSlTestResult(null); }}>
                     <SelectTrigger size="sm" className="h-9 text-xs">
                       <SelectValue placeholder="Select a provider" />
@@ -914,9 +925,9 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
                 {slProvider !== "relayapi" && (
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-muted-foreground">
+                  <span className="block text-xs font-medium text-muted-foreground">
                     API Key
-                  </label>
+                  </span>
                   {slHasKey && !slEditingKey ? (
                     <div className="flex items-center gap-2">
                       <div className="flex-1 rounded-md border border-border bg-accent/5 px-3 py-2 text-[13px] text-muted-foreground">
@@ -944,11 +955,15 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                 )}
 
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-muted-foreground">
+                  <label
+                    htmlFor="settings-sl-domain"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
                     Custom Domain{" "}
                     <span className="font-normal text-muted-foreground/60">(optional)</span>
                   </label>
                   <input
+                    id="settings-sl-domain"
                     type="text"
                     value={slDomain}
                     onChange={(e) => setSlDomain(e.target.value)}
@@ -1092,6 +1107,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                     <div className="flex items-center gap-1 shrink-0">
                       {!sig.is_default && (
                         <button
+                          type="button"
                           onClick={() => handleSetDefaultSig(sig.id)}
                           className="rounded p-1 hover:bg-accent/50 transition-colors"
                           title="Set as default"
@@ -1100,6 +1116,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                         </button>
                       )}
                       <button
+                        type="button"
                         onClick={() => handleEditSig(sig)}
                         className="rounded p-1 hover:bg-accent/50 transition-colors"
                         title="Edit"
@@ -1107,6 +1124,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                         <Pen className="size-3.5 text-foreground/40" />
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleDeleteSig(sig.id)}
                         className="rounded p-1 hover:bg-accent/50 transition-colors"
                         title="Delete"
@@ -1281,10 +1299,14 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                 This will permanently delete <span className="font-medium text-foreground">{orgName}</span> and all associated data including API keys, connections, posts, webhooks, and team members. This action cannot be undone.
               </p>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label
+                  htmlFor="settings-delete-confirm"
+                  className="text-xs font-medium text-muted-foreground"
+                >
                   Type <span className="font-mono text-foreground">{orgName}</span> to confirm
                 </label>
                 <input
+                  id="settings-delete-confirm"
                   type="text"
                   value={deleteConfirmText}
                   onChange={(e) => setDeleteConfirmText(e.target.value)}

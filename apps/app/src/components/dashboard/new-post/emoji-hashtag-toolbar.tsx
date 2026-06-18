@@ -1,6 +1,6 @@
-import { Hash, Plus, Smile, Trash2, X } from "lucide-react";
+import { Hash, Plus, Smile, Trash2, } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
 	countCharsForPlatform,

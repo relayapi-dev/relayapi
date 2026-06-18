@@ -36,7 +36,8 @@ const ScheduledAt = z
 			if (val === "now" || val === "draft" || val === "auto") return true;
 			// Must be a valid ISO 8601 datetime
 			const date = new Date(val);
-			if (isNaN(date.getTime()) || !/^\d{4}-\d{2}-\d{2}/.test(val)) return false;
+			if (Number.isNaN(date.getTime()) || !/^\d{4}-\d{2}-\d{2}/.test(val))
+				return false;
 			// Must not be more than 30 days in the future
 			const maxDate = new Date();
 			maxDate.setDate(maxDate.getDate() + MAX_SCHEDULE_DAYS);

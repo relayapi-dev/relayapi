@@ -102,7 +102,7 @@ app.openapi(listByPost, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied as any;
+	if (denied) return denied as never;
 
 	const conditions = [eq(crossPostActions.postId, post_id)];
 
@@ -135,7 +135,7 @@ app.openapi(listByPost, async (c) => {
 	const data = rows.slice(0, limit).map(serializeAction);
 
 	return c.json(
-		{ data, next_cursor: hasMore ? data[data.length - 1]!.id : null, has_more: hasMore },
+		{ data, next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null, has_more: hasMore },
 		200,
 	);
 });
@@ -162,7 +162,7 @@ app.openapi(cancelAction, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, action.postWorkspaceId);
-	if (denied) return denied as any;
+	if (denied) return denied as never;
 
 	if (action.action.status !== "pending") {
 		return c.json({ error: { code: "CONFLICT", message: "Only pending actions can be cancelled" } }, 409);
@@ -174,7 +174,8 @@ app.openapi(cancelAction, async (c) => {
 		.where(eq(crossPostActions.id, id))
 		.returning();
 
-	return c.json(serializeAction(updated!), 200);
+	if (!updated) throw new Error("Failed to update cross-post action");
+	return c.json(serializeAction(updated), 200);
 });
 
 export default app;

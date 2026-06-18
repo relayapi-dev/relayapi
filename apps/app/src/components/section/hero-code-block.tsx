@@ -9,7 +9,7 @@ export function HeroCodeBlock() {
     const [activeTab, setActiveTab] = useState<string>("openclaw");
     const [copied, setCopied] = useState(false);
 
-    const activeCommand = INSTALL_TABS.find((t) => t.id === activeTab)!.command;
+    const activeCommand = (INSTALL_TABS.find((t) => t.id === activeTab) ?? INSTALL_TABS[0]).command;
 
     const handleCopy = () => {
         navigator.clipboard.writeText(activeCommand);
@@ -31,6 +31,7 @@ export function HeroCodeBlock() {
                         <div className="flex items-center gap-1">
                             {INSTALL_TABS.map((tab) => (
                                 <button
+                                    type="button"
                                     key={tab.id}
                                     onClick={() => {
                                         setActiveTab(tab.id);
@@ -55,12 +56,14 @@ export function HeroCodeBlock() {
                             {activeCommand}
                         </code>
                         <button
+                            type="button"
                             onClick={handleCopy}
                             className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-white/5 transition-colors shrink-0"
                             aria-label="Copy command"
                         >
                             {copied ? (
                                 <svg
+                                    aria-hidden="true"
                                     viewBox="0 0 24 24"
                                     fill="none"
                                     stroke="currentColor"
@@ -73,6 +76,7 @@ export function HeroCodeBlock() {
                                 </svg>
                             ) : (
                                 <svg
+                                    aria-hidden="true"
                                     viewBox="0 0 24 24"
                                     fill="none"
                                     stroke="currentColor"

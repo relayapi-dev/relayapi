@@ -62,6 +62,7 @@ function AccountRow({
 }) {
 	return (
 		<label
+			htmlFor={`channel-account-${account.id}`}
 			className={cn(
 				"flex items-center gap-3 py-2 hover:bg-accent/30 cursor-pointer transition-colors",
 				indented ? "pl-9 pr-3" : "px-3",
@@ -69,6 +70,7 @@ function AccountRow({
 			)}
 		>
 			<Checkbox
+				id={`channel-account-${account.id}`}
 				checked={checked}
 				onCheckedChange={(c) => onToggle(account.id, !!c)}
 			/>
@@ -118,7 +120,6 @@ export function ChannelSelector({
 	accounts,
 	workspaces,
 	selectedAccountIds,
-	selectedGroupIds,
 	onToggleAccount,
 	onToggleGroup,
 	onDeselectAll,

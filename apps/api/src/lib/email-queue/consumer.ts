@@ -26,7 +26,7 @@ export async function processEmailMessage(
 			return { success: true, shouldRetry: false };
 		}
 
-		const statusCode = (error as any).statusCode as number | undefined;
+		const statusCode = (error as { statusCode?: number }).statusCode;
 		const shouldRetry = statusCode ? RETRYABLE_STATUS_CODES.has(statusCode) : false;
 
 		console.error(

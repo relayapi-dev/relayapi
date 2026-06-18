@@ -159,8 +159,9 @@ export async function syncExternalAds(
 			externalAd: (typeof result.ads)[number],
 		): Promise<string | null> {
 			const platformCampaignId = externalAd.platformCampaignId;
-			if (resolvedCampaignId.has(platformCampaignId)) {
-				return resolvedCampaignId.get(platformCampaignId)!;
+			const alreadyResolved = resolvedCampaignId.get(platformCampaignId);
+			if (alreadyResolved !== undefined) {
+				return alreadyResolved;
 			}
 
 			const existing = campaignByPlatformId.get(platformCampaignId);
@@ -320,8 +321,8 @@ export async function syncExternalAds(
 			(now.getUTCHours() === 0 && now.getUTCMinutes() < 30 ? 30 : 3);
 		const windowStart = new Date(now);
 		windowStart.setDate(windowStart.getDate() - windowDays);
-		const endDate = now.toISOString().split("T")[0]!;
-		const startDate = windowStart.toISOString().split("T")[0]!;
+		const endDate = now.toISOString().split("T")[0] ?? "";
+		const startDate = windowStart.toISOString().split("T")[0] ?? "";
 
 		// Process in batches of 5 for bounded concurrency. Reuse this sync's db
 		// client instead of opening a fresh postgres client per ad.
@@ -405,7 +406,9 @@ export async function syncAllExternalAds(env: Env): Promise<void> {
 			console.error("[Ad Sync] Failed to enqueue page:", err);
 		}
 
-		lastId = page[page.length - 1]!.id;
+		const lastRow = page[page.length - 1];
+		if (!lastRow) break;
+		lastId = lastRow.id;
 		if (page.length < PAGE_SIZE) break;
 	}
 

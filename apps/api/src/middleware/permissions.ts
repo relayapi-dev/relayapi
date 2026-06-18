@@ -19,7 +19,10 @@ export const readOnlyMiddleware = createMiddleware<{
 
 	const method = c.req.method;
 	if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
-		return assertWriteAccess(c)!;
+		// hasWriteAccess(c) is false here, so assertWriteAccess always returns a
+		// 403 Response (never undefined); the guard keeps that invariant explicit.
+		const denied = assertWriteAccess(c);
+		if (denied) return denied;
 	}
 
 	return next();

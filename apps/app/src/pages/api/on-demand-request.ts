@@ -33,7 +33,7 @@ export const POST: APIRoute = async (context) => {
 			);
 		}
 
-		const cfEnv = env as Record<string, any>;
+		const cfEnv = env as Record<string, unknown>;
 
 		const html = `
 			<h2>New On-Demand Platform Request</h2>
@@ -62,7 +62,7 @@ export const POST: APIRoute = async (context) => {
 		if (queue) {
 			await queue.send(emailMessage);
 		} else if (cfEnv.RESEND_API_KEY) {
-			const resend = new Resend(cfEnv.RESEND_API_KEY);
+			const resend = new Resend(cfEnv.RESEND_API_KEY as string);
 			await resend.emails.send(emailMessage);
 		} else {
 			return Response.json(

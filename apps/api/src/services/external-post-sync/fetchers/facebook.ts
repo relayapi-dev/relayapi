@@ -6,7 +6,6 @@
 import type {
 	ExternalPostFetcher,
 	ExternalPostData,
-	FetchPostsResult,
 } from "../types";
 import { RateLimitError } from "../types";
 import { parseRateLimitHeaders } from "../rate-limits";
@@ -25,10 +24,29 @@ const POST_FIELDS = [
 	"attachments{media_type,unshimmed_url,title,description}",
 ].join(",");
 
-async function fbFetch(
+interface FacebookRawPost {
+	id: string;
+	message?: string;
+	created_time?: string;
+	full_picture?: string;
+	permalink_url?: string;
+	status_type?: string;
+	attachments?: { data?: Array<{ media_type?: string }> };
+}
+
+interface FacebookFeedResponse {
+	data?: FacebookRawPost[];
+	paging?: { next?: string };
+}
+
+interface FacebookInsightsResponse {
+	data?: Array<{ name: string; values?: Array<{ value?: number }> }>;
+}
+
+async function fbFetch<T = unknown>(
 	url: string,
 	accessToken: string,
-): Promise<{ data: any; headers: Headers }> {
+): Promise<{ data: T; headers: Headers }> {
 	const sep = url.includes("?") ? "&" : "?";
 	const res = await fetch(`${url}${sep}access_token=${accessToken}`);
 	if (res.status === 429) {
@@ -42,10 +60,10 @@ async function fbFetch(
 		const body = await res.text();
 		throw new Error(`Facebook API ${res.status}: ${body}`);
 	}
-	return { data: await res.json(), headers: res.headers };
+	return { data: (await res.json()) as T, headers: res.headers };
 }
 
-function parsePost(raw: any): ExternalPostData {
+function parsePost(raw: FacebookRawPost): ExternalPostData {
 	const thumbnailUrl: string | null = raw.full_picture ?? null;
 	const mediaUrls: string[] = thumbnailUrl ? [thumbnailUrl] : [];
 
@@ -90,7 +108,10 @@ export const facebookPostFetcher: ExternalPostFetcher = {
 			}
 		}
 
-		const { data: json, headers } = await fbFetch(url, accessToken);
+		const { data: json, headers } = await fbFetch<FacebookFeedResponse>(
+			url,
+			accessToken,
+		);
 		const posts: ExternalPostData[] = (json.data ?? []).map(parsePost);
 
 		const nextCursor = json.paging?.next ?? null;
@@ -110,7 +131,7 @@ export const facebookPostFetcher: ExternalPostFetcher = {
 		// Facebook insights: batch up to 50 per request
 		for (const postId of platformPostIds) {
 			try {
-				const { data: json } = await fbFetch(
+				const { data: json } = await fbFetch<FacebookInsightsResponse>(
 					`${BASE}/${postId}/insights?metric=post_media_view,post_clicks,post_reactions_like_total`,
 					accessToken,
 				);

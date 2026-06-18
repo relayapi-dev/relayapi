@@ -329,10 +329,13 @@ describe("simulate (dry-run walker)", () => {
 		};
 		const result = await simulate({ graph });
 		expect(result.steps.length).toBe(2);
-		expect(result.steps[0]!.node_kind).toBe("message");
-		expect(result.steps[0]!.outcome).toBe("advance");
-		expect(result.steps[1]!.node_kind).toBe("end");
-		expect(result.steps[1]!.outcome).toBe("end");
+		const step0 = result.steps[0];
+		const step1 = result.steps[1];
+		if (!step0 || !step1) throw new Error("expected two steps");
+		expect(step0.node_kind).toBe("message");
+		expect(step0.outcome).toBe("advance");
+		expect(step1.node_kind).toBe("end");
+		expect(step1.outcome).toBe("end");
 	});
 
 	it("honours branchChoices for condition nodes", async () => {
@@ -425,7 +428,9 @@ describe("simulate (dry-run walker)", () => {
 			edges: [],
 		};
 		const result = await simulate({ graph });
-		expect(result.steps[0]!.outcome).toBe("wait_input");
+		const step0 = result.steps[0];
+		if (!step0) throw new Error("expected a step");
+		expect(step0.outcome).toBe("wait_input");
 		expect(result.exit_reason).toBe("wait_input");
 	});
 
@@ -470,7 +475,9 @@ describe("simulate (dry-run walker)", () => {
 		// Default (no branch choice) — should advance via `next`.
 		const defaultResult = await simulate({ graph });
 		expect(defaultResult.steps.map((s) => s.node_key)).toEqual(["ag", "ok"]);
-		expect(defaultResult.steps[0]!.exited_via_port_key).toBe("next");
+		const defaultStep0 = defaultResult.steps[0];
+		if (!defaultStep0) throw new Error("expected a step");
+		expect(defaultStep0.exited_via_port_key).toBe("next");
 
 		// Forced `error` — should advance via `error`.
 		const forcedResult = await simulate({
@@ -478,7 +485,9 @@ describe("simulate (dry-run walker)", () => {
 			branchChoices: { ag: "error" },
 		});
 		expect(forcedResult.steps.map((s) => s.node_key)).toEqual(["ag", "err"]);
-		expect(forcedResult.steps[0]!.exited_via_port_key).toBe("error");
+		const forcedStep0 = forcedResult.steps[0];
+		if (!forcedStep0) throw new Error("expected a step");
+		expect(forcedStep0.exited_via_port_key).toBe("error");
 	});
 });
 
@@ -505,6 +514,7 @@ describe("matchAndEnroll", () => {
 			})
 			.returning();
 		expect(ep).toBeTruthy();
+		if (!ep) throw new Error("expected ep to exist");
 
 		const event: InboundEvent = {
 			kind: "dm_received",
@@ -518,7 +528,7 @@ describe("matchAndEnroll", () => {
 		const result = await matchAndEnroll(db, event, {});
 		expect(result.matched).toBe(true);
 		if (result.matched) {
-			expect(result.entrypointId).toBe(ep!.id);
+			expect(result.entrypointId).toBe(ep.id);
 			expect(result.automationId).toBe(auto.id);
 		}
 	});
@@ -987,7 +997,8 @@ describe("processScheduledJobs", () => {
 		const refreshed = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, run.id),
 		});
-		expect(["active", "completed", "waiting"]).toContain(refreshed!.status);
+		if (!refreshed) throw new Error("expected refreshed run to exist");
+		expect(["active", "completed", "waiting"]).toContain(refreshed.status);
 	});
 
 	it("reclaims stale processing rows", async () => {
@@ -1026,8 +1037,9 @@ describe("processScheduledJobs", () => {
 		const refreshed = await db.query.automationScheduledJobs.findFirst({
 			where: eq(automationScheduledJobs.id, stuck.id),
 		});
+		if (!refreshed) throw new Error("expected refreshed job to exist");
 		// Stale job should have been reclaimed and processed (done), or at
 		// minimum flipped out of processing.
-		expect(refreshed!.status).not.toBe("processing");
+		expect(refreshed.status).not.toBe("processing");
 	});
 });

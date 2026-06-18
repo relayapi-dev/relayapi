@@ -1,6 +1,7 @@
 import {
 	apikey,
 	createDb,
+	type Database,
 	invoices,
 	organizationSubscriptions,
 	whatsappPhoneNumbers,
@@ -15,10 +16,6 @@ import type { Env, KVKeyData } from "../types";
 import { PRICING } from "../types";
 
 const app = new Hono<{ Bindings: Env }>();
-
-interface ApiKeyLookupDb {
-	select(...args: any[]): any;
-}
 
 /** Extract subscription ID from an invoice's parent field */
 function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
@@ -446,7 +443,7 @@ async function handleEvent(event: Stripe.Event, env: Env): Promise<void> {
 
 async function syncOrgKeysToKV(
 	env: Env,
-	db: ApiKeyLookupDb,
+	db: Database,
 	orgId: string,
 	plan: "free" | "pro",
 	callsIncluded: number,
@@ -467,9 +464,11 @@ async function syncOrgKeysToKV(
 	// stale period splits a month's usage across two records, each granting a
 	// full included allowance and under-billing overage). Free plans carry no
 	// period and fall back to calendar month.
-	const hasPeriod = plan === "pro" && opts?.period?.start && opts?.period?.end;
-	const periodStart = hasPeriod ? opts!.period!.start!.toISOString() : null;
-	const periodEnd = hasPeriod ? opts!.period!.end!.toISOString() : null;
+	const periodStartDate = plan === "pro" ? (opts?.period?.start ?? null) : null;
+	const periodEndDate = plan === "pro" ? (opts?.period?.end ?? null) : null;
+	const hasPeriod = periodStartDate !== null && periodEndDate !== null;
+	const periodStart = hasPeriod ? periodStartDate.toISOString() : null;
+	const periodEnd = hasPeriod ? periodEndDate.toISOString() : null;
 
 	for (const k of orgKeys) {
 		const existing = await env.KV.get<KVKeyData>(`apikey:${k.key}`, "json");

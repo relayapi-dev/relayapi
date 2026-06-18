@@ -9,7 +9,7 @@ interface Predicate {
 	value?: unknown;
 }
 
-interface FilterGroup {
+export interface FilterGroup {
 	all?: Predicate[];
 	any?: Predicate[];
 	none?: Predicate[];
@@ -186,7 +186,7 @@ export function matchesTriggerFilters(
 
 	if (tagsAny && !tagsAny.some((t) => tags.includes(t))) return false;
 	if (tagsAll && !tagsAll.every((t) => tags.includes(t))) return false;
-	if (tagsNone && tagsNone.some((t) => tags.includes(t))) return false;
+	if (tagsNone?.some((t) => tags.includes(t))) return false;
 
 	const predicates = filters.predicates as FilterGroup | undefined;
 	if (predicates && !evaluateFilterGroup(predicates, subject)) return false;

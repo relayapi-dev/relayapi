@@ -1,5 +1,4 @@
 import type { APIRoute } from "astro";
-import { getRelayClient } from "@/lib/relay";
 import { handleSdkError, requireClient } from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
@@ -7,7 +6,7 @@ export const GET: APIRoute = async (ctx) => {
   if (client instanceof Response) return client;
   try {
     const url = new URL(ctx.request.url);
-    const params: Record<string, any> = {
+    const params: Record<string, unknown> = {
       limit: Number(url.searchParams.get("limit")) || 20,
       cursor: url.searchParams.get("cursor") || undefined,
     };
@@ -19,7 +18,9 @@ export const GET: APIRoute = async (ctx) => {
     if (url.searchParams.get("to")) params.to = url.searchParams.get("to");
     if (url.searchParams.get("include")) params.include = url.searchParams.get("include");
     if (url.searchParams.get("include_external")) params.include_external = url.searchParams.get("include_external");
-    const data = await client.posts.list(params);
+    const data = await client.posts.list(
+      params as Parameters<typeof client.posts.list>[0],
+    );
     return Response.json(data, { headers: { "Cache-Control": "private, no-cache" } });
   } catch (e) {
     return handleSdkError(e);

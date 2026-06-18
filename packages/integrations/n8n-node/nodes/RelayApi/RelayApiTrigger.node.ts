@@ -1,4 +1,5 @@
 import type {
+	IDataObject,
 	IWebhookFunctions,
 	IHookFunctions,
 	INodeType,
@@ -81,7 +82,7 @@ export class RelayApiTrigger implements INodeType {
 
 				try {
 					const response = await relayApiRequest.call(
-						this as any,
+						this,
 						'GET',
 						'/v1/webhooks',
 					);
@@ -89,8 +90,8 @@ export class RelayApiTrigger implements INodeType {
 					const webhooks = response.data ?? response;
 					if (!Array.isArray(webhooks)) return false;
 
-					const existing = webhooks.find(
-						(wh: any) => wh.url === webhookUrl,
+					const existing = (webhooks as IDataObject[]).find(
+						(wh: IDataObject) => wh.url === webhookUrl,
 					);
 
 					if (existing) {
@@ -109,12 +110,12 @@ export class RelayApiTrigger implements INodeType {
 				const events = this.getNodeParameter('events') as string[];
 				const webhookData = this.getWorkflowStaticData('node');
 
-				const response = await relayApiRequest.call(this as any, 'POST', '/v1/webhooks', {
+				const response = await relayApiRequest.call(this, 'POST', '/v1/webhooks', {
 					url: webhookUrl,
 					events,
 				});
 
-				const webhook = response.data ?? response;
+				const webhook = (response.data ?? response) as IDataObject;
 				webhookData.webhookId = webhook.id;
 				return true;
 			},
@@ -126,7 +127,7 @@ export class RelayApiTrigger implements INodeType {
 				if (!webhookId) return true;
 
 				try {
-					await relayApiRequest.call(this as any, 'DELETE', `/v1/webhooks/${webhookId}`);
+					await relayApiRequest.call(this, 'DELETE', `/v1/webhooks/${webhookId}`);
 				} catch {
 					// Webhook may already be deleted — ignore
 				}

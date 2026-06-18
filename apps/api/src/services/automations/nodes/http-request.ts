@@ -9,7 +9,7 @@
 // nodes can branch on it via the condition/filter engine.
 
 import { applyMergeTags } from "../merge-tags";
-import type { NodeHandler } from "../types";
+import type { NodeHandler, RunContext } from "../types";
 
 type HttpRequestConfig = {
 	url: string;
@@ -20,7 +20,7 @@ type HttpRequestConfig = {
 	response_key?: string;
 };
 
-function buildMergeCtx(ctx: any) {
+function buildMergeCtx(ctx: RunContext) {
 	return {
 		contact: (ctx.context?.contact as Record<string, unknown> | undefined) ?? null,
 		state: ctx.context ?? {},

@@ -18,7 +18,12 @@ import {
 
 function SiIcon({ icon }: { icon: { path: string } }) {
   return (
-    <svg role="img" viewBox="0 0 24 24" fill="currentColor" className="size-4">
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className="size-4"
+      aria-hidden="true"
+    >
       <path d={icon.path} />
     </svg>
   );
@@ -26,7 +31,12 @@ function SiIcon({ icon }: { icon: { path: string } }) {
 
 function Svg({ d }: { d: string }) {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="size-4">
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className="size-4"
+      aria-hidden="true"
+    >
       <path d={d} />
     </svg>
   );

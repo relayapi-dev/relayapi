@@ -1,6 +1,5 @@
 import { openapi } from "@/lib/openapi";
 import { createAPIPage } from "fumadocs-openapi/ui";
-import type { ApiPageProps } from "fumadocs-openapi/ui";
 import client from "./api-page.client";
 import { jsx } from "react/jsx-runtime";
 

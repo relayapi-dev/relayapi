@@ -516,7 +516,10 @@ export async function matchAndEnroll(
 		const cB = b.entrypoint.createdAt.getTime();
 		return cA - cB;
 	});
-	const picked = finalists[0]!;
+	const picked = finalists[0];
+	if (!picked) {
+		return { matched: false, reason: "reentry_blocked" };
+	}
 
 	// 6. Enroll via the runner.
 	try {
@@ -538,7 +541,7 @@ export async function matchAndEnroll(
 			// Reuse the contact row + custom fields we already loaded above for
 			// filter evaluation so enrollContact doesn't re-query them.
 			prehydrated: {
-				contact: (contactRow as Record<string, any> | undefined) ?? null,
+				contact: (contactRow as Record<string, unknown> | undefined) ?? null,
 				tags: tagList,
 				fields: fieldsMap as Record<string, string>,
 			},

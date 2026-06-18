@@ -11,13 +11,13 @@ const { slug } = Astro.params;
 const platform = slug ? getPlatformBySlug(slug) : undefined;
 const api = slug ? getApiBySlug(slug) : undefined;
 
-if (!platform && !api) {
+const data = platform ?? api;
+if (!data) {
   return Astro.redirect("/404");
 }
 
-const data = platform || api!;
 const title = platform ? `${platform.name} API` : data.name;
-const description = platform ? platform.heroDescription : api!.heroDescription;
+const description = platform ? platform.heroDescription : data.heroDescription;
 const pageType = platform ? "platform" : "api";
 ---
 

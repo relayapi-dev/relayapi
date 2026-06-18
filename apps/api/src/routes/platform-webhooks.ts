@@ -20,7 +20,7 @@ async function safeEqual(a: string, b: string): Promise<boolean> {
 	const b8 = new Uint8Array(sigB);
 	let mismatch = 0;
 	for (let i = 0; i < a8.length; i++) {
-		mismatch |= a8[i]! ^ b8[i]!;
+		mismatch |= (a8[i] ?? 0) ^ (b8[i] ?? 0);
 	}
 	return mismatch === 0;
 }
@@ -139,7 +139,10 @@ async function resolveAccounts(
 		.from(socialAccounts)
 		.where(
 			and(
-				eq(socialAccounts.platform, platform as any),
+				eq(
+					socialAccounts.platform,
+					platform as typeof socialAccounts.$inferSelect.platform,
+				),
 				eq(socialAccounts.platformAccountId, platformAccountId),
 			),
 		)
@@ -348,7 +351,7 @@ async function processFacebookWebhook(
 						hint: {
 							event_type: eventType,
 							platform_post_id:
-								(change.value as any)?.post_id ?? undefined,
+								(change.value as { post_id?: string })?.post_id ?? undefined,
 						},
 					} satisfies SyncPostsMessage);
 				}
@@ -378,7 +381,7 @@ async function processFacebookWebhook(
 		// - Echo messages (is_echo): sender = business, recipient = customer
 		// Collect business IDs from both sides so echo detection catches all formats.
 		for (const msg of entry.messaging ?? []) {
-			if ((msg.message as any)?.is_echo) {
+			if ((msg.message as { is_echo?: boolean })?.is_echo) {
 				// Echo: sender IS the business account
 				if (msg.sender?.id) knownBusinessIds.add(msg.sender.id);
 			} else {
@@ -436,7 +439,7 @@ async function processFacebookWebhook(
 			}
 
 			const mid = msg.message?.mid;
-			const isEcho = !!(msg.message as any)?.is_echo;
+			const isEcho = !!(msg.message as { is_echo?: boolean })?.is_echo;
 			const senderIsKnown = knownBusinessIds.has(msg.sender.id);
 
 			// --- Echo detection (4 layers) ---
@@ -917,7 +920,7 @@ interface TelegramUpdate {
 
 async function processTelegramWebhook(
 	body: TelegramUpdate,
-	secret: string,
+	_secret: string,
 	env: Env,
 ): Promise<void> {
 	// Resolve the chat id from a normal message OR an inline-button callback.

@@ -344,6 +344,7 @@ export const siteConfig = {
 					fill="none"
 					xmlns="http://www.w3.org/2000/svg"
 					className="text-muted-foreground"
+					aria-hidden="true"
 				>
 					<path
 						d="M4 4C3.44772 4 3 4.44772 3 5V7C3 7.55228 3.44772 8 4 8H5V10C5 10.5523 5.44772 11 6 11H7C7.55228 11 8 10.5523 8 10V5C8 4.44772 7.55228 4 7 4H4Z"

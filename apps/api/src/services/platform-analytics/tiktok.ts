@@ -17,23 +17,6 @@ function authHeaders(accessToken: string): Record<string, string> {
 	};
 }
 
-function pctChange(current: number, previous: number): number | null {
-	if (previous === 0) return current > 0 ? 100 : null;
-	return Math.round(((current - previous) / previous) * 10000) / 100;
-}
-
-function previousPeriod(dateRange: DateRange): DateRange {
-	const fromMs = new Date(`${dateRange.from}T00:00:00Z`).getTime();
-	const toMs = new Date(`${dateRange.to}T00:00:00Z`).getTime();
-	const durationMs = toMs - fromMs;
-	const prevTo = new Date(fromMs - 86_400_000);
-	const prevFrom = new Date(prevTo.getTime() - durationMs);
-	return {
-		from: prevFrom.toISOString().slice(0, 10),
-		to: prevTo.toISOString().slice(0, 10),
-	};
-}
-
 interface TikTokUserInfo {
 	data: {
 		user: {

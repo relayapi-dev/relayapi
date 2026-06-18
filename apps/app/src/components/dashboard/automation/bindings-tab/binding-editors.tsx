@@ -107,9 +107,9 @@ export function MainMenuEditor({ items, setItems }: MenuEditorProps) {
 	return (
 		<div className="space-y-2">
 			<div className="flex items-center justify-between">
-				<label className="text-[11px] font-medium text-muted-foreground">
+				<span className="text-[11px] font-medium text-muted-foreground">
 					Menu items ({items.length}/{MAIN_MENU_MAX_TOP_LEVEL_ITEMS})
-				</label>
+				</span>
 				<Button
 					type="button"
 					size="sm"
@@ -190,10 +190,8 @@ function MenuItemEditor({ item, depth, onChange, onRemove }: MenuItemEditorProps
 			</div>
 
 			<div className="grid grid-cols-2 gap-2">
-				<div>
-					<label className="text-[10px] text-muted-foreground">
-						Label (max {MAIN_MENU_LABEL_MAX})
-					</label>
+				<label className="block text-[10px] text-muted-foreground">
+					Label (max {MAIN_MENU_LABEL_MAX})
 					<input
 						type="text"
 						value={item.label}
@@ -202,9 +200,9 @@ function MenuItemEditor({ item, depth, onChange, onRemove }: MenuItemEditorProps
 						placeholder="e.g. Shop now"
 						className="mt-0.5 h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
 					/>
-				</div>
-				<div>
-					<label className="text-[10px] text-muted-foreground">Action</label>
+				</label>
+				<label className="block text-[10px] text-muted-foreground">
+					Action
 					<select
 						value={item.action}
 						onChange={(e) =>
@@ -215,13 +213,11 @@ function MenuItemEditor({ item, depth, onChange, onRemove }: MenuItemEditorProps
 						<option value="postback">Postback (trigger automation)</option>
 						<option value="url">URL (open link)</option>
 					</select>
-				</div>
+				</label>
 			</div>
 
-			<div>
-				<label className="text-[10px] text-muted-foreground">
-					{item.action === "url" ? "URL" : "Payload"}
-				</label>
+			<label className="block text-[10px] text-muted-foreground">
+				{item.action === "url" ? "URL" : "Payload"}
 				<input
 					type="text"
 					value={item.payload}
@@ -229,14 +225,14 @@ function MenuItemEditor({ item, depth, onChange, onRemove }: MenuItemEditorProps
 					placeholder={item.action === "url" ? "https://example.com" : "MENU_SHOP"}
 					className="mt-0.5 h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
 				/>
-			</div>
+			</label>
 
 			{canNest && (
 				<div className="mt-1 space-y-1.5">
 					<div className="flex items-center justify-between">
-						<label className="text-[10px] text-muted-foreground">
+						<span className="text-[10px] text-muted-foreground">
 							Sub-items ({subItems.length})
-						</label>
+						</span>
 						<Button
 							type="button"
 							size="sm"
@@ -287,13 +283,18 @@ export function ConversationStarterEditor({
 		const next = [...starters];
 		const swap = idx + dir;
 		if (swap < 0 || swap >= next.length) return;
-		[next[idx], next[swap]] = [next[swap]!, next[idx]!];
+		const a = next[idx];
+		const b = next[swap];
+		if (!a || !b) return;
+		[next[idx], next[swap]] = [b, a];
 		setStarters(next);
 	};
 
 	const update = (idx: number, patch: Partial<ConversationStarter>) => {
 		const next = [...starters];
-		next[idx] = { ...next[idx]!, ...patch };
+		const current = next[idx];
+		if (!current) return;
+		next[idx] = { ...current, ...patch };
 		setStarters(next);
 	};
 
@@ -304,9 +305,9 @@ export function ConversationStarterEditor({
 	return (
 		<div className="space-y-2">
 			<div className="flex items-center justify-between">
-				<label className="text-[11px] font-medium text-muted-foreground">
+				<span className="text-[11px] font-medium text-muted-foreground">
 					Starters ({starters.length}/{STARTER_MAX_ITEMS})
-				</label>
+				</span>
 				<Button
 					type="button"
 					size="sm"
@@ -362,10 +363,8 @@ export function ConversationStarterEditor({
 									<Trash2 className="size-3" />
 								</button>
 							</div>
-							<div>
-								<label className="text-[10px] text-muted-foreground">
-									Label (max {STARTER_LABEL_MAX})
-								</label>
+							<label className="block text-[10px] text-muted-foreground">
+								Label (max {STARTER_LABEL_MAX})
 								<input
 									type="text"
 									value={s.label}
@@ -374,11 +373,9 @@ export function ConversationStarterEditor({
 									placeholder="e.g. Talk to support"
 									className="mt-0.5 h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
 								/>
-							</div>
-							<div>
-								<label className="text-[10px] text-muted-foreground">
-									Payload
-								</label>
+							</label>
+							<label className="block text-[10px] text-muted-foreground">
+								Payload
 								<input
 									type="text"
 									value={s.payload}
@@ -386,7 +383,7 @@ export function ConversationStarterEditor({
 									placeholder="e.g. SUPPORT"
 									className="mt-0.5 h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
 								/>
-							</div>
+							</label>
 						</div>
 					))}
 				</div>
@@ -412,13 +409,18 @@ export function IceBreakerEditor({
 		const next = [...questions];
 		const swap = idx + dir;
 		if (swap < 0 || swap >= next.length) return;
-		[next[idx], next[swap]] = [next[swap]!, next[idx]!];
+		const a = next[idx];
+		const b = next[swap];
+		if (!a || !b) return;
+		[next[idx], next[swap]] = [b, a];
 		setQuestions(next);
 	};
 
 	const update = (idx: number, patch: Partial<IceBreakerQuestion>) => {
 		const next = [...questions];
-		next[idx] = { ...next[idx]!, ...patch };
+		const current = next[idx];
+		if (!current) return;
+		next[idx] = { ...current, ...patch };
 		setQuestions(next);
 	};
 
@@ -429,9 +431,9 @@ export function IceBreakerEditor({
 	return (
 		<div className="space-y-2">
 			<div className="flex items-center justify-between">
-				<label className="text-[11px] font-medium text-muted-foreground">
+				<span className="text-[11px] font-medium text-muted-foreground">
 					Questions ({questions.length}/{ICE_BREAKER_MAX_ITEMS})
-				</label>
+				</span>
 				<Button
 					type="button"
 					size="sm"
@@ -487,10 +489,8 @@ export function IceBreakerEditor({
 									<Trash2 className="size-3" />
 								</button>
 							</div>
-							<div>
-								<label className="text-[10px] text-muted-foreground">
-									Question (max {ICE_BREAKER_QUESTION_MAX})
-								</label>
+							<label className="block text-[10px] text-muted-foreground">
+								Question (max {ICE_BREAKER_QUESTION_MAX})
 								<input
 									type="text"
 									value={q.question}
@@ -499,11 +499,9 @@ export function IceBreakerEditor({
 									placeholder="e.g. What brought you here?"
 									className="mt-0.5 h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
 								/>
-							</div>
-							<div>
-								<label className="text-[10px] text-muted-foreground">
-									Payload
-								</label>
+							</label>
+							<label className="block text-[10px] text-muted-foreground">
+								Payload
 								<input
 									type="text"
 									value={q.payload}
@@ -511,7 +509,7 @@ export function IceBreakerEditor({
 									placeholder="e.g. SUPPORT_INQUIRY"
 									className="mt-0.5 h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
 								/>
-							</div>
+							</label>
 						</div>
 					))}
 				</div>

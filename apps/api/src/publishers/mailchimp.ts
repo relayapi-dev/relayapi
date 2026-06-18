@@ -84,8 +84,11 @@ export const mailchimpPublisher: Publisher = {
 			});
 
 			if (!campaignRes.ok) {
-				const err = await campaignRes.json().catch(() => ({}));
-				const detail = (err as any)?.detail ?? (err as any)?.title ?? campaignRes.statusText;
+				const err = (await campaignRes.json().catch(() => ({}))) as {
+					detail?: string;
+					title?: string;
+				};
+				const detail = err?.detail ?? err?.title ?? campaignRes.statusText;
 				const raw = `HTTP ${campaignRes.status}\n${JSON.stringify(err)}`;
 
 				if (campaignRes.status === 401) {
@@ -121,9 +124,11 @@ export const mailchimpPublisher: Publisher = {
 			);
 
 			if (!contentRes.ok) {
-				const err = await contentRes.json().catch(() => ({}));
+				const err = (await contentRes.json().catch(() => ({}))) as {
+					detail?: string;
+				};
 				const raw = `HTTP ${contentRes.status}\n${JSON.stringify(err)}`;
-				throw new PublishError(`Mailchimp set content failed: ${(err as any)?.detail ?? contentRes.statusText}`, { statusCode: contentRes.status, detail: raw });
+				throw new PublishError(`Mailchimp set content failed: ${err?.detail ?? contentRes.statusText}`, { statusCode: contentRes.status, detail: raw });
 			}
 
 			// Step 4: Send or schedule the campaign
@@ -144,9 +149,11 @@ export const mailchimpPublisher: Publisher = {
 				);
 
 				if (!scheduleRes.ok) {
-					const err = await scheduleRes.json().catch(() => ({}));
+					const err = (await scheduleRes.json().catch(() => ({}))) as {
+						detail?: string;
+					};
 					const raw = `HTTP ${scheduleRes.status}\n${JSON.stringify(err)}`;
-					throw new PublishError(`Mailchimp schedule failed: ${(err as any)?.detail ?? scheduleRes.statusText}`, { statusCode: scheduleRes.status, detail: raw });
+					throw new PublishError(`Mailchimp schedule failed: ${err?.detail ?? scheduleRes.statusText}`, { statusCode: scheduleRes.status, detail: raw });
 				}
 			} else {
 				// Docs: https://mailchimp.com/developer/marketing/api/campaigns/send-campaign/
@@ -159,9 +166,11 @@ export const mailchimpPublisher: Publisher = {
 				);
 
 				if (!sendRes.ok) {
-					const err = await sendRes.json().catch(() => ({}));
+					const err = (await sendRes.json().catch(() => ({}))) as {
+						detail?: string;
+					};
 					const raw = `HTTP ${sendRes.status}\n${JSON.stringify(err)}`;
-					throw new PublishError(`Mailchimp send failed: ${(err as any)?.detail ?? sendRes.statusText}`, { statusCode: sendRes.status, detail: raw });
+					throw new PublishError(`Mailchimp send failed: ${err?.detail ?? sendRes.statusText}`, { statusCode: sendRes.status, detail: raw });
 				}
 			}
 

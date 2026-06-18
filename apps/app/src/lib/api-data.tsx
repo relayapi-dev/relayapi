@@ -26,6 +26,7 @@ export const apis: ApiData[] = [
 				strokeLinecap="round"
 				strokeLinejoin="round"
 				className="size-4"
+				aria-hidden="true"
 			>
 				<line x1="22" y1="2" x2="11" y2="13" />
 				<polygon points="22 2 15 22 11 13 2 9 22 2" />
@@ -206,6 +207,7 @@ print(post["id"], post["status"])`,
 				strokeLinecap="round"
 				strokeLinejoin="round"
 				className="size-4"
+				aria-hidden="true"
 			>
 				<rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
 				<circle cx="8.5" cy="8.5" r="1.5" />
@@ -369,6 +371,7 @@ print(media["variants"])  # platform-specific versions`,
 				strokeLinecap="round"
 				strokeLinejoin="round"
 				className="size-4"
+				aria-hidden="true"
 			>
 				<line x1="12" y1="20" x2="12" y2="10" />
 				<line x1="18" y1="20" x2="18" y2="4" />
@@ -541,6 +544,7 @@ print(f"Top platform: {overview['top_platform']['name']}")`,
 				strokeLinecap="round"
 				strokeLinejoin="round"
 				className="size-4"
+				aria-hidden="true"
 			>
 				<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
 				<path d="M13.73 21a2 2 0 0 1-3.46 0" />

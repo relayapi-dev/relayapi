@@ -213,9 +213,7 @@ export async function dispatchAutomationMessage(
 	// to attach quick_replies per Messenger/Instagram/Telegram convention.
 	const lastSendableIndex = findLastSendableIndex(blocks, capability);
 
-	for (let i = 0; i < blocks.length; i++) {
-		const block = blocks[i]!;
-
+	for (const [i, block] of blocks.entries()) {
 		// In-message delay is a pause, not an outbound message. Clamped to the
 		// per-dispatch sleep budget so a misconfigured (or malicious) delay block
 		// can't stall the shared inbox/cron pipeline.
@@ -395,7 +393,8 @@ function findLastSendableIndex(
 	capability: Record<BlockType, boolean>,
 ): number {
 	for (let i = blocks.length - 1; i >= 0; i--) {
-		const b = blocks[i]!;
+		const b = blocks[i];
+		if (!b) continue;
 		if (b.type === "delay") continue;
 		if (!capability[b.type]) continue;
 		return i;

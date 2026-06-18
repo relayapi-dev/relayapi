@@ -25,6 +25,7 @@ import { QueuePostList } from "@/components/dashboard/pages/posts/queue-post-lis
 import { WorkspaceGuard } from "@/components/dashboard/workspace-guard";
 import { flattenPost, type QueuePost } from "@/components/dashboard/pages/posts/queue-post-card";
 import type { InitialPaginatedData } from "@/lib/dashboard-page";
+import type { EditPostData } from "@/components/dashboard/new-post-dialog";
 
 interface PostTarget {
   status: string;
@@ -75,11 +76,11 @@ function PostsSectionFallback() {
 }
 
 export interface PostsPageProps {
-  initialAllData?: InitialPaginatedData<any>;
+  initialAllData?: InitialPaginatedData<Post>;
   initialCalendarPeriod?: CalendarPeriod;
   initialDraftsData?: InitialPaginatedData<Post>;
   initialFailedData?: InitialPaginatedData<Post>;
-  initialPublishedData?: InitialPaginatedData<any>;
+  initialPublishedData?: InitialPaginatedData<Post>;
   initialQueueData?: InitialPaginatedData<Post>;
   initialTab?: "all" | "queue" | "drafts" | "published";
   initialViewMode?: "list" | "calendar";
@@ -107,7 +108,7 @@ export function PostsPage({
   const [newPostOpen, setNewPostOpen] = useState(false);
   const [newPostInitialDate, setNewPostInitialDate] = useState<string | undefined>();
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
-  const [editPostData, setEditPostData] = useState<any>(null);
+  const [editPostData, setEditPostData] = useState<EditPostData | null>(null);
   const [activeTab, setActiveTab] = useState(initialTab);
   const [viewMode, setViewMode] = useState<"list" | "calendar">(initialViewMode);
   const [calendarPeriod, setCalendarPeriod] = useState<CalendarPeriod>(initialCalendarPeriod);
@@ -141,7 +142,7 @@ export function PostsPage({
   };
 
   const filterQuery = useFilterQuery();
-  const { accountId } = useFilter();
+  const { accountId: _accountId } = useFilter();
 
   // List-view data (queue/failed/all hooks) only renders when the list is
   // actually shown. In calendar view CalendarView fetches its own data via
@@ -221,7 +222,7 @@ export function PostsPage({
     loadingMore: publishedLoadingMore,
     setData: setPublishedPosts,
     refetch: refetchPublished,
-  } = usePaginatedApi<any>(
+  } = usePaginatedApi<Post>(
     activeTab === "published" ? "posts" : null,
     {
       initialCursor: initialPublishedData?.nextCursor,
@@ -247,7 +248,7 @@ export function PostsPage({
     loadingMore: allLoadingMore,
     setData: setAllPosts,
     refetch: refetchAll,
-  } = usePaginatedApi<any>(
+  } = usePaginatedApi<Post>(
     activeTab === "all" && listRendered ? "posts" : null,
     {
       initialCursor: initialAllData?.nextCursor,
@@ -298,13 +299,13 @@ export function PostsPage({
       const res = await fetch(`/api/posts/${id}/retry`, { method: "POST" });
       if (res.ok) {
         const updated = await res.json();
-        const platforms = Object.values(updated.targets || {}).map((t: any) => (t as any).platform);
+        const platforms = (Object.values(updated.targets || {}) as PostTarget[]).map((t) => t.platform);
         const patch = { status: updated.status, platforms };
         setQueuePosts((prev) =>
           prev.map((p) => p.id === id ? { ...p, ...patch } : p)
         );
         setAllPosts((prev) =>
-          prev.map((p: any) => p.id === id ? { ...p, ...patch } : p)
+          prev.map((p) => p.id === id ? { ...p, ...patch } : p)
         );
       }
     } catch { /* ignore */ }
@@ -335,8 +336,8 @@ export function PostsPage({
     if (res.ok || res.status === 204) {
       setQueuePosts((prev) => prev.filter((p) => p.id !== id));
       setDraftPosts((prev) => prev.filter((p) => p.id !== id));
-      setPublishedPosts((prev) => prev.filter((p: any) => p.id !== id));
-      setAllPosts((prev) => prev.filter((p: any) => p.id !== id));
+      setPublishedPosts((prev) => prev.filter((p) => p.id !== id));
+      setAllPosts((prev) => prev.filter((p) => p.id !== id));
     }
   };
 
@@ -347,7 +348,10 @@ export function PostsPage({
       const data = await res.json();
       const errors: Array<{ platform: string; message: string; detail?: string }> = [];
       for (const target of Object.values(data.targets || {})) {
-        const t = target as any;
+        const t = target as {
+          platform: string;
+          error?: { message?: string; detail?: string };
+        };
         if (t.error?.message) {
           errors.push({ platform: t.platform, message: t.error.message, detail: t.error.detail });
         }
@@ -363,7 +367,7 @@ export function PostsPage({
       const data = await res.json();
       const publishedPlatforms: string[] = [];
       for (const target of Object.values(data.targets || {})) {
-        const t = target as any;
+        const t = target as { platform?: string; status?: string };
         if (t.status === "published" && t.platform) {
           publishedPlatforms.push(t.platform);
         }
@@ -386,10 +390,10 @@ export function PostsPage({
         const updated = await res.json();
         const patch = { status: updated.status };
         setPublishedPosts((prev) =>
-          prev.map((p: any) => p.id === unpublishPost.id ? { ...p, ...patch } : p)
+          prev.map((p) => p.id === unpublishPost.id ? { ...p, ...patch } : p)
         );
         setAllPosts((prev) =>
-          prev.map((p: any) => p.id === unpublishPost.id ? { ...p, ...patch } : p)
+          prev.map((p) => p.id === unpublishPost.id ? { ...p, ...patch } : p)
         );
       }
     } finally {
@@ -418,7 +422,7 @@ export function PostsPage({
     } catch { /* ignore */ }
   };
 
-  const handleDuplicate = (post: QueuePost) => {
+  const handleDuplicate = (_post: QueuePost) => {
     setNewPostInitialDate(undefined);
     setNewPostOpen(true);
   };
@@ -454,7 +458,7 @@ export function PostsPage({
               editPostData={editPostData}
               onCreated={(created) => {
                 if (!created) return;
-                const platforms = Object.values(created.targets || {}).map((t: any) => (t as any).platform).filter(Boolean);
+                const platforms = (Object.values(created.targets || {}) as PostTarget[]).map((t) => t.platform).filter(Boolean);
                 const postData = {
                   id: created.id,
                   content: created.content || "",
@@ -471,7 +475,7 @@ export function PostsPage({
                   // Edit: update in-place or move between lists
                   setQueuePosts((prev) => prev.filter((p) => p.id !== editingPostId));
                   setDraftPosts((prev) => prev.filter((p) => p.id !== editingPostId));
-                  setAllPosts((prev) => prev.filter((p: any) => p.id !== editingPostId));
+                  setAllPosts((prev) => prev.filter((p) => p.id !== editingPostId));
                   if (postData.status === "draft") {
                     setDraftPosts((prev) => [postData, ...prev]);
                   } else {
@@ -503,6 +507,7 @@ export function PostsPage({
               tab.toLowerCase() as NonNullable<PostsPageProps["initialTab"]>;
             return (
               <button
+                type="button"
                 key={tab}
                 onClick={() => switchTab(tabKey)}
                 className={cn(
@@ -535,6 +540,7 @@ export function PostsPage({
           {(activeTab === "queue" || activeTab === "all") && (
             <div className="hidden md:flex items-center gap-0">
               <button
+                type="button"
                 onClick={() => {
                   setViewMode("calendar");
                   localStorage.setItem("posts:viewMode", "calendar");
@@ -552,6 +558,7 @@ export function PostsPage({
                 {viewMode === "calendar" && "Calendar"}
               </button>
               <button
+                type="button"
                 onClick={() => {
                   setViewMode("list");
                   localStorage.setItem("posts:viewMode", "list");
@@ -603,10 +610,10 @@ export function PostsPage({
         <>
           {/* Non-published posts (publishing/scheduled/failed/partial) use QueuePostList for status badges */}
           {allPosts
-            .filter((p: any) => ["publishing", "scheduled", "failed", "partial"].includes(p.status))
-            .some((p: any) => flattenPost(p).length > 0) && (
+            .filter((p) => ["publishing", "scheduled", "failed", "partial"].includes(p.status))
+            .some((p) => flattenPost(p).length > 0) && (
             <QueuePostList
-              posts={allPosts.filter((p: any) => ["publishing", "scheduled", "failed", "partial"].includes(p.status))}
+              posts={allPosts.filter((p) => ["publishing", "scheduled", "failed", "partial"].includes(p.status))}
               loading={false}
               hasMore={false}
               loadingMore={false}
@@ -619,7 +626,7 @@ export function PostsPage({
             />
           )}
           <SentPostList
-            posts={allPosts.filter((p: any) => p.status === "published")}
+            posts={allPosts.filter((p) => p.status === "published")}
             loading={allLoading}
             hasMore={allHasMore}
             loadingMore={allLoadingMore}
@@ -728,12 +735,13 @@ export function PostsPage({
           <div className="flex flex-wrap gap-2 py-1">
             {unpublishPost?.platforms.map((p) => (
               <button
+                type="button"
                 key={p}
                 onClick={() => toggleUnpublishPlatform(p)}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all",
                   unpublishSelected.has(p)
-                    ? "text-white ring-2 ring-offset-1 ring-offset-background ring-foreground/20 " + (platformColors[p] || "bg-neutral-600")
+                    ? `text-white ring-2 ring-offset-1 ring-offset-background ring-foreground/20 ${platformColors[p] || "bg-neutral-600"}`
                     : "text-muted-foreground bg-accent/30 opacity-50"
                 )}
               >

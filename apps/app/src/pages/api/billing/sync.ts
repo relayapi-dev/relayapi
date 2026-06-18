@@ -9,10 +9,16 @@ export const POST: APIRoute = async (context) => {
   const forbidden = await requireBillingAdmin(context);
   if (forbidden) return forbidden;
 
-  const org = context.locals.organization!;
+  const org = context.locals.organization;
+  if (!org) {
+    return Response.json(
+      { error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+      { status: 401 },
+    );
+  }
   const db = context.locals.db;
   const kv = context.locals.kv;
-  const orgId = (org as any).id as string;
+  const orgId = org.id as string;
 
   const [sub] = await db
     .select()
@@ -72,9 +78,13 @@ export const POST: APIRoute = async (context) => {
       await syncKeysToKV(db, kv, orgId, plan, callsIncluded);
 
       return Response.json({ plan });
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Subscription was deleted in Stripe (404) — downgrade
-      if (err?.statusCode === 404) {
+      const statusCode =
+        err && typeof err === "object" && "statusCode" in err
+          ? (err as { statusCode?: number }).statusCode
+          : undefined;
+      if (statusCode === 404) {
         await db
           .update(organizationSubscriptions)
           .set({
@@ -129,8 +139,8 @@ export const POST: APIRoute = async (context) => {
 };
 
 async function syncKeysToKV(
-  db: any,
-  kv: any,
+  db: App.Locals["db"],
+  kv: App.Locals["kv"],
   orgId: string,
   plan: string,
   callsIncluded: number,

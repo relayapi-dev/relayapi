@@ -148,7 +148,7 @@ export function InsightsPanel({ automationId, onClose }: Props) {
 						<div className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
 							{error}
 						</div>
-					) : !data || isEmpty ? (
+					) : !data || isEmpty || !totals ? (
 						<div className="rounded-md border border-border/60 bg-card/50 px-3 py-6 text-[11px] text-muted-foreground text-center">
 							No runs in this period.
 						</div>
@@ -156,17 +156,17 @@ export function InsightsPanel({ automationId, onClose }: Props) {
 						<>
 							{/* Totals tiles */}
 							<div className="grid grid-cols-2 gap-2">
-								<Tile label="Enrolled" value={totals!.enrolled} />
+								<Tile label="Enrolled" value={totals.enrolled} />
 								<Tile
 									label="Live"
-									value={totals!.active + totals!.waiting}
+									value={totals.active + totals.waiting}
 								/>
-								<Tile label="Completed" value={totals!.completed} />
-								<Tile label="Failed" value={totals!.failed} />
-								<Tile label="Exited" value={totals!.exited} />
+								<Tile label="Completed" value={totals.completed} />
+								<Tile label="Failed" value={totals.failed} />
+								<Tile label="Exited" value={totals.exited} />
 								<Tile
 									label="Avg duration"
-									value={formatDuration(totals!.avg_duration_ms)}
+									value={formatDuration(totals.avg_duration_ms)}
 								/>
 							</div>
 

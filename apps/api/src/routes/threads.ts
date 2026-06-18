@@ -1,10 +1,9 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import {
-	createDb,
+	type createDb,
 	generateId,
 	posts,
 	postTargets,
-	socialAccounts,
 } from "@relayapi/db";
 import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { ErrorResponse } from "../schemas/common";
@@ -14,10 +13,8 @@ import {
 	ThreadListQuery,
 	ThreadListResponse,
 	ThreadResponse,
-	UpdateThreadBody,
 } from "../schemas/threads";
 import { resolveTargets } from "../services/target-resolver";
-import { isThreadable } from "../services/thread-publisher";
 import { assertScopedCreateWorkspace } from "../lib/request-access";
 import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
 import type { Env, Variables } from "../types";
@@ -231,7 +228,8 @@ async function buildThreadResponse(
 	else if (statuses.some((s) => s === "publishing")) threadStatus = "publishing";
 	else threadStatus = "partial";
 
-	const root = threadPosts[0]!;
+	const root = threadPosts[0];
+	if (!root) return null;
 	return {
 		thread_group_id: threadGroupId,
 		status: threadStatus,
@@ -265,7 +263,7 @@ app.openapi(createThread, async (c) => {
 						: "No valid targets resolved.",
 				},
 			},
-			400 as any,
+			400,
 		);
 	}
 
@@ -294,7 +292,7 @@ app.openapi(createThread, async (c) => {
 						message: "No available slot found.",
 					},
 				},
-				409 as any,
+				409,
 			);
 		}
 		scheduledAt = new Date(slot.slot_at);
@@ -316,8 +314,7 @@ app.openapi(createThread, async (c) => {
 	// which the scheduler would then publish (wrong item_count) or strand in "publishing".
 	const postRows: Array<typeof posts.$inferInsert> = [];
 	const targetRows: Array<typeof postTargets.$inferInsert> = [];
-	for (let i = 0; i < body.items.length; i++) {
-		const item = body.items[i]!;
+	for (const [i, item] of body.items.entries()) {
 		const postId = generateId("post_");
 
 		const platformOverrides: Record<string, unknown> = {
@@ -330,7 +327,7 @@ app.openapi(createThread, async (c) => {
 			organizationId: orgId,
 			workspaceId: body.workspace_id ?? null,
 			content: item.content,
-			status: postStatus as any,
+			status: postStatus as typeof posts.$inferInsert.status,
 			scheduledAt,
 			timezone: body.timezone,
 			platformOverrides,
@@ -344,8 +341,8 @@ app.openapi(createThread, async (c) => {
 				id: generateId(""),
 				postId,
 				socialAccountId: account.id,
-				platform: account.platform as any,
-				status: postStatus as any,
+				platform: account.platform as typeof postTargets.$inferInsert.platform,
+				status: postStatus as typeof postTargets.$inferInsert.status,
 			});
 		}
 	}
@@ -392,7 +389,7 @@ app.openapi(getThread, async (c) => {
 	if (!existing) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Thread not found" } },
-			404 as any,
+			404,
 		);
 	}
 
@@ -403,7 +400,7 @@ app.openapi(getThread, async (c) => {
 	if (!response) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Thread not found" } },
-			404 as any,
+			404,
 		);
 	}
 
@@ -423,7 +420,10 @@ app.openapi(listThreads, async (c) => {
 	];
 	applyWorkspaceScope(c, conditions, posts.workspaceId);
 	if (workspace_id) conditions.push(eq(posts.workspaceId, workspace_id));
-	if (status) conditions.push(eq(posts.status, status as any));
+	if (status)
+		conditions.push(
+			eq(posts.status, status as typeof posts.$inferSelect.status),
+		);
 	if (cursor) conditions.push(sql`${posts.createdAt} < ${new Date(cursor)}`);
 
 	const rootPosts = await db
@@ -455,22 +455,35 @@ app.openapi(listThreads, async (c) => {
 			.from(posts)
 			.where(inArray(posts.threadGroupId, groupIds))
 			.groupBy(posts.threadGroupId);
-		itemCounts = new Map(counts.map((c) => [c.threadGroupId!, c.count]));
+		itemCounts = new Map(
+			counts.flatMap((c) =>
+				c.threadGroupId !== null
+					? ([[c.threadGroupId, c.count]] as const)
+					: [],
+			),
+		);
 	}
 
-	const data = page.map((p) => ({
-		thread_group_id: p.threadGroupId!,
-		status: p.status,
-		item_count: itemCounts.get(p.threadGroupId!) ?? 1,
-		root_content: p.content,
-		scheduled_at: p.scheduledAt?.toISOString() ?? null,
-		created_at: p.createdAt.toISOString(),
-		updated_at: p.updatedAt.toISOString(),
-	}));
+	const data = page.map((p) => {
+		// The list query filters isNotNull(posts.threadGroupId), so threadGroupId
+		// is always present here; the fallback satisfies the type without changing
+		// runtime behavior.
+		const threadGroupId = p.threadGroupId ?? "";
+		return {
+			thread_group_id: threadGroupId,
+			status: p.status,
+			item_count: itemCounts.get(threadGroupId) ?? 1,
+			root_content: p.content,
+			scheduled_at: p.scheduledAt?.toISOString() ?? null,
+			created_at: p.createdAt.toISOString(),
+			updated_at: p.updatedAt.toISOString(),
+		};
+	});
 
-	const nextCursor = hasMore && page.length > 0
-		? page[page.length - 1]!.createdAt.toISOString()
-		: null;
+	const nextCursor =
+		hasMore && page.length > 0
+			? (page[page.length - 1]?.createdAt.toISOString() ?? null)
+			: null;
 
 	return c.json({ data, next_cursor: nextCursor, has_more: hasMore }, 200);
 });
@@ -495,7 +508,7 @@ app.openapi(deleteThread, async (c) => {
 	if (!existing) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Thread not found" } },
-			404 as any,
+			404,
 		);
 	}
 

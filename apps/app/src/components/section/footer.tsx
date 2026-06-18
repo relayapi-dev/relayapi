@@ -22,7 +22,7 @@ export function Footer() {
                         variant="outline"
                         className="border-white text-white hover:bg-white/10 rounded-full px-8"
                     >
-                        <a href="#">Get started</a>
+                        <a href="/signup">Get started</a>
                     </Button>
                 </div>
             </div>
@@ -73,8 +73,8 @@ export function Footer() {
                 <a
                     href={links.twitter}
                     className="text-muted-foreground hover:text-foreground transition-colors"
-                    aria-label="Twitter"
                 >
+                    <span className="sr-only">Twitter</span>
                     <svg
                         className="w-5 h-5"
                         fill="currentColor"
@@ -87,8 +87,8 @@ export function Footer() {
                 <a
                     href={links.github}
                     className="text-muted-foreground hover:text-foreground transition-colors"
-                    aria-label="GitHub"
                 >
+                    <span className="sr-only">GitHub</span>
                     <svg
                         className="w-5 h-5"
                         fill="currentColor"

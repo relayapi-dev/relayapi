@@ -196,16 +196,14 @@ export function UploadMediaDialog({ open, onOpenChange, onUploaded }: UploadMedi
 
         {/* Drop zone or file list */}
         {!hasFiles ? (
-          <div
-            role="button"
-            tabIndex={0}
+          <button
+            type="button"
             onClick={() => inputRef.current?.click()}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") inputRef.current?.click(); }}
             onDragEnter={onDragEnter}
             onDragLeave={onDragLeave}
             onDragOver={onDragOver}
             onDrop={onDrop}
-            className={`flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed px-6 py-10 cursor-pointer transition-colors ${
+            className={`flex w-full flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed px-6 py-10 cursor-pointer transition-colors ${
               isDragging
                 ? "border-primary bg-primary/5"
                 : "border-border hover:border-muted-foreground/40 hover:bg-accent/20"
@@ -218,8 +216,9 @@ export function UploadMediaDialog({ open, onOpenChange, onUploaded }: UploadMedi
             <p className="text-xs text-muted-foreground/60">
               Images, videos, and GIFs
             </p>
-          </div>
+          </button>
         ) : (
+          // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop drop target wraps interactive controls and has no clickable/keyboard semantics
           <div
             className="space-y-2"
             onDragEnter={onDragEnter}
@@ -284,6 +283,7 @@ export function UploadMediaDialog({ open, onOpenChange, onUploaded }: UploadMedi
                   <div className="shrink-0">
                     {item.status === "pending" && (
                       <button
+                        type="button"
                         onClick={() => removeFile(item.id)}
                         className="rounded p-1 hover:bg-accent/30 transition-colors"
                         title="Remove"
@@ -299,6 +299,7 @@ export function UploadMediaDialog({ open, onOpenChange, onUploaded }: UploadMedi
                     )}
                     {item.status === "error" && (
                       <button
+                        type="button"
                         onClick={() => {
                           updateFile(item.id, { status: "pending", progress: 0, error: undefined });
                         }}

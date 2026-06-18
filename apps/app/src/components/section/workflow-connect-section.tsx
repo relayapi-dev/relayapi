@@ -9,6 +9,7 @@ import { LazyDither } from "../animations/lazy-dither";
 const workflowConnectConfig = siteConfig.workflowConnectSection;
 
 export function WorkflowConnectSection() {
+    const [firstBlock, secondBlock] = workflowConnectConfig.blocks;
     return (
         <section id="workflow" className="w-full relative flex flex-col divide-y divide-border">
             <div className="relative h-14 overflow-hidden">
@@ -45,11 +46,11 @@ export function WorkflowConnectSection() {
                                 <MediaUploadBlock />
                                 <div className="max-w-xl text-left items-start p-6">
                                     <p className="text-sm text-muted-foreground flex items-center gap-2 justify-start">
-                                        {workflowConnectConfig.blocks[0]!.icon}
-                                        {workflowConnectConfig.blocks[0]!.title}
+                                        {firstBlock?.icon}
+                                        {firstBlock?.title}
                                     </p>
                                     <p className="text-base text-foreground leading-relaxed mt-2">
-                                        {workflowConnectConfig.blocks[0]!.description}
+                                        {firstBlock?.description}
                                     </p>
                                 </div>
                             </div>
@@ -60,11 +61,11 @@ export function WorkflowConnectSection() {
                                 <WebhookStreamBlock />
                                 <div className="max-w-xl text-left items-start p-6">
                                     <p className="text-sm text-muted-foreground flex items-center gap-2 justify-start">
-                                        {workflowConnectConfig.blocks[1]!.icon}
-                                        {workflowConnectConfig.blocks[1]!.title}
+                                        {secondBlock?.icon}
+                                        {secondBlock?.title}
                                     </p>
                                     <p className="text-base text-foreground leading-relaxed mt-2">
-                                        {workflowConnectConfig.blocks[1]!.description}
+                                        {secondBlock?.description}
                                     </p>
                                 </div>
                             </div>

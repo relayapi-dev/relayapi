@@ -7,11 +7,12 @@ import { member, notifications } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
 import { applyMergeTags } from "../merge-tags";
+import type { RunContext } from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type NotifyAdminAction = Extract<Action, { type: "notify_admin" }>;
 
-function buildMergeCtx(ctx: any) {
+function buildMergeCtx(ctx: RunContext) {
 	return {
 		contact:
 			(ctx.context?.contact as Record<string, unknown> | undefined) ?? null,

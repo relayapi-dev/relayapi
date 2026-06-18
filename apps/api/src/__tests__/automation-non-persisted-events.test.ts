@@ -313,7 +313,9 @@ describe("G1: follow trigger creates a valid run with conversation_id=null", () 
 			.from(automationRuns)
 			.where(eq(automationRuns.automationId, auto.id));
 		expect(runs.length).toBe(1);
-		expect(runs[0]!.conversationId).toBeNull();
+		const run0 = runs[0];
+		if (!run0) throw new Error("expected a run");
+		expect(run0.conversationId).toBeNull();
 		// The message-node handler ran (via fake transport).
 		expect(sendCalls.some((c) => c.text === "Thanks for the follow!")).toBe(
 			true,
@@ -374,7 +376,9 @@ describe("G1: follow trigger creates a valid run with conversation_id=null", () 
 			.from(automationRuns)
 			.where(eq(automationRuns.automationId, auto.id));
 		expect(runs.length).toBe(1);
-		expect(runs[0]!.conversationId).toBeNull();
+		const run0 = runs[0];
+		if (!run0) throw new Error("expected a run");
+		expect(run0.conversationId).toBeNull();
 		expect(sendCalls.some((c) => c.text === "Welcome!")).toBe(true);
 	}, 45_000);
 });
@@ -431,7 +435,9 @@ describe("G2: standalone ad_click / referral creates a valid run", () => {
 			.from(automationRuns)
 			.where(eq(automationRuns.automationId, auto.id));
 		expect(runs.length).toBe(1);
-		expect(runs[0]!.conversationId).toBeNull();
+		const run0 = runs[0];
+		if (!run0) throw new Error("expected a run");
+		expect(run0.conversationId).toBeNull();
 		expect(sendCalls.some((c) => c.text === "CTM hello")).toBe(true);
 
 		// Non-persisted: no inbox conversation row produced.
@@ -489,7 +495,9 @@ describe("G2: standalone ad_click / referral creates a valid run", () => {
 			.from(automationRuns)
 			.where(eq(automationRuns.automationId, auto.id));
 		expect(runs.length).toBe(1);
-		expect(runs[0]!.conversationId).toBeNull();
+		const run0 = runs[0];
+		if (!run0) throw new Error("expected a run");
+		expect(run0.conversationId).toBeNull();
 		expect(sendCalls.some((c) => c.text === "FB CTM hello")).toBe(true);
 	}, 45_000);
 });
@@ -570,8 +578,10 @@ describe("in-DM ad_click (messages event with referral.source=ADS) keeps a real 
 			.from(automationRuns)
 			.where(eq(automationRuns.automationId, auto.id));
 		expect(runs.length).toBe(1);
+		const run0 = runs[0];
+		if (!run0) throw new Error("expected a run");
 		// Must be a real inbox_conversations row reference — NOT null.
-		expect(runs[0]!.conversationId).not.toBeNull();
+		expect(run0.conversationId).not.toBeNull();
 		expect(sendCalls.some((c) => c.text === "In-DM ad reply")).toBe(true);
 
 		// The run's conversation_id points at the inbox_conversations row
@@ -582,9 +592,11 @@ describe("in-DM ad_click (messages event with referral.source=ADS) keeps a real 
 				accountId: inboxConversations.accountId,
 			})
 			.from(inboxConversations)
-			.where(eq(inboxConversations.id, runs[0]!.conversationId as string));
+			.where(eq(inboxConversations.id, run0.conversationId as string));
 		expect(referencedConv.length).toBe(1);
-		expect(referencedConv[0]!.accountId).toBe(igSocialAccountId);
+		const referencedConv0 = referencedConv[0];
+		if (!referencedConv0) throw new Error("expected a referenced conversation");
+		expect(referencedConv0.accountId).toBe(igSocialAccountId);
 	}, 45_000);
 });
 
@@ -686,7 +698,8 @@ describe("G3: start_automation forwards socialAccountId to the child run", () =>
 		const parentRun = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, parentRunId),
 		});
-		expect(parentRun!.status).toBe("completed");
+		if (!parentRun) throw new Error("expected parentRun to exist");
+		expect(parentRun.status).toBe("completed");
 
 		// The child run is whichever automation-runs row belongs to the
 		// target automation for this contact.
@@ -704,7 +717,9 @@ describe("G3: start_automation forwards socialAccountId to the child run", () =>
 			);
 		expect(childRuns.length).toBe(1);
 
-		const childCtx = (childRuns[0]!.context as Record<string, unknown>) ?? {};
+		const childRun0 = childRuns[0];
+		if (!childRun0) throw new Error("expected a child run");
+		const childCtx = (childRun0.context as Record<string, unknown>) ?? {};
 		// The fix: child inherits the triggering social account even when
 		// `pass_context: false` means context state isn't carried through.
 		expect(childCtx._triggering_social_account_id).toBe(igSocialAccountId);

@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { requireClient, handleSdkError } from "@/lib/api-utils";
+import { requireClient, } from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
   const platform = ctx.params.platform;
@@ -15,7 +15,10 @@ export const GET: APIRoute = async (ctx) => {
   try {
     const method = ctx.url.searchParams.get("method") || undefined;
     const redirectUrl = `${ctx.url.origin}/app/connect/callback/${platform}`;
-    const data = await client.connect.startOAuthFlow(platform as any, { redirect_url: redirectUrl, method });
+    const data = await client.connect.startOAuthFlow(
+      platform as Parameters<typeof client.connect.startOAuthFlow>[0],
+      { redirect_url: redirectUrl, method },
+    );
     return Response.redirect(data.auth_url, 302);
   } catch (e) {
     console.error("OAuth start error:", e);

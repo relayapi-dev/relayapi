@@ -82,7 +82,7 @@ let accountBPlatformId = "";
 // PART 1-3: the comment_to_dm automation + contact we exercise.
 let commentAutomationId = "";
 // PART 3: follow-up automation reacting to tag_applied
-let followupAutomationId = "";
+let _followupAutomationId = "";
 // PART 1 contact
 let aliceId = "";
 let aliceChatId = "";
@@ -91,8 +91,8 @@ let charlieChatId = "";
 // Track run ids that cross sub-tests
 let aliceRunId: string | null = null;
 // PART 6 schedule automation
-let scheduleAutomationId = "";
-let scheduleEntrypointId = "";
+let _scheduleAutomationId = "";
+let _scheduleEntrypointId = "";
 
 // `sendTransport` capture — assertions inspect outbound traffic.
 const sendCalls: Array<SendMessageRequest & { accessToken?: string }> = [];
@@ -561,7 +561,9 @@ describe("day-in-the-life", () => {
 			},
 		});
 		expect(built.entrypoints.length).toBe(1);
-		expect(built.entrypoints[0]!.kind).toBe("comment_created");
+		const firstEntrypoint = built.entrypoints[0];
+		if (!firstEntrypoint) throw new Error("expected an entrypoint");
+		expect(firstEntrypoint.kind).toBe("comment_created");
 
 		// Persist the real automation + entrypoint, but use our expanded graph
 		// so PART 2 has a branch to drive through.
@@ -626,14 +628,16 @@ describe("day-in-the-life", () => {
 			.from(automationRuns)
 			.where(eq(automationRuns.automationId, auto.id));
 		expect(runs.length).toBe(1);
-		aliceRunId = runs[0]!.id;
-		aliceId = runs[0]!.contactId;
+		const aliceRun = runs[0];
+		if (!aliceRun) throw new Error("expected an automation run for Alice");
+		aliceRunId = aliceRun.id;
+		aliceId = aliceRun.contactId;
 		expect(aliceId).toBeTruthy();
 
 		// The run is parked waiting for a button tap — `send_dm` has interactive
 		// ports, so the runner pauses there.
-		expect(runs[0]!.status).toBe("waiting");
-		expect(runs[0]!.currentNodeKey).toBe("send_dm");
+		expect(aliceRun.status).toBe("waiting");
+		expect(aliceRun.currentNodeKey).toBe("send_dm");
 
 		// sendMessage was called with account A's token (F2 fix). The
 		// accessToken on the SendMessageRequest is the token pulled via
@@ -645,7 +649,8 @@ describe("day-in-the-life", () => {
 			(c.text ?? "").startsWith("Here you go"),
 		);
 		expect(dmCall).toBeTruthy();
-		expect(dmCall!.accessToken).toBe("token-account-a");
+		if (!dmCall) throw new Error("expected a DM send call");
+		expect(dmCall.accessToken).toBe("token-account-a");
 	}, 60_000);
 
 	// -------------------------------------------------------------------------
@@ -677,7 +682,8 @@ describe("day-in-the-life", () => {
 			where: eq(automationRuns.id, aliceRunId as string),
 		});
 		expect(run).toBeTruthy();
-		expect(run!.status).toBe("completed");
+		if (!run) throw new Error("expected an automation run");
+		expect(run.status).toBe("completed");
 
 		// Condition evaluated TRUE because tag_add updated run.context.tags
 		// within the same run (F6 fix). Verify by: welcome message was sent,
@@ -726,7 +732,7 @@ describe("day-in-the-life", () => {
 			})
 			.returning();
 		if (!followup) throw new Error("followup insert failed");
-		followupAutomationId = followup.id;
+		_followupAutomationId = followup.id;
 		await db.insert(automationEntrypoints).values({
 			automationId: followup.id,
 			channel: "instagram",
@@ -774,6 +780,7 @@ describe("day-in-the-life", () => {
 				),
 			);
 		expect(bobContact).toBeTruthy();
+		if (!bobContact) throw new Error("expected Bob's contact");
 
 		const [bobCommentRun] = await db
 			.select({ id: automationRuns.id })
@@ -781,7 +788,7 @@ describe("day-in-the-life", () => {
 			.where(
 				and(
 					eq(automationRuns.automationId, commentAutomationId),
-					eq(automationRuns.contactId, bobContact!.id),
+					eq(automationRuns.contactId, bobContact.id),
 				),
 			);
 		expect(bobCommentRun).toBeTruthy();
@@ -801,8 +808,9 @@ describe("day-in-the-life", () => {
 		const [bobAfter] = await db
 			.select({ id: contacts.id, tags: contacts.tags })
 			.from(contacts)
-			.where(eq(contacts.id, bobContact!.id));
-		expect(bobAfter!.tags ?? []).toContain("subscribed");
+			.where(eq(contacts.id, bobContact.id));
+		if (!bobAfter) throw new Error("expected Bob's contact row after reload");
+		expect(bobAfter.tags ?? []).toContain("subscribed");
 
 		const followupRuns = await db
 			.select({ id: automationRuns.id, status: automationRuns.status })
@@ -810,7 +818,7 @@ describe("day-in-the-life", () => {
 			.where(
 				and(
 					eq(automationRuns.automationId, followup.id),
-					eq(automationRuns.contactId, bobContact!.id),
+					eq(automationRuns.contactId, bobContact.id),
 				),
 			);
 		expect(followupRuns.length).toBe(1);
@@ -983,6 +991,7 @@ describe("day-in-the-life", () => {
 				),
 			);
 		expect(charlieContact).toBeTruthy();
+		if (!charlieContact) throw new Error("expected Charlie's contact");
 
 		// A run exists on the welcome automation for charlie (the binding fired).
 		const welcomeRuns = await db
@@ -991,7 +1000,7 @@ describe("day-in-the-life", () => {
 			.where(
 				and(
 					eq(automationRuns.automationId, welcomeAuto.id),
-					eq(automationRuns.contactId, charlieContact!.id),
+					eq(automationRuns.contactId, charlieContact.id),
 				),
 			);
 		expect(welcomeRuns.length).toBe(1);
@@ -1003,7 +1012,7 @@ describe("day-in-the-life", () => {
 			.where(
 				and(
 					eq(automationRuns.automationId, defaultAuto.id),
-					eq(automationRuns.contactId, charlieContact!.id),
+					eq(automationRuns.contactId, charlieContact.id),
 				),
 			);
 		expect(defaultReplyRuns.length).toBe(0);
@@ -1093,7 +1102,7 @@ describe("day-in-the-life", () => {
 			})
 			.returning();
 		if (!auto) throw new Error("schedule automation insert failed");
-		scheduleAutomationId = auto.id;
+		_scheduleAutomationId = auto.id;
 
 		const [ep] = await db
 			.insert(automationEntrypoints)
@@ -1116,7 +1125,7 @@ describe("day-in-the-life", () => {
 			})
 			.returning();
 		if (!ep) throw new Error("schedule entrypoint insert failed");
-		scheduleEntrypointId = ep.id;
+		_scheduleEntrypointId = ep.id;
 
 		// Self-arm (simulating the activate path — production code does this
 		// from automations.ts:activate / entrypoint create handlers).
@@ -1139,17 +1148,19 @@ describe("day-in-the-life", () => {
 				),
 			);
 		expect(pending.length).toBe(1);
+		const pendingJob = pending[0];
+		if (!pendingJob) throw new Error("expected a pending scheduled job");
 
 		// The runAt is either 13:00 or 14:00 UTC (9am NY during DST vs EST).
 		// Our test date: 2026-04-20 falls in EDT (DST), so 9am NY = 13:00 UTC.
-		const runAtUtcHour = pending[0]!.runAt.getUTCHours();
+		const runAtUtcHour = pendingJob.runAt.getUTCHours();
 		expect([13, 14]).toContain(runAtUtcHour);
 
 		// Force the job run_at to the past and dispatch.
 		await db
 			.update(automationScheduledJobs)
 			.set({ runAt: new Date(Date.now() - 60_000) })
-			.where(eq(automationScheduledJobs.id, pending[0]!.id));
+			.where(eq(automationScheduledJobs.id, pendingJob.id));
 
 		// Alice and Bob are tagged "subscribed" from PARTs 2 + 3; charlie is
 		// not. So dispatch should enroll 2 contacts.
@@ -1252,13 +1263,14 @@ describe("day-in-the-life", () => {
 				),
 			);
 		expect(dave).toBeTruthy();
-		expect(dave!.workspaceId).toBe(workspaceId);
+		if (!dave) throw new Error("expected Dave's contact");
+		expect(dave.workspaceId).toBe(workspaceId);
 
 		if (result.status === "ok") {
 			const run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, result.runId),
 			});
-			expect(run?.contactId).toBe(dave!.id);
+			expect(run?.contactId).toBe(dave.id);
 		}
 	}, 60_000);
 });

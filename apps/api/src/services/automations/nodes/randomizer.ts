@@ -11,7 +11,10 @@ type RandomizerConfig = { variants: Variant[] };
 export const randomizerHandler: NodeHandler<RandomizerConfig> = {
 	kind: "randomizer",
 	async handle(node, ctx): Promise<HandlerResult> {
-		const sticky = ctx.context._randomizer?.[node.key];
+		const stickyMap = ctx.context._randomizer as
+			| Record<string, string>
+			| undefined;
+		const sticky = stickyMap?.[node.key];
 		if (typeof sticky === "string") {
 			return { result: "advance", via_port: `variant.${sticky}` };
 		}
@@ -26,7 +29,14 @@ export const randomizerHandler: NodeHandler<RandomizerConfig> = {
 		}
 		const totalWeight = variants.reduce((s, v) => s + (v.weight ?? 1), 0);
 		let roll = Math.random() * totalWeight;
-		let chosen: Variant = variants[0]!;
+		const [firstVariant] = variants;
+		if (!firstVariant) {
+			return {
+				result: "fail",
+				error: new Error("randomizer has no variants"),
+			};
+		}
+		let chosen: Variant = firstVariant;
 		for (const v of variants) {
 			roll -= v.weight ?? 1;
 			if (roll <= 0) {

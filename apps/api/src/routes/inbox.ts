@@ -1,9 +1,9 @@
-import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
+import { createRoute, OpenAPIHono, type z } from "@hono/zod-openapi";
 import {
-	createDb,
+	type createDb,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { ErrorResponse } from "../schemas/common";
 import {
@@ -899,12 +899,14 @@ app.openapi(listComments, async (c) => {
 		accounts.filter((a) => a.accessToken),
 		6,
 		async (account) => {
+			const accessToken = account.accessToken;
+			if (!accessToken) return [] as PostContext[];
 			try {
 				return await getCachedPosts(
 					c.env.KV,
 					account.id,
 					account.platform,
-					account.accessToken!,
+					accessToken,
 					MAX_POSTS_PER_ACCOUNT,
 				);
 			} catch {
@@ -935,6 +937,7 @@ app.openapi(listComments, async (c) => {
 	const commentResults = await mapConcurrently(allPosts, 8, async (post) => {
 		const account = accountById.get(post.account_id);
 		if (!account?.accessToken) return [] as CommentWithPost[];
+		const accessToken = account.accessToken;
 
 		try {
 			const result = await getCachedComments(
@@ -944,11 +947,11 @@ app.openapi(listComments, async (c) => {
 				async () => {
 					switch (post.platform) {
 						case "facebook":
-							return fetchFacebookComments(account.accessToken!, post.id, undefined, commentsPerPost);
+							return fetchFacebookComments(accessToken, post.id, undefined, commentsPerPost);
 						case "instagram":
-							return fetchInstagramComments(account.accessToken!, post.id, undefined, commentsPerPost, account.username ?? undefined);
+							return fetchInstagramComments(accessToken, post.id, undefined, commentsPerPost, account.username ?? undefined);
 						case "youtube":
-							return fetchYouTubeComments(account.accessToken!, post.id, undefined, commentsPerPost);
+							return fetchYouTubeComments(accessToken, post.id, undefined, commentsPerPost);
 						default:
 							return { data: [], next_cursor: null };
 					}
@@ -995,7 +998,7 @@ app.openapi(listComments, async (c) => {
 
 	return c.json(
 		{
-			data: page as any,
+			data: page as z.infer<typeof CommentsResponse>["data"],
 			next_cursor: nextCursor,
 			has_more: nextCursor !== null,
 		},
@@ -1026,8 +1029,10 @@ app.openapi(listPostsByComments, async (c) => {
 		accounts.filter((a) => a.accessToken),
 		6,
 		async (account) => {
+			const accessToken = account.accessToken;
+			if (!accessToken) return [] as PostContext[];
 			try {
-				return await getCachedPosts(c.env.KV, account.id, account.platform, account.accessToken!, 10);
+				return await getCachedPosts(c.env.KV, account.id, account.platform, accessToken, 10);
 			} catch {
 				return [] as PostContext[];
 			}
@@ -1073,7 +1078,7 @@ app.openapi(listPostsByComments, async (c) => {
 				platform_url: p.platform_url,
 				created_at: p.created_at,
 				comments_count: p.comments_count,
-			})) as any,
+			})) as z.infer<typeof PostsWithCommentsResponse>["data"],
 			next_cursor: nextCursor,
 			has_more: nextCursor !== null,
 		},
@@ -1097,23 +1102,24 @@ app.openapi(getPostComments, async (c) => {
 
 	// Use the first matching account that has a token
 	const account = accounts.find((a) => a.accessToken);
-	if (!account) {
+	if (!account?.accessToken) {
 		return c.json(
 			{ data: [], post_id, next_cursor: null, has_more: false },
 			200,
 		);
 	}
+	const accessToken = account.accessToken;
 
 	let result: { data: CommentData[]; next_cursor: string | null };
 	switch (account.platform) {
 		case "facebook":
-			result = await fetchFacebookComments(account.accessToken!, post_id, cursor, limit);
+			result = await fetchFacebookComments(accessToken, post_id, cursor, limit);
 			break;
 		case "instagram":
-			result = await fetchInstagramComments(account.accessToken!, post_id, cursor, limit, account.username ?? undefined);
+			result = await fetchInstagramComments(accessToken, post_id, cursor, limit, account.username ?? undefined);
 			break;
 		case "youtube":
-			result = await fetchYouTubeComments(account.accessToken!, post_id, cursor, limit);
+			result = await fetchYouTubeComments(accessToken, post_id, cursor, limit);
 			break;
 		default:
 			result = { data: [], next_cursor: null };
@@ -1121,9 +1127,10 @@ app.openapi(getPostComments, async (c) => {
 
 	return c.json(
 		{
-			data: result.data as any,
+			data: result.data as z.infer<typeof CommentsResponse>["data"],
 			post_id,
-			platform: account.platform as any,
+			platform:
+				account.platform as typeof socialAccounts.$inferSelect.platform,
 			next_cursor: result.next_cursor,
 			has_more: result.next_cursor !== null,
 		},
@@ -1239,12 +1246,14 @@ app.openapi(deleteComment, async (c) => {
 
 	const results = await Promise.allSettled(
 		candidates.map(async (account) => {
+			const accessToken = account.accessToken;
+			if (!accessToken) return;
 			switch (account.platform) {
 				case "facebook": {
 					// Facebook Graph API: Delete a comment
 					// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#deleting
 					const res = await fetch(
-						`${GRAPH_BASE.facebook}/${comment_id}?access_token=${encodeURIComponent(account.accessToken!)}`,
+						`${GRAPH_BASE.facebook}/${comment_id}?access_token=${encodeURIComponent(accessToken)}`,
 						{ method: "DELETE" },
 					);
 					if (!res.ok) throw new Error(`fb ${res.status}`);
@@ -1255,7 +1264,7 @@ app.openapi(deleteComment, async (c) => {
 					// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#deleting
 					// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
 					const res = await fetch(
-						`https://${igGraphHost(account.accessToken!)}/${API_VERSIONS.meta_graph}/${comment_id}?access_token=${encodeURIComponent(account.accessToken!)}`,
+						`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${comment_id}?access_token=${encodeURIComponent(accessToken)}`,
 						{ method: "DELETE" },
 					);
 					if (!res.ok) throw new Error(`ig ${res.status}`);
@@ -1268,7 +1277,7 @@ app.openapi(deleteComment, async (c) => {
 						`https://www.googleapis.com/youtube/v3/comments?id=${encodeURIComponent(comment_id)}`,
 						{
 							method: "DELETE",
-							headers: { Authorization: `Bearer ${account.accessToken!}` },
+							headers: { Authorization: `Bearer ${accessToken}` },
 						},
 					);
 					if (!res.ok) throw new Error(`yt ${res.status}`);
@@ -1301,12 +1310,14 @@ app.openapi(hideComment, async (c) => {
 
 	const results = await Promise.allSettled(
 		candidates.map(async (account) => {
+			const accessToken = account.accessToken;
+			if (!accessToken) return;
 			if (account.platform === "instagram") {
 				// Instagram Graph API: Hide a comment (set hide to true)
 				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#updating
 				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (the Facebook param)
 				const res = await fetch(
-					`https://${igGraphHost(account.accessToken!)}/${API_VERSIONS.meta_graph}/${comment_id}`,
+					`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${comment_id}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -1358,12 +1369,14 @@ app.openapi(unhideComment, async (c) => {
 
 	const results = await Promise.allSettled(
 		candidates.map(async (account) => {
+			const accessToken = account.accessToken;
+			if (!accessToken) return;
 			if (account.platform === "instagram") {
 				// Instagram Graph API: Unhide a comment (set hide to false)
 				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#updating
 				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (the Facebook param)
 				const res = await fetch(
-					`https://${igGraphHost(account.accessToken!)}/${API_VERSIONS.meta_graph}/${comment_id}`,
+					`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${comment_id}`,
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -1454,10 +1467,12 @@ app.openapi(unlikeComment, async (c) => {
 
 	const results = await Promise.allSettled(
 		candidates.map(async (account) => {
+			const accessToken = account.accessToken;
+			if (!accessToken) return;
 			// Facebook Graph API: Unlike a comment (remove like)
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/object/likes/#deleting
 			const res = await fetch(
-				`${GRAPH_BASE.facebook}/${comment_id}/likes?access_token=${encodeURIComponent(account.accessToken!)}`,
+				`${GRAPH_BASE.facebook}/${comment_id}/likes?access_token=${encodeURIComponent(accessToken)}`,
 				{ method: "DELETE" },
 			);
 			if (!res.ok) throw new Error(`fb ${res.status}`);
@@ -1582,6 +1597,10 @@ app.openapi(listReviews, async (c) => {
 			if (cursorSupplied && cursorMap && accountCursor === undefined) {
 				return { accountId: account.id, reviews: [], cursor: null };
 			}
+			const accessToken = account.accessToken;
+			if (!accessToken) {
+				return { accountId: account.id, reviews: [], cursor: null };
+			}
 			try {
 				switch (account.platform) {
 					case "googlebusiness": {
@@ -1687,7 +1706,7 @@ app.openapi(listReviews, async (c) => {
 						return { accountId: account.id, reviews, cursor: json.nextPageToken ?? null };
 					}
 					case "facebook": {
-						let url = `${GRAPH_BASE.facebook}/${account.platformAccountId}/ratings?access_token=${encodeURIComponent(account.accessToken!)}&limit=${perAccountPageSize}&fields=reviewer,rating,review_text,created_time`;
+						let url = `${GRAPH_BASE.facebook}/${account.platformAccountId}/ratings?access_token=${encodeURIComponent(accessToken)}&limit=${perAccountPageSize}&fields=reviewer,rating,review_text,created_time`;
 						if (accountCursor) url += `&after=${encodeURIComponent(accountCursor)}`;
 						const res = await fetch(url);
 						if (!res.ok) return { accountId: account.id, reviews: [], cursor: null };
@@ -1741,7 +1760,7 @@ app.openapi(listReviews, async (c) => {
 
 	return c.json(
 		{
-			data: allReviews as any,
+			data: allReviews as z.infer<typeof ReviewsListResponse>["data"],
 			next_cursor: nextCursor,
 			has_more: nextCursor !== null,
 		},

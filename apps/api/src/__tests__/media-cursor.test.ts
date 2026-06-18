@@ -92,7 +92,9 @@ describe("GET /v1/media cursor pagination", () => {
 		// Composite keyset: the cursor is the opaque id of the last returned row
 		// (the handler resolves its created_at server-side for the (created_at,id)
 		// comparison, so the client cursor stays an id).
-		expect(body.next_cursor).toBe(rows[PAGE - 1]!.id);
+		const lastRow = rows[PAGE - 1];
+		if (!lastRow) throw new Error("expected last row");
+		expect(body.next_cursor).toBe(lastRow.id);
 	});
 
 	it("applies the cursor as an additional where condition", async () => {

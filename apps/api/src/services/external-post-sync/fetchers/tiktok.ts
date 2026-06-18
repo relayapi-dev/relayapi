@@ -28,10 +28,31 @@ const VIDEO_FIELDS = [
 	"duration",
 ].join(",");
 
-async function ttFetch(
+interface TikTokRawVideo {
+	id: string;
+	create_time: number;
+	share_url?: string;
+	cover_image_url?: string;
+	video_description?: string;
+	like_count?: number;
+	comment_count?: number;
+	share_count?: number;
+	view_count?: number;
+	duration?: number;
+}
+
+interface TikTokVideoListResponse {
+	data?: {
+		videos?: TikTokRawVideo[];
+		cursor?: number;
+		has_more?: boolean;
+	};
+}
+
+async function ttFetch<T = unknown>(
 	url: string,
 	accessToken: string,
-): Promise<{ data: any; headers: Headers }> {
+): Promise<{ data: T; headers: Headers }> {
 	const res = await fetch(url, {
 		method: "GET",
 		headers: {
@@ -49,10 +70,10 @@ async function ttFetch(
 		const text = await res.text();
 		throw new Error(`TikTok API ${res.status}: ${text}`);
 	}
-	return { data: await res.json(), headers: res.headers };
+	return { data: (await res.json()) as T, headers: res.headers };
 }
 
-function parseVideo(raw: any): ExternalPostData {
+function parseVideo(raw: TikTokRawVideo): ExternalPostData {
 	return {
 		platformPostId: raw.id,
 		platformUrl: raw.share_url ?? null,
@@ -82,7 +103,10 @@ export const tiktokPostFetcher: ExternalPostFetcher = {
 			url += `&cursor=${options.cursor}`;
 		}
 
-		const { data: json, headers } = await ttFetch(url, accessToken);
+		const { data: json, headers } = await ttFetch<TikTokVideoListResponse>(
+			url,
+			accessToken,
+		);
 
 		const videoData = json.data ?? {};
 		const videos = videoData.videos ?? [];
@@ -90,8 +114,9 @@ export const tiktokPostFetcher: ExternalPostFetcher = {
 		const posts: ExternalPostData[] = videos.map(parseVideo);
 
 		// Filter by since if provided (TikTok doesn't support since param natively)
-		const filtered = options.since
-			? posts.filter((p) => p.publishedAt >= options.since!)
+		const since = options.since;
+		const filtered = since
+			? posts.filter((p) => p.publishedAt >= since)
 			: posts;
 
 		const nextCursor = videoData.cursor != null ? String(videoData.cursor) : null;
@@ -111,7 +136,7 @@ export const tiktokPostFetcher: ExternalPostFetcher = {
 
 		// TikTok: re-fetch video list and match by ID (no batch metrics endpoint)
 		try {
-			const { data: json } = await ttFetch(
+			const { data: json } = await ttFetch<TikTokVideoListResponse>(
 				`${BASE}/user/${platformAccountId}/videos/?fields=${VIDEO_FIELDS}&max_count=20`,
 				accessToken,
 			);

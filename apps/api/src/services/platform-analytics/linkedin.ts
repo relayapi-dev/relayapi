@@ -457,11 +457,6 @@ export const linkedinAnalytics: PlatformAnalyticsFetcher = {
 				mediaType = "link";
 			}
 
-			// Extract the post ID for URL construction
-			// Post URNs can be "urn:li:share:{id}" or "urn:li:ugcPost:{id}"
-			const postIdParts = post.id.split(":");
-			const postNumericId = postIdParts[postIdParts.length - 1];
-
 			const publishedAt = post.publishedAt ?? post.createdAt ?? 0;
 
 			return {

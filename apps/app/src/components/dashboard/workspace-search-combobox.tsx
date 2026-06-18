@@ -203,6 +203,7 @@ export function WorkspaceSearchCombobox({
           <div className="max-h-48 overflow-y-auto py-1">
             {showAllOption && (
               <button
+                type="button"
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 transition-colors",
                   value === null && "bg-accent/20 font-medium"
@@ -216,6 +217,7 @@ export function WorkspaceSearchCombobox({
 
             {showUnassignedOption && (
               <button
+                type="button"
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent/30 transition-colors",
                   value === "__ungrouped" && "bg-accent/20 font-medium text-foreground"
@@ -233,6 +235,7 @@ export function WorkspaceSearchCombobox({
 
             {workspaces.map((w) => (
               <button
+                type="button"
                 key={w.id}
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 transition-colors",
@@ -260,6 +263,7 @@ export function WorkspaceSearchCombobox({
               <>
                 <div className="border-t border-border my-1" />
                 <button
+                  type="button"
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/30 transition-colors text-primary font-medium"
                   onClick={() => {
                     setNewWorkspaceName(search.trim());

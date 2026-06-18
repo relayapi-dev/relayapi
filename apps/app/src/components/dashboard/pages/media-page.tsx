@@ -10,7 +10,6 @@ import {
   Type,
   BookOpen,
   Search,
-  Wrench,
   Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -103,7 +102,9 @@ function MediaPreview({ file }: { file: MediaFile }) {
         preload="metadata"
         className="size-full object-cover"
         onError={() => setFailed(true)}
-      />
+      >
+        <track kind="captions" />
+      </video>
     );
   }
 
@@ -174,6 +175,7 @@ export function MediaPage({
             const tabKey = tab.toLowerCase() as typeof initialTab;
             return (
               <button
+                type="button"
                 key={tab}
                 onClick={() => switchTab(tabKey)}
                 className={cn(
@@ -245,6 +247,7 @@ export function MediaPage({
                       </p>
                     </div>
                     <button
+                      type="button"
                       className="rounded-lg p-1.5 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
                       onClick={() => handleDelete(file.id)}
                       title="Delete"

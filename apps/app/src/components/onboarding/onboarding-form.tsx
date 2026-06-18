@@ -118,7 +118,6 @@ export function OnboardingForm({ userEmail }: OnboardingFormProps) {
 								onChange={(e) => setName(e.target.value)}
 								placeholder="My Company"
 								required
-								autoFocus
 								className="w-full rounded-lg border border-border bg-background py-2.5 px-3 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25"
 							/>
 						</div>
@@ -172,6 +171,7 @@ export function OnboardingForm({ userEmail }: OnboardingFormProps) {
 				<p className="mt-6 text-center text-sm text-muted-foreground">
 					Signed in as {userEmail}.{" "}
 					<button
+						type="button"
 						onClick={handleSignOut}
 						className="font-medium text-primary hover:underline"
 					>

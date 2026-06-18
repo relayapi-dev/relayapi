@@ -43,8 +43,11 @@ export function CalendarDayCell({ date, posts, currentMonth, onClickDate, onEdit
   const overflowCount = posts.length - MAX_VISIBLE;
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: interactive wrapper cannot be a button due to nested controls (post cards and buttons)
     <div
       ref={setNodeRef}
+      role="button"
+      tabIndex={past || tooFar ? -1 : 0}
       onClick={(e) => {
         if (past || tooFar) return;
         const target = e.target as HTMLElement;
@@ -52,6 +55,14 @@ export function CalendarDayCell({ date, posts, currentMonth, onClickDate, onEdit
         if (target.closest("[data-radix-popper-content-wrapper]")) return;
         if (target.closest("[role='dialog']")) return;
         onClickDate(date);
+      }}
+      onKeyDown={(e) => {
+        if (past || tooFar) return;
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClickDate(date);
+        }
       }}
       className={cn(
         "min-h-[120px] border-b border-r border-border p-1 transition-colors bg-white dark:bg-background",
@@ -79,6 +90,7 @@ export function CalendarDayCell({ date, posts, currentMonth, onClickDate, onEdit
         ))}
         {overflowCount > 0 && !showAll && (
           <button
+            type="button"
             className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground pl-1"
             onClick={(e) => {
               e.stopPropagation();
@@ -91,6 +103,7 @@ export function CalendarDayCell({ date, posts, currentMonth, onClickDate, onEdit
         )}
         {showAll && overflowCount > 0 && (
           <button
+            type="button"
             className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground pl-1"
             onClick={(e) => {
               e.stopPropagation();

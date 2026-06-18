@@ -27,6 +27,7 @@ export function PageActions({ llmUrl }: PageActionsProps) {
   return (
     <div className="flex items-center gap-2">
       <button
+        type="button"
         onClick={handleCopy}
         disabled={loading}
         className="inline-flex items-center gap-1.5 rounded-lg border border-fd-border px-3 py-1.5 text-sm font-medium text-fd-muted-foreground hover:bg-fd-accent hover:text-fd-accent-foreground transition-colors cursor-pointer disabled:opacity-50"

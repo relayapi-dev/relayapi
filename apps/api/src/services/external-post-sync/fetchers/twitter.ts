@@ -18,10 +18,40 @@ const TWEET_FIELDS =
 const EXPANSIONS = "attachments.media_keys";
 const MEDIA_FIELDS = "url,preview_image_url,type";
 
-async function xFetch(
+interface TwitterPublicMetrics {
+	impression_count?: number;
+	like_count?: number;
+	reply_count?: number;
+	retweet_count?: number;
+	quote_count?: number;
+}
+
+interface TwitterMedia {
+	media_key: string;
+	type?: string;
+	url?: string;
+	preview_image_url?: string;
+}
+
+interface TwitterRawTweet {
+	id: string;
+	text?: string;
+	created_at?: string;
+	public_metrics?: TwitterPublicMetrics;
+	entities?: unknown;
+	attachments?: { media_keys?: string[] };
+}
+
+interface TwitterTimelineResponse {
+	data?: TwitterRawTweet[];
+	includes?: { media?: TwitterMedia[] };
+	meta?: { next_token?: string };
+}
+
+async function xFetch<T = unknown>(
 	url: string,
 	accessToken: string,
-): Promise<{ data: any; headers: Headers }> {
+): Promise<{ data: T; headers: Headers }> {
 	const res = await fetch(url, {
 		headers: { Authorization: `Bearer ${accessToken}` },
 	});
@@ -36,12 +66,12 @@ async function xFetch(
 		const body = await res.text();
 		throw new Error(`X API ${res.status}: ${body}`);
 	}
-	return { data: await res.json(), headers: res.headers };
+	return { data: (await res.json()) as T, headers: res.headers };
 }
 
 function parseTweet(
-	tweet: any,
-	mediaMap: Map<string, any>,
+	tweet: TwitterRawTweet,
+	mediaMap: Map<string, TwitterMedia>,
 ): ExternalPostData {
 	const mediaUrls: string[] = [];
 	let mediaType: string | null = null;
@@ -71,7 +101,7 @@ function parseTweet(
 		mediaUrls,
 		mediaType,
 		thumbnailUrl,
-		publishedAt: new Date(tweet.created_at),
+		publishedAt: tweet.created_at ? new Date(tweet.created_at) : new Date(),
 		platformData: {
 			public_metrics: pm,
 			entities: tweet.entities,
@@ -80,7 +110,7 @@ function parseTweet(
 			impressions: pm.impression_count ?? 0,
 			likes: pm.like_count ?? 0,
 			comments: pm.reply_count ?? 0,
-			shares: pm.retweet_count + (pm.quote_count ?? 0),
+			shares: (pm.retweet_count ?? 0) + (pm.quote_count ?? 0),
 			views: pm.impression_count ?? 0,
 		},
 	};
@@ -100,15 +130,18 @@ export const twitterPostFetcher: ExternalPostFetcher = {
 			url += `&start_time=${options.since.toISOString()}`;
 		}
 
-		const { data: json, headers } = await xFetch(url, accessToken);
+		const { data: json, headers } = await xFetch<TwitterTimelineResponse>(
+			url,
+			accessToken,
+		);
 
 		// Build media lookup
-		const mediaMap = new Map<string, any>();
+		const mediaMap = new Map<string, TwitterMedia>();
 		for (const media of json.includes?.media ?? []) {
 			mediaMap.set(media.media_key, media);
 		}
 
-		const posts: ExternalPostData[] = (json.data ?? []).map((t: any) =>
+		const posts: ExternalPostData[] = (json.data ?? []).map((t) =>
 			parseTweet(t, mediaMap),
 		);
 
@@ -124,7 +157,7 @@ export const twitterPostFetcher: ExternalPostFetcher = {
 		// X API: batch lookup up to 100 tweets
 		const ids = platformPostIds.slice(0, 100).join(",");
 		try {
-			const { data: json } = await xFetch(
+			const { data: json } = await xFetch<{ data?: TwitterRawTweet[] }>(
 				`${BASE}/tweets?ids=${ids}&tweet.fields=public_metrics`,
 				accessToken,
 			);

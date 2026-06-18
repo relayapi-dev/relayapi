@@ -20,13 +20,12 @@ import {
 	automationStepRuns,
 	automations,
 	contacts,
-	createDb,
 	customFieldDefinitions,
 	customFieldValues,
 	type Database,
 } from "@relayapi/db";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
-import type { Graph, GraphEdge, GraphNode } from "../../schemas/automation-graph";
+import type { Graph, GraphEdge, } from "../../schemas/automation-graph";
 import { getHandler } from "./manifest";
 import type { HandlerResult, RunContext, RunStatus } from "./types";
 
@@ -49,7 +48,7 @@ export type RunLoopOptions = {
 export async function runLoop(
 	db: Db,
 	runId: string,
-	env: Record<string, any>,
+	env: Record<string, unknown>,
 	options: RunLoopOptions = {},
 ): Promise<{ status: RunStatus; exit_reason: string | null }> {
 	const maxVisits = options.maxVisits ?? MAX_VISITS_PER_LOOP;
@@ -156,12 +155,12 @@ export async function runLoop(
 		// resume with no account pinned and `resolveRecipient` would pick
 		// up the newest contact_channels row — potentially account B in a
 		// multi-account workspace.
-		const runCtxObj = (run.context as Record<string, any>) ?? {};
+		const runCtxObj = (run.context as Record<string, unknown>) ?? {};
 		const persistedAccountId = runCtxObj._triggering_social_account_id as
 			| string
 			| null
 			| undefined;
-		const effectiveEnv: Record<string, any> = { db, ...env };
+		const effectiveEnv: Record<string, unknown> = { db, ...env };
 		if (effectiveEnv.socialAccountId == null && persistedAccountId) {
 			effectiveEnv.socialAccountId = persistedAccountId;
 		}
@@ -385,8 +384,8 @@ export async function enrollContact(
 		 * forgot to pass it through env.
 		 */
 		socialAccountId?: string | null;
-		contextOverrides?: Record<string, any>;
-		env: Record<string, any>;
+		contextOverrides?: Record<string, unknown>;
+		env: Record<string, unknown>;
 		runLoopOptions?: RunLoopOptions;
 		/**
 		 * Contact state already loaded by the caller (e.g. the trigger matcher
@@ -395,7 +394,7 @@ export async function enrollContact(
 		 * this, saving ~2 redundant DB round trips per enrollment.
 		 */
 		prehydrated?: {
-			contact: Record<string, any> | null;
+			contact: Record<string, unknown> | null;
 			tags: string[];
 			fields: Record<string, string>;
 		};
@@ -464,7 +463,7 @@ export async function enrollContact(
 	// ctx.db, which runLoop populates directly. Pin socialAccountId on env
 	// so `resolveRecipient` scopes `contact_channels` to the account that
 	// actually triggered this run.
-	const envForRun: Record<string, any> = { db, ...args.env };
+	const envForRun: Record<string, unknown> = { db, ...args.env };
 	if (args.socialAccountId && envForRun.socialAccountId == null) {
 		envForRun.socialAccountId = args.socialAccountId;
 	}
@@ -496,7 +495,7 @@ export async function resumeExternalEventRuns(
 		organizationId: string;
 		contactId: string;
 		automationId: string | null;
-		env: Record<string, any>;
+		env: Record<string, unknown>;
 	},
 ): Promise<{ resumed: number }> {
 	const parked = await db
@@ -565,13 +564,13 @@ async function buildInitialRunContext(
 	db: Db,
 	contactId: string,
 	organizationId: string,
-	overrides: Record<string, any>,
+	overrides: Record<string, unknown>,
 	prehydrated?: {
-		contact: Record<string, any> | null;
+		contact: Record<string, unknown> | null;
 		tags: string[];
 		fields: Record<string, string>;
 	},
-): Promise<Record<string, any>> {
+): Promise<Record<string, unknown>> {
 	// Reuse caller-supplied contact state when available (the trigger matcher
 	// already loaded the contact row + custom fields to evaluate filters), so we
 	// don't re-run the same two queries here.
@@ -691,7 +690,7 @@ export type RunUpdate = Partial<{
 	status: RunStatus;
 	currentNodeKey: string | null;
 	currentPortKey: string | null;
-	context: Record<string, any>;
+	context: Record<string, unknown>;
 	waitingFor: string | null;
 	waitingUntil: Date | null;
 	exitReason: string | null;
@@ -714,7 +713,7 @@ export async function updateRunOptimistic(
 	priorUpdatedAt: Date,
 	patch: RunUpdate,
 ): Promise<boolean> {
-	const setPayload: Record<string, any> = { updatedAt: new Date() };
+	const setPayload: Record<string, unknown> = { updatedAt: new Date() };
 	if (patch.status !== undefined) setPayload.status = patch.status;
 	if (patch.currentNodeKey !== undefined)
 		setPayload.currentNodeKey = patch.currentNodeKey;

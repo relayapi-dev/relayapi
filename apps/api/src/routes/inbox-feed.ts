@@ -234,12 +234,13 @@ app.openapi(bulkRoute, async (c) => {
 			eq(inboxConversations.organizationId, orgId),
 		];
 		if (workspaceScope !== "all") {
-			conds.push(
-				or(
-					inArray(inboxConversations.workspaceId, workspaceScope),
-					isNull(inboxConversations.workspaceId),
-				)!,
+			const scopeCondition = or(
+				inArray(inboxConversations.workspaceId, workspaceScope),
+				isNull(inboxConversations.workspaceId),
 			);
+			if (scopeCondition) {
+				conds.push(scopeCondition);
+			}
 		}
 		return conds;
 	};
@@ -845,9 +846,9 @@ app.openapi(sendMessageRoute, async (c) => {
 					? { context: { message_id: reply_to } }
 					: {};
 
-				if (attachments && attachments.length > 0) {
+				const att = attachments?.[0];
+				if (att) {
 					// Send first attachment as media message
-					const att = attachments[0]!;
 					const waType = att.type.startsWith("image/")
 						? "image"
 						: att.type.startsWith("video/")

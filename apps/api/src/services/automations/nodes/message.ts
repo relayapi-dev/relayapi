@@ -26,7 +26,13 @@ import {
 	type AutomationChannel,
 } from "../platforms";
 import { applyMergeTags } from "../merge-tags";
+import type {
+	SendMessageRequest,
+	SendMessageResult,
+} from "../../message-sender";
 import type { NodeHandler, RunContext } from "../types";
+
+type SendTransport = (req: SendMessageRequest) => Promise<SendMessageResult>;
 
 type MessageConfig = {
 	blocks?: MessageBlock[];
@@ -102,7 +108,7 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 				accessToken: recipient.accessToken,
 				platformAccountId: recipient.accountPlatformId,
 			},
-			sendTransport: ctx.env?.sendTransport,
+			sendTransport: ctx.env?.sendTransport as SendTransport | undefined,
 		});
 
 		const payload = {

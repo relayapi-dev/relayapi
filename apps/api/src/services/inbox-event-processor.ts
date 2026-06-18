@@ -21,7 +21,11 @@ import type {
 } from "./automations/trigger-matcher";
 import { rehostAvatar } from "./avatar-store";
 import { ensureContactForAuthor } from "./contact-linker";
-import { insertMessage, upsertConversation } from "./inbox-persistence";
+import {
+	insertMessage,
+	type UpsertConversationData,
+	upsertConversation,
+} from "./inbox-persistence";
 import { deliverWebhook, dispatchWebhookEvent } from "./webhook-delivery";
 import { subscribeYouTubeChannel } from "./webhook-subscription";
 
@@ -358,7 +362,7 @@ export async function processInboxEvent(
 					organizationId: event.organization_id,
 					workspaceId: sa?.workspaceId ?? null,
 					accountId: event.account_id,
-					platform: event.platform as any,
+					platform: event.platform as UpsertConversationData["platform"],
 					type: event.type === "comment" ? "comment_thread" : "dm",
 					platformConversationId:
 						event.post_id ||
@@ -1179,7 +1183,7 @@ function normalizeFacebookEvent(
 	if (event_type === "messages") {
 		const msg = payload as FacebookMessagingPayload;
 		const isEcho =
-			!!(msg.message as any)?.is_echo ||
+			!!(msg.message as { is_echo?: boolean })?.is_echo ||
 			msg.sender.id === message.platform_account_id;
 		if (isEcho) return [];
 		const text = msg.message?.text ?? msg.postback?.title;
@@ -1365,7 +1369,7 @@ function normalizeInstagramEvent(
 	if (event_type === "messages") {
 		const msg = payload as FacebookMessagingPayload;
 		const isEcho =
-			!!(msg.message as any)?.is_echo ||
+			!!(msg.message as { is_echo?: boolean })?.is_echo ||
 			msg.sender.id === message.platform_account_id;
 		// Skip echoes — outbound messages are already stored by the sendMessage handler
 		if (isEcho) return [];

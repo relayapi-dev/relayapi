@@ -20,7 +20,7 @@ export const POST: APIRoute = async (context) => {
 	}
 
 	const db = context.locals.db;
-	const cfEnv = env as Record<string, any>;
+	const cfEnv = env as Record<string, unknown>;
 
 	try {
 		const [row] = await db
@@ -69,7 +69,7 @@ export const POST: APIRoute = async (context) => {
 			);
 		}
 
-		const baseUrl = cfEnv.BETTER_AUTH_URL || context.url.origin;
+		const baseUrl = (cfEnv.BETTER_AUTH_URL as string | undefined) || context.url.origin;
 		const inviteUrl = `${baseUrl}/invite/${row.id}`;
 
 		const html = await render(
@@ -95,7 +95,7 @@ export const POST: APIRoute = async (context) => {
 		if (queue) {
 			await queue.send(emailMessage);
 		} else if (cfEnv.RESEND_API_KEY) {
-			const resend = new Resend(cfEnv.RESEND_API_KEY);
+			const resend = new Resend(cfEnv.RESEND_API_KEY as string);
 			await resend.emails.send({
 				from: emailMessage.from,
 				to: emailMessage.to,

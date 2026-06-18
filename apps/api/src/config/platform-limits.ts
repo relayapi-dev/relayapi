@@ -262,6 +262,7 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 };
 
 const URL_REGEX = /https?:\/\/[^\s]+/g;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: intentional ASCII range boundary (\x00-\x7F) to detect non-ASCII characters
 const NON_ASCII_REGEX = /[^\x00-\x7F]/;
 const TWITTER_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
 

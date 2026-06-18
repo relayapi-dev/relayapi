@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { validateGraph } from "../services/automations/validator";
 
-const mkGraph = (overrides: Partial<any> = {}) => ({
+const mkGraph = (overrides: Record<string, unknown> = {}) => ({
   schema_version: 1 as const,
   root_node_key: "a",
   nodes: [

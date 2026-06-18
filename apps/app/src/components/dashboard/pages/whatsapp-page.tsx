@@ -143,6 +143,7 @@ export function WhatsAppPage({
             const tabKey = tab.toLowerCase() as typeof initialTab;
             return (
               <button
+                type="button"
                 key={tab}
                 onClick={() => switchTab(tabKey)}
                 className={cn(

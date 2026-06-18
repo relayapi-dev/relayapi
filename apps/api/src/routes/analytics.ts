@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import {
-	createDb,
+	type createDb,
 	postAnalytics,
 	postTargets,
 	posts,
@@ -326,7 +326,17 @@ async function getOrgAnalyticsOverview(
 		FROM latest
 	`);
 
-	const row = (rows as any).rows?.[0] ?? (rows as any)[0];
+	type TotalsRow = {
+		total_posts: string | number;
+		total_impressions: string | number | null;
+		total_likes: string | number | null;
+		total_comments: string | number | null;
+		total_shares: string | number | null;
+		total_clicks: string | number | null;
+		total_views: string | number | null;
+	};
+	const result = rows as { rows?: TotalsRow[] } & ArrayLike<TotalsRow>;
+	const row = result.rows?.[0] ?? result[0];
 	const toNum = (v: string | number | null | undefined) =>
 		v == null ? 0 : typeof v === "number" ? v : Number(v);
 
@@ -495,7 +505,7 @@ app.openapi(getDailyMetrics, async (c) => {
 
 	for (const row of rows) {
 		if (!row.publishedAt) continue;
-		const dateStr = row.publishedAt.toISOString().split("T")[0]!;
+		const dateStr = row.publishedAt.toISOString().slice(0, 10);
 
 		let existing = dailyMap.get(dateStr);
 		if (!existing) {
@@ -719,7 +729,7 @@ app.openapi(getPostTimeline, async (c) => {
 	>();
 
 	for (const s of snapshots) {
-		const dateStr = s.collectedAt.toISOString().split("T")[0]!;
+		const dateStr = s.collectedAt.toISOString().slice(0, 10);
 		const existing = dateMap.get(dateStr) ?? {
 			impressions: 0,
 			likes: 0,
@@ -812,11 +822,13 @@ app.openapi(getPostingFrequency, async (c) => {
 		SELECT post_count, total_engagement, total_impressions FROM weekly
 	`);
 
-	const rawWeeks = ((weekRows as any).rows ?? (weekRows as any)) as Array<{
+	type WeekRow = {
 		post_count: string | number;
 		total_engagement: string | number | null;
 		total_impressions: string | number | null;
-	}>;
+	};
+	const weekResult = weekRows as { rows?: WeekRow[] } & ArrayLike<WeekRow>;
+	const rawWeeks: WeekRow[] = weekResult.rows ?? Array.from(weekResult);
 
 	if (rawWeeks.length === 0) {
 		return c.json({ data: [], optimal_frequency: 0 }, 200);
@@ -926,7 +938,7 @@ app.openapi(getYouTubeDailyViews, async (c) => {
 	>();
 
 	for (const s of snapshots) {
-		const dateStr = s.collectedAt.toISOString().split("T")[0]!;
+		const dateStr = s.collectedAt.toISOString().slice(0, 10);
 		const existing = dateMap.get(dateStr) ?? {
 			views: 0,
 			watch_time_minutes: 0,
@@ -948,12 +960,10 @@ app.openapi(getYouTubeDailyViews, async (c) => {
 // =============================================================================
 
 function getPlatformDateRange(fromDate?: string, toDate?: string): DateRange {
-	const to = toDate || new Date().toISOString().split("T")[0]!;
+	const to = toDate || new Date().toISOString().slice(0, 10);
 	const from =
 		fromDate ||
-		new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-			.toISOString()
-			.split("T")[0]!;
+		new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 	return { from, to };
 }
 

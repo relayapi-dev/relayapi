@@ -27,8 +27,9 @@ type PositionedNode = {
 function anyNodesOverlap(nodes: PositionedNode[]): boolean {
 	for (let i = 0; i < nodes.length; i++) {
 		for (let j = i + 1; j < nodes.length; j++) {
-			const a = nodes[i]!;
-			const b = nodes[j]!;
+			const a = nodes[i];
+			const b = nodes[j];
+			if (!a || !b) continue;
 			const sa = estimateNodeSize(a);
 			const sb = estimateNodeSize(b);
 			const ax = a.canvas_x ?? 0;
@@ -185,13 +186,14 @@ describe("buildGraphFromTemplate", () => {
 			(n) => n.key === result.graph.root_node_key,
 		);
 		expect(root).toBeDefined();
-		expect(typeof root!.canvas_x).toBe("number");
-		expect(typeof root!.canvas_y).toBe("number");
+		if (!root) throw new Error("expected root node to be defined");
+		expect(typeof root.canvas_x).toBe("number");
+		expect(typeof root.canvas_y).toBe("number");
 		// LR layout: the root is a source node, so it sits at the left-most x.
 		const minX = Math.min(
 			...result.graph.nodes.map((n) => n.canvas_x ?? Number.POSITIVE_INFINITY),
 		);
-		expect(root!.canvas_x).toBe(minX);
+		expect(root.canvas_x).toBe(minX);
 	});
 
 	// Simulates what POST /v1/automations does end-to-end: build from template,
@@ -217,7 +219,13 @@ describe("buildGraphFromTemplate", () => {
 		// downstream node to the right, and the two cards must not overlap.
 		const publicReply = persisted.nodes.find((n) => n.key === "public_reply");
 		const sendDm = persisted.nodes.find((n) => n.key === "send_dm");
-		expect(sendDm!.canvas_x!).toBeGreaterThan(publicReply!.canvas_x!);
+		if (sendDm?.canvas_x === undefined) {
+			throw new Error("expected send_dm node with canvas_x");
+		}
+		if (publicReply?.canvas_x === undefined) {
+			throw new Error("expected public_reply node with canvas_x");
+		}
+		expect(sendDm.canvas_x).toBeGreaterThan(publicReply.canvas_x);
 		expect(anyNodesOverlap(persisted.nodes as PositionedNode[])).toBe(false);
 	});
 
@@ -284,14 +292,16 @@ describe("buildGraphFromTemplate", () => {
 			config: FIXTURES.comment_to_dm,
 		});
 		expect(result.entrypoints).toHaveLength(1);
-		const ep = result.entrypoints[0]!;
+		const ep = result.entrypoints[0];
+		if (!ep) throw new Error("expected an entrypoint");
 		expect(ep.kind).toBe("comment_created");
 		expect(ep.socialAccountId).toBe("acc_123");
-		expect((ep.config as any).post_ids).toEqual(["post_abc"]);
+		const epConfig = ep.config as Record<string, unknown>;
+		expect(epConfig.post_ids).toEqual(["post_abc"]);
 		// After the key-drift fix the emitted entrypoint uses `keywords` (the
 		// key the matcher reads); the template input is still `keyword_filter`.
-		expect((ep.config as any).keywords).toEqual(["link"]);
-		expect((ep.config as any).keyword_filter).toBeUndefined();
+		expect(epConfig.keywords).toEqual(["link"]);
+		expect(epConfig.keyword_filter).toBeUndefined();
 	});
 
 	it("follow_to_dm emits a follow entrypoint", () => {
@@ -301,7 +311,9 @@ describe("buildGraphFromTemplate", () => {
 			config: FIXTURES.follow_to_dm,
 		});
 		expect(result.entrypoints).toHaveLength(1);
-		expect(result.entrypoints[0]!.kind).toBe("follow");
+		const ep = result.entrypoints[0];
+		if (!ep) throw new Error("expected an entrypoint");
+		expect(ep.kind).toBe("follow");
 	});
 
 	it("follow_to_dm does NOT persist rate-limit fields on the entrypoint config", () => {
@@ -314,7 +326,8 @@ describe("buildGraphFromTemplate", () => {
 			channel: "instagram",
 			config: FIXTURES.follow_to_dm,
 		});
-		const ep = result.entrypoints[0]!;
+		const ep = result.entrypoints[0];
+		if (!ep) throw new Error("expected an entrypoint");
 		const cfg = (ep.config ?? {}) as Record<string, unknown>;
 		expect(cfg.max_sends_per_day).toBeUndefined();
 		expect(cfg.cooldown_between_sends_ms).toBeUndefined();

@@ -555,10 +555,11 @@ export const blueskyPublisher: Publisher = {
 				);
 				const videoMedia = media.filter((m) => m.type === "video");
 
-				if (videoMedia.length > 0) {
+				const firstVideo = videoMedia[0];
+				if (firstVideo) {
 					// Video — upload via video.bsky.app service
 					// https://docs.bsky.app/docs/tutorials/video
-					const videoBlob = await uploadVideo(session, videoMedia[0]!.url);
+					const videoBlob = await uploadVideo(session, firstVideo.url);
 					record.embed = {
 						$type: "app.bsky.embed.video",
 						video: videoBlob,
@@ -574,7 +575,10 @@ export const blueskyPublisher: Publisher = {
 					const images = await Promise.all(
 						imageMedia.slice(0, 4).map(async (m) => {
 							const blob = await uploadBlob(session, m.url);
-							return { alt: (m as any).alt_text ?? "", image: blob };
+							return {
+								alt: (m as { alt_text?: string }).alt_text ?? "",
+								image: blob,
+							};
 						}),
 					);
 					record.embed = {
@@ -709,8 +713,9 @@ async function publishThread(
 				(m) => !m.type || m.type === "image" || m.type === "gif",
 			);
 
-			if (videoMedia.length > 0) {
-				const videoBlob = await uploadVideo(session, videoMedia[0]!.url);
+			const firstVideo = videoMedia[0];
+			if (firstVideo) {
+				const videoBlob = await uploadVideo(session, firstVideo.url);
 				record.embed = {
 					$type: "app.bsky.embed.video",
 					video: videoBlob,
@@ -720,7 +725,10 @@ async function publishThread(
 				const images = await Promise.all(
 					imageMedia.slice(0, 4).map(async (m) => {
 						const blob = await uploadBlob(session, m.url);
-						return { alt: (m as any).alt_text ?? "", image: blob };
+						return {
+							alt: (m as { alt_text?: string }).alt_text ?? "",
+							image: blob,
+						};
 					}),
 				);
 				record.embed = { $type: "app.bsky.embed.images", images };

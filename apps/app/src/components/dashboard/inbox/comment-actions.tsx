@@ -34,6 +34,7 @@ export function LikeButton({ comment }: { comment: InboxComment }) {
 
   return (
     <button
+      type="button"
       onClick={handleLike}
       className={cn(
         "rounded p-1 transition-all hover:bg-accent/50",
@@ -50,7 +51,6 @@ export function CommentActions({
   comment,
   platform,
   accountId,
-  postId,
   onDelete,
   onHideToggle,
   onRequestReply,
@@ -136,7 +136,7 @@ export function CommentActions({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button className="rounded p-1 opacity-0 group-hover:opacity-100 hover:bg-accent/50 transition-all focus:opacity-100">
+          <button type="button" className="rounded p-1 opacity-0 group-hover:opacity-100 hover:bg-accent/50 transition-all focus:opacity-100">
             <MoreHorizontal className="size-3.5 text-muted-foreground" />
           </button>
         </DropdownMenuTrigger>

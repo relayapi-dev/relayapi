@@ -92,7 +92,6 @@ export function BindingDetailPanel({
 	const [insights, setInsights] = useState<InsightsResponse | null>(null);
 
 	// Re-initialise when the selected binding / create type changes.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: re-seed on identity change
 	useEffect(() => {
 		setBanner(null);
 		setConfig(ed ? (binding ? ed.parseConfig(binding.config) : ed.emptyConfig) : {});
@@ -382,9 +381,9 @@ export function BindingDetailPanel({
 
 					{/* Account */}
 					<div>
-						<label className="text-[11px] font-medium text-muted-foreground">
+						<span className="block text-[11px] font-medium text-muted-foreground">
 							Account
-						</label>
+						</span>
 						{isCreate ? (
 							<AccountSearchCombobox
 								value={accountId}

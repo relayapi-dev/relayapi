@@ -74,10 +74,11 @@ export function AutoPostEditDialog({ open, onOpenChange, rule, onUpdated }: Auto
   if (!rule) return null;
 
   async function handleSave() {
+    if (!rule) return;
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/auto-post-rules/${rule!.id}`, {
+      const res = await fetch(`/api/auto-post-rules/${rule.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -102,10 +103,11 @@ export function AutoPostEditDialog({ open, onOpenChange, rule, onUpdated }: Auto
   }
 
   async function handleToggle() {
+    if (!rule) return;
     setToggling(true);
-    const action = rule!.status === "active" ? "pause" : "activate";
+    const action = rule.status === "active" ? "pause" : "activate";
     try {
-      const res = await fetch(`/api/auto-post-rules/${rule!.id}/${action}`, {
+      const res = await fetch(`/api/auto-post-rules/${rule.id}/${action}`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -122,13 +124,14 @@ export function AutoPostEditDialog({ open, onOpenChange, rule, onUpdated }: Auto
   }
 
   async function handleDelete() {
+    if (!rule) return;
     if (!confirmDelete) {
       setConfirmDelete(true);
       return;
     }
     setDeleting(true);
     try {
-      const res = await fetch(`/api/auto-post-rules/${rule!.id}`, {
+      const res = await fetch(`/api/auto-post-rules/${rule.id}`, {
         method: "DELETE",
       });
       if (!res.ok && res.status !== 204) {
@@ -173,8 +176,9 @@ export function AutoPostEditDialog({ open, onOpenChange, rule, onUpdated }: Auto
 
           {/* Name */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
+            <label htmlFor="edit-auto-post-name" className="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
             <input
+              id="edit-auto-post-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -184,8 +188,9 @@ export function AutoPostEditDialog({ open, onOpenChange, rule, onUpdated }: Auto
 
           {/* Feed URL */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Feed URL</label>
+            <label htmlFor="edit-auto-post-feed-url" className="text-xs font-medium text-muted-foreground mb-1 block">Feed URL</label>
             <input
+              id="edit-auto-post-feed-url"
               type="url"
               value={feedUrl}
               onChange={(e) => setFeedUrl(e.target.value)}
@@ -195,10 +200,11 @@ export function AutoPostEditDialog({ open, onOpenChange, rule, onUpdated }: Auto
 
           {/* Content Template */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">
+            <label htmlFor="edit-auto-post-content-template" className="text-xs font-medium text-muted-foreground mb-1 block">
               Content Template <span className="text-muted-foreground/60">(optional)</span>
             </label>
             <textarea
+              id="edit-auto-post-content-template"
               value={contentTemplate}
               onChange={(e) => setContentTemplate(e.target.value)}
               placeholder="{{title}}"
@@ -221,8 +227,9 @@ export function AutoPostEditDialog({ open, onOpenChange, rule, onUpdated }: Auto
 
           {/* Polling Interval */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Polling Interval</label>
+            <label htmlFor="edit-auto-post-polling-interval" className="text-xs font-medium text-muted-foreground mb-1 block">Polling Interval</label>
             <select
+              id="edit-auto-post-polling-interval"
               value={pollingInterval}
               onChange={(e) => setPollingInterval(Number(e.target.value))}
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"

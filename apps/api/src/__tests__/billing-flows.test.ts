@@ -18,7 +18,7 @@ mock.module("../services/notification-manager", () => ({
 let activeDb: ReturnType<typeof import("./__mocks__/db").createMockDb>;
 
 mock.module("@relayapi/db", () => {
-	const { createMockDb, mockEq } = require("./__mocks__/db");
+	const { mockEq } = require("./__mocks__/db");
 
 	// Fake Drizzle table/column objects
 	const organizationSubscriptions = {
@@ -52,15 +52,16 @@ mock.module("@relayapi/db", () => {
 		apikey,
 		usageRecords,
 		apiRequestLogs,
-		eq: (col: any, val: any) => mockEq(col, val),
+		eq: (col: unknown, val: unknown) => mockEq(col, val),
 	};
 });
 
 mock.module("drizzle-orm", () => {
 	const { mockEq } = require("./__mocks__/db");
 	return {
-		eq: (col: any, val: any) => mockEq(col, val),
-		sql: (strings: TemplateStringsArray, ...values: any[]) => strings.join(""),
+		eq: (col: unknown, val: unknown) => mockEq(col, val),
+		sql: (strings: TemplateStringsArray, ..._values: unknown[]) =>
+			strings.join(""),
 	};
 });
 
@@ -77,17 +78,16 @@ mock.module("../services/stripe", () => ({
 
 // ── Now import modules under test ──
 
-import { handleEvent, syncOrgKeysToKV } from "../routes/stripe-webhooks";
+import { handleEvent, } from "../routes/stripe-webhooks";
 import { incrementUsage } from "../middleware/usage-tracking";
 import { createMockDb } from "./__mocks__/db";
-import { MockKV, createMockEnv } from "./__mocks__/env";
+import { type MockKV, createMockEnv } from "./__mocks__/env";
 import {
 	createCheckoutCompletedEvent,
 	createSubscriptionUpdatedEvent,
 	createSubscriptionDeletedEvent,
 	createInvoicePaymentFailedEvent,
 	createInvoicePaidEvent,
-	createMockSubscription,
 } from "./__mocks__/stripe";
 import type { Env, KVKeyData } from "../types";
 
@@ -175,7 +175,7 @@ describe("Upgrade flow: checkout → webhook → KV pro", () => {
 		await handleEvent(event, env);
 
 		// DB should be updated to active
-		const sub = db._getData("organizationSubscriptions")[0];
+		const sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
 		expect(sub.status).toBe("active");
 		expect(sub.stripeSubscriptionId).toBe("sub_test_123");
 
@@ -198,7 +198,7 @@ describe("Cancel at period end → deleted", () => {
 		await handleEvent(updateEvent, env);
 
 		// DB should have cancelAtPeriodEnd=true, status still active
-		let sub = db._getData("organizationSubscriptions")[0];
+		let sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
 		expect(sub.cancelAtPeriodEnd).toBe(true);
 		expect(sub.status).toBe("active");
 
@@ -210,7 +210,7 @@ describe("Cancel at period end → deleted", () => {
 		await handleEvent(deleteEvent, env);
 
 		// DB should be cancelled
-		sub = db._getData("organizationSubscriptions")[0];
+		sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
 		expect(sub.status).toBe("cancelled");
 		expect(sub.stripeSubscriptionId).toBeNull();
 		expect(sub.cancelAtPeriodEnd).toBe(false);
@@ -231,7 +231,7 @@ describe("Payment failure and recovery", () => {
 		await handleEvent(failEvent, env);
 
 		// DB should be past_due, KV should be free
-		let sub = db._getData("organizationSubscriptions")[0];
+		let sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
 		expect(sub.status).toBe("past_due");
 		expect(await getKVPlan(kv, "hashed_key_1")).toBe("free");
 		expect(await getKVCallsIncluded(kv, "hashed_key_1")).toBe(200);
@@ -252,7 +252,7 @@ describe("Payment failure and recovery", () => {
 		await handleEvent(paidEvent, env);
 
 		// DB should be active again, KV should be pro
-		sub = db._getData("organizationSubscriptions")[0];
+		sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
 		expect(sub.status).toBe("active");
 		expect(await getKVPlan(kv, "hashed_key_1")).toBe("pro");
 		expect(await getKVCallsIncluded(kv, "hashed_key_1")).toBe(10_000);

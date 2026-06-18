@@ -641,7 +641,6 @@ async function enumerateContactsForScheduleFilter(
 					),
 				);
 			for (const r of rows) ids.add(r.id);
-			continue;
 		}
 	}
 
@@ -743,6 +742,7 @@ function computeNextCronRunInZone(
 	const parts = cron.trim().split(/\s+/);
 	if (parts.length !== 5) return null;
 	const [mStr, hStr, dom, mon, dow] = parts;
+	if (mStr === undefined || hStr === undefined) return null;
 	if (dom !== "*" || mon !== "*" || dow !== "*") return null;
 
 	// Seed with the zone-local wall-clock components of `from`, zero
@@ -753,8 +753,8 @@ function computeNextCronRunInZone(
 	// hand ticks the same in every zone), but we still round to the
 	// next boundary using the wall-clock minute to preserve intuition
 	// when the operator expects firings at ":00 / :15 / :30 / :45".
-	if (hStr === "*" && /^\*\/\d+$/.test(mStr!)) {
-		const n = Number(mStr!.slice(2));
+	if (hStr === "*" && /^\*\/\d+$/.test(mStr)) {
+		const n = Number(mStr.slice(2));
 		if (!Number.isFinite(n) || n < 1 || n > 59) return null;
 		const minutes = fromZoned.minute;
 		const rem = minutes % n;

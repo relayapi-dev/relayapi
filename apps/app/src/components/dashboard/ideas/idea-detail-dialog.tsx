@@ -147,7 +147,9 @@ function MediaTile({
 					controls
 					playsInline
 					onError={() => setVideoError(true)}
-				/>
+				>
+					<track kind="captions" />
+				</video>
 			) : isVideo && videoError ? (
 				<div className="w-full h-32 flex flex-col items-center justify-center gap-2 bg-accent/10">
 					<Film className="size-8 text-muted-foreground/50" />
@@ -184,8 +186,9 @@ function commentInitials(comment: IdeaComment): string {
 	const name = comment.author?.name?.trim();
 	if (name) {
 		const parts = name.split(/\s+/).filter(Boolean);
-		if (parts.length >= 2) {
-			return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+		const [first, second] = parts;
+		if (first && second) {
+			return (first.charAt(0) + second.charAt(0)).toUpperCase();
 		}
 		return name.slice(0, 2).toUpperCase();
 	}
@@ -737,9 +740,11 @@ export function IdeaDetailDialog({
 											return (
 												<label
 													key={tag.id}
+													htmlFor={`idea-tag-${tag.id}`}
 													className="flex items-center gap-2 rounded px-1.5 py-1 cursor-pointer hover:bg-accent/40 text-sm"
 												>
 													<Checkbox
+														id={`idea-tag-${tag.id}`}
 														checked={checked}
 														onCheckedChange={(value) => {
 															setSelectedTagIds((prev) =>
@@ -778,6 +783,7 @@ export function IdeaDetailDialog({
 								strokeWidth="2"
 								strokeLinecap="round"
 								strokeLinejoin="round"
+								aria-hidden="true"
 							>
 								<path d="M18 6 6 18" />
 								<path d="m6 6 12 12" />

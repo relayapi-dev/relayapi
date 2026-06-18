@@ -16,6 +16,8 @@ interface Props {
 const ED = BINDING_CONFIG_EDITORS.ice_breaker;
 
 export function IceBreakerTab({ socialAccountId }: Props) {
+	const renderEditor = ED.renderEditor;
+	if (!renderEditor) return null;
 	return (
 		<StubbedBindingShell
 			socialAccountId={socialAccountId}
@@ -27,7 +29,7 @@ export function IceBreakerTab({ socialAccountId }: Props) {
 			emptyConfig={ED.emptyConfig}
 			parseConfig={ED.parseConfig}
 			validateConfig={ED.validateConfig}
-			renderEditor={ED.renderEditor!}
+			renderEditor={renderEditor}
 		/>
 	);
 }

@@ -324,9 +324,10 @@ export function InboxMessagesPage() {
   }, [isPro]);
 
   useEffect(() => {
-    if (selectedConversationId || loading || visibleConversations.length === 0) return;
+    const firstConversation = visibleConversations[0];
+    if (selectedConversationId || loading || !firstConversation) return;
     if (typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches) {
-      setSelectedConversationId(visibleConversations[0]!.id);
+      setSelectedConversationId(firstConversation.id);
     }
   }, [selectedConversationId, loading, visibleConversations]);
 
@@ -441,7 +442,6 @@ export function InboxMessagesPage() {
     const assigned = user?.id
       ? conversations.filter((conversation) => conversation.assigned_user_id === user.id).length
       : 0;
-    const team = conversations.filter((conversation) => conversation.assigned_user_id).length;
     return [
       {
         items: [
@@ -478,7 +478,10 @@ export function InboxMessagesPage() {
           <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
             Upgrade to the Pro plan to access your unified social media inbox with comments, messages, and reviews.
           </p>
-          <button className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90">
+          <button
+            type="button"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
             Upgrade to Pro
           </button>
         </div>

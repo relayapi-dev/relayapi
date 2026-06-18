@@ -182,7 +182,7 @@ export function renderTemplate(
 		);
 
 	if (appendUrl && item.url && !content.includes(item.url)) {
-		content += "\n\n" + item.url;
+		content += `\n\n${item.url}`;
 	}
 	return content;
 }
@@ -428,7 +428,7 @@ async function processRule(
 	await db
 		.update(autoPostRules)
 		.set({
-			lastProcessedUrl: lastProcessedUrl ?? newItems[0]!.url,
+			lastProcessedUrl: lastProcessedUrl ?? newItems[0]?.url ?? null,
 			lastProcessedAt: new Date(),
 			consecutiveErrors: 0,
 			lastError: null,

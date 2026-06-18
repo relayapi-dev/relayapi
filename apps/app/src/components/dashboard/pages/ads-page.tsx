@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { motion } from "motion/react";
 import {
   Plus, Megaphone, Loader2, BookOpen, BarChart3, Pause, Play, X as XIcon,
-  RefreshCw, Upload, Trash2, Search, Eye,
+  RefreshCw, Upload, Trash2, Search, 
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -235,17 +235,18 @@ export function AdsPage({
 
   // Set default ad account for audiences tab
   useEffect(() => {
-    if (!selectedAdAccountId && adAccounts.length > 0) {
-      setSelectedAdAccountId(adAccounts[0]!.id);
+    const firstAdAccount = adAccounts[0];
+    if (!selectedAdAccountId && firstAdAccount) {
+      setSelectedAdAccountId(firstAdAccount.id);
     }
   }, [selectedAdAccountId, adAccounts]);
 
   // --- Actions ---
-  const { mutate: cancelAd } = useMutation("ads", "DELETE");
-  const { mutate: updateCampaign } = useMutation("ads/campaigns", "PATCH");
-  const { mutate: cancelCampaign } = useMutation("ads/campaigns", "DELETE");
-  const { mutate: deleteAudience } = useMutation("ads/audiences", "DELETE");
-  const { mutate: syncAccount, loading: syncing } = useMutation("ads/accounts", "POST");
+  const { mutate: _cancelAd } = useMutation("ads", "DELETE");
+  const { mutate: _updateCampaign } = useMutation("ads/campaigns", "PATCH");
+  const { mutate: _cancelCampaign } = useMutation("ads/campaigns", "DELETE");
+  const { mutate: _deleteAudience } = useMutation("ads/audiences", "DELETE");
+  const { mutate: _syncAccount, loading: _syncing } = useMutation("ads/accounts", "POST");
 
   const handleCancelAd = useCallback(async (id: string) => {
     if (!confirm("Cancel this ad?")) return;
@@ -376,6 +377,7 @@ export function AdsPage({
         <div className="flex gap-4 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           {tabs.map((tab) => (
             <button
+              type="button"
               key={tab.key}
               onClick={() => switchTab(tab.key)}
               className={cn(
@@ -402,6 +404,7 @@ export function AdsPage({
             <div className="flex gap-1 flex-wrap">
               {adStatuses.map((s) => (
                 <button
+                  type="button"
                   key={s}
                   onClick={() => setAdStatus(s)}
                   className={cn(
@@ -417,6 +420,7 @@ export function AdsPage({
             <div className="flex gap-1">
               {(["all", "created", "external"] as const).map((s) => (
                 <button
+                  type="button"
                   key={s}
                   onClick={() => setAdSource(s)}
                   className={cn(
@@ -483,6 +487,7 @@ export function AdsPage({
                         <td className="px-4 py-3 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button
+                              type="button"
                               onClick={() => { setAnalyticsAdId(ad.id); setAnalyticsAdName(ad.name); }}
                               className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
                               title="View analytics"
@@ -490,17 +495,17 @@ export function AdsPage({
                               <BarChart3 className="size-3.5" />
                             </button>
                             {ad.status === "active" && (
-                              <button onClick={() => handleUpdateAd(ad.id, "paused")} className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" title="Pause">
+                              <button type="button" onClick={() => handleUpdateAd(ad.id, "paused")} className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" title="Pause">
                                 <Pause className="size-3.5" />
                               </button>
                             )}
                             {ad.status === "paused" && (
-                              <button onClick={() => handleUpdateAd(ad.id, "active")} className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" title="Resume">
+                              <button type="button" onClick={() => handleUpdateAd(ad.id, "active")} className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" title="Resume">
                                 <Play className="size-3.5" />
                               </button>
                             )}
                             {!["completed", "rejected", "cancelled"].includes(ad.status) && (
-                              <button onClick={() => handleCancelAd(ad.id)} className="p-1 rounded hover:bg-destructive/20 transition-colors text-muted-foreground hover:text-destructive" title="Cancel">
+                              <button type="button" onClick={() => handleCancelAd(ad.id)} className="p-1 rounded hover:bg-destructive/20 transition-colors text-muted-foreground hover:text-destructive" title="Cancel">
                                 <XIcon className="size-3.5" />
                               </button>
                             )}
@@ -523,6 +528,7 @@ export function AdsPage({
           <div className="flex gap-1 flex-wrap">
             {campaignStatuses.map((s) => (
               <button
+                type="button"
                 key={s}
                 onClick={() => setCampaignStatus(s)}
                 className={cn(
@@ -588,6 +594,7 @@ export function AdsPage({
                           <div className="flex items-center justify-end gap-1">
                             {(camp.status === "active" || camp.status === "paused") && (
                               <button
+                                type="button"
                                 onClick={() => handleToggleCampaign(camp.id, camp.status)}
                                 className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
                                 title={camp.status === "active" ? "Pause" : "Resume"}
@@ -596,7 +603,7 @@ export function AdsPage({
                               </button>
                             )}
                             {!["completed", "cancelled"].includes(camp.status) && (
-                              <button onClick={() => handleCancelCampaign(camp.id)} className="p-1 rounded hover:bg-destructive/20 transition-colors text-muted-foreground hover:text-destructive" title="Cancel">
+                              <button type="button" onClick={() => handleCancelCampaign(camp.id)} className="p-1 rounded hover:bg-destructive/20 transition-colors text-muted-foreground hover:text-destructive" title="Cancel">
                                 <XIcon className="size-3.5" />
                               </button>
                             )}
@@ -618,7 +625,7 @@ export function AdsPage({
         <>
           {/* Ad account selector */}
           <div className="flex items-center gap-2">
-            <label className="text-xs text-muted-foreground">Ad Account:</label>
+            <span className="text-xs text-muted-foreground">Ad Account:</span>
             <AdAccountCombobox
               value={selectedAdAccountId}
               onSelect={setSelectedAdAccountId}
@@ -675,6 +682,7 @@ export function AdsPage({
                           <div className="flex items-center justify-end gap-1">
                             {aud.type === "customer_list" && (
                               <button
+                                type="button"
                                 onClick={() => { setUploadAudienceId(aud.id); setUploadUsersOpen(true); }}
                                 className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
                                 title="Upload users"
@@ -683,6 +691,7 @@ export function AdsPage({
                               </button>
                             )}
                             <button
+                              type="button"
                               onClick={() => handleDeleteAudience(aud.id)}
                               className="p-1 rounded hover:bg-destructive/20 transition-colors text-muted-foreground hover:text-destructive"
                               title="Delete"
@@ -985,7 +994,7 @@ function DiscoverAdAccountsDialog({ open, onOpenChange, selectedId, onSelect, on
                   </div>
                   {selectedId === acc.id && (
                     <div className="size-5 rounded-full bg-primary flex items-center justify-center shrink-0">
-                      <svg className="size-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                      <svg aria-hidden="true" className="size-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
                     </div>
                   )}
                 </button>

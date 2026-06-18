@@ -150,8 +150,8 @@ function getAnalyticsDateRange(preset: DatePreset): { from: string; to: string }
 	}
 
 	return {
-		from: from.toISOString().split("T")[0]!,
-		to: to.toISOString().split("T")[0]!,
+		from: from.toISOString().split("T")[0] ?? "",
+		to: to.toISOString().split("T")[0] ?? "",
 	};
 }
 

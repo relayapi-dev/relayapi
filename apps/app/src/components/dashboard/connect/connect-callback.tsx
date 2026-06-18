@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Loader2, CheckCircle2, Circle, AlertCircle, ArrowLeft, FolderOpen } from "lucide-react";
+import { Loader2, CheckCircle2, Circle, AlertCircle, ArrowLeft, } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -22,6 +22,22 @@ interface SecondaryItem {
   name: string;
   subtitle?: string | null;
   imageUrl?: string | null;
+}
+
+interface RawSecondaryItem {
+  id?: string;
+  urn?: string;
+  profile_id?: string;
+  name?: string;
+  display_name?: string;
+  category?: string | null;
+  vanity_name?: string | null;
+  description?: string | null;
+  address?: string | null;
+  username?: string | null;
+  picture_url?: string | null;
+  logo_url?: string | null;
+  profile_image_url?: string | null;
 }
 
 interface ConnectCallbackProps {
@@ -53,7 +69,7 @@ function goToSuccess(setStep: (s: Step) => void) {
 }
 
 export function ConnectCallback({
-  platform, code, state, error: oauthError,
+  platform, code, state: _state, error: oauthError,
   serverStatus, serverAccountId, serverErrorCode, serverErrorMessage, serverErrorDescription,
 }: ConnectCallbackProps) {
   // Determine initial step based on server-side callback params or legacy flow
@@ -86,7 +102,7 @@ export function ConnectCallback({
   const exchanged = useRef(false);
 
   // Extract account ID from API responses
-  const getAccountId = (data: any): string | null => {
+  const getAccountId = (data: { account?: { id?: string }; id?: string } | null | undefined): string | null => {
     // Direct account response
     if (data?.account?.id) return data.account.id;
     // The response might be the account itself
@@ -103,9 +119,9 @@ export function ConnectCallback({
       const listRes = await fetch(`/api/${config.endpoint}`);
       if (listRes.ok) {
         const listData = await listRes.json();
-        const rawItems = listData[config.listKey] || [];
-        const items: SecondaryItem[] = rawItems.map((item: any) => ({
-          id: item.id || item.urn || item.profile_id,
+        const rawItems: RawSecondaryItem[] = listData[config.listKey] || [];
+        const items: SecondaryItem[] = rawItems.map((item) => ({
+          id: item.id || item.urn || item.profile_id || "",
           name: item.name || item.display_name || "Unknown",
           subtitle: item.category || item.vanity_name || item.description || item.address || item.username || null,
           imageUrl: item.picture_url || item.logo_url || item.profile_image_url || null,
@@ -166,9 +182,9 @@ export function ConnectCallback({
             const listRes = await fetch(`/api/${config.endpoint}`);
             if (listRes.ok) {
               const listData = await listRes.json();
-              const rawItems = listData[config.listKey] || [];
-              const items: SecondaryItem[] = rawItems.map((item: any) => ({
-                id: item.id || item.urn || item.profile_id,
+              const rawItems: RawSecondaryItem[] = listData[config.listKey] || [];
+              const items: SecondaryItem[] = rawItems.map((item) => ({
+                id: item.id || item.urn || item.profile_id || "",
                 name: item.name || item.display_name || "Unknown",
                 subtitle: item.category || item.vanity_name || item.description || item.address || item.username || null,
                 imageUrl: item.picture_url || item.logo_url || item.profile_image_url || null,
@@ -363,6 +379,7 @@ export function ConnectCallback({
               <div className="max-h-64 overflow-y-auto space-y-1.5">
                 {platform === "linkedin" && linkedinPersonal && (
                   <button
+                    type="button"
                     className={cn(
                       "w-full flex items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-colors",
                       selectedId === linkedinPersonal.urn
@@ -388,6 +405,7 @@ export function ConnectCallback({
 
                 {step.items.map((item) => (
                   <button
+                    type="button"
                     key={item.id}
                     className={cn(
                       "w-full flex items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-colors",

@@ -1,4 +1,4 @@
-import { Canvas, ThreeEvent, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { EffectComposer, wrapEffect } from "@react-three/postprocessing";
 import { Effect } from "postprocessing";
 import { forwardRef, useEffect, useRef } from "react";
@@ -143,17 +143,24 @@ class RetroEffectImpl extends Effect {
 		super("RetroEffect", ditherFragmentShader, { uniforms });
 		this.uniforms = uniforms;
 	}
+	private getUniform(key: string): THREE.Uniform<number> {
+		const uniform = this.uniforms.get(key);
+		if (!uniform) {
+			throw new Error(`RetroEffect uniform "${key}" is not defined`);
+		}
+		return uniform;
+	}
 	set colorNum(value: number) {
-		this.uniforms.get("colorNum")!.value = value;
+		this.getUniform("colorNum").value = value;
 	}
 	get colorNum(): number {
-		return this.uniforms.get("colorNum")!.value;
+		return this.getUniform("colorNum").value;
 	}
 	set pixelSize(value: number) {
-		this.uniforms.get("pixelSize")!.value = value;
+		this.getUniform("pixelSize").value = value;
 	}
 	get pixelSize(): number {
-		return this.uniforms.get("pixelSize")!.value;
+		return this.getUniform("pixelSize").value;
 	}
 }
 
@@ -343,7 +350,7 @@ export function Dither({
 	waveSpeed = 0.01,
 	waveFrequency = 0,
 	waveAmplitude = 0.18,
-	waveColor = DEFAULT_WAVE_COLOR,
+	waveColor: _waveColor = DEFAULT_WAVE_COLOR,
 	waveColorDark = DEFAULT_WAVE_COLOR,
 	colorNum = 2.5,
 	pixelSize = 2,

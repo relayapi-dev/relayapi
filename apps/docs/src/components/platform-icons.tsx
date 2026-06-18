@@ -10,6 +10,7 @@ function Icon({ children, ...props }: IconProps & { children: React.ReactNode })
       fill="currentColor"
       width="1em"
       height="1em"
+      aria-hidden="true"
       {...props}
     >
       {children}

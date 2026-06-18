@@ -105,13 +105,6 @@ interface YTVideosResponse {
 	}[];
 }
 
-interface YTErrorResponse {
-	error?: {
-		errors: { message: string; domain: string; reason: string }[];
-		code: number;
-		message: string;
-	};
-}
 
 // ---------------------------------------------------------------------------
 // Helper: authenticated GET against the YouTube Analytics API
@@ -348,7 +341,7 @@ export const youtubeAnalytics: PlatformAnalyticsFetcher = {
 	// -----------------------------------------------------------------------
 	async getPostMetrics(
 		accessToken: string,
-		platformAccountId: string,
+		_platformAccountId: string,
 		dateRange: DateRange,
 		limit = 25,
 	): Promise<PlatformPostMetrics[]> {
@@ -393,11 +386,6 @@ export const youtubeAnalytics: PlatformAnalyticsFetcher = {
 		const likesIdx = colIndex(analytics, "likes");
 		const commentsIdx = colIndex(analytics, "comments");
 		const sharesIdx = colIndex(analytics, "shares");
-		const watchTimeIdx = colIndex(
-			analytics,
-			"estimatedMinutesWatched",
-		);
-		const avgDurationIdx = colIndex(analytics, "averageViewDuration");
 
 		const results: PlatformPostMetrics[] = [];
 
@@ -512,10 +500,11 @@ export const youtubeAnalytics: PlatformAnalyticsFetcher = {
 				const gender = strVal(row, genderIdx);
 				const percentage = numVal(row, pctIdx);
 
-				if (!ageGroups.has(ageGroup)) {
-					ageGroups.set(ageGroup, { male: 0, female: 0, other: 0 });
+				let group = ageGroups.get(ageGroup);
+				if (!group) {
+					group = { male: 0, female: 0, other: 0 };
+					ageGroups.set(ageGroup, group);
 				}
-				const group = ageGroups.get(ageGroup)!;
 
 				switch (gender) {
 					case "male":

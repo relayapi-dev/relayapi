@@ -8,7 +8,6 @@ import {
 	adAudiences,
 	adCampaigns,
 	ads,
-	createDb,
 	eq,
 } from "@relayapi/db";
 import { and, desc, inArray, sql } from "drizzle-orm";
@@ -42,23 +41,27 @@ import * as adAnalytics from "../services/ad-analytics";
 import * as adAudienceService from "../services/ad-audience";
 import {
 	getAdPlatformAdapter,
-	socialPlatformToAdPlatform,
 } from "../services/ad-platforms";
 import { AdPlatformError } from "../services/ad-platforms/types";
+import type { AdTargeting } from "../services/ad-platforms/types";
 import * as adService from "../services/ad-service";
 import type { Env, Variables } from "../types";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
 } from "../lib/workspace-scope";
+import type { Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // ---------------------------------------------------------------------------
 // Error handler helper
 // ---------------------------------------------------------------------------
 
-function handleAdError(c: any, err: unknown) {
+function handleAdError(c: AppContext, err: unknown) {
 	if (err instanceof AdPlatformError) {
 		const status =
 			err.code === "NOT_FOUND"
@@ -71,8 +74,8 @@ function handleAdError(c: any, err: unknown) {
 						: 500;
 		return c.json(
 			{ error: { code: err.code, message: err.message } },
-			status as any,
-		);
+			status as ContentfulStatusCode,
+		) as never;
 	}
 	console.error("[Ads]", err);
 	return c.json(
@@ -83,7 +86,7 @@ function handleAdError(c: any, err: unknown) {
 			},
 		},
 		500,
-	);
+	) as never;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +217,7 @@ app.openapi(listAdAccounts, async (c) => {
 		}
 		if (q) {
 			conditions.push(
-				sql`(${adAccounts.name} ILIKE ${"%" + q + "%"} OR ${adAccounts.platformAdAccountId} ILIKE ${"%" + q + "%"})`,
+				sql`(${adAccounts.name} ILIKE ${`%${q}%`} OR ${adAccounts.platformAdAccountId} ILIKE ${`%${q}%`})`,
 			);
 		}
 		if (cursor) {
@@ -257,9 +260,15 @@ app.openapi(listAdAccounts, async (c) => {
 						: [],
 				};
 			}),
-			next_cursor: hasMore ? items[items.length - 1]!.id : null,
+			next_cursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
 			has_more: hasMore,
-		});
+		} as {
+			data: z.infer<typeof AdAccountResponse>[];
+			next_cursor: string | null;
+			has_more: boolean;
+		},
+			200,
+		);
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -323,7 +332,7 @@ app.openapi(createCampaignRoute, async (c) => {
 						message: "Failed to create campaign",
 					},
 				},
-				400 as any,
+				400,
 			);
 		}
 
@@ -400,6 +409,7 @@ app.openapi(listCampaigns, async (c) => {
 
 	const hasMore = campaigns.length > limit;
 	const items = campaigns.slice(0, limit);
+	const lastItem = items[items.length - 1];
 
 	// Count ads per campaign
 	const campaignIds = items.map((c) => c.id);
@@ -436,14 +446,12 @@ app.openapi(listCampaigns, async (c) => {
 			created_at: camp.createdAt.toISOString(),
 			updated_at: camp.updatedAt.toISOString(),
 		})),
-		next_cursor: hasMore
-			? encodeCursor(
-					items[items.length - 1]!.createdAt,
-					items[items.length - 1]!.id,
-				)
-			: null,
+		next_cursor:
+			hasMore && lastItem
+				? encodeCursor(lastItem.createdAt, lastItem.id)
+				: null,
 		has_more: hasMore,
-	} as any);
+	} as z.infer<typeof CampaignListResponse>);
 });
 
 const getCampaign = createRoute({
@@ -516,7 +524,9 @@ app.openapi(getCampaign, async (c) => {
 			created_at: campaign.createdAt.toISOString(),
 			updated_at: campaign.updatedAt.toISOString(),
 		},
-	} as any);
+	} as { data: z.infer<typeof CampaignResponse> },
+		200,
+	);
 });
 
 const updateCampaignStatus = createRoute({
@@ -560,7 +570,7 @@ app.openapi(updateCampaignStatus, async (c) => {
 				body.status,
 				c.get("db"),
 			);
-			return c.json(result);
+			return c.json(result, 200);
 		}
 
 		// Name/budget updates
@@ -579,7 +589,7 @@ app.openapi(updateCampaignStatus, async (c) => {
 				and(eq(adCampaigns.id, id), eq(adCampaigns.organizationId, orgId)),
 			);
 
-		return c.json({ updated: 1, skipped: 0 });
+		return c.json({ updated: 1, skipped: 0 }, 200);
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -669,7 +679,7 @@ app.openapi(createAdRoute, async (c) => {
 				linkUrl: body.link_url,
 				imageUrl: body.image_url,
 				videoUrl: body.video_url,
-				targeting: body.targeting as any,
+				targeting: body.targeting as AdTargeting | undefined,
 				dailyBudgetCents: body.daily_budget_cents,
 				lifetimeBudgetCents: body.lifetime_budget_cents,
 				durationDays: body.duration_days,
@@ -679,7 +689,8 @@ app.openapi(createAdRoute, async (c) => {
 			c.get("db"),
 		);
 
-		return c.json({ data: formatAdResponse(ad!) } as any, 201);
+		if (!ad) throw new Error("Failed to create ad");
+		return c.json({ data: formatAdResponse(ad) as z.infer<typeof AdResponse> }, 201);
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -723,7 +734,7 @@ app.openapi(boostPostRoute, async (c) => {
 				externalPostId: body.external_post_id,
 				name: body.name,
 				objective: body.objective,
-				targeting: body.targeting as any,
+				targeting: body.targeting as AdTargeting | undefined,
 				dailyBudgetCents: body.daily_budget_cents,
 				lifetimeBudgetCents: body.lifetime_budget_cents,
 				currency: body.currency,
@@ -742,7 +753,8 @@ app.openapi(boostPostRoute, async (c) => {
 			c.get("db"),
 		);
 
-		return c.json({ data: formatAdResponse(ad!) } as any, 201);
+		if (!ad) throw new Error("Failed to create ad");
+		return c.json({ data: formatAdResponse(ad) as z.infer<typeof AdResponse> }, 201);
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -794,17 +806,16 @@ app.openapi(listAds, async (c) => {
 
 	const hasMore = results.length > limit;
 	const items = results.slice(0, limit);
+	const lastItem = items[items.length - 1];
 
 	return c.json({
 		data: items.map(formatAdResponse),
-		next_cursor: hasMore
-			? encodeCursor(
-					items[items.length - 1]!.createdAt,
-					items[items.length - 1]!.id,
-				)
-			: null,
+		next_cursor:
+			hasMore && lastItem
+				? encodeCursor(lastItem.createdAt, lastItem.id)
+				: null,
 		has_more: hasMore,
-	} as any);
+	} as z.infer<typeof AdListResponse>);
 });
 
 // =========================================================================
@@ -834,13 +845,12 @@ const getAdAnalytics = createRoute({
 });
 
 app.openapi(getAdAnalytics, async (c) => {
-	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { from, to, breakdowns } = c.req.valid("query");
 
 	const startDate =
-		from ?? new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0]!;
-	const endDate = to ?? new Date().toISOString().split("T")[0]!;
+		from ?? new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+	const endDate = to ?? new Date().toISOString().slice(0, 10);
 
 	try {
 		// Use stored metrics first; fall back to live if breakdowns requested or stored is empty
@@ -848,7 +858,10 @@ app.openapi(getAdAnalytics, async (c) => {
 			const db = c.get("db");
 			const stored = await adAnalytics.getAdAnalytics(db, id, startDate, endDate);
 			if (stored.daily.length > 0) {
-				return c.json({ data: stored });
+				return c.json(
+					{ data: stored } as { data: z.infer<typeof AdAnalyticsResponse> },
+					200,
+				);
 			}
 		}
 
@@ -861,7 +874,10 @@ app.openapi(getAdAnalytics, async (c) => {
 			breakdowns?.split(","),
 		);
 
-		return c.json({ data: result });
+		return c.json(
+			{ data: result } as { data: z.infer<typeof AdAnalyticsResponse> },
+			200,
+		);
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -910,12 +926,14 @@ app.openapi(searchInterests, async (c) => {
 		)
 		.limit(1);
 
-	if (adAccountRows.length === 0) {
-		return c.json({ data: [] } as any);
+	const firstAdAccount = adAccountRows[0];
+	if (!firstAdAccount) {
+		return c.json({ data: [] as z.infer<typeof InterestResponse>[] });
 	}
 
-	const adapter = getAdPlatformAdapter(adAccountRows[0]!.platform);
-	if (!adapter) return c.json({ data: [] } as any);
+	const adapter = getAdPlatformAdapter(firstAdAccount.platform);
+	if (!adapter)
+		return c.json({ data: [] as z.infer<typeof InterestResponse>[] });
 
 	// Get access token from the linked social account
 	const { socialAccounts: saTable } = await import("@relayapi/db");
@@ -930,10 +948,10 @@ app.openapi(searchInterests, async (c) => {
 		)
 		.limit(1);
 
-	if (!sa) return c.json({ data: [] } as any);
+	if (!sa) return c.json({ data: [] as z.infer<typeof InterestResponse>[] });
 
 	const denied = assertWorkspaceScope(c, sa.workspaceId);
-	if (denied) return denied;
+	if (denied) return denied as never;
 
 	let accessToken = sa.accessToken;
 	if (accessToken && c.env.ENCRYPTION_KEY) {
@@ -950,7 +968,7 @@ app.openapi(searchInterests, async (c) => {
 				category: i.category,
 				audience_size: i.audienceSize,
 			})),
-		} as any);
+		} as { data: z.infer<typeof InterestResponse>[] });
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -976,6 +994,10 @@ const createAudience = createRoute({
 			content: {
 				"application/json": { schema: z.object({ data: AudienceResponse }) },
 			},
+		},
+		400: {
+			description: "Bad request",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
@@ -1007,7 +1029,7 @@ app.openapi(createAudience, async (c) => {
 						message: "Failed to create audience",
 					},
 				},
-				400 as any,
+				400,
 			);
 		}
 
@@ -1026,7 +1048,7 @@ app.openapi(createAudience, async (c) => {
 					created_at: audience.createdAt.toISOString(),
 					updated_at: audience.updatedAt.toISOString(),
 				},
-			} as any,
+			} as { data: z.infer<typeof AudienceResponse> },
 			201,
 		);
 	} catch (err) {
@@ -1105,6 +1127,7 @@ app.openapi(listAudiences, async (c) => {
 
 	const hasMore = audiences.length > limit;
 	const items = audiences.slice(0, limit);
+	const lastItem = items[items.length - 1];
 
 	return c.json({
 		data: items.map((a) => ({
@@ -1120,14 +1143,12 @@ app.openapi(listAudiences, async (c) => {
 			created_at: a.createdAt.toISOString(),
 			updated_at: a.updatedAt.toISOString(),
 		})),
-		next_cursor: hasMore
-			? encodeCursor(
-					items[items.length - 1]!.createdAt,
-					items[items.length - 1]!.id,
-				)
-			: null,
+		next_cursor:
+			hasMore && lastItem
+				? encodeCursor(lastItem.createdAt, lastItem.id)
+				: null,
 		has_more: hasMore,
-	} as any);
+	} as z.infer<typeof AudienceListResponse>);
 });
 
 const getAudience = createRoute({
@@ -1184,7 +1205,9 @@ app.openapi(getAudience, async (c) => {
 			created_at: audience.createdAt.toISOString(),
 			updated_at: audience.updatedAt.toISOString(),
 		},
-	} as any);
+	} as { data: z.infer<typeof AudienceResponse> },
+		200,
+	);
 });
 
 const addAudienceUsers = createRoute({
@@ -1375,7 +1398,10 @@ app.openapi(getAd, async (c) => {
 		);
 	}
 
-	return c.json({ data: formatAdResponse(ad) } as any);
+	return c.json(
+		{ data: formatAdResponse(ad) as z.infer<typeof AdResponse> },
+		200,
+	);
 });
 
 const updateAdRoute = createRoute({
@@ -1418,12 +1444,16 @@ app.openapi(updateAdRoute, async (c) => {
 				status: body.status,
 				dailyBudgetCents: body.daily_budget_cents,
 				lifetimeBudgetCents: body.lifetime_budget_cents,
-				targeting: body.targeting as any,
+				targeting: body.targeting as AdTargeting | undefined,
 			},
 			c.get("db"),
 		);
 
-		return c.json({ data: formatAdResponse(updated!) } as any);
+		if (!updated) throw new Error("Failed to update ad");
+		return c.json(
+			{ data: formatAdResponse(updated) as z.infer<typeof AdResponse> },
+			200,
+		);
 	} catch (err) {
 		return handleAdError(c, err);
 	}

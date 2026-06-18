@@ -78,7 +78,8 @@ app.openapi(createSegment, async (c) => {
 		})
 		.returning();
 
-	return c.json(serialize(row!), 201);
+	if (!row) throw new Error("Failed to create segment");
+	return c.json(serialize(row), 201);
 });
 
 const listSegments = createRoute({
@@ -236,7 +237,8 @@ app.openapi(updateSegment, async (c) => {
 		.set(updates)
 		.where(eq(segments.id, id))
 		.returning();
-	return c.json(serialize(updated!), 200);
+	if (!updated) throw new Error("Failed to update segment");
+	return c.json(serialize(updated), 200);
 });
 
 const deleteSegment = createRoute({

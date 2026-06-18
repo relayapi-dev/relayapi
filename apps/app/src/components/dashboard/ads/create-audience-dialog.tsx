@@ -74,7 +74,7 @@ export function CreateAudienceDialog({
       return;
     }
 
-    let body: Record<string, unknown> = {
+    const body: Record<string, unknown> = {
       ad_account_id: adAccountId,
       type,
       name: name.trim(),
@@ -145,7 +145,7 @@ export function CreateAudienceDialog({
 
           {/* Ad Account */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Ad Account</label>
+            <span className="text-xs font-medium text-muted-foreground">Ad Account</span>
             <div className="mt-1">
               <AdAccountCombobox value={adAccountId} onSelect={setAdAccountId} />
             </div>
@@ -153,20 +153,20 @@ export function CreateAudienceDialog({
 
           {/* Name */}
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Name</label>
-            <input type="text" placeholder="Audience name" value={name} onChange={(e) => setName(e.target.value)} className={cn(inputClass, "mt-1")} />
+            <label htmlFor="audience-name" className="text-xs font-medium text-muted-foreground">Name</label>
+            <input id="audience-name" type="text" placeholder="Audience name" value={name} onChange={(e) => setName(e.target.value)} className={cn(inputClass, "mt-1")} />
           </div>
 
           {/* Customer List fields */}
           {type === "customer_list" && (
             <>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Description</label>
-                <input type="text" placeholder="Optional description" value={description} onChange={(e) => setDescription(e.target.value)} className={cn(inputClass, "mt-1")} />
+                <label htmlFor="audience-cl-description" className="text-xs font-medium text-muted-foreground">Description</label>
+                <input id="audience-cl-description" type="text" placeholder="Optional description" value={description} onChange={(e) => setDescription(e.target.value)} className={cn(inputClass, "mt-1")} />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Customer File Source</label>
-                <input type="text" placeholder="Optional source" value={customerFileSource} onChange={(e) => setCustomerFileSource(e.target.value)} className={cn(inputClass, "mt-1")} />
+                <label htmlFor="audience-cl-source" className="text-xs font-medium text-muted-foreground">Customer File Source</label>
+                <input id="audience-cl-source" type="text" placeholder="Optional source" value={customerFileSource} onChange={(e) => setCustomerFileSource(e.target.value)} className={cn(inputClass, "mt-1")} />
               </div>
             </>
           )}
@@ -175,20 +175,20 @@ export function CreateAudienceDialog({
           {type === "website" && (
             <>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Description</label>
-                <input type="text" placeholder="Optional description" value={description} onChange={(e) => setDescription(e.target.value)} className={cn(inputClass, "mt-1")} />
+                <label htmlFor="audience-web-description" className="text-xs font-medium text-muted-foreground">Description</label>
+                <input id="audience-web-description" type="text" placeholder="Optional description" value={description} onChange={(e) => setDescription(e.target.value)} className={cn(inputClass, "mt-1")} />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Pixel ID *</label>
-                <input type="text" placeholder="Pixel ID" value={pixelId} onChange={(e) => setPixelId(e.target.value)} className={cn(inputClass, "mt-1")} />
+                <label htmlFor="audience-web-pixel" className="text-xs font-medium text-muted-foreground">Pixel ID *</label>
+                <input id="audience-web-pixel" type="text" placeholder="Pixel ID" value={pixelId} onChange={(e) => setPixelId(e.target.value)} className={cn(inputClass, "mt-1")} />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Retention Days</label>
-                <input type="number" min={1} max={180} value={retentionDays} onChange={(e) => setRetentionDays(Number(e.target.value))} className={cn(inputClass, "mt-1")} />
+                <label htmlFor="audience-web-retention" className="text-xs font-medium text-muted-foreground">Retention Days</label>
+                <input id="audience-web-retention" type="number" min={1} max={180} value={retentionDays} onChange={(e) => setRetentionDays(Number(e.target.value))} className={cn(inputClass, "mt-1")} />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Rule</label>
-                <input type="text" placeholder="Optional rule" value={rule} onChange={(e) => setRule(e.target.value)} className={cn(inputClass, "mt-1")} />
+                <label htmlFor="audience-web-rule" className="text-xs font-medium text-muted-foreground">Rule</label>
+                <input id="audience-web-rule" type="text" placeholder="Optional rule" value={rule} onChange={(e) => setRule(e.target.value)} className={cn(inputClass, "mt-1")} />
               </div>
             </>
           )}
@@ -197,8 +197,8 @@ export function CreateAudienceDialog({
           {type === "lookalike" && (
             <>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Source Audience</label>
-                <select value={sourceAudienceId} onChange={(e) => setSourceAudienceId(e.target.value)} className={cn(inputClass, "mt-1")}>
+                <label htmlFor="audience-ll-source" className="text-xs font-medium text-muted-foreground">Source Audience</label>
+                <select id="audience-ll-source" value={sourceAudienceId} onChange={(e) => setSourceAudienceId(e.target.value)} className={cn(inputClass, "mt-1")}>
                   <option value="">Select source audience</option>
                   {existingAudiences.map((a) => (
                     <option key={a.id} value={a.id}>{a.name}</option>
@@ -206,12 +206,12 @@ export function CreateAudienceDialog({
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Country (2-char code)</label>
-                <input type="text" maxLength={2} placeholder="US" value={country} onChange={(e) => setCountry(e.target.value)} className={cn(inputClass, "mt-1")} />
+                <label htmlFor="audience-ll-country" className="text-xs font-medium text-muted-foreground">Country (2-char code)</label>
+                <input id="audience-ll-country" type="text" maxLength={2} placeholder="US" value={country} onChange={(e) => setCountry(e.target.value)} className={cn(inputClass, "mt-1")} />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Ratio</label>
-                <input type="number" min={0.01} max={0.2} step={0.01} value={ratio} onChange={(e) => setRatio(Number(e.target.value))} className={cn(inputClass, "mt-1")} />
+                <label htmlFor="audience-ll-ratio" className="text-xs font-medium text-muted-foreground">Ratio</label>
+                <input id="audience-ll-ratio" type="number" min={0.01} max={0.2} step={0.01} value={ratio} onChange={(e) => setRatio(Number(e.target.value))} className={cn(inputClass, "mt-1")} />
               </div>
             </>
           )}

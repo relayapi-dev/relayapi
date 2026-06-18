@@ -227,9 +227,9 @@ async function processBroadcast(
 		// successes, one for failures) instead of one round trip per recipient.
 		const sentRows: Array<{ id: string; messageId: string | null }> = [];
 		const failedRows: Array<{ id: string; error: string }> = [];
-		for (let i = 0; i < results.length; i++) {
-			const recipient = batch[i]!;
-			const settled = results[i]!;
+		for (const [i, settled] of results.entries()) {
+			const recipient = batch[i];
+			if (!recipient) continue;
 			if (settled.status === "fulfilled" && settled.value.success) {
 				sentRows.push({ id: recipient.id, messageId: settled.value.messageId ?? null });
 			} else {

@@ -8,7 +8,7 @@ export const PATCH: APIRoute = async (context) => {
 		return Response.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const userId = (user as any).id as string;
+	const userId = user.id as string;
 	const notifId = context.params.id;
 	if (!notifId) {
 		return Response.json({ error: "Missing notification ID" }, { status: 400 });
