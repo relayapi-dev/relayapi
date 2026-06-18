@@ -22,6 +22,11 @@
  * their latest release needs a deliberate migration or breaks the build; the script
  * logs each one it skips. Pass --force to bump them anyway.
  *
+ * Each catalog resolves against the npm `latest` dist-tag by default. Named
+ * catalogs can opt into a different tag via CATALOG_DIST_TAG — e.g. the `astro`
+ * catalog tracks the `beta` tag so the Astro 7 pre-releases keep moving forward
+ * instead of being reverted to the v6 `latest`.
+ *
  * Usage:
  *   bun run deps:upgrade              # upgrade catalog (minus HELD), then `bun install`
  *   bun run deps:upgrade --dry-run    # print what would change, write nothing
@@ -67,9 +72,28 @@ const HELD: Record<string, string> = {
 	"@types/three": "must track the held `three` version",
 	postprocessing:
 		"pinned so a single postprocessing version is shared with @react-three/postprocessing@3.x (avoids duplicate Effect classes)",
+	"fumadocs-openapi":
+		"v11 renames createAPIPage→createOpenAPIPage, moves defineClientConfig, and changes createOpenAPI's input signature — apps/docs needs a deliberate migration",
 };
 
 const FORCE = process.argv.includes("--force");
+
+// npm dist-tag to resolve each catalog against. Anything not listed uses "latest".
+// The Astro 7 packages live in the named `astro` catalog and track `beta`: their
+// npm `latest` tag still points at the v6 stable line, so resolving against
+// `latest` would silently downgrade them.
+const CATALOG_DIST_TAG: Record<string, string> = {
+	astro: "beta",
+};
+
+function distTagFor(label: string): string {
+	// `label` is "catalog" for the default catalog or "catalogs.<name>" for a
+	// named one — map the named ones onto their configured dist-tag.
+	const name = label.startsWith("catalogs.")
+		? label.slice("catalogs.".length)
+		: label;
+	return CATALOG_DIST_TAG[name] ?? "latest";
+}
 
 // Pull off the leading semver operator we want to preserve (^, ~, >=, etc.).
 function rangePrefix(range: string): string {
@@ -83,7 +107,7 @@ function isUpgradeable(range: string): boolean {
 	return /^\d+(\.\d+)*(\.\d+)?([-+][0-9A-Za-z.-]+)?$/.test(rest);
 }
 
-async function fetchLatest(name: string): Promise<string | null> {
+async function fetchLatest(name: string, tag: string): Promise<string | null> {
 	// Scoped names need the slash encoded: @scope/pkg -> @scope%2Fpkg
 	const url = `https://registry.npmjs.org/${name.replace("/", "%2F")}`;
 	try {
@@ -94,8 +118,15 @@ async function fetchLatest(name: string): Promise<string | null> {
 			console.warn(`  ! ${name}: registry returned HTTP ${res.status}`);
 			return null;
 		}
-		const data = (await res.json()) as { "dist-tags"?: { latest?: string } };
-		return data["dist-tags"]?.latest ?? null;
+		const data = (await res.json()) as {
+			"dist-tags"?: Record<string, string>;
+		};
+		const version = data["dist-tags"]?.[tag];
+		if (!version) {
+			console.warn(`  ! ${name}: no "${tag}" dist-tag published`);
+			return null;
+		}
+		return version;
 	} catch (err) {
 		console.warn(`  ! ${name}: ${(err as Error).message}`);
 		return null;
@@ -107,9 +138,10 @@ async function upgradeCatalog(
 	catalog: Catalog,
 	changes: Change[],
 ): Promise<void> {
+	const tag = distTagFor(label);
 	const names = Object.keys(catalog).sort();
 	const latest = await Promise.all(
-		names.map(async (name) => [name, await fetchLatest(name)] as const),
+		names.map(async (name) => [name, await fetchLatest(name, tag)] as const),
 	);
 	for (const [name, version] of latest) {
 		if (!version) continue;
