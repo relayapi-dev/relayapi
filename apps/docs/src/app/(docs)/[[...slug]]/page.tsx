@@ -1,4 +1,6 @@
 import { source } from "@/lib/source";
+import { openapi } from "@/lib/openapi";
+import type { OpenAPIPageProps } from "fumadocs-openapi/ui";
 import { DocsPage, DocsBody } from "fumadocs-ui/page";
 import { notFound } from "next/navigation";
 import defaultComponents from "fumadocs-ui/mdx";
@@ -12,22 +14,32 @@ import {
 } from "@/components/ai/page-actions";
 import { DocsFeedback } from "@/components/docs-feedback";
 
-const components = {
-  ...defaultComponents,
-  APIPage,
-  Tab,
-  Tabs,
-  Callout,
-  Steps,
-  Step,
-};
-
 export default async function Page(props: {
   params: Promise<{ slug?: string[] }>;
 }) {
   const params = await props.params;
   const page = source.getPage(params.slug);
   if (!page) notFound();
+
+  // v11: the OpenAPI page component is preloaded per-request and given the bundled
+  // schema via `preloaded` props, which the generated MDX's own props are spread on top of.
+  const components = {
+    ...defaultComponents,
+    APIPage: async (apiPageProps: Record<string, unknown>) => {
+      // The generated MDX supplies the spec props (document/operations/…) at
+      // runtime; we add the per-request `preloaded` schema. Cast because the
+      // MDX-provided props are only known structurally as a record here.
+      const preloaded = await openapi.preloadOpenAPIPage(page);
+      return (
+        <APIPage {...({ ...preloaded, ...apiPageProps } as OpenAPIPageProps)} />
+      );
+    },
+    Tab,
+    Tabs,
+    Callout,
+    Steps,
+    Step,
+  };
 
   const MDXContent = page.data.body;
   const isApiPage = page.data.full;

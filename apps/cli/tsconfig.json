@@ -2,6 +2,13 @@
 	"extends": "../../tsconfig.json",
 	"compilerOptions": {
 		"outDir": "./dist",
+		// TS 6.0 defaults `types` to [] (no @types auto-discovery); @types/bun
+		// provides the `Bun` global this CLI uses.
+		"types": ["bun"],
+		// typecheck-only (noEmit); the @relayapi/sdk path pulls workspace source
+		// into the program, so root the project at the repo root to satisfy TS 6.0's
+		// tightened "rootDir must contain all source files" check (TS6059).
+		"rootDir": "../..",
 		"paths": {
 			"@relayapi/sdk": ["../../packages/sdk/src/index.ts"]
 		}

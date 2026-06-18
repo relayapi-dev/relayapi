@@ -61,20 +61,7 @@ interface Change {
 // latest release needs a deliberate migration or breaks the build. Upgrade these
 // by hand (and re-validate with `bun run typecheck`) when you're ready to migrate.
 // Pass `--force` to ignore this list. Keep the reasons up to date.
-const HELD: Record<string, string> = {
-	typescript:
-		"TS 6.0 errors on this repo's moduleResolution:node10 and tightens rootDir — needs a tsconfig migration",
-	"@tsparticles/engine": "v4 is an API rewrite (initParticlesEngine moved, shape/effect props renamed)",
-	"@tsparticles/react": "v4 is an API rewrite (see @tsparticles/engine)",
-	"@tsparticles/slim": "v4 is an API rewrite (see @tsparticles/engine)",
-	three:
-		"@react-three/postprocessing@3.x transitively caps three < 0.184 — bumping forces a duplicate three (runtime hazard)",
-	"@types/three": "must track the held `three` version",
-	postprocessing:
-		"pinned so a single postprocessing version is shared with @react-three/postprocessing@3.x (avoids duplicate Effect classes)",
-	"fumadocs-openapi":
-		"v11 renames createAPIPage→createOpenAPIPage, moves defineClientConfig, and changes createOpenAPI's input signature — apps/docs needs a deliberate migration",
-};
+const HELD: Record<string, string> = {};
 
 const FORCE = process.argv.includes("--force");
 

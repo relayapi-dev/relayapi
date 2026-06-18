@@ -6,6 +6,9 @@
     "outDir": "./dist",
     "declaration": false,
     "declarationMap": false,
+    // TS 6.0 defaults `types` to [] (no @types auto-discovery); list the ambient
+    // type packages the test files and runtime rely on (e.g. the `bun:test` module).
+    "types": ["bun-types"],
     "paths": {
       "@/*": ["./src/*"]
     }

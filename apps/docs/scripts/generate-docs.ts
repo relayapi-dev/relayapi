@@ -83,7 +83,7 @@ console.log(
 );
 
 const openapi = createOpenAPI({
-	input: () => ({ [specUrl]: spec }),
+	input: { [specUrl]: spec },
 	disableCache: true,
 });
 
