@@ -424,15 +424,15 @@ export function Sidebar({
 				onMouseEnter={() => onPrefetch?.(item.href)}
 				onFocus={() => onPrefetch?.(item.href)}
 				className={cn(
-					"flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] transition-colors ease-[var(--ease-relay)] md:py-1.5",
+					"flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[12.5px] transition-colors ease-[var(--ease-relay)] md:py-1.5",
 					isActive
 						? "bg-sidebar-accent font-medium text-foreground"
 						: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
 				)}
 			>
 				<item.icon
-					className={cn("size-[17px] shrink-0", !isActive && "opacity-90")}
-					strokeWidth={1.6}
+					className={cn("size-[15px] shrink-0", !isActive && "opacity-90")}
+					strokeWidth={1.5}
 				/>
 				<span className="flex-1 text-left">{item.label}</span>
 				{item.badge && (
@@ -456,13 +456,13 @@ export function Sidebar({
 					onMouseEnter={() => prefetchItem(item)}
 					onFocus={() => prefetchItem(item)}
 					className={cn(
-						"flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] transition-colors ease-[var(--ease-relay)] md:py-1.5",
+						"flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[12.5px] transition-colors ease-[var(--ease-relay)] md:py-1.5",
 						hasActiveChild
 							? "font-medium text-foreground"
 							: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
 					)}
 				>
-					<item.icon className="size-[17px] shrink-0" strokeWidth={1.6} />
+					<item.icon className="size-[15px] shrink-0" strokeWidth={1.5} />
 					<span className="flex-1 text-left">{item.label}</span>
 					<motion.div
 						animate={{ rotate: isExpanded ? 90 : 0 }}
@@ -492,7 +492,7 @@ export function Sidebar({
 											onMouseEnter={() => onPrefetch?.(child.href)}
 											onFocus={() => onPrefetch?.(child.href)}
 											className={cn(
-												"flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[12.5px] transition-colors ease-[var(--ease-relay)] md:py-1",
+												"flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[12px] transition-colors ease-[var(--ease-relay)] md:py-1",
 												isActive
 													? "bg-sidebar-accent font-medium text-foreground"
 													: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
@@ -534,13 +534,13 @@ export function Sidebar({
 
 			<aside
 				className={cn(
-					"fixed top-0 left-0 z-60 h-dvh w-[85vw] max-w-[320px] shrink-0 border-r border-sidebar-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:w-56 md:max-w-none md:translate-x-0 md:border-r-0",
+					"fixed top-0 left-0 z-60 h-dvh w-[85vw] max-w-[320px] shrink-0 border-r border-sidebar-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:w-48 md:max-w-none md:translate-x-0 md:border-r-0",
 					isOpen ? "translate-x-0" : "-translate-x-full",
 				)}
 			>
 				<div className="flex h-full flex-col">
 					{/* Profile block (top) */}
-					<div className="shrink-0 px-3 pt-3 pb-2">
+					<div className="shrink-0 px-3 pt-3 pb-2 md:pt-10 lg:pt-12">
 						<div className="flex items-center gap-2.5 px-1">
 							{user?.image ? (
 								<img
@@ -565,7 +565,8 @@ export function Sidebar({
 							<div ref={menuRef} className="relative">
 								<button
 									type="button"
-									title="Account menu"
+									aria-label="Account menu"
+									title={menuOpen ? undefined : "Account menu"}
 									onClick={() => setMenuOpen((o) => !o)}
 									className={cn(
 										"inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground",
@@ -582,7 +583,7 @@ export function Sidebar({
 											initial="hidden"
 											animate="visible"
 											exit="exit"
-											className="absolute left-0 top-full z-[60] mt-1.5 w-60 origin-top-left rounded-md border border-border bg-popover p-1.5 shadow-[var(--shadow-popover)]"
+											className="absolute left-0 top-full z-[70] mt-1.5 w-60 origin-top-left rounded-md border border-border bg-popover p-1.5 shadow-[var(--shadow-popover)]"
 										>
 											<button type="button" className={menuRow} onClick={toggleTheme}>
 												{isDark ? (
@@ -819,9 +820,9 @@ export function Sidebar({
 						<button
 							type="button"
 							onClick={() => onNavigate("notifications")}
-							className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground md:py-1.5"
+							className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground md:py-1.5"
 						>
-							<Bell className="size-[17px] shrink-0" strokeWidth={1.6} />
+							<Bell className="size-[15px] shrink-0" strokeWidth={1.5} />
 							<span className="flex-1 text-left">Notifications</span>
 							{notifCount > 0 && (
 								<span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">

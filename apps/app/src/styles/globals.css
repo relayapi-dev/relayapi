@@ -178,7 +178,7 @@
    grayscale + near-black buttons + green activity. Source of truth:
    /Users/zank/Downloads/RelayAPI Design System/ui_kits/dashboard/index.html */
 .dash-theme {
-	--background: oklch(0.975 0.0015 95);
+	--background: #f9f9f8;
 	--foreground: oklch(0.205 0.006 60);
 	--card: oklch(1 0 0);
 	--card-foreground: oklch(0.205 0.006 60);
@@ -196,7 +196,7 @@
 	--border: oklch(0.918 0.003 95);
 	--input: oklch(0.90 0.004 95);
 	--ring: oklch(0.235 0.006 60);
-	--sidebar: oklch(0.975 0.0015 95);
+	--sidebar: #f9f9f8;
 	--sidebar-foreground: oklch(0.205 0.006 60);
 	--sidebar-primary: oklch(0.235 0.006 60);
 	--sidebar-primary-foreground: oklch(0.985 0 0);

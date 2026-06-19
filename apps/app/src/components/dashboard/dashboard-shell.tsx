@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, type ReactNode } from "react";
 import { Menu } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { StreakProvider } from "@/hooks/use-streak";
 import { UsageProvider } from "@/hooks/use-usage";
 import { prefetchDashboardPage } from "@/lib/dashboard-prefetch";
@@ -117,7 +118,13 @@ export function DashboardShell({
 									</button>
 								</div>
 							)}
-							<div className="flex flex-1 overflow-hidden">
+							<div
+								className={cn(
+									"mx-auto flex w-full flex-1 overflow-hidden",
+									!fullBleed &&
+										"max-w-[1500px] md:gap-10 md:px-7 lg:gap-20 lg:px-12",
+								)}
+							>
 								<Sidebar
 									currentPage={currentPage}
 									onNavigate={navigate}
@@ -129,7 +136,7 @@ export function DashboardShell({
 									organization={organization}
 								/>
 								<main
-									className="flex-1 overflow-y-auto"
+									className="min-w-0 flex-1 overflow-y-auto"
 									style={{
 										scrollbarGutter: fullBleed ? undefined : "stable",
 									}}
@@ -154,7 +161,7 @@ export function DashboardShell({
 										className={
 											fullBleed
 												? "min-h-full px-0 pt-0 md:h-full"
-												: `mx-auto max-w-7xl px-5 pt-4 sm:px-8 md:px-10 md:pt-8 ${
+												: `mx-auto max-w-7xl px-5 pt-4 sm:px-8 md:px-0 md:pt-10 lg:pt-12 ${
 														fullHeightPages.has(currentPage) ? "pb-0" : "pb-16"
 													}`
 										}
