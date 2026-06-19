@@ -31,7 +31,11 @@ export function Segmented<T extends string>({
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-0.5 rounded-md bg-muted p-0.5",
+        // `max-w-full overflow-x-auto scrollbar-hide`: on narrow screens a long
+        // tab strip (e.g. Connections' 5 tabs) scrolls horizontally instead of
+        // overflowing the viewport. Children keep `whitespace-nowrap` so they
+        // never wrap; the strip shrinks within its `min-w-0` toolbar slot.
+        "inline-flex max-w-full items-center gap-0.5 overflow-x-auto scrollbar-hide rounded-md bg-muted p-0.5",
         className
       )}
     >

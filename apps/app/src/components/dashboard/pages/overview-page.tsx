@@ -175,7 +175,7 @@ export function OverviewPage() {
 								Current
 							</span>
 						</div>
-						<p className="mt-3 max-w-[380px] text-[14.5px] leading-normal text-muted-foreground">
+						<p className="mt-3 max-w-full text-[14.5px] leading-normal text-muted-foreground sm:max-w-[380px]">
 							Everything you need to publish and listen across all connected
 							channels, with generous monthly limits.
 						</p>
@@ -212,7 +212,7 @@ export function OverviewPage() {
 
 			{/* API calls heatmap */}
 			<div className={card()}>
-				<div className="flex items-start justify-between gap-4">
+				<div className="flex flex-wrap items-start justify-between gap-4">
 					<div>
 						<div className="text-[14px] text-muted-foreground">API Calls</div>
 						<div className="mt-1 text-[32px] font-semibold tracking-[-0.02em]">

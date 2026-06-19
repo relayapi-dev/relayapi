@@ -648,7 +648,7 @@ export function IdeaDetailDialog({
 					sidePanel ? "max-w-2xl md:max-w-4xl" : "max-w-2xl",
 				)}
 			>
-			<div className="flex max-h-[90vh]">
+			<div className="flex flex-col md:flex-row max-h-[90vh]">
 			<div className="flex-1 flex flex-col min-w-0">
 				<DialogHeader className="flex-row items-center justify-between px-5 py-3 border-b border-border gap-3 space-y-0">
 					<DialogTitle className="text-sm font-medium shrink-0">
@@ -982,7 +982,7 @@ export function IdeaDetailDialog({
 			</div>
 
 			{isEditMode && sidePanel && (
-				<div className="w-80 shrink-0 border-l border-border flex flex-col bg-background min-h-0">
+				<div className="w-full md:w-80 shrink-0 border-t md:border-t-0 md:border-l border-border flex flex-col bg-background min-h-0">
 					<div className="flex items-center justify-between px-4 py-3 border-b border-border">
 						<p className="text-sm font-medium flex h-7 items-center gap-1.5">
 							{sidePanel === "comments" ? (

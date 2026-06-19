@@ -160,7 +160,7 @@ export function DashboardShell({
 										className={
 											fullBleed
 												? "min-h-full px-0 pt-0 md:h-full"
-												: `mx-auto max-w-7xl px-5 pt-4 sm:px-8 md:pl-0 md:pr-7 md:pt-10 lg:pr-12 lg:pt-12 ${
+												: `mx-auto max-w-7xl overflow-x-clip px-5 pt-4 sm:px-8 md:pl-0 md:pr-7 md:pt-10 lg:pr-12 lg:pt-12 ${
 														fullHeightPages.has(currentPage) ? "pb-0" : "pb-16"
 													}`
 										}

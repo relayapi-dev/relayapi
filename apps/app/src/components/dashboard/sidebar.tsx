@@ -4,15 +4,13 @@ import {
 	Bell,
 	BellDot,
 	BookOpen,
+	Building2,
 	Check,
 	ChevronRight,
-	CreditCard,
-	FileText,
+	Code2,
 	Flame,
-	Gauge,
 	House,
 	Inbox,
-	Key,
 	Link2,
 	Loader2,
 	LogOut,
@@ -27,7 +25,6 @@ import {
 	Target,
 	User,
 	Users,
-	Webhook,
 	Workflow,
 	X,
 } from "lucide-react";
@@ -83,9 +80,6 @@ interface NavItem {
 const navSections: NavItem[][] = [
 	[
 		{ label: "Overview", icon: House, href: "overview" },
-		{ label: "Settings", icon: Settings, href: "settings" },
-	],
-	[
 		{ label: "Connections", icon: Link2, href: "connections" },
 		{
 			label: "Inbox",
@@ -127,15 +121,29 @@ const navSections: NavItem[][] = [
 		{ label: "Ads", icon: Target, href: "ads" },
 	],
 	[
-		{ label: "API Keys", icon: Key, href: "api-keys" },
-		{ label: "Webhooks", icon: Webhook, href: "webhooks" },
-		{ label: "Logs", icon: FileText, href: "logs" },
+		{
+			label: "Developer",
+			icon: Code2,
+			href: "api-keys",
+			children: [
+				{ label: "API Keys", href: "api-keys" },
+				{ label: "Webhooks", href: "webhooks" },
+				{ label: "Logs", href: "logs" },
+			],
+		},
+		{
+			label: "Workspace",
+			icon: Building2,
+			href: "settings",
+			children: [
+				{ label: "Settings", href: "settings" },
+				{ label: "Members", href: "team" },
+				{ label: "Usage", href: "usage" },
+				{ label: "Billing & Invoices", href: "billing" },
+			],
+		},
 	],
-	[
-		{ label: "Members", icon: Users, href: "team" },
-		{ label: "Usage", icon: Gauge, href: "usage" },
-		{ label: "Billing & Invoices", icon: CreditCard, href: "billing" },
-	],
+	[{ label: "Notifications", icon: Bell, href: "notifications" }],
 ];
 
 const allNavItems = navSections.flat();
@@ -219,8 +227,6 @@ export function Sidebar({
 	const plan = usage?.plan || "free";
 	const [isCancelling, setIsCancelling] = useState(false);
 	const [billingStatusLoaded, setBillingStatusLoaded] = useState(false);
-	const planLabel =
-		plan === "pro" ? (isCancelling ? "Ending" : "Pro") : "Free";
 
 	// --- Theme toggle (light default, scoped via .dash-theme) ---
 	const [isDark, setIsDark] = useState(false);
@@ -416,6 +422,15 @@ export function Sidebar({
 
 	const renderFlatItem = (item: NavItem) => {
 		const isActive = currentPage === item.href;
+		// Notifications carries a live, WebSocket-driven count instead of a static badge.
+		const badge =
+			item.href === "notifications"
+				? notifCount > 0
+					? notifCount > 99
+						? "99+"
+						: String(notifCount)
+					: undefined
+				: item.badge;
 		return (
 			<a
 				key={item.href}
@@ -435,9 +450,9 @@ export function Sidebar({
 					strokeWidth={1.5}
 				/>
 				<span className="flex-1 text-left">{item.label}</span>
-				{item.badge && (
+				{badge && (
 					<span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
-						{item.badge}
+						{badge}
 					</span>
 				)}
 			</a>
@@ -560,8 +575,21 @@ export function Sidebar({
 								<div className="truncate text-[12.5px] font-semibold">
 									{user?.name || "User"}
 								</div>
-								<div className="text-[11px] text-muted-foreground">
-									{planLabel}
+								<div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+									<span className="truncate">
+										{currentOrg?.name ||
+											organization?.name ||
+											"Personal"}
+									</span>
+									{plan === "pro" && (
+										<Sparkles
+											className="size-3 shrink-0 text-foreground"
+											strokeWidth={1.8}
+											aria-label={
+												isCancelling ? "Pro (ending)" : "Pro"
+											}
+										/>
+									)}
 								</div>
 							</div>
 
@@ -586,7 +614,7 @@ export function Sidebar({
 											initial="hidden"
 											animate="visible"
 											exit="exit"
-											className="absolute left-0 top-full z-[70] mt-1.5 w-60 origin-top-left rounded-md border border-border bg-popover p-1.5 shadow-[var(--shadow-popover)]"
+											className="absolute right-0 top-full z-[70] mt-1.5 w-60 origin-top-right rounded-md border border-border bg-popover p-1.5 shadow-[var(--shadow-popover)] md:right-auto md:left-0 md:origin-top-left"
 										>
 											<button type="button" className={menuRow} onClick={toggleTheme}>
 												{isDark ? (
@@ -790,9 +818,9 @@ export function Sidebar({
 						</nav>
 					</ScrollArea>
 
-					{/* Footer: streak + notifications */}
-					<div className="shrink-0 space-y-0.5 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-						{streak?.active && streak.current_streak_days > 0 && (
+					{/* Footer: posting streak (Notifications now lives inline in the nav) */}
+					{streak?.active && streak.current_streak_days > 0 && (
+						<div className="shrink-0 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
 							<div
 								className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px]"
 								title={`${streak.current_streak_days}-day posting streak! Best: ${streak.best_streak_days} days.`}
@@ -818,22 +846,8 @@ export function Sidebar({
 									{streak.current_streak_days}d streak
 								</span>
 							</div>
-						)}
-
-						<button
-							type="button"
-							onClick={() => onNavigate("notifications")}
-							className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground md:py-1.5"
-						>
-							<Bell className="size-[15px] shrink-0" strokeWidth={1.5} />
-							<span className="flex-1 text-left">Notifications</span>
-							{notifCount > 0 && (
-								<span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
-									{notifCount > 99 ? "99+" : notifCount}
-								</span>
-							)}
-						</button>
-					</div>
+						</div>
+					)}
 				</div>
 			</aside>
 

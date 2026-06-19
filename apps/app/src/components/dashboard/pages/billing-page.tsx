@@ -245,7 +245,7 @@ export function BillingPage() {
 
     {/* Past Due Banner */}
     {isPastDue && (
-      <div className="rounded-[12px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 flex items-center gap-2">
+      <div className="rounded-[12px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 flex flex-wrap items-center gap-2">
         <AlertTriangle className="size-4 shrink-0" />
         <span>Your payment failed. Please update your payment method to avoid losing Pro access.</span>
         <Button
@@ -262,7 +262,7 @@ export function BillingPage() {
 
     {/* Cancelling Banner */}
     {isCancelling && !isPastDue && (
-      <div className="rounded-[12px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 flex items-center gap-2">
+      <div className="rounded-[12px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 flex flex-wrap items-center gap-2">
         <AlertTriangle className="size-4 shrink-0" />
         <span>
           Your Pro plan will end on{" "}

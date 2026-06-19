@@ -9,6 +9,7 @@ const tabs = [
 
 export function AdminNav({ current }: { current: string }) {
   return (
+    <div className="-mx-5 overflow-x-auto scrollbar-hide px-5 sm:mx-0 sm:overflow-visible sm:px-0">
     <div className="inline-flex items-center gap-0.5 rounded-md bg-muted p-0.5">
       {tabs.map((tab) => {
         const active = current === tab.key;
@@ -28,6 +29,7 @@ export function AdminNav({ current }: { current: string }) {
           </a>
         );
       })}
+    </div>
     </div>
   );
 }

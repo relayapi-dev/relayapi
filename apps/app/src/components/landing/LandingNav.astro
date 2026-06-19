@@ -3,21 +3,21 @@ import { LANDING_LINKS } from "./data";
 ---
 
 <header style="position:sticky; top:0; z-index:60; backdrop-filter:blur(14px); background:rgba(243,241,234,0.8);">
-  <nav style="position:relative; max-width:1480px; margin:0 auto; padding:16px 32px; display:flex; align-items:center; justify-content:space-between;">
+  <nav style="position:relative; max-width:1480px; margin:0 auto; padding:14px 32px; display:flex; align-items:center; justify-content:space-between;">
     <a href="/" style="display:flex; align-items:center; gap:10px; z-index:2;">
-      <span style="width:30px; height:30px; border-radius:8px; background:#1A1815; display:flex; align-items:center; justify-content:center;"><svg width="18" height="18" viewBox="0 0 150 150" fill="#F3F1EA"><path fill-rule="evenodd" d="M34.82,18.54C16.52,18.54,1.49,33.56,1.49,51.87s15.02,33.33,33.33,33.33h80.69c6.95,0,12.28,5.33,12.28,12.28s-5.33,12.28-12.28,12.28H33.07c-5.77-.01-10.52,4.74-10.52,10.51s4.76,10.52,10.52,10.52h82.44c18.31,0,33.33-15.02,33.33-33.33s-15.02-33.33-33.33-33.33H34.82c-6.95,0-12.28-5.33-12.28-12.28s5.33-12.28,12.28-12.28h82.45c5.77.01,10.52-4.74,10.52-10.51s-4.76-10.52-10.52-10.52H34.82Z"></path></svg></span>
-      <span style="font-size:20px; font-weight:600; letter-spacing:0.06em;">RELAYAPI</span>
+      <span style="width:26px; height:26px; border-radius:7px; background:#1A1815; display:flex; align-items:center; justify-content:center;"><svg width="15" height="15" viewBox="0 0 150 150" fill="#F3F1EA"><path fill-rule="evenodd" d="M34.82,18.54C16.52,18.54,1.49,33.56,1.49,51.87s15.02,33.33,33.33,33.33h80.69c6.95,0,12.28,5.33,12.28,12.28s-5.33,12.28-12.28,12.28H33.07c-5.77-.01-10.52,4.74-10.52,10.51s4.76,10.52,10.52,10.52h82.44c18.31,0,33.33-15.02,33.33-33.33s-15.02-33.33-33.33-33.33H34.82c-6.95,0-12.28-5.33-12.28-12.28s5.33-12.28,12.28-12.28h82.45c5.77.01,10.52-4.74,10.52-10.51s-4.76-10.52-10.52-10.52H34.82Z"></path></svg></span>
+      <span style="font-size:16px; font-weight:600; letter-spacing:0.04em;">RELAYAPI</span>
     </a>
-    <div style="flex:1; display:flex; align-items:center; justify-content:center; gap:clamp(16px,2.6vw,38px); font-size:16px; color:#3A3833;">
+    <div style="flex:1; display:flex; align-items:center; justify-content:center; gap:clamp(14px,2vw,30px); font-size:14px; color:#3A3833;">
       <a href="#" class="nav-link" style="transition:color .15s;">Product</a>
       <a href="#" class="nav-link" style="transition:color .15s;">Platforms</a>
       <a href={LANDING_LINKS.pricing} class="nav-link" style="transition:color .15s;">Pricing</a>
       <a href={LANDING_LINKS.docs} class="nav-link" style="transition:color .15s;" target="_blank" rel="noopener noreferrer">Resources</a>
     </div>
-    <div style="display:flex; align-items:center; gap:10px; z-index:2;">
-      <a href={LANDING_LINKS.login} class="nav-signin" style="font-size:15px; color:#3A3833; padding:8px 6px;">Sign in</a>
-      <a href="#" class="nav-contact" style="font-size:15px; color:#1A1815; background:#E7E4DC; padding:9px 17px; border-radius:999px; white-space:nowrap; transition:background .15s;">Contact sales</a>
-      <a href={LANDING_LINKS.signup} class="nav-cta" style="font-size:15px; font-weight:500; color:#F3F1EA; background:#1A1815; padding:9px 20px; border-radius:999px; white-space:nowrap; transition:opacity .15s;">Get started</a>
+    <div style="display:flex; align-items:center; gap:8px; z-index:2;">
+      <a href={LANDING_LINKS.login} class="nav-signin" style="font-size:14px; color:#3A3833; padding:7px 6px;">Sign in</a>
+      <a href="#" class="nav-contact" style="font-size:14px; color:#1A1815; background:transparent; border:1px solid rgba(26,24,21,0.16); padding:7px 15px; border-radius:9px; white-space:nowrap; transition:background .15s, border-color .15s;">Contact sales</a>
+      <a href={LANDING_LINKS.signup} class="nav-cta" style="font-size:14px; font-weight:500; color:#F3F1EA; background:#1A1815; border:1px solid #1A1815; padding:7px 16px; border-radius:9px; white-space:nowrap; transition:opacity .15s;">Get started</a>
     </div>
   </nav>
 </header>
@@ -32,7 +32,8 @@ import { LANDING_LINKS } from "./data";
   }
 
   .nav-contact:hover {
-    background: #DEDACF;
+    background: rgba(26, 24, 21, 0.04);
+    border-color: rgba(26, 24, 21, 0.28);
   }
 
   .nav-cta:hover {

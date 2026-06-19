@@ -214,7 +214,7 @@ export function LogsPage({
           options={levelFilters.map((f) => ({ value: f, label: f }))}
         />
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <label
             htmlFor="logs-date-from"
             className="text-[13px] text-muted-foreground shrink-0"
@@ -226,7 +226,7 @@ export function LogsPage({
             type="datetime-local"
             value={dateFrom}
             onChange={(e) => setDateFrom(e.target.value)}
-            className="text-[13px] bg-transparent border border-border rounded-md px-2 py-1 text-foreground [&::-webkit-calendar-picker-indicator]:dark:invert"
+            className="text-[13px] bg-transparent border border-border rounded-md px-2 py-1 text-foreground max-w-full [&::-webkit-calendar-picker-indicator]:dark:invert"
           />
           <label
             htmlFor="logs-date-to"
@@ -239,7 +239,7 @@ export function LogsPage({
             type="datetime-local"
             value={dateTo}
             onChange={(e) => setDateTo(e.target.value)}
-            className="text-[13px] bg-transparent border border-border rounded-md px-2 py-1 text-foreground [&::-webkit-calendar-picker-indicator]:dark:invert"
+            className="text-[13px] bg-transparent border border-border rounded-md px-2 py-1 text-foreground max-w-full [&::-webkit-calendar-picker-indicator]:dark:invert"
           />
           {(dateFrom || dateTo) && (
             <button

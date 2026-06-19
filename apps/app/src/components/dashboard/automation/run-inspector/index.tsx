@@ -81,11 +81,16 @@ export function RunInspector({
 	return (
 		<div className="flex min-h-0 flex-1">
 			{/* Detail pane (right column). Renders a placeholder until a run is
-			    selected, so the layout stays stable. */}
-			<RunDetail
-				runId={selectedRunId}
-				onShowOnCanvas={onShowOnCanvas}
-			/>
+			    selected, so the layout stays stable. On mobile we collapse it and
+			    give the run list the full width — the master/detail split doesn't
+			    fit a ~390px viewport, so the list (the navigator) is the primary
+			    panel there. */}
+			<div className="hidden min-w-0 flex-1 md:flex">
+				<RunDetail
+					runId={selectedRunId}
+					onShowOnCanvas={onShowOnCanvas}
+				/>
+			</div>
 
 			{/* List pane (right edge, matches the existing panel chrome). The
 			    RunHistoryPanel renders its own header / filters / scroll area so

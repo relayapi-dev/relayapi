@@ -837,9 +837,9 @@ export function ConnectionsPage({
           </div>
         ) : (
           <>
-            <div className="rounded-[12px] border border-border bg-card overflow-hidden font-mono text-xs">
+            <div className="rounded-[12px] border border-border bg-card overflow-x-auto scrollbar-hide font-mono text-xs">
               <motion.div
-                className="divide-y divide-border"
+                className="divide-y divide-border min-w-[640px]"
                 variants={stagger}
                 initial="hidden"
                 animate="visible"

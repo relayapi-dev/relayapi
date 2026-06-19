@@ -233,8 +233,8 @@ export function WebhooksPage({
                                 })
                               }
                             />
-                            <code className="text-xs font-mono">{event.value}</code>
-                            <span className="text-[11px] text-muted-foreground">{event.description}</span>
+                            <code className="text-xs font-mono shrink-0">{event.value}</code>
+                            <span className="text-[11px] text-muted-foreground hidden sm:inline">{event.description}</span>
                           </label>
                         ))}
                       </div>
@@ -287,11 +287,11 @@ export function WebhooksPage({
                     variants={fadeUp}
                     className="rounded-[12px] border border-border bg-card p-5 hover:bg-accent transition-colors"
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start gap-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3 min-w-0">
                         <div
                           className={cn(
-                            "rounded-md p-1.5 mt-0.5",
+                            "rounded-md p-1.5 mt-0.5 shrink-0",
                             webhook.enabled
                               ? "bg-success/10 text-success"
                               : "bg-muted text-muted-foreground"
@@ -299,9 +299,9 @@ export function WebhooksPage({
                         >
                           <Zap className="size-4" />
                         </div>
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <code className="text-sm font-mono font-medium">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <code className="text-sm font-mono font-medium truncate">
                               {webhook.url}
                             </code>
                           </div>

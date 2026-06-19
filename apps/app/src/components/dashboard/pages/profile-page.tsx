@@ -664,7 +664,7 @@ export function ProfilePage() {
         variants={fadeUp}
         className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
+        <div className="px-5 py-3.5 border-b border-border flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
             <Shield className="size-3.5 text-muted-foreground" />
             Active Sessions
@@ -747,7 +747,7 @@ export function ProfilePage() {
         </div>
         <div className="p-5">
           {!deleteConfirmOpen ? (
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-[13px] font-medium">Delete Account</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -757,7 +757,7 @@ export function ProfilePage() {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+                className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive self-start sm:self-auto shrink-0"
                 onClick={() => setDeleteConfirmOpen(true)}
               >
                 Delete Account

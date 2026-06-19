@@ -138,7 +138,7 @@ export function QueuesPage() {
                 i !== slots.length - 1 && "border-b border-border"
               )}
             >
-              <code className="text-xs font-mono text-muted-foreground">
+              <code className="text-xs font-mono text-muted-foreground break-all md:break-normal">
                 {job.id}
               </code>
               <span className="text-xs">{job.type}</span>

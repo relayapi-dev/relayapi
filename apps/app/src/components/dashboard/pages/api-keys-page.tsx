@@ -353,7 +353,7 @@ export function ApiKeysPage() {
       {/* Delete Confirmation */}
       {deleteId && (
         <motion.div
-          className="rounded-[12px] border border-destructive/30 bg-destructive/5 p-5 flex items-center justify-between"
+          className="rounded-[12px] border border-destructive/30 bg-destructive/5 p-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
         >

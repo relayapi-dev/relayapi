@@ -485,7 +485,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 	return (
 		<div className="flex h-full min-h-0 flex-col overflow-hidden border-t border-border bg-muted">
 			{/* ===== Header ===== */}
-			<header className="z-20 flex shrink-0 items-center justify-between gap-4 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
+			<header className="z-20 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-background/95 px-4 py-2 backdrop-blur sm:flex-nowrap sm:gap-4">
 				<div className="flex min-w-0 items-center gap-3">
 					<a
 						href="/app/automation"
@@ -506,7 +506,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 									e.currentTarget.blur();
 								}
 							}}
-							className="max-w-[340px] -ml-1 truncate rounded bg-transparent px-1 text-sm font-medium outline-none focus:ring-1 focus:ring-ring"
+							className="-ml-1 w-full max-w-full truncate rounded bg-transparent px-1 text-sm font-medium outline-none focus:ring-1 focus:ring-ring sm:max-w-[340px]"
 						/>
 						<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
 							<StatusBadge status={automation.status} />
@@ -699,7 +699,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 					)}
 					{tab === "insights" && (
 						<div className="flex flex-1">
-							<div className="flex flex-1 items-start justify-center p-6">
+							<div className="hidden flex-1 items-start justify-center p-6 md:flex">
 								<div className="max-w-xl text-sm text-muted-foreground">
 									Totals and outcomes over the last 30 days.
 								</div>

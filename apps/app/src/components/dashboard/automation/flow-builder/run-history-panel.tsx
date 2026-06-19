@@ -214,7 +214,7 @@ export function RunHistoryPanel({
 	const selectedRun = runs.find((r) => r.id === selectedRunId) ?? null;
 
 	return (
-		<div className="w-80 border-l border-border bg-card/30 flex flex-col overflow-hidden">
+		<div className="w-full border-l border-border bg-card/30 flex flex-col overflow-hidden md:w-80">
 			<div className="px-3 py-2 border-b border-border flex items-center justify-between">
 				<div>
 					<h3 className="text-xs font-medium flex items-center gap-1.5">

@@ -271,6 +271,16 @@
 	background-color: var(--neutral-400);
 }
 
+/* Horizontally-scrollable strips (tab bars, toolbars) on narrow screens with no
+   visible scrollbar chrome. Used by the Segmented control and mobile toolbars. */
+@utility scrollbar-hide {
+	scrollbar-width: none;
+	-ms-overflow-style: none;
+	&::-webkit-scrollbar {
+		display: none;
+	}
+}
+
 @layer base {
 	* {
 		@apply border-border outline-ring/50;

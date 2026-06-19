@@ -295,8 +295,8 @@ export function AnalyticsHome({
             No channels connected yet.
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[13px]">
+          <div className="overflow-x-auto scrollbar-hide -mx-5 px-5 sm:mx-0 sm:px-0">
+            <table className="w-full min-w-[420px] text-[13px]">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
                   <th className="pb-2 pr-4 text-left font-medium">Profiles</th>

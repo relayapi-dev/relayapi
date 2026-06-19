@@ -85,7 +85,11 @@ export function UsagePage() {
 				</p>
 			</div>
 
-			<div className={card("flex items-center justify-between gap-4")}>
+			<div
+				className={card(
+					"flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between",
+				)}
+			>
 				<div className="min-w-0">
 					<div className="text-[15px] font-medium">
 						Detailed usage analytics
