@@ -1,0 +1,20 @@
+---
+import { LANDING_LINKS } from "./data";
+---
+
+<section style="max-width:1480px; margin:0 auto; padding:clamp(48px,8vw,118px) 32px clamp(40px,5vw,72px); text-align:center;">
+  <h1 style="font-size:clamp(44px,8vw,134px); line-height:0.93; letter-spacing:-0.04em; font-weight:500; margin:0 auto; max-width:13ch; color:#1A1815; text-wrap:balance;">The agent-native way to post everywhere.</h1>
+  <div style="display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-top:clamp(32px,4vw,56px);">
+    <a href={LANDING_LINKS.signup} class="hero-cta-primary" style="font-size:17px; font-weight:500; color:#F3F1EA; background:#1A1815; padding:15px 30px; border-radius:999px; display:inline-flex; align-items:center; gap:9px; transition:opacity .15s;">Get started <span style="font-size:15px;">→</span></a>
+    <a href={LANDING_LINKS.signup} class="hero-cta-secondary" style="font-size:17px; font-weight:500; color:#1A1815; background:#E4E1D9; padding:15px 30px; border-radius:999px; display:inline-flex; align-items:center; gap:9px; transition:background .15s;">Request a demo <span style="font-size:15px;">→</span></a>
+  </div>
+</section>
+
+<style>
+  .hero-cta-primary:hover {
+    opacity: 0.88;
+  }
+  .hero-cta-secondary:hover {
+    background: #DBD7CC;
+  }
+</style>

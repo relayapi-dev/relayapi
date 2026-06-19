@@ -534,7 +534,10 @@ export function Sidebar({
 
 			<aside
 				className={cn(
-					"fixed top-0 left-0 z-60 h-dvh w-[85vw] max-w-[320px] shrink-0 border-r border-sidebar-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:w-48 md:max-w-none md:translate-x-0 md:border-r-0",
+					// `md:translate-none` (not `md:translate-x-0`): a non-`none` translate
+					// creates a stacking context that would trap the account menu's z-index
+					// inside the sidebar, letting positioned content in <main> paint over it.
+					"fixed top-0 left-0 z-60 h-dvh w-[85vw] max-w-[320px] shrink-0 border-r border-sidebar-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:w-48 md:max-w-none md:translate-none md:border-r-0",
 					isOpen ? "translate-x-0" : "-translate-x-full",
 				)}
 			>

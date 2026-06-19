@@ -1,0 +1,12 @@
+---
+import { logos } from "./data";
+---
+
+<section style="max-width:1200px; margin:0 auto; padding:clamp(56px,7vw,96px) 32px 48px; text-align:center;">
+  <h2 style="font-size:clamp(20px,2vw,28px); font-weight:500; letter-spacing:-0.02em; color:#46443D; margin:0 0 40px;">Trusted every day by teams that ship across every platform</h2>
+  <div style="display:flex; flex-wrap:wrap; gap:20px 56px; justify-content:center; align-items:center;">
+    {logos.map((l) => (
+      <span style="font-size:21px; font-weight:600; letter-spacing:-0.01em; color:#B7B2A7;">{l}</span>
+    ))}
+  </div>
+</section>

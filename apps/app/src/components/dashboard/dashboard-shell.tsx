@@ -120,9 +120,8 @@ export function DashboardShell({
 							)}
 							<div
 								className={cn(
-									"mx-auto flex w-full flex-1 overflow-hidden",
-									!fullBleed &&
-										"max-w-[1500px] md:gap-10 md:px-7 lg:gap-20 lg:px-12",
+									"flex flex-1 overflow-hidden",
+									!fullBleed && "md:gap-10 md:pl-7 lg:gap-20 lg:pl-12",
 								)}
 							>
 								<Sidebar
@@ -136,7 +135,7 @@ export function DashboardShell({
 									organization={organization}
 								/>
 								<main
-									className="min-w-0 flex-1 overflow-y-auto"
+									className="dash-scroll min-w-0 flex-1 overflow-y-auto"
 									style={{
 										scrollbarGutter: fullBleed ? undefined : "stable",
 									}}
@@ -161,7 +160,7 @@ export function DashboardShell({
 										className={
 											fullBleed
 												? "min-h-full px-0 pt-0 md:h-full"
-												: `mx-auto max-w-7xl px-5 pt-4 sm:px-8 md:px-0 md:pt-10 lg:pt-12 ${
+												: `mx-auto max-w-7xl px-5 pt-4 sm:px-8 md:pl-0 md:pr-7 md:pt-10 lg:pr-12 lg:pt-12 ${
 														fullHeightPages.has(currentPage) ? "pb-0" : "pb-16"
 													}`
 										}

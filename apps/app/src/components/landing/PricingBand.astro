@@ -1,0 +1,37 @@
+---
+import { compareRows, LANDING_LINKS } from "./data";
+---
+
+<!-- ================= PRICING ================= -->
+<section id="pricing" style="max-width:1480px; margin:0 auto; padding:36px 20px;">
+  <div data-reveal style="background:#E9E7DF; border-radius:30px; padding:clamp(32px,4.5vw,64px); display:grid; grid-template-columns:1fr 1fr; gap:48px; align-items:center;">
+    <div>
+      <h2 style="font-size:clamp(28px,3vw,44px); letter-spacing:-0.03em; font-weight:500; margin:0 0 14px; color:#1A1815;">Priced to scale, not to gouge.</h2>
+      <p style="font-size:17px; color:#6E6A62; line-height:1.5; margin:0 0 26px; max-width:46ch;">Start free with 200 requests/month. Pro is $5/mo with 10,000 included — then $1 per 1,000 extra. Analytics and comments always included.</p>
+      <div style="display:flex; gap:12px;">
+        <a href={LANDING_LINKS.signup} class="btn-start-free" style="font-size:15px; font-weight:500; color:#F3F1EA; background:#1A1815; padding:12px 24px; border-radius:999px;">Start free</a>
+        <a href={LANDING_LINKS.pricing} class="btn-compare-plans" style="font-size:15px; font-weight:500; color:#1A1815; background:#E4E1D9; padding:12px 22px; border-radius:999px;">Compare plans</a>
+      </div>
+    </div>
+    <div style="background:#FBFAF6; border:1px solid rgba(26,24,21,0.08); border-radius:18px; overflow:hidden;">
+      <table style="width:100%; border-collapse:collapse; font-size:14px;">
+        <thead>
+          <tr style="background:#F1EFE8;">
+            <th style="text-align:left; padding:13px 18px; font-weight:500; color:#6E6A62;">Platform</th>
+            <th style="text-align:right; padding:13px 18px; font-weight:500; color:#6E6A62;">50 cust.</th>
+            <th style="text-align:right; padding:13px 18px; font-weight:500; color:#6E6A62;">500 cust.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {compareRows.map((r) => (
+            <tr style="border-top:1px solid rgba(26,24,21,0.07);">
+              <td style={`padding:14px 18px; font-weight:500; color:${r.color};`}>{r.name}</td>
+              <td style={`text-align:right; padding:14px 18px; font-family:var(--font-mono-landing); color:${r.color};`}>{r.c50}</td>
+              <td style={`text-align:right; padding:14px 18px; font-family:var(--font-mono-landing); color:${r.color};`}>{r.c500}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>

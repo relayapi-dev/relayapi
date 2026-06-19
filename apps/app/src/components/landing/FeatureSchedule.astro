@@ -1,0 +1,33 @@
+---
+import { scheduleRows } from "./data";
+---
+
+<section style="max-width:1480px; margin:0 auto; padding:18px 20px;">
+  <div data-reveal style="position:relative; border-radius:30px; overflow:hidden; background:#E9E7DF; min-height:clamp(520px,46vw,680px);">
+    <div style="position:absolute; left:clamp(28px,4vw,64px); top:clamp(44px,5vw,72px); max-width:430px; z-index:3;">
+      <h3 style="font-size:clamp(26px,2.5vw,34px); font-weight:600; letter-spacing:-0.025em; line-height:1.12; margin:0 0 4px; color:#1A1815;">Works autonomously, runs in parallel</h3>
+      <p style="font-size:clamp(18px,1.8vw,22px); line-height:1.32; color:#86827A; margin:0 0 18px;">Relay publishes, retries, and reports back — delivering to every platform at the right time across time zones.</p>
+      <a href="https://docs.relayapi.dev" class="learn-scheduling-link" style="font-size:17px; font-weight:500; color:#CB5A2C;" target="_blank" rel="noopener noreferrer">Learn about scheduling →</a>
+    </div>
+    <div style="position:absolute; right:0; bottom:0; width:min(820px,60%); background:#1B1915; border-radius:16px 0 0 0; box-shadow:0 30px 80px -28px rgba(40,28,12,0.5); border:1px solid rgba(255,255,255,0.08); border-bottom:none; border-right:none; overflow:hidden; color:#D7D2C7;">
+      <div style="position:relative; display:flex; align-items:center; padding:13px 16px; background:#221F18; border-bottom:1px solid rgba(255,255,255,0.06);">
+        <div style="display:flex; gap:7px;"><span style="width:11px; height:11px; border-radius:50%; background:#3C382F;"></span><span style="width:11px; height:11px; border-radius:50%; background:#3C382F;"></span><span style="width:11px; height:11px; border-radius:50%; background:#3C382F;"></span></div>
+        <span style="position:absolute; left:50%; transform:translateX(-50%); font-size:13px; color:#8C887E;">Campaign · Q2 Launch</span>
+      </div>
+      <div style="padding:22px; display:flex; flex-direction:column; gap:10px;">
+        {scheduleRows.map((r) => (
+          <div style="display:flex; align-items:center; justify-content:space-between; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.07); border-radius:10px; padding:13px 15px;">
+            <span style="display:flex; align-items:center; gap:12px; font-size:14px; color:#ECE8DF;"><span style="width:26px; height:26px; border-radius:7px; background:rgba(255,255,255,0.07); display:flex; align-items:center; justify-content:center;"><svg width="15" height="15" viewBox="0 0 24 24"><path fill="#D7D2C7" d={r.path}></path></svg></span>{r.name}</span>
+            <span style={`font-size:12.5px; font-family:var(--font-mono-landing); color:${r.color}; display:flex; align-items:center; gap:6px;`}><span style={`width:6px; height:6px; border-radius:50%; background:${r.color};`}></span>{r.status}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .learn-scheduling-link:hover {
+    text-decoration: underline;
+  }
+</style>
