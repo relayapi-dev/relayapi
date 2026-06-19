@@ -1,123 +1,141 @@
 ---
-import Layout from "../layouts/Layout.astro";
-import SEO from "../components/SEO.astro";
-import LandingNav from "../components/landing/LandingNav.astro";
-import LandingHero from "../components/landing/LandingHero.astro";
-import HeroProductBand from "../components/landing/HeroProductBand.astro";
-import TrustStrip from "../components/landing/TrustStrip.astro";
+import BlogHighlights from "../components/landing/BlogHighlights.astro";
+import ChangelogList from "../components/landing/ChangelogList.astro";
 import FeatureChat from "../components/landing/FeatureChat.astro";
 import FeatureSchedule from "../components/landing/FeatureSchedule.astro";
-import TestimonialWall from "../components/landing/TestimonialWall.astro";
-import FrontierTrio from "../components/landing/FrontierTrio.astro";
-import PricingBand from "../components/landing/PricingBand.astro";
-import ChangelogList from "../components/landing/ChangelogList.astro";
-import OpenSource from "../components/landing/OpenSource.astro";
-import BlogHighlights from "../components/landing/BlogHighlights.astro";
 import FinalCTA from "../components/landing/FinalCTA.astro";
+import FrontierTrio from "../components/landing/FrontierTrio.astro";
+import HeroProductBand from "../components/landing/HeroProductBand.astro";
 import LandingFooter from "../components/landing/LandingFooter.astro";
+import LandingHero from "../components/landing/LandingHero.astro";
+import LandingNav from "../components/landing/LandingNav.astro";
+import OpenSource from "../components/landing/OpenSource.astro";
+import PricingBand from "../components/landing/PricingBand.astro";
+import TestimonialWall from "../components/landing/TestimonialWall.astro";
+import TrustStrip from "../components/landing/TrustStrip.astro";
+import SEO from "../components/SEO.astro";
+import Layout from "../layouts/Layout.astro";
 ---
 
 <Layout>
-  <SEO
-    slot="head"
-    description="The agent-native way to post everywhere. One API, twenty-one platforms, zero glue code between you and your audience."
-  />
-  <link slot="head" rel="preconnect" href="https://fonts.googleapis.com" />
-  <link slot="head" rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link
-    slot="head"
-    rel="stylesheet"
-    href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap"
-  />
+	<SEO
+		slot="head"
+		description="The agent-native way to post everywhere. One API, twenty-one platforms, zero glue code between you and your audience."
+	/>
+	<link slot="head" rel="preload" as="image" href="/hero.png" />
+	<link slot="head" rel="preconnect" href="https://fonts.googleapis.com" />
+	<link
+		slot="head"
+		rel="preconnect"
+		href="https://fonts.gstatic.com"
+		crossorigin
+	/>
+	<link
+		slot="head"
+		rel="stylesheet"
+		href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap"
+	/>
 
-  <div class="relay-landing">
-    <LandingNav />
-    <LandingHero />
-    <HeroProductBand />
-    <TrustStrip />
-    <FeatureChat />
-    <FeatureSchedule />
-    <TestimonialWall />
-    <FrontierTrio />
-    <PricingBand />
-    <ChangelogList />
-    <OpenSource />
-    <BlogHighlights />
-    <FinalCTA />
-    <LandingFooter />
-  </div>
+	<div class="relay-landing">
+		<LandingNav />
+		<LandingHero />
+		<HeroProductBand />
+		<TrustStrip />
+		<FeatureChat />
+		<FeatureSchedule />
+		<TestimonialWall />
+		<FrontierTrio />
+		<PricingBand />
+		<ChangelogList />
+		<OpenSource />
+		<BlogHighlights />
+		<FinalCTA />
+		<LandingFooter />
+	</div>
 </Layout>
 
 <style is:global>
-  /* Landing-only overrides — this stylesheet is loaded only on this route. */
-  html {
-    scroll-behavior: smooth;
-  }
-  body {
-    background: #f4f2ec;
-    padding-left: 0;
-    padding-right: 0;
-  }
-  .relay-landing {
-    min-height: 100vh;
-    overflow-x: hidden;
-    color: #1a1815;
-    font-family: "Geist Variable", "Geist Fallback", -apple-system, system-ui, sans-serif;
-    --font-newsreader: "Newsreader", Georgia, "Times New Roman", serif;
-    --font-mono-landing: "Geist Mono Variable", "Geist Mono Fallback", ui-monospace, monospace;
-  }
-  .relay-landing ::selection {
-    background: #1a1815;
-    color: #f3f1ea;
-  }
-  .relay-landing a {
-    color: inherit;
-    text-decoration: none;
-  }
-  /* Scroll-reveal — only armed once JS adds `reveal-ready`, so content is
+	/* Landing-only overrides — this stylesheet is loaded only on this route. */
+	html {
+		scroll-behavior: smooth;
+	}
+	body {
+		background: #f4f2ec;
+		padding-left: 0;
+		padding-right: 0;
+	}
+	.relay-landing {
+		min-height: 100vh;
+		overflow-x: hidden;
+		color: #1a1815;
+		font-family:
+			"Geist Variable",
+			"Geist Fallback",
+			-apple-system,
+			system-ui,
+			sans-serif;
+		--font-newsreader: "Newsreader", Georgia, "Times New Roman", serif;
+		--font-mono-landing:
+			"Geist Mono Variable", "Geist Mono Fallback", ui-monospace,
+			monospace;
+	}
+	.relay-landing ::selection {
+		background: #1a1815;
+		color: #f3f1ea;
+	}
+	.relay-landing a {
+		color: inherit;
+		text-decoration: none;
+	}
+	/* Scroll-reveal — only armed once JS adds `reveal-ready`, so content is
      never hidden when JS is unavailable. */
-  .relay-landing.reveal-ready [data-reveal] {
-    opacity: 0;
-    transform: translateY(24px);
-    transition:
-      opacity 0.8s cubic-bezier(0.32, 0.72, 0, 1),
-      transform 0.8s cubic-bezier(0.32, 0.72, 0, 1);
-  }
-  .relay-landing.reveal-ready [data-reveal].is-visible {
-    opacity: 1;
-    transform: none;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .relay-landing.reveal-ready [data-reveal] {
-      opacity: 1;
-      transform: none;
-      transition: none;
-    }
-  }
+	.relay-landing.reveal-ready [data-reveal] {
+		opacity: 0;
+		transform: translateY(24px);
+		transition:
+			opacity 0.8s cubic-bezier(0.32, 0.72, 0, 1),
+			transform 0.8s cubic-bezier(0.32, 0.72, 0, 1);
+	}
+	.relay-landing.reveal-ready [data-reveal].is-visible {
+		opacity: 1;
+		transform: none;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.relay-landing.reveal-ready [data-reveal] {
+			opacity: 1;
+			transform: none;
+			transition: none;
+		}
+	}
 </style>
 
 <script>
-  const root = document.querySelector<HTMLElement>(".relay-landing");
-  const els = root
-    ? Array.from(root.querySelectorAll<HTMLElement>("[data-reveal]"))
-    : [];
-  const reduceMotion = window.matchMedia(
-    "(prefers-reduced-motion: reduce)",
-  ).matches;
+	const root = document.querySelector<HTMLElement>(".relay-landing");
+	const els = root
+		? Array.from(root.querySelectorAll<HTMLElement>("[data-reveal]"))
+		: [];
+	const reduceMotion = window.matchMedia(
+		"(prefers-reduced-motion: reduce)",
+	).matches;
 
-  if (root && els.length && "IntersectionObserver" in window && !reduceMotion) {
-    root.classList.add("reveal-ready");
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            entry.target.classList.add("is-visible");
-            io.unobserve(entry.target);
-          }
-        }
-      },
-      { threshold: 0.1, rootMargin: "0px 0px -6% 0px" },
-    );
-    for (const el of els) io.observe(el);
-  }
+	if (
+		root &&
+		els.length &&
+		"IntersectionObserver" in window &&
+		!reduceMotion
+	) {
+		root.classList.add("reveal-ready");
+		const io = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					if (entry.isIntersecting) {
+						entry.target.classList.add("is-visible");
+						io.unobserve(entry.target);
+					}
+				}
+			},
+			{ threshold: 0.1, rootMargin: "0px 0px -6% 0px" },
+		);
+		for (const el of els) io.observe(el);
+	}
 </script>

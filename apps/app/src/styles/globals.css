@@ -130,6 +130,77 @@
 			transform: translateZ(0) rotate(360deg);
 		}
 	}
+
+	/* ---- Landing feature-card entrance animations ----
+	   One distinct entrance per feature card. Surfaced as `animate-feature-*`
+	   utilities and fired by the <Feature> component when its card scrolls into
+	   view (the card root toggles `.is-visible`, see index.astro reveal engine).
+	   The cubic-bezier matches --ease-relay so they feel of-a-piece. */
+	--animate-feature-rise: feature-rise 0.95s cubic-bezier(0.32, 0.72, 0, 1) both;
+	--animate-feature-drift: feature-drift 1.05s cubic-bezier(0.32, 0.72, 0, 1) both;
+	--animate-feature-zoom: feature-zoom 0.9s cubic-bezier(0.32, 0.72, 0, 1) both;
+	--animate-feature-tilt: feature-tilt 1s cubic-bezier(0.32, 0.72, 0, 1) both;
+	--animate-feature-unfold: feature-unfold 1s cubic-bezier(0.32, 0.72, 0, 1) both;
+
+	@keyframes feature-rise {
+		0% {
+			opacity: 0;
+			transform: translateY(56px);
+		}
+
+		100% {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	@keyframes feature-drift {
+		0% {
+			opacity: 0;
+			transform: translateX(72px);
+		}
+
+		100% {
+			opacity: 1;
+			transform: translateX(0);
+		}
+	}
+
+	@keyframes feature-zoom {
+		0% {
+			opacity: 0;
+			transform: scale(0.9);
+		}
+
+		100% {
+			opacity: 1;
+			transform: scale(1);
+		}
+	}
+
+	@keyframes feature-tilt {
+		0% {
+			opacity: 0;
+			transform: perspective(1400px) rotateX(7deg) translateY(40px);
+		}
+
+		100% {
+			opacity: 1;
+			transform: perspective(1400px) rotateX(0) translateY(0);
+		}
+	}
+
+	@keyframes feature-unfold {
+		0% {
+			opacity: 0;
+			transform: perspective(1600px) rotateY(-12deg) translateX(48px);
+		}
+
+		100% {
+			opacity: 1;
+			transform: perspective(1600px) rotateY(0) translateX(0);
+		}
+	}
 }
 
 :root {

@@ -2,41 +2,175 @@
 import { LANDING_LINKS } from "./data";
 ---
 
-<header style="position:sticky; top:0; z-index:60; backdrop-filter:blur(14px); background:rgba(243,241,234,0.8);">
-  <nav style="position:relative; max-width:1480px; margin:0 auto; padding:14px 32px; display:flex; align-items:center; justify-content:space-between;">
-    <a href="/" style="display:flex; align-items:center; gap:10px; z-index:2;">
-      <span style="width:26px; height:26px; border-radius:7px; background:#1A1815; display:flex; align-items:center; justify-content:center;"><svg width="15" height="15" viewBox="0 0 150 150" fill="#F3F1EA"><path fill-rule="evenodd" d="M34.82,18.54C16.52,18.54,1.49,33.56,1.49,51.87s15.02,33.33,33.33,33.33h80.69c6.95,0,12.28,5.33,12.28,12.28s-5.33,12.28-12.28,12.28H33.07c-5.77-.01-10.52,4.74-10.52,10.51s4.76,10.52,10.52,10.52h82.44c18.31,0,33.33-15.02,33.33-33.33s-15.02-33.33-33.33-33.33H34.82c-6.95,0-12.28-5.33-12.28-12.28s5.33-12.28,12.28-12.28h82.45c5.77.01,10.52-4.74,10.52-10.51s-4.76-10.52-10.52-10.52H34.82Z"></path></svg></span>
-      <span style="font-size:16px; font-weight:600; letter-spacing:0.04em;">RELAYAPI</span>
+{/* Fixed top bar — sizing/structure modeled on cursor.com's header
+    (52px tall, solid bar, pill buttons, 7.5px action gap), mapped onto
+    RelayAPI's cream/ink palette. The spacer keeps the hero from sliding
+    under the fixed bar. */}
+<header class="rl-nav">
+  <nav class="rl-nav__inner">
+    <a href="/" class="rl-nav__brand">
+      <span class="rl-nav__logo"><svg width="15" height="15" viewBox="0 0 150 150" fill="#F3F1EA"><path fill-rule="evenodd" d="M34.82,18.54C16.52,18.54,1.49,33.56,1.49,51.87s15.02,33.33,33.33,33.33h80.69c6.95,0,12.28,5.33,12.28,12.28s-5.33,12.28-12.28,12.28H33.07c-5.77-.01-10.52,4.74-10.52,10.51s4.76,10.52,10.52,10.52h82.44c18.31,0,33.33-15.02,33.33-33.33s-15.02-33.33-33.33-33.33H34.82c-6.95,0-12.28-5.33-12.28-12.28s5.33-12.28,12.28-12.28h82.45c5.77.01,10.52-4.74,10.52-10.51s-4.76-10.52-10.52-10.52H34.82Z"></path></svg></span>
+      <span class="rl-nav__word">RELAYAPI</span>
     </a>
-    <div style="flex:1; display:flex; align-items:center; justify-content:center; gap:clamp(14px,2vw,30px); font-size:14px; color:#3A3833;">
-      <a href="#" class="nav-link" style="transition:color .15s;">Product</a>
-      <a href="#" class="nav-link" style="transition:color .15s;">Platforms</a>
-      <a href={LANDING_LINKS.pricing} class="nav-link" style="transition:color .15s;">Pricing</a>
-      <a href={LANDING_LINKS.docs} class="nav-link" style="transition:color .15s;" target="_blank" rel="noopener noreferrer">Resources</a>
+    <div class="rl-nav__links">
+      <a href="#" class="rl-nav__link">Product</a>
+      <a href="#" class="rl-nav__link">Platforms</a>
+      <a href={LANDING_LINKS.pricing} class="rl-nav__link">Pricing</a>
+      <a href={LANDING_LINKS.docs} class="rl-nav__link" target="_blank" rel="noopener noreferrer">Docs</a>
     </div>
-    <div style="display:flex; align-items:center; gap:8px; z-index:2;">
-      <a href={LANDING_LINKS.login} class="nav-signin" style="font-size:14px; color:#3A3833; padding:7px 6px;">Sign in</a>
-      <a href="#" class="nav-contact" style="font-size:14px; color:#1A1815; background:transparent; border:1px solid rgba(26,24,21,0.16); padding:7px 15px; border-radius:9px; white-space:nowrap; transition:background .15s, border-color .15s;">Contact sales</a>
-      <a href={LANDING_LINKS.signup} class="nav-cta" style="font-size:14px; font-weight:500; color:#F3F1EA; background:#1A1815; border:1px solid #1A1815; padding:7px 16px; border-radius:9px; white-space:nowrap; transition:opacity .15s;">Get started</a>
+    <div class="rl-nav__actions">
+      <a href={LANDING_LINKS.login} class="rl-nav__signin">Sign in</a>
+      <a href={LANDING_LINKS.github} class="rl-nav__pill" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <a href={LANDING_LINKS.signup} class="rl-nav__pill rl-nav__pill--cta">Get started</a>
     </div>
   </nav>
 </header>
+<div class="rl-nav__spacer" aria-hidden="true"></div>
 
 <style>
-  .nav-link:hover {
-    color: #1A1815;
+  /* --- Fixed bar (cursor: position:fixed, top:0, z-50, 52px tall, solid) --- */
+  .rl-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 52px;
+    z-index: 60;
+    background: #f4f2ec;
+    display: flex;
+    align-items: center;
+  }
+  /* Reserves the bar's height in flow so the hero doesn't slip underneath. */
+  .rl-nav__spacer {
+    height: 52px;
   }
 
-  .nav-signin:hover {
-    color: #1A1815;
+  .rl-nav__inner {
+    width: 100%;
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 0 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
   }
 
-  .nav-contact:hover {
+  /* --- Brand --- */
+  .rl-nav__brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .rl-nav__logo {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: #1a1815;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .rl-nav__word {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: #1a1815;
+  }
+
+  /* --- Center links (cursor: 14px, even spacing) --- */
+  .rl-nav__links {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(14px, 2vw, 28px);
+  }
+  .rl-nav__link {
+    font-size: 14px;
+    color: #3a3833;
+    transition: color 0.15s;
+  }
+  .rl-nav__link:hover {
+    color: #1a1815;
+  }
+
+  /* --- Right actions (cursor: flex, gap 7.5px) --- */
+  .rl-nav__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .rl-nav__signin {
+    font-size: 14px;
+    color: #3a3833;
+    padding: 6px 8px;
+    transition: color 0.15s;
+  }
+  .rl-nav__signin:hover {
+    color: #1a1815;
+  }
+
+  /* Pills — fully rounded like cursor's "Contact sales" / "Download". */
+  .rl-nav__pill {
+    font-size: 14px;
+    line-height: 1;
+    color: #1a1815;
+    background: transparent;
+    border: 1px solid rgba(26, 24, 21, 0.18);
+    padding: 7px 14px;
+    border-radius: 999px;
+    white-space: nowrap;
+    transition:
+      background 0.15s,
+      border-color 0.15s,
+      opacity 0.15s;
+  }
+  .rl-nav__pill:hover {
     background: rgba(26, 24, 21, 0.04);
-    border-color: rgba(26, 24, 21, 0.28);
+    border-color: rgba(26, 24, 21, 0.3);
+  }
+  .rl-nav__pill--cta {
+    font-weight: 500;
+    color: #f3f1ea;
+    background: #1a1815;
+    border-color: #1a1815;
+  }
+  .rl-nav__pill--cta:hover {
+    background: #1a1815;
+    border-color: #1a1815;
+    opacity: 0.88;
   }
 
-  .nav-cta:hover {
-    opacity: 0.88;
+  /* --- Responsive: collapse like cursor does on narrow viewports --- */
+  @media (max-width: 860px) {
+    .rl-nav__links {
+      display: none;
+    }
+  }
+  @media (max-width: 560px) {
+    .rl-nav__signin {
+      display: none;
+    }
+    .rl-nav__inner {
+      padding: 0 18px;
+    }
+  }
+  /* Smallest phones (~320px): the brand word + both pills are flex-shrink:0
+     and would otherwise clip the CTA off-screen (no scrollbar, since the bar
+     is fixed). Collapse to the logo mark and tighten spacing to keep both the
+     GitHub and Get started buttons fully on-screen. */
+  @media (max-width: 400px) {
+    .rl-nav__word {
+      display: none;
+    }
+    .rl-nav__inner {
+      padding: 0 14px;
+    }
+    .rl-nav__actions {
+      gap: 6px;
+    }
   }
 </style>

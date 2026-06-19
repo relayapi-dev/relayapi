@@ -1,78 +1,15 @@
 ---
-import { reviewTasks } from "./data";
+import HeroDashboard from "./HeroDashboard.astro";
 ---
 
-<!-- ================= HERO PRODUCT BAND (painted backdrop + 3-pane window) ================= -->
-<section style="max-width:1520px; margin:0 auto; padding:0 20px;">
-  <div style="position:relative; border-radius:22px 22px 0 0; overflow:hidden; height:clamp(380px,46vw,640px); background:linear-gradient(180deg,#DCD5C5 0%,#D5CAB5 30%,#CABD9F 54%,#BFAF8D 76%,#B4A17D 100%);">
-    <!-- painterly haze + land forms -->
-    <div style="position:absolute; inset:0; background:radial-gradient(72% 55% at 50% -4%, rgba(241,235,220,0.8), transparent 60%), radial-gradient(55% 72% at 93% 94%, rgba(150,128,98,0.5), transparent 62%), radial-gradient(60% 80% at 3% 100%, rgba(172,152,120,0.42), transparent 60%);"></div>
-    <div style="position:absolute; left:-6%; right:-6%; bottom:-3%; height:48%; background:radial-gradient(ellipse 58% 100% at 80% 100%, rgba(118,98,72,0.5), transparent 70%); filter:blur(14px);"></div>
+<!-- ================= HERO PRODUCT BAND (painted backdrop + animated dashboard) ================= -->
+<section class="mx-auto max-w-[1320px] px-5">
+  <div class="relative flex min-h-[clamp(560px,76vh,880px)] flex-col justify-center overflow-hidden rounded-2xl bg-[#c7b795] bg-[url('/hero.png')] bg-cover bg-[position:center_34%] px-[clamp(18px,2.6vw,46px)] pt-[clamp(64px,10vw,140px)] pb-[clamp(72px,10vw,140px)] shadow-[0_30px_80px_-44px_rgba(40,28,12,0.4)]">
+    <!-- top haze: lets the window read against the sky -->
+    <div class="pointer-events-none absolute inset-x-0 top-0 h-[46%] bg-gradient-to-b from-[#f4f2ec]/[0.42] to-transparent"></div>
+    <!-- gentle vignette so the bright window pops -->
+    <div class="pointer-events-none absolute inset-0 [background:radial-gradient(125%_95%_at_50%_12%,transparent_58%,rgba(40,28,12,0.18))]"></div>
 
-    <!-- main window -->
-    <div style="position:absolute; left:50%; top:54px; transform:translateX(-50%); width:min(1180px, calc(100% - 56px)); background:#FAF9F4; border-radius:14px 14px 0 0; overflow:hidden; box-shadow:0 40px 90px -28px rgba(40,28,12,0.5), 0 12px 30px rgba(40,28,12,0.18); border:1px solid rgba(26,24,21,0.08); border-bottom:none;">
-      <!-- titlebar -->
-      <div style="position:relative; display:flex; align-items:center; padding:13px 16px; background:#F1EFE8; border-bottom:1px solid rgba(26,24,21,0.07);">
-        <div style="display:flex; gap:7px;"><span style="width:11px; height:11px; border-radius:50%; background:#CFC9BD;"></span><span style="width:11px; height:11px; border-radius:50%; background:#CFC9BD;"></span><span style="width:11px; height:11px; border-radius:50%; background:#CFC9BD;"></span></div>
-        <span style="position:absolute; left:50%; transform:translateX(-50%); font-size:13px; color:#6E6A62;">RelayAPI Studio</span>
-      </div>
-      <!-- 3 panes -->
-      <div style="display:grid; grid-template-columns:1fr 1.05fr 1.35fr; height:480px;">
-        <!-- LEFT: review list -->
-        <div style="border-right:1px solid rgba(26,24,21,0.07); padding:16px 14px; overflow:hidden;">
-          <div style="font-size:11px; letter-spacing:0.07em; color:#9A968C; margin-bottom:12px;">READY FOR REVIEW 6</div>
-          <div style="display:flex; flex-direction:column; gap:14px;">
-            {reviewTasks.map((t) => (
-              <div style="display:flex; gap:10px;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1A1815" stroke-width="1.8" style="flex-shrink:0; margin-top:1px;"><circle cx="12" cy="12" r="10"></circle><path d="m8 12 3 3 5-6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-                <div style="min-width:0; flex:1;">
-                  <div style="display:flex; justify-content:space-between; gap:8px;"><span style="font-size:13.5px; color:#1A1815; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{t.title}</span><span style="font-size:12px; color:#9A968C; flex-shrink:0;">{t.time}</span></div>
-                  <div style="font-size:12.5px; color:#9A968C; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{t.sub}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <!-- MIDDLE: chat detail -->
-        <div style="border-right:1px solid rgba(26,24,21,0.07); padding:18px 18px; overflow:hidden;">
-          <div style="font-size:14px; font-weight:500; color:#1A1815; margin-bottom:14px;">Launch announcement</div>
-          <div style="background:#F1EFE8; border:1px solid rgba(26,24,21,0.06); border-radius:10px; padding:12px 13px; font-size:13.5px; color:#3A3833; line-height:1.45; margin-bottom:16px;">post our v2 launch to every platform with the hero image</div>
-          <div style="display:flex; flex-direction:column; gap:11px; font-size:13px;">
-            <div style="color:#6E6A62;">Read <span style="font-family:var(--font-mono-landing); color:#9A968C;">brand-kit.md</span></div>
-            <div style="color:#6E6A62;">Read <span style="font-family:var(--font-mono-landing); color:#9A968C;">launch-copy.md</span></div>
-            <div style="color:#6E6A62;">Thought <span style="color:#9A968C;">4s</span></div>
-            <div style="color:#3A3833; line-height:1.5;">I'll adapt the copy and media for each network, then schedule for 9:00 AM.</div>
-          </div>
-          <div style="display:flex; flex-direction:column; gap:8px; margin-top:16px;">
-            <div style="display:flex; align-items:center; gap:9px; background:#FFFFFF; border:1px solid rgba(26,24,21,0.09); border-radius:9px; padding:9px 12px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A968C" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg><span style="font-size:13px; font-family:var(--font-mono-landing); color:#3A3833;">post.json</span><span style="font-size:12px; font-family:var(--font-mono-landing); color:#4E9A5A; margin-left:auto;">+21 -0</span></div>
-            <div style="display:flex; align-items:center; gap:9px; background:#FFFFFF; border:1px solid rgba(26,24,21,0.09); border-radius:9px; padding:9px 12px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A968C" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg><span style="font-size:13px; font-family:var(--font-mono-landing); color:#3A3833;">schedule.json</span><span style="font-size:12px; font-family:var(--font-mono-landing); color:#4E9A5A; margin-left:auto;">+4 -0</span></div>
-          </div>
-        </div>
-        <!-- RIGHT: preview browser -->
-        <div style="display:flex; flex-direction:column; overflow:hidden;">
-          <div style="display:flex; align-items:center; gap:14px; padding:12px 16px; border-bottom:1px solid rgba(26,24,21,0.07);">
-            <span style="color:#B6B1A6; font-size:15px;">←</span><span style="color:#B6B1A6; font-size:15px;">→</span><span style="color:#B6B1A6; font-size:14px;">⟳</span>
-            <div style="flex:1; font-size:12.5px; font-family:var(--font-mono-landing); color:#6E6A62; background:#F1EFE8; border-radius:7px; padding:5px 11px;">relayapi.dev/preview</div>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#B6B1A6" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M15 3v18"></path></svg>
-          </div>
-          <div style="padding:24px 26px; overflow:hidden;">
-            <div style="font-family:var(--font-newsreader); font-style:italic; font-size:24px; color:#1A1815; margin-bottom:18px;">Relay Studio</div>
-            <span style="display:inline-block; font-size:11.5px; color:#2C6FB3; background:rgba(44,111,179,0.1); border-radius:4px; padding:2px 7px; margin-bottom:8px;">PostBody · p</span>
-            <div style="border:1.5px solid rgba(44,111,179,0.45); border-radius:8px; padding:14px 16px; font-family:var(--font-newsreader); font-size:18.5px; line-height:1.5; color:#2A2620;">Today we're launching RelayAPI v2 — one API, twenty-one platforms, and zero glue code between you and your audience.</div>
-            <div style="font-family:var(--font-newsreader); font-size:18px; color:#3A3833; margin-top:16px;">Read the launch notes, or start posting in minutes.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- CLI peek window bottom-right -->
-    <div class="cli-window" style="position:absolute; right:36px; bottom:0; width:min(440px, 42%); background:#FAF9F4; border-radius:12px 12px 0 0; box-shadow:0 -10px 40px -16px rgba(40,28,12,0.4); border:1px solid rgba(26,24,21,0.08); border-bottom:none; overflow:hidden;">
-      <div style="position:relative; display:flex; align-items:center; padding:11px 14px; background:#F1EFE8; border-bottom:1px solid rgba(26,24,21,0.07);">
-        <div style="display:flex; gap:6px;"><span style="width:10px; height:10px; border-radius:50%; background:#CFC9BD;"></span><span style="width:10px; height:10px; border-radius:50%; background:#CFC9BD;"></span><span style="width:10px; height:10px; border-radius:50%; background:#CFC9BD;"></span></div>
-        <span style="position:absolute; left:50%; transform:translateX(-50%); font-size:12px; color:#6E6A62;">RelayAPI CLI</span>
-      </div>
-      <pre style="margin:0; padding:16px; font-family:var(--font-mono-landing); font-size:12px; line-height:1.7; color:#3A3833;"><span style="color:#4E9A5A;">$</span> relay post --all "ship day!"
-<span style="color:#9A968C;">→ delivering to 21 platforms…</span></pre>
-    </div>
+    <HeroDashboard />
   </div>
 </section>

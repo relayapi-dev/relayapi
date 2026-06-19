@@ -1,12 +1,52 @@
 ---
-import { logos } from "./data";
+import { platformLogos } from "./data";
+
+// Three identical tracks make the marquee seamless: the `animate-marquee`
+// keyframe (globals.css @theme) shifts one full track plus the inter-track gap
+// to the left, so track 2 lands exactly where track 1 began. Only the first
+// track is exposed to assistive tech; the duplicates are decorative.
+const tracks = [0, 1, 2];
 ---
 
-<section style="max-width:1200px; margin:0 auto; padding:clamp(56px,7vw,96px) 32px 48px; text-align:center;">
-  <h2 style="font-size:clamp(20px,2vw,28px); font-weight:500; letter-spacing:-0.02em; color:#46443D; margin:0 0 40px;">Trusted every day by teams that ship across every platform</h2>
-  <div style="display:flex; flex-wrap:wrap; gap:20px 56px; justify-content:center; align-items:center;">
-    {logos.map((l) => (
-      <span style="font-size:21px; font-weight:600; letter-spacing:-0.01em; color:#B7B2A7;">{l}</span>
-    ))}
-  </div>
+<section
+	data-reveal
+	class="mx-auto max-w-[75rem] px-8 pt-[clamp(3.5rem,7vw,6rem)] pb-28 text-center"
+>
+	<h2 class="m-0 mb-10 font-medium tracking-[-0.01em] text-[#46443D]">
+		One API. Every platform you publish to.
+	</h2>
+
+	<div
+		class="group flex w-full overflow-hidden [gap:var(--gap)] [--duration:60s] [--gap:3.5rem] [mask-image:linear-gradient(to_right,transparent,#000_8%,#000_92%,transparent)] [-webkit-mask-image:linear-gradient(to_right,transparent,#000_8%,#000_92%,transparent)] motion-reduce:flex-wrap motion-reduce:[mask-image:none] motion-reduce:[-webkit-mask-image:none]"
+	>
+		{
+			tracks.map((t) => (
+				<div
+					aria-hidden={t > 0 ? "true" : undefined}
+					class:list={[
+						"flex shrink-0 items-center justify-around [gap:var(--gap)] animate-marquee group-hover:[animation-play-state:paused] motion-reduce:[animation-play-state:paused]",
+						t > 0
+							? "motion-reduce:hidden"
+							: "motion-reduce:w-full motion-reduce:flex-wrap motion-reduce:justify-center motion-reduce:[gap:1.5rem]",
+					]}
+				>
+					{platformLogos.map((p) => (
+						<span class="flex shrink-0 items-center gap-2.5 text-[#1A1815] transition-colors duration-300 hover:text-[#CB5A2C]">
+							<svg
+								viewBox="0 0 24 24"
+								fill="currentColor"
+								aria-hidden="true"
+								class="size-5"
+							>
+								<path d={p.glyph} />
+							</svg>
+							<span class="whitespace-nowrap font-semibold tracking-[-0.01em]">
+								{p.name}
+							</span>
+						</span>
+					))}
+				</div>
+			))
+		}
+	</div>
 </section>

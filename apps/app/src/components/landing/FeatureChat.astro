@@ -1,79 +1,148 @@
 ---
+import Feature from "./Feature.astro";
 import { LANDING_LINKS } from "./data";
 ---
 
-<!-- ================= FEATURE CARD 1 (chat + doc window, orange caption) ================= -->
-<section style="max-width:1480px; margin:0 auto; padding:18px 20px;">
-  <div data-reveal style="position:relative; border-radius:30px; overflow:hidden; background:#E9E7DF; min-height:clamp(560px,52vw,760px);">
-    <!-- caption bottom-left -->
-    <div style="position:absolute; left:clamp(28px,4vw,64px); bottom:clamp(40px,5vw,72px); max-width:430px; z-index:3;">
-      <h3 style="font-size:clamp(26px,2.5vw,34px); font-weight:600; letter-spacing:-0.025em; line-height:1.12; margin:0 0 4px; color:#1A1815;">Agents that post for you</h3>
-      <p style="font-size:clamp(18px,1.8vw,22px); line-height:1.32; color:#86827A; margin:0 0 18px; font-weight:400;">Hand off a campaign and Relay drafts, formats, and schedules it across every platform — while you focus on the message.</p>
-      <a href={LANDING_LINKS.docs} class="learn-link" style="font-size:17px; font-weight:500; color:#CB5A2C;" target="_blank" rel="noopener noreferrer">Learn about social agents →</a>
-    </div>
-    <!-- floating window, right, cropped -->
-    <div style="position:absolute; right:0; top:48px; bottom:0; width:min(900px,64%); background:#F4F2EC; border-radius:18px 0 0 0; box-shadow:0 30px 80px -28px rgba(40,28,12,0.4); border:1px solid rgba(26,24,21,0.07); overflow:hidden;">
-      <div style="position:relative; display:flex; align-items:center; padding:13px 16px; background:#EDEBE4; border-bottom:1px solid rgba(26,24,21,0.06);">
-        <div style="display:flex; gap:7px;"><span style="width:11px; height:11px; border-radius:50%; background:#CFC9BD;"></span><span style="width:11px; height:11px; border-radius:50%; background:#CFC9BD;"></span><span style="width:11px; height:11px; border-radius:50%; background:#CFC9BD;"></span></div>
-        <span style="position:absolute; left:50%; transform:translateX(-50%); font-size:13px; color:#6E6A62;">RelayAPI</span>
-      </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; height:100%;">
-        <!-- chat pane -->
-        <div style="border-right:1px solid rgba(26,24,21,0.06); padding:18px; overflow:hidden; display:flex; flex-direction:column;">
-          <div style="font-size:14px; font-weight:500; margin-bottom:12px;">Plan launch campaign</div>
-          <div style="background:#FFFFFF; border:1px solid rgba(26,24,21,0.08); border-radius:10px; padding:11px 13px; font-size:13.5px; color:#3A3833; line-height:1.45; margin-bottom:14px;">plan a launch campaign across all our social channels</div>
-          <div style="display:flex; flex-direction:column; gap:9px; font-size:13px; margin-bottom:14px;">
-            <div style="color:#6E6A62;">Thought <span style="color:#9A968C;">4s</span></div>
-            <div style="color:#6E6A62;">Read <span style="font-family:var(--font-mono-landing); color:#9A968C;">brand-kit.md</span></div>
-            <div style="color:#6E6A62;">Searched <span style="color:#9A968C;">best posting times</span></div>
-          </div>
-          <div style="display:flex; align-items:center; gap:9px; background:#FFFFFF; border:1px solid rgba(26,24,21,0.09); border-radius:9px; padding:9px 12px; margin-bottom:14px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A968C" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg><span style="font-size:13px; font-family:var(--font-mono-landing); color:#3A3833;">campaign.md</span><span style="font-size:12px; font-family:var(--font-mono-landing); color:#4E9A5A; margin-left:auto;">+68</span></div>
-          <!-- questions card -->
-          <div style="background:#FFFFFF; border:1px solid rgba(26,24,21,0.09); border-radius:11px; padding:14px; margin-top:auto;">
-            <div style="font-size:12.5px; color:#9A968C; margin-bottom:10px;">Questions</div>
-            <div style="font-size:13.5px; font-weight:500; margin-bottom:10px;">Which platforms should I prioritize?</div>
-            <div style="display:flex; flex-direction:column; gap:9px;">
-              <div style="display:flex; gap:10px; font-size:13px; color:#3A3833;"><span style="color:#B6B1A6;">1</span> All 21 platforms</div>
-              <div style="display:flex; gap:10px; font-size:13px; color:#3A3833;"><span style="color:#B6B1A6;">2</span> Just the big 5</div>
-              <div style="display:flex; gap:10px; font-size:13px; color:#3A3833;"><span style="color:#B6B1A6;">3</span> Let me choose</div>
-            </div>
-            <div style="display:flex; align-items:center; justify-content:flex-end; gap:12px; margin-top:14px;">
-              <span style="font-size:13px; color:#9A968C;">Skip</span>
-              <span class="continue-btn" style="font-size:13px; font-weight:500; color:#fff; background:#BE8038; border-radius:7px; padding:7px 16px;">Continue</span>
-            </div>
-          </div>
-          <div style="display:flex; align-items:center; gap:8px; margin-top:12px; background:#FFFFFF; border:1px solid rgba(26,24,21,0.09); border-radius:10px; padding:8px 10px;">
-            <span style="font-size:12px; color:#BE8038; background:rgba(190,128,56,0.12); border-radius:6px; padding:4px 9px;">⌗ Plan</span>
-            <span style="font-size:12.5px; color:#9A968C;">Relay 2.5 ▾</span>
-            <span style="margin-left:auto; width:24px; height:24px; border-radius:50%; background:#E7E4DC; display:flex; align-items:center; justify-content:center; font-size:12px; color:#6E6A62;">↑</span>
-          </div>
-        </div>
-        <!-- doc pane -->
-        <div style="padding:20px 22px; overflow:hidden;">
-          <h4 style="font-size:19px; font-weight:600; letter-spacing:-0.02em; margin:0 0 16px;">Launch Campaign Plan</h4>
-          <div style="font-size:14px; font-weight:600; margin-bottom:6px;">Audience</div>
-          <p style="font-size:13.5px; color:#6E6A62; line-height:1.5; margin:0 0 16px;">Developers and indie builders who manage multiple social accounts and want one API.</p>
-          <div style="font-size:14px; font-weight:600; margin-bottom:6px;">Cadence</div>
-          <p style="font-size:13.5px; color:#6E6A62; line-height:1.5; margin:0 0 20px;">Launch thread at 9 AM, Reel at noon, recap post end of week — staggered per platform.</p>
-          <div style="font-size:13px; color:#9A968C; margin-bottom:12px;">3 Tasks</div>
-          <div style="display:flex; flex-direction:column; gap:13px;">
-            <div style="display:flex; gap:11px; font-size:13.5px; color:#3A3833;"><span style="width:16px; height:16px; border-radius:50%; border:1.6px solid #C7C2B6; flex-shrink:0;"></span>Draft launch thread for X + LinkedIn</div>
-            <div style="display:flex; gap:11px; font-size:13.5px; color:#3A3833;"><span style="width:16px; height:16px; border-radius:50%; border:1.6px solid #C7C2B6; flex-shrink:0;"></span>Schedule Reel for Instagram + TikTok</div>
-            <div style="display:flex; gap:11px; font-size:13.5px; color:#3A3833;"><span style="width:16px; height:16px; border-radius:50%; border:1.6px solid #C7C2B6; flex-shrink:0;"></span>Queue recap for Blog + Newsletter</div>
-            <div style="display:flex; gap:11px; font-size:13.5px; color:#B6B1A6;"><span style="width:16px; height:16px; border-radius:50%; border:1.6px solid #DAD5C9; flex-shrink:0;"></span>Add a task, ⌘K to generate…</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<style>
-  .learn-link:hover {
-    opacity: 0.8;
-  }
-
-  .continue-btn:hover {
-    opacity: 0.88;
-  }
-</style>
+<!-- FEATURE 1 — agentic chat + plan doc, caption left, window drifts in from the right -->
+<Feature
+	title="Agents that post for you"
+	description="Hand off a campaign and Relay drafts, formats, and schedules it across every platform — while you focus on the message."
+	linkText="Learn about social agents"
+	linkHref={LANDING_LINKS.docs}
+	side="left"
+	captionAlign="bottom"
+	windowTitle="RelayAPI"
+	animation="drift"
+	panelFill
+>
+	<div class="grid h-full min-w-[480px] grid-cols-2 md:min-w-0">
+		<!-- chat pane -->
+		<div
+			class="flex flex-col overflow-hidden border-r border-[rgba(26,24,21,0.06)] p-[18px]"
+		>
+			<div class="mb-3 text-[14px] font-medium">Plan launch campaign</div>
+			<div
+				class="mb-[14px] rounded-[10px] border border-[rgba(26,24,21,0.08)] bg-white px-[13px] py-[11px] text-[13.5px] leading-[1.45] text-[#3A3833]"
+			>
+				plan a launch campaign across all our social channels
+			</div>
+			<div class="mb-[14px] flex flex-col gap-[9px] text-[13px]">
+				<div class="text-[#6E6A62]">
+					Thought <span class="text-[#9A968C]">4s</span>
+				</div>
+				<div class="text-[#6E6A62]">
+					Read <span
+						class="[font-family:var(--font-mono-landing)] text-[#9A968C]"
+						>brand-kit.md</span
+					>
+				</div>
+				<div class="text-[#6E6A62]">
+					Searched <span class="text-[#9A968C]">best posting times</span
+					>
+				</div>
+			</div>
+			<div
+				class="mb-[14px] flex items-center gap-[9px] rounded-[9px] border border-[rgba(26,24,21,0.09)] bg-white px-3 py-[9px]"
+			>
+				<svg
+					width="14"
+					height="14"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="#9A968C"
+					stroke-width="1.8"
+					><path
+						d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+					></path><path d="M14 2v6h6"></path></svg
+				>
+				<span
+					class="[font-family:var(--font-mono-landing)] text-[13px] text-[#3A3833]"
+					>campaign.md</span
+				>
+				<span
+					class="ml-auto [font-family:var(--font-mono-landing)] text-[12px] text-[#4E9A5A]"
+					>+68</span
+				>
+			</div>
+			<!-- questions card -->
+			<div
+				class="mt-auto rounded-[11px] border border-[rgba(26,24,21,0.09)] bg-white p-[14px]"
+			>
+				<div class="mb-[10px] text-[12.5px] text-[#9A968C]">Questions</div>
+				<div class="mb-[10px] text-[13.5px] font-medium">
+					Which platforms should I prioritize?
+				</div>
+				<div class="flex flex-col gap-[9px]">
+					<div class="flex gap-[10px] text-[13px] text-[#3A3833]">
+						<span class="text-[#B6B1A6]">1</span> All 21 platforms
+					</div>
+					<div class="flex gap-[10px] text-[13px] text-[#3A3833]">
+						<span class="text-[#B6B1A6]">2</span> Just the big 5
+					</div>
+					<div class="flex gap-[10px] text-[13px] text-[#3A3833]">
+						<span class="text-[#B6B1A6]">3</span> Let me choose
+					</div>
+				</div>
+				<div class="mt-[14px] flex items-center justify-end gap-3">
+					<span class="text-[13px] text-[#9A968C]">Skip</span>
+					<span
+						class="rounded-[7px] bg-[#BE8038] px-4 py-[7px] text-[13px] font-medium text-white transition-opacity duration-200 hover:opacity-[0.88]"
+						>Continue</span
+					>
+				</div>
+			</div>
+			<div
+				class="mt-3 flex items-center gap-2 rounded-[10px] border border-[rgba(26,24,21,0.09)] bg-white px-[10px] py-2"
+			>
+				<span
+					class="rounded-[6px] bg-[rgba(190,128,56,0.12)] px-[9px] py-1 text-[12px] text-[#BE8038]"
+					>⌗ Plan</span
+				>
+				<span class="text-[12.5px] text-[#9A968C]">Relay 2.5 ▾</span>
+				<span
+					class="ml-auto flex size-6 items-center justify-center rounded-full bg-[#E7E4DC] text-[12px] text-[#6E6A62]"
+					>↑</span
+				>
+			</div>
+		</div>
+		<!-- doc pane -->
+		<div class="overflow-hidden px-[22px] py-5">
+			<h4 class="mb-4 text-[19px] font-semibold tracking-[-0.02em]">
+				Launch Campaign Plan
+			</h4>
+			<div class="mb-1.5 text-[14px] font-semibold">Audience</div>
+			<p class="mb-4 text-[13.5px] leading-[1.5] text-[#6E6A62]">
+				Developers and indie builders who manage multiple social accounts
+				and want one API.
+			</p>
+			<div class="mb-1.5 text-[14px] font-semibold">Cadence</div>
+			<p class="mb-5 text-[13.5px] leading-[1.5] text-[#6E6A62]">
+				Launch thread at 9 AM, Reel at noon, recap post end of week —
+				staggered per platform.
+			</p>
+			<div class="mb-3 text-[13px] text-[#9A968C]">3 Tasks</div>
+			<div class="flex flex-col gap-[13px]">
+				<div class="flex gap-[11px] text-[13.5px] text-[#3A3833]">
+					<span
+						class="size-4 shrink-0 rounded-full border-[1.6px] border-[#C7C2B6]"
+					></span>Draft launch thread for X + LinkedIn
+				</div>
+				<div class="flex gap-[11px] text-[13.5px] text-[#3A3833]">
+					<span
+						class="size-4 shrink-0 rounded-full border-[1.6px] border-[#C7C2B6]"
+					></span>Schedule Reel for Instagram + TikTok
+				</div>
+				<div class="flex gap-[11px] text-[13.5px] text-[#3A3833]">
+					<span
+						class="size-4 shrink-0 rounded-full border-[1.6px] border-[#C7C2B6]"
+					></span>Queue recap for Blog + Newsletter
+				</div>
+				<div class="flex gap-[11px] text-[13.5px] text-[#B6B1A6]">
+					<span
+						class="size-4 shrink-0 rounded-full border-[1.6px] border-[#DAD5C9]"
+					></span>Add a task, ⌘K to generate…
+				</div>
+			</div>
+		</div>
+	</div>
+</Feature>
