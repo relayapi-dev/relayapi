@@ -1,4 +1,5 @@
 ---
+import { Font } from "astro:assets";
 import "../styles/globals.css";
 ---
 
@@ -14,15 +15,8 @@ import "../styles/globals.css";
 		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 		<link rel="preconnect" href="https://api.relayapi.dev" crossorigin />
-		<style>
-			:root {
-				--font-geist-sans:
-					"Geist Variable", "Geist Fallback", system-ui, sans-serif;
-				--font-geist-mono:
-					"Geist Mono Variable", "Geist Mono Fallback", ui-monospace,
-					monospace;
-			}
-		</style>
+		<Font cssVariable="--font-geist-sans" preload />
+		<Font cssVariable="--font-geist-mono" preload />
 		<script is:inline>
 			// Apply saved dashboard theme before paint (light default) to avoid FOUC.
 			try {

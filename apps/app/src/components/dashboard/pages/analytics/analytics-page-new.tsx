@@ -103,7 +103,7 @@ const fadeUp = {
 
 function AnalyticsPageLoadingSkeleton() {
   return (
-    <div className="space-y-6 pb-16">
+    <div className="space-y-5 pb-16">
       <PageHeader
         title="Analytics"
         docsHref={DOCS_HREF}
@@ -234,7 +234,7 @@ export function AnalyticsPageNew({
 
   if (!isPro) {
     return (
-      <div className="space-y-6 pb-16">
+      <div className="space-y-5 pb-16">
         <PageHeader title="Analytics" docsHref={DOCS_HREF} />
         <div className="rounded-[12px] border border-border bg-card p-12 text-center">
           <Lock className="size-8 text-muted-foreground/40 mx-auto mb-2" />
@@ -254,25 +254,27 @@ export function AnalyticsPageNew({
   // -- Main layout ----------------------------------------------------------
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader title="Analytics" docsHref={DOCS_HREF} />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader title="Analytics" docsHref={DOCS_HREF} />
 
-      {/* Date-range control */}
-      <PageToolbar
-        right={
-          <Segmented
-            value={datePreset}
-            onChange={(v) => changeDatePreset(v)}
-            options={(Object.keys(datePresetShortLabels) as DatePreset[]).map(
-              (value) => ({
-                value,
-                label: datePresetShortLabels[value],
-                title: datePresetLabels[value],
-              }),
-            )}
-          />
-        }
-      />
+        {/* Date-range control */}
+        <PageToolbar
+          right={
+            <Segmented
+              value={datePreset}
+              onChange={(v) => changeDatePreset(v)}
+              options={(Object.keys(datePresetShortLabels) as DatePreset[]).map(
+                (value) => ({
+                  value,
+                  label: datePresetShortLabels[value],
+                  title: datePresetLabels[value],
+                }),
+              )}
+            />
+          }
+        />
+      </div>
 
       {/* Mobile channel selector (visible below sm) */}
       <div className="sm:hidden">

@@ -185,27 +185,29 @@ export function LogsPage({
       });
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader
-        title="Logs"
-        docsHref="https://docs.relayapi.dev/api-reference/usage/listRequestLogs"
-      />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader
+          title="Logs"
+          docsHref="https://docs.relayapi.dev/api-reference/usage/listRequestLogs"
+        />
 
-      <PageToolbar
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
-          />
-        }
-        right={
-          <>
-            <WorkspaceFilterButton />
-            <AccountFilterButton />
-          </>
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+            />
+          }
+          right={
+            <>
+              <WorkspaceFilterButton />
+              <AccountFilterButton />
+            </>
+          }
+        />
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <Segmented

@@ -221,7 +221,7 @@ export function AnalyticsHome({
 }: AnalyticsHomeProps) {
   if (loading) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-4">
         <SkeletonTotals />
         <SkeletonTable />
       </div>
@@ -252,7 +252,7 @@ export function AnalyticsHome({
 
   return (
     <motion.div
-      className="space-y-6"
+      className="space-y-4"
       variants={stagger}
       initial="hidden"
       animate="visible"

@@ -532,23 +532,25 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
   };
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader title="Settings" />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader title="Settings" />
 
-      <PageToolbar
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={settingsTabs.map((tab) => ({
-              value: tab.toLowerCase().replace(" ", "-") as NonNullable<
-                SettingsPageProps["initialTab"]
-              >,
-              label: tab,
-            }))}
-          />
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={settingsTabs.map((tab) => ({
+                value: tab.toLowerCase().replace(" ", "-") as NonNullable<
+                  SettingsPageProps["initialTab"]
+                >,
+                label: tab,
+              }))}
+            />
+          }
+        />
+      </div>
 
       {activeTab === "general" && (<>
 

@@ -434,128 +434,130 @@ export function PostsPage({
   const isWeekCalendar = viewMode === "calendar" && calendarPeriod === "week" && !isMobile;
 
   return (
-    <div className={cn("space-y-6", isWeekCalendar ? "pb-4" : "pb-16")}>
-      <PageHeader
-        title="Posts"
-        docsHref="https://docs.relayapi.dev/api-reference/posts"
-        action={
-          <Button size="sm" onClick={() => { setNewPostInitialDate(undefined); setNewPostOpen(true); }}>
-            <Plus className="size-4" />
-            {activeTab === "drafts" ? "New Draft" : "New Post"}
-          </Button>
-        }
-      />
-      <Suspense fallback={null}>
-          {newPostOpen ? (
-            <NewPostDialog
-              open={newPostOpen}
-              onOpenChange={(open) => {
-                setNewPostOpen(open);
-                if (!open) {
-                  setNewPostInitialDate(undefined);
-                  setEditingPostId(null);
-                  setEditPostData(null);
-                }
-              }}
-              initialDate={editingPostId ? undefined : newPostInitialDate}
-              initialPublishMode={editingPostId ? undefined : (activeTab === "drafts" ? "draft" : "now")}
-              editPostId={editingPostId}
-              editPostData={editPostData}
-              onCreated={(created) => {
-                if (!created) return;
-                const platforms = (Object.values(created.targets || {}) as PostTarget[]).map((t) => t.platform).filter(Boolean);
-                const postData = {
-                  id: created.id,
-                  content: created.content || "",
-                  platforms,
-                  status: (created.status || "publishing") as Post["status"],
-                  scheduled_at: (created.scheduled_at && created.scheduled_at !== "now" && created.scheduled_at !== "draft") ? created.scheduled_at : null,
-                  published_at: created.published_at || null,
-                  created_at: created.created_at || new Date().toISOString(),
-                  targets: created.targets,
-                  media: created.media || null,
-                };
+    <div className={cn("space-y-5", isWeekCalendar ? "pb-4" : "pb-16")}>
+      <div className="space-y-3">
+        <PageHeader
+          title="Posts"
+          docsHref="https://docs.relayapi.dev/api-reference/posts"
+          action={
+            <Button size="sm" onClick={() => { setNewPostInitialDate(undefined); setNewPostOpen(true); }}>
+              <Plus className="size-4" />
+              {activeTab === "drafts" ? "New Draft" : "New Post"}
+            </Button>
+          }
+        />
+        <Suspense fallback={null}>
+            {newPostOpen ? (
+              <NewPostDialog
+                open={newPostOpen}
+                onOpenChange={(open) => {
+                  setNewPostOpen(open);
+                  if (!open) {
+                    setNewPostInitialDate(undefined);
+                    setEditingPostId(null);
+                    setEditPostData(null);
+                  }
+                }}
+                initialDate={editingPostId ? undefined : newPostInitialDate}
+                initialPublishMode={editingPostId ? undefined : (activeTab === "drafts" ? "draft" : "now")}
+                editPostId={editingPostId}
+                editPostData={editPostData}
+                onCreated={(created) => {
+                  if (!created) return;
+                  const platforms = (Object.values(created.targets || {}) as PostTarget[]).map((t) => t.platform).filter(Boolean);
+                  const postData = {
+                    id: created.id,
+                    content: created.content || "",
+                    platforms,
+                    status: (created.status || "publishing") as Post["status"],
+                    scheduled_at: (created.scheduled_at && created.scheduled_at !== "now" && created.scheduled_at !== "draft") ? created.scheduled_at : null,
+                    published_at: created.published_at || null,
+                    created_at: created.created_at || new Date().toISOString(),
+                    targets: created.targets,
+                    media: created.media || null,
+                  };
 
-                if (editingPostId) {
-                  // Edit: update in-place or move between lists
-                  setQueuePosts((prev) => prev.filter((p) => p.id !== editingPostId));
-                  setDraftPosts((prev) => prev.filter((p) => p.id !== editingPostId));
-                  setAllPosts((prev) => prev.filter((p) => p.id !== editingPostId));
-                  if (postData.status === "draft") {
-                    setDraftPosts((prev) => [postData, ...prev]);
+                  if (editingPostId) {
+                    // Edit: update in-place or move between lists
+                    setQueuePosts((prev) => prev.filter((p) => p.id !== editingPostId));
+                    setDraftPosts((prev) => prev.filter((p) => p.id !== editingPostId));
+                    setAllPosts((prev) => prev.filter((p) => p.id !== editingPostId));
+                    if (postData.status === "draft") {
+                      setDraftPosts((prev) => [postData, ...prev]);
+                    } else {
+                      setQueuePosts((prev) => [postData, ...prev]);
+                    }
+                    setAllPosts((prev) => [postData, ...prev]);
+                    setEditingPostId(null);
+                    setEditPostData(null);
                   } else {
-                    setQueuePosts((prev) => [postData, ...prev]);
+                    // Create: prepend to correct list
+                    if (postData.status === "draft") {
+                      setDraftPosts((prev) => [postData, ...prev]);
+                    } else {
+                      setQueuePosts((prev) => [postData, ...prev]);
+                    }
+                    setAllPosts((prev) => [postData, ...prev]);
                   }
-                  setAllPosts((prev) => [postData, ...prev]);
-                  setEditingPostId(null);
-                  setEditPostData(null);
-                } else {
-                  // Create: prepend to correct list
-                  if (postData.status === "draft") {
-                    setDraftPosts((prev) => [postData, ...prev]);
-                  } else {
-                    setQueuePosts((prev) => [postData, ...prev]);
-                  }
-                  setAllPosts((prev) => [postData, ...prev]);
-                }
-              }}
+                }}
+              />
+            ) : null}
+          </Suspense>
+
+        {/* Tabs + filters/controls */}
+        <PageToolbar
+          className="flex-nowrap"
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={topTabs.map((tab) => ({
+                value: tab.toLowerCase() as typeof activeTab,
+                label: tab,
+                // Queue is hidden on mobile to keep the tab row + filters on one line.
+                className: tab === "Queue" ? "hidden md:inline-flex" : undefined,
+              }))}
             />
-          ) : null}
-        </Suspense>
-
-      {/* Tabs + filters/controls */}
-      <PageToolbar
-        className="flex-nowrap"
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={topTabs.map((tab) => ({
-              value: tab.toLowerCase() as typeof activeTab,
-              label: tab,
-              // Queue is hidden on mobile to keep the tab row + filters on one line.
-              className: tab === "Queue" ? "hidden md:inline-flex" : undefined,
-            }))}
-          />
-        }
-        right={
-          <>
-            {(activeTab === "all" || activeTab === "published") && (
-              <IconButton
-                title={syncing ? "Syncing..." : "Sync"}
-                onClick={handleForceResync}
-                disabled={syncing}
-              >
-                {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              </IconButton>
-            )}
-            <WorkspaceFilterButton />
-            <AccountFilterButton />
-            {(activeTab === "queue" || activeTab === "all") && (
-              <>
-                <ToolbarDivider className="hidden md:block" />
-                <div className="hidden md:block">
-                  <Segmented
-                    size="icon"
-                    value={viewMode}
-                    onChange={(v) => {
-                      setViewMode(v);
-                      localStorage.setItem("posts:viewMode", v);
-                      const url = new URL(window.location.href);
-                      url.searchParams.set("view", v);
-                      window.history.replaceState({}, "", url.toString());
-                    }}
-                    options={[
-                      { value: "calendar", icon: <CalendarDays />, title: "Calendar view" },
-                      { value: "list", icon: <List />, title: "List view" },
-                    ]}
-                  />
-                </div>
-              </>
-            )}
-          </>
-        }
-      />
+          }
+          right={
+            <>
+              {(activeTab === "all" || activeTab === "published") && (
+                <IconButton
+                  title={syncing ? "Syncing..." : "Sync"}
+                  onClick={handleForceResync}
+                  disabled={syncing}
+                >
+                  {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                </IconButton>
+              )}
+              <WorkspaceFilterButton />
+              <AccountFilterButton />
+              {(activeTab === "queue" || activeTab === "all") && (
+                <>
+                  <ToolbarDivider className="hidden md:block" />
+                  <div className="hidden md:block">
+                    <Segmented
+                      size="icon"
+                      value={viewMode}
+                      onChange={(v) => {
+                        setViewMode(v);
+                        localStorage.setItem("posts:viewMode", v);
+                        const url = new URL(window.location.href);
+                        url.searchParams.set("view", v);
+                        window.history.replaceState({}, "", url.toString());
+                      }}
+                      options={[
+                        { value: "calendar", icon: <CalendarDays />, title: "Calendar view" },
+                        { value: "list", icon: <List />, title: "List view" },
+                      ]}
+                    />
+                  </div>
+                </>
+              )}
+            </>
+          }
+        />
+      </div>
 
       {allError && activeTab === "all" && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

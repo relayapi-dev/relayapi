@@ -148,7 +148,7 @@ export function BillingPage() {
   const isCancelling = billingStatus?.subscription?.cancelAtPeriodEnd && !isCancelled;
   if (loading || billingLoading) {
     return (
-      <div className="space-y-6 pb-16">
+      <div className="space-y-5 pb-16">
         <div className="h-7 w-44 rounded bg-muted animate-pulse" />
         <div className="rounded-[12px] border border-border bg-card p-5 space-y-4">
           <div className="flex items-center justify-between">
@@ -234,7 +234,7 @@ export function BillingPage() {
   }
 
   return (
-    <div className="space-y-6 pb-16">
+    <div className="space-y-5 pb-16">
     <PageHeader title="Billing & Invoices" />
 
     {error && (
@@ -286,7 +286,7 @@ export function BillingPage() {
     )}
 
     <motion.div
-      className="space-y-6"
+      className="space-y-4"
       variants={stagger}
       initial="hidden"
       animate="visible"

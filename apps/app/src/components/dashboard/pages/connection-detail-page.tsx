@@ -130,7 +130,7 @@ export function ConnectionDetailPage({ accountId, initialTab }: Props) {
 		.join(" · ");
 
 	return (
-		<div className="space-y-6 pb-16">
+		<div className="space-y-5 pb-16">
 			<BackLink />
 
 			{/* Header */}

@@ -337,7 +337,7 @@ export function ProfilePage() {
 
   return (
     <motion.div
-      className="space-y-6 pb-16"
+      className="space-y-5 pb-16"
       variants={stagger}
       initial="hidden"
       animate="visible"

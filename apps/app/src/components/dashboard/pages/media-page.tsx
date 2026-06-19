@@ -157,38 +157,40 @@ export function MediaPage({
   };
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader
-        title="Media"
-        docsHref="https://docs.relayapi.dev/api-reference/media"
-        action={
-          activeTab === "library" ? (
-            <Button size="sm" onClick={() => setUploadOpen(true)}>
-              <Upload className="size-4" />
-              Upload
-            </Button>
-          ) : undefined
-        }
-      />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader
+          title="Media"
+          docsHref="https://docs.relayapi.dev/api-reference/media"
+          action={
+            activeTab === "library" ? (
+              <Button size="sm" onClick={() => setUploadOpen(true)}>
+                <Upload className="size-4" />
+                Upload
+              </Button>
+            ) : undefined
+          }
+        />
 
-      <PageToolbar
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={tabs.map((tab) => ({
-              value: tab.toLowerCase() as typeof initialTab,
-              label: tab,
-            }))}
-          />
-        }
-        right={
-          <>
-            <WorkspaceFilterButton />
-            <AccountFilterButton />
-          </>
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={tabs.map((tab) => ({
+                value: tab.toLowerCase() as typeof initialTab,
+                label: tab,
+              }))}
+            />
+          }
+          right={
+            <>
+              <WorkspaceFilterButton />
+              <AccountFilterButton />
+            </>
+          }
+        />
+      </div>
 
       {activeTab === "library" && (
         <div className="flex items-start gap-2.5 rounded-[12px] border border-border bg-muted px-3.5 py-2.5 text-xs text-muted-foreground">

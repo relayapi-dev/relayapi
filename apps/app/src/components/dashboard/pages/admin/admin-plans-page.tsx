@@ -262,7 +262,7 @@ export function AdminPlansPage() {
   });
 
   return (
-    <div className="space-y-6 pb-16">
+    <div className="space-y-5 pb-16">
       <PageHeader title="Plans & Subscriptions" />
 
       <AdminNav current="admin-plans" />

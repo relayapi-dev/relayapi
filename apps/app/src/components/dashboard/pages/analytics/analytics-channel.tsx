@@ -232,7 +232,7 @@ export function AnalyticsChannel({
 
   if (needsReconnect || apiNeedsReconnect) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-4">
         <ChannelHeader
           platform={platform}
           displayName={displayName}
@@ -268,7 +268,7 @@ export function AnalyticsChannel({
 
   if (isInitialLoading) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-4">
         <ChannelHeader
           platform={platform}
           displayName={displayName}
@@ -285,7 +285,7 @@ export function AnalyticsChannel({
   // ---- Render --------------------------------------------------------------
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <ChannelHeader
         platform={platform}
         displayName={displayName}
@@ -589,7 +589,7 @@ export function AnalyticsChannel({
             </div>
           ) : (
             <motion.div
-              className="space-y-6"
+              className="space-y-4"
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{

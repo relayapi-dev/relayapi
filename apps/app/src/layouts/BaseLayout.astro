@@ -1,4 +1,5 @@
 ---
+import { Font } from "astro:assets";
 import "../styles/globals.css";
 ---
 
@@ -8,15 +9,8 @@ import "../styles/globals.css";
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-		<style>
-			:root {
-				--font-geist-sans:
-					"Geist Variable", "Geist Fallback", system-ui, sans-serif;
-				--font-geist-mono:
-					"Geist Mono Variable", "Geist Mono Fallback", ui-monospace,
-					monospace;
-			}
-		</style>
+		<Font cssVariable="--font-geist-sans" preload />
+		<Font cssVariable="--font-geist-mono" preload />
 		<slot name="head" />
 	</head>
 	<body class="antialiased font-sans px-4 lg:px-0 overflow-x-hidden">

@@ -137,32 +137,34 @@ export function WebhooksPage({
   };
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader
-        title="Webhooks"
-        docsHref="https://docs.relayapi.dev/api-reference/webhooks"
-        action={
-          activeTab === "endpoints" ? (
-            <Button size="sm" onClick={() => setShowCreate(true)}>
-              <Plus className="size-4" />
-              Add Webhook
-            </Button>
-          ) : undefined
-        }
-      />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader
+          title="Webhooks"
+          docsHref="https://docs.relayapi.dev/api-reference/webhooks"
+          action={
+            activeTab === "endpoints" ? (
+              <Button size="sm" onClick={() => setShowCreate(true)}>
+                <Plus className="size-4" />
+                Add Webhook
+              </Button>
+            ) : undefined
+          }
+        />
 
-      <PageToolbar
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={tabs.map((tab) => ({
-              value: tab.toLowerCase() as typeof initialTab,
-              label: tab,
-            }))}
-          />
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={tabs.map((tab) => ({
+                value: tab.toLowerCase() as typeof initialTab,
+                label: tab,
+              }))}
+            />
+          }
+        />
+      </div>
 
       {webhooksError && activeTab === "endpoints" && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

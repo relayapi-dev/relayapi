@@ -126,38 +126,40 @@ export function WhatsAppPage({
   const activeError = broadcastsError || templatesError || groupsError;
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader
-        title="WhatsApp"
-        docsHref="https://docs.relayapi.dev/api-reference/whatsapp"
-        action={
-          activeTab === "broadcasts" ? (
-            <Button size="sm">
-              <Send className="size-4" />
-              New Broadcast
-            </Button>
-          ) : undefined
-        }
-      />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader
+          title="WhatsApp"
+          docsHref="https://docs.relayapi.dev/api-reference/whatsapp"
+          action={
+            activeTab === "broadcasts" ? (
+              <Button size="sm">
+                <Send className="size-4" />
+                New Broadcast
+              </Button>
+            ) : undefined
+          }
+        />
 
-      <PageToolbar
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={tabs.map((tab) => ({
-              value: tab.toLowerCase() as typeof initialTab,
-              label: tab,
-            }))}
-          />
-        }
-        right={
-          <>
-            <WorkspaceFilterButton />
-            <AccountFilterButton />
-          </>
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={tabs.map((tab) => ({
+                value: tab.toLowerCase() as typeof initialTab,
+                label: tab,
+              }))}
+            />
+          }
+          right={
+            <>
+              <WorkspaceFilterButton />
+              <AccountFilterButton />
+            </>
+          }
+        />
+      </div>
 
       {activeError && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

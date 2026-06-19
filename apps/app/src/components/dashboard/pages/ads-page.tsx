@@ -335,57 +335,59 @@ export function AdsPage({
   }, [adsRefetch]);
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader
-        title="Ads"
-        docsHref="https://docs.relayapi.dev/api-reference/ads"
-        action={
-          activeTab === "ads" ? (
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setBoostDialogOpen(true)}>
-                <Megaphone className="size-4" />
-                Boost Post
-              </Button>
-              <Button size="sm" onClick={() => setCreateAdOpen(true)}>
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader
+          title="Ads"
+          docsHref="https://docs.relayapi.dev/api-reference/ads"
+          action={
+            activeTab === "ads" ? (
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setBoostDialogOpen(true)}>
+                  <Megaphone className="size-4" />
+                  Boost Post
+                </Button>
+                <Button size="sm" onClick={() => setCreateAdOpen(true)}>
+                  <Plus className="size-4" />
+                  Create Ad
+                </Button>
+              </div>
+            ) : activeTab === "campaigns" ? (
+              <Button size="sm" onClick={() => setCreateCampaignOpen(true)}>
                 <Plus className="size-4" />
-                Create Ad
+                Create Campaign
               </Button>
-            </div>
-          ) : activeTab === "campaigns" ? (
-            <Button size="sm" onClick={() => setCreateCampaignOpen(true)}>
-              <Plus className="size-4" />
-              Create Campaign
-            </Button>
-          ) : activeTab === "audiences" ? (
-            <Button size="sm" onClick={() => setCreateAudienceOpen(true)}>
-              <Plus className="size-4" />
-              Create Audience
-            </Button>
-          ) : activeTab === "accounts" ? (
-            <Button size="sm" onClick={() => setDiscoverOpen(true)}>
-              <Search className="size-4" />
-              Discover Ad Accounts
-            </Button>
-          ) : undefined
-        }
-      />
+            ) : activeTab === "audiences" ? (
+              <Button size="sm" onClick={() => setCreateAudienceOpen(true)}>
+                <Plus className="size-4" />
+                Create Audience
+              </Button>
+            ) : activeTab === "accounts" ? (
+              <Button size="sm" onClick={() => setDiscoverOpen(true)}>
+                <Search className="size-4" />
+                Discover Ad Accounts
+              </Button>
+            ) : undefined
+          }
+        />
 
-      {/* Tabs + filters */}
-      <PageToolbar
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
-          />
-        }
-        right={
-          <>
-            <WorkspaceFilterButton />
-            <AccountFilterButton />
-          </>
-        }
-      />
+        {/* Tabs + filters */}
+        <PageToolbar
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+            />
+          }
+          right={
+            <>
+              <WorkspaceFilterButton />
+              <AccountFilterButton />
+            </>
+          }
+        />
+      </div>
 
       {/* ====== ADS TAB ====== */}
       {activeTab === "ads" && (

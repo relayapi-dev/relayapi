@@ -301,43 +301,45 @@ export function ConnectionsPage({
   };
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader
-        title="Connections"
-        docsHref="https://docs.relayapi.dev/guides/connecting-accounts"
-        action={
-          activeTab === "workspaces" ? (
-            <Button size="sm" onClick={() => setShowCreateWorkspace(true)}>
-              <Plus className="size-4" />
-              Create Workspace
-            </Button>
-          ) : activeTab !== "connect" ? (
-            <Button size="sm" onClick={() => switchTab("connect")}>
-              <Plus className="size-4" />
-              Connect Account
-            </Button>
-          ) : undefined
-        }
-      />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader
+          title="Connections"
+          docsHref="https://docs.relayapi.dev/guides/connecting-accounts"
+          action={
+            activeTab === "workspaces" ? (
+              <Button size="sm" onClick={() => setShowCreateWorkspace(true)}>
+                <Plus className="size-4" />
+                Create Workspace
+              </Button>
+            ) : activeTab !== "connect" ? (
+              <Button size="sm" onClick={() => switchTab("connect")}>
+                <Plus className="size-4" />
+                Connect Account
+              </Button>
+            ) : undefined
+          }
+        />
 
-      <PageToolbar
-        className="flex-nowrap"
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={tabs.map((tab) => {
-              const value = tab.toLowerCase() as typeof initialTab;
-              return {
-                value,
-                icon: tabIcons[value],
-                label: <span className="hidden md:inline">{tab}</span>,
-              };
-            })}
-          />
-        }
-        right={<WorkspaceFilterButton />}
-      />
+        <PageToolbar
+          className="flex-nowrap"
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={tabs.map((tab) => {
+                const value = tab.toLowerCase() as typeof initialTab;
+                return {
+                  value,
+                  icon: tabIcons[value],
+                  label: <span className="hidden md:inline">{tab}</span>,
+                };
+              })}
+            />
+          }
+          right={<WorkspaceFilterButton />}
+        />
+      </div>
 
       {accountsError && activeTab === "accounts" && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

@@ -97,7 +97,7 @@ export function InboxCommentsPage({
 
   if (!isPro && usage !== null) {
     return (
-      <div className="space-y-6 pb-16">
+      <div className="space-y-5 pb-16">
         <PageHeader title="Comments" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
         <div className="rounded-[12px] border border-border bg-card p-12 text-center">
           <Lock className="size-8 text-muted-foreground/40 mx-auto mb-2" />
@@ -117,28 +117,30 @@ export function InboxCommentsPage({
   }
 
   return (
-    <div className="space-y-4 pb-16">
-      <PageHeader title="Comments" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader title="Comments" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
 
-      <PageToolbar
-        left={
-          <Segmented
-            size="icon"
-            value={viewMode}
-            onChange={(v) => switchView(v)}
-            options={[
-              { value: "list", icon: <LayoutList />, title: "List view" },
-              { value: "by-post", icon: <Rows3 />, title: "By Post view" },
-            ]}
-          />
-        }
-        right={
-          <>
-            <WorkspaceFilterButton />
-            <AccountFilterButton />
-          </>
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              size="icon"
+              value={viewMode}
+              onChange={(v) => switchView(v)}
+              options={[
+                { value: "list", icon: <LayoutList />, title: "List view" },
+                { value: "by-post", icon: <Rows3 />, title: "By Post view" },
+              ]}
+            />
+          }
+          right={
+            <>
+              <WorkspaceFilterButton />
+              <AccountFilterButton />
+            </>
+          }
+        />
+      </div>
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

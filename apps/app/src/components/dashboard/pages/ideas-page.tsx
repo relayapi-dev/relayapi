@@ -492,7 +492,7 @@ export function IdeasPage() {
 	};
 
 	return (
-		<div className="flex flex-col gap-6 h-[calc(100dvh-5rem)] md:h-[calc(100dvh-2rem)]">
+		<div className="flex flex-col gap-5 h-[calc(100dvh-5rem)] md:h-[calc(100dvh-2rem)]">
 			<PageHeader
 				title="Ideas"
 				className="shrink-0"

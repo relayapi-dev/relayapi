@@ -346,7 +346,7 @@ export function AutomationPage() {
 	};
 
 	return (
-		<div className="space-y-6 pb-16">
+		<div className="space-y-5 pb-16">
 			<PageHeader
 				title="Automations"
 				docsHref="https://docs.relayapi.dev/guides/automations"

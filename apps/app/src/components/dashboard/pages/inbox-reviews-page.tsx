@@ -48,7 +48,7 @@ export function InboxReviewsPage() {
 
   if (!isPro && usage !== null) {
     return (
-      <div className="space-y-6 pb-16">
+      <div className="space-y-5 pb-16">
         <PageHeader title="Reviews" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
         <div className="rounded-[12px] border border-border bg-card p-12 text-center">
           <Lock className="size-8 text-muted-foreground/40 mx-auto mb-2" />
@@ -68,37 +68,39 @@ export function InboxReviewsPage() {
   }
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader title="Reviews" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader title="Reviews" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
 
-      <PageToolbar
-        left={
-          <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-            {[1, 2, 3, 4, 5].map((rating) => (
-              <button
-                type="button"
-                key={rating}
-                onClick={() => setMinRating(minRating === rating ? null : rating)}
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-[6px] px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap",
-                  minRating === rating
-                    ? "bg-card text-foreground shadow-xs"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-                title={`${rating}+ stars`}
-              >
-                {rating}<Star className={cn("size-3", minRating === rating && "fill-amber-500 text-amber-500")} />+
-              </button>
-            ))}
-          </div>
-        }
-        right={
-          <>
-            <WorkspaceFilterButton />
-            <AccountFilterButton />
-          </>
-        }
-      />
+        <PageToolbar
+          left={
+            <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
+              {[1, 2, 3, 4, 5].map((rating) => (
+                <button
+                  type="button"
+                  key={rating}
+                  onClick={() => setMinRating(minRating === rating ? null : rating)}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-[6px] px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap",
+                    minRating === rating
+                      ? "bg-card text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  title={`${rating}+ stars`}
+                >
+                  {rating}<Star className={cn("size-3", minRating === rating && "fill-amber-500 text-amber-500")} />+
+                </button>
+              ))}
+            </div>
+          }
+          right={
+            <>
+              <WorkspaceFilterButton />
+              <AccountFilterButton />
+            </>
+          }
+        />
+      </div>
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

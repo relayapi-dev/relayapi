@@ -46,16 +46,13 @@ const { title, description } = Astro.props;
 		min-height: 100vh;
 		overflow-x: hidden;
 		color: #1a1815;
-		font-family:
-			"Geist Variable",
-			"Geist Fallback",
-			-apple-system,
-			system-ui,
-			sans-serif;
+		/* Geist now comes from Astro's Fonts API via the --font-geist-* vars
+		   (BaseLayout, which Layout wraps, renders <Font>). The vars already bake
+		   in the optimized metric-matched fallbacks, so reference them rather than
+		   the literal "Geist Variable" family name (Astro hashes that name). */
+		font-family: var(--font-geist-sans), -apple-system, system-ui, sans-serif;
 		--font-newsreader: "Newsreader", Georgia, "Times New Roman", serif;
-		--font-mono-landing:
-			"Geist Mono Variable", "Geist Mono Fallback", ui-monospace,
-			monospace;
+		--font-mono-landing: var(--font-geist-mono), ui-monospace, monospace;
 	}
 	.relay-landing ::selection {
 		background: #1a1815;

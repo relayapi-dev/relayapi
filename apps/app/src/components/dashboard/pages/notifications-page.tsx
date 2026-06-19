@@ -109,32 +109,34 @@ export function NotificationsPage() {
 
   return (
     <motion.div
-      className="space-y-6 pb-16"
+      className="space-y-5 pb-16"
       variants={stagger}
       initial="hidden"
       animate="visible"
     >
-      <PageHeader
-        title="Notifications"
-        action={
-          <Button variant="outline" size="sm" onClick={handleMarkAllRead}>
-            Mark all as read
-          </Button>
-        }
-      />
+      <div className="space-y-3">
+        <PageHeader
+          title="Notifications"
+          action={
+            <Button variant="outline" size="sm" onClick={handleMarkAllRead}>
+              Mark all as read
+            </Button>
+          }
+        />
 
-      <PageToolbar
-        left={
-          <Segmented
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { value: "all", label: "All" },
-              { value: "unread", label: "Unread" },
-            ]}
-          />
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { value: "all", label: "All" },
+                { value: "unread", label: "Unread" },
+              ]}
+            />
+          }
+        />
+      </div>
 
       <motion.div variants={fadeUp}>
         {loading ? (

@@ -469,7 +469,7 @@ export function InboxMessagesPage() {
 
   if (!isPro && usage !== null) {
     return (
-      <div className="space-y-6 p-6 md:p-8">
+      <div className="space-y-5 p-6 md:p-8">
         <PageHeader title="Messages" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
         <div className="rounded-[12px] border border-border bg-card p-12 text-center">
           <Lock className="mx-auto mb-2 size-8 text-muted-foreground/40" />

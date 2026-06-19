@@ -163,40 +163,42 @@ export function CampaignsPage({
   const [editingAutoPost, setEditingAutoPost] = useState<AutoPostRuleResponse | null>(null);
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader
-        title="Campaigns"
-        docsHref="https://docs.relayapi.dev/api-reference/campaigns"
-        action={
-          activeTab === "broadcasts" ? (
-            <Button size="sm" onClick={() => setBroadcastDialogOpen(true)}>
-              <Plus className="size-4" />
-              Create Broadcast
-            </Button>
-          ) : (
-            <Button size="sm" onClick={() => setAutoPostDialogOpen(true)}>
-              <Plus className="size-4" />
-              Create Rule
-            </Button>
-          )
-        }
-      />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader
+          title="Campaigns"
+          docsHref="https://docs.relayapi.dev/api-reference/campaigns"
+          action={
+            activeTab === "broadcasts" ? (
+              <Button size="sm" onClick={() => setBroadcastDialogOpen(true)}>
+                <Plus className="size-4" />
+                Create Broadcast
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => setAutoPostDialogOpen(true)}>
+                <Plus className="size-4" />
+                Create Rule
+              </Button>
+            )
+          }
+        />
 
-      <PageToolbar
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
-          />
-        }
-        right={
-          <>
-            <WorkspaceFilterButton />
-            <AccountFilterButton />
-          </>
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+            />
+          }
+          right={
+            <>
+              <WorkspaceFilterButton />
+              <AccountFilterButton />
+            </>
+          }
+        />
+      </div>
 
       {activeTab === "broadcasts" && (
         <>

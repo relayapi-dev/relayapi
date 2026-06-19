@@ -67,7 +67,7 @@ export function WorkspacesPage() {
   }
 
   return (
-    <div className="space-y-6 pb-16">
+    <div className="space-y-5 pb-16">
       <PageHeader
         title="Workspaces"
         action={

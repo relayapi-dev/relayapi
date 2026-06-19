@@ -139,7 +139,7 @@ export function ApiKeysPage() {
   }
 
   return (
-    <div className="space-y-6 pb-16">
+    <div className="space-y-5 pb-16">
       <PageHeader
         title="API Keys"
         docsHref="https://docs.relayapi.dev/api-reference/api-keys"

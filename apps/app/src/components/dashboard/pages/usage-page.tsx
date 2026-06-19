@@ -40,7 +40,7 @@ export function UsagePage() {
 		included > 0 ? Math.min(Math.round((used / included) * 100), 100) : 0;
 
 	return (
-		<div className="space-y-6 pb-16">
+		<div className="space-y-5 pb-16">
 			<PageHeader
 				title="Usage"
 				docsHref="https://docs.relayapi.dev/"

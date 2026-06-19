@@ -78,35 +78,37 @@ export function SchedulingPage({
   const refetch = activeTab === "queue-slots" ? refetchSlots : refetchPreview;
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader
-        title="Scheduling"
-        docsHref="https://docs.relayapi.dev/api-reference/queue"
-        action={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" />
-            Create Schedule
-          </Button>
-        }
-      />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader
+          title="Scheduling"
+          docsHref="https://docs.relayapi.dev/api-reference/queue"
+          action={
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" />
+              Create Schedule
+            </Button>
+          }
+        />
 
-      <PageToolbar
-        left={
-          <Segmented
-            value={activeTab}
-            onChange={(v) => switchTab(v)}
-            options={tabs.map((tab) => ({
-              value: tab.toLowerCase().replace(" ", "-") as typeof initialTab,
-              label: tab,
-            }))}
-          />
-        }
-        right={
-          <IconButton title="Refresh" onClick={() => refetch()}>
-            <RefreshCw />
-          </IconButton>
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              value={activeTab}
+              onChange={(v) => switchTab(v)}
+              options={tabs.map((tab) => ({
+                value: tab.toLowerCase().replace(" ", "-") as typeof initialTab,
+                label: tab,
+              }))}
+            />
+          }
+          right={
+            <IconButton title="Refresh" onClick={() => refetch()}>
+              <RefreshCw />
+            </IconButton>
+          }
+        />
+      </div>
 
       {error && (
         <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

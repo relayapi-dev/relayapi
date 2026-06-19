@@ -211,31 +211,33 @@ export function TeamPage() {
   }
 
   return (
-    <div className="space-y-6 pb-16">
-      <PageHeader
-        title="Members"
-        action={
-          canManageMembers ? (
-            <Button size="sm" onClick={() => setShowInvite(true)}>
-              <Plus className="size-4" />
-              Invite
-            </Button>
-          ) : undefined
-        }
-      />
+    <div className="space-y-5 pb-16">
+      <div className="space-y-3">
+        <PageHeader
+          title="Members"
+          action={
+            canManageMembers ? (
+              <Button size="sm" onClick={() => setShowInvite(true)}>
+                <Plus className="size-4" />
+                Invite
+              </Button>
+            ) : undefined
+          }
+        />
 
-      <PageToolbar
-        left={
-          <Segmented
-            value={tab}
-            onChange={setTab}
-            options={[
-              { value: "members", label: "Members" },
-              { value: "invitations", label: "Invitations" },
-            ]}
-          />
-        }
-      />
+        <PageToolbar
+          left={
+            <Segmented
+              value={tab}
+              onChange={setTab}
+              options={[
+                { value: "members", label: "Members" },
+                { value: "invitations", label: "Invitations" },
+              ]}
+            />
+          }
+        />
+      </div>
 
       {error && (
         <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
