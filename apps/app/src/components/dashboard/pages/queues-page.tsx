@@ -5,7 +5,6 @@ import { cn } from "@/lib/utils";
 import { useApi } from "@/hooks/use-api";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { PageToolbar } from "@/components/dashboard/page-toolbar";
 import { IconButton } from "@/components/dashboard/icon-button";
 
 const stagger = {
@@ -70,10 +69,9 @@ export function QueuesPage() {
 
   return (
     <div className="space-y-6 pb-16">
-      <PageHeader title="Queues" />
-
-      <PageToolbar
-        right={
+      <PageHeader
+        title="Queues"
+        action={
           <IconButton title="Refresh" onClick={() => refetch()}>
             <RefreshCw />
           </IconButton>

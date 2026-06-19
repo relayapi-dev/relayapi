@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { motion } from "motion/react";
-import { Plus, Loader2, MoreHorizontal, Link2Off, Link2, Activity, FileText, FolderOpen, Trash2, ArrowRightLeft, Search, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
+import { Plus, Loader2, MoreHorizontal, Link2Off, Link2, Activity, FileText, FolderOpen, Trash2, ArrowRightLeft, Search, CheckCircle2, XCircle, RefreshCw, AtSign, LayoutGrid } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import {
@@ -80,6 +80,16 @@ interface LogEntry {
 }
 
 const tabs = ["Accounts", "Connect", "Workspaces", "Health", "Logs"] as const;
+
+// Mobile-only icons for the tab pills (text labels return at md:+). Keyed by the
+// lowercased tab value. `md:hidden` hides the icon once the text labels appear.
+const tabIcons: Record<string, ReactNode> = {
+  accounts: <AtSign className="md:hidden" />,
+  connect: <Link2 className="md:hidden" />,
+  workspaces: <LayoutGrid className="md:hidden" />,
+  health: <Activity className="md:hidden" />,
+  logs: <FileText className="md:hidden" />,
+};
 
 const eventStyles: Record<string, string> = {
   connected: "text-success",
@@ -311,14 +321,19 @@ export function ConnectionsPage({
       />
 
       <PageToolbar
+        className="flex-nowrap"
         left={
           <Segmented
             value={activeTab}
             onChange={(v) => switchTab(v)}
-            options={tabs.map((tab) => ({
-              value: tab.toLowerCase() as typeof initialTab,
-              label: tab,
-            }))}
+            options={tabs.map((tab) => {
+              const value = tab.toLowerCase() as typeof initialTab;
+              return {
+                value,
+                icon: tabIcons[value],
+                label: <span className="hidden md:inline">{tab}</span>,
+              };
+            })}
           />
         }
         right={<WorkspaceFilterButton />}

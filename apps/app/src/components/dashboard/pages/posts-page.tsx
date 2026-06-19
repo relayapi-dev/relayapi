@@ -505,6 +505,7 @@ export function PostsPage({
 
       {/* Tabs + filters/controls */}
       <PageToolbar
+        className="flex-nowrap"
         left={
           <Segmented
             value={activeTab}
@@ -512,6 +513,8 @@ export function PostsPage({
             options={topTabs.map((tab) => ({
               value: tab.toLowerCase() as typeof activeTab,
               label: tab,
+              // Queue is hidden on mobile to keep the tab row + filters on one line.
+              className: tab === "Queue" ? "hidden md:inline-flex" : undefined,
             }))}
           />
         }

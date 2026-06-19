@@ -21,7 +21,6 @@ import {
 import { usePaginatedApi } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { PageToolbar } from "@/components/dashboard/page-toolbar";
 import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
 import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 
@@ -456,19 +455,14 @@ export function TemplatesPage() {
       <PageHeader
         title="Templates"
         action={
-          <Button onClick={handleNewTemplate}>
-            <Plus className="size-4" />
-            New Template
-          </Button>
-        }
-      />
-
-      <PageToolbar
-        right={
-          <>
+          <div className="flex items-center gap-2">
             <WorkspaceFilterButton />
             <AccountFilterButton />
-          </>
+            <Button onClick={handleNewTemplate}>
+              <Plus className="size-4" />
+              New Template
+            </Button>
+          </div>
         }
       />
 

@@ -1,45 +1,52 @@
 ---
+import Container from "./Container.astro";
 import { testimonials } from "./data";
 ---
 
-<section class="mx-auto max-w-[1240px] px-6 sm:px-8 py-[clamp(64px,8vw,104px)]">
-	<div data-reveal>
+<!-- Mirrors cursor.com "The new way to build software." testimonial grid:
+     a #f7f7f4 band with subtle-fill #f2f1ed rounded cards, 10px gaps, a
+     centered 36px regular-weight heading, and 1 → 2 (md) → 3 (lg) columns.
+     Card values transcribed from the live site's computed styles. -->
+<section class="bg-[#f7f7f4] text-[#26251e]">
+	<Container class="py-[clamp(3.5rem,8vw,4.25rem)]">
 		<h2
-			class="text-center text-[clamp(30px,4.4vw,52px)] font-medium leading-[1.05] tracking-[-0.035em] text-[#1a1815]"
+			data-reveal
+			class="mx-auto text-balance text-center text-[clamp(1.875rem,3.4vw,2.375rem)] font-normal leading-[1.2] tracking-[-0.02em] text-[#26251e]"
 		>
 			The new way to post.
 		</h2>
-		<p class="mt-3 text-center text-[17px] text-[#8c887e]">
-			Hear from our totally real users.
-		</p>
-	</div>
 
-	<div
-		data-reveal
-		class="mt-12 grid grid-cols-1 gap-px overflow-hidden rounded-[2px] bg-[#1a1815]/10 sm:mt-14 sm:grid-cols-2 lg:grid-cols-3"
-	>
-		{
-			testimonials.map((t) => (
-				<figure class="flex h-full flex-col bg-[#f4f2ec] p-6 sm:p-7 lg:p-8">
-					<blockquote class="text-[15px] leading-[1.6] text-[#3c3a33]">
-						{`“${t.quote}”`}
-					</blockquote>
-					<figcaption class="mt-auto flex items-center gap-3 pt-7">
-						<span
-							style={`--avatar-bg:${t.avatarBg}`}
-							class="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--avatar-bg)] text-[14px] font-semibold text-[#1a1815]"
-						>
-							{t.initial}
-						</span>
-						<div class="min-w-0">
-							<div class="truncate text-[14px] font-semibold text-[#1a1815]">
-								{t.name}
-							</div>
-							<div class="text-[12.5px] text-[#8c887e]">{t.role}</div>
-						</div>
-					</figcaption>
-				</figure>
-			))
-		}
-	</div>
+		<div
+			data-reveal
+			class="mt-14 grid grid-cols-1 items-stretch gap-[0.625rem] md:mt-20 md:grid-cols-2 lg:grid-cols-3"
+		>
+			{
+				testimonials.map((t) => (
+					<div class="flex h-full min-h-[11.25rem] flex-col rounded-[0.25rem] bg-[#f2f1ed] px-[1.125rem] pt-4 pb-[1.125rem]">
+						<figure class="flex h-full flex-col">
+							<p class="text-[1rem] font-normal leading-[1.5] text-[#26251e]">
+								{`“${t.quote}”`}
+							</p>
+							<figcaption class="mt-auto flex items-center gap-3 pt-20">
+								<span
+									style={`--avatar-bg:${t.avatarBg}`}
+									class="flex size-10 shrink-0 items-center justify-center rounded-full bg-[var(--avatar-bg)] text-[0.9375rem] font-semibold text-[#26251e] ring-1 ring-inset ring-black/[0.06]"
+								>
+									{t.initial}
+								</span>
+								<div class="min-w-0 leading-[1.5]">
+									<span class="block truncate text-[0.875rem] font-normal text-[#26251e]">
+										{t.name}
+									</span>
+									<span class="block text-[0.875rem] font-normal text-[#26251e]/60">
+										{t.role}
+									</span>
+								</div>
+							</figcaption>
+						</figure>
+					</div>
+				))
+			}
+		</div>
+	</Container>
 </section>

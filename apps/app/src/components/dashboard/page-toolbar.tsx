@@ -18,7 +18,7 @@ export function PageToolbar({
   return (
     <div className={cn("flex flex-wrap items-center justify-between gap-3", className)}>
       <div className="flex min-w-0 items-center gap-2">{left}</div>
-      {right && <div className="flex items-center gap-1">{right}</div>}
+      {right && <div className="flex shrink-0 items-center gap-1">{right}</div>}
     </div>
   );
 }

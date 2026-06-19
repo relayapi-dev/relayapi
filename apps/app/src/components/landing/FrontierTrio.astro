@@ -1,5 +1,6 @@
 ---
 import { frontier, LANDING_LINKS } from "./data";
+import Container from "./Container.astro";
 
 function cardHref(link: string): string {
   if (link === "Explore platforms") return LANDING_LINKS.pricing;
@@ -7,7 +8,7 @@ function cardHref(link: string): string {
 }
 ---
 
-<section style="max-width:1240px; margin:0 auto; padding:clamp(64px,8vw,104px) 32px 40px;">
+<Container as="section" class="pt-[clamp(4rem,8vw,6.5rem)] pb-10">
   <h2 style="font-size:clamp(30px,3.2vw,44px); letter-spacing:-0.03em; font-weight:500; margin:0 0 48px; max-width:22ch;">Stay on the frontier of social.</h2>
   <div data-reveal style="display:grid; grid-template-columns:repeat(3,1fr); gap:22px;">
     {frontier.map((f) => (
@@ -29,7 +30,7 @@ function cardHref(link: string): string {
       </div>
     ))}
   </div>
-</section>
+</Container>
 
 <style>
   .frontier-link:hover {

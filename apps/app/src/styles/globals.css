@@ -201,6 +201,44 @@
 			transform: perspective(1600px) rotateY(0) translateX(0);
 		}
 	}
+
+	/* ---- Landing feature design tokens ----
+	   Single source of truth for the Cursor-style feature cards. Surfaced as
+	   Tailwind utilities (bg-landing-*, text-landing-*, text-feature,
+	   tracking-feature, rounded-feature*, shadow-feature-window) so the
+	   <Feature> component and any future landing block reuse them instead of
+	   hardcoding hexes/sizes. Numbers measured from cursor.com's feature card. */
+	--color-landing-bg: #f4f2ec;
+	/* Subtle card — barely darker than the page, like cursor's #F2F1ED on
+	   #F7F7F4; the floating window's shadow is what reads, not the card. */
+	--color-landing-card: #eeebe3;
+	--color-landing-ink: #1a1815;
+	--color-landing-muted: color-mix(in oklab, #1a1815, transparent 40%);
+	--color-landing-accent: #cb5a2c;
+	/* Window shares the card tone (like cursor's #F2F1ED window on #F2F1ED card);
+	   the page (--color-landing-bg) stays lighter, so the shadow does the
+	   separating, not a colour step. */
+	--color-landing-panel: #eeebe3;
+	--color-landing-panel-dark: #1b1915;
+	--color-landing-line: color-mix(in oklab, #1a1815, transparent 92%);
+	--color-landing-line-dark: color-mix(in oklab, #ffffff, transparent 92%);
+
+	/* Caption type scale — cursor's type-md is 22px / 1.3 / -0.11px, regular
+	   weight; clamped down to ~17px on phones (their type-base). */
+	--text-feature: clamp(1.0625rem, 0.92rem + 0.55vw, 1.375rem);
+	--text-feature--line-height: 1.3;
+	/* cursor: -0.11px at 22px ≈ -0.005em */
+	--tracking-feature: -0.005em;
+
+	/* cursor's feature card is ~4px (near-square); the window is the rounded
+	   element at 10px. Keep the card barely rounded so the window reads. */
+	--radius-feature: 8px;
+	--radius-feature-window: 10px;
+
+	/* Floating-window elevation: soft two-layer drop + a 1px hairline ring. */
+	--shadow-feature-window: 0 28px 70px 0 rgba(0, 0, 0, 0.14),
+		0 14px 32px 0 rgba(0, 0, 0, 0.1),
+		0 0 0 1px color-mix(in oklab, #1a1815, transparent 90%);
 }
 
 :root {

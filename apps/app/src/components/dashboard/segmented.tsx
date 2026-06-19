@@ -3,9 +3,11 @@ import { cn } from "@/lib/utils";
 
 export interface SegmentedOption<T extends string> {
   value: T;
-  label?: string;
+  label?: ReactNode;
   icon?: ReactNode;
   title?: string;
+  /** Extra classes for this option's button (e.g. `hidden md:inline-flex` to hide a tab on mobile). */
+  className?: string;
 }
 
 /**
@@ -52,7 +54,8 @@ export function Segmented<T extends string>({
               size === "icon" ? "h-[26px] w-7" : "gap-1.5 px-3.5 py-1",
               active
                 ? "bg-card text-foreground shadow-xs"
-                : "text-muted-foreground hover:text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+              o.className
             )}
           >
             {o.icon}

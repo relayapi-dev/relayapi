@@ -2,36 +2,40 @@
 /**
  * Feature.astro — abstract landing "feature card" in the Cursor.com style.
  *
- * A full-bleed rounded card with a text caption on one side and a floating
- * product window cropped off the opposite edge. Everything is configurable:
- *   - `side`         which side the caption sits on (window goes opposite)
- *   - `captionAlign` caption pinned to the top or bottom of the card
- *   - `panelTheme`   light or dark window chrome
- *   - `animation`    a distinct entrance per feature (see globals.css @theme)
+ * Geometry + type scale are measured from cursor.com's feature card and live as
+ * tokens in globals.css (@theme): the caption uses `text-feature` (22px / 1.3 /
+ * regular), the card is `bg-landing-card rounded-feature`, and the floating
+ * window is `shadow-feature-window rounded-feature-window`. Nothing here
+ * hardcodes a hex or a font size — change the look in one place (the tokens).
  *
- * The window body is a <slot/>, so each feature supplies its own mockup. The
- * card uses the shared `data-reveal` scroll engine (index.astro); when it
- * enters the viewport the root gains `.is-visible`, which fires the window's
- * `animate-feature-*` entrance via the `group/feat` variant.
+ * Config:
+ *   - `side`         which side the caption sits on (window bleeds off the other)
+ *   - `panelTheme`   light or dark window chrome
+ *   - `animation`    a distinct entrance per feature (see @theme feature-*)
+ *   - `panelFill`    stretch the window top↔bottom (tall mocks) vs. float centered
+ *
+ * The window body is a <slot/>. The card uses the shared `data-reveal` engine
+ * (index.astro); on enter it gains `.is-visible`, firing the window's
+ * `animate-feature-*` entrance via the `group/feat` variant. A position wrapper
+ * holds placement so the entrance transform never disturbs the layout.
  */
+import Container from "./Container.astro";
+
 interface Props {
 	title: string;
 	description: string;
 	linkText: string;
 	linkHref: string;
-	/** Caption side; the floating window is rendered on the opposite edge. */
+	/** Caption side; the floating window bleeds off the opposite edge. */
 	side?: "left" | "right";
-	captionAlign?: "top" | "bottom";
 	panelTheme?: "light" | "dark";
 	/** Centered label in the window's title bar. */
 	windowTitle?: string;
-	/** Per-feature entrance — keyed to the @animate-feature-* utilities. */
+	/** Per-feature entrance — keyed to the @theme feature-* utilities. */
 	animation?: "rise" | "drift" | "zoom" | "tilt" | "unfold";
 	/** Card min-height (a clamp() expression). */
 	height?: string;
-	/** Floating window width (a min()/clamp() expression). */
-	panelWidth?: string;
-	/** Stretch the window from near the top to the bottom (vs. auto height). */
+	/** Stretch the window from top inset to bottom inset (vs. float centered). */
 	panelFill?: boolean;
 	class?: string;
 }
@@ -42,18 +46,17 @@ const {
 	linkText,
 	linkHref,
 	side = "left",
-	captionAlign = "bottom",
 	panelTheme = "light",
 	windowTitle = "RelayAPI",
 	animation = "rise",
-	height = "clamp(560px,52vw,760px)",
-	panelWidth = "min(900px,64%)",
+	height = "clamp(560px,52vw,720px)",
 	panelFill = false,
 	class: className = "",
 } = Astro.props;
 
 const isExternal = linkHref.startsWith("http");
 const panelLeft = side === "right"; // window opposite the caption
+const isDark = panelTheme === "dark";
 
 const animClass = {
 	rise: "group-[.is-visible]/feat:animate-feature-rise",
@@ -62,41 +65,35 @@ const animClass = {
 	tilt: "group-[.is-visible]/feat:animate-feature-tilt",
 	unfold: "group-[.is-visible]/feat:animate-feature-unfold",
 }[animation];
-
-const isDark = panelTheme === "dark";
 ---
 
-<section class:list={["mx-auto max-w-[1480px] px-5 py-[18px]", className]}>
+<Container as="section" class:list={["py-[1.125rem]", className]}>
 	<div
 		data-reveal
-		class="group/feat relative flex flex-col overflow-hidden rounded-[20px] bg-[#E9E7DF] md:block md:min-h-[var(--feat-h)] md:rounded-[30px]"
+		class="group/feat relative flex flex-col overflow-hidden rounded-feature bg-landing-card md:block md:min-h-[var(--feat-h)]"
 		style={`--feat-h:${height}`}
 	>
-		<!-- caption (stacked at top on mobile, absolutely placed on the configured side from md up) -->
+		<!-- caption — stacked on mobile; vertically centered in a ~28% column from md up
+		     (cursor's caption is ~29% of the card width, leaving a clear gap to the window) -->
 		<div
 			class:list={[
-				"z-[3] max-w-[430px] px-7 pt-8 md:p-0 md:absolute",
-				side === "left"
-					? "md:left-[clamp(28px,4vw,64px)]"
-					: "md:right-[clamp(28px,4vw,64px)]",
-				captionAlign === "bottom"
-					? "md:bottom-[clamp(40px,5vw,72px)]"
-					: "md:top-[clamp(44px,5vw,72px)]",
+				"z-[3] max-w-[420px] px-7 pt-8 md:absolute md:top-1/2 md:w-[27%] md:max-w-[22rem] md:-translate-y-1/2 md:p-0",
+				side === "left" ? "md:left-[4%]" : "md:right-[4%]",
 			]}
 		>
 			<h3
-				class="mb-1 text-[clamp(26px,2.5vw,34px)] font-semibold leading-[1.12] tracking-[-0.025em] text-[#1A1815]"
+				class="text-feature font-normal tracking-feature text-landing-ink"
 			>
 				{title}
 			</h3>
 			<p
-				class="mb-[18px] text-[clamp(18px,1.8vw,22px)] font-normal leading-[1.32] text-[#86827A]"
+				class="text-feature font-normal tracking-feature text-landing-muted"
 			>
 				{description}
 			</p>
 			<a
 				href={linkHref}
-				class="text-[17px] font-medium text-[#CB5A2C] transition-opacity duration-200 hover:opacity-80"
+				class="mt-5 inline-block text-[16px] font-normal text-landing-accent! transition-opacity duration-200 hover:opacity-70"
 				target={isExternal ? "_blank" : undefined}
 				rel={isExternal ? "noopener noreferrer" : undefined}
 			>
@@ -104,61 +101,67 @@ const isDark = panelTheme === "dark";
 			</a>
 		</div>
 
-		<!-- floating window: full-width below the caption on mobile, cropped off the opposite edge from md up -->
+		<!-- window position wrapper — full-width below the caption on mobile; from md up it
+		     spans the right ~62% of the card (left edge at 38%, bleeding ~7% off the outer
+		     edge) and floats with an 8% top/bottom inset, mirroring cursor's geometry. This
+		     can't collide with the caption (right edge ~34%) thanks to the ~4% gap. -->
 		<div
 			class:list={[
-				"relative mt-7 w-full overflow-hidden border shadow-[0_30px_80px_-28px_rgba(40,28,12,0.45)] [transform-style:preserve-3d]",
-				"md:absolute md:bottom-0 md:mt-0 md:w-[var(--feat-pw)]",
-				"motion-reduce:animate-none",
-				animClass,
-				panelLeft
-					? "rounded-tr-[18px] md:left-0 md:rounded-tl-none"
-					: "rounded-tl-[18px] md:right-0",
-				panelFill ? "md:top-12" : "",
-				isDark
-					? "border-white/10 bg-[#1B1915] text-[#D7D2C7]"
-					: "border-[rgba(26,24,21,0.07)] bg-[#F4F2EC]",
+				"relative mt-7 w-full md:absolute md:mt-0 md:w-auto",
+				panelFill ? "md:top-[8%] md:bottom-[8%]" : "md:top-1/2 md:-translate-y-1/2",
+				panelLeft ? "md:left-[-7%] md:right-[36.5%]" : "md:left-[36.5%] md:right-[-7%]",
 			]}
-			style={`--feat-pw:${panelWidth}`}
 		>
-			<!-- window chrome -->
+			<!-- floating window (the animated element) -->
 			<div
 				class:list={[
-					"relative flex items-center px-4 py-[13px]",
+					"flex h-full flex-col overflow-hidden rounded-feature-window shadow-feature-window",
+					"motion-reduce:animate-none",
+					animClass,
 					isDark
-						? "border-b border-white/[0.06] bg-[#221F18]"
-						: "border-b border-[rgba(26,24,21,0.06)] bg-[#EDEBE4]",
+						? "bg-landing-panel-dark text-[#D7D2C7]"
+						: "bg-landing-panel",
 				]}
 			>
-				<div class="flex gap-[7px]">
-					<span
-						class:list={[
-							"size-[11px] rounded-full",
-							isDark ? "bg-[#3C382F]" : "bg-[#CFC9BD]",
-						]}></span>
-					<span
-						class:list={[
-							"size-[11px] rounded-full",
-							isDark ? "bg-[#3C382F]" : "bg-[#CFC9BD]",
-						]}></span>
-					<span
-						class:list={[
-							"size-[11px] rounded-full",
-							isDark ? "bg-[#3C382F]" : "bg-[#CFC9BD]",
-						]}></span>
-				</div>
-				<span
+				<!-- window chrome -->
+				<div
 					class:list={[
-						"absolute left-1/2 -translate-x-1/2 text-[13px]",
-						isDark ? "text-[#8C887E]" : "text-[#6E6A62]",
-					]}>{windowTitle}</span
+						"relative flex shrink-0 items-center px-4 py-[9px]",
+						isDark
+							? "border-b border-landing-line-dark"
+							: "border-b border-landing-line",
+					]}
 				>
-			</div>
+					<div class="flex gap-[7px]">
+						<span
+							class:list={[
+								"size-[10px] rounded-full",
+								isDark ? "bg-white/15" : "bg-black/10",
+							]}></span>
+						<span
+							class:list={[
+								"size-[10px] rounded-full",
+								isDark ? "bg-white/15" : "bg-black/10",
+							]}></span>
+						<span
+							class:list={[
+								"size-[10px] rounded-full",
+								isDark ? "bg-white/15" : "bg-black/10",
+							]}></span>
+					</div>
+					<span
+						class:list={[
+							"absolute left-1/2 -translate-x-1/2 text-[12px]",
+							isDark ? "text-white/55" : "text-landing-muted",
+						]}>{windowTitle}</span
+					>
+				</div>
 
-			<!-- window body -->
-			<div class:list={["overflow-hidden", panelFill ? "md:h-full" : ""]}>
-				<slot />
+				<!-- window body -->
+				<div class="min-h-0 flex-1 overflow-hidden">
+					<slot />
+				</div>
 			</div>
 		</div>
 	</div>
-</section>
+</Container>

@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { PageToolbar } from "@/components/dashboard/page-toolbar";
 import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
 import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
@@ -498,23 +497,7 @@ export function IdeasPage() {
 				title="Ideas"
 				className="shrink-0"
 				action={
-					<Button
-						type="button"
-						onClick={() => {
-							setCreateGroupId(null);
-							setCreateDialogOpen(true);
-						}}
-					>
-						<Plus className="size-4" />
-						New Idea
-					</Button>
-				}
-			/>
-
-			<PageToolbar
-				className="shrink-0"
-				right={
-					<>
+					<div className="flex items-center gap-2">
 						<WorkspaceFilterButton />
 						<AccountFilterButton />
 
@@ -574,7 +557,18 @@ export function IdeasPage() {
 								<X className="size-3.5" />
 							</button>
 						)}
-					</>
+
+						<Button
+							type="button"
+							onClick={() => {
+								setCreateGroupId(null);
+								setCreateDialogOpen(true);
+							}}
+						>
+							<Plus className="size-4" />
+							New Idea
+						</Button>
+					</div>
 				}
 			/>
 

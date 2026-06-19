@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { PageToolbar } from "@/components/dashboard/page-toolbar";
 import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
 import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
@@ -68,19 +67,14 @@ export function ContactsPage() {
       <PageHeader
         title="Contacts"
         action={
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" />
-            Add Contact
-          </Button>
-        }
-      />
-
-      <PageToolbar
-        right={
-          <>
+          <div className="flex items-center gap-2">
             <WorkspaceFilterButton />
             <AccountFilterButton />
-          </>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" />
+              Add Contact
+            </Button>
+          </div>
         }
       />
 

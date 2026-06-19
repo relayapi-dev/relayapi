@@ -1,9 +1,10 @@
 ---
 import { blog } from "./data";
+import Container from "./Container.astro";
 ---
 
 <!-- ================= BLOG HIGHLIGHTS ================= -->
-<section style="max-width:1240px; margin:0 auto; padding:48px 32px;">
+<Container as="section" class="py-12">
   <h2 style="font-size:clamp(24px,2.4vw,34px); letter-spacing:-0.03em; font-weight:500; margin:0 0 28px;">Recent highlights</h2>
   <div data-reveal style="display:grid; grid-template-columns:repeat(4,1fr); gap:20px;">
     {blog.map((b) => (
@@ -15,4 +16,4 @@ import { blog } from "./data";
       </a>
     ))}
   </div>
-</section>
+</Container>

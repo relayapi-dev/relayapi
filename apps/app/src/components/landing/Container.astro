@@ -1,0 +1,34 @@
+---
+/**
+ * Container — the single source of truth for the landing's horizontal rhythm.
+ *
+ * Centers content at one shared max-width (77.5rem) with consistent gutters so
+ * the nav, every section, and the footer all align to the same edge. Use it as
+ * the outermost wrapper of every landing block instead of ad-hoc
+ * `mx-auto max-w-[…] px-…` combinations.
+ *
+ *   <Container as="section" class="py-12">…</Container>
+ *
+ * `as`    chooses the rendered element (defaults to <div>); pass "section",
+ *         "header", "nav", "footer", etc.
+ * `class` is merged after the base classes, so callers add their own vertical
+ *         padding / alignment without redefining the width or gutters.
+ *
+ * All forwarded attributes (`id`, `data-reveal`, …) pass straight through.
+ */
+import type { HTMLAttributes, HTMLTag } from "astro/types";
+
+interface Props extends Omit<HTMLAttributes<"div">, "class"> {
+	as?: HTMLTag;
+	class?: string;
+}
+
+const { as: Tag = "div", class: className, ...rest } = Astro.props;
+---
+
+<Tag
+	class:list={["mx-auto w-full max-w-[77.5rem] px-5 sm:px-8", className]}
+	{...rest}
+>
+	<slot />
+</Tag>

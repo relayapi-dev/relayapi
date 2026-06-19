@@ -1,5 +1,6 @@
 ---
 import { platformLogos } from "./data";
+import Container from "./Container.astro";
 
 // Three identical tracks make the marquee seamless: the `animate-marquee`
 // keyframe (globals.css @theme) shifts one full track plus the inter-track gap
@@ -8,9 +9,10 @@ import { platformLogos } from "./data";
 const tracks = [0, 1, 2];
 ---
 
-<section
+<Container
+	as="section"
 	data-reveal
-	class="mx-auto max-w-[75rem] px-8 pt-[clamp(3.5rem,7vw,6rem)] pb-28 text-center"
+	class="pt-[clamp(3.5rem,7vw,6rem)] pb-12 text-center"
 >
 	<h2 class="m-0 mb-10 font-medium tracking-[-0.01em] text-[#46443D]">
 		One API. Every platform you publish to.
@@ -49,4 +51,4 @@ const tracks = [0, 1, 2];
 			))
 		}
 	</div>
-</section>
+</Container>

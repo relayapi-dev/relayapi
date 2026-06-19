@@ -1,9 +1,10 @@
 ---
 import { compareRows, LANDING_LINKS } from "./data";
+import Container from "./Container.astro";
 ---
 
 <!-- ================= PRICING ================= -->
-<section id="pricing" style="max-width:1480px; margin:0 auto; padding:36px 20px;">
+<Container as="section" id="pricing" class="py-9">
   <div data-reveal style="background:#E9E7DF; border-radius:30px; padding:clamp(32px,4.5vw,64px); display:grid; grid-template-columns:1fr 1fr; gap:48px; align-items:center;">
     <div>
       <h2 style="font-size:clamp(28px,3vw,44px); letter-spacing:-0.03em; font-weight:500; margin:0 0 14px; color:#1A1815;">Priced to scale, not to gouge.</h2>
@@ -34,4 +35,4 @@ import { compareRows, LANDING_LINKS } from "./data";
       </table>
     </div>
   </div>
-</section>
+</Container>

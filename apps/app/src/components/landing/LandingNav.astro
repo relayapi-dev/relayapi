@@ -1,5 +1,6 @@
 ---
 import { LANDING_LINKS } from "./data";
+import Container from "./Container.astro";
 ---
 
 {/* Fixed top bar — sizing/structure modeled on cursor.com's header
@@ -7,7 +8,7 @@ import { LANDING_LINKS } from "./data";
     RelayAPI's cream/ink palette. The spacer keeps the hero from sliding
     under the fixed bar. */}
 <header class="rl-nav">
-  <nav class="rl-nav__inner">
+  <Container as="nav" class="relative flex items-center justify-between gap-4 max-[400px]:px-[0.875rem]">
     <a href="/" class="rl-nav__brand">
       <span class="rl-nav__logo"><svg width="15" height="15" viewBox="0 0 150 150" fill="#F3F1EA"><path fill-rule="evenodd" d="M34.82,18.54C16.52,18.54,1.49,33.56,1.49,51.87s15.02,33.33,33.33,33.33h80.69c6.95,0,12.28,5.33,12.28,12.28s-5.33,12.28-12.28,12.28H33.07c-5.77-.01-10.52,4.74-10.52,10.51s4.76,10.52,10.52,10.52h82.44c18.31,0,33.33-15.02,33.33-33.33s-15.02-33.33-33.33-33.33H34.82c-6.95,0-12.28-5.33-12.28-12.28s5.33-12.28,12.28-12.28h82.45c5.77.01,10.52-4.74,10.52-10.51s-4.76-10.52-10.52-10.52H34.82Z"></path></svg></span>
       <span class="rl-nav__word">RELAYAPI</span>
@@ -23,7 +24,7 @@ import { LANDING_LINKS } from "./data";
       <a href={LANDING_LINKS.github} class="rl-nav__pill" target="_blank" rel="noopener noreferrer">GitHub</a>
       <a href={LANDING_LINKS.signup} class="rl-nav__pill rl-nav__pill--cta">Get started</a>
     </div>
-  </nav>
+  </Container>
 </header>
 <div class="rl-nav__spacer" aria-hidden="true"></div>
 
@@ -43,17 +44,6 @@ import { LANDING_LINKS } from "./data";
   /* Reserves the bar's height in flow so the hero doesn't slip underneath. */
   .rl-nav__spacer {
     height: 52px;
-  }
-
-  .rl-nav__inner {
-    width: 100%;
-    max-width: 1480px;
-    margin: 0 auto;
-    padding: 0 32px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
   }
 
   /* --- Brand --- */
@@ -79,9 +69,15 @@ import { LANDING_LINKS } from "./data";
     color: #1a1815;
   }
 
-  /* --- Center links (cursor: 14px, even spacing) --- */
+  /* --- Center links (cursor: 14px, even spacing) ---
+     Absolutely centered to the nav (which is itself centered in the viewport),
+     so the links sit on the true screen center regardless of the differing
+     widths of the brand (left) and the action buttons (right). */
   .rl-nav__links {
-    flex: 1;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -154,9 +150,6 @@ import { LANDING_LINKS } from "./data";
     .rl-nav__signin {
       display: none;
     }
-    .rl-nav__inner {
-      padding: 0 18px;
-    }
   }
   /* Smallest phones (~320px): the brand word + both pills are flex-shrink:0
      and would otherwise clip the CTA off-screen (no scrollbar, since the bar
@@ -165,9 +158,6 @@ import { LANDING_LINKS } from "./data";
   @media (max-width: 400px) {
     .rl-nav__word {
       display: none;
-    }
-    .rl-nav__inner {
-      padding: 0 14px;
     }
     .rl-nav__actions {
       gap: 6px;

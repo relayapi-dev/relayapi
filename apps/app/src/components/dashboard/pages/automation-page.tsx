@@ -21,7 +21,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { PageToolbar } from "@/components/dashboard/page-toolbar";
 import {
 	Dialog,
 	DialogClose,
@@ -352,20 +351,10 @@ export function AutomationPage() {
 				title="Automations"
 				docsHref="https://docs.relayapi.dev/guides/automations"
 				action={
-					<Button onClick={() => openDialog()}>
-						<Plus className="size-4" />
-						New automation
-					</Button>
-				}
-			/>
-
-			{/* Template filter */}
-			<PageToolbar
-				right={
 					<div className="flex items-center gap-2">
 						<label
 							htmlFor="automation-template-filter"
-							className="text-xs text-muted-foreground"
+							className="hidden text-xs text-muted-foreground sm:inline"
 						>
 							Template:
 						</label>
@@ -391,6 +380,10 @@ export function AutomationPage() {
 								Clear
 							</button>
 						)}
+						<Button onClick={() => openDialog()}>
+							<Plus className="size-4" />
+							New automation
+						</Button>
 					</div>
 				}
 			/>
