@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Plus, Loader2, MoreHorizontal, Link2Off, Link2, Activity, FileText, FolderOpen, Trash2, ArrowRightLeft, Search, BookOpen, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
+import { Plus, Loader2, MoreHorizontal, Link2Off, Link2, Activity, FileText, FolderOpen, Trash2, ArrowRightLeft, Search, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import {
@@ -16,6 +16,10 @@ import { platformColors, platformLabels, platformAvatars, platformConnectionType
 import { PlatformGrid } from "@/components/dashboard/connect/platform-grid";
 import { WorkspaceSearchCombobox } from "@/components/dashboard/workspace-search-combobox";
 import { useFilter } from "@/components/dashboard/filter-context";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
 import { AccountHealthDialog } from "@/components/dashboard/account-health-dialog";
 import { hasPostingCapability, hasAnalyticsCapability, getExpectedScopes } from "@/lib/platform-scopes";
 import type { InitialPaginatedData } from "@/lib/dashboard-page";
@@ -78,16 +82,16 @@ interface LogEntry {
 const tabs = ["Accounts", "Connect", "Workspaces", "Health", "Logs"] as const;
 
 const eventStyles: Record<string, string> = {
-  connected: "text-emerald-400",
-  disconnected: "text-amber-400",
-  token_refreshed: "text-blue-400",
-  error: "text-red-400",
+  connected: "text-success",
+  disconnected: "text-amber-600",
+  token_refreshed: "text-foreground",
+  error: "text-destructive",
 };
 const eventBg: Record<string, string> = {
-  connected: "bg-emerald-400/10",
-  disconnected: "bg-amber-400/10",
-  token_refreshed: "bg-blue-400/10",
-  error: "bg-red-400/10",
+  connected: "bg-success/10",
+  disconnected: "bg-amber-600/10",
+  token_refreshed: "bg-muted",
+  error: "bg-destructive/10",
 };
 
 export interface ConnectionsPageProps {
@@ -108,7 +112,7 @@ export function ConnectionsPage({
   const [activeTab, setActiveTab] = useState(initialTab);
 
   // Use shared filter context for workspace/account filtering
-  const { workspaceId: workspaceFilterId, setWorkspaceId: setWorkspaceFilterId } = useFilter();
+  const { workspaceId: workspaceFilterId } = useFilter();
 
   // Health check state
   const [healthTarget, setHealthTarget] = useState<Account | null>(null);
@@ -287,57 +291,38 @@ export function ConnectionsPage({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Connections</h1>
-          <a href="https://docs.relayapi.dev/guides/connecting-accounts" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        {activeTab === "workspaces" ? (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setShowCreateWorkspace(true)}>
-            <Plus className="size-3.5" />
-            Create Workspace
-          </Button>
-        ) : activeTab !== "connect" ? (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => switchTab("connect")}>
-            <Plus className="size-3.5" />
-            Connect Account
-          </Button>
-        ) : null}
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Connections"
+        docsHref="https://docs.relayapi.dev/guides/connecting-accounts"
+        action={
+          activeTab === "workspaces" ? (
+            <Button onClick={() => setShowCreateWorkspace(true)}>
+              <Plus className="size-4" />
+              Create Workspace
+            </Button>
+          ) : activeTab !== "connect" ? (
+            <Button onClick={() => switchTab("connect")}>
+              <Plus className="size-4" />
+              Connect Account
+            </Button>
+          ) : undefined
+        }
+      />
 
-      <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <div className="flex gap-4">
-          {tabs.map((tab) => {
-            const tabKey = tab.toLowerCase() as typeof initialTab;
-            return (
-              <button
-                type="button"
-                key={tab}
-                onClick={() => switchTab(tabKey)}
-                className={cn(
-                  "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-                  activeTab === tabKey
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {tab}
-              </button>
-            );
-          })}
-        </div>
-        <div className="pb-2 shrink-0">
-          <WorkspaceSearchCombobox
-            value={workspaceFilterId}
-            onSelect={setWorkspaceFilterId}
-            showAllOption
-            showUnassignedOption
-            placeholder="All workspaces"
-            align="right"
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={tabs.map((tab) => ({
+              value: tab.toLowerCase() as typeof initialTab,
+              label: tab,
+            }))}
           />
-        </div>
-      </div>
+        }
+        right={<WorkspaceFilterButton />}
+      />
 
       {accountsError && activeTab === "accounts" && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -354,7 +339,7 @@ export function ConnectionsPage({
         ) : (
           <>
             {accounts.length === 0 ? (
-              <div className="rounded-md border border-dashed border-border p-12 text-center">
+              <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
                 <FolderOpen className="size-8 text-muted-foreground/40 mx-auto mb-2" />
                 <p className="text-sm text-muted-foreground">
                   {workspaceFilterId ? "No accounts in this workspace" : "No connected accounts"}
@@ -381,7 +366,7 @@ export function ConnectionsPage({
                     <motion.div
                       key={acc.id}
                       variants={fadeUp}
-                      className="group rounded-md border border-border p-4 hover:bg-accent/20 transition-colors"
+                      className="group rounded-[12px] border border-border bg-card p-5 hover:bg-accent transition-colors"
                     >
                       <div className="flex items-start justify-between">
                         <div className="relative">
@@ -420,7 +405,7 @@ export function ConnectionsPage({
 
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button type="button" className="rounded-lg p-1.5 opacity-0 group-hover:opacity-100 hover:bg-accent/50 transition-all">
+                            <button type="button" className="rounded-md p-1.5 opacity-0 group-hover:opacity-100 hover:bg-muted transition-all">
                               <MoreHorizontal className="size-4 text-muted-foreground" />
                             </button>
                           </DropdownMenuTrigger>
@@ -485,11 +470,11 @@ export function ConnectionsPage({
 
                       <div className="mt-3 flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
-                          <div className="size-1.5 rounded-full bg-emerald-500" />
+                          <div className="size-1.5 rounded-full bg-success" />
                           <span className="text-xs text-muted-foreground">Active</span>
                         </div>
                         {acc.workspace && (
-                          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary truncate max-w-[100px]">
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground truncate max-w-[100px]">
                             {acc.workspace.name}
                           </span>
                         )}
@@ -525,7 +510,7 @@ export function ConnectionsPage({
 
           {showCreateWorkspace && (
             <motion.div
-              className="rounded-md border border-border p-4 space-y-3"
+              className="rounded-[12px] border border-border bg-card p-5 space-y-3"
               initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
             >
@@ -582,7 +567,7 @@ export function ConnectionsPage({
           )}
 
           {/* Workspaces search */}
-          <div className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 w-52">
+          <div className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 w-52">
             <Search className="size-3.5 text-muted-foreground shrink-0" />
             <input
               type="text"
@@ -598,7 +583,7 @@ export function ConnectionsPage({
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : groups.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <FolderOpen className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">
                 {workspacesSearch ? "No workspaces found" : "No workspaces"}
@@ -621,12 +606,12 @@ export function ConnectionsPage({
                   <motion.div
                     key={group.id}
                     variants={fadeUp}
-                    className="rounded-md border border-border p-4 hover:bg-accent/20 transition-colors"
+                    className="rounded-[12px] border border-border bg-card p-5 hover:bg-accent transition-colors"
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex items-start gap-3">
-                        <div className="rounded-md bg-primary/10 p-1.5 mt-0.5">
-                          <FolderOpen className="size-4 text-primary" />
+                        <div className="rounded-md bg-muted p-1.5 mt-0.5">
+                          <FolderOpen className="size-4 text-muted-foreground" />
                         </div>
                         <div>
                           <h3 className="text-sm font-medium">{group.name}</h3>
@@ -648,11 +633,11 @@ export function ConnectionsPage({
                       </div>
                       <button
                         type="button"
-                        className="rounded-lg p-1.5 hover:bg-red-500/10 transition-colors"
+                        className="rounded-md p-1.5 hover:bg-destructive/10 transition-colors"
                         onClick={() => handleDeleteWorkspace(group.id)}
                         title="Delete workspace"
                       >
-                        <Trash2 className="size-4 text-muted-foreground hover:text-red-400" />
+                        <Trash2 className="size-4 text-muted-foreground hover:text-destructive" />
                       </button>
                     </div>
                   </motion.div>
@@ -676,19 +661,19 @@ export function ConnectionsPage({
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         ) : healthItems.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border p-12 text-center">
+          <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
             <Activity className="size-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No accounts to monitor</p>
           </div>
         ) : (
           <>
             <motion.div
-              className="rounded-md border border-border overflow-hidden"
+              className="rounded-[12px] border border-border bg-card overflow-hidden"
               variants={stagger}
               initial="hidden"
               animate="visible"
             >
-              <div className="hidden md:grid grid-cols-[1.5fr_0.8fr_0.8fr_0.7fr_1fr_0.8fr] gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
+              <div className="hidden md:grid grid-cols-[1.5fr_0.8fr_0.8fr_0.7fr_1fr_0.8fr] gap-4 px-4 py-2.5 text-xs text-muted-foreground border-b border-border bg-muted/50">
                 <span>Account</span>
                 <span>Platform</span>
                 <span>Status</span>
@@ -722,7 +707,7 @@ export function ConnectionsPage({
                       avatar_url: item.avatar_url,
                     })}
                     className={cn(
-                      "grid md:grid-cols-[1.5fr_0.8fr_0.8fr_0.7fr_1fr_0.8fr] gap-3 md:gap-4 p-4 md:py-3 items-center cursor-pointer hover:bg-accent/30 transition-colors",
+                      "grid md:grid-cols-[1.5fr_0.8fr_0.8fr_0.7fr_1fr_0.8fr] gap-3 md:gap-4 p-4 md:py-3 items-center text-[13px] cursor-pointer hover:bg-accent transition-colors",
                       i !== healthItems.length - 1 && "border-b border-border",
                       !item.healthy && "bg-destructive/[0.03]"
                     )}
@@ -764,7 +749,7 @@ export function ConnectionsPage({
                         className={cn(
                           "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
                           item.healthy
-                            ? "bg-emerald-500/10 text-emerald-600"
+                            ? "bg-success/10 text-success"
                             : "bg-destructive/10 text-destructive"
                         )}
                       >
@@ -795,7 +780,7 @@ export function ConnectionsPage({
                       <span
                         className={cn(
                           "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
-                          canPost ? "bg-emerald-500/10 text-emerald-600" : "bg-destructive/10 text-destructive"
+                          canPost ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"
                         )}
                       >
                         {canPost ? <CheckCircle2 className="size-2.5" /> : <XCircle className="size-2.5" />}
@@ -805,7 +790,7 @@ export function ConnectionsPage({
                         <span
                           className={cn(
                             "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
-                            canAnalytics ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground"
+                            canAnalytics ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
                           )}
                         >
                           {canAnalytics ? <CheckCircle2 className="size-2.5" /> : <XCircle className="size-2.5" />}
@@ -843,7 +828,7 @@ export function ConnectionsPage({
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         ) : logs.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border p-12 text-center">
+          <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
             <FileText className="size-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No connection logs</p>
             <p className="text-xs text-muted-foreground mt-1">
@@ -852,7 +837,7 @@ export function ConnectionsPage({
           </div>
         ) : (
           <>
-            <div className="rounded-md border border-border overflow-hidden font-mono text-xs">
+            <div className="rounded-[12px] border border-border bg-card overflow-hidden font-mono text-xs">
               <motion.div
                 className="divide-y divide-border"
                 variants={stagger}
@@ -876,7 +861,7 @@ export function ConnectionsPage({
                     <motion.div
                       key={log.id}
                       variants={fadeUp}
-                      className="flex items-start gap-3 px-4 py-2.5 hover:bg-accent/30 transition-colors"
+                      className="flex items-start gap-3 px-4 py-2.5 hover:bg-accent transition-colors"
                     >
                       <span className="text-muted-foreground shrink-0 w-32 tabular-nums">{time}</span>
                       <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase whitespace-nowrap", eventStyles[event] || "text-blue-400", eventBg[event] || "bg-blue-400/10")}>

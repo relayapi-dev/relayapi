@@ -33,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/dashboard/page-header";
 import { AdminNav } from "./admin-nav";
 
 const planTiers = [
@@ -83,10 +84,10 @@ interface Subscription {
 }
 
 const statusColors: Record<string, string> = {
-  active: "text-emerald-400 bg-emerald-400/10",
-  trialing: "text-amber-400 bg-amber-400/10",
-  past_due: "text-red-400 bg-red-400/10",
-  cancelled: "text-muted-foreground bg-accent/50",
+  active: "text-success bg-success/10",
+  trialing: "text-chart-3 bg-chart-3/10",
+  past_due: "text-destructive bg-destructive/10",
+  cancelled: "text-muted-foreground bg-muted",
 };
 
 export function AdminPlansPage() {
@@ -172,7 +173,7 @@ export function AdminPlansPage() {
         ),
         cell: ({ row }) => (
           <div className="min-w-0">
-            <p className="text-sm font-medium truncate">
+            <p className="text-[13px] font-medium truncate">
               {row.original.orgName || "Unknown"}
             </p>
             <p className="text-xs text-muted-foreground truncate">
@@ -199,7 +200,7 @@ export function AdminPlansPage() {
         accessorKey: "monthlyPriceCents",
         header: "Price",
         cell: ({ row }) => (
-          <span className="text-sm">
+          <span className="text-[13px]">
             ${(row.original.monthlyPriceCents / 100).toFixed(2)}/mo
           </span>
         ),
@@ -216,7 +217,7 @@ export function AdminPlansPage() {
                 {sub.apiCallsIncluded.toLocaleString()}
               </span>
               {sub.overageCalls > 0 && (
-                <p className="text-[10px] text-amber-400">
+                <p className="text-[10px] text-chart-3">
                   +{sub.overageCalls.toLocaleString()} overage ($
                   {(sub.overageCostCents / 100).toFixed(2)})
                 </p>
@@ -261,13 +262,13 @@ export function AdminPlansPage() {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-16">
+      <PageHeader title="Plans & Subscriptions" />
+
       <AdminNav current="admin-plans" />
 
-      <h1 className="text-lg font-medium">Plans & Subscriptions</h1>
-
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
@@ -281,19 +282,19 @@ export function AdminPlansPage() {
           {planTiers.map((plan) => (
             <div
               key={plan.name}
-              className="rounded-md border border-border overflow-hidden"
+              className="rounded-[12px] border border-border bg-card overflow-hidden"
             >
-              <div className="px-4 py-3 border-b border-border bg-accent/10 flex items-center justify-between">
+              <div className="px-5 py-4 border-b border-border flex items-center justify-between">
                 <h3 className="text-[13px] font-medium">{plan.name}</h3>
                 <span className="text-sm font-semibold">{plan.price}</span>
               </div>
-              <div className="p-4 space-y-2">
+              <div className="p-5 space-y-2">
                 {plan.features.map((f) => (
                   <div
                     key={f}
                     className="flex items-center gap-2 text-[13px] text-muted-foreground"
                   >
-                    <Check className="size-3.5 shrink-0 text-primary" />
+                    <Check className="size-3.5 shrink-0 text-foreground" />
                     {f}
                   </div>
                 ))}
@@ -323,7 +324,7 @@ export function AdminPlansPage() {
           ].map((stat) => (
             <div
               key={stat.label}
-              className="rounded-md border border-border p-4"
+              className="rounded-[12px] border border-border bg-card p-5"
             >
               <p className="text-xs text-muted-foreground">{stat.label}</p>
               <p className="text-lg font-semibold mt-1">{stat.value}</p>
@@ -338,12 +339,12 @@ export function AdminPlansPage() {
           All Subscriptions
         </h2>
         {loading ? (
-          <div className="flex items-center justify-center py-12">
+          <div className="flex items-center justify-center rounded-[12px] border border-border py-12">
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         ) : (
           <>
-            <div className="overflow-hidden rounded-md border">
+            <div className="overflow-hidden rounded-[12px] border border-border bg-card">
               <Table>
                 <TableHeader>
                   {table.getHeaderGroups().map((headerGroup) => (
@@ -379,7 +380,7 @@ export function AdminPlansPage() {
                     <TableRow>
                       <TableCell
                         colSpan={columns.length}
-                        className="h-24 text-center"
+                        className="h-24 text-center text-[13px] text-muted-foreground"
                       >
                         No subscriptions found.
                       </TableCell>
@@ -421,7 +422,7 @@ export function AdminPlansPage() {
       {/* Edit modal */}
       {editModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-sm rounded-lg border border-border bg-background p-6 shadow-lg space-y-4">
+          <div className="w-full max-w-sm rounded-[12px] border border-border bg-card p-6 space-y-4">
             <h3 className="text-sm font-medium">
               Edit Subscription — {editModal.orgName}
             </h3>
@@ -439,7 +440,7 @@ export function AdminPlansPage() {
                   onChange={(e) =>
                     setEditForm({ ...editForm, status: e.target.value })
                   }
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                  className="w-full rounded-[10px] border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20"
                 >
                   <option value="trialing">Trialing</option>
                   <option value="active">Active</option>
@@ -466,7 +467,7 @@ export function AdminPlansPage() {
                       ),
                     })
                   }
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                  className="w-full rounded-[10px] border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20"
                   step="0.01"
                   min="0"
                 />
@@ -476,19 +477,13 @@ export function AdminPlansPage() {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs"
                 onClick={() => setEditModal(null)}
               >
                 Cancel
               </Button>
-              <Button
-                size="sm"
-                className="h-7 text-xs"
-                disabled={saving}
-                onClick={saveEdit}
-              >
+              <Button size="sm" disabled={saving} onClick={saveEdit}>
                 {saving ? (
-                  <Loader2 className="size-3 animate-spin" />
+                  <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   "Save Changes"
                 )}

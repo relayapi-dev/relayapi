@@ -20,6 +20,10 @@ import {
 } from "@/components/ui/dialog";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 
 // --- Animation ---
 
@@ -334,64 +338,64 @@ function TemplateCard({
 
   return (
     <motion.div variants={fadeUp}>
-      <div className="group rounded-lg border border-border bg-background p-4 hover:border-foreground/20 transition-colors">
+      <div className="group rounded-[12px] border border-border bg-card p-5 transition-colors hover:border-foreground/20">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-medium truncate">{template.name}</h3>
+            <h3 className="truncate text-sm font-medium text-foreground">{template.name}</h3>
             {template.description && (
-              <p className="mt-0.5 text-xs text-foreground/50 truncate">
+              <p className="mt-0.5 truncate text-xs text-muted-foreground">
                 {template.description}
               </p>
             )}
           </div>
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
             <button
               type="button"
               onClick={handleCopy}
-              className="rounded p-1 hover:bg-accent/50 transition-colors"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               title="Copy content"
             >
               {copied ? (
-                <Check className="size-3.5 text-emerald-500" />
+                <Check className="size-3.5 text-success" />
               ) : (
-                <Copy className="size-3.5 text-foreground/50" />
+                <Copy className="size-3.5" />
               )}
             </button>
             <button
               type="button"
               onClick={onEdit}
-              className="rounded p-1 hover:bg-accent/50 transition-colors"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               title="Edit"
             >
-              <Pencil className="size-3.5 text-foreground/50" />
+              <Pencil className="size-3.5" />
             </button>
             <button
               type="button"
               onClick={onDelete}
-              className="rounded p-1 hover:bg-accent/50 transition-colors"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               title="Delete"
             >
-              <Trash2 className="size-3.5 text-foreground/50" />
+              <Trash2 className="size-3.5" />
             </button>
           </div>
         </div>
 
-        <p className="mt-2 text-xs text-foreground/60 line-clamp-2 font-mono whitespace-pre-wrap">
+        <p className="mt-2 line-clamp-2 whitespace-pre-wrap font-mono text-xs text-muted-foreground">
           {template.content}
         </p>
 
-        <div className="mt-3 flex items-center gap-2 flex-wrap">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           {template.tags.map((tag) => (
             <span
               key={tag}
-              className="inline-flex items-center gap-1 rounded-full bg-accent/40 px-2 py-0.5 text-[11px] font-medium text-foreground/60"
+              className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
             >
               <Tag className="size-2.5" />
               {tag}
             </span>
           ))}
           {overrideCount > 0 && (
-            <span className="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground">
               {overrideCount} platform override{overrideCount > 1 ? "s" : ""}
             </span>
           )}
@@ -448,23 +452,29 @@ export function TemplatesPage() {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-medium">Templates</h1>
-        <Button
-          size="sm"
-          className="gap-1.5 h-7 text-xs"
-          onClick={handleNewTemplate}
-        >
-          <Plus className="size-3.5" />
-          New Template
-        </Button>
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Templates"
+        action={
+          <Button onClick={handleNewTemplate}>
+            <Plus className="size-4" />
+            New Template
+          </Button>
+        }
+      />
+
+      <PageToolbar
+        right={
+          <>
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+          </>
+        }
+      />
 
       {/* Error */}
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
@@ -472,27 +482,23 @@ export function TemplatesPage() {
       {/* Loading */}
       {loading && (
         <div className="flex items-center justify-center py-16">
-          <Loader2 className="size-5 animate-spin text-foreground/30" />
+          <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       )}
 
       {/* Empty State */}
       {!loading && templates.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <div className="rounded-full bg-accent/50 p-3 mb-3">
-            <FileText className="size-5 text-foreground/40" />
+        <div className="flex flex-col items-center justify-center rounded-[12px] border border-dashed border-border py-16 text-center">
+          <div className="mb-3 rounded-full bg-muted p-3">
+            <FileText className="size-5 text-muted-foreground" />
           </div>
-          <h3 className="text-sm font-medium">No templates yet</h3>
-          <p className="text-xs text-foreground/50 mt-1 max-w-xs">
+          <h3 className="text-sm font-medium text-foreground">No templates yet</h3>
+          <p className="mt-1 max-w-xs text-xs text-muted-foreground">
             Save reusable post templates to speed up content creation across
             platforms.
           </p>
-          <Button
-            size="sm"
-            className="mt-4 gap-1.5 text-xs"
-            onClick={handleNewTemplate}
-          >
-            <Plus className="size-3.5" />
+          <Button className="mt-4" onClick={handleNewTemplate}>
+            <Plus className="size-4" />
             Create Template
           </Button>
         </div>

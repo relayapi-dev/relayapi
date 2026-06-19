@@ -7,13 +7,16 @@ import {
   Send,
   FileText,
   Settings,
-  BookOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
-import { FilterBar } from "@/components/dashboard/filter-bar";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
 
 const stagger = {
@@ -54,13 +57,13 @@ interface WaGroup {
 const tabs = ["Broadcasts", "Templates", "Groups", "Settings"] as const;
 
 const statusColors: Record<string, string> = {
-  sent: "text-emerald-400 bg-emerald-400/10",
-  pending: "text-blue-400 bg-blue-400/10",
-  draft: "text-amber-400 bg-amber-400/10",
-  failed: "text-red-400 bg-red-400/10",
-  approved: "text-emerald-400 bg-emerald-400/10",
-  rejected: "text-red-400 bg-red-400/10",
-  submitted: "text-blue-400 bg-blue-400/10",
+  sent: "text-success bg-success/10",
+  pending: "text-muted-foreground bg-muted",
+  draft: "text-muted-foreground bg-muted",
+  failed: "text-destructive bg-destructive/10",
+  approved: "text-success bg-success/10",
+  rejected: "text-destructive bg-destructive/10",
+  submitted: "text-muted-foreground bg-muted",
 };
 
 export function WhatsAppPage({
@@ -123,45 +126,38 @@ export function WhatsAppPage({
   const activeError = broadcastsError || templatesError || groupsError;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">WhatsApp</h1>
-          <a href="https://docs.relayapi.dev/api-reference/whatsapp" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        {activeTab === "broadcasts" && (
-          <Button size="sm" className="gap-1.5 h-7 text-xs">
-            <Send className="size-3.5" />
-            New Broadcast
-          </Button>
-        )}
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="WhatsApp"
+        docsHref="https://docs.relayapi.dev/api-reference/whatsapp"
+        action={
+          activeTab === "broadcasts" ? (
+            <Button>
+              <Send className="size-4" />
+              New Broadcast
+            </Button>
+          ) : undefined
+        }
+      />
 
-      <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <div className="flex gap-4 shrink-0">
-          {tabs.map((tab) => {
-            const tabKey = tab.toLowerCase() as typeof initialTab;
-            return (
-              <button
-                type="button"
-                key={tab}
-                onClick={() => switchTab(tabKey)}
-                className={cn(
-                  "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-                  activeTab === tabKey
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {tab}
-              </button>
-            );
-          })}
-        </div>
-        <div className="pb-2 shrink-0">
-          <FilterBar />
-        </div>
-      </div>
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={tabs.map((tab) => ({
+              value: tab.toLowerCase() as typeof initialTab,
+              label: tab,
+            }))}
+          />
+        }
+        right={
+          <>
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+          </>
+        }
+      />
 
       {activeError && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -176,7 +172,7 @@ export function WhatsAppPage({
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         ) : broadcasts.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border p-12 text-center">
+          <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
             <Send className="size-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No broadcasts</p>
             <p className="text-xs text-muted-foreground mt-1">
@@ -195,14 +191,14 @@ export function WhatsAppPage({
                 <motion.div
                   key={bc.id}
                   variants={fadeUp}
-                  className="rounded-md border border-border p-4 hover:bg-accent/20 transition-colors"
+                  className="rounded-[12px] border border-border bg-card p-5 hover:bg-accent/20 transition-colors"
                 >
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-medium">{bc.name}</h3>
                     <span
                       className={cn(
                         "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium capitalize",
-                        statusColors[bc.status] || "text-blue-400 bg-blue-400/10"
+                        statusColors[bc.status] || "text-muted-foreground bg-muted"
                       )}
                     >
                       {bc.status}
@@ -239,7 +235,7 @@ export function WhatsAppPage({
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         ) : templates.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border p-12 text-center">
+          <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
             <FileText className="size-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No templates</p>
             <p className="text-xs text-muted-foreground mt-1">
@@ -249,12 +245,12 @@ export function WhatsAppPage({
         ) : (
           <>
             <motion.div
-              className="rounded-md border border-border overflow-hidden"
+              className="rounded-[12px] border border-border bg-card overflow-hidden"
               variants={stagger}
               initial="hidden"
               animate="visible"
             >
-              <div className="hidden md:grid grid-cols-[1.5fr_1fr_0.8fr_1fr_1fr] gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
+              <div className="hidden md:grid grid-cols-[1.5fr_1fr_0.8fr_1fr_1fr] gap-4 px-4 py-2.5 text-xs text-muted-foreground border-b border-border bg-muted">
                 <span>Name</span>
                 <span>Category</span>
                 <span>Language</span>
@@ -266,17 +262,17 @@ export function WhatsAppPage({
                   key={tpl.id}
                   variants={fadeUp}
                   className={cn(
-                    "grid md:grid-cols-[1.5fr_1fr_0.8fr_1fr_1fr] gap-3 md:gap-4 p-4 md:py-3 items-center hover:bg-accent/30 transition-colors",
+                    "grid md:grid-cols-[1.5fr_1fr_0.8fr_1fr_1fr] gap-3 md:gap-4 p-4 md:py-3 items-center text-[13px] hover:bg-accent/30 transition-colors",
                     i !== templates.length - 1 && "border-b border-border"
                   )}
                 >
-                  <span className="text-sm font-medium">{tpl.name}</span>
+                  <span className="font-medium">{tpl.name}</span>
                   <span className="text-xs text-muted-foreground capitalize">{tpl.category}</span>
                   <span className="text-xs text-muted-foreground">{tpl.language}</span>
                   <span
                     className={cn(
                       "inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[11px] font-medium capitalize",
-                      statusColors[tpl.status] || "text-blue-400 bg-blue-400/10"
+                      statusColors[tpl.status] || "text-muted-foreground bg-muted"
                     )}
                   >
                     {tpl.status}
@@ -308,7 +304,7 @@ export function WhatsAppPage({
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         ) : groups.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border p-12 text-center">
+          <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
             <MessageCircle className="size-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No groups</p>
             <p className="text-xs text-muted-foreground mt-1">
@@ -327,12 +323,12 @@ export function WhatsAppPage({
                 <motion.div
                   key={group.id}
                   variants={fadeUp}
-                  className="rounded-md border border-border p-4 hover:bg-accent/20 transition-colors"
+                  className="rounded-[12px] border border-border bg-card p-5 hover:bg-accent/20 transition-colors"
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="rounded-md bg-green-600/10 p-1.5">
-                        <MessageCircle className="size-4 text-green-500" />
+                      <div className="rounded-md bg-success/10 p-1.5">
+                        <MessageCircle className="size-4 text-success" />
                       </div>
                       <div>
                         <h3 className="text-sm font-medium">{group.name}</h3>
@@ -363,7 +359,7 @@ export function WhatsAppPage({
 
       {/* Settings tab */}
       {activeTab === "settings" && (
-        <div className="rounded-md border border-dashed border-border p-12 text-center">
+        <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
           <Settings className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm font-medium">WhatsApp Settings</p>
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">

@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { motion } from "motion/react";
 import { Bell, Building2, Camera, Check, Link2, Loader2, Pen, Plus, Shield, Star, Trash2, X } from "lucide-react";
 import {
   Select,
@@ -12,20 +11,10 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { organization as orgClient, useSession } from "@/lib/auth-client";
 import { slugify, getOrgColor } from "@/types/dashboard";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
 import { TagsSettings } from "../settings/tags-settings";
-
-const stagger = {
-  hidden: {},
-  visible: { transition: { staggerChildren: 0.04 } },
-};
-const fadeUp = {
-  hidden: { opacity: 0, y: 6 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.15, ease: [0.32, 0.72, 0, 1] as const },
-  },
-};
 
 function Toggle({
   enabled,
@@ -543,49 +532,31 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
   };
 
   return (
-    <motion.div
-      className="space-y-6"
-      variants={stagger}
-      initial="hidden"
-      animate="visible"
-    >
-      <motion.div variants={fadeUp}>
-        <h1 className="text-lg font-medium">Settings</h1>
-      </motion.div>
+    <div className="space-y-6 pb-16">
+      <PageHeader title="Settings" />
 
-      <motion.div variants={fadeUp}>
-        <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-          <div className="flex gap-4 shrink-0">
-            {settingsTabs.map((tab) => {
-              const tabKey = tab.toLowerCase().replace(" ", "-") as NonNullable<SettingsPageProps["initialTab"]>;
-              return (
-                <button
-                  type="button"
-                  key={tab}
-                  onClick={() => switchTab(tabKey)}
-                  className={cn(
-                    "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-                    activeTab === tabKey
-                      ? "border-foreground text-foreground"
-                      : "border-transparent text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {tab}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </motion.div>
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={settingsTabs.map((tab) => ({
+              value: tab.toLowerCase().replace(" ", "-") as NonNullable<
+                SettingsPageProps["initialTab"]
+              >,
+              label: tab,
+            }))}
+          />
+        }
+      />
 
       {activeTab === "general" && (<>
 
       {/* Organization Profile */}
-      <motion.div
-        variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+      <div
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
+        <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
             <Building2 className="size-3.5" />
             Organization
@@ -600,7 +571,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <div className="p-4 space-y-4">
+          <div className="p-5 space-y-4">
             {/* Logo */}
             <div className="flex items-center gap-4">
               <div className="relative">
@@ -659,7 +630,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                   </button>
                 )}
                 {logoError && (
-                  <p className="text-[11px] text-red-400 mt-0.5">{logoError}</p>
+                  <p className="text-[11px] text-destructive mt-0.5">{logoError}</p>
                 )}
               </div>
             </div>
@@ -696,7 +667,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                 </Button>
               </div>
               {orgNameError && (
-                <p className="text-xs text-red-400">{orgNameError}</p>
+                <p className="text-xs text-destructive">{orgNameError}</p>
               )}
             </div>
 
@@ -737,23 +708,22 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                 </p>
               )}
               {orgSlugError && (
-                <p className="text-xs text-red-400">{orgSlugError}</p>
+                <p className="text-xs text-destructive">{orgSlugError}</p>
               )}
             </div>
           </div>
         )}
-      </motion.div>
+      </div>
 
       </>)}
 
       {activeTab === "notifications" && (<>
 
       {/* Notifications */}
-      <motion.div
-        variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+      <div
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
+        <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
             <Bell className="size-3.5" />
             Notifications
@@ -784,7 +754,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                   .catch(() => setPrefsError(true))
                   .finally(() => setPrefsLoading(false));
               }}
-              className="text-[12px] text-primary hover:underline mt-1"
+              className="text-[12px] text-foreground hover:underline mt-1"
             >
               Retry
             </button>
@@ -792,7 +762,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
         ) : prefs ? (
           <div className="divide-y divide-border">
             {/* Column headers */}
-            <div className="flex items-center justify-end px-4 py-2 bg-accent/5">
+            <div className="flex items-center justify-end px-5 py-2 bg-muted/30">
               <div className="flex items-center gap-6">
                 <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider w-10 text-center">
                   In-App
@@ -806,7 +776,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
             {NOTIFICATION_TYPES.map(({ key, label, description, emailAlwaysOn }) => (
               <div
                 key={key}
-                className="flex items-center justify-between px-4 py-3"
+                className="flex items-center justify-between px-5 py-3"
               >
                 <div className="flex-1 min-w-0 mr-4">
                   <p className="text-[13px] font-medium">{label}</p>
@@ -834,23 +804,22 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
           </div>
         ) : null}
 
-        <div className="px-4 py-2.5 bg-accent/5 border-t border-border">
+        <div className="px-5 py-3 bg-muted/30 border-t border-border">
           <p className="text-[11px] text-muted-foreground">
             Note: Critical account and security emails cannot be disabled.
           </p>
         </div>
-      </motion.div>
+      </div>
 
       </>)}
 
       {activeTab === "short-links" && (<>
 
       {/* Short Links */}
-      <motion.div
-        variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+      <div
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
+        <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
             <Link2 className="size-3.5" />
             Short Links
@@ -865,7 +834,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <div className="p-4 space-y-4">
+          <div className="p-5 space-y-4">
             {/* Mode */}
             <div className="space-y-2">
               <span className="block text-xs font-medium text-muted-foreground">
@@ -878,8 +847,8 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                     className={cn(
                       "flex items-start gap-3 rounded-md border px-3 py-2.5 cursor-pointer transition-colors",
                       slMode === mode
-                        ? "border-primary/50 bg-primary/5"
-                        : "border-border hover:bg-accent/5"
+                        ? "border-foreground/30 bg-muted"
+                        : "border-border hover:bg-muted/50"
                     )}
                   >
                     <input
@@ -888,7 +857,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                       value={mode}
                       checked={slMode === mode}
                       onChange={() => setSlMode(mode)}
-                      className="mt-0.5 accent-primary"
+                      className="mt-0.5 accent-foreground"
                     />
                     <div>
                       <p className="text-[13px] font-medium capitalize">{mode}</p>
@@ -930,7 +899,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                   </span>
                   {slHasKey && !slEditingKey ? (
                     <div className="flex items-center gap-2">
-                      <div className="flex-1 rounded-md border border-border bg-accent/5 px-3 py-2 text-[13px] text-muted-foreground">
+                      <div className="flex-1 rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-muted-foreground">
                         ••••••••••••••••
                       </div>
                       <Button
@@ -1007,8 +976,8 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                   <div className={cn(
                     "flex items-center gap-2 rounded-md px-3 py-2 text-xs",
                     slTestResult.success
-                      ? "bg-emerald-500/10 text-emerald-400"
-                      : "bg-red-500/10 text-red-400"
+                      ? "bg-success/10 text-success"
+                      : "bg-destructive/10 text-destructive"
                   )}>
                     {slTestResult.success ? (
                       <Check className="size-3.5 shrink-0" />
@@ -1025,7 +994,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
               </>
             )}
 
-            {slError && <p className="text-xs text-red-400">{slError}</p>}
+            {slError && <p className="text-xs text-destructive">{slError}</p>}
 
             {/* Save button when mode is never (just save mode change) */}
             {slMode === "never" && (
@@ -1047,23 +1016,22 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
           </div>
         )}
 
-        <div className="px-4 py-2.5 bg-accent/5 border-t border-border">
+        <div className="px-5 py-3 bg-muted/30 border-t border-border">
           <p className="text-[11px] text-muted-foreground">
             Pro feature. Supports Dub.co, Short.io, and Bitly.
           </p>
         </div>
-      </motion.div>
+      </div>
 
       </>)}
 
       {activeTab === "general" && (<>
 
       {/* Signatures */}
-      <motion.div
-        variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+      <div
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
+        <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
             <Pen className="size-3.5" />
             Signatures
@@ -1078,7 +1046,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <div className="p-4 space-y-4">
+          <div className="p-5 space-y-4">
             {/* Existing signatures */}
             {sigs.length > 0 && (
               <div className="space-y-2">
@@ -1091,12 +1059,12 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                       <div className="flex items-center gap-2">
                         <p className="text-[13px] font-medium truncate">{sig.name}</p>
                         {sig.is_default && (
-                          <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                          <span className="inline-flex items-center gap-0.5 rounded-full bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
                             <Star className="size-2.5" />
                             Default
                           </span>
                         )}
-                        <span className="rounded-full bg-accent/40 px-1.5 py-0.5 text-[10px] font-medium text-foreground/50 capitalize">
+                        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground capitalize">
                           {sig.position}
                         </span>
                       </div>
@@ -1109,27 +1077,27 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                         <button
                           type="button"
                           onClick={() => handleSetDefaultSig(sig.id)}
-                          className="rounded p-1 hover:bg-accent/50 transition-colors"
+                          className="rounded p-1 hover:bg-muted transition-colors"
                           title="Set as default"
                         >
-                          <Star className="size-3.5 text-foreground/40" />
+                          <Star className="size-3.5 text-muted-foreground" />
                         </button>
                       )}
                       <button
                         type="button"
                         onClick={() => handleEditSig(sig)}
-                        className="rounded p-1 hover:bg-accent/50 transition-colors"
+                        className="rounded p-1 hover:bg-muted transition-colors"
                         title="Edit"
                       >
-                        <Pen className="size-3.5 text-foreground/40" />
+                        <Pen className="size-3.5 text-muted-foreground" />
                       </button>
                       <button
                         type="button"
                         onClick={() => handleDeleteSig(sig.id)}
-                        className="rounded p-1 hover:bg-accent/50 transition-colors"
+                        className="rounded p-1 hover:bg-muted transition-colors"
                         title="Delete"
                       >
-                        <Trash2 className="size-3.5 text-foreground/40" />
+                        <Trash2 className="size-3.5 text-muted-foreground" />
                       </button>
                     </div>
                   </div>
@@ -1139,7 +1107,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
             {/* Add/Edit form */}
             <div className="space-y-3 rounded-md border border-dashed border-border p-3">
-              <p className="text-xs font-medium text-foreground/70">
+              <p className="text-xs font-medium text-foreground">
                 {sigEditingId ? "Edit Signature" : "Add Signature"}
               </p>
               <input
@@ -1171,12 +1139,12 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                     type="checkbox"
                     checked={sigIsDefault}
                     onChange={(e) => setSigIsDefault(e.target.checked)}
-                    className="accent-primary"
+                    className="accent-foreground"
                   />
                   Set as default
                 </label>
               </div>
-              {sigError && <p className="text-xs text-red-400">{sigError}</p>}
+              {sigError && <p className="text-xs text-destructive">{sigError}</p>}
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
@@ -1206,20 +1174,19 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
           </div>
         )}
 
-        <div className="px-4 py-2.5 bg-accent/5 border-t border-border">
+        <div className="px-5 py-3 bg-muted/30 border-t border-border">
           <p className="text-[11px] text-muted-foreground">
             The default signature is automatically added to new posts. API users can skip it with{" "}
-            <code className="text-[10px] bg-accent/40 px-1 py-0.5 rounded">skip_signature: true</code>.
+            <code className="text-[10px] bg-muted px-1 py-0.5 rounded">skip_signature: true</code>.
           </p>
         </div>
-      </motion.div>
+      </div>
 
       {/* Organization Settings */}
-      <motion.div
-        variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+      <div
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
+        <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
             <Shield className="size-3.5" />
             Organization Settings
@@ -1235,14 +1202,14 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
           </div>
         ) : (
           <div className="divide-y divide-border">
-            <div className="flex items-center justify-between px-4 py-3">
+            <div className="flex items-center justify-between px-5 py-3">
               <div className="flex-1 min-w-0 mr-4">
                 <p className="text-[13px] font-medium">
                   Require Workspace ID
                 </p>
                 <p className="text-[11px] text-muted-foreground">
                   When enabled, all API create requests must include a{" "}
-                  <code className="text-[10px] bg-accent/40 px-1 py-0.5 rounded">
+                  <code className="text-[10px] bg-muted px-1 py-0.5 rounded">
                     workspace_id
                   </code>
                   . Useful for multi-tenant deployments to enforce customer isolation.
@@ -1257,25 +1224,24 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
           </div>
         )}
 
-        <div className="px-4 py-2.5 bg-accent/5 border-t border-border">
+        <div className="px-5 py-3 bg-muted/30 border-t border-border">
           <p className="text-[11px] text-muted-foreground">
             Changes take effect immediately for all API keys in this organization.
           </p>
         </div>
-      </motion.div>
+      </div>
 
       {/* Danger Zone */}
-      <motion.div
-        variants={fadeUp}
-        className="rounded-md border border-red-500/30 overflow-hidden"
+      <div
+        className="rounded-[12px] border border-destructive/30 bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-red-500/30 bg-red-500/5">
-          <h2 className="text-[13px] font-medium text-red-400 flex items-center gap-2">
+        <div className="px-5 py-4 border-b border-destructive/30 bg-destructive/5">
+          <h2 className="text-[13px] font-medium text-destructive flex items-center gap-2">
             <Trash2 className="size-3.5" />
             Danger Zone
           </h2>
         </div>
-        <div className="p-4">
+        <div className="p-5">
           {!deleteConfirmOpen ? (
             <div className="flex items-center justify-between">
               <div>
@@ -1287,7 +1253,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs text-red-400 border-red-500/30 hover:bg-red-500/10 hover:text-red-400"
+                className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
                 onClick={() => setDeleteConfirmOpen(true)}
               >
                 Delete Organization
@@ -1311,11 +1277,11 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                   value={deleteConfirmText}
                   onChange={(e) => setDeleteConfirmText(e.target.value)}
                   placeholder={orgName}
-                  className="w-full rounded-md border border-red-500/30 bg-background px-3 py-2 text-[13px] outline-none focus:ring-1 focus:ring-red-500/50 placeholder:text-muted-foreground/50"
+                  className="w-full rounded-md border border-destructive/30 bg-background px-3 py-2 text-[13px] outline-none focus:ring-1 focus:ring-destructive/50 placeholder:text-muted-foreground/50"
                 />
               </div>
               {deleteError && (
-                <p className="text-xs text-red-400">{deleteError}</p>
+                <p className="text-xs text-destructive">{deleteError}</p>
               )}
               <div className="flex gap-2">
                 <Button
@@ -1332,7 +1298,8 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
                 </Button>
                 <Button
                   size="sm"
-                  className="h-8 text-xs bg-red-600 hover:bg-red-700 text-white"
+                  variant="destructive"
+                  className="h-8 text-xs"
                   onClick={handleDeleteOrg}
                   disabled={deleteLoading || deleteConfirmText !== orgName}
                 >
@@ -1346,12 +1313,12 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
             </div>
           )}
         </div>
-      </motion.div>
+      </div>
 
       </>)}
 
       {activeTab === "tags" && <TagsSettings />}
 
-    </motion.div>
+    </div>
   );
 }

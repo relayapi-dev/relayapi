@@ -38,7 +38,7 @@ export function IdeaCard({
 		<div
 			role="button"
 			tabIndex={0}
-			className="rounded-md border border-border bg-background p-3 cursor-pointer hover:bg-accent/20 transition-colors relative"
+			className="rounded-[12px] border border-border bg-card p-3 cursor-pointer hover:bg-accent transition-colors relative"
 			onClick={onClick}
 			onKeyDown={(e) => {
 				if (e.key === "Enter" || e.key === " ") {
@@ -49,10 +49,10 @@ export function IdeaCard({
 		>
 			{convertedToPostId && (
 				<span
-					className="absolute top-2 right-2 size-4 rounded-full bg-green-500/20 flex items-center justify-center"
+					className="absolute top-2 right-2 size-4 rounded-full bg-success/15 flex items-center justify-center"
 					title="Converted to post"
 				>
-					<Check className="size-2.5 text-green-500" />
+					<Check className="size-2.5 text-success" />
 				</span>
 			)}
 
@@ -69,7 +69,7 @@ export function IdeaCard({
 					{visibleTags.map((tag) => (
 						<span
 							key={tag.id}
-							className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] text-muted-foreground bg-accent/40"
+							className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] text-muted-foreground bg-muted"
 						>
 							<span
 								className="size-1.5 rounded-full shrink-0"

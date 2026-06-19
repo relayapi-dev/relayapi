@@ -11,6 +11,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { organization, useSession } from "@/lib/auth-client";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
 
 const stagger = {
   hidden: {},
@@ -75,6 +78,7 @@ export function TeamPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [tab, setTab] = useState<"members" | "invitations">("members");
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
@@ -207,32 +211,47 @@ export function TeamPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-medium">Team</h1>
-        {canManageMembers && (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setShowInvite(true)}>
-            <Plus className="size-3.5" />
-            Invite Member
-          </Button>
-        )}
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Members"
+        action={
+          canManageMembers ? (
+            <Button onClick={() => setShowInvite(true)}>
+              <Plus className="size-4" />
+              Invite
+            </Button>
+          ) : undefined
+        }
+      />
+
+      <PageToolbar
+        left={
+          <Segmented
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: "members", label: "Members" },
+              { value: "invitations", label: "Invitations" },
+            ]}
+          />
+        }
+      />
 
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
 
       {success && (
-        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600 dark:text-emerald-400">
+        <div className="rounded-[12px] border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">
           {success}
         </div>
       )}
 
       {showInvite && (
         <motion.div
-          className="rounded-md border border-border p-4 space-y-3"
+          className="rounded-[12px] border border-border bg-card p-5 space-y-3"
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
         >
@@ -271,27 +290,26 @@ export function TeamPage() {
           </div>
           <div className="flex gap-2">
             <Button
-              size="sm"
-              className="h-7 text-xs"
               disabled={!inviteEmail.trim() || inviting}
               onClick={handleInvite}
             >
-              {inviting ? <Loader2 className="size-3 animate-spin" /> : "Send Invite"}
+              {inviting ? <Loader2 className="size-4 animate-spin" /> : "Send Invite"}
             </Button>
-            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowInvite(false)}>
+            <Button variant="outline" onClick={() => setShowInvite(false)}>
               Cancel
             </Button>
           </div>
         </motion.div>
       )}
 
+      {tab === "members" && (
       <motion.div
-        className="rounded-md border border-border overflow-hidden"
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
         variants={stagger}
         initial="hidden"
         animate="visible"
       >
-        <div className="hidden md:grid grid-cols-[2fr_1fr_1fr_auto] gap-4 px-4 py-3 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
+        <div className="hidden md:grid grid-cols-[2fr_1fr_1fr_auto] gap-4 px-5 py-3 text-xs text-muted-foreground border-b border-border bg-muted/40">
           <span>Member</span>
           <span>Role</span>
           <span>Joined</span>
@@ -305,8 +323,8 @@ export function TeamPage() {
               key={member.id}
               variants={fadeUp}
               className={cn(
-                "grid md:grid-cols-[2fr_1fr_1fr_auto] gap-3 md:gap-4 p-4 items-center hover:bg-accent/30 transition-colors",
-                (i !== members.length - 1 || invitations.length > 0) && "border-b border-border"
+                "grid md:grid-cols-[2fr_1fr_1fr_auto] gap-3 md:gap-4 px-5 py-4 items-center hover:bg-accent transition-colors",
+                i !== members.length - 1 && "border-b border-border"
               )}
             >
               <div className="flex items-center gap-3">
@@ -323,7 +341,7 @@ export function TeamPage() {
                   )}
                 </div>
                 <div>
-                  <p className="text-sm font-medium">{user.name || "Unnamed"}</p>
+                  <p className="text-[13px] font-medium text-foreground">{user.name || "Unnamed"}</p>
                   <p className="text-xs text-muted-foreground">{user.email}</p>
                 </div>
               </div>
@@ -335,7 +353,7 @@ export function TeamPage() {
               >
                 {member.role}
               </span>
-              <span className="text-sm text-muted-foreground">
+              <span className="text-[13px] text-muted-foreground">
                 {new Date(member.createdAt).toLocaleDateString("en-US", {
                   month: "short",
                   day: "numeric",
@@ -345,7 +363,7 @@ export function TeamPage() {
               <div className="flex items-center gap-1 justify-self-end">
                 <a
                   href={`mailto:${user.email}`}
-                  className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors"
+                  className="rounded-md p-1.5 hover:bg-accent transition-colors"
                   title={`Email ${user.email}`}
                 >
                   <Mail className="size-4 text-muted-foreground" />
@@ -353,7 +371,7 @@ export function TeamPage() {
                 {member.role !== "owner" && canManageMembers && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button type="button" className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors">
+                      <button type="button" className="rounded-md p-1.5 hover:bg-accent transition-colors">
                         {(removingMemberId === member.id || updatingRoleId === member.id) ? (
                           <Loader2 className="size-4 animate-spin text-muted-foreground" />
                         ) : (
@@ -384,15 +402,17 @@ export function TeamPage() {
           );
         })}
       </motion.div>
+      )}
 
-      {canManageMembers && invitations.length > 0 && (
+      {tab === "invitations" && (
+        canManageMembers && invitations.length > 0 ? (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <Clock className="size-4 text-muted-foreground" />
             <h2 className="text-sm font-medium text-muted-foreground">Pending Invitations</h2>
           </div>
           <motion.div
-            className="rounded-md border border-dashed border-border overflow-hidden"
+            className="rounded-[12px] border border-dashed border-border bg-card overflow-hidden"
             variants={stagger}
             initial="hidden"
             animate="visible"
@@ -402,7 +422,7 @@ export function TeamPage() {
                 key={inv.id}
                 variants={fadeUp}
                 className={cn(
-                  "grid md:grid-cols-[2fr_1fr_1fr_auto] gap-3 md:gap-4 p-4 items-center",
+                  "grid md:grid-cols-[2fr_1fr_1fr_auto] gap-3 md:gap-4 px-5 py-4 items-center",
                   i !== invitations.length - 1 && "border-b border-border"
                 )}
               >
@@ -411,8 +431,8 @@ export function TeamPage() {
                     <Mail className="size-4" />
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-muted-foreground">{inv.email}</p>
-                    <p className="text-xs text-muted-foreground/60">Invitation pending</p>
+                    <p className="text-[13px] font-medium text-foreground">{inv.email}</p>
+                    <p className="text-xs text-muted-foreground">Invitation pending</p>
                   </div>
                 </div>
                 <span
@@ -423,7 +443,7 @@ export function TeamPage() {
                 >
                   {inv.role}
                 </span>
-                <span className="text-xs text-muted-foreground">
+                <span className="text-[13px] text-muted-foreground">
                   Sent{" "}
                   {new Date(inv.createdAt).toLocaleDateString("en-US", {
                     month: "short",
@@ -436,7 +456,7 @@ export function TeamPage() {
                     type="button"
                     onClick={() => handleResendInvitation(inv.id)}
                     disabled={resendingId === inv.id}
-                    className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors text-muted-foreground disabled:opacity-50"
+                    className="rounded-md p-1.5 hover:bg-accent transition-colors text-muted-foreground disabled:opacity-50"
                     title="Resend invitation"
                   >
                     {resendingId === inv.id ? (
@@ -449,7 +469,7 @@ export function TeamPage() {
                     type="button"
                     onClick={() => handleCancelInvitation(inv.id)}
                     disabled={cancellingId === inv.id}
-                    className="rounded-lg p-1.5 hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive disabled:opacity-50"
+                    className="rounded-md p-1.5 hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive disabled:opacity-50"
                     title="Cancel invitation"
                   >
                     {cancellingId === inv.id ? (
@@ -463,6 +483,12 @@ export function TeamPage() {
             ))}
           </motion.div>
         </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-2 rounded-[12px] border border-dashed border-border bg-card px-6 py-16 text-center">
+            <Clock className="size-5 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">No pending invitations</p>
+          </div>
+        )
       )}
     </div>
   );

@@ -1,12 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import { motion } from "motion/react";
-import { Loader2, Lock, Star, BookOpen, Send, Trash2, MessageSquare } from "lucide-react";
+import { Loader2, Lock, Star, Send, Trash2, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { useUsage } from "@/hooks/use-usage";
 import { LoadMore } from "@/components/ui/load-more";
-import { FilterBar } from "@/components/dashboard/filter-bar";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -45,12 +48,9 @@ export function InboxReviewsPage() {
 
   if (!isPro && usage !== null) {
     return (
-      <div className="space-y-6">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Reviews</h1>
-          <a href="https://docs.relayapi.dev/api-reference/inbox" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        <div className="rounded-md border border-border p-12 text-center">
+      <div className="space-y-6 pb-16">
+        <PageHeader title="Reviews" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
+        <div className="rounded-[12px] border border-border bg-card p-12 text-center">
           <Lock className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm font-medium">Pro Feature</p>
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
@@ -68,35 +68,37 @@ export function InboxReviewsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-2">
-        <h1 className="text-lg font-medium">Reviews</h1>
-        <a href="https://docs.relayapi.dev/api-reference/inbox" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader title="Reviews" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
 
-      <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <div className="pb-2 flex items-center gap-1">
-          {[1, 2, 3, 4, 5].map((rating) => (
-            <button
-              type="button"
-              key={rating}
-              onClick={() => setMinRating(minRating === rating ? null : rating)}
-              className={cn(
-                "inline-flex items-center gap-1 text-xs font-medium h-7 px-2 rounded-md transition-colors whitespace-nowrap",
-                minRating === rating
-                  ? "bg-amber-500/10 text-amber-600"
-                  : "text-muted-foreground/50 hover:text-muted-foreground"
-              )}
-              title={`${rating}+ stars`}
-            >
-              {rating}<Star className={cn("size-3", minRating === rating && "fill-amber-500")} />+
-            </button>
-          ))}
-        </div>
-        <div className="pb-2 shrink-0">
-          <FilterBar />
-        </div>
-      </div>
+      <PageToolbar
+        left={
+          <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
+            {[1, 2, 3, 4, 5].map((rating) => (
+              <button
+                type="button"
+                key={rating}
+                onClick={() => setMinRating(minRating === rating ? null : rating)}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-[6px] px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap",
+                  minRating === rating
+                    ? "bg-card text-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                title={`${rating}+ stars`}
+              >
+                {rating}<Star className={cn("size-3", minRating === rating && "fill-amber-500 text-amber-500")} />+
+              </button>
+            ))}
+          </div>
+        }
+        right={
+          <>
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+          </>
+        }
+      />
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -109,7 +111,7 @@ export function InboxReviewsPage() {
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       ) : reviews.length === 0 && !error ? (
-        <div className="rounded-md border border-dashed border-border p-12 text-center">
+        <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
           <Star className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">No reviews</p>
           <p className="text-xs text-muted-foreground mt-1">
@@ -229,7 +231,7 @@ function ReviewCard({
   };
 
   return (
-    <motion.div variants={fadeUp} className="rounded-lg border border-border p-4 space-y-3">
+    <motion.div variants={fadeUp} className="rounded-[12px] border border-border bg-card p-4 space-y-3">
       <div className="flex items-start gap-3">
         <PlatformBadge platform={platform} />
         <div className="flex-1 min-w-0">

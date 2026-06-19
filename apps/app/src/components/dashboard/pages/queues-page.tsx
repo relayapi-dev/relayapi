@@ -1,9 +1,12 @@
 import { useCallback } from "react";
 import { motion } from "motion/react";
-import { Clock, CheckCircle, Loader2, AlertTriangle, RotateCw } from "lucide-react";
+import { Clock, CheckCircle, Loader2, AlertTriangle, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useApi } from "@/hooks/use-api";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { IconButton } from "@/components/dashboard/icon-button";
 
 const stagger = {
   hidden: {},
@@ -34,17 +37,17 @@ interface QueueSlotsResponse {
 }
 
 const statConfig = [
-  { key: "pending", label: "Pending", icon: Clock, color: "text-blue-400 bg-blue-400/10" },
-  { key: "processing", label: "Processing", icon: Loader2, color: "text-amber-400 bg-amber-400/10" },
-  { key: "completed", label: "Completed", icon: CheckCircle, color: "text-emerald-400 bg-emerald-400/10" },
-  { key: "failed", label: "Failed", icon: AlertTriangle, color: "text-red-400 bg-red-400/10" },
+  { key: "pending", label: "Pending", icon: Clock, color: "text-muted-foreground bg-muted" },
+  { key: "processing", label: "Processing", icon: Loader2, color: "text-foreground bg-accent" },
+  { key: "completed", label: "Completed", icon: CheckCircle, color: "text-success bg-success/10" },
+  { key: "failed", label: "Failed", icon: AlertTriangle, color: "text-destructive bg-destructive/10" },
 ];
 
 const statusStyles: Record<string, string> = {
-  completed: "text-emerald-400 bg-emerald-400/10",
-  processing: "text-amber-400 bg-amber-400/10",
-  pending: "text-blue-400 bg-blue-400/10",
-  failed: "text-red-400 bg-red-400/10",
+  completed: "text-success bg-success/10",
+  processing: "text-foreground bg-accent",
+  pending: "text-muted-foreground bg-muted",
+  failed: "text-destructive bg-destructive/10",
 };
 
 export function QueuesPage() {
@@ -66,18 +69,16 @@ export function QueuesPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-medium">Queues</h1>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent/50 transition-colors"
-          onClick={() => refetch()}
-        >
-          <RotateCw className="size-3" />
-          Refresh
-        </button>
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader title="Queues" />
+
+      <PageToolbar
+        right={
+          <IconButton title="Refresh" onClick={() => refetch()}>
+            <RefreshCw />
+          </IconButton>
+        }
+      />
 
       <motion.div
         className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
@@ -92,7 +93,7 @@ export function QueuesPage() {
             <motion.div
               key={stat.label}
               variants={fadeUp}
-              className="rounded-md border border-border p-4"
+              className="rounded-[12px] border border-border bg-card p-5"
             >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-medium text-muted-foreground">
@@ -112,15 +113,15 @@ export function QueuesPage() {
 
       {slots.length > 0 && (
         <motion.div
-          className="rounded-md border border-border overflow-hidden"
+          className="rounded-[12px] border border-border bg-card overflow-hidden"
           variants={stagger}
           initial="hidden"
           animate="visible"
         >
-          <div className="px-4 py-3 border-b border-border">
+          <div className="px-5 py-3 border-b border-border">
             <h3 className="text-[13px] font-medium">Recent Jobs</h3>
           </div>
-          <div className="hidden md:grid grid-cols-[1fr_1fr_1fr_0.7fr_0.7fr_0.8fr] gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
+          <div className="hidden md:grid grid-cols-[1fr_1fr_1fr_0.7fr_0.7fr_0.8fr] gap-4 px-5 py-2.5 text-xs text-muted-foreground border-b border-border bg-muted">
             <span>Job ID</span>
             <span>Type</span>
             <span>Platform</span>
@@ -133,7 +134,7 @@ export function QueuesPage() {
               key={job.id}
               variants={fadeUp}
               className={cn(
-                "grid md:grid-cols-[1fr_1fr_1fr_0.7fr_0.7fr_0.8fr] gap-3 md:gap-4 p-4 md:py-3 items-center text-sm hover:bg-accent/30 transition-colors",
+                "grid md:grid-cols-[1fr_1fr_1fr_0.7fr_0.7fr_0.8fr] gap-3 md:gap-4 px-5 py-4 md:py-3 items-center text-[13px] hover:bg-accent transition-colors",
                 i !== slots.length - 1 && "border-b border-border"
               )}
             >
@@ -145,7 +146,7 @@ export function QueuesPage() {
               <span
                 className={cn(
                   "inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[11px] font-medium capitalize",
-                  statusStyles[job.status] || "text-blue-400 bg-blue-400/10"
+                  statusStyles[job.status] || "text-muted-foreground bg-muted"
                 )}
               >
                 {job.status}
@@ -165,7 +166,7 @@ export function QueuesPage() {
       )}
 
       {slots.length === 0 && (
-        <div className="rounded-md border border-dashed border-border p-12 text-center">
+        <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
           <Clock className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">No queue jobs</p>
           <p className="text-xs text-muted-foreground mt-1">

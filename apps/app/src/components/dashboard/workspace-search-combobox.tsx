@@ -25,7 +25,7 @@ interface WorkspaceSearchComboboxProps {
   showUnassignedOption?: boolean;
   placeholder?: string;
   className?: string;
-  variant?: "default" | "input";
+  variant?: "default" | "input" | "icon";
   align?: "left" | "right";
 }
 
@@ -154,31 +154,53 @@ export function WorkspaceSearchCombobox({
     setSearch("");
   };
 
+  const triggerLabel = value === "__ungrouped"
+    ? "Unassigned"
+    : value === null
+      ? (placeholder || "All workspaces")
+      : (selectedName || placeholder || "Workspace");
+
   return (
-    <div ref={containerRef} className={cn("relative", className)}>
-      <button
-        type="button"
-        onClick={() => { setOpen(!open); setTimeout(() => inputRef.current?.focus(), 50); }}
-        className={cn(
-          "flex items-center gap-1.5 rounded-md text-muted-foreground transition-colors w-full text-left",
-          variant === "input"
-            ? "border border-border bg-background px-3 py-2 text-sm hover:border-ring"
-            : "px-2.5 py-1.5 text-xs font-medium hover:bg-accent/50 hover:text-foreground"
-        )}
-      >
-        <FolderOpen className="size-3.5 shrink-0" />
-        <span className="truncate flex-1">
-          {value === null && showAllOption ? "All workspaces" : selectedName || placeholder}
-        </span>
-        {value && value !== "__all" ? (
-          <X
-            className="size-3 hover:text-foreground shrink-0"
-            onClick={(e) => { e.stopPropagation(); handleSelect(null); }}
-          />
-        ) : (
-          <Search className="size-3 shrink-0 opacity-50" />
-        )}
-      </button>
+    <div ref={containerRef} className={cn("relative", variant === "icon" ? "inline-flex" : "", className)}>
+      {variant === "icon" ? (
+        <button
+          type="button"
+          title={triggerLabel}
+          onClick={() => { setOpen(!open); setTimeout(() => inputRef.current?.focus(), 50); }}
+          className={cn(
+            "inline-flex items-center justify-center size-8 rounded-md transition-colors ease-[var(--ease-relay)] [&_svg]:size-4 [&_svg]:shrink-0",
+            value !== null || open
+              ? "bg-accent text-foreground"
+              : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+          )}
+        >
+          <FolderOpen strokeWidth={1.75} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => { setOpen(!open); setTimeout(() => inputRef.current?.focus(), 50); }}
+          className={cn(
+            "flex items-center gap-1.5 rounded-md text-muted-foreground transition-colors w-full text-left",
+            variant === "input"
+              ? "border border-border bg-background px-3 py-2 text-sm hover:border-ring"
+              : "px-2.5 py-1.5 text-xs font-medium hover:bg-accent/50 hover:text-foreground"
+          )}
+        >
+          <FolderOpen className="size-3.5 shrink-0" />
+          <span className="truncate flex-1">
+            {value === null && showAllOption ? "All workspaces" : selectedName || placeholder}
+          </span>
+          {value && value !== "__all" ? (
+            <X
+              className="size-3 hover:text-foreground shrink-0"
+              onClick={(e) => { e.stopPropagation(); handleSelect(null); }}
+            />
+          ) : (
+            <Search className="size-3 shrink-0 opacity-50" />
+          )}
+        </button>
+      )}
 
       {open && dropdownPos && createPortal(
         <div ref={dropdownRef} data-combobox-dropdown className="fixed z-50 min-w-[220px] rounded-lg border border-border bg-background shadow-lg" style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, position: "absolute" }} onPointerDown={(e) => e.stopPropagation()}>

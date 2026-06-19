@@ -1,14 +1,20 @@
 import { useState, useMemo } from "react";
 import { motion } from "motion/react";
-import { Home, Lock, Loader2, AlertTriangle, BookOpen } from "lucide-react";
+import { Home, Lock, Loader2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useApi } from "@/hooks/use-api";
 import { useUsage } from "@/hooks/use-usage";
 import { platformLabels, platformColors, platformAvatars } from "@/lib/platform-maps";
 import { platformIcons } from "@/lib/platform-icons";
+import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
 import { AnalyticsHome } from "./analytics-home";
 import { AnalyticsChannel } from "./analytics-channel";
 import type { InitialApiData } from "@/lib/dashboard-page";
+
+const DOCS_HREF = "https://docs.relayapi.dev/api-reference/analytics";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,6 +81,13 @@ const datePresetLabels: Record<DatePreset, string> = {
   year: "This year",
 };
 
+const datePresetShortLabels: Record<DatePreset, string> = {
+  "7d": "7d",
+  "30d": "30d",
+  "90d": "90d",
+  year: "Year",
+};
+
 // ---------------------------------------------------------------------------
 // Animation variants
 // ---------------------------------------------------------------------------
@@ -90,24 +103,17 @@ const fadeUp = {
 
 function AnalyticsPageLoadingSkeleton() {
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Analytics</h1>
-          <a
-            href="https://docs.relayapi.dev/api-reference/analytics"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <BookOpen className="size-3.5" />
-          </a>
-        </div>
-        <div className="h-7 w-32 rounded bg-muted-foreground/10 animate-pulse" />
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Analytics"
+        docsHref={DOCS_HREF}
+        action={
+          <div className="h-8 w-32 rounded-md bg-muted animate-pulse" />
+        }
+      />
 
       <div className="sm:hidden">
-        <div className="h-10 w-full rounded-md border border-border bg-muted-foreground/10 animate-pulse" />
+        <div className="h-10 w-full rounded-[12px] border border-border bg-muted animate-pulse" />
       </div>
 
       <div className="flex gap-6">
@@ -228,31 +234,18 @@ export function AnalyticsPageNew({
 
   if (!isPro) {
     return (
-      <div className="space-y-6">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Analytics</h1>
-          <a
-            href="https://docs.relayapi.dev/api-reference/analytics"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <BookOpen className="size-3.5" />
-          </a>
-        </div>
-        <div className="rounded-md border border-border p-12 text-center">
+      <div className="space-y-6 pb-16">
+        <PageHeader title="Analytics" docsHref={DOCS_HREF} />
+        <div className="rounded-[12px] border border-border bg-card p-12 text-center">
           <Lock className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm font-medium">Pro Feature</p>
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
             Upgrade to the Pro plan to access cross-platform analytics,
             engagement metrics, and performance insights.
           </p>
-          <button
-            type="button"
-            className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
+          <Button type="button" className="mt-4">
             Upgrade to Pro
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -261,34 +254,25 @@ export function AnalyticsPageNew({
   // -- Main layout ----------------------------------------------------------
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Analytics</h1>
-          <a
-            href="https://docs.relayapi.dev/api-reference/analytics"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <BookOpen className="size-3.5" />
-          </a>
-        </div>
-        <select
-          value={datePreset}
-          onChange={(e) => changeDatePreset(e.target.value as DatePreset)}
-          className="rounded-md border border-border bg-transparent pl-2.5 pr-7 py-1 text-xs text-foreground"
-        >
-          {(Object.entries(datePresetLabels) as [DatePreset, string][]).map(
-            ([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ),
-          )}
-        </select>
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader title="Analytics" docsHref={DOCS_HREF} />
+
+      {/* Date-range control */}
+      <PageToolbar
+        right={
+          <Segmented
+            value={datePreset}
+            onChange={(v) => changeDatePreset(v)}
+            options={(Object.keys(datePresetShortLabels) as DatePreset[]).map(
+              (value) => ({
+                value,
+                label: datePresetShortLabels[value],
+                title: datePresetLabels[value],
+              }),
+            )}
+          />
+        }
+      />
 
       {/* Mobile channel selector (visible below sm) */}
       <div className="sm:hidden">
@@ -297,7 +281,7 @@ export function AnalyticsPageNew({
           onChange={(e) =>
             selectChannel(e.target.value === "" ? null : e.target.value)
           }
-          className="w-full rounded-md border border-border bg-transparent px-2.5 py-2 text-sm text-foreground"
+          className="w-full rounded-[12px] border border-border bg-card px-2.5 py-2 text-sm text-foreground"
         >
           <option value="">Home</option>
           {channels.map((ch) => (
@@ -329,8 +313,8 @@ export function AnalyticsPageNew({
               className={cn(
                 "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
                 selectedChannel === null
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-sidebar-accent",
               )}
             >
               <Home className="size-4" />
@@ -368,8 +352,8 @@ export function AnalyticsPageNew({
                 className={cn(
                   "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm transition-colors",
                   selectedChannel === ch.account_id
-                    ? "bg-muted text-foreground font-medium"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                    ? "bg-accent text-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground hover:bg-sidebar-accent",
                 )}
               >
                 {/* Platform avatar */}

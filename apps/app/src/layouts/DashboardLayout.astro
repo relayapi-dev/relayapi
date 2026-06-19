@@ -2,7 +2,7 @@
 import "../styles/globals.css";
 ---
 
-<html lang="en" class="dark">
+<html lang="en" class="dash-theme">
 	<head>
 		<meta charset="utf-8" />
 		<meta
@@ -23,6 +23,14 @@ import "../styles/globals.css";
 					monospace;
 			}
 		</style>
+		<script is:inline>
+			// Apply saved dashboard theme before paint (light default) to avoid FOUC.
+			try {
+				if (localStorage.getItem("relay_theme") === "dark") {
+					document.documentElement.classList.add("dark");
+				}
+			} catch (e) {}
+		</script>
 	</head>
 	<body class="antialiased font-sans overflow-hidden">
 		<script>

@@ -15,6 +15,10 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi, useMutation } from "@/hooks/use-api";
+import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
 
 interface NotificationItem {
   id: string;
@@ -37,13 +41,13 @@ const NOTIF_TYPE_ICON: Record<string, typeof AlertTriangle> = {
 };
 
 const NOTIF_TYPE_COLOR: Record<string, string> = {
-  post_failed: "text-rose-500",
-  post_published: "text-emerald-500",
-  account_disconnected: "text-amber-500",
-  payment_failed: "text-rose-500",
-  usage_warning: "text-amber-500",
-  weekly_digest: "text-indigo-500",
-  marketing: "text-indigo-500",
+  post_failed: "text-destructive",
+  post_published: "text-success",
+  account_disconnected: "text-foreground",
+  payment_failed: "text-destructive",
+  usage_warning: "text-foreground",
+  weekly_digest: "text-muted-foreground",
+  marketing: "text-muted-foreground",
 };
 
 function timeAgo(dateStr: string): string {
@@ -105,48 +109,32 @@ export function NotificationsPage() {
 
   return (
     <motion.div
-      className="space-y-6"
+      className="space-y-6 pb-16"
       variants={stagger}
       initial="hidden"
       animate="visible"
     >
-      <motion.div variants={fadeUp} className="flex items-center justify-between">
-        <h1 className="text-lg font-medium">Notifications</h1>
-        <button
-          type="button"
-          onClick={handleMarkAllRead}
-          className="text-[12px] text-muted-foreground hover:text-foreground transition-colors"
-        >
-          Mark all as read
-        </button>
-      </motion.div>
+      <PageHeader
+        title="Notifications"
+        action={
+          <Button variant="outline" onClick={handleMarkAllRead}>
+            Mark all as read
+          </Button>
+        }
+      />
 
-      <motion.div variants={fadeUp} className="flex gap-1">
-        <button
-          type="button"
-          onClick={() => setFilter("all")}
-          className={cn(
-            "rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors",
-            filter === "all"
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-accent/40",
-          )}
-        >
-          All
-        </button>
-        <button
-          type="button"
-          onClick={() => setFilter("unread")}
-          className={cn(
-            "rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors",
-            filter === "unread"
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-accent/40",
-          )}
-        >
-          Unread
-        </button>
-      </motion.div>
+      <PageToolbar
+        left={
+          <Segmented
+            value={filter}
+            onChange={setFilter}
+            options={[
+              { value: "all", label: "All" },
+              { value: "unread", label: "Unread" },
+            ]}
+          />
+        }
+      />
 
       <motion.div variants={fadeUp}>
         {loading ? (
@@ -161,7 +149,7 @@ export function NotificationsPage() {
             </p>
           </div>
         ) : (
-          <div className="rounded-md border border-border overflow-hidden divide-y divide-border">
+          <div className="rounded-[12px] border border-border bg-card overflow-hidden divide-y divide-border">
             {notifs.map((notif) => {
               const Icon = NOTIF_TYPE_ICON[notif.type] || Mail;
               const iconColor = NOTIF_TYPE_COLOR[notif.type] || "text-muted-foreground";
@@ -171,11 +159,11 @@ export function NotificationsPage() {
                   key={notif.id}
                   onClick={() => handleMarkRead(notif)}
                   className={cn(
-                    "flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-accent/30 transition-colors",
-                    !notif.read && "bg-accent/10",
+                    "flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-accent transition-colors",
+                    !notif.read && "bg-muted",
                   )}
                 >
-                  <div className={cn("mt-0.5 flex size-8 items-center justify-center rounded-full shrink-0", !notif.read ? "bg-accent/30" : "bg-accent/10")}>
+                  <div className={cn("mt-0.5 flex size-8 items-center justify-center rounded-full shrink-0", !notif.read ? "bg-accent" : "bg-muted")}>
                     <Icon className={cn("size-4", iconColor)} />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -190,7 +178,7 @@ export function NotificationsPage() {
                     </p>
                   </div>
                   {!notif.read && (
-                    <span className="mt-2 size-2 rounded-full bg-indigo-500 shrink-0" />
+                    <span className="mt-2 size-2 rounded-full bg-primary shrink-0" />
                   )}
                 </button>
               );

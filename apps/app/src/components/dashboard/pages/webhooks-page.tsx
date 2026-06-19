@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Plus, Zap, Loader2, Trash2, FileText, BookOpen, ChevronDown } from "lucide-react";
+import { Plus, Zap, Loader2, Trash2, FileText, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi, useMutation } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
 
 const WEBHOOK_EVENT_GROUPS = [
   {
@@ -134,40 +137,32 @@ export function WebhooksPage({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Webhooks</h1>
-          <a href="https://docs.relayapi.dev/api-reference/webhooks" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        {activeTab === "endpoints" && (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setShowCreate(true)}>
-            <Plus className="size-3.5" />
-            Add Webhook
-          </Button>
-        )}
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Webhooks"
+        docsHref="https://docs.relayapi.dev/api-reference/webhooks"
+        action={
+          activeTab === "endpoints" ? (
+            <Button onClick={() => setShowCreate(true)}>
+              <Plus className="size-4" />
+              Add Webhook
+            </Button>
+          ) : undefined
+        }
+      />
 
-      <div className="flex gap-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        {tabs.map((tab) => {
-          const tabKey = tab.toLowerCase() as typeof initialTab;
-          return (
-            <button
-              type="button"
-              key={tab}
-              onClick={() => switchTab(tabKey)}
-              className={cn(
-                "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-                activeTab === tabKey
-                  ? "border-foreground text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {tab}
-            </button>
-          );
-        })}
-      </div>
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={tabs.map((tab) => ({
+              value: tab.toLowerCase() as typeof initialTab,
+              label: tab,
+            }))}
+          />
+        }
+      />
 
       {webhooksError && activeTab === "endpoints" && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -180,7 +175,7 @@ export function WebhooksPage({
         <>
           {showCreate && (
             <motion.div
-              className="rounded-md border border-border p-4 space-y-3"
+              className="rounded-[12px] border border-border bg-card p-5 space-y-3"
               initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
             >
@@ -226,7 +221,7 @@ export function WebhooksPage({
                           // biome-ignore lint/a11y/noLabelWithoutControl: label wraps the Radix Checkbox control, which Biome cannot detect
                           <label
                             key={event.value}
-                            className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent/30 transition-colors cursor-pointer"
+                            className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent transition-colors cursor-pointer"
                           >
                             <Checkbox
                               checked={selectedEvents.has(event.value)}
@@ -271,7 +266,7 @@ export function WebhooksPage({
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : webhooks.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <Zap className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No webhooks configured</p>
               <p className="text-xs text-muted-foreground mt-1">
@@ -290,7 +285,7 @@ export function WebhooksPage({
                   <motion.div
                     key={webhook.id}
                     variants={fadeUp}
-                    className="rounded-md border border-border p-4 hover:bg-accent/20 transition-colors"
+                    className="rounded-[12px] border border-border bg-card p-5 hover:bg-accent transition-colors"
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex items-start gap-3">
@@ -298,8 +293,8 @@ export function WebhooksPage({
                           className={cn(
                             "rounded-md p-1.5 mt-0.5",
                             webhook.enabled
-                              ? "bg-emerald-400/10 text-emerald-400"
-                              : "bg-neutral-400/10 text-neutral-400"
+                              ? "bg-success/10 text-success"
+                              : "bg-muted text-muted-foreground"
                           )}
                         >
                           <Zap className="size-4" />
@@ -322,11 +317,11 @@ export function WebhooksPage({
                       </div>
                       <button
                         type="button"
-                        className="rounded-lg p-1.5 hover:bg-red-500/10 transition-colors shrink-0"
+                        className="rounded-md p-1.5 hover:bg-destructive/10 transition-colors shrink-0 group"
                         onClick={() => handleDelete(webhook.id)}
                         title="Delete webhook"
                       >
-                        <Trash2 className="size-4 text-muted-foreground hover:text-red-400" />
+                        <Trash2 className="size-4 text-muted-foreground group-hover:text-destructive" />
                       </button>
                     </div>
                     <div className="flex items-center justify-between mt-4 pl-11">
@@ -334,7 +329,7 @@ export function WebhooksPage({
                         {(webhook.events || []).map((event) => (
                           <span
                             key={event}
-                            className="inline-flex rounded-md bg-accent/50 px-2 py-0.5 text-[11px] font-mono text-muted-foreground"
+                            className="inline-flex rounded-md bg-muted px-2 py-0.5 text-[11px] font-mono text-muted-foreground"
                           >
                             {event}
                           </span>
@@ -344,14 +339,14 @@ export function WebhooksPage({
                         className={cn(
                           "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium shrink-0",
                           webhook.enabled
-                            ? "text-emerald-400 bg-emerald-400/10"
-                            : "text-neutral-400 bg-neutral-400/10"
+                            ? "text-success bg-success/10"
+                            : "text-muted-foreground bg-muted"
                         )}
                       >
                         <span
                           className={cn(
                             "size-1.5 rounded-full",
-                            webhook.enabled ? "bg-emerald-400" : "bg-neutral-400"
+                            webhook.enabled ? "bg-success" : "bg-muted-foreground"
                           )}
                         />
                         {webhook.enabled ? "active" : "inactive"}
@@ -378,7 +373,7 @@ export function WebhooksPage({
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         ) : logs.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border p-12 text-center">
+          <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
             <FileText className="size-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No webhook delivery logs</p>
             <p className="text-xs text-muted-foreground mt-1">
@@ -388,12 +383,12 @@ export function WebhooksPage({
         ) : (
           <>
             <motion.div
-              className="rounded-md border border-border overflow-hidden"
+              className="rounded-[12px] border border-border bg-card overflow-hidden"
               variants={stagger}
               initial="hidden"
               animate="visible"
             >
-              <div className="hidden md:grid grid-cols-[1.5fr_1fr_0.8fr_0.8fr_1fr] gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
+              <div className="hidden md:grid grid-cols-[1.5fr_1fr_0.8fr_0.8fr_1fr] gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-muted">
                 <span>Webhook</span>
                 <span>Event</span>
                 <span>Status</span>
@@ -410,21 +405,21 @@ export function WebhooksPage({
                 >
                   <button
                     type="button"
-                    className="w-full text-left grid md:grid-cols-[1.5fr_1fr_0.8fr_0.8fr_1fr] gap-3 md:gap-4 p-4 md:py-3 items-center hover:bg-accent/30 transition-colors cursor-pointer"
+                    className="w-full text-left grid md:grid-cols-[1.5fr_1fr_0.8fr_0.8fr_1fr] gap-3 md:gap-4 p-4 md:py-3 items-center text-[13px] hover:bg-accent transition-colors cursor-pointer"
                     onClick={() => setExpandedLog(expandedLog === log.id ? null : log.id)}
                   >
                     <code className="text-xs font-mono text-muted-foreground truncate">
                       {log.webhook_id}
                     </code>
-                    <span className="inline-flex rounded-md bg-accent/50 px-2 py-0.5 text-[11px] font-mono text-muted-foreground w-fit">
+                    <span className="inline-flex rounded-md bg-muted px-2 py-0.5 text-[11px] font-mono text-muted-foreground w-fit">
                       {log.event}
                     </span>
                     <span
                       className={cn(
                         "inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
                         log.success
-                          ? "text-emerald-400 bg-emerald-400/10"
-                          : "text-red-400 bg-red-400/10"
+                          ? "text-success bg-success/10"
+                          : "text-destructive bg-destructive/10"
                       )}
                     >
                       {log.status_code}
@@ -450,13 +445,13 @@ export function WebhooksPage({
                   {expandedLog === log.id && (
                     <div className="px-4 pb-4 space-y-2">
                       <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Request Body</p>
-                      <pre className="text-xs font-mono bg-accent/30 rounded-md p-3 overflow-x-auto max-h-64 text-foreground/80">
+                      <pre className="text-xs font-mono bg-muted rounded-md p-3 overflow-x-auto max-h-64 text-foreground/80">
                         {log.payload ? JSON.stringify(log.payload, null, 2) : "No payload recorded"}
                       </pre>
                       {log.error && (
                         <>
-                          <p className="text-[11px] font-medium text-red-400 uppercase tracking-wider mt-2">Error</p>
-                          <pre className="text-xs font-mono bg-red-400/10 text-red-400 rounded-md p-3 overflow-x-auto">{log.error}</pre>
+                          <p className="text-[11px] font-medium text-destructive uppercase tracking-wider mt-2">Error</p>
+                          <pre className="text-xs font-mono bg-destructive/10 text-destructive rounded-md p-3 overflow-x-auto">{log.error}</pre>
                         </>
                       )}
                     </div>

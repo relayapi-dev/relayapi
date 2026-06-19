@@ -5,7 +5,10 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
-import { FilterBar } from "@/components/dashboard/filter-bar";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
 import { platformColors, platformAvatars, platformLabels } from "@/lib/platform-maps";
 import { ContactCreateDialog } from "@/components/dashboard/contacts/contact-create-dialog";
@@ -61,24 +64,28 @@ export function ContactsPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-medium">Contacts</h1>
-        <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setCreateOpen(true)}>
-          <Plus className="size-3.5" />
-          Add Contact
-        </Button>
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Contacts"
+        action={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
+            Add Contact
+          </Button>
+        }
+      />
 
-      <div className="flex items-end justify-between gap-x-4 border-b border-border">
-        <div />
-        <div className="pb-2 shrink-0">
-          <FilterBar />
-        </div>
-      </div>
+      <PageToolbar
+        right={
+          <>
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+          </>
+        }
+      />
 
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
@@ -88,7 +95,7 @@ export function ContactsPage() {
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       ) : contacts.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border p-12 text-center">
+        <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
           <Users className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">No contacts yet</p>
           <p className="text-xs text-muted-foreground mt-1">
@@ -98,13 +105,13 @@ export function ContactsPage() {
       ) : (
         <>
           <motion.div
-            className="rounded-md border border-border overflow-hidden"
+            className="rounded-[12px] border border-border bg-card overflow-hidden"
             variants={stagger}
             initial="hidden"
             animate="visible"
           >
             {/* Table header */}
-            <div className="hidden md:grid grid-cols-[1.5fr_1.2fr_1fr_1fr_0.8fr] gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
+            <div className="hidden md:grid grid-cols-[1.5fr_1.2fr_1fr_1fr_0.8fr] gap-4 px-4 py-2.5 text-xs text-muted-foreground border-b border-border bg-muted">
               <span>Name</span>
               <span>Email / Phone</span>
               <span>Platforms</span>
@@ -118,17 +125,17 @@ export function ContactsPage() {
                 variants={fadeUp}
                 onClick={() => openEdit(contact)}
                 className={cn(
-                  "grid md:grid-cols-[1.5fr_1.2fr_1fr_1fr_0.8fr] gap-3 md:gap-4 p-4 md:py-3 items-center hover:bg-accent/30 transition-colors cursor-pointer",
+                  "grid md:grid-cols-[1.5fr_1.2fr_1fr_1fr_0.8fr] gap-3 md:gap-4 p-4 md:py-3 items-center hover:bg-accent transition-colors cursor-pointer",
                   i !== contacts.length - 1 && "border-b border-border"
                 )}
               >
                 {/* Name */}
-                <span className="text-sm font-medium truncate">
+                <span className="text-[13px] font-medium truncate">
                   {contact.name || <span className="text-muted-foreground">Unknown</span>}
                 </span>
 
                 {/* Email / Phone */}
-                <span className="text-xs text-muted-foreground truncate">
+                <span className="text-[13px] text-muted-foreground truncate">
                   {contact.email || contact.phone || <span className="text-muted-foreground/50">--</span>}
                 </span>
 
@@ -163,7 +170,7 @@ export function ContactsPage() {
                     contact.tags.slice(0, 3).map((tag) => (
                       <span
                         key={tag}
-                        className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-accent/40 text-muted-foreground"
+                        className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground"
                       >
                         {tag}
                       </span>
@@ -175,7 +182,7 @@ export function ContactsPage() {
                 </div>
 
                 {/* Created */}
-                <span className="text-xs text-muted-foreground">
+                <span className="text-[13px] text-muted-foreground">
                   {new Date(contact.created_at).toLocaleDateString("en-US", {
                     month: "short",
                     day: "numeric",

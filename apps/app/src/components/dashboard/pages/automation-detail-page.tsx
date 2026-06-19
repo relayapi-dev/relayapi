@@ -483,7 +483,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const hasValidationErrors = validationErrors.length > 0;
 
 	return (
-		<div className="flex h-full min-h-0 flex-col overflow-hidden border-t border-border bg-[#f5f6fa]">
+		<div className="flex h-full min-h-0 flex-col overflow-hidden border-t border-border bg-muted">
 			{/* ===== Header ===== */}
 			<header className="z-20 flex shrink-0 items-center justify-between gap-4 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
 				<div className="flex min-w-0 items-center gap-3">
@@ -515,7 +515,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 							{automation.created_from_template && (
 								<>
 									<span>·</span>
-									<span className="rounded-full bg-[#eef2ff] px-1.5 py-0.5 text-[9px] font-medium text-[#4338ca]">
+									<span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
 										{automation.created_from_template}
 									</span>
 								</>
@@ -531,7 +531,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 				</div>
 
 				{/* ===== Tabs ===== */}
-				<div className="flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5">
+				<div className="inline-flex items-center gap-0.5 rounded-md bg-muted p-0.5">
 					<TabButton
 						active={tab === "canvas"}
 						onClick={() => setTab("canvas")}
@@ -588,7 +588,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 								title="Simulator"
 								className={cn(
 									"h-7 w-7 p-0",
-									toolbarPanel === "simulator" && "bg-accent/40",
+									toolbarPanel === "simulator" && "bg-accent",
 								)}
 							>
 								<FlaskConical className="size-3.5" />
@@ -646,7 +646,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 						"border-b px-4 py-2 text-xs",
 						banner.type === "error"
 							? "border-destructive/30 bg-destructive/10 text-destructive"
-							: "border-emerald-500/30 bg-emerald-500/10 text-emerald-500",
+							: "border-success/30 bg-success/10 text-success",
 					)}
 				>
 					{banner.message}
@@ -859,9 +859,9 @@ function TabButton({
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+				"rounded-[6px] px-3.5 py-1 text-[13px] font-medium transition-colors",
 				active
-					? "bg-white text-foreground shadow-sm"
+					? "bg-card text-foreground shadow-xs"
 					: "text-muted-foreground hover:text-foreground",
 			)}
 		>
@@ -875,12 +875,12 @@ function StatusBadge({
 }: {
 	status: "draft" | "active" | "paused" | "archived";
 }) {
-	const draft = { label: "Draft", classes: "text-neutral-500" };
+	const draft = { label: "Draft", classes: "text-muted-foreground" };
 	const map: Record<string, { label: string; classes: string }> = {
 		draft,
-		active: { label: "Active", classes: "text-emerald-600" },
+		active: { label: "Active", classes: "text-success" },
 		paused: { label: "Paused", classes: "text-amber-500" },
-		archived: { label: "Archived", classes: "text-neutral-500" },
+		archived: { label: "Archived", classes: "text-muted-foreground" },
 	};
 	const cfg = map[status] ?? draft;
 	return (

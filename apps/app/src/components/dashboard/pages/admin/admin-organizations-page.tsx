@@ -35,6 +35,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/dashboard/page-header";
 import { AdminNav } from "./admin-nav";
 
 interface AdminOrg {
@@ -53,18 +54,9 @@ interface AdminOrg {
 }
 
 const planColors: Record<string, string> = {
-  pro: "text-primary bg-primary/10",
-  free: "text-muted-foreground bg-accent/50",
+  pro: "text-foreground bg-muted border border-border",
+  free: "text-muted-foreground bg-muted",
 };
-
-const orgColors = [
-  "bg-indigo-600",
-  "bg-emerald-600",
-  "bg-amber-600",
-  "bg-rose-600",
-  "bg-cyan-600",
-  "bg-violet-600",
-];
 
 const PAGE_SIZE = 50;
 
@@ -213,27 +205,21 @@ export function AdminOrganizationsPage() {
         ),
         cell: ({ row }) => {
           const org = row.original;
-          const idx = orgs.findIndex((o) => o.id === org.id) % orgColors.length;
           return (
             <div className="flex items-center gap-3">
-              <div
-                className={cn(
-                  "flex size-8 items-center justify-center rounded text-[10px] font-bold text-white shrink-0",
-                  orgColors[idx]
-                )}
-              >
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-[8px] bg-muted text-[10px] font-bold text-muted-foreground">
                 {org.logo ? (
                   <img
                     src={org.logo}
                     alt=""
-                    className="size-8 rounded object-cover"
+                    className="size-8 rounded-[8px] object-cover"
                   />
                 ) : (
                   org.name.charAt(0).toUpperCase()
                 )}
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">{org.name}</p>
+                <p className="text-[13px] font-medium truncate">{org.name}</p>
                 <p className="text-xs text-muted-foreground truncate">
                   {org.slug}
                 </p>
@@ -246,7 +232,7 @@ export function AdminOrganizationsPage() {
         accessorKey: "memberCount",
         header: "Members",
         cell: ({ row }) => (
-          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
             <Users className="size-3.5" />
             {row.original.memberCount}
           </div>
@@ -274,8 +260,8 @@ export function AdminOrganizationsPage() {
             className={cn(
               "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium",
               row.original.aiEnabled
-                ? "text-emerald-700 bg-emerald-100"
-                : "text-muted-foreground bg-accent/50"
+                ? "text-success bg-success/10"
+                : "text-muted-foreground bg-muted"
             )}
           >
             {row.original.aiEnabled ? "Enabled" : "Off"}
@@ -297,15 +283,15 @@ export function AdminOrganizationsPage() {
                 {org.apiCallsUsed.toLocaleString()} /{" "}
                 {org.apiCallsIncluded.toLocaleString()}
               </span>
-              <div className="h-1 rounded-full bg-accent/40 overflow-hidden">
+              <div className="h-1 rounded-full bg-muted overflow-hidden">
                 <div
                   className={cn(
                     "h-full rounded-full transition-all",
                     pct > 95
-                      ? "bg-red-400"
+                      ? "bg-destructive"
                       : pct > 80
-                        ? "bg-amber-400"
-                        : "bg-primary"
+                        ? "bg-chart-3"
+                        : "bg-foreground"
                   )}
                   style={{ width: `${Math.min(pct, 100)}%` }}
                 />
@@ -328,12 +314,15 @@ export function AdminOrganizationsPage() {
             <ArrowUpDown className="ml-1.5 size-3" />
           </Button>
         ),
-        cell: ({ row }) =>
-          new Date(row.original.createdAt).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          }),
+        cell: ({ row }) => (
+          <span className="text-[13px] text-muted-foreground">
+            {new Date(row.original.createdAt).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </span>
+        ),
       },
       {
         id: "actions",
@@ -417,15 +406,10 @@ export function AdminOrganizationsPage() {
   });
 
   return (
-    <div className="space-y-6">
-      <AdminNav current="admin-organizations" />
+    <div className="space-y-6 pb-16">
+      <PageHeader title="Organizations" subtitle={`${total} total`} />
 
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-lg font-medium">Organizations</h1>
-        <span className="text-xs text-muted-foreground">
-          {total} total
-        </span>
-      </div>
+      <AdminNav current="admin-organizations" />
 
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
@@ -434,23 +418,23 @@ export function AdminOrganizationsPage() {
           placeholder="Search organizations..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full rounded-md border border-border bg-background pl-9 pr-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+          className="w-full rounded-[10px] border border-border bg-card pl-9 pr-3 py-2 text-[13px] outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20 placeholder:text-muted-foreground"
         />
       </div>
 
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-20">
+        <div className="flex items-center justify-center rounded-[12px] border border-border py-20">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-md border">
+          <div className="overflow-hidden rounded-[12px] border border-border bg-card">
             <Table>
               <TableHeader>
                 {table.getHeaderGroups().map((headerGroup) => (
@@ -486,7 +470,7 @@ export function AdminOrganizationsPage() {
                   <TableRow>
                     <TableCell
                       colSpan={columns.length}
-                      className="h-24 text-center"
+                      className="h-24 text-center text-[13px] text-muted-foreground"
                     >
                       No organizations found.
                     </TableCell>
@@ -527,7 +511,7 @@ export function AdminOrganizationsPage() {
       {/* Edit modal */}
       {editModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-sm rounded-lg border border-border bg-background p-6 shadow-lg space-y-4">
+          <div className="w-full max-w-sm rounded-[12px] border border-border bg-card p-6 space-y-4">
             <h3 className="text-sm font-medium">Edit Organization</h3>
             <div className="space-y-3">
               <div className="space-y-1.5">
@@ -544,7 +528,7 @@ export function AdminOrganizationsPage() {
                   onChange={(e) =>
                     setEditForm({ ...editForm, name: e.target.value })
                   }
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                  className="w-full rounded-[10px] border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20"
                 />
               </div>
               <div className="space-y-1.5">
@@ -561,7 +545,7 @@ export function AdminOrganizationsPage() {
                   onChange={(e) =>
                     setEditForm({ ...editForm, slug: e.target.value })
                   }
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                  className="w-full rounded-[10px] border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20"
                 />
               </div>
             </div>
@@ -569,19 +553,17 @@ export function AdminOrganizationsPage() {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs"
                 onClick={() => setEditModal(null)}
               >
                 Cancel
               </Button>
               <Button
                 size="sm"
-                className="h-7 text-xs"
                 disabled={actionLoading || !editForm.name.trim()}
                 onClick={saveEdit}
               >
                 {actionLoading ? (
-                  <Loader2 className="size-3 animate-spin" />
+                  <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   "Save"
                 )}
@@ -594,7 +576,7 @@ export function AdminOrganizationsPage() {
       {/* Delete confirmation */}
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-sm rounded-lg border border-border bg-background p-6 shadow-lg space-y-4">
+          <div className="w-full max-w-sm rounded-[12px] border border-border bg-card p-6 space-y-4">
             <h3 className="text-sm font-medium">Delete Organization</h3>
             <p className="text-sm text-muted-foreground">
               This will permanently delete <strong>{confirmDelete.name}</strong>{" "}
@@ -605,7 +587,6 @@ export function AdminOrganizationsPage() {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs"
                 onClick={() => setConfirmDelete(null)}
               >
                 Cancel
@@ -613,12 +594,11 @@ export function AdminOrganizationsPage() {
               <Button
                 size="sm"
                 variant="destructive"
-                className="h-7 text-xs"
                 disabled={actionLoading}
                 onClick={() => handleDelete(confirmDelete.id)}
               >
                 {actionLoading ? (
-                  <Loader2 className="size-3 animate-spin" />
+                  <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   "Delete"
                 )}

@@ -6,22 +6,24 @@ import {
 	BookOpen,
 	Check,
 	ChevronRight,
-	ChevronsUpDown,
 	CreditCard,
 	FileText,
 	Flame,
+	Gauge,
+	House,
 	Inbox,
 	Key,
 	Link2,
 	Loader2,
 	LogOut,
-	Megaphone,
-	MessageCircle,
+	MoreHorizontal,
+	Moon,
 	PenSquare,
 	Plus,
 	Settings,
 	Shield,
 	Sparkles,
+	Sun,
 	Target,
 	User,
 	Users,
@@ -31,7 +33,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -56,7 +58,6 @@ import type { LucideIcon } from "lucide-react";
 import {
 	type AppOrganization,
 	type AppUser,
-	formatNumber,
 	getOrgColor,
 	slugify,
 } from "@/types/dashboard";
@@ -77,43 +78,67 @@ interface NavItem {
 	children?: NavSubItem[];
 }
 
-const navItems: NavItem[] = [
-	{ label: "Connections", icon: Link2, href: "connections" },
-	{ label: "Ideas", icon: Sparkles, href: "ideas" },
-	{
-		label: "Posts",
-		icon: PenSquare,
-		href: "posts",
-		children: [
-			{ label: "Overview", href: "posts" },
-			{ label: "Media", href: "media" },
-			{ label: "Scheduling", href: "scheduling" },
-		],
-	},
-	{ label: "Analytics", icon: BarChart3, href: "analytics" },
-	{
-		label: "Inbox",
-		icon: Inbox,
-		href: "inbox-comments",
-		children: [
-			{ label: "Comments", href: "inbox-comments" },
-			{ label: "Messages", href: "inbox-messages" },
-			{ label: "Reviews", href: "inbox-reviews" },
-		],
-	},
-	{ label: "Contacts", icon: Users, href: "contacts" },
-	{ label: "Templates", icon: FileText, href: "templates" },
-	{ label: "Automation", icon: Workflow, href: "automation" },
-	{ label: "Campaigns", icon: Megaphone, href: "campaigns" },
-	{ label: "WhatsApp", icon: MessageCircle, href: "whatsapp" },
-	{ label: "Ads", icon: Target, href: "ads" },
-	{ label: "API Keys", icon: Key, href: "api-keys" },
-	{ label: "Webhooks", icon: Webhook, href: "webhooks" },
-	{ label: "Logs", icon: FileText, href: "logs" },
-	{ label: "Team", icon: Users, href: "team" },
-	{ label: "Billing", icon: CreditCard, href: "billing" },
-	{ label: "Settings", icon: Settings, href: "settings" },
+// Grouped, unlabeled sections separated by hairline dividers (mockup Sidebar.jsx).
+// Secondary pages are nested as collapsible sub-items to keep the rail compact.
+const navSections: NavItem[][] = [
+	[
+		{ label: "Overview", icon: House, href: "overview" },
+		{ label: "Settings", icon: Settings, href: "settings" },
+	],
+	[
+		{ label: "Connections", icon: Link2, href: "connections" },
+		{
+			label: "Inbox",
+			icon: Inbox,
+			href: "inbox-comments",
+			children: [
+				{ label: "Comments", href: "inbox-comments" },
+				{ label: "Messages", href: "inbox-messages" },
+				{ label: "Reviews", href: "inbox-reviews" },
+			],
+		},
+	],
+	[
+		{
+			label: "Posts",
+			icon: PenSquare,
+			href: "posts",
+			children: [
+				{ label: "Calendar", href: "posts" },
+				{ label: "Scheduling", href: "scheduling" },
+				{ label: "Media", href: "media" },
+				{ label: "Ideas", href: "ideas" },
+				{ label: "Templates", href: "templates" },
+			],
+		},
+		{ label: "Analytics", icon: BarChart3, href: "analytics" },
+		{
+			label: "Automation",
+			icon: Workflow,
+			href: "automation",
+			children: [
+				{ label: "Flows", href: "automation" },
+				{ label: "Campaigns", href: "campaigns" },
+				{ label: "Broadcasts", href: "broadcasts" },
+				{ label: "WhatsApp", href: "whatsapp" },
+			],
+		},
+		{ label: "Contacts", icon: Users, href: "contacts" },
+		{ label: "Ads", icon: Target, href: "ads" },
+	],
+	[
+		{ label: "API Keys", icon: Key, href: "api-keys" },
+		{ label: "Webhooks", icon: Webhook, href: "webhooks" },
+		{ label: "Logs", icon: FileText, href: "logs" },
+	],
+	[
+		{ label: "Members", icon: Users, href: "team" },
+		{ label: "Usage", icon: Gauge, href: "usage" },
+		{ label: "Billing & Invoices", icon: CreditCard, href: "billing" },
+	],
 ];
+
+const allNavItems = navSections.flat();
 
 function getAllChildHrefs(item: NavItem): string[] {
 	return item.children?.map((c) => c.href) ?? [];
@@ -125,8 +150,8 @@ function isChildActive(item: NavItem, currentPage: string): boolean {
 
 // --- Animation variants ---
 
-const dropdownVariants = {
-	hidden: { opacity: 0, scale: 0.95, y: -4 },
+const menuVariants = {
+	hidden: { opacity: 0, scale: 0.96, y: -4 },
 	visible: {
 		opacity: 1,
 		scale: 1,
@@ -135,24 +160,8 @@ const dropdownVariants = {
 	},
 	exit: {
 		opacity: 0,
-		scale: 0.95,
+		scale: 0.96,
 		y: -4,
-		transition: { duration: 0.08, ease: [0.32, 0.72, 0, 1] as const },
-	},
-};
-
-const upwardDropdownVariants = {
-	hidden: { opacity: 0, scale: 0.95, y: 4 },
-	visible: {
-		opacity: 1,
-		scale: 1,
-		y: 0,
-		transition: { duration: 0.12, ease: [0.32, 0.72, 0, 1] as const },
-	},
-	exit: {
-		opacity: 0,
-		scale: 0.95,
-		y: 4,
 		transition: { duration: 0.08, ease: [0.32, 0.72, 0, 1] as const },
 	},
 };
@@ -187,7 +196,9 @@ export function Sidebar({
 	user,
 	organization,
 }: SidebarProps) {
-	const hrefFor = (page: string) => buildHref?.(page) ?? `/app/${page}`;
+	// Overview lives at /app (and /app/overview); everything else at /app/<page>.
+	const hrefFor = (page: string) =>
+		page === "overview" ? "/app" : (buildHref?.(page) ?? `/app/${page}`);
 
 	// Navigate via onNavigate (programmatic full-document nav) instead of the
 	// native <a> default. iOS Safari drops the default navigation when onClose()
@@ -201,22 +212,36 @@ export function Sidebar({
 		e.preventDefault();
 		onNavigate(page);
 	};
-	// --- Usage ---
-	const { usage, loading: usageLoading } = useUsage();
-	// --- Streak ---
+
+	// --- Usage / streak (plan label + upgrade CTA) ---
+	const { usage } = useUsage();
 	const { streak } = useStreak();
+	const plan = usage?.plan || "free";
 	const [isCancelling, setIsCancelling] = useState(false);
 	const [billingStatusLoaded, setBillingStatusLoaded] = useState(false);
-	const plan = usage?.plan || "free";
-	const used = usage?.api_calls?.used || 0;
-	const included = usage?.api_calls?.included || 200;
-	const pct =
-		included > 0 ? Math.min(Math.round((used / included) * 100), 100) : 0;
+	const planLabel =
+		plan === "pro" ? (isCancelling ? "Ending" : "Pro") : "Free";
+
+	// --- Theme toggle (light default, scoped via .dash-theme) ---
+	const [isDark, setIsDark] = useState(false);
+	useEffect(() => {
+		setIsDark(document.documentElement.classList.contains("dark"));
+	}, []);
+	const toggleTheme = () => {
+		const next = !document.documentElement.classList.contains("dark");
+		document.documentElement.classList.toggle("dark", next);
+		try {
+			localStorage.setItem("relay_theme", next ? "dark" : "light");
+		} catch {
+			// ignore
+		}
+		setIsDark(next);
+	};
 
 	// --- Collapsible nav ---
 	const [expandedItems, setExpandedItems] = useState<Set<string>>(() => {
 		const expanded = new Set<string>();
-		for (const item of navItems) {
+		for (const item of allNavItems) {
 			if (item.children && isChildActive(item, currentPage)) {
 				expanded.add(item.label);
 			}
@@ -227,7 +252,7 @@ export function Sidebar({
 	useEffect(() => {
 		setExpandedItems((prev) => {
 			const next = new Set(prev);
-			for (const item of navItems) {
+			for (const item of allNavItems) {
 				if (item.children && isChildActive(item, currentPage)) {
 					next.add(item.label);
 				}
@@ -249,7 +274,11 @@ export function Sidebar({
 		}
 	};
 
-	// --- Org switcher ---
+	// --- Account menu (consolidated: theme, org switcher, account, sign out) ---
+	const [menuOpen, setMenuOpen] = useState(false);
+	const menuRef = useRef<HTMLDivElement>(null);
+	const orgSearchRef = useRef<HTMLInputElement>(null);
+
 	const [currentOrg, setCurrentOrg] = useState<OrgListItem | null>(
 		organization
 			? {
@@ -264,7 +293,6 @@ export function Sidebar({
 	const [orgsLoading, setOrgsLoading] = useState(false);
 	const [orgsLoaded, setOrgsLoaded] = useState(false);
 	const [orgSearch, setOrgSearch] = useState("");
-	const [orgMenuOpen, setOrgMenuOpen] = useState(false);
 	const [createOrgOpen, setCreateOrgOpen] = useState(false);
 	const [newOrgName, setNewOrgName] = useState("");
 	const [newOrgSlug, setNewOrgSlug] = useState("");
@@ -272,50 +300,29 @@ export function Sidebar({
 	const [createOrgLoading, setCreateOrgLoading] = useState(false);
 	const [createOrgError, setCreateOrgError] = useState<string | null>(null);
 
-	const orgMenuRef = useRef<HTMLDivElement>(null);
-	const userMenuRef = useRef<HTMLDivElement>(null);
-	const orgSearchRef = useRef<HTMLInputElement>(null);
-
-	// Focus the org search field when the menu opens
-	useEffect(() => {
-		if (orgMenuOpen) orgSearchRef.current?.focus();
-	}, [orgMenuOpen]);
-
-	// Click-outside handler for org menu
-	useEffect(() => {
-		if (!orgMenuOpen) return;
-		const handleClick = (e: MouseEvent) => {
-			if (
-				orgMenuRef.current &&
-				!orgMenuRef.current.contains(e.target as Node)
-			) {
-				setOrgMenuOpen(false);
-				setOrgSearch("");
-			}
-		};
-		document.addEventListener("mousedown", handleClick);
-		return () => document.removeEventListener("mousedown", handleClick);
-	}, [orgMenuOpen]);
-
 	const loadOrganizations = useCallback(async () => {
 		setOrgsLoading(true);
 		try {
 			const { organization: orgClient } = await loadAuthClient();
 			const { data } = await orgClient.list();
 			if (data) {
-				const items: OrgListItem[] = data.map((o: { id: string; name: string; slug: string; logo?: string | null }) => ({
-					id: o.id,
-					name: o.name,
-					slug: o.slug,
-					logo: o.logo,
-				}));
+				const items: OrgListItem[] = data.map(
+					(o: {
+						id: string;
+						name: string;
+						slug: string;
+						logo?: string | null;
+					}) => ({
+						id: o.id,
+						name: o.name,
+						slug: o.slug,
+						logo: o.logo,
+					}),
+				);
 				setOrgs(items);
-				setCurrentOrg((prev) => {
-					if (prev) {
-						return items.find((o) => o.id === prev.id) ?? prev;
-					}
-					return items[0] ?? null;
-				});
+				setCurrentOrg((prev) =>
+					prev ? (items.find((o) => o.id === prev.id) ?? prev) : (items[0] ?? null),
+				);
 				if (!currentOrg && items[0]) {
 					void orgClient.setActive({ organizationId: items[0].id });
 				}
@@ -334,62 +341,52 @@ export function Sidebar({
 		}
 	}, [currentOrg, orgsLoaded, orgsLoading, loadOrganizations]);
 
+	// Load org list + billing status the first time the menu opens.
+	useEffect(() => {
+		if (!menuOpen) return;
+		if (!orgsLoaded && !orgsLoading) void loadOrganizations();
+		if (plan === "pro" && !billingStatusLoaded) {
+			fetch("/api/billing/status")
+				.then((r) => (r.ok ? r.json() : null))
+				.then((data) => setIsCancelling(!!data?.subscription?.cancelAtPeriodEnd))
+				.catch(() => {})
+				.finally(() => setBillingStatusLoaded(true));
+		}
+	}, [menuOpen, orgsLoaded, orgsLoading, loadOrganizations, plan, billingStatusLoaded]);
+
+	// Click-outside handler for the account menu.
+	useEffect(() => {
+		if (!menuOpen) return;
+		const handleClick = (e: MouseEvent) => {
+			if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+				setMenuOpen(false);
+				setOrgSearch("");
+			}
+		};
+		document.addEventListener("mousedown", handleClick);
+		return () => document.removeEventListener("mousedown", handleClick);
+	}, [menuOpen]);
+
 	const handleSwitchOrg = async (org: OrgListItem) => {
 		setCurrentOrg(org);
-		setOrgMenuOpen(false);
+		setMenuOpen(false);
 		setOrgSearch("");
 		const { organization: orgClient } = await loadAuthClient();
 		await orgClient.setActive({ organizationId: org.id });
 		window.location.href = window.location.pathname;
 	};
 
-	const orgInitial = currentOrg?.name?.charAt(0)?.toUpperCase() || "?";
-	const orgColor = currentOrg ? getOrgColor(currentOrg.id) : "bg-muted";
-
-	// --- Notifications (via WebSocket) ---
+	// --- Notifications (via WebSocket bootstrap) ---
 	const [notifCount, setNotifCount] = useState(0);
-
 	useEffect(() => {
 		return scheduleIdleTask(() => {
-			// Org-key the bootstrap result cache so the usage/streak/key-status hooks
-			// share this single call instead of re-firing under a "__default__" key.
-			void fetchDashboardBootstrap({ orgId: organization?.id ?? null }).then((data) => {
-				if (data?.notif_count != null) setNotifCount(data.notif_count);
-			});
+			void fetchDashboardBootstrap({ orgId: organization?.id ?? null }).then(
+				(data) => {
+					if (data?.notif_count != null) setNotifCount(data.notif_count);
+				},
+			);
 		}, 1500);
 	}, [organization?.id]);
-
-	// --- User menu ---
-	const [userMenuOpen, setUserMenuOpen] = useState(false);
-
-	useEffect(() => {
-		if (plan === "pro" && userMenuOpen && !billingStatusLoaded) {
-			fetch("/api/billing/status")
-				.then((r) => (r.ok ? r.json() : null))
-				.then((data) => {
-					setIsCancelling(!!data?.subscription?.cancelAtPeriodEnd);
-				})
-				.catch(() => {})
-				.finally(() => {
-					setBillingStatusLoaded(true);
-				});
-		}
-	}, [plan, userMenuOpen, billingStatusLoaded]);
-
-	// Click-outside handler for user menu
-	useEffect(() => {
-		if (!userMenuOpen) return;
-		const handleClick = (e: MouseEvent) => {
-			if (
-				userMenuRef.current &&
-				!userMenuRef.current.contains(e.target as Node)
-			) {
-				setUserMenuOpen(false);
-			}
-		};
-		document.addEventListener("mousedown", handleClick);
-		return () => document.removeEventListener("mousedown", handleClick);
-	}, [userMenuOpen]);
 
 	const userInitials = user?.name
 		? user.name
@@ -427,14 +424,22 @@ export function Sidebar({
 				onMouseEnter={() => onPrefetch?.(item.href)}
 				onFocus={() => onPrefetch?.(item.href)}
 				className={cn(
-					"flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 text-[13px] transition-colors md:py-1.5",
+					"flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] transition-colors ease-[var(--ease-relay)] md:py-1.5",
 					isActive
-						? "bg-accent/80 text-foreground font-medium"
-						: "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+						? "bg-sidebar-accent font-medium text-foreground"
+						: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
 				)}
 			>
-				<item.icon className="size-4 shrink-0" />
+				<item.icon
+					className={cn("size-[17px] shrink-0", !isActive && "opacity-90")}
+					strokeWidth={1.6}
+				/>
 				<span className="flex-1 text-left">{item.label}</span>
+				{item.badge && (
+					<span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+						{item.badge}
+					</span>
+				)}
 			</a>
 		);
 	};
@@ -451,20 +456,17 @@ export function Sidebar({
 					onMouseEnter={() => prefetchItem(item)}
 					onFocus={() => prefetchItem(item)}
 					className={cn(
-						"flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 text-[13px] transition-colors md:py-1.5",
+						"flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] transition-colors ease-[var(--ease-relay)] md:py-1.5",
 						hasActiveChild
-							? "text-foreground font-medium"
-							: "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+							? "font-medium text-foreground"
+							: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
 					)}
 				>
-					<item.icon className="size-4 shrink-0" />
+					<item.icon className="size-[17px] shrink-0" strokeWidth={1.6} />
 					<span className="flex-1 text-left">{item.label}</span>
 					<motion.div
 						animate={{ rotate: isExpanded ? 90 : 0 }}
-						transition={{
-							duration: 0.15,
-							ease: [0.32, 0.72, 0, 1],
-						}}
+						transition={{ duration: 0.15, ease: [0.32, 0.72, 0, 1] }}
 					>
 						<ChevronRight className="size-3 text-muted-foreground/60" />
 					</motion.div>
@@ -476,13 +478,10 @@ export function Sidebar({
 							initial={{ height: 0, opacity: 0 }}
 							animate={{ height: "auto", opacity: 1 }}
 							exit={{ height: 0, opacity: 0 }}
-							transition={{
-								duration: 0.15,
-								ease: [0.32, 0.72, 0, 1],
-							}}
+							transition={{ duration: 0.15, ease: [0.32, 0.72, 0, 1] }}
 							className="overflow-hidden"
 						>
-							<div className="ml-4 border-l border-border pl-2 mt-0.5 space-y-px">
+							<div className="mt-0.5 ml-[18px] space-y-px border-l border-sidebar-border pl-2.5">
 								{item.children.map((child) => {
 									const isActive = currentPage === child.href;
 									return (
@@ -493,15 +492,15 @@ export function Sidebar({
 											onMouseEnter={() => onPrefetch?.(child.href)}
 											onFocus={() => onPrefetch?.(child.href)}
 											className={cn(
-												"flex w-full items-center gap-2 rounded-md px-2 py-2 text-[12.5px] transition-colors md:py-1",
+												"flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[12.5px] transition-colors ease-[var(--ease-relay)] md:py-1",
 												isActive
-													? "text-foreground font-medium bg-accent/60"
-													: "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+													? "bg-sidebar-accent font-medium text-foreground"
+													: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
 											)}
 										>
 											<span>{child.label}</span>
 											{child.badge && (
-												<span className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider bg-primary/10 text-primary">
+												<span className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
 													{child.badge}
 												</span>
 											)}
@@ -516,10 +515,11 @@ export function Sidebar({
 		);
 	};
 
-	const renderNavItem = (item: NavItem) => {
-		if (item.children) return renderCollapsibleItem(item);
-		return renderFlatItem(item);
-	};
+	const renderNavItem = (item: NavItem) =>
+		item.children ? renderCollapsibleItem(item) : renderFlatItem(item);
+
+	const menuRow =
+		"flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-1.5 text-[13px] text-foreground transition-colors hover:bg-accent";
 
 	return (
 		<>
@@ -534,61 +534,91 @@ export function Sidebar({
 
 			<aside
 				className={cn(
-					"fixed top-0 left-0 z-60 h-dvh w-[85vw] max-w-[320px] shrink-0 border-r border-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:w-56 md:max-w-none md:translate-x-0",
+					"fixed top-0 left-0 z-60 h-dvh w-[85vw] max-w-[320px] shrink-0 border-r border-sidebar-border bg-sidebar transition-transform duration-200 md:static md:z-auto md:h-auto md:w-56 md:max-w-none md:translate-x-0 md:border-r-0",
 					isOpen ? "translate-x-0" : "-translate-x-full",
 				)}
 			>
-				<div className="flex flex-col h-full">
-					{/* Header: Org switcher + mobile close */}
+				<div className="flex h-full flex-col">
+					{/* Profile block (top) */}
 					<div className="shrink-0 px-3 pt-3 pb-2">
-						<div className="flex items-center justify-between">
-							<div ref={orgMenuRef} className="relative flex-1 min-w-0">
+						<div className="flex items-center gap-2.5 px-1">
+							{user?.image ? (
+								<img
+									src={user.image}
+									alt={user.name}
+									className="size-[30px] shrink-0 rounded-full object-cover"
+								/>
+							) : (
+								<div className="flex size-[30px] shrink-0 items-center justify-center rounded-full bg-secondary text-[12px] font-semibold text-foreground">
+									{userInitials}
+								</div>
+							)}
+							<div className="min-w-0 flex-1 leading-tight">
+								<div className="truncate text-[12.5px] font-semibold">
+									{user?.name || "User"}
+								</div>
+								<div className="text-[11px] text-muted-foreground">
+									{planLabel}
+								</div>
+							</div>
+
+							<div ref={menuRef} className="relative">
 								<button
 									type="button"
-									onClick={() => {
-										const nextOpen = !orgMenuOpen;
-										setOrgMenuOpen(nextOpen);
-										if (
-											nextOpen &&
-											(!orgsLoaded || orgs.length === 0) &&
-											!orgsLoading
-										) {
-											void loadOrganizations();
-										}
-									}}
-									className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent/40 transition-colors"
-								>
-									{currentOrg?.logo ? (
-										<img
-											src={currentOrg.logo}
-											alt={currentOrg.name}
-											className="size-6 rounded object-cover shrink-0"
-										/>
-									) : (
-										<div
-											className={cn(
-												"flex size-6 items-center justify-center rounded text-[11px] font-bold text-white shrink-0",
-												orgColor,
-											)}
-										>
-											{orgInitial}
-										</div>
+									title="Account menu"
+									onClick={() => setMenuOpen((o) => !o)}
+									className={cn(
+										"inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground",
+										menuOpen && "bg-sidebar-accent text-foreground",
 									)}
-									<span className="text-[13px] font-medium truncate flex-1 text-left">
-										{currentOrg?.name || "Select org"}
-									</span>
-									<ChevronsUpDown className="size-3 text-muted-foreground shrink-0" />
+								>
+									<MoreHorizontal className="size-4" strokeWidth={1.6} />
 								</button>
 
 								<AnimatePresence>
-									{orgMenuOpen && (
+									{menuOpen && (
 										<motion.div
-											variants={dropdownVariants}
+											variants={menuVariants}
 											initial="hidden"
 											animate="visible"
 											exit="exit"
-											className="absolute left-0 top-full z-[60] mt-1 w-52 rounded-md border border-border bg-background p-1 shadow-lg origin-top-left"
+											className="absolute left-0 top-full z-[60] mt-1.5 w-60 origin-top-left rounded-md border border-border bg-popover p-1.5 shadow-[var(--shadow-popover)]"
 										>
+											<button type="button" className={menuRow} onClick={toggleTheme}>
+												{isDark ? (
+													<Sun className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												) : (
+													<Moon className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												)}
+												<span>{isDark ? "Light mode" : "Dark mode"}</span>
+											</button>
+											<button
+												type="button"
+												className={menuRow}
+												onClick={() => {
+													onNavigate("settings");
+													setMenuOpen(false);
+												}}
+											>
+												<Settings className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												<span>Account settings</span>
+											</button>
+											<button
+												type="button"
+												className={menuRow}
+												onClick={() => {
+													onNavigate("profile");
+													setMenuOpen(false);
+												}}
+											>
+												<User className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												<span>Profile</span>
+											</button>
+
+											<div className="my-1.5 h-px bg-border" />
+											<div className="px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+												Organizations
+											</div>
 											{orgsLoading ? (
 												<div className="flex items-center justify-center py-3">
 													<Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -603,11 +633,11 @@ export function Sidebar({
 																placeholder="Search organizations..."
 																value={orgSearch}
 																onChange={(e) => setOrgSearch(e.target.value)}
-																className="w-full rounded border border-border bg-background px-2 py-1 text-[12px] outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
+																className="w-full rounded border border-border bg-background px-2 py-1 text-[12px] outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
 															/>
 														</div>
 													)}
-													<div className="max-h-[200px] overflow-y-auto">
+													<div className="max-h-[180px] overflow-y-auto">
 														{orgs
 															.filter(
 																(org) =>
@@ -621,46 +651,109 @@ export function Sidebar({
 																	type="button"
 																	key={org.id}
 																	onClick={() => handleSwitchOrg(org)}
-																	className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] hover:bg-accent/40 transition-colors"
+																	className={menuRow}
 																>
 																	{org.logo ? (
 																		<img
 																			src={org.logo}
 																			alt={org.name}
-																			className="size-5 rounded object-cover shrink-0"
+																			className="size-5 shrink-0 rounded object-cover"
 																		/>
 																	) : (
 																		<div
 																			className={cn(
-																				"flex size-5 items-center justify-center rounded text-[10px] font-bold text-white shrink-0",
+																				"flex size-5 shrink-0 items-center justify-center rounded text-[10px] font-bold text-white",
 																				getOrgColor(org.id),
 																			)}
 																		>
 																			{org.name.charAt(0).toUpperCase()}
 																		</div>
 																	)}
-																	<span className="truncate flex-1 text-left">
+																	<span className="flex-1 truncate text-left">
 																		{org.name}
 																	</span>
 																	{org.id === currentOrg?.id && (
-																		<Check className="size-3.5 text-foreground shrink-0" />
+																		<Check className="size-3.5 shrink-0 text-foreground" />
 																	)}
 																</button>
 															))}
 													</div>
 												</>
 											)}
-											<div className="my-1 border-t border-border" />
 											<button
 												type="button"
 												onClick={() => {
-													setOrgMenuOpen(false);
+													setMenuOpen(false);
 													setCreateOrgOpen(true);
 												}}
-												className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+												className={cn(menuRow, "text-muted-foreground")}
 											>
-												<Plus className="size-3.5 shrink-0" />
+												<Plus className="size-[15px] shrink-0" strokeWidth={1.6} />
 												<span>Create organization</span>
+											</button>
+
+											{plan !== "pro" && (
+												<button
+													type="button"
+													onClick={() => {
+														onNavigate("billing");
+														setMenuOpen(false);
+													}}
+													className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-[6px] bg-accent py-1.5 text-[12px] font-medium text-foreground transition-colors hover:bg-sidebar-accent"
+												>
+													<Sparkles className="size-3.5" />
+													Upgrade plan
+												</button>
+											)}
+
+											<div className="my-1.5 h-px bg-border" />
+											<a
+												href="https://docs.relayapi.dev/"
+												target="_blank"
+												rel="noopener noreferrer"
+												className={menuRow}
+											>
+												<BookOpen className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												<span>Documentation</span>
+											</a>
+											<button
+												type="button"
+												onClick={() => {
+													const prevParams = new URLSearchParams(
+														window.location.search,
+													);
+													const nextParams = new URLSearchParams();
+													for (const key of ["workspace", "account"]) {
+														const value = prevParams.get(key);
+														if (value) nextParams.set(key, value);
+													}
+													nextParams.set("tab", "notifications");
+													window.location.assign(`/app/settings?${nextParams}`);
+													setMenuOpen(false);
+												}}
+												className={menuRow}
+											>
+												<BellDot className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												<span>Notification preferences</span>
+											</button>
+											{user?.role === "admin" && (
+												<button
+													type="button"
+													onClick={() => {
+														onNavigate("admin-users");
+														setMenuOpen(false);
+													}}
+													className={menuRow}
+												>
+													<Shield className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+													<span>Admin</span>
+												</button>
+											)}
+
+											<div className="my-1.5 h-px bg-border" />
+											<button type="button" onClick={handleSignOut} className={menuRow}>
+												<LogOut className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												<span>Sign out</span>
 											</button>
 										</motion.div>
 									)}
@@ -669,7 +762,7 @@ export function Sidebar({
 
 							<button
 								type="button"
-								className="rounded p-1 hover:bg-accent/50 md:hidden ml-1"
+								className="ml-0.5 rounded p-1 hover:bg-sidebar-accent md:hidden"
 								onClick={onClose}
 							>
 								<X className="size-3.5" />
@@ -678,260 +771,64 @@ export function Sidebar({
 					</div>
 
 					{/* Navigation */}
-					<ScrollArea className="flex-1 min-h-0">
-						<nav className="space-y-px px-3 py-2">
-							{navItems.map(renderNavItem)}
+					<ScrollArea className="min-h-0 flex-1">
+						<nav className="px-3 py-1">
+							{navSections.map((section, si) => (
+								<Fragment key={section[0]?.href ?? si}>
+									{si > 0 && (
+										<div className="mx-2.5 my-2 h-px bg-sidebar-border" />
+									)}
+									<div className="space-y-0.5">
+										{section.map(renderNavItem)}
+									</div>
+								</Fragment>
+							))}
 						</nav>
 					</ScrollArea>
 
-					{/* Footer: Notifications + User */}
-					<div className="shrink-0 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-1">
-						{/* Streak badge */}
+					{/* Footer: streak + notifications */}
+					<div className="shrink-0 space-y-0.5 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
 						{streak?.active && streak.current_streak_days > 0 && (
 							<div
-								className="group relative flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px]"
-								title={`${streak.current_streak_days}-day posting streak! Best: ${streak.best_streak_days} days. ${streak.hours_remaining != null ? `${Math.round(streak.hours_remaining)}h remaining` : ""}`}
+								className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px]"
+								title={`${streak.current_streak_days}-day posting streak! Best: ${streak.best_streak_days} days.`}
 							>
 								<Flame
 									className={cn(
 										"size-4 shrink-0",
-										streak.hours_remaining != null && streak.hours_remaining < 2
-											? "text-red-400 animate-pulse"
-											: "text-amber-400",
+										streak.hours_remaining != null &&
+											streak.hours_remaining < 2
+											? "animate-pulse text-red-400"
+											: "text-amber-500",
 									)}
 								/>
 								<span
 									className={cn(
 										"font-semibold",
-										streak.hours_remaining != null && streak.hours_remaining < 2
+										streak.hours_remaining != null &&
+											streak.hours_remaining < 2
 											? "text-red-400"
-											: "text-amber-400",
+											: "text-amber-500",
 									)}
 								>
 									{streak.current_streak_days}d streak
 								</span>
-								{streak.hours_remaining != null &&
-									streak.hours_remaining < 2 && (
-										<span className="text-[10px] text-red-400/70 ml-auto">
-											{Math.round(streak.hours_remaining * 60)}m left
-										</span>
-									)}
 							</div>
 						)}
 
-						{/* Notification button */}
 						<button
 							type="button"
 							onClick={() => onNavigate("notifications")}
-							className="flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors md:py-1.5"
+							className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground md:py-1.5"
 						>
-							<Bell className="size-4 shrink-0" />
+							<Bell className="size-[17px] shrink-0" strokeWidth={1.6} />
 							<span className="flex-1 text-left">Notifications</span>
 							{notifCount > 0 && (
-								<span className="flex size-5 items-center justify-center rounded-full bg-rose-500 text-[9px] font-bold text-white">
+								<span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
 									{notifCount > 99 ? "99+" : notifCount}
 								</span>
 							)}
 						</button>
-
-						{/* User block */}
-						<div ref={userMenuRef} className="relative">
-							<button
-								type="button"
-								onClick={() => setUserMenuOpen(!userMenuOpen)}
-								className="flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 hover:bg-accent/40 transition-colors md:py-1.5"
-							>
-								{user?.image ? (
-									<img
-										src={user.image}
-										alt={user.name}
-										className="size-6 rounded-full object-cover shrink-0"
-									/>
-								) : (
-									<div className="flex size-6 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground shrink-0">
-										{userInitials}
-									</div>
-								)}
-								<span className="text-[13px] font-medium truncate flex-1 text-left">
-									{user?.name || "User"}
-								</span>
-							</button>
-
-							<AnimatePresence>
-								{userMenuOpen && (
-									<motion.div
-										variants={upwardDropdownVariants}
-										initial="hidden"
-										animate="visible"
-										exit="exit"
-										className="absolute left-0 bottom-full z-[60] mb-1.5 w-52 rounded-md border border-border bg-background p-1 shadow-lg origin-bottom-left"
-									>
-										{/* User info */}
-										<div className="px-2 py-2">
-											<p className="text-[13px] font-medium">
-												{user?.name || "User"}
-											</p>
-											<p className="text-[11px] text-muted-foreground">
-												{user?.email || ""}
-											</p>
-										</div>
-
-										{/* Org plan info */}
-										{!usageLoading && (
-											<>
-												<div className="my-1 border-t border-border" />
-												<button
-													type="button"
-													onClick={() => {
-														onNavigate("settings");
-														setUserMenuOpen(false);
-													}}
-													className="w-full px-2 py-1.5 rounded hover:bg-accent/40 transition-colors text-left"
-												>
-													<div className="flex items-center gap-1.5">
-														{currentOrg?.logo ? (
-															<img
-																src={currentOrg.logo}
-																alt={currentOrg.name}
-																className="size-4 rounded object-cover shrink-0"
-															/>
-														) : (
-															<div
-																className={cn(
-																	"flex size-4 items-center justify-center rounded text-[8px] font-bold text-white shrink-0",
-																	orgColor,
-																)}
-															>
-																{orgInitial}
-															</div>
-														)}
-														<span className="text-[11px] font-medium text-foreground truncate">
-															{currentOrg?.name || "Org"}
-														</span>
-														<span
-															className={cn(
-																"rounded px-1 py-px text-[8px] font-semibold uppercase tracking-wider shrink-0 ml-auto",
-																plan === "pro"
-																	? isCancelling
-																		? "bg-amber-500/10 text-amber-500"
-																		: "bg-primary/10 text-primary"
-																	: "bg-muted text-muted-foreground",
-															)}
-														>
-															{plan === "pro"
-																? isCancelling
-																	? "Ending"
-																	: "Pro"
-																: "Free"}
-														</span>
-													</div>
-													<div className="flex items-center justify-between mt-1.5">
-														<div className="flex-1 h-1 rounded-full bg-accent/50">
-															<div
-																className={cn(
-																	"h-1 rounded-full transition-all",
-																	pct > 95
-																		? "bg-red-400"
-																		: pct > 80
-																			? "bg-amber-400"
-																			: "bg-primary/70",
-																)}
-																style={{ width: `${pct}%` }}
-															/>
-														</div>
-														<span className="text-[10px] text-muted-foreground ml-2 shrink-0">
-															{formatNumber(used)}/{formatNumber(included)}
-														</span>
-													</div>
-												</button>
-												{plan !== "pro" && (
-													<div className="px-2 pb-1">
-														<button
-															type="button"
-															onClick={() => {
-																onNavigate("billing");
-																setUserMenuOpen(false);
-															}}
-															className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md bg-primary/10 py-1 text-[11px] font-medium text-primary hover:bg-primary/15 transition-colors"
-														>
-															<Sparkles className="size-3" />
-															Upgrade to Pro
-														</button>
-													</div>
-												)}
-											</>
-										)}
-
-										<div className="my-1 border-t border-border" />
-
-										{/* Links */}
-										<a
-											href="https://docs.relayapi.dev/"
-											target="_blank"
-											rel="noopener noreferrer"
-											className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
-										>
-											<BookOpen className="size-3.5 shrink-0" />
-											Documentation
-										</a>
-										<button
-											type="button"
-											onClick={() => {
-												onNavigate("profile");
-												setUserMenuOpen(false);
-											}}
-											className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
-										>
-											<User className="size-3.5 shrink-0" />
-											Profile
-										</button>
-										<button
-											type="button"
-											onClick={() => {
-												const prevParams = new URLSearchParams(
-													window.location.search,
-												);
-												const nextParams = new URLSearchParams();
-												for (const key of ["workspace", "account"]) {
-													const value = prevParams.get(key);
-													if (value) nextParams.set(key, value);
-												}
-												nextParams.set("tab", "notifications");
-												window.location.assign(`/app/settings?${nextParams}`);
-												setUserMenuOpen(false);
-											}}
-											className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
-										>
-											<BellDot className="size-3.5 shrink-0" />
-											Notification preferences
-										</button>
-										{user?.role === "admin" && (
-											<button
-												type="button"
-												onClick={() => {
-													onNavigate("admin-users");
-													setUserMenuOpen(false);
-												}}
-												className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
-											>
-												<Shield className="size-3.5 shrink-0" />
-												Admin
-											</button>
-										)}
-
-										<div className="my-1 border-t border-border" />
-										<button
-											type="button"
-											onClick={handleSignOut}
-											className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-[13px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
-										>
-											<LogOut className="size-3.5 shrink-0" />
-											Sign out
-										</button>
-									</motion.div>
-								)}
-							</AnimatePresence>
-						</div>
 					</div>
 				</div>
 			</aside>
@@ -992,7 +889,7 @@ export function Sidebar({
 						className="space-y-4"
 					>
 						{createOrgError && (
-							<div className="rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2.5 text-sm text-destructive">
+							<div className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
 								{createOrgError}
 							</div>
 						)}
@@ -1017,7 +914,7 @@ export function Sidebar({
 								placeholder="My Company"
 								required
 								autoFocus
-								className="w-full rounded-lg border border-border bg-background py-2.5 px-3 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25"
+								className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25"
 							/>
 						</div>
 
@@ -1039,7 +936,7 @@ export function Sidebar({
 								placeholder="my-company"
 								required
 								pattern="[a-z0-9][a-z0-9-]*[a-z0-9]"
-								className="w-full rounded-lg border border-border bg-background py-2.5 px-3 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25 font-mono"
+								className="w-full rounded-lg border border-border bg-background px-3 py-2.5 font-mono text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25"
 							/>
 							{newOrgSlug && (
 								<p className="text-[11px] text-muted-foreground">

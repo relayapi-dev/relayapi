@@ -1,11 +1,11 @@
 ---
 import DashboardLayout from "../../layouts/DashboardLayout.astro";
-import { OverviewRouteApp } from "../../components/dashboard/route-apps/overview-route-app";
+import { UsageRouteApp } from "../../components/dashboard/route-apps/usage-route-app";
 import { getDashboardRouteContext } from "../../lib/dashboard-page";
 
 const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
 ---
 
 <DashboardLayout>
-	<OverviewRouteApp client:load currentPage="overview" {...dashboard} />
+	<UsageRouteApp client:load currentPage="usage" {...dashboard} />
 </DashboardLayout>

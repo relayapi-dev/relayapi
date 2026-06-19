@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { authClient, useSession } from "@/lib/auth-client";
+import { PageHeader } from "@/components/dashboard/page-header";
 
 const stagger = {
   hidden: {},
@@ -336,24 +337,24 @@ export function ProfilePage() {
 
   return (
     <motion.div
-      className="space-y-6"
+      className="space-y-6 pb-16"
       variants={stagger}
       initial="hidden"
       animate="visible"
     >
       <motion.div variants={fadeUp}>
-        <h1 className="text-lg font-medium">Profile</h1>
+        <PageHeader title="Profile" />
       </motion.div>
 
       {/* Personal Information */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
+        <div className="px-5 py-3.5 border-b border-border">
           <h2 className="text-[13px] font-medium">Personal Information</h2>
         </div>
-        <div className="p-4 space-y-4">
+        <div className="p-5 space-y-4">
           <div className="flex items-center gap-4">
             <div className="relative">
               <button
@@ -406,7 +407,7 @@ export function ProfilePage() {
                 </button>
               )}
               {avatarError && (
-                <p className="text-[11px] text-red-400 mt-0.5">{avatarError}</p>
+                <p className="text-[11px] text-destructive mt-0.5">{avatarError}</p>
               )}
             </div>
           </div>
@@ -430,13 +431,11 @@ export function ProfilePage() {
                 />
               </div>
               <Button
-                size="sm"
-                className="h-9 text-xs"
                 onClick={handleUpdateName}
                 disabled={nameLoading || !name.trim() || name === user?.name}
               >
                 {nameLoading ? (
-                  <Loader2 className="size-3.5 animate-spin" />
+                  <Loader2 className="size-4 animate-spin" />
                 ) : nameSuccess ? (
                   "Saved!"
                 ) : (
@@ -445,7 +444,7 @@ export function ProfilePage() {
               </Button>
             </div>
             {nameError && (
-              <p className="text-xs text-red-400">{nameError}</p>
+              <p className="text-xs text-destructive">{nameError}</p>
             )}
           </div>
 
@@ -463,7 +462,7 @@ export function ProfilePage() {
                 type="email"
                 value={user?.email || ""}
                 disabled
-                className="w-full rounded-md border border-border bg-accent/20 px-3 py-2 pl-9 text-[13px] text-muted-foreground cursor-not-allowed"
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 pl-9 text-[13px] text-muted-foreground cursor-not-allowed"
               />
             </div>
             <p className="text-[11px] text-muted-foreground">
@@ -483,15 +482,15 @@ export function ProfilePage() {
       {/* Timezone */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
+        <div className="px-5 py-3.5 border-b border-border">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
-            <Globe className="size-3.5" />
+            <Globe className="size-3.5 text-muted-foreground" />
             Timezone
           </h2>
         </div>
-        <div className="p-4">
+        <div className="p-5">
           <div className="space-y-2 max-w-xs">
             <label
               htmlFor="profile-timezone"
@@ -521,15 +520,15 @@ export function ProfilePage() {
       {/* Change Password */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
+        <div className="px-5 py-3.5 border-b border-border">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
-            <Lock className="size-3.5" />
+            <Lock className="size-3.5 text-muted-foreground" />
             Change Password
           </h2>
         </div>
-        <div className="p-4 space-y-3">
+        <div className="p-5 space-y-3">
           <div className="space-y-2">
             <label
               htmlFor="profile-current-password"
@@ -581,23 +580,21 @@ export function ProfilePage() {
             </div>
           </div>
           {passwordError && (
-            <p className="text-xs text-red-400">{passwordError}</p>
+            <p className="text-xs text-destructive">{passwordError}</p>
           )}
           {passwordSuccess && (
-            <p className="text-xs text-emerald-400">
+            <p className="text-xs text-success">
               Password changed successfully
             </p>
           )}
           <Button
-            size="sm"
-            className="h-8 text-xs"
             onClick={handleChangePassword}
             disabled={
               passwordLoading || !currentPassword || !newPassword || !confirmPassword
             }
           >
             {passwordLoading ? (
-              <Loader2 className="size-3.5 animate-spin" />
+              <Loader2 className="size-4 animate-spin" />
             ) : (
               "Update Password"
             )}
@@ -608,15 +605,15 @@ export function ProfilePage() {
       {/* Connected Accounts */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
+        <div className="px-5 py-3.5 border-b border-border">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
-            <Link2 className="size-3.5" />
+            <Link2 className="size-3.5 text-muted-foreground" />
             Connected Accounts
           </h2>
         </div>
-        <div className="p-4 space-y-3">
+        <div className="p-5 space-y-3">
           {accountsLoading ? (
             <div className="flex items-center justify-center py-4">
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -624,7 +621,7 @@ export function ProfilePage() {
           ) : (
             <div className="flex items-center justify-between rounded-md border border-border px-4 py-3">
               <div className="flex items-center gap-3">
-                <div className="flex size-8 items-center justify-center rounded-full bg-accent/40">
+                <div className="flex size-8 items-center justify-center rounded-full bg-muted">
                   <Globe className="size-4 text-muted-foreground" />
                 </div>
                 <div>
@@ -665,11 +662,11 @@ export function ProfilePage() {
       {/* Active Sessions */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10 flex items-center justify-between">
+        <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
-            <Shield className="size-3.5" />
+            <Shield className="size-3.5 text-muted-foreground" />
             Active Sessions
           </h2>
           {sessions.length > 1 && (
@@ -701,7 +698,7 @@ export function ProfilePage() {
               return (
                 <div
                   key={s.id}
-                  className="flex items-center justify-between px-4 py-3"
+                  className="flex items-center justify-between px-5 py-3"
                 >
                   <div className="flex items-center gap-3">
                     <DeviceIcon className="size-4 text-muted-foreground shrink-0" />
@@ -709,7 +706,7 @@ export function ProfilePage() {
                       <p className="text-[13px] font-medium flex items-center gap-2">
                         {browser} on {device}
                         {isCurrent && (
-                          <span className="text-[11px] text-emerald-400 font-normal">
+                          <span className="text-[11px] text-success font-normal">
                             Current
                           </span>
                         )}
@@ -740,15 +737,15 @@ export function ProfilePage() {
       {/* Danger Zone */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-red-500/30 overflow-hidden"
+        className="rounded-[12px] border border-destructive/30 bg-card overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-red-500/30 bg-red-500/5">
-          <h2 className="text-[13px] font-medium text-red-400 flex items-center gap-2">
+        <div className="px-5 py-3.5 border-b border-destructive/30 bg-destructive/5">
+          <h2 className="text-[13px] font-medium text-destructive flex items-center gap-2">
             <Trash2 className="size-3.5" />
             Danger Zone
           </h2>
         </div>
-        <div className="p-4">
+        <div className="p-5">
           {!deleteConfirmOpen ? (
             <div className="flex items-center justify-between">
               <div>
@@ -760,7 +757,7 @@ export function ProfilePage() {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs text-red-400 border-red-500/30 hover:bg-red-500/10 hover:text-red-400"
+                className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
                 onClick={() => setDeleteConfirmOpen(true)}
               >
                 Delete Account
@@ -777,10 +774,10 @@ export function ProfilePage() {
                 value={deletePassword}
                 onChange={(e) => setDeletePassword(e.target.value)}
                 placeholder="Enter your password"
-                className="w-full rounded-md border border-red-500/30 bg-background px-3 py-2 text-[13px] outline-none focus:ring-1 focus:ring-red-500/50 placeholder:text-muted-foreground/50"
+                className="w-full rounded-md border border-destructive/30 bg-background px-3 py-2 text-[13px] outline-none focus:ring-1 focus:ring-destructive/50 placeholder:text-muted-foreground/50"
               />
               {deleteError && (
-                <p className="text-xs text-red-400">{deleteError}</p>
+                <p className="text-xs text-destructive">{deleteError}</p>
               )}
               <div className="flex gap-2">
                 <Button
@@ -797,7 +794,8 @@ export function ProfilePage() {
                 </Button>
                 <Button
                   size="sm"
-                  className="h-8 text-xs bg-red-600 hover:bg-red-700 text-white"
+                  variant="destructive"
+                  className="h-8 text-xs"
                   onClick={handleDeleteAccount}
                   disabled={deleteLoading || !deletePassword}
                 >

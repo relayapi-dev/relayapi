@@ -58,7 +58,7 @@ function ChangeBadge({ change }: { change: number | null }) {
     <span
       className={cn(
         "inline-flex items-center gap-0.5 text-xs font-medium",
-        up ? "text-emerald-400" : "text-red-400",
+        up ? "text-success" : "text-destructive",
       )}
     >
       {up ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
@@ -70,7 +70,7 @@ function ChangeBadge({ change }: { change: number | null }) {
 
 function SkeletonTotals() {
   return (
-    <div className="rounded-md border border-border p-5">
+    <div className="rounded-[12px] border border-border bg-card p-5">
       <div className="h-4 w-16 rounded bg-muted-foreground/10 animate-pulse mb-4" />
       <div className="grid gap-3 sm:grid-cols-3">
         {Array.from({ length: 3 }).map((_, i) => (
@@ -87,7 +87,7 @@ function SkeletonTotals() {
 
 function SkeletonTable() {
   return (
-    <div className="rounded-md border border-border p-5">
+    <div className="rounded-[12px] border border-border bg-card p-5">
       <div className="h-4 w-44 rounded bg-muted-foreground/10 animate-pulse mb-4" />
       <div className="space-y-3">
         {Array.from({ length: 4 }).map((_, i) => (
@@ -112,7 +112,7 @@ function StreakCard() {
 
   if (loading) {
     return (
-      <div className="rounded-md border border-border p-5">
+      <div className="rounded-[12px] border border-border bg-card p-5">
         <div className="h-4 w-28 rounded bg-muted-foreground/10 animate-pulse mb-4" />
         <div className="grid gap-3 sm:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -138,15 +138,15 @@ function StreakCard() {
     : null;
 
   return (
-    <div className="rounded-md border border-border p-5">
+    <div className="rounded-[12px] border border-border bg-card p-5">
       <div className="flex items-center gap-2 mb-4">
         <Flame
           className={cn(
             "size-4",
             streak.active
               ? isUrgent
-                ? "text-red-400 animate-pulse"
-                : "text-amber-400"
+                ? "text-destructive animate-pulse"
+                : "text-amber-500"
               : "text-muted-foreground",
           )}
         />
@@ -157,7 +157,7 @@ function StreakCard() {
         <div className="grid gap-3 sm:grid-cols-4">
           <div>
             <p className="text-xs text-muted-foreground">Current Streak</p>
-            <p className="mt-1 text-2xl font-semibold text-amber-400">
+            <p className="mt-1 text-2xl font-semibold text-amber-500">
               {streak.current_streak_days}d
             </p>
           </div>
@@ -178,7 +178,7 @@ function StreakCard() {
             <p
               className={cn(
                 "mt-1 text-lg font-medium",
-                isUrgent ? "text-red-400" : "text-muted-foreground",
+                isUrgent ? "text-destructive" : "text-muted-foreground",
               )}
             >
               {hoursRemaining != null
@@ -260,7 +260,7 @@ export function AnalyticsHome({
       {/* Totals Section */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border p-5"
+        className="rounded-[12px] border border-border bg-card p-5"
       >
         <h3 className="text-[13px] font-medium mb-4">Totals</h3>
         <div className="grid gap-3 sm:grid-cols-3">
@@ -284,7 +284,7 @@ export function AnalyticsHome({
       {/* Social Channels Overview */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border p-5"
+        className="rounded-[12px] border border-border bg-card p-5"
       >
         <h3 className="text-[13px] font-medium mb-4">
           Social channels overview
@@ -296,7 +296,7 @@ export function AnalyticsHome({
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
                   <th className="pb-2 pr-4 text-left font-medium">Profiles</th>
@@ -316,7 +316,7 @@ export function AnalyticsHome({
                   <tr
                     key={channel.account_id}
                     onClick={() => onSelectChannel(channel.account_id)}
-                    className="border-b border-border last:border-0 cursor-pointer hover:bg-muted/50 transition-colors"
+                    className="border-b border-border last:border-0 cursor-pointer hover:bg-accent/50 transition-colors"
                   >
                     <td className="py-3 pr-4">
                       <div className="flex items-center gap-3">
@@ -363,7 +363,7 @@ export function AnalyticsHome({
                                 channel.platform}
                             </p>
                             {channel.needs_reconnect && (
-                              <span className="inline-flex items-center gap-1 text-[10px] text-amber-400">
+                              <span className="inline-flex items-center gap-1 text-[10px] text-amber-500">
                                 <AlertCircle className="size-2.5" />
                                 Reconnect
                               </span>

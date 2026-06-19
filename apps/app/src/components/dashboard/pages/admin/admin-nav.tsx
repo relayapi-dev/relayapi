@@ -9,22 +9,25 @@ const tabs = [
 
 export function AdminNav({ current }: { current: string }) {
   return (
-    <div className="flex items-center gap-1 border-b border-border mb-6">
-      {tabs.map((tab) => (
-        <a
-          key={tab.key}
-          href={`/app/${tab.key}`}
-          className={cn(
-            "flex items-center gap-2 px-3 py-2 text-[13px] border-b-2 -mb-px transition-colors",
-            current === tab.key
-              ? "border-foreground text-foreground font-medium"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          )}
-        >
-          <tab.icon className="size-3.5" />
-          {tab.label}
-        </a>
-      ))}
+    <div className="inline-flex items-center gap-0.5 rounded-md bg-muted p-0.5">
+      {tabs.map((tab) => {
+        const active = current === tab.key;
+        return (
+          <a
+            key={tab.key}
+            href={`/app/${tab.key}`}
+            className={cn(
+              "inline-flex items-center gap-1.5 whitespace-nowrap rounded-[6px] px-3.5 py-1 text-[13px] font-medium transition-colors ease-[var(--ease-relay)] [&_svg]:size-[15px] [&_svg]:shrink-0",
+              active
+                ? "bg-card text-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <tab.icon />
+            {tab.label}
+          </a>
+        );
+      })}
     </div>
   );
 }

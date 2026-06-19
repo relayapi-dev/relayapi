@@ -8,15 +8,17 @@ import {
   FileCheck,
   Hash,
   Type,
-  BookOpen,
   Search,
   Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
-import { FilterBar } from "@/components/dashboard/filter-bar";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { LoadMore } from "@/components/ui/load-more";
 import { UploadMediaDialog } from "@/components/dashboard/upload-media-dialog";
 import { PostLengthDialog } from "@/components/dashboard/tools/post-length-dialog";
@@ -155,55 +157,48 @@ export function MediaPage({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Media</h1>
-          <a href="https://docs.relayapi.dev/api-reference/media" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        {activeTab === "library" && (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setUploadOpen(true)}>
-            <Upload className="size-3.5" />
-            Upload
-          </Button>
-        )}
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Media"
+        docsHref="https://docs.relayapi.dev/api-reference/media"
+        action={
+          activeTab === "library" ? (
+            <Button onClick={() => setUploadOpen(true)}>
+              <Upload className="size-4" />
+              Upload
+            </Button>
+          ) : undefined
+        }
+      />
 
-      <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <div className="flex gap-4 shrink-0">
-          {tabs.map((tab) => {
-            const tabKey = tab.toLowerCase() as typeof initialTab;
-            return (
-              <button
-                type="button"
-                key={tab}
-                onClick={() => switchTab(tabKey)}
-                className={cn(
-                  "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-                  activeTab === tabKey
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {tab}
-              </button>
-            );
-          })}
-        </div>
-        <div className="pb-2 shrink-0">
-          <FilterBar />
-        </div>
-      </div>
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={tabs.map((tab) => ({
+              value: tab.toLowerCase() as typeof initialTab,
+              label: tab,
+            }))}
+          />
+        }
+        right={
+          <>
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+          </>
+        }
+      />
 
       {activeTab === "library" && (
-        <div className="flex items-start gap-2.5 rounded-md border border-border bg-accent/30 px-3.5 py-2.5 text-xs text-muted-foreground">
+        <div className="flex items-start gap-2.5 rounded-[12px] border border-border bg-muted px-3.5 py-2.5 text-xs text-muted-foreground">
           <Info className="size-3.5 shrink-0 mt-0.5" />
           <p>Files are temporary and automatically deleted after 30 days. Upload media when you're ready to publish your posts.</p>
         </div>
       )}
 
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
@@ -215,7 +210,7 @@ export function MediaPage({
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
         ) : media.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border p-12 text-center">
+          <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
             <ImageIcon className="size-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No media files</p>
             <p className="text-xs text-muted-foreground mt-1">
@@ -234,9 +229,9 @@ export function MediaPage({
                 <motion.div
                   key={file.id}
                   variants={fadeUp}
-                  className="group rounded-md border border-border overflow-hidden hover:bg-accent/20 transition-colors"
+                  className="group rounded-[12px] border border-border bg-card overflow-hidden hover:bg-accent transition-colors"
                 >
-                  <div className="aspect-video bg-accent/20 flex items-center justify-center">
+                  <div className="aspect-video bg-muted flex items-center justify-center">
                     <MediaPreview file={file} />
                   </div>
                   <div className="p-3 flex items-center justify-between">
@@ -248,11 +243,11 @@ export function MediaPage({
                     </div>
                     <button
                       type="button"
-                      className="rounded-lg p-1.5 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                      className="rounded-md p-1.5 hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
                       onClick={() => handleDelete(file.id)}
                       title="Delete"
                     >
-                      <Trash2 className="size-4 text-muted-foreground hover:text-red-400" />
+                      <Trash2 className="size-4 text-muted-foreground hover:text-destructive" />
                     </button>
                   </div>
                 </motion.div>
@@ -282,12 +277,12 @@ export function MediaPage({
               <motion.div
                 key={tool.id}
                 variants={fadeUp}
-                className="rounded-md border border-border p-4 hover:bg-accent/20 transition-colors cursor-pointer"
+                className="rounded-[12px] border border-border bg-card p-5 hover:bg-accent transition-colors cursor-pointer"
                 onClick={() => setOpenTool(tool.id)}
               >
                 <div className="flex items-start gap-3">
-                  <div className="rounded-md bg-primary/10 p-2 shrink-0">
-                    <Icon className="size-4 text-primary" />
+                  <div className="rounded-md bg-muted p-2 shrink-0">
+                    <Icon className="size-4 text-foreground" />
                   </div>
                   <div>
                     <h3 className="text-sm font-medium">{tool.label}</h3>

@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { authClient } from "@/lib/auth-client";
+import { PageHeader } from "@/components/dashboard/page-header";
 import { AdminNav } from "./admin-nav";
 
 interface AdminUser {
@@ -52,18 +53,9 @@ interface AdminUser {
 }
 
 const roleColors: Record<string, string> = {
-  admin: "text-violet-400 bg-violet-400/10",
-  user: "text-muted-foreground bg-accent/50",
+  admin: "text-foreground bg-muted border border-border",
+  user: "text-muted-foreground bg-muted",
 };
-
-const avatarColors = [
-  "bg-primary",
-  "bg-violet-600",
-  "bg-emerald-600",
-  "bg-amber-600",
-  "bg-pink-600",
-  "bg-blue-600",
-];
 
 function getInitials(name: string): string {
   return name
@@ -218,16 +210,9 @@ export function AdminUsersPage() {
         ),
         cell: ({ row }) => {
           const u = row.original;
-          const idx =
-            users.findIndex((x) => x.id === u.id) % avatarColors.length;
           return (
             <div className="flex items-center gap-3">
-              <div
-                className={cn(
-                  "flex size-8 items-center justify-center rounded-full text-[10px] font-semibold text-white shrink-0",
-                  avatarColors[idx]
-                )}
-              >
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground">
                 {u.image ? (
                   <img
                     src={u.image}
@@ -239,7 +224,7 @@ export function AdminUsersPage() {
                 )}
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">
+                <p className="text-[13px] font-medium truncate">
                   {u.name || "Unnamed"}
                 </p>
                 <p className="text-xs text-muted-foreground truncate">
@@ -272,11 +257,11 @@ export function AdminUsersPage() {
         header: "Status",
         cell: ({ row }) =>
           row.original.banned ? (
-            <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium text-red-400 bg-red-400/10">
+            <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium text-destructive bg-destructive/10">
               Banned
             </span>
           ) : (
-            <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium text-emerald-400 bg-emerald-400/10">
+            <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium text-success bg-success/10">
               Active
             </span>
           ),
@@ -295,12 +280,15 @@ export function AdminUsersPage() {
             <ArrowUpDown className="ml-1.5 size-3" />
           </Button>
         ),
-        cell: ({ row }) =>
-          new Date(row.original.createdAt).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          }),
+        cell: ({ row }) => (
+          <span className="text-[13px] text-muted-foreground">
+            {new Date(row.original.createdAt).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </span>
+        ),
       },
       {
         id: "actions",
@@ -397,41 +385,36 @@ export function AdminUsersPage() {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-16">
+      <PageHeader title="Users" subtitle={`${total} total`} />
+
       <AdminNav current="admin-users" />
 
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-lg font-medium">Users</h1>
-        <span className="text-xs text-muted-foreground">{total} total</span>
-      </div>
-
       {/* Search */}
-      <div className="flex items-center gap-3">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search users..."
-            className="w-full max-w-xs rounded-md border border-border bg-background pl-9 pr-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-          />
-        </div>
+      <div className="relative max-w-xs">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search users..."
+          className="w-full rounded-[10px] border border-border bg-card pl-9 pr-3 py-2 text-[13px] outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20 placeholder:text-muted-foreground"
+        />
       </div>
 
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-20">
+        <div className="flex items-center justify-center rounded-[12px] border border-border py-20">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-md border">
+          <div className="overflow-hidden rounded-[12px] border border-border bg-card">
             <Table>
               <TableHeader>
                 {table.getHeaderGroups().map((headerGroup) => (
@@ -467,7 +450,7 @@ export function AdminUsersPage() {
                   <TableRow>
                     <TableCell
                       colSpan={columns.length}
-                      className="h-24 text-center"
+                      className="h-24 text-center text-[13px] text-muted-foreground"
                     >
                       No users found.
                     </TableCell>
@@ -509,7 +492,7 @@ export function AdminUsersPage() {
       {/* Ban modal */}
       {banModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-sm rounded-lg border border-border bg-background p-6 shadow-lg space-y-4">
+          <div className="w-full max-w-sm rounded-[12px] border border-border bg-card p-6 space-y-4">
             <h3 className="text-sm font-medium">Ban User</h3>
             <div className="space-y-1.5">
               <label
@@ -524,14 +507,13 @@ export function AdminUsersPage() {
                 value={banReason}
                 onChange={(e) => setBanReason(e.target.value)}
                 placeholder="Spamming, abuse, etc."
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                className="w-full rounded-[10px] border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20"
               />
             </div>
             <div className="flex gap-2 justify-end">
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs"
                 onClick={() => {
                   setBanModal(null);
                   setBanReason("");
@@ -542,12 +524,11 @@ export function AdminUsersPage() {
               <Button
                 size="sm"
                 variant="destructive"
-                className="h-7 text-xs"
                 disabled={actionLoading}
                 onClick={() => handleBan(banModal)}
               >
                 {actionLoading ? (
-                  <Loader2 className="size-3 animate-spin" />
+                  <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   "Ban User"
                 )}
@@ -560,7 +541,7 @@ export function AdminUsersPage() {
       {/* Delete confirmation */}
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-sm rounded-lg border border-border bg-background p-6 shadow-lg space-y-4">
+          <div className="w-full max-w-sm rounded-[12px] border border-border bg-card p-6 space-y-4">
             <h3 className="text-sm font-medium">Delete User</h3>
             <p className="text-sm text-muted-foreground">
               This will permanently delete this user and all their data. This
@@ -570,7 +551,6 @@ export function AdminUsersPage() {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs"
                 onClick={() => setConfirmDelete(null)}
               >
                 Cancel
@@ -578,12 +558,11 @@ export function AdminUsersPage() {
               <Button
                 size="sm"
                 variant="destructive"
-                className="h-7 text-xs"
                 disabled={actionLoading}
                 onClick={() => handleDelete(confirmDelete)}
               >
                 {actionLoading ? (
-                  <Loader2 className="size-3 animate-spin" />
+                  <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   "Delete"
                 )}

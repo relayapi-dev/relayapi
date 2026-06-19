@@ -4,6 +4,7 @@ import { Plus, MoreHorizontal, Mail, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { organization } from "@/lib/auth-client";
+import { PageHeader } from "@/components/dashboard/page-header";
 
 const stagger = {
   hidden: {},
@@ -27,11 +28,11 @@ interface Member {
 }
 
 const roleColors: Record<string, string> = {
-  owner: "text-primary bg-primary/10",
-  admin: "text-violet-400 bg-violet-400/10",
-  editor: "text-emerald-400 bg-emerald-400/10",
-  member: "text-muted-foreground bg-accent/50",
-  viewer: "text-muted-foreground bg-accent/50",
+  owner: "text-foreground bg-muted",
+  admin: "text-foreground bg-muted",
+  editor: "text-success bg-success/10",
+  member: "text-muted-foreground bg-muted",
+  viewer: "text-muted-foreground bg-muted",
 };
 
 function getInitials(name: string): string {
@@ -44,12 +45,12 @@ function getInitials(name: string): string {
 }
 
 const avatarColors = [
-  "bg-primary",
-  "bg-violet-600",
-  "bg-emerald-600",
-  "bg-amber-600",
-  "bg-pink-600",
-  "bg-blue-600",
+  "bg-muted",
+  "bg-muted",
+  "bg-muted",
+  "bg-muted",
+  "bg-muted",
+  "bg-muted",
 ];
 
 export function UsersPage() {
@@ -106,24 +107,26 @@ export function UsersPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-medium">Users</h1>
-        <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setShowInvite(true)}>
-          <Plus className="size-3.5" />
-          Invite User
-        </Button>
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Users"
+        action={
+          <Button onClick={() => setShowInvite(true)}>
+            <Plus className="size-4" />
+            Invite User
+          </Button>
+        }
+      />
 
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
 
       {showInvite && (
         <motion.div
-          className="rounded-md border border-border p-4 space-y-3"
+          className="rounded-[12px] border border-border bg-card p-5 space-y-3"
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
         >
@@ -162,14 +165,12 @@ export function UsersPage() {
           </div>
           <div className="flex gap-2">
             <Button
-              size="sm"
-              className="h-7 text-xs"
               disabled={!inviteEmail.trim() || inviting}
               onClick={handleInvite}
             >
-              {inviting ? <Loader2 className="size-3 animate-spin" /> : "Send Invite"}
+              {inviting ? <Loader2 className="size-4 animate-spin" /> : "Send Invite"}
             </Button>
-            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowInvite(false)}>
+            <Button variant="outline" onClick={() => setShowInvite(false)}>
               Cancel
             </Button>
           </div>
@@ -177,12 +178,12 @@ export function UsersPage() {
       )}
 
       <motion.div
-        className="rounded-md border border-border overflow-hidden"
+        className="rounded-[12px] border border-border bg-card overflow-hidden"
         variants={stagger}
         initial="hidden"
         animate="visible"
       >
-        <div className="hidden md:grid grid-cols-[2fr_1fr_1fr_auto] gap-4 px-4 py-3 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
+        <div className="hidden md:grid grid-cols-[2fr_1fr_1fr_auto] gap-4 px-4 py-3 text-xs text-muted-foreground border-b border-border bg-muted">
           <span>User</span>
           <span>Role</span>
           <span>Joined</span>
@@ -196,14 +197,14 @@ export function UsersPage() {
               key={member.id}
               variants={fadeUp}
               className={cn(
-                "grid md:grid-cols-[2fr_1fr_1fr_auto] gap-3 md:gap-4 p-4 items-center hover:bg-accent/30 transition-colors",
+                "grid md:grid-cols-[2fr_1fr_1fr_auto] gap-3 md:gap-4 p-4 items-center hover:bg-accent transition-colors",
                 i !== members.length - 1 && "border-b border-border"
               )}
             >
               <div className="flex items-center gap-3">
                 <div
                   className={cn(
-                    "flex size-9 items-center justify-center rounded-full text-xs font-semibold text-white",
+                    "flex size-9 items-center justify-center rounded-full text-xs font-semibold text-muted-foreground",
                     avatarColors[colorIdx]
                   )}
                 >
@@ -214,7 +215,7 @@ export function UsersPage() {
                   )}
                 </div>
                 <div>
-                  <p className="text-sm font-medium">{user.name || "Unnamed"}</p>
+                  <p className="text-[13px] font-medium">{user.name || "Unnamed"}</p>
                   <p className="text-xs text-muted-foreground">{user.email}</p>
                 </div>
               </div>
@@ -226,7 +227,7 @@ export function UsersPage() {
               >
                 {member.role}
               </span>
-              <span className="text-sm text-muted-foreground">
+              <span className="text-[13px] text-muted-foreground">
                 {new Date(member.createdAt).toLocaleDateString("en-US", {
                   month: "short",
                   day: "numeric",
@@ -234,11 +235,11 @@ export function UsersPage() {
                 })}
               </span>
               <div className="flex items-center gap-1 justify-self-end">
-                <button type="button" className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors">
-                  <Mail className="size-4 text-muted-foreground" />
+                <button type="button" className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors">
+                  <Mail className="size-4" />
                 </button>
-                <button type="button" className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors">
-                  <MoreHorizontal className="size-4 text-muted-foreground" />
+                <button type="button" className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors">
+                  <MoreHorizontal className="size-4" />
                 </button>
               </div>
             </motion.div>

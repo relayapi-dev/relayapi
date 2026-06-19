@@ -10,6 +10,7 @@ import {
 import { cn, formatPercentage } from "@/lib/utils";
 import { useApi } from "@/hooks/use-api";
 import { platformLabels } from "@/lib/platform-maps";
+import { Segmented } from "@/components/dashboard/segmented";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -238,7 +239,7 @@ export function AnalyticsChannel({
           username={username}
           avatarUrl={avatarUrl}
         />
-        <div className="rounded-md border border-border bg-amber-500/5 p-5 flex items-center gap-3">
+        <div className="rounded-[12px] border border-border bg-amber-500/5 p-5 flex items-center gap-3">
           <AlertCircle className="size-5 text-amber-500 shrink-0" />
           <div className="flex-1">
             <p className="text-sm font-medium">
@@ -293,25 +294,14 @@ export function AnalyticsChannel({
       />
 
       {/* Tab bar */}
-      <div className="border-b border-border">
-        <div className="flex gap-4 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-          {tabs.map((tab) => (
-            <button
-              type="button"
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px capitalize",
-                activeTab === tab
-                  ? "border-foreground text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-      </div>
+      <Segmented
+        value={activeTab}
+        onChange={(v) => setActiveTab(v)}
+        options={tabs.map((tab) => ({
+          value: tab,
+          label: tab.charAt(0).toUpperCase() + tab.slice(1),
+        }))}
+      />
 
       {/* ===== Overview Tab ===== */}
       {activeTab === "overview" && (
@@ -364,7 +354,7 @@ export function AnalyticsChannel({
           {/* Daily engagement chart */}
           {chartData.length > 0 && (
             <motion.div
-              className="rounded-md border border-border p-5"
+              className="rounded-[12px] border border-border bg-card p-5"
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{
@@ -415,7 +405,7 @@ export function AnalyticsChannel({
           )}
 
           {chartData.length === 0 && !dailyLoading && (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <p className="text-sm text-muted-foreground">
                 No daily data available for this period
               </p>
@@ -475,7 +465,7 @@ export function AnalyticsChannel({
               {/* Post insights table */}
               {posts.length > 0 ? (
                 <motion.div
-                  className="rounded-md border border-border overflow-x-auto"
+                  className="rounded-[12px] border border-border bg-card overflow-x-auto"
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{
@@ -517,7 +507,7 @@ export function AnalyticsChannel({
                   {posts.map((post) => (
                     <div
                       key={post.platform_post_id}
-                      className="grid grid-cols-[1fr_100px_100px_100px_80px] gap-2 px-5 py-3 border-b border-border last:border-b-0 items-center hover:bg-muted/30 transition-colors"
+                      className="grid grid-cols-[1fr_100px_100px_100px_80px] gap-2 px-5 py-3 border-b border-border last:border-b-0 items-center hover:bg-accent/40 transition-colors"
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         {post.media_url && (
@@ -565,13 +555,13 @@ export function AnalyticsChannel({
                   </div>
                 </motion.div>
               ) : postsError && postsErrorCode === "API_ERROR" ? (
-                <div className="rounded-md border border-destructive/30 bg-destructive/5 p-12 text-center">
+                <div className="rounded-[12px] border border-destructive/30 bg-destructive/5 p-12 text-center">
                   <p className="text-sm text-destructive">
                     {postsError}
                   </p>
                 </div>
               ) : (
-                <div className="rounded-md border border-dashed border-border p-12 text-center">
+                <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
                   <p className="text-sm text-muted-foreground">
                     No posts found for this period
                   </p>
@@ -587,7 +577,7 @@ export function AnalyticsChannel({
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : audience?.available === false ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <AlertCircle className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm font-medium">
                 Audience data not available for this platform
@@ -609,7 +599,7 @@ export function AnalyticsChannel({
             >
               {/* Top Cities */}
               {audience?.top_cities && audience.top_cities.length > 0 && (
-                <div className="rounded-md border border-border p-5">
+                <div className="rounded-[12px] border border-border bg-card p-5">
                   <h3 className="text-[13px] font-medium mb-4">Top cities</h3>
                   <HorizontalBarList
                     items={audience.top_cities.map((c) => ({
@@ -622,7 +612,7 @@ export function AnalyticsChannel({
 
               {/* Top Countries */}
               {audience?.top_countries && audience.top_countries.length > 0 && (
-                <div className="rounded-md border border-border p-5">
+                <div className="rounded-[12px] border border-border bg-card p-5">
                   <h3 className="text-[13px] font-medium mb-4">
                     Top countries
                   </h3>
@@ -637,7 +627,7 @@ export function AnalyticsChannel({
 
               {/* Age & Gender */}
               {audience?.age_gender && audience.age_gender.length > 0 && (
-                <div className="rounded-md border border-border p-5">
+                <div className="rounded-[12px] border border-border bg-card p-5">
                   <h3 className="text-[13px] font-medium mb-4">
                     Age &amp; Gender
                   </h3>
@@ -665,7 +655,7 @@ export function AnalyticsChannel({
                   audience.top_countries.length === 0) &&
                 (!audience?.age_gender ||
                   audience.age_gender.length === 0) && (
-                  <div className="rounded-md border border-dashed border-border p-12 text-center">
+                  <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
                     <p className="text-sm text-muted-foreground">
                       No audience data available for this period
                     </p>
@@ -728,7 +718,7 @@ function MetricCard({
 }) {
   const up = (change ?? 0) >= 0;
   return (
-    <motion.div variants={fadeUp} className="rounded-md border border-border p-4">
+    <motion.div variants={fadeUp} className="rounded-[12px] border border-border bg-card p-4">
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
       <div className="mt-2 flex items-baseline gap-2">
         <span className="text-2xl font-semibold">{value}</span>
@@ -736,7 +726,7 @@ function MetricCard({
           <span
             className={cn(
               "inline-flex items-center gap-0.5 text-xs font-medium",
-              up ? "text-emerald-400" : "text-red-400",
+              up ? "text-success" : "text-destructive",
             )}
           >
             {up ? (

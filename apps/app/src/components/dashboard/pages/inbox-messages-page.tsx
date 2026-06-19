@@ -13,6 +13,7 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
+import { PageHeader } from "@/components/dashboard/page-header";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { useUsage } from "@/hooks/use-usage";
 import { useFilter, useFilterQuery } from "@/components/dashboard/filter-context";
@@ -103,13 +104,13 @@ function ToolbarSelect({
       <SelectTrigger
         size="sm"
         className={cn(
-          "h-8 min-w-[7.5rem] rounded-md border-[#d8dce5] bg-white px-3 text-[12px] font-medium text-slate-600 shadow-none hover:bg-[#f8f9fc]",
+          "h-8 min-w-[7.5rem] rounded-md border-border bg-card px-3 text-[12px] font-medium text-muted-foreground shadow-none hover:bg-accent",
           className,
         )}
       >
         <SelectValue />
       </SelectTrigger>
-      <SelectContent className="border-[#d9dee8] bg-white">
+      <SelectContent>
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
             {option.label}
@@ -126,8 +127,8 @@ function ScopeFiltersPanel() {
   return (
     <div className="space-y-3">
       <div className="space-y-1">
-        <p className="text-[12px] font-semibold text-slate-800">Filters</p>
-        <p className="text-[12px] leading-5 text-slate-500">
+        <p className="text-[12px] font-semibold text-foreground">Filters</p>
+        <p className="text-[12px] leading-5 text-muted-foreground">
           Limit the inbox to a workspace or a specific connected account.
         </p>
       </div>
@@ -163,7 +164,7 @@ function ScopeFiltersPanel() {
               setWorkspaceId(null);
               setAccountId(null);
             }}
-            className="text-[12px] font-medium text-slate-500 transition-colors hover:text-slate-800"
+            className="text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
             Clear filters
           </button>
@@ -187,7 +188,7 @@ function SidebarSection({
   return (
     <div className="space-y-0.5">
       {title && (
-        <div className="px-4 pb-1 pt-3 text-[11px] font-medium text-slate-400">
+        <div className="px-4 pb-1 pt-3 text-[11px] font-medium text-muted-foreground">
           {title}
         </div>
       )}
@@ -200,13 +201,13 @@ function SidebarSection({
             onClick={() => onSelect(item.key)}
             className={cn(
               "flex w-full items-center gap-3 rounded-md px-4 py-2 text-left transition-colors",
-              isActive ? "bg-[#eceef2] text-slate-900" : "text-slate-500 hover:bg-[#f5f6f8] hover:text-slate-800",
+              isActive ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
             )}
           >
             <item.icon className="size-3.5 shrink-0" />
             <span className="flex-1 text-[13px] font-medium">{item.label}</span>
-            <span className="flex items-center gap-1 text-[12px] font-medium text-slate-400">
-              {item.accentCount && item.count > 0 && <span className="size-1.5 rounded-full bg-[#2d71f8]" />}
+            <span className="flex items-center gap-1 text-[12px] font-medium text-muted-foreground">
+              {item.accentCount && item.count > 0 && <span className="size-1.5 rounded-full bg-foreground" />}
               {item.count}
             </span>
           </button>
@@ -469,10 +470,8 @@ export function InboxMessagesPage() {
   if (!isPro && usage !== null) {
     return (
       <div className="space-y-6 p-6 md:p-8">
-        <div>
-          <h1 className="text-lg font-medium">Messages</h1>
-        </div>
-        <div className="rounded-md border border-border p-12 text-center">
+        <PageHeader title="Messages" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
+        <div className="rounded-[12px] border border-border bg-card p-12 text-center">
           <Lock className="mx-auto mb-2 size-8 text-muted-foreground/40" />
           <p className="text-sm font-medium">Pro Feature</p>
           <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
@@ -490,28 +489,27 @@ export function InboxMessagesPage() {
   }
 
   return (
-    <div className="flex min-h-[calc(100dvh-3.25rem)] flex-col bg-sidebar text-slate-900 md:h-full md:min-h-0">
-      <div className="border-b border-border bg-sidebar px-4 py-2.5 md:px-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="min-w-0 flex-1 md:flex-none">
-            <h1 className="text-[17px] font-semibold text-slate-900">Inbox</h1>
-          </div>
-
-          <div className="relative min-w-[14rem] flex-1 md:max-w-[20rem]">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search through Inbox conversations"
-              className="h-8 w-full rounded-md border border-[#d8dce5] bg-white pl-10 pr-4 text-[13px] text-slate-700 outline-none transition focus:border-[#bfd3ff] focus:ring-2 focus:ring-[#dbe8ff] placeholder:text-slate-400"
-            />
-          </div>
-
-        </div>
+    <div className="flex min-h-[calc(100dvh-3.25rem)] flex-col bg-background text-foreground md:h-full md:min-h-0">
+      <div className="border-b border-border bg-background px-4 py-3 md:px-6">
+        <PageHeader
+          title="Inbox"
+          docsHref="https://docs.relayapi.dev/api-reference/inbox"
+          action={
+            <div className="relative min-w-[14rem] md:w-[20rem]">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search through Inbox conversations"
+                className="h-8 w-full rounded-md border border-border bg-card pl-10 pr-4 text-[13px] text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/40 placeholder:text-muted-foreground"
+              />
+            </div>
+          }
+        />
       </div>
 
-      <div className="border-b border-[#e7e9ef] bg-white px-4 py-2.5 md:hidden">
+      <div className="border-b border-border bg-background px-4 py-2.5 md:hidden">
         <div className="flex gap-2 overflow-x-auto pb-1">
           {sidebarSections.flatMap((section) => section.items).map((item) => (
             <button
@@ -521,13 +519,13 @@ export function InboxMessagesPage() {
               className={cn(
                 "inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap transition-colors",
                 sidebarFilter === item.key
-                  ? "bg-[#eceef2] text-slate-900"
-                  : "bg-white text-slate-600 border border-[#d8dce5]",
+                  ? "bg-sidebar-accent text-foreground"
+                  : "bg-card text-muted-foreground border border-border",
               )}
             >
               <item.icon className="size-4" />
               {item.label}
-              <span className="text-[11px] text-slate-400">
+              <span className="text-[11px] text-muted-foreground">
                 {item.count}
               </span>
             </button>
@@ -551,7 +549,7 @@ export function InboxMessagesPage() {
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="border-b border-[#e7e9ef] bg-white px-4 py-3">
+          <div className="border-b border-border bg-background px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <ToolbarSelect
                 value={activeStatus}
@@ -570,8 +568,8 @@ export function InboxMessagesPage() {
                 className={cn(
                   "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition-colors",
                   onlyUnread
-                    ? "border-[#bfd3ff] bg-[#eef5ff] text-[#2d71f8]"
-                    : "border-[#d9dee8] bg-white text-slate-600 hover:bg-[#f8f9fc]",
+                    ? "border-foreground/30 bg-accent text-foreground"
+                    : "border-border bg-card text-muted-foreground hover:bg-accent",
                 )}
               >
                 <Inbox className="size-4" />
@@ -599,15 +597,15 @@ export function InboxMessagesPage() {
                     className={cn(
                       "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition-colors",
                       hasScopedFilters
-                        ? "border-[#bfd3ff] bg-[#eef5ff] text-[#2d71f8]"
-                        : "border-[#d9dee8] bg-white text-slate-600 hover:bg-[#f8f9fc]",
+                        ? "border-foreground/30 bg-accent text-foreground"
+                        : "border-border bg-card text-muted-foreground hover:bg-accent",
                     )}
                   >
                     <Filter className="size-4" />
                     Filter
                   </button>
                 </PopoverTrigger>
-                <PopoverContent align="end" sideOffset={8} className="w-[22rem] border-[#d9dee8] bg-white p-4">
+                <PopoverContent align="end" sideOffset={8} className="w-[22rem] p-4">
                   <ScopeFiltersPanel />
                 </PopoverContent>
               </Popover>
@@ -615,7 +613,7 @@ export function InboxMessagesPage() {
           </div>
 
           <div className="flex min-h-0 min-w-0 flex-1">
-            <div className="w-[300px] shrink-0 border-r border-[#e7e9ef] bg-white">
+            <div className="w-[300px] shrink-0 border-r border-border bg-card">
               <ConversationList
                 conversations={visibleConversations}
                 selectedId={selectedConversationId}
@@ -642,7 +640,7 @@ export function InboxMessagesPage() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col md:hidden">
-        <div className="border-b border-[#e7e9ef] bg-white px-4 py-3">
+        <div className="border-b border-border bg-background px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <ToolbarSelect
               value={activeStatus}
@@ -661,8 +659,8 @@ export function InboxMessagesPage() {
               className={cn(
                 "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition-colors",
                 onlyUnread
-                  ? "border-[#bfd3ff] bg-[#eef5ff] text-[#2d71f8]"
-                  : "border-[#d9dee8] bg-white text-slate-600 hover:bg-[#f8f9fc]",
+                  ? "border-foreground/30 bg-accent text-foreground"
+                  : "border-border bg-card text-muted-foreground hover:bg-accent",
               )}
             >
               <Inbox className="size-4" />
@@ -690,15 +688,15 @@ export function InboxMessagesPage() {
                   className={cn(
                     "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition-colors",
                     hasScopedFilters
-                      ? "border-[#bfd3ff] bg-[#eef5ff] text-[#2d71f8]"
-                      : "border-[#d9dee8] bg-white text-slate-600 hover:bg-[#f8f9fc]",
+                      ? "border-foreground/30 bg-accent text-foreground"
+                      : "border-border bg-card text-muted-foreground hover:bg-accent",
                   )}
                 >
                   <Filter className="size-4" />
                   Filter
                 </button>
               </PopoverTrigger>
-              <PopoverContent align="end" sideOffset={8} className="w-[22rem] max-w-[calc(100vw-2rem)] border-[#d9dee8] bg-white p-4">
+              <PopoverContent align="end" sideOffset={8} className="w-[22rem] max-w-[calc(100vw-2rem)] p-4">
                 <ScopeFiltersPanel />
               </PopoverContent>
             </Popover>
@@ -719,11 +717,11 @@ export function InboxMessagesPage() {
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="border-b border-[#e7e9ef] bg-white px-4 py-3">
+            <div className="border-b border-border bg-background px-4 py-3">
               <button
                 type="button"
                 onClick={() => setMobileView("list")}
-                className="inline-flex items-center gap-2 text-sm font-medium text-slate-600"
+                className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground"
               >
                 <ChevronLeft className="size-4" />
                 Back to conversations

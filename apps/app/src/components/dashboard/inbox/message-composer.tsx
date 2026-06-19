@@ -197,16 +197,16 @@ export function MessageComposer({
   };
 
   return (
-    <div className="border-t border-[#e7e9ef] bg-white">
-      <div className="flex items-center gap-5 border-b border-[#eef0f5] px-4 pt-3">
+    <div className="border-t border-border bg-card">
+      <div className="flex items-center gap-5 border-b border-border px-4 pt-3">
         <button
           type="button"
           onClick={() => setMode("reply")}
           className={cn(
             "px-0.5 pb-2 text-sm font-semibold transition-colors",
             mode === "reply"
-              ? "border-b-2 border-[#2d71f8] text-slate-900"
-              : "border-b-2 border-transparent text-slate-400 hover:text-slate-600",
+              ? "border-b-2 border-foreground text-foreground"
+              : "border-b-2 border-transparent text-muted-foreground hover:text-foreground",
           )}
         >
           Reply
@@ -217,8 +217,8 @@ export function MessageComposer({
           className={cn(
             "inline-flex items-center gap-1.5 px-0.5 pb-2 text-sm font-medium transition-colors",
             mode === "note"
-              ? "border-b-2 border-[#d4a72c] text-[#7a5c15]"
-              : "border-b-2 border-transparent text-slate-400 hover:text-slate-600",
+              ? "border-b-2 border-amber-500 text-amber-700"
+              : "border-b-2 border-transparent text-muted-foreground hover:text-foreground",
           )}
         >
           <StickyNote className="size-4" />
@@ -249,7 +249,7 @@ export function MessageComposer({
       />
 
       {mode === "reply" && attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2 border-b border-[#eef0f5] bg-[#fafbfd] px-4 py-2">
+        <div className="flex flex-wrap gap-2 border-b border-border bg-muted/40 px-4 py-2">
           {attachments.map((a) => (
             <ComposerAttachmentChip
               key={a.id}
@@ -273,12 +273,12 @@ export function MessageComposer({
         rows={3}
         disabled={disabled}
         className={cn(
-          "block min-h-[96px] w-full resize-none px-4 py-3 text-[14px] leading-6 outline-none placeholder:text-slate-400 disabled:opacity-50 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-          mode === "note" ? "bg-[#fff8e0] text-[#5d4511]" : "bg-white text-slate-700",
+          "block min-h-[96px] w-full resize-none px-4 py-3 text-[14px] leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          mode === "note" ? "bg-amber-50 text-amber-900" : "bg-card text-foreground",
         )}
       />
 
-      <div className="flex items-center justify-between border-t border-[#eef0f5] px-3 py-2">
+      <div className="flex items-center justify-between border-t border-border px-3 py-2">
         <div className="flex items-center gap-0.5">
           <EmojiPicker onInsert={insertAtCursor} />
           {mode === "reply" && (
@@ -287,7 +287,7 @@ export function MessageComposer({
                 type="button"
                 onClick={() => imageInputRef.current?.click()}
                 title="Image"
-                className="flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800"
+                className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
               >
                 <ImageIcon className="size-4" />
               </button>
@@ -295,7 +295,7 @@ export function MessageComposer({
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 title="Attachment"
-                className="flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800"
+                className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
               >
                 <Paperclip className="size-4" />
               </button>
@@ -306,11 +306,11 @@ export function MessageComposer({
 
         <div className="flex items-center gap-3">
           {mode === "reply" && singleAttachmentMode && (
-            <span className="hidden text-[11px] text-slate-400 md:inline">
+            <span className="hidden text-[11px] text-muted-foreground md:inline">
               WhatsApp supports one attachment per message
             </span>
           )}
-          <span className="hidden text-[11px] text-slate-400 sm:inline">
+          <span className="hidden text-[11px] text-muted-foreground sm:inline">
             {shortcutLabel}+Enter to send
           </span>
           <button
@@ -328,13 +328,13 @@ export function MessageComposer({
               "inline-flex h-9 items-center gap-2 rounded-md px-4 text-sm font-semibold transition-colors",
               mode === "note"
                 ? text.trim() && !disabled
-                  ? "bg-[#d4a72c] text-white hover:bg-[#b88e1f]"
-                  : "bg-[#f3e4a8] text-white"
+                  ? "bg-amber-500 text-white hover:bg-amber-600"
+                  : "bg-amber-500/40 text-white"
                 : (text.trim() || attachments.some((a) => !a.uploading && !a.error))
                   && !attachments.some((a) => a.uploading || a.error)
                   && !disabled
-                  ? "bg-[#2d71f8] text-white hover:bg-[#195fe7]"
-                  : "bg-[#d9e7ff] text-white",
+                  ? "bg-foreground text-background hover:bg-foreground/90"
+                  : "bg-muted text-muted-foreground",
             )}
           >
             {sending ? (

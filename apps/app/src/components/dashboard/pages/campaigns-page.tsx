@@ -1,11 +1,17 @@
 import { useState, useCallback } from "react";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import { motion } from "motion/react";
-import { Plus, Megaphone, Rss, Loader2, BookOpen } from "lucide-react";
+import { Plus, Megaphone, Rss, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
+import { useFilterQuery } from "@/components/dashboard/filter-context";
 import { BroadcastsCreateDialog } from "@/components/dashboard/campaigns/broadcasts-create-dialog";
 import { BroadcastsEditDialog } from "@/components/dashboard/campaigns/broadcasts-edit-dialog";
 import { AutoPostCreateDialog } from "@/components/dashboard/campaigns/auto-post-create-dialog";
@@ -50,15 +56,15 @@ interface AutoPostRuleResponse {
 }
 
 function broadcastStatusBadge(status: BroadcastResponse["status"]) {
-  const draft = { label: "Draft", classes: "text-neutral-400 bg-neutral-400/10" };
+  const draft = { label: "Draft", classes: "text-muted-foreground bg-muted" };
   const map: Record<string, { label: string; classes: string }> = {
     draft,
-    scheduled: { label: "Scheduled", classes: "text-blue-400 bg-blue-400/10" },
-    sending: { label: "Sending", classes: "text-amber-400 bg-amber-400/10" },
-    sent: { label: "Sent", classes: "text-emerald-400 bg-emerald-400/10" },
-    partially_failed: { label: "Partial", classes: "text-amber-400 bg-amber-400/10" },
-    failed: { label: "Failed", classes: "text-red-400 bg-red-400/10" },
-    cancelled: { label: "Cancelled", classes: "text-neutral-400 bg-neutral-400/10" },
+    scheduled: { label: "Scheduled", classes: "text-foreground bg-accent" },
+    sending: { label: "Sending", classes: "text-foreground bg-accent" },
+    sent: { label: "Sent", classes: "text-success bg-success/10" },
+    partially_failed: { label: "Partial", classes: "text-foreground bg-accent" },
+    failed: { label: "Failed", classes: "text-destructive bg-destructive/10" },
+    cancelled: { label: "Cancelled", classes: "text-muted-foreground bg-muted" },
   };
   const cfg = map[status] ?? draft;
   return (
@@ -70,10 +76,10 @@ function broadcastStatusBadge(status: BroadcastResponse["status"]) {
 
 function autoPostStatusBadge(status: "active" | "paused" | "error") {
   const cfg = {
-    active: { label: "Active", classes: "text-emerald-400 bg-emerald-400/10" },
-    paused: { label: "Paused", classes: "text-amber-400 bg-amber-400/10" },
-    error: { label: "Error", classes: "text-red-400 bg-red-400/10" },
-  }[status] ?? { label: status, classes: "text-neutral-400 bg-neutral-400/10" };
+    active: { label: "Active", classes: "text-success bg-success/10" },
+    paused: { label: "Paused", classes: "text-foreground bg-accent" },
+    error: { label: "Error", classes: "text-destructive bg-destructive/10" },
+  }[status] ?? { label: status, classes: "text-muted-foreground bg-muted" };
   return (
     <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium", cfg.classes)}>
       {cfg.label}
@@ -121,6 +127,8 @@ export function CampaignsPage({
     window.history.replaceState({}, "", url.toString());
   };
 
+  const filterQuery = useFilterQuery();
+
   const {
     data: broadcasts,
     loading: broadcastsLoading,
@@ -129,7 +137,9 @@ export function CampaignsPage({
     loadMore: broadcastsLoadMore,
     loadingMore: broadcastsLoadingMore,
     refetch: broadcastsRefetch,
-  } = usePaginatedApi<BroadcastResponse>(activeTab === "broadcasts" ? "broadcasts" : null);
+  } = usePaginatedApi<BroadcastResponse>(activeTab === "broadcasts" ? "broadcasts" : null, {
+    query: filterQuery,
+  });
 
   const {
     data: autoPostRules,
@@ -139,7 +149,9 @@ export function CampaignsPage({
     loadMore: autoPostLoadMore,
     loadingMore: autoPostLoadingMore,
     refetch: autoPostRefetch,
-  } = usePaginatedApi<AutoPostRuleResponse>(activeTab === "auto-post" ? "auto-post-rules" : null);
+  } = usePaginatedApi<AutoPostRuleResponse>(activeTab === "auto-post" ? "auto-post-rules" : null, {
+    query: filterQuery,
+  });
 
   useRealtimeUpdates(useCallback((event) => {
     if (event.type === "broadcast.updated") broadcastsRefetch();
@@ -151,43 +163,40 @@ export function CampaignsPage({
   const [editingAutoPost, setEditingAutoPost] = useState<AutoPostRuleResponse | null>(null);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Campaigns</h1>
-          <a href="https://docs.relayapi.dev/api-reference/campaigns" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        {activeTab === "broadcasts" && (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setBroadcastDialogOpen(true)}>
-            <Plus className="size-3.5" />
-            Create Broadcast
-          </Button>
-        )}
-        {activeTab === "auto-post" && (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setAutoPostDialogOpen(true)}>
-            <Plus className="size-3.5" />
-            Create Rule
-          </Button>
-        )}
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Campaigns"
+        docsHref="https://docs.relayapi.dev/api-reference/campaigns"
+        action={
+          activeTab === "broadcasts" ? (
+            <Button onClick={() => setBroadcastDialogOpen(true)}>
+              <Plus className="size-4" />
+              Create Broadcast
+            </Button>
+          ) : (
+            <Button onClick={() => setAutoPostDialogOpen(true)}>
+              <Plus className="size-4" />
+              Create Rule
+            </Button>
+          )
+        }
+      />
 
-      <div className="flex gap-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        {tabs.map((tab) => (
-          <button
-            type="button"
-            key={tab.key}
-            onClick={() => switchTab(tab.key)}
-            className={cn(
-              "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-              activeTab === tab.key
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+          />
+        }
+        right={
+          <>
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+          </>
+        }
+      />
 
       {activeTab === "broadcasts" && (
         <>
@@ -201,7 +210,7 @@ export function CampaignsPage({
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : broadcasts.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <Megaphone className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No broadcasts yet</p>
               <p className="text-xs text-muted-foreground mt-1">
@@ -211,14 +220,14 @@ export function CampaignsPage({
           ) : (
             <>
               <motion.div
-                className="rounded-md border border-border overflow-hidden"
+                className="rounded-[12px] border border-border bg-card overflow-hidden"
                 variants={stagger}
                 initial="hidden"
                 animate="visible"
               >
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
+                    <tr className="border-b border-border text-xs font-medium text-muted-foreground">
                       <th className="px-4 py-2.5 text-left">Name</th>
                       <th className="px-4 py-2.5 text-left hidden md:table-cell">Account</th>
                       <th className="px-4 py-2.5 text-left hidden lg:table-cell">Message</th>
@@ -233,7 +242,7 @@ export function CampaignsPage({
                         key={b.id}
                         variants={fadeUp}
                         className={cn(
-                          "hover:bg-accent/30 transition-colors cursor-pointer",
+                          "hover:bg-accent transition-colors cursor-pointer",
                           i !== broadcasts.length - 1 && "border-b border-border"
                         )}
                         onClick={() => setEditingBroadcast(b)}
@@ -243,9 +252,9 @@ export function CampaignsPage({
                         <td className="px-4 py-3 text-xs text-muted-foreground hidden lg:table-cell">{b.message_text ? truncate(b.message_text, 50) : <span className="text-muted-foreground/50">—</span>}</td>
                         <td className="px-4 py-3">{broadcastStatusBadge(b.status)}</td>
                         <td className="px-4 py-3 text-xs text-muted-foreground text-right hidden md:table-cell">
-                          <span className="text-emerald-400">{b.sent_count}</span>
+                          <span className="text-success">{b.sent_count}</span>
                           {" / "}
-                          <span className="text-red-400">{b.failed_count}</span>
+                          <span className="text-destructive">{b.failed_count}</span>
                         </td>
                         <td className="px-4 py-3 text-xs text-muted-foreground text-right hidden sm:table-cell">{formatDate(b.created_at)}</td>
                       </motion.tr>
@@ -276,7 +285,7 @@ export function CampaignsPage({
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
           ) : autoPostRules.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <Rss className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No auto-post rules yet</p>
               <p className="text-xs text-muted-foreground mt-1">
@@ -286,14 +295,14 @@ export function CampaignsPage({
           ) : (
             <>
               <motion.div
-                className="rounded-md border border-border overflow-hidden"
+                className="rounded-[12px] border border-border bg-card overflow-hidden"
                 variants={stagger}
                 initial="hidden"
                 animate="visible"
               >
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
+                    <tr className="border-b border-border text-xs font-medium text-muted-foreground">
                       <th className="px-4 py-2.5 text-left">Name</th>
                       <th className="px-4 py-2.5 text-left hidden md:table-cell">Feed URL</th>
                       <th className="px-4 py-2.5 text-left">Status</th>
@@ -308,7 +317,7 @@ export function CampaignsPage({
                         key={r.id}
                         variants={fadeUp}
                         className={cn(
-                          "hover:bg-accent/30 transition-colors cursor-pointer",
+                          "hover:bg-accent transition-colors cursor-pointer",
                           i !== autoPostRules.length - 1 && "border-b border-border"
                         )}
                         onClick={() => setEditingAutoPost(r)}

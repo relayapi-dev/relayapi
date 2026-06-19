@@ -5,7 +5,6 @@ import {
   Plus,
   Check,
   Loader2,
-  BookOpen,
   List,
   CalendarDays,
   RefreshCw,
@@ -14,7 +13,12 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
-import { FilterBar } from "@/components/dashboard/filter-bar";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar, ToolbarDivider } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
+import { IconButton } from "@/components/dashboard/icon-button";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { platformIcons } from "@/lib/platform-icons";
 import { platformColors, platformLabels } from "@/lib/platform-maps";
 import { PostErrorDialog } from "../calendar/post-error-details";
@@ -431,16 +435,17 @@ export function PostsPage({
 
   return (
     <div className={cn("space-y-6", isWeekCalendar ? "pb-4" : "pb-16")}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Posts</h1>
-          <a href="https://docs.relayapi.dev/api-reference/posts" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => { setNewPostInitialDate(undefined); setNewPostOpen(true); }}>
-          <Plus className="size-3.5" />
-          {activeTab === "drafts" ? "New Draft" : "New Post"}
-        </Button>
-        <Suspense fallback={null}>
+      <PageHeader
+        title="Posts"
+        docsHref="https://docs.relayapi.dev/api-reference/posts"
+        action={
+          <Button onClick={() => { setNewPostInitialDate(undefined); setNewPostOpen(true); }}>
+            <Plus className="size-4" />
+            {activeTab === "drafts" ? "New Draft" : "New Post"}
+          </Button>
+        }
+      />
+      <Suspense fallback={null}>
           {newPostOpen ? (
             <NewPostDialog
               open={newPostOpen}
@@ -497,89 +502,57 @@ export function PostsPage({
             />
           ) : null}
         </Suspense>
-      </div>
 
-      {/* Top-level tabs + controls */}
-      <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <div className="flex gap-4 shrink-0">
-          {topTabs.map((tab) => {
-            const tabKey =
-              tab.toLowerCase() as NonNullable<PostsPageProps["initialTab"]>;
-            return (
-              <button
-                type="button"
-                key={tab}
-                onClick={() => switchTab(tabKey)}
-                className={cn(
-                  "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-                  activeTab === tabKey
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
+      {/* Tabs + filters/controls */}
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={topTabs.map((tab) => ({
+              value: tab.toLowerCase() as typeof activeTab,
+              label: tab,
+            }))}
+          />
+        }
+        right={
+          <>
+            {(activeTab === "all" || activeTab === "published") && (
+              <IconButton
+                title={syncing ? "Syncing..." : "Sync"}
+                onClick={handleForceResync}
+                disabled={syncing}
               >
-                {tab}
-              </button>
-            );
-          })}
-        </div>
-        <div className="pb-2 flex items-center gap-2 shrink-0">
-          {/* Sync button (All/Published tabs) */}
-          {(activeTab === "all" || activeTab === "published") && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleForceResync}
-              disabled={syncing}
-              className="gap-1.5 text-xs text-muted-foreground h-7"
-            >
-              {syncing ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
-              {syncing ? "Syncing..." : "Sync"}
-            </Button>
-          )}
-          {/* View switcher (Queue and All tabs) — hidden on mobile (calendar not supported) */}
-          {(activeTab === "queue" || activeTab === "all") && (
-            <div className="hidden md:flex items-center gap-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setViewMode("calendar");
-                  localStorage.setItem("posts:viewMode", "calendar");
-                  const url = new URL(window.location.href);
-                  url.searchParams.set("view", "calendar");
-                  window.history.replaceState({}, "", url.toString());
-                }}
-                className={cn(
-                  "inline-flex items-center gap-1.5 text-xs font-medium h-7 rounded-md transition-colors",
-                  viewMode === "calendar" ? "text-foreground px-2" : "text-muted-foreground/50 hover:text-muted-foreground px-1"
-                )}
-                title="Calendar view"
-              >
-                <CalendarDays className="size-3.5" />
-                {viewMode === "calendar" && "Calendar"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setViewMode("list");
-                  localStorage.setItem("posts:viewMode", "list");
-                  const url = new URL(window.location.href);
-                  url.searchParams.set("view", "list");
-                  window.history.replaceState({}, "", url.toString());
-                }}
-                className={cn(
-                  "inline-flex items-center gap-1.5 text-xs font-medium h-7 rounded-md transition-colors",
-                  viewMode === "list" ? "text-foreground px-2" : "text-muted-foreground/50 hover:text-muted-foreground px-1"
-                )}
-                title="List view"
-              >
-                <List className="size-3.5" />
-                {viewMode === "list" && "List"}
-              </button>
-            </div>
-          )}
-          <FilterBar />
-        </div>
-      </div>
+                {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              </IconButton>
+            )}
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+            {(activeTab === "queue" || activeTab === "all") && (
+              <>
+                <ToolbarDivider className="hidden md:block" />
+                <div className="hidden md:block">
+                  <Segmented
+                    size="icon"
+                    value={viewMode}
+                    onChange={(v) => {
+                      setViewMode(v);
+                      localStorage.setItem("posts:viewMode", v);
+                      const url = new URL(window.location.href);
+                      url.searchParams.set("view", v);
+                      window.history.replaceState({}, "", url.toString());
+                    }}
+                    options={[
+                      { value: "calendar", icon: <CalendarDays />, title: "Calendar view" },
+                      { value: "list", icon: <List />, title: "List view" },
+                    ]}
+                  />
+                </div>
+              </>
+            )}
+          </>
+        }
+      />
 
       {allError && activeTab === "all" && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

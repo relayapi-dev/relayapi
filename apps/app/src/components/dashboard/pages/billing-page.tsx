@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useUsage } from "@/hooks/use-usage";
+import { PageHeader } from "@/components/dashboard/page-header";
 
 const stagger = {
   hidden: {},
@@ -147,42 +148,37 @@ export function BillingPage() {
   const isCancelling = billingStatus?.subscription?.cancelAtPeriodEnd && !isCancelled;
   if (loading || billingLoading) {
     return (
-      <div className="space-y-6">
-        <div className="h-6 w-20 rounded bg-accent/40 animate-pulse" />
-        <div className="rounded-md border border-border overflow-hidden">
-          <div className="px-4 py-3 border-b border-border bg-accent/10">
-            <div className="h-4 w-28 rounded bg-accent/40 animate-pulse" />
+      <div className="space-y-6 pb-16">
+        <div className="h-7 w-44 rounded bg-muted animate-pulse" />
+        <div className="rounded-[12px] border border-border bg-card p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="space-y-2">
+              <div className="h-4 w-24 rounded bg-muted animate-pulse" />
+              <div className="h-3 w-48 rounded bg-muted animate-pulse" />
+            </div>
+            <div className="h-6 w-16 rounded-full bg-muted animate-pulse" />
           </div>
-          <div className="p-4 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="space-y-2">
-                <div className="h-4 w-24 rounded bg-accent/40 animate-pulse" />
-                <div className="h-3 w-48 rounded bg-accent/40 animate-pulse" />
-              </div>
-              <div className="h-6 w-16 rounded-full bg-accent/40 animate-pulse" />
+          <div className="space-y-1.5">
+            <div className="flex justify-between">
+              <div className="h-3 w-16 rounded bg-muted animate-pulse" />
+              <div className="h-3 w-24 rounded bg-muted animate-pulse" />
             </div>
-            <div className="space-y-1.5">
-              <div className="flex justify-between">
-                <div className="h-3 w-16 rounded bg-accent/40 animate-pulse" />
-                <div className="h-3 w-24 rounded bg-accent/40 animate-pulse" />
-              </div>
-              <div className="h-1.5 rounded-full bg-accent/40" />
-            </div>
+            <div className="h-1.5 rounded-full bg-neutral-200" />
           </div>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           {[0, 1].map((i) => (
-            <div key={i} className="rounded-md border border-border overflow-hidden">
-              <div className="px-4 py-3 border-b border-border bg-accent/10 space-y-2">
-                <div className="h-4 w-12 rounded bg-accent/40 animate-pulse" />
-                <div className="h-6 w-20 rounded bg-accent/40 animate-pulse" />
+            <div key={i} className="rounded-[12px] border border-border bg-card p-5 space-y-4">
+              <div className="space-y-2">
+                <div className="h-4 w-12 rounded bg-muted animate-pulse" />
+                <div className="h-6 w-20 rounded bg-muted animate-pulse" />
               </div>
-              <div className="p-4 space-y-2.5">
+              <div className="space-y-2.5">
                 {[0, 1, 2, 3].map((j) => (
-                  <div key={j} className="h-4 w-40 rounded bg-accent/40 animate-pulse" />
+                  <div key={j} className="h-4 w-40 rounded bg-muted animate-pulse" />
                 ))}
                 <div className="pt-2">
-                  <div className="h-8 w-full rounded bg-accent/40 animate-pulse" />
+                  <div className="h-8 w-full rounded bg-muted animate-pulse" />
                 </div>
               </div>
             </div>
@@ -238,16 +234,18 @@ export function BillingPage() {
   }
 
   return (
-    <>
+    <div className="space-y-6 pb-16">
+    <PageHeader title="Billing & Invoices" />
+
     {error && (
-      <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive mb-6">
+      <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
         {error}
       </div>
     )}
 
     {/* Past Due Banner */}
     {isPastDue && (
-      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 mb-6 flex items-center gap-2">
+      <div className="rounded-[12px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 flex items-center gap-2">
         <AlertTriangle className="size-4 shrink-0" />
         <span>Your payment failed. Please update your payment method to avoid losing Pro access.</span>
         <Button
@@ -264,7 +262,7 @@ export function BillingPage() {
 
     {/* Cancelling Banner */}
     {isCancelling && !isPastDue && (
-      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 mb-6 flex items-center gap-2">
+      <div className="rounded-[12px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 flex items-center gap-2">
         <AlertTriangle className="size-4 shrink-0" />
         <span>
           Your Pro plan will end on{" "}
@@ -293,25 +291,19 @@ export function BillingPage() {
       initial="hidden"
       animate="visible"
     >
-      <motion.div variants={fadeUp}>
-        <h1 className="text-lg font-medium">Billing</h1>
-      </motion.div>
-
       {/* Current Plan & Usage */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+        className="rounded-[12px] border border-border bg-card p-5 space-y-4"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
-          <h2 className="text-[13px] font-medium flex items-center gap-2">
-            <Zap className="size-3.5" />
-            Current Plan
-          </h2>
-        </div>
-        <div className="p-4 space-y-4">
+        <h2 className="text-[13px] font-medium flex items-center gap-2 text-muted-foreground">
+          <Zap className="size-3.5" />
+          Current Plan
+        </h2>
+        <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[13px] font-medium capitalize">
+              <p className="text-[15px] font-medium capitalize">
                 {currentPlan} Plan
               </p>
               {isCancelling && billingStatus?.subscription?.currentPeriodEnd ? (
@@ -322,7 +314,7 @@ export function BillingPage() {
                   })}
                 </p>
               ) : periodEnd ? (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-[12px] text-muted-foreground mt-0.5">
                   Your current billing period ends on {periodEnd}
                 </p>
               ) : null}
@@ -330,34 +322,32 @@ export function BillingPage() {
             <span className={cn(
               "inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium",
               isPastDue || isCancelling || isCancelled
-                ? "text-amber-500 bg-amber-500/10"
-                : "text-emerald-400 bg-emerald-400/10"
+                ? "text-amber-600 bg-amber-500/10"
+                : "text-success bg-success/10"
             )}>
               {isPastDue ? "Past Due" : isCancelled ? "Cancelled" : isCancelling ? "Cancelling" : "Active"}
             </span>
           </div>
 
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">API Calls</span>
-                <span className="text-xs text-muted-foreground">
-                  {apiUsed.toLocaleString()} / {apiIncluded.toLocaleString()}
-                </span>
-              </div>
-              <div className="h-1.5 rounded-full bg-accent/40 overflow-hidden">
-                <div
-                  className={cn(
-                    "h-full rounded-full transition-all",
-                    apiPct > 95
-                      ? "bg-red-400"
-                      : apiPct > 80
-                        ? "bg-amber-400"
-                        : "bg-primary"
-                  )}
-                  style={{ width: `${Math.min(apiPct, 100)}%` }}
-                />
-              </div>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">API Calls</span>
+              <span className="text-xs text-muted-foreground">
+                {apiUsed.toLocaleString()} / {apiIncluded.toLocaleString()}
+              </span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-neutral-200">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  apiPct > 95
+                    ? "bg-destructive"
+                    : apiPct > 80
+                      ? "bg-amber-500"
+                      : "bg-primary"
+                )}
+                style={{ width: `${Math.min(apiPct, 100)}%` }}
+              />
             </div>
           </div>
         </div>
@@ -373,34 +363,27 @@ export function BillingPage() {
               <div
                 key={plan.name}
                 className={cn(
-                  "rounded-md border overflow-hidden",
+                  "rounded-[12px] border bg-card p-5 space-y-4",
                   isPro ? "border-primary/40" : "border-border"
                 )}
               >
-                <div
-                  className={cn(
-                    "px-4 py-3 border-b",
-                    isPro
-                      ? "border-primary/40 bg-primary/5"
-                      : "border-border bg-accent/10"
-                  )}
-                >
+                <div>
                   <div className="flex items-center justify-between">
-                    <h3 className="text-[13px] font-medium">{plan.name}</h3>
+                    <h3 className="text-[15px] font-semibold">{plan.name}</h3>
                     {isCurrent && (
-                      <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                      <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                         Current plan
                       </span>
                     )}
                   </div>
-                  <p className="mt-1">
-                    <span className="text-xl font-semibold">{plan.price}</span>
+                  <p className="mt-2">
+                    <span className="text-2xl font-semibold tracking-[-0.01em]">{plan.price}</span>
                     <span className="text-xs text-muted-foreground">
                       {plan.period}
                     </span>
                   </p>
                 </div>
-                <div className="p-4 space-y-2.5">
+                <div className="space-y-2.5">
                   {plan.features.map((feature) => (
                     <div
                       key={feature}
@@ -497,15 +480,13 @@ export function BillingPage() {
       {/* Payment Method / Subscription Management */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+        className="rounded-[12px] border border-border bg-card p-5"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
-          <h2 className="text-[13px] font-medium flex items-center gap-2">
-            <CreditCard className="size-3.5" />
-            Payment Method
-          </h2>
-        </div>
-        <div className="p-6 text-center">
+        <h2 className="text-[13px] font-medium flex items-center gap-2 text-muted-foreground">
+          <CreditCard className="size-3.5" />
+          Payment Method
+        </h2>
+        <div className="py-6 text-center">
           {currentPlan === "pro" ? (
             <>
               <p className="text-[13px] text-muted-foreground mb-3">
@@ -561,10 +542,10 @@ export function BillingPage() {
       {/* Billing History */}
       <motion.div
         variants={fadeUp}
-        className="rounded-md border border-border overflow-hidden"
+        className="overflow-hidden rounded-[12px] border border-border bg-card"
       >
-        <div className="px-4 py-3 border-b border-border bg-accent/10">
-          <h2 className="text-[13px] font-medium flex items-center gap-2">
+        <div className="px-5 py-3.5 border-b border-border">
+          <h2 className="text-[13px] font-medium flex items-center gap-2 text-muted-foreground">
             <Receipt className="size-3.5" />
             Billing History
           </h2>
@@ -574,7 +555,7 @@ export function BillingPage() {
             {billingStatus.invoices.map((invoice) => (
               <div
                 key={invoice.id}
-                className="px-4 py-3 flex items-center justify-between"
+                className="px-5 py-3 flex items-center justify-between"
               >
                 <div>
                   <p className="text-[13px]">
@@ -592,9 +573,9 @@ export function BillingPage() {
                     className={cn(
                       "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
                       invoice.status === "paid"
-                        ? "text-emerald-400 bg-emerald-400/10"
+                        ? "text-success bg-success/10"
                         : invoice.status === "finalized"
-                          ? "text-amber-500 bg-amber-500/10"
+                          ? "text-amber-600 bg-amber-500/10"
                           : "text-muted-foreground bg-muted"
                     )}
                   >
@@ -628,6 +609,6 @@ export function BillingPage() {
         )}
       </motion.div>
     </motion.div>
-    </>
+    </div>
   );
 }

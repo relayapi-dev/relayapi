@@ -4,6 +4,7 @@ import { Plus, Loader2, FolderOpen, Trash2, Edit2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePaginatedApi, useMutation } from "@/hooks/use-api";
 import { LoadMore } from "@/components/ui/load-more";
+import { PageHeader } from "@/components/dashboard/page-header";
 
 const stagger = {
   hidden: {},
@@ -66,24 +67,26 @@ export function WorkspacesPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-medium">Workspaces</h1>
-        <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setShowCreate(true)}>
-          <Plus className="size-3.5" />
-          Create Workspace
-        </Button>
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Workspaces"
+        action={
+          <Button onClick={() => setShowCreate(true)}>
+            <Plus className="size-4" />
+            New workspace
+          </Button>
+        }
+      />
 
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
 
       {showCreate && (
         <motion.div
-          className="rounded-md border border-border p-4 space-y-3"
+          className="rounded-[12px] border border-border bg-card p-5 space-y-3"
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
         >
@@ -122,14 +125,12 @@ export function WorkspacesPage() {
           </div>
           <div className="flex gap-2">
             <Button
-              size="sm"
-              className="h-7 text-xs"
               disabled={!newName.trim() || createMutation.loading}
               onClick={handleCreate}
             >
-              {createMutation.loading ? <Loader2 className="size-3 animate-spin" /> : "Create"}
+              {createMutation.loading ? <Loader2 className="size-4 animate-spin" /> : "Create"}
             </Button>
-            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowCreate(false)}>
+            <Button variant="outline" onClick={() => setShowCreate(false)}>
               Cancel
             </Button>
           </div>
@@ -140,7 +141,7 @@ export function WorkspacesPage() {
       )}
 
       {groups.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border p-12 text-center">
+        <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
           <FolderOpen className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">No workspaces</p>
           <p className="text-xs text-muted-foreground mt-1">
@@ -159,15 +160,15 @@ export function WorkspacesPage() {
               <motion.div
                 key={group.id}
                 variants={fadeUp}
-                className="rounded-md border border-border p-4 hover:bg-accent/20 transition-colors"
+                className="rounded-[12px] border border-border bg-card p-5 transition-colors hover:bg-accent"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-start gap-3">
-                    <div className="rounded-md bg-primary/10 p-1.5 mt-0.5">
-                      <FolderOpen className="size-4 text-primary" />
+                    <div className="rounded-md bg-muted p-1.5 mt-0.5">
+                      <FolderOpen className="size-4 text-muted-foreground" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-medium">{group.name}</h3>
+                      <h3 className="text-sm font-medium text-foreground">{group.name}</h3>
                       {group.description && (
                         <p className="text-xs text-muted-foreground mt-0.5">
                           {group.description}
@@ -187,18 +188,18 @@ export function WorkspacesPage() {
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      className="rounded-lg p-1.5 hover:bg-accent/50 transition-colors"
+                      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
                       title="Edit workspace"
                     >
-                      <Edit2 className="size-4 text-muted-foreground" />
+                      <Edit2 className="size-4" />
                     </button>
                     <button
                       type="button"
-                      className="rounded-lg p-1.5 hover:bg-red-500/10 transition-colors"
+                      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-destructive"
                       onClick={() => handleDelete(group.id)}
                       title="Delete workspace"
                     >
-                      <Trash2 className="size-4 text-muted-foreground hover:text-red-400" />
+                      <Trash2 className="size-4" />
                     </button>
                   </div>
                 </div>

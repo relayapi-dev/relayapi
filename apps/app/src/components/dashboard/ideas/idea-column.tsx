@@ -49,7 +49,7 @@ export function IdeaColumn({
 	};
 
 	return (
-		<div className="shrink-0 w-72 rounded-md border border-border bg-accent/10 flex flex-col h-full">
+		<div className="shrink-0 w-72 rounded-[12px] border border-border bg-muted/40 flex flex-col h-full">
 			<div
 				className="px-3 py-2 border-b border-border flex items-center gap-2 shrink-0 cursor-grab active:cursor-grabbing"
 				{...(dragHandleProps as React.HTMLAttributes<HTMLDivElement>)}

@@ -1,12 +1,16 @@
 import { useState, useCallback, useEffect } from "react";
 import { motion } from "motion/react";
 import {
-  Plus, Megaphone, Loader2, BookOpen, BarChart3, Pause, Play, X as XIcon,
-  RefreshCw, Upload, Trash2, Search, 
+  Plus, Megaphone, Loader2, BarChart3, Pause, Play, X as XIcon,
+  RefreshCw, Upload, Trash2, Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { FilterBar } from "@/components/dashboard/filter-bar";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi, useMutation } from "@/hooks/use-api";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
@@ -331,116 +335,88 @@ export function AdsPage({
   }, [adsRefetch]);
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Ads</h1>
-          <a href="https://docs.relayapi.dev/api-reference/ads" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors">
-            <BookOpen className="size-3.5" />
-          </a>
-        </div>
-        {activeTab === "ads" && (
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={() => setBoostDialogOpen(true)}>
-              <Megaphone className="size-3.5" />
-              Boost Post
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Ads"
+        docsHref="https://docs.relayapi.dev/api-reference/ads"
+        action={
+          activeTab === "ads" ? (
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setBoostDialogOpen(true)}>
+                <Megaphone className="size-4" />
+                Boost Post
+              </Button>
+              <Button onClick={() => setCreateAdOpen(true)}>
+                <Plus className="size-4" />
+                Create Ad
+              </Button>
+            </div>
+          ) : activeTab === "campaigns" ? (
+            <Button onClick={() => setCreateCampaignOpen(true)}>
+              <Plus className="size-4" />
+              Create Campaign
             </Button>
-            <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setCreateAdOpen(true)}>
-              <Plus className="size-3.5" />
-              Create Ad
+          ) : activeTab === "audiences" ? (
+            <Button onClick={() => setCreateAudienceOpen(true)}>
+              <Plus className="size-4" />
+              Create Audience
             </Button>
-          </div>
-        )}
-        {activeTab === "campaigns" && (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setCreateCampaignOpen(true)}>
-            <Plus className="size-3.5" />
-            Create Campaign
-          </Button>
-        )}
-        {activeTab === "audiences" && (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setCreateAudienceOpen(true)}>
-            <Plus className="size-3.5" />
-            Create Audience
-          </Button>
-        )}
-        {activeTab === "accounts" && (
-          <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setDiscoverOpen(true)}>
-            <Search className="size-3.5" />
-            Discover Ad Accounts
-          </Button>
-        )}
-      </div>
+          ) : activeTab === "accounts" ? (
+            <Button onClick={() => setDiscoverOpen(true)}>
+              <Search className="size-4" />
+              Discover Ad Accounts
+            </Button>
+          ) : undefined
+        }
+      />
 
       {/* Tabs + filters */}
-      <div className="flex items-end justify-between gap-x-4 border-b border-border">
-        <div className="flex gap-4 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-          {tabs.map((tab) => (
-            <button
-              type="button"
-              key={tab.key}
-              onClick={() => switchTab(tab.key)}
-              className={cn(
-                "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-                activeTab === tab.key
-                  ? "border-foreground text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-        <div className="pb-2 shrink-0">
-          <FilterBar />
-        </div>
-      </div>
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+          />
+        }
+        right={
+          <>
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+          </>
+        }
+      />
 
       {/* ====== ADS TAB ====== */}
       {activeTab === "ads" && (
         <>
           {/* Status + Source filters */}
-          <div className="flex flex-wrap gap-2">
-            <div className="flex gap-1 flex-wrap">
-              {adStatuses.map((s) => (
-                <button
-                  type="button"
-                  key={s}
-                  onClick={() => setAdStatus(s)}
-                  className={cn(
-                    "px-2.5 py-1 text-xs rounded-md transition-colors",
-                    adStatus === s ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {s === "all" ? "All" : (statusConfig[s]?.label ?? s)}
-                </button>
-              ))}
-            </div>
-            <div className="h-6 w-px bg-border self-center" />
-            <div className="flex gap-1">
-              {(["all", "created", "external"] as const).map((s) => (
-                <button
-                  type="button"
-                  key={s}
-                  onClick={() => setAdSource(s)}
-                  className={cn(
-                    "px-2.5 py-1 text-xs rounded-md transition-colors",
-                    adSource === s ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {s === "all" ? "All Sources" : s === "created" ? "Created" : "External"}
-                </button>
-              ))}
-            </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented
+              value={adStatus}
+              onChange={setAdStatus}
+              options={adStatuses.map((s) => ({
+                value: s,
+                label: s === "all" ? "All" : (statusConfig[s]?.label ?? s),
+              }))}
+            />
+            <Segmented
+              value={adSource}
+              onChange={setAdSource}
+              options={(["all", "created", "external"] as const).map((s) => ({
+                value: s,
+                label: s === "all" ? "All Sources" : s === "created" ? "Created" : "External",
+              }))}
+            />
           </div>
 
           {adsError && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{adsError}</div>
+            <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{adsError}</div>
           )}
           {adsLoading ? (
             <div className="flex items-center justify-center py-20"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
           ) : ads.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <Megaphone className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">
                 {adAccounts.length > 0 ? "No synced ads yet" : "No ads yet"}
@@ -453,10 +429,10 @@ export function AdsPage({
             </div>
           ) : (
             <>
-              <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial="hidden" animate="visible">
+              <motion.div className="overflow-hidden rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
+                    <tr className="border-b border-border bg-muted/40 text-xs font-medium text-muted-foreground">
                       <th className="px-4 py-2.5 text-left">Name</th>
                       <th className="px-4 py-2.5 text-left hidden md:table-cell">Platform</th>
                       <th className="px-4 py-2.5 text-left">Status</th>
@@ -525,29 +501,22 @@ export function AdsPage({
       {/* ====== CAMPAIGNS TAB ====== */}
       {activeTab === "campaigns" && (
         <>
-          <div className="flex gap-1 flex-wrap">
-            {campaignStatuses.map((s) => (
-              <button
-                type="button"
-                key={s}
-                onClick={() => setCampaignStatus(s)}
-                className={cn(
-                  "px-2.5 py-1 text-xs rounded-md transition-colors",
-                  campaignStatus === s ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {s === "all" ? "All" : (statusConfig[s]?.label ?? s)}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            value={campaignStatus}
+            onChange={setCampaignStatus}
+            options={campaignStatuses.map((s) => ({
+              value: s,
+              label: s === "all" ? "All" : (statusConfig[s]?.label ?? s),
+            }))}
+          />
 
           {campaignsError && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{campaignsError}</div>
+            <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{campaignsError}</div>
           )}
           {campaignsLoading ? (
             <div className="flex items-center justify-center py-20"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
           ) : campaigns.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <Megaphone className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">
                 {adAccounts.length > 0 ? "No synced campaigns yet" : "No campaigns yet"}
@@ -560,10 +529,10 @@ export function AdsPage({
             </div>
           ) : (
             <>
-              <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial="hidden" animate="visible">
+              <motion.div className="overflow-hidden rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
+                    <tr className="border-b border-border bg-muted/40 text-xs font-medium text-muted-foreground">
                       <th className="px-4 py-2.5 text-left">Name</th>
                       <th className="px-4 py-2.5 text-left hidden md:table-cell">Platform</th>
                       <th className="px-4 py-2.5 text-left hidden lg:table-cell">Objective</th>
@@ -635,24 +604,24 @@ export function AdsPage({
           </div>
 
           {!selectedAdAccountId ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <p className="text-sm text-muted-foreground">Select an ad account to view audiences</p>
             </div>
           ) : audiencesError ? (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{audiencesError}</div>
+            <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{audiencesError}</div>
           ) : audiencesLoading ? (
             <div className="flex items-center justify-center py-20"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
           ) : audiences.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <Megaphone className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No audiences yet</p>
             </div>
           ) : (
             <>
-              <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial="hidden" animate="visible">
+              <motion.div className="overflow-hidden rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
+                    <tr className="border-b border-border bg-muted/40 text-xs font-medium text-muted-foreground">
                       <th className="px-4 py-2.5 text-left">Name</th>
                       <th className="px-4 py-2.5 text-left hidden md:table-cell">Type</th>
                       <th className="px-4 py-2.5 text-left hidden lg:table-cell">Platform</th>
@@ -717,12 +686,12 @@ export function AdsPage({
           {(accountsError || accountActionError || accountActionSuccess) && (
             <>
               {accountActionSuccess && (
-                <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600 dark:text-emerald-400">
+                <div className="rounded-[12px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600">
                   {accountActionSuccess}
                 </div>
               )}
               {(accountsError || accountActionError) && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                   {accountsError || accountActionError}
                 </div>
               )}
@@ -731,21 +700,21 @@ export function AdsPage({
           {accountsLoading ? (
             <div className="flex items-center justify-center py-20"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
           ) : adAccounts.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <Megaphone className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No ad accounts found</p>
               <p className="text-xs text-muted-foreground mt-1">Select a connected social account to discover its ad accounts</p>
-              <Button size="sm" variant="outline" className="mt-4 gap-1.5 h-7 text-xs" onClick={() => setDiscoverOpen(true)}>
-                <Search className="size-3.5" />
+              <Button variant="outline" className="mt-4" onClick={() => setDiscoverOpen(true)}>
+                <Search className="size-4" />
                 Discover Ad Accounts
               </Button>
             </div>
           ) : (
             <>
-            <motion.div className="rounded-md border border-border overflow-hidden" variants={stagger} initial="hidden" animate="visible">
+            <motion.div className="overflow-hidden rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
+                  <tr className="border-b border-border bg-muted/40 text-xs font-medium text-muted-foreground">
                     <th className="px-4 py-2.5 text-left">Name</th>
                     <th className="px-4 py-2.5 text-left hidden md:table-cell">Platform</th>
                     <th className="px-4 py-2.5 text-left hidden lg:table-cell">Currency</th>
@@ -771,10 +740,9 @@ export function AdsPage({
                         <Button
                           size="sm"
                           variant="outline"
-                          className="gap-1.5 h-7 text-xs"
                           onClick={() => handleSync(acc.id)}
                         >
-                          <RefreshCw className="size-3" />
+                          <RefreshCw className="size-3.5" />
                           Sync
                         </Button>
                       </td>
@@ -914,7 +882,7 @@ function UploadUsersDialog({ open, onOpenChange, audienceId, onUploaded }: {
           />
           {error && <p className="text-sm text-destructive">{error}</p>}
           {result && (
-            <p className="text-sm text-emerald-400">
+            <p className="text-sm text-emerald-600">
               Added: {result.added} | Invalid: {result.invalid}
             </p>
           )}
@@ -1002,7 +970,7 @@ function DiscoverAdAccountsDialog({ open, onOpenChange, selectedId, onSelect, on
             </div>
           )}
           {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
+            <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
               {error}
             </div>
           )}

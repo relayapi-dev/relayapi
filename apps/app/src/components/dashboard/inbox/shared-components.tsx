@@ -33,7 +33,7 @@ export function ReplyProgressBar({ replied, total }: { replied: number; total: n
   return (
     <div className="h-1 w-full rounded-full bg-muted overflow-hidden mt-2">
       <div
-        className={cn("h-full rounded-full transition-all", ratio === 100 ? "bg-emerald-500" : "bg-amber-500")}
+        className={cn("h-full rounded-full transition-all", ratio === 100 ? "bg-success" : "bg-amber-500")}
         style={{ width: `${ratio}%` }}
       />
     </div>

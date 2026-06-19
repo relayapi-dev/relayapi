@@ -123,22 +123,13 @@ function dayKey(dateStr: string) {
 
 function EmptyThreadState() {
   return (
-    <div className="flex h-full items-center justify-center bg-white px-6">
+    <div className="flex h-full items-center justify-center bg-card px-6">
       <div className="max-w-sm text-center">
-        <div className="relative mx-auto mb-8 h-32 w-32">
-          <div className="absolute left-3 top-11 h-11 w-11 rounded-full bg-[#64ddee]" />
-          <div className="absolute left-10 top-5 h-16 w-16 rounded-full bg-[#b12a67]" />
-          <div className="absolute right-7 top-[4.5rem] h-10 w-10 rounded-full bg-[#cc34d9]" />
-          <div className="absolute right-0 top-10 h-4 w-14 rounded-full bg-[#64ddee]" />
-          <div className="absolute right-0 top-[4.75rem] h-4 w-14 rounded-full bg-[#64ddee]" />
-          <div className="absolute right-0 top-28 h-4 w-14 rounded-full bg-[#64ddee]" />
-          <div className="absolute left-12 top-12 h-8 w-8 bg-[#64ddee]" />
-          <div className="absolute left-20 top-20 h-8 w-8 bg-[#64ddee]" />
-          <div className="absolute left-20 top-12 h-8 w-8 bg-[#b12a67]" />
-          <div className="absolute left-12 top-20 h-8 w-8 bg-[#b12a67]" />
+        <div className="mx-auto mb-6 flex size-16 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          <MessageCircle className="size-7" />
         </div>
-        <h3 className="text-[28px] font-semibold tracking-tight text-slate-800">Inbox</h3>
-        <p className="mt-3 text-[15px] leading-6 text-slate-500">
+        <h3 className="text-[22px] font-semibold tracking-[-0.01em] text-foreground">Inbox</h3>
+        <p className="mt-3 text-[15px] leading-6 text-muted-foreground">
           This is where messages from your connected channels appear. Select a chat to continue the conversation.
         </p>
       </div>
@@ -609,8 +600,8 @@ export function ChatThread({
   ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-white">
-      <div className="border-b border-[#e7e9ef] bg-white">
+    <div className="relative flex h-full min-h-0 flex-col bg-card">
+      <div className="border-b border-border bg-card">
         <div className="flex min-h-[52px] items-center justify-between gap-4 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-3">
             <Avatar
@@ -621,13 +612,13 @@ export function ChatThread({
             />
 
             <div className="min-w-0">
-              <p className="truncate text-[14px] font-semibold text-slate-900">{displayName}</p>
+              <p className="truncate text-[14px] font-semibold text-foreground">{displayName}</p>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
                     disabled={assignmentPending}
-                    className="inline-flex max-w-full items-center gap-1 rounded-sm text-[12px] text-slate-500 outline-none transition-colors hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-70"
+                    className="inline-flex max-w-full items-center gap-1 rounded-sm text-[12px] text-muted-foreground outline-none transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     <span className="truncate">{assigneeLabel}</span>
                     {assignmentPending ? (
@@ -640,14 +631,14 @@ export function ChatThread({
                 <DropdownMenuContent
                   align="start"
                   sideOffset={8}
-                  className="w-[17rem] border-[#d9dee8] bg-white p-1.5"
+                  className="w-[17rem] p-1.5"
                 >
-                  <DropdownMenuLabel className="px-2 py-1 text-[11px] font-medium text-slate-400">
+                  <DropdownMenuLabel className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
                     Assign chat
                   </DropdownMenuLabel>
-                  <DropdownMenuSeparator className="bg-[#ececf1]" />
+                  <DropdownMenuSeparator />
                   {membersLoading ? (
-                    <div className="flex items-center gap-2 px-2 py-2 text-[13px] text-slate-500">
+                    <div className="flex items-center gap-2 px-2 py-2 text-[13px] text-muted-foreground">
                       <Loader2 className="size-3.5 animate-spin" />
                       Loading team members
                     </div>
@@ -658,15 +649,15 @@ export function ChatThread({
                         className="gap-3 rounded-md px-2 py-2 [&>span:first-child]:hidden"
                         disabled={assignmentPending}
                       >
-                        <div className="flex size-7 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f8fafc] text-[11px] font-semibold text-slate-500">
+                        <div className="flex size-7 items-center justify-center rounded-full border border-border bg-muted text-[11px] font-semibold text-muted-foreground">
                           U
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[13px] font-medium text-slate-700">Unassigned</p>
-                          <p className="truncate text-[11px] text-slate-400">No owner</p>
+                          <p className="truncate text-[13px] font-medium text-foreground">Unassigned</p>
+                          <p className="truncate text-[11px] text-muted-foreground">No owner</p>
                         </div>
                         {assigneeValue === UNASSIGNED_VALUE && (
-                          <Check className="size-4 shrink-0 text-slate-500" />
+                          <Check className="size-4 shrink-0 text-muted-foreground" />
                         )}
                       </DropdownMenuRadioItem>
                       {members.map((member) => {
@@ -683,19 +674,19 @@ export function ChatThread({
                               <img
                                 src={member.user.image}
                                 alt={memberLabel}
-                                className="size-7 rounded-full border border-[#e5e7eb] object-cover"
+                                className="size-7 rounded-full border border-border object-cover"
                               />
                             ) : (
-                              <div className="flex size-7 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f8fafc] text-[11px] font-semibold text-slate-500">
+                              <div className="flex size-7 items-center justify-center rounded-full border border-border bg-muted text-[11px] font-semibold text-muted-foreground">
                                 {memberLabel.charAt(0).toUpperCase()}
                               </div>
                             )}
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-[13px] font-medium text-slate-700">{memberLabel}</p>
-                              <p className="truncate text-[11px] text-slate-400">{member.user.email}</p>
+                              <p className="truncate text-[13px] font-medium text-foreground">{memberLabel}</p>
+                              <p className="truncate text-[11px] text-muted-foreground">{member.user.email}</p>
                             </div>
                             {assigneeValue === member.user.id && (
-                              <Check className="size-4 shrink-0 text-slate-500" />
+                              <Check className="size-4 shrink-0 text-muted-foreground" />
                             )}
                           </DropdownMenuRadioItem>
                         );
@@ -721,7 +712,7 @@ export function ChatThread({
                 href={platformUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800"
+                className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
                 title={`Open ${platformLabel}`}
               >
                 <ExternalLink className="size-4" />
@@ -731,7 +722,7 @@ export function ChatThread({
               type="button"
               onClick={() => void handleAutomationControlToggle()}
               disabled={automationControlPending || !conversation.contact_id}
-              className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
               title={
                 !conversation.contact_id
                   ? "Pause / resume available once the contact is resolved"
@@ -752,13 +743,13 @@ export function ChatThread({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                   title="More actions"
                 >
                   <MoreHorizontal className="size-4" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" sideOffset={8} className="min-w-[14rem] bg-white">
+              <DropdownMenuContent align="end" sideOffset={8} className="min-w-[14rem]">
                 <DropdownMenuItem
                   disabled={!conversation.contact_id}
                   onSelect={(event) => {
@@ -777,7 +768,7 @@ export function ChatThread({
               type="button"
               onClick={() => void handleStatusButton()}
               disabled={statusPending || !onStatusChange}
-              className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-[#f5f6f8] hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
               title={isArchived ? "Restore conversation" : "Archive conversation"}
             >
               {statusPending ? (
@@ -791,32 +782,32 @@ export function ChatThread({
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-t border-[#eef0f5] px-4">
-          <span className="border-b-2 border-[#2d71f8] px-1 py-2 text-[13px] font-medium text-slate-800">
+        <div className="flex items-center justify-between border-t border-border px-4">
+          <span className="border-b-2 border-foreground px-1 py-2 text-[13px] font-medium text-foreground">
             {platformLabel}
           </span>
-          <div className="flex items-center gap-3 text-[12px] text-slate-400">
+          <div className="flex items-center gap-3 text-[12px] text-muted-foreground">
             <span>{assigneeLabel}</span>
             {(conversation.unread_count ?? 0) > 0 && (
-              <span className="font-medium text-[#2d71f8]">{conversation.unread_count} unread</span>
+              <span className="font-medium text-foreground">{conversation.unread_count} unread</span>
             )}
             {automationsPaused && (
               <span className="font-medium text-amber-600">Automations paused</span>
             )}
             {isArchived && (
-              <span className="font-medium text-slate-500">Archived</span>
+              <span className="font-medium text-muted-foreground">Archived</span>
             )}
           </div>
         </div>
       </div>
 
       {assignmentError && (
-        <div className="border-b border-[#f2d2d2] bg-[#fff7f7] px-4 py-2 text-sm text-[#b14242]">
+        <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {assignmentError}
         </div>
       )}
       {automationControlError && (
-        <div className="border-b border-[#f2d2d2] bg-[#fff7f7] px-4 py-2 text-sm text-[#b14242]">
+        <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {automationControlError}
         </div>
       )}
@@ -827,7 +818,7 @@ export function ChatThread({
           onScroll: handleScroll,
           className: "[&>div]:!block [&>div]:min-h-full",
         }}
-        className="relative flex-1 bg-white"
+        className="relative flex-1 bg-card"
       >
         <div className="flex min-h-full flex-col px-4 py-5 sm:px-6">
         {loading ? (
@@ -835,16 +826,16 @@ export function ChatThread({
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : error ? (
-          <div className="mx-auto flex max-w-xl items-start gap-3 rounded-md border border-[#f2c0c0] bg-[#fff6f6] px-4 py-3 text-sm text-[#b14242]">
+          <div className="mx-auto flex max-w-xl items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             <TriangleAlert className="mt-0.5 size-4 shrink-0" />
             <span>{error}</span>
           </div>
         ) : messages.length === 0 && notes.length === 0 ? (
           <div className="flex flex-1 items-center justify-center py-12">
             <div className="text-center">
-              <MessageCircle className="mx-auto size-9 text-slate-300" />
-              <p className="mt-3 text-sm font-medium text-slate-700">No messages yet</p>
-              <p className="mt-1 text-xs text-slate-500">
+              <MessageCircle className="mx-auto size-9 text-muted-foreground/40" />
+              <p className="mt-3 text-sm font-medium text-foreground">No messages yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
                 When this contact replies, the thread will appear here.
               </p>
             </div>
@@ -900,8 +891,8 @@ export function ChatThread({
                   >
                     {showDayDivider && (
                       <div className="relative my-4 flex items-center justify-center">
-                        <div className="absolute inset-x-0 top-1/2 border-t border-[#ececf1]" />
-                        <span className="relative bg-white px-3 text-[12px] font-medium text-slate-400">
+                        <div className="absolute inset-x-0 top-1/2 border-t border-border" />
+                        <span className="relative bg-card px-3 text-[12px] font-medium text-muted-foreground">
                           {formatMessageDayLabel(item.data.created_at)}
                         </span>
                       </div>
@@ -913,7 +904,7 @@ export function ChatThread({
                           src={item.data.author_avatar_url ?? conversation.participant_avatar}
                           name={item.data.author_name || displayName}
                           className="mt-1 size-8 shrink-0"
-                          fallbackClassName="bg-white text-[11px]"
+                          fallbackClassName="bg-card text-[11px]"
                         />
                       )}
 
@@ -923,8 +914,8 @@ export function ChatThread({
                             className={cn(
                               "rounded-[18px] px-4 py-2.5 text-[14px] leading-6",
                               isOutbound
-                                ? "rounded-br-md bg-[#edf3ff] text-[#304259]"
-                                : "rounded-bl-md bg-[#f3f4f6] text-slate-700",
+                                ? "rounded-br-md bg-foreground text-background"
+                                : "rounded-bl-md bg-muted text-foreground",
                             )}
                           >
                             <p className="whitespace-pre-wrap break-words">{item.data.text}</p>
@@ -941,7 +932,7 @@ export function ChatThread({
                                     href={attachment.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="block overflow-hidden rounded-xl border border-[#dde3ee] bg-white"
+                                    className="block overflow-hidden rounded-xl border border-border bg-card"
                                   >
                                     <img
                                       src={attachment.url}
@@ -958,7 +949,7 @@ export function ChatThread({
                                   href={attachment.url}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-2 rounded-md border border-[#d9dee8] bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-[#f8f9fc]"
+                                  className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent"
                                 >
                                   <ExternalLink className="size-3" />
                                   Attachment
@@ -970,7 +961,7 @@ export function ChatThread({
 
                         <p
                           className={cn(
-                            "mt-1 px-1 text-[11px] text-slate-400",
+                            "mt-1 px-1 text-[11px] text-muted-foreground",
                             isOutbound ? "text-right" : "text-left",
                           )}
                         >
@@ -991,7 +982,7 @@ export function ChatThread({
           <button
             type="button"
             onClick={scrollToBottom}
-            className="sticky bottom-4 left-1/2 flex -translate-x-1/2 items-center justify-center rounded-full border border-[#d9dee8] bg-white p-2 text-slate-500 shadow-sm transition-colors hover:bg-[#f8f9fc]"
+            className="sticky bottom-4 left-1/2 flex -translate-x-1/2 items-center justify-center rounded-full border border-border bg-card p-2 text-muted-foreground shadow-sm transition-colors hover:bg-accent"
           >
             <ArrowDown className="size-4" />
           </button>
@@ -1000,7 +991,7 @@ export function ChatThread({
       </ScrollArea>
 
       {sendError && (
-        <div className="border-t border-[#f2d2d2] bg-[#fff7f7] px-4 py-2 text-sm text-[#b14242]">
+        <div className="border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {sendError}
         </div>
       )}
@@ -1018,8 +1009,8 @@ export function ChatThread({
           className={cn(
             "pointer-events-none absolute bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg",
             enrollNotice.kind === "ok"
-              ? "bg-slate-900 text-white"
-              : "bg-rose-600 text-white",
+              ? "bg-foreground text-background"
+              : "bg-destructive text-white",
           )}
         >
           {enrollNotice.text}
@@ -1041,15 +1032,15 @@ export function ChatThread({
                 <Loader2 className="size-4 animate-spin text-muted-foreground" />
               </div>
             ) : startAutomationsError ? (
-              <div className="rounded-md border border-[#f2c0c0] bg-[#fff6f6] px-3 py-2 text-[13px] text-[#b14242]">
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
                 {startAutomationsError}
               </div>
             ) : startAutomations.length === 0 ? (
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-6 text-center text-[13px] text-slate-500">
+              <div className="rounded-md border border-border bg-muted/50 px-3 py-6 text-center text-[13px] text-muted-foreground">
                 No active automations available for {platformLabel}.
               </div>
             ) : (
-              <ul className="divide-y divide-slate-100">
+              <ul className="divide-y divide-border">
                 {startAutomations.map((automation) => {
                   const busy = startPendingId === automation.id;
                   return (
@@ -1058,27 +1049,27 @@ export function ChatThread({
                         type="button"
                         onClick={() => void handleEnrollAutomation(automation)}
                         disabled={busy || startPendingId !== null}
-                        className="flex w-full items-start gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
+                        className="flex w-full items-start gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-70"
                       >
-                        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-700">
+                        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
                           <Zap className="size-4" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[13px] font-semibold text-slate-900">
+                          <p className="truncate text-[13px] font-semibold text-foreground">
                             {automation.name}
                           </p>
                           {automation.description ? (
-                            <p className="mt-0.5 line-clamp-2 text-[11px] text-slate-500">
+                            <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">
                               {automation.description}
                             </p>
                           ) : (
-                            <p className="mt-0.5 text-[11px] text-slate-400">
+                            <p className="mt-0.5 text-[11px] text-muted-foreground">
                               {automation.channel}
                             </p>
                           )}
                         </div>
                         {busy ? (
-                          <Loader2 className="mt-1 size-4 shrink-0 animate-spin text-slate-400" />
+                          <Loader2 className="mt-1 size-4 shrink-0 animate-spin text-muted-foreground" />
                         ) : null}
                       </button>
                     </li>

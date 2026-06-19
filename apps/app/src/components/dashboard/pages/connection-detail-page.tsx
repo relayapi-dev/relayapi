@@ -12,6 +12,7 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BindingsTab } from "@/components/dashboard/automation/bindings-tab";
 import type { BindingChannel } from "@/components/dashboard/automation/bindings-tab/types";
+import { PageHeader } from "@/components/dashboard/page-header";
 import { useApi } from "@/hooks/use-api";
 import {
 	platformAvatars,
@@ -106,9 +107,9 @@ export function ConnectionDetailPage({ accountId, initialTab }: Props) {
 
 	if (error || !account) {
 		return (
-			<div className="space-y-4">
+			<div className="space-y-4 pb-16">
 				<BackLink />
-				<div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+				<div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
 					{error ?? "Account not found"}
 				</div>
 			</div>
@@ -120,17 +121,25 @@ export function ConnectionDetailPage({ accountId, initialTab }: Props) {
 		account.display_name || account.username || platformLabels[platform] || account.platform;
 	const handle = account.username ?? account.display_name ?? account.id.slice(-6);
 
+	const subtitle = [
+		platformLabels[platform] || account.platform,
+		account.username ? `@${account.username.replace(/^@/, "")}` : null,
+		account.workspace?.name,
+	]
+		.filter(Boolean)
+		.join(" · ");
+
 	return (
-		<div className="space-y-6">
+		<div className="space-y-6 pb-16">
 			<BackLink />
 
-			{/* Header card */}
-			<div className="flex items-center gap-4 rounded-md border border-border bg-card/30 p-4">
+			{/* Header */}
+			<div className="flex items-center gap-4">
 				{account.avatar_url ? (
 					<img
 						src={account.avatar_url}
 						alt=""
-						className="size-10 rounded-md object-cover"
+						className="size-10 rounded-md object-cover shrink-0"
 						onError={(e) => {
 							(e.currentTarget as HTMLImageElement).style.display = "none";
 							const fallback = (e.currentTarget as HTMLImageElement).nextElementSibling;
@@ -140,21 +149,14 @@ export function ConnectionDetailPage({ accountId, initialTab }: Props) {
 				) : null}
 				<div
 					className={cn(
-						"flex size-10 items-center justify-center rounded-md text-xs font-bold text-white",
+						"flex size-10 items-center justify-center rounded-md text-xs font-bold text-white shrink-0",
 						platformColors[platform] || "bg-neutral-700",
 						account.avatar_url ? "hidden" : "",
 					)}
 				>
 					{platformAvatars[platform] || platform.slice(0, 2).toUpperCase()}
 				</div>
-				<div className="min-w-0">
-					<h1 className="text-base font-medium truncate">{title}</h1>
-					<p className="text-xs text-muted-foreground truncate">
-						{platformLabels[platform] || account.platform}
-						{account.username ? ` · @${account.username.replace(/^@/, "")}` : ""}
-						{account.workspace ? ` · ${account.workspace.name}` : ""}
-					</p>
-				</div>
+				<PageHeader className="flex-1" title={title} subtitle={subtitle} />
 			</div>
 
 			{/* Binding tabs */}
@@ -170,7 +172,7 @@ export function ConnectionDetailPage({ accountId, initialTab }: Props) {
 					onTabChange={handleTabChange}
 				/>
 			) : (
-				<div className="rounded-md border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+				<div className="rounded-[12px] border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
 					Automation bindings aren&rsquo;t available on{" "}
 					{platformLabels[platform] || account.platform} accounts yet.
 				</div>

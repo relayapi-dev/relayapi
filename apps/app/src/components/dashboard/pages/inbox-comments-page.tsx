@@ -2,13 +2,17 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import { useSilentRefresh } from "@/hooks/use-silent-refresh";
 import { motion, AnimatePresence } from "motion/react";
-import { Loader2, Lock, Inbox as InboxIcon, BookOpen, ExternalLink, MessageCircle, LayoutList, Rows3, ArrowLeft } from "lucide-react";
+import { Loader2, Lock, Inbox as InboxIcon, ExternalLink, MessageCircle, LayoutList, Rows3, ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { useUsage } from "@/hooks/use-usage";
 import { LoadMore } from "@/components/ui/load-more";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { FilterBar } from "@/components/dashboard/filter-bar";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
 import { WorkspaceGuard } from "@/components/dashboard/workspace-guard";
 
@@ -93,12 +97,9 @@ export function InboxCommentsPage({
 
   if (!isPro && usage !== null) {
     return (
-      <div className="space-y-6">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Comments</h1>
-          <a href="https://docs.relayapi.dev/api-reference/inbox" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        <div className="rounded-md border border-border p-12 text-center">
+      <div className="space-y-6 pb-16">
+        <PageHeader title="Comments" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
+        <div className="rounded-[12px] border border-border bg-card p-12 text-center">
           <Lock className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm font-medium">Pro Feature</p>
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
@@ -116,40 +117,28 @@ export function InboxCommentsPage({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Comments</h1>
-          <a href="https://docs.relayapi.dev/api-reference/inbox" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => switchView("list")}
-            className={cn(
-              "inline-flex items-center gap-1.5 text-xs font-medium h-7 rounded-md transition-colors",
-              viewMode === "list" ? "text-foreground px-2" : "text-muted-foreground/50 hover:text-muted-foreground px-1"
-            )}
-            title="List view"
-          >
-            <LayoutList className="size-3.5" />
-            {viewMode === "list" && "List"}
-          </button>
-          <button
-            type="button"
-            onClick={() => switchView("by-post")}
-            className={cn(
-              "inline-flex items-center gap-1.5 text-xs font-medium h-7 rounded-md transition-colors",
-              viewMode === "by-post" ? "text-foreground px-2" : "text-muted-foreground/50 hover:text-muted-foreground px-1"
-            )}
-            title="By Post view"
-          >
-            <Rows3 className="size-3.5" />
-            {viewMode === "by-post" && "By Post"}
-          </button>
-          <FilterBar />
-        </div>
-      </div>
+    <div className="space-y-4 pb-16">
+      <PageHeader title="Comments" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
+
+      <PageToolbar
+        left={
+          <Segmented
+            size="icon"
+            value={viewMode}
+            onChange={(v) => switchView(v)}
+            options={[
+              { value: "list", icon: <LayoutList />, title: "List view" },
+              { value: "by-post", icon: <Rows3 />, title: "By Post view" },
+            ]}
+          />
+        }
+        right={
+          <>
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+          </>
+        }
+      />
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -162,7 +151,7 @@ export function InboxCommentsPage({
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       ) : items.length === 0 && !error ? (
-        <div className="rounded-md border border-dashed border-border p-12 text-center">
+        <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
           <InboxIcon className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">No comments</p>
           <p className="text-xs text-muted-foreground mt-1">
@@ -254,8 +243,8 @@ function CommentsListView({
               initial={newItemEnter.initial}
               animate={newItemEnter.animate}
               className={cn(
-                "rounded-lg border p-4 space-y-3 cursor-pointer transition-colors",
-                isExpanded ? "border-primary/50 bg-primary/[0.02]" : "border-border hover:bg-accent/20"
+                "rounded-[12px] border p-4 space-y-3 cursor-pointer transition-colors",
+                isExpanded ? "border-foreground/30 bg-muted/40" : "border-border bg-card hover:bg-accent/40"
               )}
               onClick={() => toggleExpanded(c.id)}
             >
@@ -282,7 +271,7 @@ function CommentsListView({
                     <span className="text-sm font-semibold">{c.author_name}</span>
                     <span className="text-xs text-muted-foreground">{formatTimeAgo(c.created_at)}</span>
                     {hasReplies && (
-                      <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600">Replied</span>
+                      <span className="rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">Replied</span>
                     )}
                     {c.hidden && (
                       <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600">Hidden</span>
@@ -501,8 +490,8 @@ function ByPostView({
             animate={newItemEnter.animate}
             onClick={() => setSelectedPostKey(postKey)}
             className={cn(
-              "w-full text-left rounded-lg border p-3 transition-all hover:bg-accent/30",
-              isSelected ? "border-primary bg-primary/5" : "border-border"
+              "w-full text-left rounded-[12px] border p-3 transition-colors hover:bg-accent/40",
+              isSelected ? "border-foreground/30 bg-muted/50" : "border-border bg-card"
             )}
           >
             <div className="flex items-start gap-2.5">
@@ -565,7 +554,7 @@ function ByPostView({
   return (
     <>
       <div
-        className="hidden md:flex rounded-lg border border-border overflow-hidden"
+        className="hidden md:flex rounded-[12px] border border-border bg-card overflow-hidden"
         style={{ height: "calc(-7rem + 100vh)" }}
       >
         <ScrollArea className="w-[340px] shrink-0 border-r border-border">

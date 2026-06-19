@@ -1,8 +1,13 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Clock, Loader2, RotateCw, CalendarDays, BookOpen, Calendar, Plus } from "lucide-react";
+import { Clock, Loader2, RefreshCw, CalendarDays, Calendar, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useApi } from "@/hooks/use-api";
+import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
+import { IconButton } from "@/components/dashboard/icon-button";
 import { ScheduleCreateDialog } from "@/components/dashboard/scheduling/schedule-create-dialog";
 
 const stagger = {
@@ -73,58 +78,38 @@ export function SchedulingPage({
   const refetch = activeTab === "queue-slots" ? refetchSlots : refetchPreview;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-medium">Scheduling</h1>
-          <a href="https://docs.relayapi.dev/api-reference/queue" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent/50 transition-colors"
-            onClick={() => refetch()}
-          >
-            <RotateCw className="size-3" />
-            Refresh
-          </button>
-          <button
-            type="button"
-            className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent/50 transition-colors"
-            onClick={() => setCreateOpen(true)}
-          >
-            <Plus className="size-3" />
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Scheduling"
+        docsHref="https://docs.relayapi.dev/api-reference/queue"
+        action={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
             Create Schedule
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
-      <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <div className="flex gap-4">
-          {tabs.map((tab) => {
-            const tabKey =
-              tab.toLowerCase().replace(" ", "-") as typeof initialTab;
-            return (
-              <button
-                type="button"
-                key={tab}
-                onClick={() => switchTab(tabKey)}
-                className={cn(
-                  "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-                  activeTab === tabKey
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {tab}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={tabs.map((tab) => ({
+              value: tab.toLowerCase().replace(" ", "-") as typeof initialTab,
+              label: tab,
+            }))}
+          />
+        }
+        right={
+          <IconButton title="Refresh" onClick={() => refetch()}>
+            <RefreshCw />
+          </IconButton>
+        }
+      />
 
       {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
@@ -142,19 +127,19 @@ export function SchedulingPage({
               animate="visible"
             >
               <motion.div variants={fadeUp} className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-md border border-border p-4">
+                <div className="rounded-[12px] border border-border bg-card p-5">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-medium text-muted-foreground">Schedules</p>
-                    <div className="rounded-lg p-1.5 text-blue-400 bg-blue-400/10">
+                    <div className="rounded-lg bg-muted p-1.5 text-muted-foreground">
                       <Calendar className="size-3.5" />
                     </div>
                   </div>
                   <p className="text-2xl font-semibold mt-2">{schedules.length}</p>
                 </div>
-                <div className="rounded-md border border-border p-4">
+                <div className="rounded-[12px] border border-border bg-card p-5">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-medium text-muted-foreground">Time Slots</p>
-                    <div className="rounded-lg p-1.5 text-emerald-400 bg-emerald-400/10">
+                    <div className="rounded-lg bg-muted p-1.5 text-muted-foreground">
                       <Clock className="size-3.5" />
                     </div>
                   </div>
@@ -166,13 +151,13 @@ export function SchedulingPage({
                 <motion.div
                   key={schedule.id}
                   variants={fadeUp}
-                  className="rounded-md border border-border overflow-hidden"
+                  className="rounded-[12px] border border-border bg-card overflow-hidden"
                 >
-                  <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                  <div className="px-5 py-3 border-b border-border flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-[13px] font-medium">{schedule.name || "Unnamed Schedule"}</h3>
+                      <h3 className="text-[13px] font-medium text-foreground">{schedule.name || "Unnamed Schedule"}</h3>
                       {schedule.is_default && (
-                        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium text-blue-400 bg-blue-400/10">
+                        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium text-muted-foreground bg-muted">
                           Default
                         </span>
                       )}
@@ -183,7 +168,7 @@ export function SchedulingPage({
                   </div>
                   {schedule.slots.length > 0 ? (
                     <>
-                      <div className="hidden md:grid grid-cols-3 gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
+                      <div className="hidden md:grid grid-cols-3 gap-4 px-5 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-muted">
                         <span>Day</span>
                         <span>Time</span>
                         <span>Timezone</span>
@@ -195,11 +180,11 @@ export function SchedulingPage({
                         <div
                           key={`${slot.day_of_week}-${slot.time}`}
                           className={cn(
-                            "grid md:grid-cols-3 gap-3 md:gap-4 p-4 md:py-3 items-center text-sm hover:bg-accent/30 transition-colors",
+                            "grid md:grid-cols-3 gap-3 md:gap-4 px-5 py-4 md:py-3 items-center text-[13px] hover:bg-accent transition-colors",
                             i !== schedule.slots.length - 1 && "border-b border-border"
                           )}
                         >
-                          <span className="text-xs font-medium">
+                          <span className="text-xs font-medium text-foreground">
                             <span className="md:hidden">{DAY_SHORT[slot.day_of_week]}</span>
                             <span className="hidden md:inline">{DAY_NAMES[slot.day_of_week]}</span>
                           </span>
@@ -217,7 +202,7 @@ export function SchedulingPage({
               ))}
             </motion.div>
           ) : (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <Clock className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No queue schedules</p>
               <p className="text-xs text-muted-foreground mt-1">
@@ -233,15 +218,15 @@ export function SchedulingPage({
             </div>
           ) : upcomingSlots.length > 0 ? (
             <motion.div
-              className="rounded-md border border-border overflow-hidden"
+              className="rounded-[12px] border border-border bg-card overflow-hidden"
               variants={stagger}
               initial="hidden"
               animate="visible"
             >
-              <div className="px-4 py-3 border-b border-border">
-                <h3 className="text-[13px] font-medium">Upcoming Slots</h3>
+              <div className="px-5 py-3 border-b border-border">
+                <h3 className="text-[13px] font-medium text-foreground">Upcoming Slots</h3>
               </div>
-              <div className="hidden md:grid grid-cols-3 gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-accent/10">
+              <div className="hidden md:grid grid-cols-3 gap-4 px-5 py-2.5 text-xs font-medium text-muted-foreground border-b border-border bg-muted">
                 <span>Date</span>
                 <span>Day</span>
                 <span>Time</span>
@@ -253,11 +238,11 @@ export function SchedulingPage({
                     key={slot}
                     variants={fadeUp}
                     className={cn(
-                      "grid md:grid-cols-3 gap-3 md:gap-4 p-4 md:py-3 items-center text-sm hover:bg-accent/30 transition-colors",
+                      "grid md:grid-cols-3 gap-3 md:gap-4 px-5 py-4 md:py-3 items-center text-[13px] hover:bg-accent transition-colors",
                       i !== upcomingSlots.length - 1 && "border-b border-border"
                     )}
                   >
-                    <span className="text-xs font-medium">
+                    <span className="text-xs font-medium text-foreground">
                       {d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                     </span>
                     <span className="text-xs text-muted-foreground">{DAY_NAMES[d.getDay()]}</span>
@@ -269,7 +254,7 @@ export function SchedulingPage({
               })}
             </motion.div>
           ) : (
-            <div className="rounded-md border border-dashed border-border p-12 text-center">
+            <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
               <CalendarDays className="size-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No upcoming slots</p>
               <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">

@@ -9,7 +9,10 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePaginatedApi } from "@/hooks/use-api";
-import { FilterBar } from "@/components/dashboard/filter-bar";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
 import { IdeaBoard } from "@/components/dashboard/ideas/idea-board";
 import { IdeaDetailDialog } from "@/components/dashboard/ideas/idea-detail-dialog";
@@ -491,89 +494,92 @@ export function IdeasPage() {
 
 	return (
 		<div className="flex flex-col gap-6 h-[calc(100dvh-5rem)] md:h-[calc(100dvh-2rem)]">
-			<div className="flex items-center justify-between shrink-0">
-				<h1 className="text-lg font-medium">Ideas</h1>
-				<Button
-					type="button"
-					size="sm"
-					className="gap-1.5 h-7 text-xs"
-					onClick={() => {
-						setCreateGroupId(null);
-						setCreateDialogOpen(true);
-					}}
-				>
-					<Plus className="size-3.5" />
-					New Idea
-				</Button>
-			</div>
+			<PageHeader
+				title="Ideas"
+				className="shrink-0"
+				action={
+					<Button
+						type="button"
+						onClick={() => {
+							setCreateGroupId(null);
+							setCreateDialogOpen(true);
+						}}
+					>
+						<Plus className="size-4" />
+						New Idea
+					</Button>
+				}
+			/>
 
-			{/* Filters on their own row so the header never overflows on mobile (matches media/contacts pages) */}
-			<div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] shrink-0">
-				<div />
-				<div className="pb-2 flex items-center gap-2 shrink-0">
-					<FilterBar />
+			<PageToolbar
+				className="shrink-0"
+				right={
+					<>
+						<WorkspaceFilterButton />
+						<AccountFilterButton />
 
-					{tags.length > 0 && (
-						<Popover>
-							<PopoverTrigger asChild>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									className={cn(
-										"h-7 text-xs gap-1",
-										filterTagId && "border-primary",
-									)}
-								>
-									<Tags className="size-3" />
-									{filterTagId
-										? tags.find((tag) => tag.id === filterTagId)?.name ?? "Tag"
-										: "Tag"}
-								</Button>
-							</PopoverTrigger>
-							<PopoverContent className="w-44 p-1.5" align="end">
-								{tags.map((tag) => (
-									<button
-										key={tag.id}
+						{tags.length > 0 && (
+							<Popover>
+								<PopoverTrigger asChild>
+									<Button
 										type="button"
+										variant="outline"
+										size="sm"
 										className={cn(
-											"flex items-center gap-2 w-full rounded px-2 py-1.5 text-xs hover:bg-accent transition-colors",
-											filterTagId === tag.id && "bg-accent",
+											"h-8 gap-1.5",
+											filterTagId && "border-primary",
 										)}
-										onClick={() =>
-											setFilterTagId(
-												filterTagId === tag.id ? null : tag.id,
-											)
-										}
 									>
-										<span
-											className="size-2 rounded-full shrink-0"
-											style={{ backgroundColor: tag.color }}
-										/>
-										{tag.name}
-									</button>
-								))}
-							</PopoverContent>
-						</Popover>
-					)}
+										<Tags className="size-3.5" />
+										{filterTagId
+											? tags.find((tag) => tag.id === filterTagId)?.name ?? "Tag"
+											: "Tag"}
+									</Button>
+								</PopoverTrigger>
+								<PopoverContent className="w-44 p-1.5" align="end">
+									{tags.map((tag) => (
+										<button
+											key={tag.id}
+											type="button"
+											className={cn(
+												"flex items-center gap-2 w-full rounded px-2 py-1.5 text-xs hover:bg-accent transition-colors",
+												filterTagId === tag.id && "bg-accent",
+											)}
+											onClick={() =>
+												setFilterTagId(
+													filterTagId === tag.id ? null : tag.id,
+												)
+											}
+										>
+											<span
+												className="size-2 rounded-full shrink-0"
+												style={{ backgroundColor: tag.color }}
+											/>
+											{tag.name}
+										</button>
+									))}
+								</PopoverContent>
+							</Popover>
+						)}
 
-					{hasFilters && (
-						<button
-							type="button"
-							className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-							onClick={() => {
-								setFilterTagId(null);
-								setFilterAssignedTo(null);
-							}}
-						>
-							<X className="size-3.5" />
-						</button>
-					)}
-				</div>
-			</div>
+						{hasFilters && (
+							<button
+								type="button"
+								className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+								onClick={() => {
+									setFilterTagId(null);
+									setFilterAssignedTo(null);
+								}}
+							>
+								<X className="size-3.5" />
+							</button>
+						)}
+					</>
+				}
+			/>
 
 			{error && (
-				<div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+				<div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
 					{error}
 				</div>
 			)}
@@ -591,7 +597,7 @@ export function IdeasPage() {
 				>
 					<motion.div
 						variants={fadeUp}
-						className="rounded-md border border-dashed border-border p-12 text-center max-w-sm w-full"
+						className="rounded-[12px] border border-dashed border-border p-12 text-center max-w-sm w-full"
 					>
 						<Lightbulb className="size-8 text-muted-foreground/40 mx-auto mb-3" />
 						<p className="text-sm font-medium">Plan your content</p>
@@ -601,11 +607,9 @@ export function IdeasPage() {
 						</p>
 						<Button
 							type="button"
-							size="sm"
-							className="gap-1.5 h-7 text-xs"
 							onClick={() => handleCreateGroup("Ideas", "#6366f1")}
 						>
-							<Plus className="size-3.5" />
+							<Plus className="size-4" />
 							New Group
 						</Button>
 					</motion.div>

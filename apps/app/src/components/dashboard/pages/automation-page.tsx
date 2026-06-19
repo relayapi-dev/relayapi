@@ -12,7 +12,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import {
-	BookOpen,
 	Loader2,
 	MoreHorizontal,
 	Plus,
@@ -21,6 +20,8 @@ import {
 	Workflow,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
 import {
 	Dialog,
 	DialogClose,
@@ -83,14 +84,17 @@ interface ApiEntrypoint {
 // ---------------------------------------------------------------------------
 
 function statusBadge(status: AutomationRow["status"]) {
-	const draft = { label: "Draft", classes: "text-neutral-400 bg-neutral-400/10" };
+	const draft = {
+		label: "Draft",
+		classes: "text-muted-foreground bg-muted",
+	};
 	const map: Record<string, { label: string; classes: string }> = {
 		draft,
-		active: { label: "Active", classes: "text-emerald-500 bg-emerald-500/10" },
+		active: { label: "Active", classes: "text-success bg-success/10" },
 		paused: { label: "Paused", classes: "text-amber-500 bg-amber-500/10" },
 		archived: {
 			label: "Archived",
-			classes: "text-neutral-500 bg-neutral-500/10",
+			classes: "text-muted-foreground bg-muted",
 		},
 	};
 	const cfg = map[status] ?? draft;
@@ -107,25 +111,10 @@ function statusBadge(status: AutomationRow["status"]) {
 }
 
 function templateBadge(template: string | null) {
-	if (!template) return <span className="text-xs text-muted-foreground/60">—</span>;
-	// Pick one of a few stable colours based on a simple hash.
-	const palette = [
-		"bg-blue-500/10 text-blue-500",
-		"bg-purple-500/10 text-purple-500",
-		"bg-emerald-500/10 text-emerald-500",
-		"bg-rose-500/10 text-rose-500",
-		"bg-amber-500/10 text-amber-500",
-	];
-	const idx =
-		template.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0) %
-		palette.length;
+	if (!template)
+		return <span className="text-xs text-muted-foreground/60">—</span>;
 	return (
-		<span
-			className={cn(
-				"inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
-				palette[idx],
-			)}
-		>
+		<span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
 			{template}
 		</span>
 	);
@@ -358,62 +347,53 @@ export function AutomationPage() {
 	};
 
 	return (
-		<div className="space-y-6">
-			<div className="flex items-center justify-between">
-				<div className="flex items-center gap-2">
-					<h1 className="text-lg font-medium">Automations</h1>
-					<a
-						href="https://docs.relayapi.dev/guides/automations"
-						target="_blank"
-						rel="noopener noreferrer"
-						className="text-muted-foreground hover:text-foreground transition-colors"
-					>
-						<BookOpen className="size-3.5" />
-					</a>
-				</div>
-				<div className="flex items-center gap-1.5">
-					<Button
-						size="sm"
-						className="h-7 gap-1.5 text-xs"
-						onClick={() => openDialog()}
-					>
-						<Plus className="size-3.5" />
+		<div className="space-y-6 pb-16">
+			<PageHeader
+				title="Automations"
+				docsHref="https://docs.relayapi.dev/guides/automations"
+				action={
+					<Button onClick={() => openDialog()}>
+						<Plus className="size-4" />
 						New automation
 					</Button>
-				</div>
-			</div>
+				}
+			/>
 
-			{/* Filter bar */}
-			<div className="flex items-center gap-2">
-				<label
-					htmlFor="automation-template-filter"
-					className="text-xs text-muted-foreground"
-				>
-					Template:
-				</label>
-				<select
-					id="automation-template-filter"
-					value={templateFilter}
-					onChange={(e) => setTemplateFilter(e.target.value)}
-					className="h-7 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-				>
-					<option value="">All</option>
-					{templateOptions.map((t) => (
-						<option key={t} value={t}>
-							{t}
-						</option>
-					))}
-				</select>
-				{templateFilter && (
-					<button
-						type="button"
-						onClick={() => setTemplateFilter("")}
-						className="text-[11px] text-muted-foreground hover:text-foreground"
-					>
-						Clear
-					</button>
-				)}
-			</div>
+			{/* Template filter */}
+			<PageToolbar
+				right={
+					<div className="flex items-center gap-2">
+						<label
+							htmlFor="automation-template-filter"
+							className="text-xs text-muted-foreground"
+						>
+							Template:
+						</label>
+						<select
+							id="automation-template-filter"
+							value={templateFilter}
+							onChange={(e) => setTemplateFilter(e.target.value)}
+							className="h-8 rounded-md border border-border bg-card px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+						>
+							<option value="">All</option>
+							{templateOptions.map((t) => (
+								<option key={t} value={t}>
+									{t}
+								</option>
+							))}
+						</select>
+						{templateFilter && (
+							<button
+								type="button"
+								onClick={() => setTemplateFilter("")}
+								className="text-[11px] text-muted-foreground hover:text-foreground"
+							>
+								Clear
+							</button>
+						)}
+					</div>
+				}
+			/>
 
 			{/* Quick starts */}
 			<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -422,13 +402,13 @@ export function AutomationPage() {
 						key={item.slug}
 						type="button"
 						onClick={() => openDialog(item.slug)}
-						className="rounded-xl border border-border bg-card/50 p-4 text-left transition-colors hover:border-foreground/20 hover:bg-accent/20"
+						className="rounded-[12px] border border-border bg-card p-5 text-left transition-colors hover:border-foreground/20 hover:bg-accent"
 					>
 						<div className="flex items-start justify-between gap-3">
-							<div className="rounded-lg bg-accent/40 p-2">
+							<div className="rounded-lg bg-muted p-2">
 								<Sparkles className="size-4 text-foreground" />
 							</div>
-							<span className="rounded-full bg-accent/30 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+							<span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
 								Quick start
 							</span>
 						</div>
@@ -443,7 +423,7 @@ export function AutomationPage() {
 			</div>
 
 			{error && (
-				<div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+				<div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
 					{error}
 				</div>
 			)}
@@ -453,19 +433,15 @@ export function AutomationPage() {
 					<Loader2 className="size-5 animate-spin text-muted-foreground" />
 				</div>
 			) : automations.length === 0 ? (
-				<div className="rounded-md border border-dashed border-border p-12 text-center">
+				<div className="rounded-[12px] border border-dashed border-border p-12 text-center">
 					<Workflow className="mx-auto mb-2 size-8 text-muted-foreground/40" />
 					<p className="text-sm text-muted-foreground">No automations yet</p>
 					<p className="mt-1 text-xs text-muted-foreground">
 						Start from a template or build from scratch
 					</p>
 					<div className="mt-4 flex items-center justify-center gap-2">
-						<Button
-							size="sm"
-							className="h-7 gap-1.5 text-xs"
-							onClick={() => openDialog()}
-						>
-							<Plus className="size-3.5" />
+						<Button onClick={() => openDialog()}>
+							<Plus className="size-4" />
 							New automation
 						</Button>
 					</div>
@@ -473,14 +449,14 @@ export function AutomationPage() {
 			) : (
 				<>
 					<motion.div
-						className="overflow-hidden rounded-md border border-border"
+						className="overflow-hidden rounded-[12px] border border-border bg-card"
 						variants={stagger}
 						initial="hidden"
 						animate="visible"
 					>
 						<table className="w-full text-sm">
 							<thead>
-								<tr className="border-b border-border bg-accent/10 text-xs font-medium text-muted-foreground">
+								<tr className="border-b border-border text-xs font-medium text-muted-foreground">
 									<th className="px-4 py-2.5 text-left">Name</th>
 									<th className="hidden px-4 py-2.5 text-left md:table-cell">
 										Channel
@@ -510,7 +486,7 @@ export function AutomationPage() {
 											window.location.href = `/app/automation/${a.id}`;
 										}}
 										className={cn(
-											"cursor-pointer transition-colors hover:bg-accent/30",
+											"cursor-pointer transition-colors hover:bg-accent",
 											i !== automations.length - 1 && "border-b border-border",
 										)}
 									>
@@ -534,7 +510,7 @@ export function AutomationPage() {
 												<DropdownMenuTrigger asChild>
 													<button
 														type="button"
-														className="rounded-md p-1.5 transition-colors hover:bg-accent/50"
+														className="rounded-md p-1.5 transition-colors hover:bg-accent"
 														aria-label="Automation actions"
 													>
 														<MoreHorizontal className="size-4 text-muted-foreground" />

@@ -1,9 +1,13 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Loader2, FileText, BookOpen } from "lucide-react";
+import { Loader2, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePagedApi } from "@/hooks/use-api";
-import { FilterBar } from "@/components/dashboard/filter-bar";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { PageToolbar } from "@/components/dashboard/page-toolbar";
+import { Segmented } from "@/components/dashboard/segmented";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
 
 const stagger = {
@@ -49,42 +53,42 @@ interface ConnectionLogEntry {
 // --- Styles ---
 
 const levelStyles: Record<string, string> = {
-  info: "text-blue-400",
-  warn: "text-amber-400",
-  error: "text-red-400",
+  info: "text-muted-foreground",
+  warn: "text-amber-600",
+  error: "text-destructive",
 };
 
 const levelBg: Record<string, string> = {
-  info: "bg-blue-400/10",
-  warn: "bg-amber-400/10",
-  error: "bg-red-400/10",
+  info: "bg-muted",
+  warn: "bg-amber-500/10",
+  error: "bg-destructive/10",
 };
 
 const methodColors: Record<string, string> = {
-  GET: "text-blue-400 bg-blue-400/10",
-  POST: "text-emerald-400 bg-emerald-400/10",
-  PUT: "text-amber-400 bg-amber-400/10",
-  PATCH: "text-amber-400 bg-amber-400/10",
-  DELETE: "text-red-400 bg-red-400/10",
+  GET: "text-muted-foreground bg-muted",
+  POST: "text-success bg-success/10",
+  PUT: "text-amber-600 bg-amber-500/10",
+  PATCH: "text-amber-600 bg-amber-500/10",
+  DELETE: "text-destructive bg-destructive/10",
   HEAD: "text-muted-foreground bg-muted",
 };
 
 const postStatusDraftStyle = { text: "text-muted-foreground", bg: "bg-muted" };
 
 const postStatusStyles: Record<string, { text: string; bg: string }> = {
-  published: { text: "text-emerald-400", bg: "bg-emerald-400/10" },
-  failed: { text: "text-red-400", bg: "bg-red-400/10" },
-  publishing: { text: "text-blue-400", bg: "bg-blue-400/10" },
-  partial: { text: "text-amber-400", bg: "bg-amber-400/10" },
+  published: { text: "text-success", bg: "bg-success/10" },
+  failed: { text: "text-destructive", bg: "bg-destructive/10" },
+  publishing: { text: "text-muted-foreground", bg: "bg-muted" },
+  partial: { text: "text-amber-600", bg: "bg-amber-500/10" },
   draft: postStatusDraftStyle,
 };
 
-const connectionEventErrorStyle = { text: "text-red-400", bg: "bg-red-400/10" };
+const connectionEventErrorStyle = { text: "text-destructive", bg: "bg-destructive/10" };
 
 const connectionEventStyles: Record<string, { text: string; bg: string }> = {
-  connected: { text: "text-emerald-400", bg: "bg-emerald-400/10" },
-  disconnected: { text: "text-amber-400", bg: "bg-amber-400/10" },
-  token_refreshed: { text: "text-blue-400", bg: "bg-blue-400/10" },
+  connected: { text: "text-success", bg: "bg-success/10" },
+  disconnected: { text: "text-amber-600", bg: "bg-amber-500/10" },
+  token_refreshed: { text: "text-muted-foreground", bg: "bg-muted" },
   error: connectionEventErrorStyle,
 };
 
@@ -181,53 +185,34 @@ export function LogsPage({
       });
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <h1 className="text-lg font-medium">Logs</h1>
-        <a href="https://docs.relayapi.dev/api-reference/usage/listRequestLogs" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors"><BookOpen className="size-3.5" /></a>
-      </div>
+    <div className="space-y-6 pb-16">
+      <PageHeader
+        title="Logs"
+        docsHref="https://docs.relayapi.dev/api-reference/usage/listRequestLogs"
+      />
 
-      <div className="flex items-end justify-between gap-x-4 border-b border-border overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <div className="flex gap-4 shrink-0">
-          {tabs.map((tab) => (
-            <button
-              type="button"
-              key={tab.key}
-              onClick={() => switchTab(tab.key)}
-              className={cn(
-                "pb-2 text-[13px] font-medium transition-colors whitespace-nowrap border-b-2 -mb-px",
-                activeTab === tab.key
-                  ? "border-foreground text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-        <div className="pb-2 shrink-0">
-          <FilterBar />
-        </div>
-      </div>
+      <PageToolbar
+        left={
+          <Segmented
+            value={activeTab}
+            onChange={(v) => switchTab(v)}
+            options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+          />
+        }
+        right={
+          <>
+            <WorkspaceFilterButton />
+            <AccountFilterButton />
+          </>
+        }
+      />
 
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <div className="flex gap-3">
-          {levelFilters.map((f) => (
-            <button
-              type="button"
-              key={f}
-              onClick={() => setLevelFilter(f)}
-              className={cn(
-                "text-[13px] font-medium transition-colors",
-                levelFilter === f
-                  ? "text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          value={levelFilter}
+          onChange={(v) => setLevelFilter(v)}
+          options={levelFilters.map((f) => ({ value: f, label: f }))}
+        />
 
         <div className="flex items-center gap-2">
           <label
@@ -279,7 +264,7 @@ export function LogsPage({
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       ) : filtered.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border p-12 text-center">
+        <div className="rounded-[12px] border border-dashed border-border p-12 text-center">
           <FileText className="size-8 text-muted-foreground/40 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">No logs found</p>
           <p className="text-xs text-muted-foreground mt-1">
@@ -288,7 +273,7 @@ export function LogsPage({
         </div>
       ) : (
         <>
-          <div className="rounded-md border border-border overflow-hidden font-mono text-[11px]">
+          <div className="rounded-[12px] border border-border bg-card overflow-hidden font-mono text-[11px]">
             <motion.div
               className="divide-y divide-border"
               variants={stagger}
@@ -327,7 +312,7 @@ function RequestLogRow({ log }: { log: RequestLogEntry }) {
       <span
         className={cn(
           "shrink-0 w-11 rounded px-1 py-0.5 text-center text-[10px] font-semibold uppercase",
-          methodColors[log.method] || "text-blue-400 bg-blue-400/10"
+          methodColors[log.method] || "text-muted-foreground bg-muted"
         )}
       >
         {log.method}
@@ -348,7 +333,7 @@ function RequestLogRow({ log }: { log: RequestLogEntry }) {
         {log.response_time_ms}ms
       </span>
       {log.billable && (
-        <span className="shrink-0 text-[10px] text-amber-400/70">$</span>
+        <span className="shrink-0 text-[10px] text-amber-600">$</span>
       )}
     </motion.div>
   );
