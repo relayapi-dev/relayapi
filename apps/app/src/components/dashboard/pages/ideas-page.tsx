@@ -560,6 +560,7 @@ export function IdeasPage() {
 
 						<Button
 							type="button"
+							size="sm"
 							onClick={() => {
 								setCreateGroupId(null);
 								setCreateDialogOpen(true);

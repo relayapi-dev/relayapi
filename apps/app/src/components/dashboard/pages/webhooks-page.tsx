@@ -143,7 +143,7 @@ export function WebhooksPage({
         docsHref="https://docs.relayapi.dev/api-reference/webhooks"
         action={
           activeTab === "endpoints" ? (
-            <Button onClick={() => setShowCreate(true)}>
+            <Button size="sm" onClick={() => setShowCreate(true)}>
               <Plus className="size-4" />
               Add Webhook
             </Button>

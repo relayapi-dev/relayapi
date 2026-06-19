@@ -307,12 +307,12 @@ export function ConnectionsPage({
         docsHref="https://docs.relayapi.dev/guides/connecting-accounts"
         action={
           activeTab === "workspaces" ? (
-            <Button onClick={() => setShowCreateWorkspace(true)}>
+            <Button size="sm" onClick={() => setShowCreateWorkspace(true)}>
               <Plus className="size-4" />
               Create Workspace
             </Button>
           ) : activeTab !== "connect" ? (
-            <Button onClick={() => switchTab("connect")}>
+            <Button size="sm" onClick={() => switchTab("connect")}>
               <Plus className="size-4" />
               Connect Account
             </Button>

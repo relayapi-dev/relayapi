@@ -1,5 +1,5 @@
 ---
-import Layout from "../layouts/Layout.astro";
+import BaseLayout from "../layouts/BaseLayout.astro";
 import SEO from "../components/SEO.astro";
 import { Navbar } from "../components/section/navbar";
 import { PricingSection } from "../components/section/pricing-section";
@@ -8,7 +8,7 @@ import { SelfHostSection } from "../components/section/self-host-section";
 import { Button } from "../components/ui/button";
 ---
 
-<Layout>
+<BaseLayout>
   <SEO
     slot="head"
     title="Pricing"
@@ -63,4 +63,4 @@ import { Button } from "../components/ui/button";
       </section>
     </main>
   </div>
-</Layout>
+</BaseLayout>

@@ -70,7 +70,7 @@ export function ContactsPage() {
           <div className="flex items-center gap-2">
             <WorkspaceFilterButton />
             <AccountFilterButton />
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
               Add Contact
             </Button>

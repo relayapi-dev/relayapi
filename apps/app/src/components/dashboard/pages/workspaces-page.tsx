@@ -71,7 +71,7 @@ export function WorkspacesPage() {
       <PageHeader
         title="Workspaces"
         action={
-          <Button onClick={() => setShowCreate(true)}>
+          <Button size="sm" onClick={() => setShowCreate(true)}>
             <Plus className="size-4" />
             New workspace
           </Button>

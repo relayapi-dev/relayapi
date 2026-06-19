@@ -439,7 +439,7 @@ export function PostsPage({
         title="Posts"
         docsHref="https://docs.relayapi.dev/api-reference/posts"
         action={
-          <Button onClick={() => { setNewPostInitialDate(undefined); setNewPostOpen(true); }}>
+          <Button size="sm" onClick={() => { setNewPostInitialDate(undefined); setNewPostOpen(true); }}>
             <Plus className="size-4" />
             {activeTab === "drafts" ? "New Draft" : "New Post"}
           </Button>

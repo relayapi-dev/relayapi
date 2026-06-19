@@ -1,5 +1,5 @@
 ---
-import Layout from "../../layouts/Layout.astro";
+import BaseLayout from "../../layouts/BaseLayout.astro";
 import SEO from "../../components/SEO.astro";
 import { InvitationPage } from "../../components/invitation/invitation-page";
 
@@ -14,7 +14,7 @@ const user = u
   : null;
 ---
 
-<Layout>
+<BaseLayout>
   <SEO slot="head" title="Team Invitation" noIndex={true} />
   <InvitationPage client:load invitationId={id!} user={user} />
-</Layout>
+</BaseLayout>

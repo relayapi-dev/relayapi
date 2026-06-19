@@ -163,7 +163,7 @@ export function MediaPage({
         docsHref="https://docs.relayapi.dev/api-reference/media"
         action={
           activeTab === "library" ? (
-            <Button onClick={() => setUploadOpen(true)}>
+            <Button size="sm" onClick={() => setUploadOpen(true)}>
               <Upload className="size-4" />
               Upload
             </Button>

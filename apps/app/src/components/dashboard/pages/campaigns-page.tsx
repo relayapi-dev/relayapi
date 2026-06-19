@@ -169,12 +169,12 @@ export function CampaignsPage({
         docsHref="https://docs.relayapi.dev/api-reference/campaigns"
         action={
           activeTab === "broadcasts" ? (
-            <Button onClick={() => setBroadcastDialogOpen(true)}>
+            <Button size="sm" onClick={() => setBroadcastDialogOpen(true)}>
               <Plus className="size-4" />
               Create Broadcast
             </Button>
           ) : (
-            <Button onClick={() => setAutoPostDialogOpen(true)}>
+            <Button size="sm" onClick={() => setAutoPostDialogOpen(true)}>
               <Plus className="size-4" />
               Create Rule
             </Button>

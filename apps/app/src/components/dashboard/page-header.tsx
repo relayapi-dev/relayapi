@@ -20,7 +20,16 @@ export function PageHeader({
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-start justify-between gap-4", className)}>
+    // min-h-8 reserves a constant header height (matches 32px controls/sm buttons)
+    // so a header without an action stays the same height as one with an action,
+    // preventing layout shift of content below when the action is absent/conditional.
+    <div
+      className={cn(
+        "flex min-h-8 justify-between gap-4",
+        subtitle ? "items-start" : "items-center",
+        className,
+      )}
+    >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <h1 className="text-[22px] font-semibold leading-none tracking-[-0.01em]">

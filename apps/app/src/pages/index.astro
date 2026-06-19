@@ -11,10 +11,10 @@ import OpenSource from "../components/landing/OpenSource.astro";
 import PricingBand from "../components/landing/PricingBand.astro";
 import TestimonialWall from "../components/landing/TestimonialWall.astro";
 import TrustStrip from "../components/landing/TrustStrip.astro";
-import LandingLayout from "../layouts/LandingLayout.astro";
+import Layout from "../layouts/Layout.astro";
 ---
 
-<LandingLayout
+<Layout
 	description="The agent-native way to post everywhere. One API, twenty-one platforms, zero glue code between you and your audience."
 >
 	<link slot="head" rel="preload" as="image" href="/hero.png" />
@@ -31,4 +31,4 @@ import LandingLayout from "../layouts/LandingLayout.astro";
 	<OpenSource />
 	<BlogHighlights />
 	<FinalCTA />
-</LandingLayout>
+</Layout>

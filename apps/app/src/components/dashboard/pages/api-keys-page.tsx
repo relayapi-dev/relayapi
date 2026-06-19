@@ -145,6 +145,7 @@ export function ApiKeysPage() {
         docsHref="https://docs.relayapi.dev/api-reference/api-keys"
         action={
           <Button
+            size="sm"
             onClick={() => { setShowCreate(true); setCreatedKey(null); resetForm(); }}
           >
             <Plus className="size-4" />

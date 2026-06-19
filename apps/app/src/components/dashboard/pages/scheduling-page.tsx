@@ -83,7 +83,7 @@ export function SchedulingPage({
         title="Scheduling"
         docsHref="https://docs.relayapi.dev/api-reference/queue"
         action={
-          <Button onClick={() => setCreateOpen(true)}>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" />
             Create Schedule
           </Button>

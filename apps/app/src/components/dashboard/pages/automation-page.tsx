@@ -380,7 +380,7 @@ export function AutomationPage() {
 								Clear
 							</button>
 						)}
-						<Button onClick={() => openDialog()}>
+						<Button size="sm" onClick={() => openDialog()}>
 							<Plus className="size-4" />
 							New automation
 						</Button>

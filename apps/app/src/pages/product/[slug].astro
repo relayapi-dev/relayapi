@@ -1,5 +1,5 @@
 ---
-import Layout from "../../layouts/Layout.astro";
+import BaseLayout from "../../layouts/BaseLayout.astro";
 import SEO from "../../components/SEO.astro";
 import { PlatformPage } from "../../components/pages/platform-page";
 import { ApiPage } from "../../components/pages/api-page";
@@ -21,7 +21,7 @@ const description = platform ? platform.heroDescription : data.heroDescription;
 const pageType = platform ? "platform" : "api";
 ---
 
-<Layout>
+<BaseLayout>
   <SEO
     slot="head"
     title={title}
@@ -34,4 +34,4 @@ const pageType = platform ? "platform" : "api";
   ) : (
     <ApiPage slug={slug!} client:load />
   )}
-</Layout>
+</BaseLayout>

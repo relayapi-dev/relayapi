@@ -111,7 +111,7 @@ export function UsersPage() {
       <PageHeader
         title="Users"
         action={
-          <Button onClick={() => setShowInvite(true)}>
+          <Button size="sm" onClick={() => setShowInvite(true)}>
             <Plus className="size-4" />
             Invite User
           </Button>

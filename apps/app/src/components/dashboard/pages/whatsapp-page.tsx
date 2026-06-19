@@ -132,7 +132,7 @@ export function WhatsAppPage({
         docsHref="https://docs.relayapi.dev/api-reference/whatsapp"
         action={
           activeTab === "broadcasts" ? (
-            <Button>
+            <Button size="sm">
               <Send className="size-4" />
               New Broadcast
             </Button>

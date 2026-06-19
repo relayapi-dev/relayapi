@@ -342,27 +342,27 @@ export function AdsPage({
         action={
           activeTab === "ads" ? (
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setBoostDialogOpen(true)}>
+              <Button variant="outline" size="sm" onClick={() => setBoostDialogOpen(true)}>
                 <Megaphone className="size-4" />
                 Boost Post
               </Button>
-              <Button onClick={() => setCreateAdOpen(true)}>
+              <Button size="sm" onClick={() => setCreateAdOpen(true)}>
                 <Plus className="size-4" />
                 Create Ad
               </Button>
             </div>
           ) : activeTab === "campaigns" ? (
-            <Button onClick={() => setCreateCampaignOpen(true)}>
+            <Button size="sm" onClick={() => setCreateCampaignOpen(true)}>
               <Plus className="size-4" />
               Create Campaign
             </Button>
           ) : activeTab === "audiences" ? (
-            <Button onClick={() => setCreateAudienceOpen(true)}>
+            <Button size="sm" onClick={() => setCreateAudienceOpen(true)}>
               <Plus className="size-4" />
               Create Audience
             </Button>
           ) : activeTab === "accounts" ? (
-            <Button onClick={() => setDiscoverOpen(true)}>
+            <Button size="sm" onClick={() => setDiscoverOpen(true)}>
               <Search className="size-4" />
               Discover Ad Accounts
             </Button>

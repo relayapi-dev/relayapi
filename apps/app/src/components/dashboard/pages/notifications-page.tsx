@@ -117,7 +117,7 @@ export function NotificationsPage() {
       <PageHeader
         title="Notifications"
         action={
-          <Button variant="outline" onClick={handleMarkAllRead}>
+          <Button variant="outline" size="sm" onClick={handleMarkAllRead}>
             Mark all as read
           </Button>
         }

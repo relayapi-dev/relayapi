@@ -458,7 +458,7 @@ export function TemplatesPage() {
           <div className="flex items-center gap-2">
             <WorkspaceFilterButton />
             <AccountFilterButton />
-            <Button onClick={handleNewTemplate}>
+            <Button size="sm" onClick={handleNewTemplate}>
               <Plus className="size-4" />
               New Template
             </Button>

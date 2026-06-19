@@ -45,7 +45,7 @@ export function UsagePage() {
 				title="Usage"
 				docsHref="https://docs.relayapi.dev/"
 				action={
-					<Button variant="outline" asChild>
+					<Button variant="outline" size="sm" asChild>
 						<a href="/app/billing">
 							Manage plan <ArrowUpRight className="size-4" />
 						</a>
