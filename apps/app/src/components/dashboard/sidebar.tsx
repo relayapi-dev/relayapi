@@ -9,6 +9,7 @@ import {
 	ChevronRight,
 	Code2,
 	Flame,
+	Gem,
 	House,
 	Inbox,
 	Link2,
@@ -582,7 +583,7 @@ export function Sidebar({
 											"Personal"}
 									</span>
 									{plan === "pro" && (
-										<Sparkles
+										<Gem
 											className="size-3 shrink-0 text-foreground"
 											strokeWidth={1.8}
 											aria-label={
