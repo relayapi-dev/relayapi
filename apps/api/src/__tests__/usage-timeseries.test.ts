@@ -18,6 +18,7 @@ import {
 } from "@relayapi/db";
 import { Hono } from "hono";
 import usageApp from "../routes/usage";
+import type { Env, Variables } from "../types";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -83,7 +84,7 @@ async function teardownFixture() {
 }
 
 function makeApp() {
-	const app = new Hono();
+	const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 	// Stand in for the auth + db-context middleware the real stack runs first.
 	app.use("*", async (c, next) => {
 		c.set("orgId", orgId);

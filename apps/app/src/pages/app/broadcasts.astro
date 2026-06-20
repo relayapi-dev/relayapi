@@ -1,6 +1,6 @@
 ---
 const url = new URL(Astro.request.url);
-url.pathname = "/app/posts";
+url.pathname = "/app/campaigns";
 url.searchParams.set("tab", "broadcasts");
 return Astro.redirect(`${url.pathname}${url.search}`);
 ---

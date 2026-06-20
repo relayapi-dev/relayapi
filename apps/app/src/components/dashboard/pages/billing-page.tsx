@@ -149,8 +149,14 @@ export function BillingPage() {
   if (loading || billingLoading) {
     return (
       <div className="space-y-5 pb-16">
-        <div className="h-7 w-44 rounded bg-muted animate-pulse" />
+        {/* Real header — needs no data, so it renders identically to the loaded state */}
+        <PageHeader title="Billing & Invoices" />
         <div className="rounded-[12px] border border-border bg-card p-5 space-y-4">
+          {/* Static "Current Plan" header matches the loaded card */}
+          <h2 className="text-[13px] font-medium flex items-center gap-2 text-muted-foreground">
+            <Zap className="size-3.5" />
+            Current Plan
+          </h2>
           <div className="flex items-center justify-between">
             <div className="space-y-2">
               <div className="h-4 w-24 rounded bg-muted animate-pulse" />

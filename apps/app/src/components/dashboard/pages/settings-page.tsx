@@ -556,7 +556,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
       {/* Organization Profile */}
       <div
-        className="rounded-[12px] border border-border bg-card overflow-hidden"
+        className="rounded-sm border border-border bg-card overflow-hidden"
       >
         <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
@@ -723,7 +723,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
       {/* Notifications */}
       <div
-        className="rounded-[12px] border border-border bg-card overflow-hidden"
+        className="rounded-sm border border-border bg-card overflow-hidden"
       >
         <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
@@ -819,7 +819,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
       {/* Short Links */}
       <div
-        className="rounded-[12px] border border-border bg-card overflow-hidden"
+        className="rounded-sm border border-border bg-card overflow-hidden"
       >
         <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
@@ -1031,7 +1031,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
       {/* Signatures */}
       <div
-        className="rounded-[12px] border border-border bg-card overflow-hidden"
+        className="rounded-sm border border-border bg-card overflow-hidden"
       >
         <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
@@ -1186,7 +1186,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
       {/* Organization Settings */}
       <div
-        className="rounded-[12px] border border-border bg-card overflow-hidden"
+        className="rounded-sm border border-border bg-card overflow-hidden"
       >
         <div className="px-5 py-4 border-b border-border bg-muted/40">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
@@ -1235,7 +1235,7 @@ export function SettingsPage({ initialTab = "general" }: SettingsPageProps = {})
 
       {/* Danger Zone */}
       <div
-        className="rounded-[12px] border border-destructive/30 bg-card overflow-hidden"
+        className="rounded-sm border border-destructive/30 bg-card overflow-hidden"
       >
         <div className="px-5 py-4 border-b border-destructive/30 bg-destructive/5">
           <h2 className="text-[13px] font-medium text-destructive flex items-center gap-2">

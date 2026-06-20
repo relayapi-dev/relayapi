@@ -294,6 +294,11 @@ export interface AccountListResponse {
    * Cursor for next page
    */
   next_cursor: string | null;
+
+  /**
+   * Total accounts matching the filters
+   */
+  total: number;
 }
 
 export namespace AccountListResponse {

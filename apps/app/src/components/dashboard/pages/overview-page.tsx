@@ -77,18 +77,30 @@ interface IntegrationAccount {
 	avatar_url?: string | null;
 }
 
+// Fixed card height shared by Connections + API key so the row stays balanced
+// regardless of how many accounts are connected.
+const CARD_H = "md:h-[300px]";
+// Max avatar tiles rendered in the connections grid before collapsing the rest
+// into a single "+N" overflow tile (N can be in the thousands).
+const CONN_CAP = 18;
+
 function AccountAvatar({ acc }: { acc: IntegrationAccount }) {
+	const title = `${acc.display_name || acc.username || "Account"} · ${platformLabel(acc.platform)}`;
 	if (acc.avatar_url) {
 		return (
 			<img
 				src={acc.avatar_url}
 				alt={acc.display_name || acc.username || acc.platform || "account"}
-				className="size-8 shrink-0 rounded-md object-cover"
+				title={title}
+				className="size-10 shrink-0 rounded-md object-cover ring-1 ring-border"
 			/>
 		);
 	}
 	return (
-		<div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-secondary text-[12px] font-semibold text-muted-foreground">
+		<div
+			title={title}
+			className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-secondary text-[13px] font-semibold text-muted-foreground"
+		>
 			{(acc.display_name || acc.username || acc.platform || "?")
 				.charAt(0)
 				.toUpperCase()}
@@ -97,15 +109,22 @@ function AccountAvatar({ acc }: { acc: IntegrationAccount }) {
 }
 
 function ConnectionsCard() {
-	const { data } = useApi<{ data: IntegrationAccount[]; has_more?: boolean }>(
-		"accounts?limit=5",
-	);
+	const { data, loading } = useApi<{
+		data: IntegrationAccount[];
+		total?: number;
+		has_more?: boolean;
+	}>(`accounts?limit=${CONN_CAP}`);
+
 	const accounts = data?.data ?? [];
-	const shown = accounts.slice(0, 4);
-	const hasMore = accounts.length > shown.length || !!data?.has_more;
+	const total = data?.total ?? accounts.length;
+	const showOverflow = total > CONN_CAP;
+	// Reserve the last cell for the "+N" tile only when overflowing.
+	const visibleCount = showOverflow ? CONN_CAP - 1 : Math.min(total, CONN_CAP);
+	const visible = accounts.slice(0, visibleCount);
+	const overflow = Math.max(0, total - visible.length);
 
 	return (
-		<div className={card("flex flex-col")}>
+		<div className={card(`flex flex-col ${CARD_H}`)}>
 			<div className="flex items-center justify-between">
 				<h3 className="text-[17px] font-semibold">Connections</h3>
 				<a
@@ -116,7 +135,16 @@ function ConnectionsCard() {
 				</a>
 			</div>
 
-			{accounts.length === 0 ? (
+			{loading && !data ? (
+				<div className="mt-4 flex min-h-0 flex-1 flex-wrap content-start gap-2 overflow-hidden">
+					{Array.from({ length: 12 }, (_, i) => (
+						<div
+							key={i}
+							className="size-10 animate-pulse rounded-md bg-muted"
+						/>
+					))}
+				</div>
+			) : total === 0 ? (
 				<>
 					<p className="mt-3 text-[14.5px] leading-normal text-muted-foreground">
 						Link a social channel to start publishing and listening across
@@ -132,26 +160,23 @@ function ConnectionsCard() {
 				</>
 			) : (
 				<>
-					<div className="mt-4 flex flex-col gap-3.5">
-						{shown.map((acc) => (
-							<div key={acc.id} className="flex items-center gap-3">
-								<AccountAvatar acc={acc} />
-								<div className="min-w-0 flex-1">
-									<div className="truncate text-[14px] font-medium">
-										{acc.display_name || acc.username || "Account"}
-									</div>
-									<div className="truncate text-[13px] text-muted-foreground">
-										{platformLabel(acc.platform)}
-										{acc.username ? ` · @${acc.username}` : ""}
-									</div>
-								</div>
-							</div>
+					<div className="mt-4 flex min-h-0 flex-1 flex-wrap content-start gap-2 overflow-hidden">
+						{visible.map((acc) => (
+							<AccountAvatar key={acc.id} acc={acc} />
 						))}
+						{showOverflow ? (
+							<a
+								href="/app/connections"
+								title="View all connections"
+								className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+							>
+								+{formatNumber(overflow)}
+							</a>
+						) : null}
 					</div>
-					<div className="mt-auto flex items-center justify-between pt-[22px]">
+					<div className="mt-auto flex items-center justify-between pt-4">
 						<span className="text-[13px] text-muted-foreground">
-							{shown.length}
-							{hasMore ? "+" : ""} connected
+							{formatNumber(total)} connected
 						</span>
 						<Button variant="outline" size="sm" asChild>
 							<a href="/app/connections">
@@ -226,7 +251,7 @@ function ApiKeyCard() {
 	const display = revealed && key ? key : MASKED_KEY;
 
 	return (
-		<div className={card("flex flex-col")}>
+		<div className={card(`flex flex-col ${CARD_H}`)}>
 			<div className="flex items-center justify-between">
 				<h3 className="text-[17px] font-semibold">API key</h3>
 				<a
@@ -238,7 +263,18 @@ function ApiKeyCard() {
 			</div>
 
 			{loading ? (
-				<div className="mt-5 h-10 animate-pulse rounded-md bg-muted" />
+				// Mirrors the loaded layout: description near the top, the key control
+				// pinned to the bottom via mt-auto, so the card height stays stable.
+				<>
+					<div className="mt-3 space-y-1.5">
+						<div className="h-3.5 w-full animate-pulse rounded bg-muted" />
+						<div className="h-3.5 w-3/5 animate-pulse rounded bg-muted" />
+					</div>
+					<div className="mt-auto pt-[22px]">
+						<div className="h-[38px] w-full animate-pulse rounded-md bg-muted" />
+						<div className="mt-3 h-4 w-40 animate-pulse rounded bg-muted" />
+					</div>
+				</>
 			) : !hasKey ? (
 				<>
 					<p className="mt-3 text-[14.5px] leading-normal text-muted-foreground">
@@ -669,9 +705,21 @@ function ActivityCard() {
 			<h3 className="text-[17px] font-semibold">Recent activity</h3>
 
 			{loading && items.length === 0 ? (
-				<div className="mt-4 space-y-3">
-					{[0, 1, 2].map((i) => (
-						<div key={i} className="h-10 animate-pulse rounded-md bg-muted" />
+				<div className="mt-3 flex flex-col">
+					{[0, 1, 2, 3, 4].map((i) => (
+						<div
+							key={i}
+							className={`flex items-start gap-3.5 py-3 ${
+								i ? "border-t border-border" : ""
+							}`}
+						>
+							<div className="size-8 shrink-0 animate-pulse rounded-full bg-muted" />
+							<div className="min-w-0 flex-1 space-y-1.5">
+								<div className="h-3.5 w-40 animate-pulse rounded bg-muted" />
+								<div className="h-3 w-24 animate-pulse rounded bg-muted" />
+							</div>
+							<div className="h-3 w-10 shrink-0 animate-pulse rounded bg-muted" />
+						</div>
 					))}
 				</div>
 			) : items.length === 0 ? (

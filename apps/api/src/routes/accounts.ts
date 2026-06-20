@@ -1,6 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { socialAccounts, socialAccountSyncState, workspaces } from "@relayapi/db";
-import { and, desc, eq, isNull, gt, or, ilike, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, isNull, gt, or, ilike, inArray, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { getOwnedAccount } from "../lib/accounts";
 import {
@@ -430,12 +430,14 @@ app.openapi(listAccounts, async (c) => {
 	const { limit, cursor, workspace_id, ungrouped, search, platforms } = c.req.valid("query");
 	const db = c.get("db");
 
-	const conditions = [eq(socialAccounts.organizationId, orgId)];
-	applyWorkspaceScope(c, conditions, socialAccounts.workspaceId);
+	// Filters shared by the page query and the total count (everything except
+	// the keyset cursor, which only bounds the current page).
+	const baseConditions = [eq(socialAccounts.organizationId, orgId)];
+	applyWorkspaceScope(c, baseConditions, socialAccounts.workspaceId);
 	if (workspace_id) {
-		conditions.push(eq(socialAccounts.workspaceId, workspace_id));
+		baseConditions.push(eq(socialAccounts.workspaceId, workspace_id));
 	} else if (ungrouped) {
-		conditions.push(isNull(socialAccounts.workspaceId));
+		baseConditions.push(isNull(socialAccounts.workspaceId));
 	}
 	if (search) {
 		const searchCondition = or(
@@ -443,15 +445,17 @@ app.openapi(listAccounts, async (c) => {
 			ilike(socialAccounts.username, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
 		);
 		if (searchCondition) {
-			conditions.push(searchCondition);
+			baseConditions.push(searchCondition);
 		}
 	}
 	if (platforms) {
 		const platformList = platforms.split(",").map((p) => p.trim()).filter(Boolean) as (typeof socialAccounts.platform.enumValues)[number][];
 		if (platformList.length > 0) {
-			conditions.push(inArray(socialAccounts.platform, platformList));
+			baseConditions.push(inArray(socialAccounts.platform, platformList));
 		}
 	}
+
+	const conditions = [...baseConditions];
 	// Keyset pagination on the actual sort key (connected_at, id). The cursor is
 	// the id of the last row from the previous page; resolve its connected_at in
 	// SQL so equal timestamps are tie-broken deterministically by id.
@@ -461,26 +465,33 @@ app.openapi(listAccounts, async (c) => {
 		);
 	}
 
-	const accounts = await db
-		.select({
-			id: socialAccounts.id,
-			platform: socialAccounts.platform,
-			platformAccountId: socialAccounts.platformAccountId,
-			username: socialAccounts.username,
-			displayName: socialAccounts.displayName,
-			avatarUrl: socialAccounts.avatarUrl,
-			metadata: socialAccounts.metadata,
-			workspaceId: socialAccounts.workspaceId,
-			connectedAt: socialAccounts.connectedAt,
-			updatedAt: socialAccounts.updatedAt,
-			workspaceName: workspaces.name,
-		})
-		.from(socialAccounts)
-		.leftJoin(workspaces, eq(socialAccounts.workspaceId, workspaces.id))
-		.where(and(...conditions))
-		.orderBy(desc(socialAccounts.connectedAt), desc(socialAccounts.id))
-		.limit(limit + 1);
+	const [accounts, countRows] = await Promise.all([
+		db
+			.select({
+				id: socialAccounts.id,
+				platform: socialAccounts.platform,
+				platformAccountId: socialAccounts.platformAccountId,
+				username: socialAccounts.username,
+				displayName: socialAccounts.displayName,
+				avatarUrl: socialAccounts.avatarUrl,
+				metadata: socialAccounts.metadata,
+				workspaceId: socialAccounts.workspaceId,
+				connectedAt: socialAccounts.connectedAt,
+				updatedAt: socialAccounts.updatedAt,
+				workspaceName: workspaces.name,
+			})
+			.from(socialAccounts)
+			.leftJoin(workspaces, eq(socialAccounts.workspaceId, workspaces.id))
+			.where(and(...conditions))
+			.orderBy(desc(socialAccounts.connectedAt), desc(socialAccounts.id))
+			.limit(limit + 1),
+		db
+			.select({ total: count() })
+			.from(socialAccounts)
+			.where(and(...baseConditions)),
+	]);
 
+	const total = countRows[0]?.total ?? 0;
 	const hasMore = accounts.length > limit;
 	const data = accounts.slice(0, limit);
 
@@ -500,6 +511,7 @@ app.openapi(listAccounts, async (c) => {
 			})),
 			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
 			has_more: hasMore,
+			total,
 		},
 		200,
 	);

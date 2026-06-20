@@ -30,8 +30,6 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-	Background,
-	BackgroundVariant,
 	Handle,
 	MarkerType,
 	Panel,
@@ -2035,7 +2033,7 @@ function CanvasInner({
 	return (
 		<div
 			ref={wrapperRef}
-			className="relative h-full min-w-0 flex-1 bg-[#f5f6fa]"
+			className="relative h-full min-w-0 flex-1 bg-[#f9f9f8]"
 		>
 			<ReactFlow
 				nodes={nodes}
@@ -2077,12 +2075,6 @@ function CanvasInner({
 				maxZoom={1.8}
 				className="bg-transparent"
 			>
-				<Background
-					variant={BackgroundVariant.Dots}
-					gap={24}
-					size={1.2}
-					color="#dfe2ea"
-				/>
 				<CanvasControls
 					onAutoArrange={readOnly ? undefined : handleAutoArrange}
 				/>

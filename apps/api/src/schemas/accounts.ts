@@ -17,7 +17,9 @@ export const AccountResponse = z.object({
 	updated_at: z.string().datetime(),
 });
 
-export const AccountListResponse = paginatedResponse(AccountResponse);
+export const AccountListResponse = paginatedResponse(AccountResponse).extend({
+	total: z.number().describe("Total accounts matching the filters"),
+});
 
 const SyncStatus = z.object({
 	enabled: z.boolean(),

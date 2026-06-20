@@ -343,7 +343,7 @@ export function BindingDetailPanel({
 		<div
 			className={cn(
 				PANEL_WIDTH_CLS,
-				"flex h-full flex-col overflow-hidden border-l border-[#e6e9ef] bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.03)]",
+				"m-3 flex flex-col overflow-hidden rounded-[22px] border border-[#e6e9ef] bg-white shadow-[0_12px_40px_rgba(15,23,42,0.10)]",
 			)}
 		>
 			<div className="flex shrink-0 items-center justify-between border-b border-[#e6e9ef] bg-[#eef2ff] px-4 py-4">

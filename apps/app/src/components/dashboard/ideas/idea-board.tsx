@@ -43,8 +43,9 @@ interface IdeaBoardProps {
 function IdeaCardSkeleton() {
 	return (
 		<div className="rounded-[12px] border border-border bg-card p-3">
-			<div className="h-3 w-4/5 rounded bg-muted animate-pulse" />
-			<div className="h-3 w-2/5 rounded bg-muted animate-pulse mt-2" />
+			{/* title (text-sm) + content preview (text-xs, mt-1) — matches IdeaCard */}
+			<div className="h-3.5 w-4/5 rounded bg-muted animate-pulse" />
+			<div className="h-3 w-2/5 rounded bg-muted animate-pulse mt-1.5" />
 		</div>
 	);
 }

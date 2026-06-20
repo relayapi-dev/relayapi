@@ -11,7 +11,20 @@
 // Props were slimmed down to only the fields the panel actually uses — the
 // detail page no longer needs to synthesize a legacy `AutomationDetail`.
 
-import { ChevronLeft, Trash2 } from "lucide-react";
+import {
+	Clock3,
+	CornerDownRight,
+	GitBranch,
+	Globe,
+	MessageSquare,
+	Play,
+	Settings2,
+	Shuffle,
+	StopCircle,
+	Trash2,
+	X,
+	Zap,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -68,6 +81,19 @@ function titleize(value: string): string {
 		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
 		.join(" ");
 }
+
+const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+	message: MessageSquare,
+	action_group: Zap,
+	delay: Clock3,
+	condition: GitBranch,
+	randomizer: Shuffle,
+	input: Play,
+	http_request: Globe,
+	start_automation: CornerDownRight,
+	goto: CornerDownRight,
+	end: StopCircle,
+};
 
 function panelHeaderTone(nodeKind: string) {
 	if (nodeKind === "message") {
@@ -142,7 +168,7 @@ export function PropertyPanel({
 			<div
 				className={cn(
 					PANEL_WIDTH_CLS,
-					"flex items-center justify-center border-l border-[#e6e9ef] bg-white p-8",
+					"m-3 flex items-center justify-center rounded-[22px] border border-[#e6e9ef] bg-white p-8 shadow-[0_12px_40px_rgba(15,23,42,0.10)]",
 				)}
 			>
 				<p className="text-sm text-[#7e8695] text-center">
@@ -173,11 +199,12 @@ export function PropertyPanel({
 		<div
 			className={cn(
 				PANEL_WIDTH_CLS,
-				"flex flex-col overflow-hidden border-l border-[#e6e9ef] bg-white shadow-[-12px_0_32px_rgba(15,23,42,0.03)]",
+				"m-3 flex flex-col overflow-hidden rounded-[22px] border border-[#e6e9ef] bg-white shadow-[0_12px_40px_rgba(15,23,42,0.10)]",
 			)}
 		>
 			<PanelHeader
 				headerTone={headerTone}
+				kind={node.kind}
 				title={title}
 				description={description}
 				onClose={onClose}
@@ -226,33 +253,44 @@ export function PropertyPanel({
 
 function PanelHeader({
 	headerTone,
+	kind,
 	title,
 	description,
 	onClose,
 }: {
 	headerTone: ReturnType<typeof panelHeaderTone>;
+	kind: string;
 	title: string;
 	description: string;
 	onClose: () => void;
 }) {
+	const Icon = KIND_ICON[kind] ?? Settings2;
 	return (
-		<div className={cn("border-b border-[#e6e9ef] px-4 py-4", headerTone.bar)}>
-			<div className="flex items-center gap-3">
-				<button
-					type="button"
-					onClick={onClose}
-					className="rounded-full p-1 text-[#6f7786] transition hover:bg-white/70 hover:text-[#353a44]"
-					aria-label="Close editor"
-				>
-					<ChevronLeft className="size-4" />
-				</button>
-				<div className="min-w-0 flex-1">
-					<h3 className="truncate text-[18px] font-semibold text-[#353a44]">
-						{title}
-					</h3>
-					<p className="mt-1 text-[12px] text-[#6f7786]">{description}</p>
-				</div>
+		<div className="flex items-center gap-3 border-b border-[#eef0f4] px-5 py-4">
+			<div
+				className={cn(
+					"flex size-9 shrink-0 items-center justify-center rounded-full",
+					headerTone.iconBg,
+				)}
+			>
+				<Icon className={cn("size-[18px]", headerTone.badge)} />
 			</div>
+			<div className="min-w-0 flex-1">
+				<h3 className="truncate text-[16px] font-semibold leading-5 text-[#353a44]">
+					{title}
+				</h3>
+				<p className="mt-0.5 truncate text-[12px] leading-4 text-[#8b92a0]">
+					{description}
+				</p>
+			</div>
+			<button
+				type="button"
+				onClick={onClose}
+				className="shrink-0 rounded-full p-1.5 text-[#9aa1ad] transition hover:bg-[#f1f2f5] hover:text-[#353a44]"
+				aria-label="Close editor"
+			>
+				<X className="size-4" />
+			</button>
 		</div>
 	);
 }

@@ -91,7 +91,7 @@ export function TagsSettings() {
 
 	return (
 		<motion.div variants={fadeUp}>
-			<div className="rounded-md border border-border overflow-hidden">
+			<div className="rounded-sm border border-border overflow-hidden">
 				<div className="px-4 py-3 border-b border-border bg-accent/10 flex items-center justify-between">
 					<div>
 						<h2 className="text-sm font-medium">Tags</h2>

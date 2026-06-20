@@ -170,7 +170,7 @@ export function SimulatorPanel({
 		setExpanded((prev) => ({ ...prev, [idx]: !prev[idx] }));
 
 	return (
-		<div className="w-80 border-l border-border bg-card/30 flex flex-col overflow-hidden">
+		<div className="m-3 w-80 rounded-[22px] border border-border bg-card flex flex-col overflow-hidden shadow-[0_12px_40px_rgba(15,23,42,0.10)]">
 			<div className="px-3 py-2 border-b border-border flex items-center justify-between">
 				<div>
 					<h3 className="text-xs font-medium">Simulator</h3>
