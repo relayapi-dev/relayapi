@@ -10,7 +10,7 @@ import {
 } from "./auth-shell";
 
 const INPUT =
-	"h-11 w-full rounded-[12px] border border-[#1a1815]/12 bg-white text-sm text-[#1a1815] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[#9a968c] focus:border-[#1a1815]/35 focus:ring-[3px] focus:ring-[#1a1815]/10";
+	"h-11 w-full rounded-[12px] border border-[#1a1815]/12 bg-white text-base text-[#1a1815] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[#9a968c] focus:border-[#1a1815]/35 focus:ring-[3px] focus:ring-[#1a1815]/10";
 
 export function LoginForm() {
 	const [email, setEmail] = useState("");
@@ -125,7 +125,7 @@ export function LoginForm() {
 							placeholder="Your email address"
 							required
 							autoComplete="email"
-							className={`${INPUT} px-3.5 text-lg`}
+							className={`${INPUT} px-3.5`}
 						/>
 					</div>
 
@@ -145,7 +145,7 @@ export function LoginForm() {
 								placeholder="Enter your password"
 								required
 								autoComplete="current-password"
-								className={`${INPUT} pl-3.5 pr-10 text-lg`}
+								className={`${INPUT} pl-3.5 pr-10`}
 							/>
 							<button
 								type="button"

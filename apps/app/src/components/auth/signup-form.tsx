@@ -12,7 +12,7 @@ import {
 const SIGNUP_ENABLED = false;
 
 const INPUT =
-	"h-11 w-full rounded-[12px] border border-[#1a1815]/12 bg-white text-sm text-[#1a1815] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[#9a968c] focus:border-[#1a1815]/35 focus:ring-[3px] focus:ring-[#1a1815]/10";
+	"h-11 w-full rounded-[12px] border border-[#1a1815]/12 bg-white text-base text-[#1a1815] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[#9a968c] focus:border-[#1a1815]/35 focus:ring-[3px] focus:ring-[#1a1815]/10";
 
 const fade = {
 	initial: { opacity: 0, y: 12 },
@@ -169,7 +169,7 @@ export function SignupForm() {
 							placeholder="Your name"
 							required
 							autoComplete="name"
-							className={`${INPUT} px-3.5 text-lg`}
+							className={`${INPUT} px-3.5`}
 						/>
 					</div>
 
@@ -188,7 +188,7 @@ export function SignupForm() {
 							placeholder="you@example.com"
 							required
 							autoComplete="email"
-							className={`${INPUT} px-3.5 text-lg`}
+							className={`${INPUT} px-3.5`}
 						/>
 					</div>
 
