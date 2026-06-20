@@ -118,7 +118,13 @@ export function PostsPage({
   initialTab = "all",
   initialViewMode = "calendar",
 }: PostsPageProps = {}) {
-  const [isMobile, setIsMobile] = useState(false);
+  // `null` until measured on the client. The viewport can't be known during
+  // SSR, so starting at `false` would make the first paint pick the desktop
+  // calendar and then swap to the list once the effect runs — the flash this
+  // page used to show on mobile. Holding `null` lets us render a neutral
+  // spinner for that first frame instead (and SSR + first client render agree,
+  // so there's no hydration mismatch).
+  const [isMobile, setIsMobile] = useState<boolean | null>(null);
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 767px)");
     setIsMobile(mq.matches);
@@ -170,7 +176,7 @@ export function PostsPage({
   // actually shown. In calendar view CalendarView fetches its own data via
   // useCalendarPosts, so gating these hooks on the rendered view avoids a
   // wasted full proxy round trip on the default (calendar) load.
-  const listRendered = viewMode === "list" || isMobile;
+  const listRendered = viewMode === "list" || isMobile === true;
 
   // Queue tab: scheduled + failed + publishing posts
   const queueQuery: Record<string, string | undefined> = { ...filterQuery, status: "scheduled", include: "targets,media" };
@@ -462,7 +468,7 @@ export function PostsPage({
     setNewPostOpen(true);
   };
 
-  const isWeekCalendar = viewMode === "calendar" && calendarPeriod === "week" && !isMobile;
+  const isWeekCalendar = viewMode === "calendar" && calendarPeriod === "week" && isMobile === false;
 
   return (
     <div className={cn("space-y-5", isWeekCalendar ? "pb-4" : "pb-16")}>
@@ -614,8 +620,16 @@ export function PostsPage({
         </div>
       )}
 
+      {/* First client paint hasn't measured the viewport yet. Only the
+          calendar default is ambiguous — list mode renders immediately — so
+          hold a neutral spinner here instead of flashing the desktop calendar
+          on mobile before the effect swaps it for the list. */}
+      {isMobile === null &&
+        viewMode === "calendar" &&
+        (activeTab === "all" || activeTab === "queue") && <PostsSectionFallback />}
+
       {/* All tab — list view (always on mobile, or when list mode selected) */}
-      {activeTab === "all" && (viewMode === "list" || isMobile) && (
+      {activeTab === "all" && (viewMode === "list" || isMobile === true) && (
         <>
           {/* Non-published posts (publishing/scheduled/failed/partial) use QueuePostList for status badges */}
           {allPosts
@@ -647,7 +661,7 @@ export function PostsPage({
       )}
 
       {/* Calendar view (All tab) — desktop only */}
-      {viewMode === "calendar" && !isMobile && activeTab === "all" && (
+      {viewMode === "calendar" && isMobile === false && activeTab === "all" && (
         <Suspense fallback={<PostsSectionFallback />}>
           <CalendarView
             statusFilter="All"
@@ -667,7 +681,7 @@ export function PostsPage({
       )}
 
       {/* Calendar view (Queue tab) — desktop only */}
-      {viewMode === "calendar" && !isMobile && activeTab === "queue" && (
+      {viewMode === "calendar" && isMobile === false && activeTab === "queue" && (
         <WorkspaceGuard>
           <Suspense fallback={<PostsSectionFallback />}>
             <CalendarView
@@ -689,7 +703,7 @@ export function PostsPage({
       )}
 
       {/* Queue tab — list view (always on mobile, or when list mode selected) */}
-      {(viewMode === "list" || isMobile) && activeTab === "queue" && (
+      {(viewMode === "list" || isMobile === true) && activeTab === "queue" && (
         <QueuePostList
           posts={allQueuePosts}
           loading={queueLoading}

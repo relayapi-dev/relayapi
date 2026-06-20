@@ -227,8 +227,9 @@ export function LogsPage({
               onChange={(v) => switchTab(v)}
               options={tabs.map(({ key, label, icon: Icon }) => ({
                 value: key,
-                label,
+                label: <span className="hidden sm:inline">{label}</span>,
                 icon: <Icon />,
+                title: label,
               }))}
             />
           }

@@ -351,7 +351,7 @@ export function AutomationPage() {
 				title="Automations"
 				docsHref="https://docs.relayapi.dev/guides/automations"
 				action={
-					<div className="flex items-center gap-2">
+					<div className="flex flex-col-reverse items-end gap-2 sm:flex-row sm:items-center">
 						<label
 							htmlFor="automation-template-filter"
 							className="hidden text-xs text-muted-foreground sm:inline"

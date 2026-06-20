@@ -242,9 +242,9 @@ function CommentsListView({
   }, []);
 
   return (
-    // -mx-5 sm:mx-0 cancels the dashboard shell's mobile side gutter (px-5) so
-    // the cards run edge-to-edge on phones; each card keeps its own p-4 inset.
-    <div className="pb-16 -mx-5 sm:mx-0">
+    // Keep the dashboard shell's side gutter so the comment cards stay inset
+    // from the screen edges on mobile (each card also keeps its own p-4).
+    <div className="pb-16">
       <div
         ref={containerRef}
         className="space-y-3"

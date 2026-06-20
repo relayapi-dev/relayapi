@@ -111,7 +111,10 @@ export function PostDetailPanel({
   const platformLabel = platformLabels[normalizedPlatform] || post.platform;
 
   return (
-    <div ref={panelRef} className="p-4 space-y-4">
+    // No padding on mobile — the dashboard shell's px-5 gutter (and the mobile
+    // wrapper's spacing) already inset the panel. md:p-4 restores the inset on
+    // desktop, where the panel sits flush inside the bordered split-view card.
+    <div ref={panelRef} className="space-y-4 md:p-4">
       <div className="rounded-lg border border-border overflow-hidden bg-card">
         {/* Post header */}
         <div className="flex items-center gap-2.5 px-3.5 py-2.5">
