@@ -33,7 +33,10 @@ export function ConversationList({
 }) {
   return (
     <div className="flex h-full flex-col bg-card">
-      <ScrollArea className="flex-1">
+      <ScrollArea
+        className="flex-1"
+        viewportProps={{ className: "[&>div]:!block [&>div]:min-h-full" }}
+      >
         {loading ? (
           <div className="flex h-full items-center justify-center py-12">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />

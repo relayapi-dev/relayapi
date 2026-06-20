@@ -176,9 +176,11 @@ export function DashboardShell({
 									</div>
 								</main>
 							</div>
-							<Suspense fallback={null}>
-								<FeedbackWidget />
-							</Suspense>
+							{currentPage !== "inbox-messages" && (
+								<Suspense fallback={null}>
+									<FeedbackWidget />
+								</Suspense>
+							)}
 							<Suspense fallback={null}>
 								<StreakToastContainer />
 							</Suspense>

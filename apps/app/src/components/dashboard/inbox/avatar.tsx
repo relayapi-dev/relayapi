@@ -17,7 +17,7 @@ export function Avatar({
   fallback,
 }: {
   src?: string | null;
-  name: string;
+  name?: string | null;
   /** Size/shape classes applied to both the image and the letter fallback (e.g. "size-10"). */
   className?: string;
   /** Extra classes for the letter fallback only (e.g. "text-sm", "bg-white"). */
@@ -33,7 +33,7 @@ export function Avatar({
 
   if (!src || failed) {
     if (fallback !== undefined) return <>{fallback}</>;
-    const letter = (name.trim().charAt(0) || "?").toUpperCase();
+    const letter = (name?.trim().charAt(0) || "?").toUpperCase();
     return (
       <div
         className={cn(
@@ -50,7 +50,7 @@ export function Avatar({
   return (
     <img
       src={src}
-      alt={name}
+      alt={name ?? ""}
       onError={() => setFailed(true)}
       className={cn(
         "rounded-full border border-[#e5e7eb] object-cover",

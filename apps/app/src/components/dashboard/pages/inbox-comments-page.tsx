@@ -32,13 +32,12 @@ export function InboxCommentsPage({
 } = {}) {
   const filterQuery = useFilterQuery();
   const [viewMode, setViewMode] = useState<"list" | "by-post">(initialViewMode);
-
-  const switchView = (view: "list" | "by-post") => {
-    setViewMode(view);
-    const url = new URL(window.location.href);
-    url.searchParams.set("view", view);
-    window.history.replaceState({}, "", url.toString());
-  };
+  // True while a view switch is in flight. The two views consume different data
+  // shapes (PostWithComments[] vs InboxComment[]) from the same paginated hook,
+  // which keeps serving the previous view's data until the new fetch resolves.
+  // Gating on this prevents rendering one view against the other's stale data
+  // (e.g. a comment row whose author_name is undefined) during the swap.
+  const [switching, setSwitching] = useState(false);
 
   const { usage } = useUsage();
   const isPro = usage?.plan === "pro";
@@ -58,6 +57,24 @@ export function InboxCommentsPage({
     isPro ? endpoint : null,
     { query: filterQuery },
   );
+
+  const switchView = (view: "list" | "by-post") => {
+    if (view === viewMode) return;
+    setViewMode(view);
+    setSwitching(true);
+    // Drop the previous view's items so the new endpoint can't be rendered with
+    // the wrong shape — even on the error path, where the hook keeps stale data.
+    setItems([]);
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", view);
+    window.history.replaceState({}, "", url.toString());
+  };
+
+  // Once the new view's fetch starts, the hook's own `loading` flag covers the
+  // swap (and resolves with matching-shape data), so the gate can lift.
+  useEffect(() => {
+    if (loading) setSwitching(false);
+  }, [loading]);
 
   const getItemId = useCallback((item: InboxComment | PostWithComments) =>
     viewMode === "by-post" ? `${item.id}-${item.account_id}` : item.id,
@@ -148,7 +165,7 @@ export function InboxCommentsPage({
         </div>
       )}
 
-      {loading ? (
+      {loading || switching ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>

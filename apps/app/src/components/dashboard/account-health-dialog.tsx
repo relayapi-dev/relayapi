@@ -81,7 +81,7 @@ export function AccountHealthDialog({ account, onOpenChange }: AccountHealthDial
 
   return (
     <Dialog open={!!account} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md grid-rows-[auto_1fr_auto]">
+      <DialogContent className="sm:max-w-3xl grid-rows-[auto_1fr_auto]">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className="relative shrink-0">
@@ -209,10 +209,64 @@ function HealthContent({
   const tone = TONES[overall.tone];
   const HeroIcon = overall.tone === "ok" ? CheckCircle2 : overall.tone === "warn" ? Clock : AlertTriangle;
 
+  const tokenSection = (
+    <Section icon={Key} title="Access token">
+      {expiresAt === null ? (
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-2xl font-semibold leading-none text-emerald-600">Never</span>
+          <span className="text-sm text-muted-foreground">expires</span>
+        </div>
+      ) : isExpired ? (
+        <>
+          <div className="text-2xl font-semibold leading-none text-destructive">Expired</div>
+          <Row className="mt-3" label="Expired on" value={formatDate(expiresAt)} />
+        </>
+      ) : (
+        <>
+          <div className="flex items-baseline gap-1.5">
+            <span className={cn("text-2xl font-semibold leading-none tabular-nums", tokenColor)}>{days}</span>
+            <span className="text-sm text-muted-foreground">day{days === 1 ? "" : "s"} remaining</span>
+          </div>
+          <Row className="mt-3" label="Expires on" value={formatDate(expiresAt)} />
+        </>
+      )}
+    </Section>
+  );
+
+  const permissionsSection = hasScopes ? (
+    <Section icon={Shield} title="Permissions">
+      <div className="flex flex-wrap gap-2">
+        <CapabilityBadge label="Can post" enabled={canPost} />
+        {expected.analytics.length > 0 && <CapabilityBadge label="Analytics" enabled={canAnalytics} />}
+      </div>
+      {(granted.posting.length > 0 || granted.analytics.length > 0 || granted.optional.length > 0) && (
+        <div className="mt-3 space-y-2.5">
+          {granted.posting.length > 0 && (
+            <ScopeGroup label="Required for posting" scopes={granted.posting} grantedScopes={data.scopes} />
+          )}
+          {granted.analytics.length > 0 && (
+            <ScopeGroup label="For analytics" scopes={granted.analytics} grantedScopes={data.scopes} />
+          )}
+          {granted.optional.length > 0 && (
+            <ScopeGroup label="Optional" scopes={granted.optional} grantedScopes={data.scopes} />
+          )}
+        </div>
+      )}
+    </Section>
+  ) : null;
+
+  const syncSection = data.sync ? (
+    <SyncSection sync={data.sync} accountId={accountId} refetch={refetch} />
+  ) : null;
+
+  // Two-column split only when there is enough to fill both sides; otherwise a
+  // single column avoids leaving an empty half at the wider dialog size.
+  const twoColumn = !!permissionsSection && !!syncSection;
+
   return (
     <div className="space-y-3">
-      {/* Status hero */}
-      <div className={cn("flex items-start gap-3 rounded-lg border p-3.5", tone.hero)}>
+      {/* Status hero — spans full width above the columns */}
+      <div className={cn("flex items-start gap-3 rounded-lg border p-4", tone.hero)}>
         <div className={cn("flex size-9 shrink-0 items-center justify-center rounded-full", tone.iconWrap)}>
           <HeroIcon className={cn("size-5", tone.icon)} />
         </div>
@@ -222,51 +276,21 @@ function HealthContent({
         </div>
       </div>
 
-      {/* Access token */}
-      <Section icon={Key} title="Access token">
-        {expiresAt === null ? (
-          <div className="text-lg font-semibold text-emerald-600">Never expires</div>
-        ) : isExpired ? (
-          <>
-            <div className="text-lg font-semibold text-destructive">Expired</div>
-            <Row className="mt-3" label="Expired on" value={formatDate(expiresAt)} />
-          </>
-        ) : (
-          <>
-            <div className="flex items-baseline gap-1.5">
-              <span className={cn("text-2xl font-semibold leading-none tabular-nums", tokenColor)}>{days}</span>
-              <span className="text-sm text-muted-foreground">day{days === 1 ? "" : "s"} remaining</span>
-            </div>
-            <Row className="mt-3" label="Expires on" value={formatDate(expiresAt)} />
-          </>
-        )}
-      </Section>
-
-      {/* Permissions */}
-      {hasScopes && (
-        <Section icon={Shield} title="Permissions">
-          <div className="flex flex-wrap gap-2">
-            <CapabilityBadge label="Can post" enabled={canPost} />
-            {expected.analytics.length > 0 && <CapabilityBadge label="Analytics" enabled={canAnalytics} />}
+      {twoColumn ? (
+        <div className="grid items-start gap-3 sm:grid-cols-2">
+          <div className="space-y-3">
+            {tokenSection}
+            {syncSection}
           </div>
-          {(granted.posting.length > 0 || granted.analytics.length > 0 || granted.optional.length > 0) && (
-            <div className="mt-3 space-y-2.5">
-              {granted.posting.length > 0 && (
-                <ScopeGroup label="Required for posting" scopes={granted.posting} grantedScopes={data.scopes} />
-              )}
-              {granted.analytics.length > 0 && (
-                <ScopeGroup label="For analytics" scopes={granted.analytics} grantedScopes={data.scopes} />
-              )}
-              {granted.optional.length > 0 && (
-                <ScopeGroup label="Optional" scopes={granted.optional} grantedScopes={data.scopes} />
-              )}
-            </div>
-          )}
-        </Section>
+          <div className="space-y-3">{permissionsSection}</div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {tokenSection}
+          {permissionsSection}
+          {syncSection}
+        </div>
       )}
-
-      {/* Post sync */}
-      {data.sync && <SyncSection sync={data.sync} accountId={accountId} refetch={refetch} />}
     </div>
   );
 }
