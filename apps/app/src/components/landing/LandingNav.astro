@@ -1,15 +1,40 @@
 ---
+import { apis } from "../../lib/api-data";
+import { platforms } from "../../lib/platform-data";
+import { apiIconPaths, platformGlyph } from "../../lib/product-glyphs";
 import Container from "./Container.astro";
 import { LANDING_LINKS } from "./data";
+
+/**
+ * Fixed top bar — sizing modeled on cursor.com's header (52px tall, solid bar,
+ * pill buttons), on RelayAPI's cream/ink palette. "Product" and "Platforms" open
+ * mega-menu panels (driven by the script below: hover + click + keyboard +
+ * outside-click, with a hover-intent close delay). On ≤860px the centre links
+ * collapse into a hamburger menu. The bar shares the page canvas (bg-landing-page).
+ */
+
+// Short taglines for the Product mega menu (heroDescription is too long here).
+const API_TAGLINES: Record<string, string> = {
+	"posting-api": "Publish to 21 platforms in one call",
+	"media-api": "Upload once — auto-formatted per platform",
+	"analytics-api": "Cross-platform metrics in one call",
+	"webhooks-api": "Real-time delivery notifications",
+};
+
+const navLink =
+	"text-[14px] text-[#3a3833]! transition-colors duration-150 hover:text-landing-ink!";
+const trigger =
+	"group flex items-center gap-1 text-[14px] text-[#3a3833] transition-colors duration-150 hover:text-landing-ink data-[open=true]:text-landing-ink";
+const chevron =
+	"size-3 transition-transform duration-200 group-data-[open=true]:rotate-180";
+const panelWrap =
+	"invisible absolute left-1/2 top-full z-[70] -translate-x-1/2 -translate-y-1 pt-2 opacity-0 transition-[opacity,transform,visibility] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] data-[open=true]:visible data-[open=true]:translate-y-0 data-[open=true]:opacity-100";
+const panelCard =
+	"overflow-hidden rounded-[16px] border border-landing-ink/[0.08] bg-[#fbfaf6] shadow-[0_28px_70px_-30px_rgba(40,28,12,0.5)]";
 ---
 
-{
-	/* Fixed top bar — sizing/structure modeled on cursor.com's header
-    (52px tall, solid bar, pill buttons, 7.5px action gap), mapped onto
-    RelayAPI's cream/ink palette. The spacer keeps the hero from sliding
-    under the fixed bar. */
-}
 <header
+	data-nav
 	class="fixed left-0 top-0 z-[60] flex h-[52px] w-full items-center bg-landing-page"
 >
 	<Container
@@ -17,11 +42,7 @@ import { LANDING_LINKS } from "./data";
 		class="relative flex items-center justify-between gap-4 max-[400px]:px-[0.875rem]"
 	>
 		<a href="/" class="flex shrink-0 items-center gap-2.5">
-			<svg
-				width="25"
-				height="25"
-				viewBox="0 0 150 150"
-				class="fill-landing-ink"
+			<svg width="25" height="25" viewBox="0 0 150 150" class="fill-landing-ink"
 				><path
 					fill-rule="evenodd"
 					d="M34.82,18.54C16.52,18.54,1.49,33.56,1.49,51.87s15.02,33.33,33.33,33.33h80.69c6.95,0,12.28,5.33,12.28,12.28s-5.33,12.28-12.28,12.28H33.07c-5.77-.01-10.52,4.74-10.52,10.51s4.76,10.52,10.52,10.52h82.44c18.31,0,33.33-15.02,33.33-33.33s-15.02-33.33-33.33-33.33H34.82c-6.95,0-12.28-5.33-12.28-12.28s5.33-12.28,12.28-12.28h82.45c5.77.01,10.52-4.74,10.52-10.51s-4.76-10.52-10.52-10.52H34.82Z"
@@ -32,40 +53,66 @@ import { LANDING_LINKS } from "./data";
 				>RELAYAPI</span
 			>
 		</a>
+
 		<div
 			class="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-[clamp(14px,2vw,28px)] max-[860px]:hidden"
 		>
-			<a
-				href="#"
-				class="text-[14px] text-[#3a3833]! transition-colors duration-150 hover:text-landing-ink!"
-				>Product</a
+			<button
+				type="button"
+				data-menu-trigger="product"
+				aria-haspopup="true"
+				aria-expanded="false"
+				class={trigger}
 			>
-			<a
-				href="#"
-				class="text-[14px] text-[#3a3833]! transition-colors duration-150 hover:text-landing-ink!"
-				>Platforms</a
+				Product
+				<svg
+					class={chevron}
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg
+				>
+			</button>
+			<button
+				type="button"
+				data-menu-trigger="platforms"
+				aria-haspopup="true"
+				aria-expanded="false"
+				class={trigger}
 			>
-			<a
-				href={LANDING_LINKS.pricing}
-				class="text-[14px] text-[#3a3833]! transition-colors duration-150 hover:text-landing-ink!"
-				>Pricing</a
-			>
+				Platforms
+				<svg
+					class={chevron}
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg
+				>
+			</button>
+			<a href={LANDING_LINKS.pricing} class={navLink}>Pricing</a>
 			<a
 				href={LANDING_LINKS.docs}
-				class="text-[14px] text-[#3a3833]! transition-colors duration-150 hover:text-landing-ink!"
+				class={navLink}
 				target="_blank"
 				rel="noopener noreferrer">Docs</a
 			>
 		</div>
+
 		<div class="flex shrink-0 items-center gap-2 max-[400px]:gap-1.5">
 			<a
 				href={LANDING_LINKS.login}
-				class="px-2 py-1.5 text-[14px] text-[#3a3833]! transition-colors duration-150 hover:text-landing-ink! max-[560px]:hidden"
+				class="px-2 py-1.5 text-[14px] text-[#3a3833]! transition-colors duration-150 hover:text-landing-ink! max-[860px]:hidden"
 				>Sign in</a
 			>
 			<a
 				href={LANDING_LINKS.github}
-				class="whitespace-nowrap rounded-full border border-landing-ink/[0.18] bg-transparent px-3.5 py-[7px] text-[14px] leading-none text-landing-ink! transition-[background-color,border-color,opacity] duration-150 hover:border-landing-ink/30 hover:bg-landing-ink/[0.04]"
+				class="whitespace-nowrap rounded-full border border-landing-ink/[0.18] bg-transparent px-3.5 py-[7px] text-[14px] leading-none text-landing-ink! transition-[background-color,border-color,opacity] duration-150 hover:border-landing-ink/30 hover:bg-landing-ink/[0.04] max-[860px]:hidden"
 				target="_blank"
 				rel="noopener noreferrer">GitHub</a
 			>
@@ -74,7 +121,278 @@ import { LANDING_LINKS } from "./data";
 				class="whitespace-nowrap rounded-full border border-landing-ink bg-landing-ink px-3.5 py-[7px] text-[14px] font-medium leading-none text-[#f3f1ea]! transition-[background-color,border-color,opacity] duration-150 hover:bg-landing-ink hover:opacity-[0.88]"
 				>Get started</a
 			>
+			<button
+				type="button"
+				data-burger
+				aria-label="Open menu"
+				aria-expanded="false"
+				class="hidden size-9 items-center justify-center rounded-full border border-landing-ink/[0.18] text-landing-ink transition-colors hover:bg-landing-ink/[0.04] max-[860px]:flex"
+			>
+				<svg
+					class="size-[18px]"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					aria-hidden="true"
+				>
+					<path d="M3 6h18M3 12h18M3 18h18"></path>
+				</svg>
+			</button>
 		</div>
 	</Container>
+
+	{/* ===== PRODUCT mega panel (APIs) ===== */}
+	<div data-menu-panel="product" class:list={[panelWrap, "max-[860px]:hidden"]}>
+		<div class:list={[panelCard, "w-[34rem]"]}>
+			<div class="grid grid-cols-2 gap-1 p-2">
+				{
+					apis.map((a) => (
+						<a
+							href={`/product/${a.slug}`}
+							class="flex items-start gap-3 rounded-[12px] p-3 transition-colors duration-150 hover:bg-landing-ink/[0.05]"
+						>
+							<span class="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-landing-ink/[0.05] text-landing-ink [&>svg]:size-[18px]">
+								<svg
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									aria-hidden="true"
+								>
+									{apiIconPaths(a.slug).map((d) => (
+										<path d={d} />
+									))}
+								</svg>
+							</span>
+							<span class="flex flex-col gap-0.5">
+								<span class="text-[14px] font-medium text-landing-ink">
+									{a.name}
+								</span>
+								<span class="text-[12.5px] leading-snug text-[#6e6a62]">
+									{API_TAGLINES[a.slug]}
+								</span>
+							</span>
+						</a>
+					))
+				}
+			</div>
+			<a
+				href={LANDING_LINKS.docs}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="flex items-center justify-between border-t border-landing-ink/[0.08] bg-landing-ink/[0.02] px-5 py-3 text-[13px] font-medium text-landing-ink! transition-colors hover:bg-landing-ink/[0.05]"
+			>
+				Browse the full API reference
+				<span aria-hidden="true">→</span>
+			</a>
+		</div>
+	</div>
+
+	{/* ===== PLATFORMS mega panel ===== */}
+	<div data-menu-panel="platforms" class:list={[panelWrap, "max-[860px]:hidden"]}>
+		<div class:list={[panelCard, "w-[42rem]"]}>
+			<div class="p-3">
+				<p
+					class="px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[#9a968c]"
+				>
+					Publish to 21 platforms
+				</p>
+				<div class="grid grid-cols-4 gap-0.5">
+					{
+						platforms.map((p) => (
+							<a
+								href={`/product/${p.slug}`}
+								class="flex items-center gap-2.5 rounded-[10px] px-2.5 py-2 transition-colors duration-150 hover:bg-landing-ink/[0.05]"
+							>
+								<svg
+									viewBox="0 0 24 24"
+									fill="currentColor"
+									class="size-[18px] shrink-0 text-landing-ink"
+									aria-hidden="true"
+								>
+									<path d={platformGlyph(p.slug)} />
+								</svg>
+								<span class="truncate text-[13px] text-[#46443d]">{p.name}</span>
+							</a>
+						))
+					}
+				</div>
+			</div>
+			<a
+				href={LANDING_LINKS.pricing}
+				class="flex items-center justify-between border-t border-landing-ink/[0.08] bg-landing-ink/[0.02] px-5 py-3 text-[13px] font-medium text-landing-ink! transition-colors hover:bg-landing-ink/[0.05]"
+			>
+				One price for every platform — see pricing
+				<span aria-hidden="true">→</span>
+			</a>
+		</div>
+	</div>
+
+	{/* ===== MOBILE menu ===== */}
+	<div
+		data-mobile-menu
+		data-open="false"
+		class="invisible absolute left-0 right-0 top-full max-h-[calc(100vh-52px)] -translate-y-1 overflow-y-auto border-b border-landing-ink/10 bg-landing-page px-5 pb-8 pt-4 opacity-0 transition-[opacity,transform,visibility] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] data-[open=true]:visible data-[open=true]:translate-y-0 data-[open=true]:opacity-100 min-[861px]:hidden"
+	>
+		<p
+			class="px-1 pb-2 pt-1 text-[11px] font-medium uppercase tracking-[0.14em] text-[#9a968c]"
+		>
+			Product
+		</p>
+		<div class="flex flex-col">
+			{
+				apis.map((a) => (
+					<a
+						href={`/product/${a.slug}`}
+						class="flex items-center gap-3 rounded-[10px] px-1 py-2.5 text-[15px] text-landing-ink! transition-colors hover:bg-landing-ink/[0.04]"
+					>
+						<svg
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							class="size-[18px] shrink-0 text-[#6e6a62]"
+							aria-hidden="true"
+						>
+							{apiIconPaths(a.slug).map((d) => (
+								<path d={d} />
+							))}
+						</svg>
+						{a.name}
+					</a>
+				))
+			}
+		</div>
+
+		<p
+			class="px-1 pb-2 pt-5 text-[11px] font-medium uppercase tracking-[0.14em] text-[#9a968c]"
+		>
+			Platforms
+		</p>
+		<div class="grid grid-cols-2 gap-0.5">
+			{
+				platforms.map((p) => (
+					<a
+						href={`/product/${p.slug}`}
+						class="flex items-center gap-2.5 rounded-[10px] px-1 py-2 text-[14px] text-landing-ink! transition-colors hover:bg-landing-ink/[0.04]"
+					>
+						<svg
+							viewBox="0 0 24 24"
+							fill="currentColor"
+							class="size-4 shrink-0 text-landing-ink"
+							aria-hidden="true"
+						>
+							<path d={platformGlyph(p.slug)} />
+						</svg>
+						<span class="truncate">{p.name}</span>
+					</a>
+				))
+			}
+		</div>
+
+		<div class="mt-5 flex flex-col border-t border-landing-ink/10 pt-3">
+			<a
+				href={LANDING_LINKS.pricing}
+				class="rounded-[10px] px-1 py-2.5 text-[15px] font-medium text-landing-ink! transition-colors hover:bg-landing-ink/[0.04]"
+				>Pricing</a
+			>
+			<a
+				href={LANDING_LINKS.docs}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="rounded-[10px] px-1 py-2.5 text-[15px] font-medium text-landing-ink! transition-colors hover:bg-landing-ink/[0.04]"
+				>Docs</a
+			>
+			<a
+				href={LANDING_LINKS.login}
+				class="rounded-[10px] px-1 py-2.5 text-[15px] font-medium text-landing-ink! transition-colors hover:bg-landing-ink/[0.04]"
+				>Sign in</a
+			>
+			<a
+				href={LANDING_LINKS.github}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="rounded-[10px] px-1 py-2.5 text-[15px] font-medium text-landing-ink! transition-colors hover:bg-landing-ink/[0.04]"
+				>GitHub</a
+			>
+		</div>
+	</div>
 </header>
 <div class="h-[52px]" aria-hidden="true"></div>
+
+<script>
+	const header = document.querySelector<HTMLElement>("[data-nav]");
+	if (header) {
+		const triggers = Array.from(
+			header.querySelectorAll<HTMLElement>("[data-menu-trigger]"),
+		);
+		const panels = Array.from(
+			header.querySelectorAll<HTMLElement>("[data-menu-panel]"),
+		);
+		let closeTimer: ReturnType<typeof setTimeout> | undefined;
+
+		const setOpen = (name: string | null) => {
+			clearTimeout(closeTimer);
+			for (const t of triggers) {
+				const on = t.dataset.menuTrigger === name;
+				t.dataset.open = on ? "true" : "false";
+				t.setAttribute("aria-expanded", on ? "true" : "false");
+			}
+			for (const p of panels) {
+				p.dataset.open = p.dataset.menuPanel === name ? "true" : "false";
+			}
+		};
+		const scheduleClose = () => {
+			clearTimeout(closeTimer);
+			closeTimer = setTimeout(() => setOpen(null), 140);
+		};
+
+		for (const t of triggers) {
+			const name = t.dataset.menuTrigger ?? null;
+			t.addEventListener("mouseenter", () => setOpen(name));
+			t.addEventListener("focus", () => setOpen(name));
+			t.addEventListener("mouseleave", scheduleClose);
+			t.addEventListener("click", (e) => {
+				e.preventDefault();
+				setOpen(t.dataset.open === "true" ? null : name);
+			});
+		}
+		for (const p of panels) {
+			p.addEventListener("mouseenter", () => clearTimeout(closeTimer));
+			p.addEventListener("mouseleave", scheduleClose);
+		}
+
+		document.addEventListener("keydown", (e) => {
+			if (e.key === "Escape") setOpen(null);
+		});
+		document.addEventListener("click", (e) => {
+			if (!header.contains(e.target as Node)) setOpen(null);
+		});
+
+		// Mobile menu
+		const burger = header.querySelector<HTMLElement>("[data-burger]");
+		const mobile = header.querySelector<HTMLElement>("[data-mobile-menu]");
+		if (burger && mobile) {
+			const setMobile = (open: boolean) => {
+				mobile.dataset.open = open ? "true" : "false";
+				burger.setAttribute("aria-expanded", open ? "true" : "false");
+				burger.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+			};
+			burger.addEventListener("click", () =>
+				setMobile(mobile.dataset.open !== "true"),
+			);
+			for (const a of Array.from(mobile.querySelectorAll("a"))) {
+				a.addEventListener("click", () => setMobile(false));
+			}
+			document.addEventListener("keydown", (e) => {
+				if (e.key === "Escape") setMobile(false);
+			});
+		}
+	}
+</script>

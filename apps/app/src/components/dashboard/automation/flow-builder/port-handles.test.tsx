@@ -4,9 +4,8 @@
 // test runner is used across the builder tests. Until RTL lands, we exercise
 // the pure helpers (port style lookup + vertical spacing) directly instead of
 // rendering through React Flow. This still covers the behaviour the spec
-// calls out — role→color mapping, sub-role resolution for branch "true" /
-// "false", and even distribution of multi-output handles — without pulling
-// a DOM stack into the test runner.
+// calls out — the monochrome port style contract and even distribution of
+// multi-output handles — without pulling a DOM stack into the test runner.
 //
 // When RTL is added, a full render test should be added here that asserts
 // `<Handle>` counts, ids, and data-* attributes on a 3-output node.
@@ -17,89 +16,36 @@ import {
 	stylesForPort,
 } from "./port-handles";
 import { derivePorts } from "./derive-ports";
+import type { AutomationPort } from "./graph-types";
 
 describe("stylesForPort", () => {
-	it("uses green for condition true branch", () => {
-		const style = stylesForPort({
-			key: "true",
-			direction: "output",
-			role: "branch",
-		});
-		expect(style.dot).toContain("#1fa971");
+	// Monochrome by design: every role shares one neutral dot/chip treatment.
+	// The chip *label* (e.g. "True", "False", "Error") carries the meaning, so
+	// the canvas stays calm without a rainbow of port colours. These tests pin
+	// that contract — if a future variant reintroduces per-role colour cues,
+	// update them deliberately.
+	const ROLES: AutomationPort[] = [
+		{ key: "true", direction: "output", role: "branch" },
+		{ key: "false", direction: "output", role: "branch" },
+		{ key: "variant.a", direction: "output", role: "branch", label: "A" },
+		{ key: "error", direction: "output", role: "error" },
+		{ key: "invalid", direction: "output", role: "invalid" },
+		{ key: "success", direction: "output", role: "success" },
+		{ key: "button.cta", direction: "output", role: "interactive", label: "CTA" },
+		{ key: "timeout", direction: "output", role: "timeout" },
+		{ key: "skip", direction: "output", role: "skip" },
+		{ key: "next", direction: "output" },
+	];
+
+	it("uses one neutral grey dot treatment for every role", () => {
+		for (const port of ROLES) {
+			expect(stylesForPort(port).dot).toContain("#98a6bd");
+		}
 	});
 
-	it("uses red for condition false branch", () => {
-		const style = stylesForPort({
-			key: "false",
-			direction: "output",
-			role: "branch",
-		});
-		expect(style.dot).toContain("#d64545");
-	});
-
-	it("uses purple for non-true/false branch roles", () => {
-		const style = stylesForPort({
-			key: "variant.a",
-			direction: "output",
-			role: "branch",
-			label: "A",
-		});
-		expect(style.dot).toContain("#7c4dff");
-	});
-
-	it("maps error and invalid roles to red", () => {
-		expect(
-			stylesForPort({ key: "error", direction: "output", role: "error" }).dot,
-		).toContain("#d64545");
-		expect(
-			stylesForPort({
-				key: "invalid",
-				direction: "output",
-				role: "invalid",
-			}).dot,
-		).toContain("#d64545");
-	});
-
-	it("maps success role to green", () => {
-		const style = stylesForPort({
-			key: "success",
-			direction: "output",
-			role: "success",
-		});
-		expect(style.dot).toContain("#1fa971");
-	});
-
-	it("maps interactive role to blue", () => {
-		const style = stylesForPort({
-			key: "button.cta",
-			direction: "output",
-			role: "interactive",
-			label: "CTA",
-		});
-		expect(style.dot).toContain("#2f6bff");
-	});
-
-	it("maps timeout role to amber", () => {
-		const style = stylesForPort({
-			key: "timeout",
-			direction: "output",
-			role: "timeout",
-		});
-		expect(style.dot).toContain("#c78028");
-	});
-
-	it("maps skip role to neutral", () => {
-		const style = stylesForPort({
-			key: "skip",
-			direction: "output",
-			role: "skip",
-		});
-		expect(style.dot).toContain("#b7bdc9");
-	});
-
-	it("maps unknown role to neutral grey", () => {
-		const style = stylesForPort({ key: "next", direction: "output" });
-		expect(style.dot).toContain("#98a6bd");
+	it("is monochrome — all roles resolve to identical dot + chip styling", () => {
+		const styles = ROLES.map((port) => JSON.stringify(stylesForPort(port)));
+		expect(new Set(styles).size).toBe(1);
 	});
 });
 
@@ -128,7 +74,8 @@ describe("derivePorts x port-handles", () => {
 		expect(outputs.map((p) => p.key).sort()).toEqual(["false", "true"]);
 		const firstOutput = outputs[0];
 		if (!firstOutput) throw new Error("expected at least one output port");
-		expect(stylesForPort(firstOutput).dot).toMatch(/#1fa971|#d64545/);
+		// Branch ports share the same neutral dot as every other port.
+		expect(stylesForPort(firstOutput).dot).toContain("#98a6bd");
 	});
 
 	it("a message node with two branch buttons yields 3 output handles", () => {

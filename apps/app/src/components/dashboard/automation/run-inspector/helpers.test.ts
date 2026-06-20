@@ -48,27 +48,29 @@ describe("formatDuration", () => {
 });
 
 describe("statusColor", () => {
-	it("maps known statuses to distinct classes", () => {
-		const completed = statusColor("completed");
-		const active = statusColor("active");
-		const waiting = statusColor("waiting");
-		const failed = statusColor("failed");
-		const exited = statusColor("exited");
-
-		expect(completed).toContain("emerald");
-		expect(active).toContain("sky");
-		expect(waiting).toContain("amber");
-		expect(failed).toContain("destructive");
-		expect(exited).toContain("neutral");
-
-		// Ensure they are all distinct
-		const all = [completed, active, waiting, failed, exited];
-		expect(new Set(all).size).toBe(all.length);
+	// Monochrome by design — the status word carries the meaning. Red is the
+	// only retained hue so genuine failures still read as an alarm; every other
+	// status (known or not) shares one neutral pill.
+	it("uses a destructive pill for failure", () => {
+		expect(statusColor("failed")).toContain("destructive");
 	});
 
-	it("falls back to a muted variant for unknown statuses", () => {
-		expect(statusColor("weird")).toContain("muted-foreground");
-		expect(statusColor("")).toContain("muted-foreground");
+	it("uses one neutral pill for every non-failure status", () => {
+		const neutral = [
+			statusColor("completed"),
+			statusColor("active"),
+			statusColor("waiting"),
+			statusColor("exited"),
+			statusColor("weird"),
+			statusColor(""),
+		];
+
+		// All non-failure statuses collapse to the same neutral pill...
+		expect(new Set(neutral).size).toBe(1);
+		// ...and none borrow the destructive (failure) hue.
+		for (const cls of neutral) {
+			expect(cls).not.toContain("destructive");
+		}
 	});
 });
 
@@ -104,21 +106,38 @@ describe("outcomeIcon", () => {
 });
 
 describe("outcomeAccent", () => {
-	it("returns a green accent for success-ish outcomes", () => {
-		expect(outcomeAccent("advance")).toContain("emerald");
-		expect(outcomeAccent("success")).toContain("emerald");
-		expect(outcomeAccent("end")).toContain("emerald");
+	// Monochrome by design — only failure keeps a hue (destructive). Success,
+	// waiting, and skipped share neutral greys so the timeline stays calm.
+	it("uses one neutral accent for success-ish and waiting outcomes", () => {
+		const neutral = [
+			outcomeAccent("advance"),
+			outcomeAccent("success"),
+			outcomeAccent("end"),
+			outcomeAccent("waiting"),
+			outcomeAccent("wait_input"),
+			outcomeAccent("wait_delay"),
+		];
+		// They all collapse to the same neutral accent...
+		expect(new Set(neutral).size).toBe(1);
+		// ...with no leftover semantic hue.
+		for (const cls of neutral) {
+			expect(cls).not.toContain("destructive");
+			expect(cls).not.toContain("emerald");
+			expect(cls).not.toContain("amber");
+		}
 	});
-	it("returns an amber accent for waiting", () => {
-		expect(outcomeAccent("wait_input")).toContain("amber");
+	it("uses its own muted grey for skipped", () => {
+		const skipped = outcomeAccent("skipped");
+		expect(skipped).not.toContain("destructive");
+		expect(skipped).not.toContain("emerald");
+		// distinct (lighter) from the standard success/waiting neutral accent
+		expect(skipped).not.toBe(outcomeAccent("success"));
 	});
 	it("returns a destructive accent for failure", () => {
 		expect(outcomeAccent("failed")).toContain("destructive");
+		expect(outcomeAccent("error")).toContain("destructive");
 	});
-	it("returns a muted accent for skipped", () => {
-		expect(outcomeAccent("skipped")).toContain("muted");
-	});
-	it("returns a neutral accent for unknown outcomes", () => {
+	it("returns a neutral border accent for unknown outcomes", () => {
 		expect(outcomeAccent("huh")).toContain("border-border");
 	});
 });
