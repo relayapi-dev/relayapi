@@ -85,12 +85,36 @@ export interface ReviewTask {
 }
 
 export const reviewTasks: ReviewTask[] = [
-	{ title: "Launch announcement", time: "now", sub: "Done. Delivered to 21 platforms." },
-	{ title: "Weekly product digest", time: "now", sub: "All set! Scheduled for Monday 9 AM." },
-	{ title: "Reply to top mentions", time: "now", sub: "+12 · Drafted replies for review" },
-	{ title: "Instagram Reel · v2", time: "10m", sub: "Reformatted media for Reels + TikTok" },
-	{ title: "Set up auto-repost rule", time: "30m", sub: "Auto-repost Blog posts to LinkedIn" },
-	{ title: "Quarterly recap thread", time: "45m", sub: "Drafted 6-post thread for X" },
+	{
+		title: "Launch announcement",
+		time: "now",
+		sub: "Done. Delivered to 21 platforms.",
+	},
+	{
+		title: "Weekly product digest",
+		time: "now",
+		sub: "All set! Scheduled for Monday 9 AM.",
+	},
+	{
+		title: "Reply to top mentions",
+		time: "now",
+		sub: "+12 · Drafted replies for review",
+	},
+	{
+		title: "Instagram Reel · v2",
+		time: "10m",
+		sub: "Reformatted media for Reels + TikTok",
+	},
+	{
+		title: "Set up auto-repost rule",
+		time: "30m",
+		sub: "Auto-repost Blog posts to LinkedIn",
+	},
+	{
+		title: "Quarterly recap thread",
+		time: "45m",
+		sub: "Drafted 6-post thread for X",
+	},
 ];
 
 export interface PlatformLogo {
@@ -132,11 +156,36 @@ export interface ScheduleRow {
 }
 
 export const scheduleRows: ScheduleRow[] = [
-	{ name: "Twitter / X", path: PLATFORM_PATHS.x, status: "delivered", color: "#7FB88A" },
-	{ name: "LinkedIn", path: PLATFORM_PATHS.linkedin, status: "delivered", color: "#7FB88A" },
-	{ name: "Instagram", path: PLATFORM_PATHS.instagram, status: "publishing", color: "#D9A66B" },
-	{ name: "TikTok", path: PLATFORM_PATHS.tiktok, status: "queued · 12:00", color: "#8C887E" },
-	{ name: "YouTube", path: PLATFORM_PATHS.youtube, status: "queued · 14:00", color: "#8C887E" },
+	{
+		name: "Twitter / X",
+		path: PLATFORM_PATHS.x,
+		status: "delivered",
+		color: "#7FB88A",
+	},
+	{
+		name: "LinkedIn",
+		path: PLATFORM_PATHS.linkedin,
+		status: "delivered",
+		color: "#7FB88A",
+	},
+	{
+		name: "Instagram",
+		path: PLATFORM_PATHS.instagram,
+		status: "publishing",
+		color: "#D9A66B",
+	},
+	{
+		name: "TikTok",
+		path: PLATFORM_PATHS.tiktok,
+		status: "queued · 12:00",
+		color: "#8C887E",
+	},
+	{
+		name: "YouTube",
+		path: PLATFORM_PATHS.youtube,
+		status: "queued · 14:00",
+		color: "#8C887E",
+	},
 ];
 
 export interface Testimonial {
@@ -195,32 +244,25 @@ export const testimonials: Testimonial[] = [
 export interface FrontierCard {
 	title: string;
 	body: string;
+	/** Call-to-action label; the component supplies the href by position. */
 	link: string;
-	bg: string;
-	icon: string;
 }
 
 export const frontier: FrontierCard[] = [
 	{
 		title: "Every platform, one API",
 		body: "Consistent request format, unified error handling, and standardized responses across all 21 networks.",
-		link: "Explore platforms",
-		bg: "linear-gradient(160deg,#E4D8C2,#D2BC9A)",
-		icon: "M5 12h14M12 5v14",
+		link: "See all platforms",
 	},
 	{
 		title: "Complete media understanding",
 		body: "Upload once — images and video get auto-resized and reformatted to each platform's exact specs.",
 		link: "Media API docs",
-		bg: "linear-gradient(160deg,#DED7C7,#CCC2AD)",
-		icon: "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z",
 	},
 	{
 		title: "Build enduring integrations",
 		body: "Webhooks, analytics, and SDKs for TypeScript, Python, Go, and Java. Drop it into any stack.",
-		link: "Read the docs",
-		bg: "linear-gradient(160deg,#E2D2BA,#C8A883)",
-		icon: "M16 18l6-6-6-6M8 6l-6 6 6 6",
+		link: "Explore the SDKs",
 	},
 ];
 
@@ -228,32 +270,48 @@ export interface CompareRow {
 	name: string;
 	c50: string;
 	c500: string;
-	color: string;
 }
 
 export const compareRows: CompareRow[] = [
-	{ name: "RelayAPI", c50: "$10/mo", c500: "$145/mo", color: "#1A1815" },
-	{ name: "Per-account API", c50: "$779/mo", c500: "$2,624/mo", color: "#9A968C" },
-	{ name: "Usage-based API", c50: "$275/mo", c500: "$2,750/mo", color: "#9A968C" },
+	{ name: "RelayAPI", c50: "$10/mo", c500: "$145/mo" },
+	{ name: "Per-account API", c50: "$779/mo", c500: "$2,624/mo" },
+	{ name: "Usage-based API", c50: "$275/mo", c500: "$2,750/mo" },
 ];
 
 export interface ChangelogEntry {
 	date: string;
+	/** Feature area, shown as a monospace tag. */
+	tag: string;
 	title: string;
 }
 
 export const changelog: ChangelogEntry[] = [
-	{ date: "Jun 10, 2026", title: "Bluesky and Threads now support native video uploads" },
-	{ date: "Jun 4, 2026", title: "Custom webhooks, retry policies, and per-platform scheduling" },
-	{ date: "May 28, 2026", title: "Analytics API v2 — cross-platform engagement in one call" },
-	{ date: "May 14, 2026", title: "New Go and Java SDKs, plus a faster media pipeline" },
+	{
+		date: "Jun 10, 2026",
+		tag: "Platforms",
+		title: "Bluesky and Threads now support native video uploads",
+	},
+	{
+		date: "Jun 4, 2026",
+		tag: "Webhooks",
+		title: "Custom webhooks, retry policies, and per-platform scheduling",
+	},
+	{
+		date: "May 28, 2026",
+		tag: "Analytics",
+		title: "Analytics API v2 — cross-platform engagement in one call",
+	},
+	{
+		date: "May 14, 2026",
+		tag: "SDKs",
+		title: "New Go and Java SDKs, plus a faster media pipeline",
+	},
 ];
 
 export interface BlogPost {
 	tag: string;
 	title: string;
 	meta: string;
-	bg: string;
 }
 
 export const blog: BlogPost[] = [
@@ -261,25 +319,21 @@ export const blog: BlogPost[] = [
 		tag: "Product",
 		title: "Introducing RelayAPI v2",
 		meta: "Relay Team · 7 min read",
-		bg: "linear-gradient(160deg,#E4D8C2,#D2BC9A)",
 	},
 	{
 		tag: "Engineering",
 		title: "Delivering to 21 platforms in under 100ms",
 		meta: "Giulio Z. · 5 min read",
-		bg: "linear-gradient(160deg,#DED7C7,#CCC2AD)",
 	},
 	{
 		tag: "Guides",
 		title: "Posting from Claude with the OpenClaw skill",
 		meta: "Relay Team · 4 min read",
-		bg: "linear-gradient(160deg,#E2D2BA,#C8A883)",
 	},
 	{
 		tag: "Research",
 		title: "The hidden cost of per-account social APIs",
 		meta: "Relay Team · 6 min read",
-		bg: "linear-gradient(160deg,#E6DCC8,#D6C8AE)",
 	},
 ];
 
@@ -289,10 +343,24 @@ export interface FooterColumn {
 }
 
 export const footerCols: FooterColumn[] = [
-	{ title: "Product", links: ["Posting API", "Media API", "Analytics API", "Webhooks API", "Pricing"] },
-	{ title: "Platforms", links: ["Instagram", "X / Twitter", "LinkedIn", "TikTok", "All platforms"] },
-	{ title: "Resources", links: ["Documentation", "API Reference", "Changelog", "Login", "Sign up"] },
-	{ title: "Legal", links: ["Privacy Policy", "Terms of Service"] },
+	{
+		title: "Product",
+		links: [
+			"Posting API",
+			"Media API",
+			"Analytics API",
+			"Webhooks API",
+			"Pricing",
+		],
+	},
+	{
+		title: "Platforms",
+		links: ["Instagram", "X / Twitter", "LinkedIn", "TikTok", "All platforms"],
+	},
+	{
+		title: "Resources",
+		links: ["Documentation", "API Reference", "Changelog", "Login", "Sign up"],
+	},
 ];
 
 /** Shared external/internal link targets for the landing. */

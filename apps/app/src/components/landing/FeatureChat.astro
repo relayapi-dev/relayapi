@@ -14,10 +14,10 @@ import Feature from "./Feature.astro";
 	animation="drift"
 	panelFill
 >
-	<div class="grid h-full min-w-[480px] grid-cols-2 md:min-w-0">
-		<!-- chat pane -->
+	<div class="grid h-full grid-cols-1 sm:grid-cols-2">
+		<!-- chat pane — stacks above the doc pane on phones, sits beside it from sm up -->
 		<div
-			class="flex flex-col overflow-hidden border-r border-[rgba(26,24,21,0.06)] p-[18px]"
+			class="flex flex-col overflow-hidden border-b border-[rgba(26,24,21,0.06)] p-[18px] sm:border-r sm:border-b-0"
 		>
 			<div class="mb-3 text-[14px] font-medium">Plan launch campaign</div>
 			<div

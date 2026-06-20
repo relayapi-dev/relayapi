@@ -1,29 +1,46 @@
 ---
-import { changelog, LANDING_LINKS } from "./data";
 import Container from "./Container.astro";
+import { changelog, LANDING_LINKS } from "./data";
 ---
 
 <!-- ================= CHANGELOG ================= -->
-<Container as="section" class="py-12">
-  <h2 class="mb-7 text-[clamp(24px,2.4vw,34px)] font-medium tracking-[-0.03em]">Changelog</h2>
-  <div class="flex flex-col">
-    {changelog.map((c) => (
-      <a
-        href={LANDING_LINKS.changelog}
-        target="_blank"
-        rel="noopener noreferrer"
-        class="flex items-center gap-[22px] border-t border-landing-ink/[0.1] px-1 py-[19px] transition-opacity duration-150 hover:opacity-60"
-      >
-        <span class="w-[100px] shrink-0 text-[13px] text-[#9a968c] [font-family:var(--font-mono-landing)]">{c.date}</span>
-        <span class="flex-1 text-[16px] text-landing-ink">{c.title}</span>
-        <span class="text-[16px] text-[#9a968c]">→</span>
-      </a>
-    ))}
-  </div>
-  <a
-    href={LANDING_LINKS.changelog}
-    target="_blank"
-    rel="noopener noreferrer"
-    class="mt-[26px] inline-block text-[15px] font-medium text-landing-accent!"
-  >See what's new in RelayAPI →</a>
+<Container as="section" class="py-[clamp(3rem,6vw,4.5rem)]">
+	<h2
+		class="mb-7 text-[clamp(1.5rem,2.4vw,2.125rem)] font-medium tracking-[-0.03em] text-landing-ink"
+	>
+		Changelog
+	</h2>
+	<div data-reveal class="flex flex-col">
+		{
+			changelog.map((c) => (
+				<a
+					href={LANDING_LINKS.changelog}
+					target="_blank"
+					rel="noopener noreferrer"
+					class="group flex items-center gap-3 border-t border-landing-line py-[1.0625rem] sm:gap-5 sm:py-[1.1875rem]"
+				>
+					<span class="w-[5.5rem] shrink-0 text-[0.75rem] text-landing-muted [font-family:var(--font-mono-landing)] sm:w-[7rem] sm:text-[0.8125rem]">
+						{c.date}
+					</span>
+					<span class="hidden w-fit rounded-full border border-landing-line px-2.5 py-0.5 text-[0.6875rem] uppercase tracking-[0.06em] text-landing-muted [font-family:var(--font-mono-landing)] sm:inline-block">
+						{c.tag}
+					</span>
+					<span class="flex-1 text-[0.9375rem] text-landing-ink transition-colors duration-150 group-hover:text-landing-accent sm:text-[1rem]">
+						{c.title}
+					</span>
+					<span class="shrink-0 text-landing-muted transition-all duration-150 group-hover:translate-x-1 group-hover:text-landing-accent">
+						→
+					</span>
+				</a>
+			))
+		}
+	</div>
+	<a
+		href={LANDING_LINKS.changelog}
+		target="_blank"
+		rel="noopener noreferrer"
+		class="mt-7 inline-block text-[0.9375rem] font-medium text-landing-accent! transition-opacity duration-150 hover:opacity-70"
+	>
+		See what's new in RelayAPI →
+	</a>
 </Container>

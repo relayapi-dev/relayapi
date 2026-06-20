@@ -1,27 +1,51 @@
 ---
 import Container from "./Container.astro";
-import { LANDING_LINKS } from "./data";
+import { LANDING_LINKS, platformLogos } from "./data";
 ---
 
 <Container
 	as="section"
-	class="pt-[clamp(4rem,8vw,7rem)] pb-[clamp(2.5rem,5vw,4.1875rem)] text-left"
+	class="pt-[clamp(4rem,8vw,7rem)] pb-[clamp(2.5rem,5vw,4.1875rem)] text-center"
 >
 	<h1
-		class="m-0 mb-[22px] max-w-[26ch] text-balance text-[clamp(22px,1.9vw,26px)] font-normal leading-[1.25] tracking-[-0.0125em] text-[#1a1815]"
+		class="mx-auto mb-[clamp(1.5rem,3vw,2rem)] max-w-[20ch] text-balance text-[clamp(1.875rem,3.2vw,2.75rem)] font-medium leading-[1.15] tracking-[-0.02em] text-[#1a1815]"
 	>
 		The agent-native way to post everywhere.
 	</h1>
-	<div class="flex flex-wrap justify-start gap-[10px]">
+	<div class="flex flex-wrap justify-center gap-[0.625rem]">
 		<a
 			href={LANDING_LINKS.signup}
-			class="inline-flex items-center gap-2 rounded-full bg-[#1a1815] px-[22px] py-[12.5px] text-[16px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
-			>Get started <span class="text-[14px]">→</span></a
+			class="inline-flex items-center gap-2 rounded-full bg-[#1a1815] px-[1.375rem] py-[0.8125rem] text-[1rem] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
+			>Get started</a
 		>
 		<a
 			href={LANDING_LINKS.signup}
-			class="inline-flex items-center gap-2 rounded-full bg-[#e4e1d9] px-[22px] py-[12.5px] text-[16px] font-medium text-[#1a1815]! transition-colors duration-150 hover:bg-[#dbd7cc]"
-			>Request a demo <span class="text-[14px]">→</span></a
+			class="inline-flex items-center gap-2 rounded-full bg-[#e4e1d9] px-[1.375rem] py-[0.8125rem] text-[1rem] font-medium text-[#1a1815]! transition-colors duration-150 hover:bg-[#dbd7cc]"
+			>Request a demo</a
 		>
+	</div>
+
+	<!-- mini platform glyphs: an honest "post to all of these" trust signal -->
+	<div
+		aria-label="Publish to every supported platform"
+		class="mx-auto mt-[clamp(2rem,4vw,3rem)] flex max-w-[40rem] flex-wrap items-center justify-center gap-x-[1.25rem] gap-y-[0.75rem]"
+	>
+		{
+			platformLogos.map((p) => (
+				<span
+					title={p.name}
+					class="text-[#8c887e] transition-colors duration-200 hover:text-[#1a1815]"
+				>
+					<svg
+						viewBox="0 0 24 24"
+						fill="currentColor"
+						aria-hidden="true"
+						class="size-[1.125rem]"
+					>
+						<path d={p.glyph} />
+					</svg>
+				</span>
+			))
+		}
 	</div>
 </Container>

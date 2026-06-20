@@ -1,41 +1,106 @@
 ---
-import { compareRows, LANDING_LINKS } from "./data";
 import Container from "./Container.astro";
+import { compareRows, LANDING_LINKS } from "./data";
 ---
 
 <!-- ================= PRICING ================= -->
-<Container as="section" id="pricing" class="py-9">
-  <div
-    data-reveal
-    class="grid grid-cols-2 items-center gap-12 rounded-[1.875rem] bg-[#e9e7df] p-[clamp(32px,4.5vw,64px)]"
-  >
-    <div>
-      <h2 class="mb-3.5 text-[clamp(28px,3vw,44px)] font-medium tracking-[-0.03em] text-landing-ink">Priced to scale, not to gouge.</h2>
-      <p class="mb-[26px] max-w-[46ch] text-[17px] leading-[1.5] text-[#6e6a62]">Start free with 200 requests/month. Pro is $5/mo with 10,000 included — then $1 per 1,000 extra. Analytics and comments always included.</p>
-      <div class="flex gap-3">
-        <a href={LANDING_LINKS.signup} class="rounded-full bg-landing-ink px-6 py-3 text-[15px] font-medium text-[#f3f1ea]!">Start free</a>
-        <a href={LANDING_LINKS.pricing} class="rounded-full bg-[#e4e1d9] px-[22px] py-3 text-[15px] font-medium text-landing-ink!">Compare plans</a>
-      </div>
-    </div>
-    <div class="overflow-hidden rounded-[1.125rem] border border-landing-ink/[0.08] bg-[#fbfaf6]">
-      <table class="w-full border-collapse text-[14px]">
-        <thead>
-          <tr class="bg-[#f1efe8]">
-            <th class="px-[18px] py-[13px] text-left font-medium text-[#6e6a62]">Platform</th>
-            <th class="px-[18px] py-[13px] text-right font-medium text-[#6e6a62]">50 cust.</th>
-            <th class="px-[18px] py-[13px] text-right font-medium text-[#6e6a62]">500 cust.</th>
-          </tr>
-        </thead>
-        <tbody>
-          {compareRows.map((r) => (
-            <tr class="border-t border-landing-ink/[0.07]" style={`--row-color:${r.color}`}>
-              <td class="px-[18px] py-3.5 font-medium text-[var(--row-color)]">{r.name}</td>
-              <td class="px-[18px] py-3.5 text-right [font-family:var(--font-mono-landing)] text-[var(--row-color)]">{r.c50}</td>
-              <td class="px-[18px] py-3.5 text-right [font-family:var(--font-mono-landing)] text-[var(--row-color)]">{r.c500}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  </div>
+<Container as="section" id="pricing" class="py-[clamp(1.5rem,3vw,2.5rem)]">
+	<div
+		data-reveal
+		class="grid grid-cols-1 items-center gap-[clamp(2rem,4vw,3.5rem)] rounded-md bg-landing-card p-[clamp(2rem,4.5vw,4rem)] lg:grid-cols-2"
+	>
+		<div>
+			<h2
+				class="mb-4 text-[clamp(1.75rem,3vw,2.75rem)] font-medium tracking-[-0.03em] text-landing-ink"
+			>
+				Priced to scale, not to gouge.
+			</h2>
+			<p class="mb-7 max-w-[46ch] text-[1.0625rem] leading-[1.5] text-landing-muted">
+				Start free with 200 requests a month. Pro is $5/mo with 10,000
+				included — then $1 per 1,000 extra. Analytics and comments always
+				included.
+			</p>
+			<div class="flex flex-wrap gap-3">
+				<a
+					href={LANDING_LINKS.signup}
+					class="rounded-full bg-landing-ink px-6 py-3 text-[0.9375rem] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
+					>Start free</a
+				>
+				<a
+					href={LANDING_LINKS.pricing}
+					class="rounded-full bg-[#e4e1d9] px-[1.375rem] py-3 text-[0.9375rem] font-medium text-landing-ink! transition-colors duration-150 hover:bg-[#dbd7cc]"
+					>Compare plans</a
+				>
+			</div>
+		</div>
+
+		<div>
+			<div class="overflow-x-auto rounded-md border border-landing-line bg-landing-page">
+				<table class="w-full border-collapse text-[0.875rem]">
+					<thead>
+						<tr class="border-b border-landing-line text-landing-muted">
+							<th class="whitespace-nowrap px-3 py-3 text-left font-medium sm:px-[1.125rem]"
+								>Approach</th
+							>
+							<th class="whitespace-nowrap px-3 py-3 text-right font-medium sm:px-[1.125rem]"
+								>50 cust.</th
+							>
+							<th class="whitespace-nowrap px-3 py-3 text-right font-medium sm:px-[1.125rem]"
+								>500 cust.</th
+							>
+						</tr>
+					</thead>
+					<tbody>
+						{
+							compareRows.map((r, i) => {
+								const isUs = i === 0;
+								return (
+									<tr
+										class:list={[
+											"border-t border-landing-line",
+											isUs && "bg-landing-accent/8",
+										]}
+									>
+										<td
+											class:list={[
+												"whitespace-nowrap px-3 py-3.5 font-medium sm:px-[1.125rem]",
+												isUs
+													? "text-landing-accent"
+													: "text-landing-muted",
+											]}
+										>
+											{r.name}
+										</td>
+										<td
+											class:list={[
+												"whitespace-nowrap px-3 py-3.5 text-right [font-family:var(--font-mono-landing)] sm:px-[1.125rem]",
+												isUs
+													? "font-semibold text-landing-ink"
+													: "text-landing-muted",
+											]}
+										>
+											{r.c50}
+										</td>
+										<td
+											class:list={[
+												"whitespace-nowrap px-3 py-3.5 text-right [font-family:var(--font-mono-landing)] sm:px-[1.125rem]",
+												isUs
+													? "font-semibold text-landing-ink"
+													: "text-landing-muted",
+											]}
+										>
+											{r.c500}
+										</td>
+									</tr>
+								);
+							})
+						}
+					</tbody>
+				</table>
+			</div>
+			<p class="mt-3 text-[0.8125rem] text-landing-muted">
+				Same 21 platforms. One bill, not one per account.
+			</p>
+		</div>
+	</div>
 </Container>

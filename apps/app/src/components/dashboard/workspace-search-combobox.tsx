@@ -213,7 +213,7 @@ export function WorkspaceSearchCombobox({
       )}
 
       {open && dropdownPos && createPortal(
-        <div ref={dropdownRef} data-combobox-dropdown className="fixed z-50 min-w-[220px] rounded-lg border border-border bg-background shadow-lg" style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, position: "absolute" }} onPointerDown={(e) => e.stopPropagation()}>
+        <div ref={dropdownRef} data-combobox-dropdown className="pointer-events-auto fixed z-50 min-w-[220px] rounded-lg border border-border bg-background shadow-lg" style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, position: "absolute" }} onPointerDown={(e) => e.stopPropagation()}>
           <div className="px-2.5 pt-2.5 pb-2">
             <div className="flex items-center gap-1.5 rounded-md bg-accent/40 px-2.5 py-1.5">
               <Search className="size-3.5 text-muted-foreground shrink-0" />
