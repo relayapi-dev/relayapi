@@ -122,6 +122,8 @@ export interface PlatformLogo {
 	name: string;
 	/** Single-path simple-icons glyph, rendered monochrome via currentColor. */
 	glyph: string;
+	/** Platform-page slug (lib/platform-data) — drives `/product/${slug}` links. */
+	slug: string;
 }
 
 /**
@@ -130,22 +132,26 @@ export interface PlatformLogo {
  * reads as "every platform you publish to" rather than implying endorsement.
  */
 export const platformLogos: PlatformLogo[] = [
-	{ name: "X", glyph: PLATFORM_PATHS.x },
-	{ name: "Instagram", glyph: PLATFORM_PATHS.instagram },
-	{ name: "LinkedIn", glyph: PLATFORM_PATHS.linkedin },
-	{ name: "Facebook", glyph: PLATFORM_PATHS.facebook },
-	{ name: "YouTube", glyph: PLATFORM_PATHS.youtube },
-	{ name: "TikTok", glyph: PLATFORM_PATHS.tiktok },
-	{ name: "Threads", glyph: PLATFORM_PATHS.threads },
-	{ name: "Pinterest", glyph: PLATFORM_PATHS.pinterest },
-	{ name: "Reddit", glyph: PLATFORM_PATHS.reddit },
-	{ name: "Bluesky", glyph: PLATFORM_PATHS.bluesky },
-	{ name: "Mastodon", glyph: PLATFORM_PATHS.mastodon },
-	{ name: "Telegram", glyph: PLATFORM_PATHS.telegram },
-	{ name: "WhatsApp", glyph: PLATFORM_PATHS.whatsapp },
-	{ name: "Snapchat", glyph: PLATFORM_PATHS.snapchat },
-	{ name: "Discord", glyph: PLATFORM_PATHS.discord },
-	{ name: "Google Business", glyph: PLATFORM_PATHS.google },
+	{ name: "X", glyph: PLATFORM_PATHS.x, slug: "twitter" },
+	{ name: "Instagram", glyph: PLATFORM_PATHS.instagram, slug: "instagram" },
+	{ name: "LinkedIn", glyph: PLATFORM_PATHS.linkedin, slug: "linkedin" },
+	{ name: "Facebook", glyph: PLATFORM_PATHS.facebook, slug: "facebook" },
+	{ name: "YouTube", glyph: PLATFORM_PATHS.youtube, slug: "youtube" },
+	{ name: "TikTok", glyph: PLATFORM_PATHS.tiktok, slug: "tiktok" },
+	{ name: "Threads", glyph: PLATFORM_PATHS.threads, slug: "threads" },
+	{ name: "Pinterest", glyph: PLATFORM_PATHS.pinterest, slug: "pinterest" },
+	{ name: "Reddit", glyph: PLATFORM_PATHS.reddit, slug: "reddit" },
+	{ name: "Bluesky", glyph: PLATFORM_PATHS.bluesky, slug: "bluesky" },
+	{ name: "Mastodon", glyph: PLATFORM_PATHS.mastodon, slug: "mastodon" },
+	{ name: "Telegram", glyph: PLATFORM_PATHS.telegram, slug: "telegram" },
+	{ name: "WhatsApp", glyph: PLATFORM_PATHS.whatsapp, slug: "whatsapp" },
+	{ name: "Snapchat", glyph: PLATFORM_PATHS.snapchat, slug: "snapchat" },
+	{ name: "Discord", glyph: PLATFORM_PATHS.discord, slug: "discord" },
+	{
+		name: "Google Business",
+		glyph: PLATFORM_PATHS.google,
+		slug: "google-business",
+	},
 ];
 
 export interface ScheduleRow {
@@ -372,4 +378,5 @@ export const LANDING_LINKS = {
 	quickstart: "https://docs.relayapi.dev/quickstart",
 	changelog: "https://docs.relayapi.dev/changelog",
 	github: "https://github.com/relayapi-dev/relayapi",
+	selfhost: "https://docs.relayapi.dev/guides/self-hosting",
 } as const;

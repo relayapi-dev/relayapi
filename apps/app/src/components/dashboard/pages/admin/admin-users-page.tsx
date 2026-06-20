@@ -386,29 +386,29 @@ export function AdminUsersPage() {
 
   return (
     <div className="space-y-5 pb-16">
-      <PageHeader
-        title="Users"
-        subtitle={
-          loading ? (
-            <span className="inline-block h-3.5 w-16 animate-pulse rounded bg-muted align-middle" />
-          ) : (
-            `${total} total`
-          )
-        }
-      />
+      <PageHeader title="Users" />
 
       <AdminNav current="admin-users" />
 
-      {/* Search */}
-      <div className="relative max-w-xs">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search users..."
-          className="w-full rounded-[10px] border border-border bg-card pl-9 pr-3 py-2 text-[13px] outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20 placeholder:text-muted-foreground"
-        />
+      {/* Search + total count (count sits at the table's top-right) */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="relative w-full max-w-xs">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search users..."
+            className="w-full rounded-[10px] border border-border bg-card pl-9 pr-3 py-2 text-[13px] outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20 placeholder:text-muted-foreground"
+          />
+        </div>
+        {loading ? (
+          <span className="inline-block h-3.5 w-16 shrink-0 animate-pulse rounded bg-muted" />
+        ) : (
+          <p className="shrink-0 text-[13px] text-muted-foreground">
+            {total} total
+          </p>
+        )}
       </div>
 
       {error && (
