@@ -93,7 +93,25 @@ export function prefetchDashboardPage(page: string, url?: string): void {
 	if (!prefetch || prefetchedPages.has(page)) return;
 
 	prefetchedPages.add(page);
-	void prefetch().catch(() => {
-		prefetchedPages.delete(page);
-	});
+
+	// Mark this speculative module import as in-flight. The layout's
+	// vite:preloadError recovery reloads the page on a chunk error, but a
+	// hover/tap prefetch that fails — a not-yet-loaded chunk racing the tap's
+	// navigation on iOS (where the tap synthesizes mouseenter/focus), or a stale
+	// hash — must NOT reload. That spurious reload is the "first tap to a page
+	// you haven't opened yet just refreshes the current page" bug. vite:preloadError
+	// is dispatched synchronously while this counter is still raised; the finally
+	// below runs a microtask later, so the handler reliably sees a prefetch active.
+	const w = window as Window & { __relayPrefetchInFlight?: number };
+	w.__relayPrefetchInFlight = (w.__relayPrefetchInFlight ?? 0) + 1;
+	void prefetch()
+		.catch(() => {
+			prefetchedPages.delete(page);
+		})
+		.finally(() => {
+			w.__relayPrefetchInFlight = Math.max(
+				0,
+				(w.__relayPrefetchInFlight ?? 1) - 1,
+			);
+		});
 }

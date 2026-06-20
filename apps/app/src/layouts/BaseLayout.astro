@@ -29,6 +29,12 @@ import "../styles/globals.css";
 			window.addEventListener("beforeunload", markNavigating);
 			window.addEventListener("vite:preloadError", () => {
 				if (navigatingAway) return;
+				// A speculative hover/tap prefetch that failed must not reload — only a
+				// genuine page-load chunk error should. dashboard-prefetch.ts raises
+				// this counter around its import() calls; reloading on a failed prefetch
+				// is the "first tap to an unopened page just refreshes" bug on iOS.
+				const w = window as unknown as { __relayPrefetchInFlight?: number };
+				if (w.__relayPrefetchInFlight) return;
 				window.location.reload();
 			});
 		</script>

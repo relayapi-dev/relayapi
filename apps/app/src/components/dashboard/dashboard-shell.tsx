@@ -142,7 +142,12 @@ export function DashboardShell({
 									}}
 								>
 									<div
-										className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-background/85 px-4 backdrop-blur md:hidden"
+										// iOS Safari intermittently fails to repaint a `position: sticky`
+										// element that also has `backdrop-filter` while momentum-scrolling,
+										// making this bar (and the menu button) vanish at the top. Use an
+										// opaque background instead of the frosted blur, and force a stable
+										// compositing layer (transform-gpu) so it always repaints.
+										className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-background px-4 transform-gpu md:hidden"
 										style={{
 											paddingTop: "max(0.5rem, env(safe-area-inset-top))",
 											paddingBottom: "0.5rem",
