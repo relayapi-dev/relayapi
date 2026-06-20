@@ -1,6 +1,14 @@
-import { Clock, FileEdit, FileText, Link2, Loader2, Plus, Search, Send } from "lucide-react";
-import { CrossPostActionsPanel, CrossPostActionsTrigger, type CrossPostAction } from "./cross-post-actions-section";
 import * as Popover from "@radix-ui/react-popover";
+import {
+	Clock,
+	FileEdit,
+	FileText,
+	Link2,
+	Loader2,
+	Plus,
+	Search,
+	Send,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +22,6 @@ import {
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
-	SelectValue,
 } from "@/components/ui/select";
 import { usePaginatedApi } from "@/hooks/use-api";
 import {
@@ -28,8 +35,30 @@ import {
 } from "@/lib/platform-maps";
 import { uploadMedia } from "@/lib/upload-media";
 import { cn } from "@/lib/utils";
-import { ChannelSelector } from "./new-post/channel-selector";
+import {
+	type CrossPostAction,
+	CrossPostActionsPanel,
+	CrossPostActionsTrigger,
+} from "./cross-post-actions-section";
 import { ChannelEditor } from "./new-post/channel-editor";
+import { ChannelSelector } from "./new-post/channel-selector";
+
+// The cross-post Actions popover contains an account combobox (portaled to
+// <body> with [data-combobox-dropdown]) and a delay Select (portaled into a
+// [data-radix-popper-content-wrapper]). Interacting with either fires the
+// popover's outside-interaction handlers; treat those targets — and the focus
+// fallback to <body> when a portaled dropdown unmounts — as "inside" so the
+// popover stays open. Mirrors the same guards in components/ui/dialog.tsx.
+function shouldKeepActionsPopoverOpen(target: EventTarget | null | undefined) {
+	if (!target) return true;
+	if (!(target instanceof Element)) return false;
+	return (
+		target === target.ownerDocument.body ||
+		!!target.closest(
+			"[data-combobox-dropdown],[data-radix-popper-content-wrapper]",
+		)
+	);
+}
 
 // ── Types ──
 
@@ -60,7 +89,10 @@ export interface EditPostData {
 	scheduled_at: string | null;
 	timezone: string | null;
 	media: Array<{ url: string; type?: string }> | null;
-	targets: Record<string, { platform: string; accounts?: Array<{ id: string }> }>;
+	targets: Record<
+		string,
+		{ platform: string; accounts?: Array<{ id: string }> }
+	>;
 	target_options: Record<string, Record<string, unknown>> | null;
 }
 
@@ -157,17 +189,23 @@ export function NewPostDialog({
 	);
 
 	// Cross-post actions
-	const [crossPostActions, setCrossPostActions] = useState<CrossPostAction[]>([]);
+	const [crossPostActions, setCrossPostActions] = useState<CrossPostAction[]>(
+		[],
+	);
 	const [crossPostExpanded, setCrossPostExpanded] = useState(false);
 
 	// Short links
 	const [shortenUrls, setShortenUrls] = useState(false);
-	const [slModeConfig, setSlModeConfig] = useState<"always" | "ask" | "never">("never");
+	const [slModeConfig, setSlModeConfig] = useState<"always" | "ask" | "never">(
+		"never",
+	);
 
 	// Template picker
 	const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
 	const [templateSearch, setTemplateSearch] = useState("");
-	const [templates, setTemplates] = useState<Array<{ id: string; name: string; content: string; tags: string[] | null }>>([]);
+	const [templates, setTemplates] = useState<
+		Array<{ id: string; name: string; content: string; tags: string[] | null }>
+	>([]);
 	const [templatesLoading, setTemplatesLoading] = useState(false);
 
 	// Fetch templates when picker opens
@@ -175,7 +213,7 @@ export function NewPostDialog({
 		if (templatePickerOpen && templates.length === 0) {
 			setTemplatesLoading(true);
 			fetch("/api/content-templates?limit=100")
-				.then((r) => r.ok ? r.json() : { data: [] })
+				.then((r) => (r.ok ? r.json() : { data: [] }))
 				.then((res) => setTemplates(res.data || []))
 				.catch(() => {})
 				.finally(() => setTemplatesLoading(false));
@@ -209,7 +247,7 @@ export function NewPostDialog({
 	useEffect(() => {
 		if (open) {
 			fetch("/api/short-links/config")
-				.then((r) => r.ok ? r.json() : null)
+				.then((r) => (r.ok ? r.json() : null))
 				.then((data) => {
 					if (data?.mode) setSlModeConfig(data.mode);
 				})
@@ -224,7 +262,9 @@ export function NewPostDialog({
 			setSharedContent(editPostData.content ?? "");
 
 			if (editPostData.media?.length) {
-				setSharedMedia(editPostData.media.map((m) => ({ url: m.url, type: m.type })));
+				setSharedMedia(
+					editPostData.media.map((m) => ({ url: m.url, type: m.type })),
+				);
 			}
 
 			// Extract account IDs from targets
@@ -241,7 +281,13 @@ export function NewPostDialog({
 			// Restore target_options, channel overrides, and unlinked fields
 			if (editPostData.target_options) {
 				const platformOpts: Record<string, Record<string, unknown>> = {};
-				const overrides: Record<string, { content?: string; media?: Array<{ url: string; type?: string; previewUrl?: string }> }> = {};
+				const overrides: Record<
+					string,
+					{
+						content?: string;
+						media?: Array<{ url: string; type?: string; previewUrl?: string }>;
+					}
+				> = {};
 				const unlinked: Record<string, Set<string>> = {};
 
 				for (const [key, opts] of Object.entries(editPostData.target_options)) {
@@ -249,14 +295,21 @@ export function NewPostDialog({
 						// Per-account overrides
 						const { content, media, ...rest } = opts;
 						if (content !== undefined) {
-							overrides[key] = { ...overrides[key], content: content as string };
+							overrides[key] = {
+								...overrides[key],
+								content: content as string,
+							};
 							unlinked[key] = unlinked[key] ?? new Set();
 							unlinked[key].add("content");
 						}
 						if (media !== undefined) {
 							overrides[key] = {
 								...overrides[key],
-								media: media as Array<{ url: string; type?: string; previewUrl?: string }>,
+								media: media as Array<{
+									url: string;
+									type?: string;
+									previewUrl?: string;
+								}>,
 							};
 							unlinked[key] = unlinked[key] ?? new Set();
 							unlinked[key].add("media");
@@ -276,7 +329,11 @@ export function NewPostDialog({
 			// Pre-fill publish mode and schedule
 			if (editPostData.status === "draft") {
 				setPublishMode("draft");
-			} else if (editPostData.scheduled_at && editPostData.scheduled_at !== "now" && editPostData.scheduled_at !== "draft") {
+			} else if (
+				editPostData.scheduled_at &&
+				editPostData.scheduled_at !== "now" &&
+				editPostData.scheduled_at !== "draft"
+			) {
 				setPublishMode("schedule");
 				const dt = new Date(editPostData.scheduled_at);
 				const local = new Date(dt.getTime() - dt.getTimezoneOffset() * 60000)
@@ -305,7 +362,9 @@ export function NewPostDialog({
 		} else if (open) {
 			// Create mode
 			if (initialDate) {
-				const candidate = initialDate.includes("T") ? initialDate : `${initialDate}T09:00`;
+				const candidate = initialDate.includes("T")
+					? initialDate
+					: `${initialDate}T09:00`;
 				const candidateDate = new Date(candidate);
 				const maxScheduleDate = new Date();
 				maxScheduleDate.setDate(maxScheduleDate.getDate() + 30);
@@ -335,14 +394,20 @@ export function NewPostDialog({
 		hasMore: accountsHasMore,
 		loadMore: accountsLoadMore,
 		loadingMore: accountsLoadingMore,
-	} = usePaginatedApi<Account>(open ? "accounts" : null, { limit: 30, query: searchQuery });
+	} = usePaginatedApi<Account>(open ? "accounts" : null, {
+		limit: 30,
+		query: searchQuery,
+	});
 	const {
 		data: groups,
 		loading: groupsLoading,
 		hasMore: groupsHasMore,
 		loadMore: groupsLoadMore,
 		loadingMore: groupsLoadingMore,
-	} = usePaginatedApi<Workspace>(open ? "workspaces" : null, { limit: 30, query: searchQuery });
+	} = usePaginatedApi<Workspace>(open ? "workspaces" : null, {
+		limit: 30,
+		query: searchQuery,
+	});
 
 	// Resolved selected accounts (expanding workspaces)
 	const resolvedAccounts = useMemo(() => {
@@ -494,9 +559,7 @@ export function NewPostDialog({
 					...prev,
 					[accountId]: {
 						...prev[accountId],
-						media: (prev[accountId]?.media || []).filter(
-							(_, i) => i !== index,
-						),
+						media: (prev[accountId]?.media || []).filter((_, i) => i !== index),
 					},
 				}));
 			} else {
@@ -603,7 +666,11 @@ export function NewPostDialog({
 		if (publishMode === "schedule" && !scheduledDate) {
 			return "Select a date and time for scheduling.";
 		}
-		if (publishMode === "schedule" && scheduledDate && new Date(scheduledDate) <= new Date()) {
+		if (
+			publishMode === "schedule" &&
+			scheduledDate &&
+			new Date(scheduledDate) <= new Date()
+		) {
 			return "Scheduled date must be in the future.";
 		}
 		if (publishMode === "schedule" && scheduledDate) {
@@ -620,10 +687,9 @@ export function NewPostDialog({
 
 			for (const acc of resolvedAccounts) {
 				if (acc.platform !== platform) continue;
-				const effectiveContent =
-					unlinkedFields[acc.id]?.has("content")
-						? channelOverrides[acc.id]?.content ?? sharedContent
-						: sharedContent;
+				const effectiveContent = unlinkedFields[acc.id]?.has("content")
+					? (channelOverrides[acc.id]?.content ?? sharedContent)
+					: sharedContent;
 				if (effectiveContent) {
 					const count = countCharsForPlatform(effectiveContent, platform);
 					if (count > limit.maxChars) {
@@ -850,9 +916,7 @@ export function NewPostDialog({
 														)}
 													>
 														{platformAvatars[account.platform] ||
-															account.platform
-																.slice(0, 2)
-																.toUpperCase()}
+															account.platform.slice(0, 2).toUpperCase()}
 													</div>
 												)}
 												<div
@@ -863,9 +927,7 @@ export function NewPostDialog({
 													)}
 												>
 													{platformAvatars[account.platform] ||
-														account.platform
-															.slice(0, 2)
-															.toUpperCase()}
+														account.platform.slice(0, 2).toUpperCase()}
 												</div>
 											</button>
 										);
@@ -949,21 +1011,9 @@ export function NewPostDialog({
 					/>
 				</div>
 
-				{/* Cross-Post Actions (expanded panel) */}
-				{publishMode !== "draft" && crossPostExpanded && (
-					<div className="shrink-0">
-						<CrossPostActionsPanel
-							actions={crossPostActions}
-							onChange={setCrossPostActions}
-						/>
-					</div>
-				)}
-
 				{/* Footer */}
 				<div className="px-5 py-3 shrink-0 space-y-3">
-					{error && (
-						<p className="text-xs text-destructive">{error}</p>
-					)}
+					{error && <p className="text-xs text-destructive">{error}</p>}
 
 					{publishMode === "schedule" && (
 						<div className="flex flex-col sm:flex-row gap-2">
@@ -973,7 +1023,9 @@ export function NewPostDialog({
 									value={scheduledDate}
 									onChange={(e) => setScheduledDate(e.target.value)}
 									min={new Date().toISOString().slice(0, 16)}
-								max={new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16)}
+									max={new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+										.toISOString()
+										.slice(0, 16)}
 									className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
 								/>
 							</div>
@@ -992,110 +1044,189 @@ export function NewPostDialog({
 					<div className="flex items-center justify-end gap-2">
 						<div className="flex items-center gap-1 mr-auto">
 							{!editPostId && (
-								<Popover.Root open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
+								<Popover.Root
+									open={templatePickerOpen}
+									onOpenChange={setTemplatePickerOpen}
+								>
 									<Popover.Trigger asChild>
-										<Button variant="ghost" size="sm" className="gap-1.5 text-xs text-muted-foreground">
+										<Button
+											variant="ghost"
+											size="sm"
+											className="gap-1.5 text-xs text-muted-foreground"
+											title="Use Template"
+										>
 											<FileText className="size-3.5" />
-											Use Template
+											<span className="hidden sm:inline">Use Template</span>
 										</Button>
-								</Popover.Trigger>
-								<Popover.Portal>
-									<Popover.Content
-										className="z-50 w-72 rounded-lg border bg-popover p-0 shadow-lg"
-										align="start"
-										sideOffset={4}
-										side="top"
-									>
-										<div className="p-2 border-b">
-											<div className="relative">
-												<Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-												<input
-													className="w-full rounded-md border bg-transparent py-1.5 pl-7 pr-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-													placeholder="Search templates..."
-													value={templateSearch}
-													onChange={(e) => setTemplateSearch(e.target.value)}
-												/>
-											</div>
-										</div>
-										<div className="max-h-48 overflow-y-auto p-1">
-											{templatesLoading ? (
-												<div className="flex items-center justify-center py-4">
-													<Loader2 className="size-4 animate-spin text-muted-foreground" />
+									</Popover.Trigger>
+									<Popover.Portal>
+										<Popover.Content
+											className="z-50 w-72 rounded-lg border bg-popover p-0 shadow-lg"
+											align="start"
+											sideOffset={4}
+											side="top"
+										>
+											<div className="p-2 border-b">
+												<div className="relative">
+													<Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+													<input
+														className="w-full rounded-md border bg-transparent py-1.5 pl-7 pr-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+														placeholder="Search templates..."
+														value={templateSearch}
+														onChange={(e) => setTemplateSearch(e.target.value)}
+													/>
 												</div>
-											) : filteredTemplates.length === 0 ? (
-												<p className="py-3 text-center text-xs text-muted-foreground">
-													{templates.length === 0 ? "No templates yet" : "No matches"}
-												</p>
-											) : (
-												filteredTemplates.map((tmpl) => (
-													<button
-														key={tmpl.id}
-														type="button"
-														className="w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60 transition-colors"
-														onClick={() => applyTemplate(tmpl)}
-													>
-														<div className="font-medium truncate">{tmpl.name}</div>
-														<div className="text-muted-foreground truncate mt-0.5">
-															{tmpl.content.slice(0, 60)}
-															{tmpl.content.length > 60 ? "..." : ""}
-														</div>
-													</button>
-												))
-											)}
-										</div>
-									</Popover.Content>
-								</Popover.Portal>
+											</div>
+											<div className="max-h-48 overflow-y-auto p-1">
+												{templatesLoading ? (
+													<div className="flex items-center justify-center py-4">
+														<Loader2 className="size-4 animate-spin text-muted-foreground" />
+													</div>
+												) : filteredTemplates.length === 0 ? (
+													<p className="py-3 text-center text-xs text-muted-foreground">
+														{templates.length === 0
+															? "No templates yet"
+															: "No matches"}
+													</p>
+												) : (
+													filteredTemplates.map((tmpl) => (
+														<button
+															key={tmpl.id}
+															type="button"
+															className="w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60 transition-colors"
+															onClick={() => applyTemplate(tmpl)}
+														>
+															<div className="font-medium truncate">
+																{tmpl.name}
+															</div>
+															<div className="text-muted-foreground truncate mt-0.5">
+																{tmpl.content.slice(0, 60)}
+																{tmpl.content.length > 60 ? "..." : ""}
+															</div>
+														</button>
+													))
+												)}
+											</div>
+										</Popover.Content>
+									</Popover.Portal>
 								</Popover.Root>
 							)}
 							{publishMode !== "draft" && (
-								<CrossPostActionsTrigger
-									count={crossPostActions.length}
-									onClick={() => {
-										if (!crossPostExpanded && crossPostActions.length === 0) {
-											setCrossPostActions([{ action_type: "repost", target_account_id: "", delay_minutes: 0 }]);
+								<Popover.Root
+									open={crossPostExpanded}
+									onOpenChange={(open) => {
+										if (open && crossPostActions.length === 0) {
+											setCrossPostActions([
+												{
+													action_type: "repost",
+													target_account_id: "",
+													delay_minutes: 0,
+												},
+											]);
 										}
-										setCrossPostExpanded(!crossPostExpanded);
+										setCrossPostExpanded(open);
 									}}
-								/>
+								>
+									<Popover.Trigger asChild>
+										<CrossPostActionsTrigger
+											count={crossPostActions.length}
+											title="Cross-post actions"
+										/>
+									</Popover.Trigger>
+									<Popover.Portal>
+										<Popover.Content
+											className="z-50 w-[min(26rem,calc(100vw-2rem))] rounded-lg border bg-popover shadow-lg"
+											align="start"
+											side="top"
+											sideOffset={6}
+											collisionPadding={8}
+											onPointerDownOutside={(e) => {
+												if (shouldKeepActionsPopoverOpen(e.target))
+													e.preventDefault();
+											}}
+											onFocusOutside={(e) => {
+												if (shouldKeepActionsPopoverOpen(e.target))
+													e.preventDefault();
+											}}
+										>
+											<div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+												Cross-post actions
+											</div>
+											<div className="max-h-[50vh] overflow-y-auto">
+												<CrossPostActionsPanel
+													actions={crossPostActions}
+													onChange={setCrossPostActions}
+													className="p-3"
+												/>
+											</div>
+										</Popover.Content>
+									</Popover.Portal>
+								</Popover.Root>
 							)}
 						</div>
 						{/* Short links indicator */}
 						{slModeConfig === "always" && (
-							<span className="text-[11px] text-muted-foreground flex items-center gap-1">
+							<span className="text-[11px] text-muted-foreground hidden sm:flex items-center gap-1">
 								<Link2 className="size-3" />
 								URLs will be shortened
 							</span>
 						)}
 						{slModeConfig === "ask" && (
-							<label className="flex items-center gap-1.5 cursor-pointer select-none">
+							<label
+								className="flex items-center gap-1.5 cursor-pointer select-none"
+								title="Shorten URLs"
+							>
 								<button
 									type="button"
 									onClick={() => setShortenUrls(!shortenUrls)}
 									className={cn(
 										"relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors",
-										shortenUrls ? "bg-primary" : "bg-accent/60 border border-border"
+										shortenUrls
+											? "bg-primary"
+											: "bg-accent/60 border border-border",
 									)}
 								>
 									<span
 										className={cn(
 											"pointer-events-none inline-block size-3 rounded-full bg-white shadow-sm transition-transform",
-											shortenUrls ? "translate-x-3.5" : "translate-x-0.5"
+											shortenUrls ? "translate-x-3.5" : "translate-x-0.5",
 										)}
 									/>
 								</button>
-								<span className="text-[11px] text-muted-foreground">Shorten URLs</span>
+								<span className="hidden sm:inline text-[11px] text-muted-foreground">
+									Shorten URLs
+								</span>
 							</label>
 						)}
 
 						<Select
 							value={publishMode}
-							onValueChange={(v) => setPublishMode(v as PublishMode)}
+							onValueChange={(v) => {
+								setPublishMode(v as PublishMode);
+								if (v === "draft") setCrossPostExpanded(false);
+							}}
 						>
 							<SelectTrigger
 								size="sm"
 								className="w-auto h-8 text-xs gap-1.5 border-border"
+								aria-label="Publish mode"
 							>
-								<SelectValue />
+								<span className="flex items-center gap-1.5">
+									{publishMode === "now" ? (
+										<Send className="size-3" />
+									) : publishMode === "draft" ? (
+										<FileEdit className="size-3" />
+									) : (
+										<Clock className="size-3" />
+									)}
+									<span className="hidden sm:inline">
+										{publishMode === "now"
+											? "Publish Now"
+											: publishMode === "draft"
+												? "Save Draft"
+												: "Schedule"}
+									</span>
+								</span>
 							</SelectTrigger>
 							<SelectContent>
 								<SelectItem value="now">
@@ -1125,12 +1256,18 @@ export function NewPostDialog({
 							disabled={!canSubmit}
 							onClick={handleSubmit}
 						>
-							{submitting && (
-								<Loader2 className="size-3 animate-spin" />
-							)}
+							{submitting && <Loader2 className="size-3 animate-spin" />}
 							{editPostId
-								? (publishMode === "now" ? "Publish" : publishMode === "draft" ? "Save Draft" : "Update")
-								: (publishMode === "now" ? "Publish" : publishMode === "draft" ? "Save Draft" : "Schedule")}
+								? publishMode === "now"
+									? "Publish"
+									: publishMode === "draft"
+										? "Save Draft"
+										: "Update"
+								: publishMode === "now"
+									? "Publish"
+									: publishMode === "draft"
+										? "Save Draft"
+										: "Schedule"}
 						</Button>
 					</div>
 				</div>
