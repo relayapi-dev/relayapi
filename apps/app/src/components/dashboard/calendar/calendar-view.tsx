@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, closestCenter, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
 import { addMonths, subMonths, addWeeks, subWeeks, startOfMonth, startOfWeek, format } from "date-fns";
 import { Loader2 } from "lucide-react";
@@ -7,6 +7,7 @@ import { CalendarGrid } from "./calendar-grid";
 import { WeekTimeGrid } from "./week-time-grid";
 import { DraftsSidePanel } from "./drafts-side-panel";
 import { CalendarPostCard } from "./calendar-post-card";
+import { CalendarPopoverContext } from "./calendar-popover-context";
 import { useCalendarPosts, type CalendarPost } from "./use-calendar-posts";
 import { useTimezone } from "@/hooks/use-timezone";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
@@ -37,6 +38,9 @@ export function CalendarView({
   const timezone = useTimezone();
   const [draftsPanelOpen, setDraftsPanelOpen] = useState(false);
   const [activePost, setActivePost] = useState<CalendarPost | null>(null);
+  // Only one post preview popover may be open at a time — opening one closes the rest.
+  const [openPopoverId, setOpenPopoverId] = useState<string | null>(null);
+  const popoverCtx = useMemo(() => ({ openId: openPopoverId, setOpenId: setOpenPopoverId }), [openPopoverId]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -130,73 +134,75 @@ export function CalendarView({
   );
 
   return (
-    <div className="space-y-3">
-      <CalendarHeader
-        currentDate={currentDate}
-        period={period}
-        onPrev={handlePrev}
-        onNext={handleNext}
-        onToday={handleToday}
-        onPeriodChange={handlePeriodChange}
-        draftCount={drafts.length}
-        onToggleDrafts={() => setDraftsPanelOpen((o) => !o)}
-        draftsOpen={draftsPanelOpen}
-      />
+    <CalendarPopoverContext.Provider value={popoverCtx}>
+      <div className="space-y-3">
+        <CalendarHeader
+          currentDate={currentDate}
+          period={period}
+          onPrev={handlePrev}
+          onNext={handleNext}
+          onToday={handleToday}
+          onPeriodChange={handlePeriodChange}
+          draftCount={drafts.length}
+          onToggleDrafts={() => setDraftsPanelOpen((o) => !o)}
+          draftsOpen={draftsPanelOpen}
+        />
 
-      {error && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+        {error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {error}
+          </div>
+        )}
 
-      {truncated && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-600 dark:text-amber-400">
-          Too many posts to display. Select a workspace to narrow results.
-        </div>
-      )}
+        {truncated && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-600 dark:text-amber-400">
+            Too many posts to display. Select a workspace to narrow results.
+          </div>
+        )}
 
-      <div className="relative">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={period === "week" ? closestCenter : undefined}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-        >
-          {loading ? (
-            <div className="flex items-center justify-center py-20">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : period === "week" ? (
-            <WeekTimeGrid
-              currentDate={currentDate}
-              postsByHour={postsByHour}
-              onClickDateTime={handleClickDateTime}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              timezone={timezone}
+        <div className="relative">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={period === "week" ? closestCenter : undefined}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+          >
+            {loading ? (
+              <div className="flex items-center justify-center py-20">
+                <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : period === "week" ? (
+              <WeekTimeGrid
+                currentDate={currentDate}
+                postsByHour={postsByHour}
+                onClickDateTime={handleClickDateTime}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                timezone={timezone}
+              />
+            ) : (
+              <CalendarGrid
+                month={currentDate}
+                postsByDate={postsByDate}
+                onClickDate={handleClickDate}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                timezone={timezone}
+              />
+            )}
+
+            <DraftsSidePanel
+              open={draftsPanelOpen}
+              onOpenChange={setDraftsPanelOpen}
+              drafts={drafts}
             />
-          ) : (
-            <CalendarGrid
-              month={currentDate}
-              postsByDate={postsByDate}
-              onClickDate={handleClickDate}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              timezone={timezone}
-            />
-          )}
 
-          <DraftsSidePanel
-            open={draftsPanelOpen}
-            onOpenChange={setDraftsPanelOpen}
-            drafts={drafts}
-          />
-
-          <DragOverlay>
-            {activePost ? <CalendarPostCard post={activePost} overlay /> : null}
-          </DragOverlay>
-        </DndContext>
+            <DragOverlay>
+              {activePost ? <CalendarPostCard post={activePost} overlay /> : null}
+            </DragOverlay>
+          </DndContext>
+        </div>
       </div>
-    </div>
+    </CalendarPopoverContext.Provider>
   );
 }

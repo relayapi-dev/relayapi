@@ -94,7 +94,9 @@ export function WeekHourCell({ date, hour, posts, onClickDateTime, onEdit, onDel
         {visiblePosts.map((post) => (
           <CalendarPostCard key={post.id} post={post} compact onEdit={onEdit} onDelete={onDelete} timezone={tz} />
         ))}
-        {/* Overflow popover — shows all posts for this slot */}
+        {/* Overflow popover — shows only the overflow posts. Rendering the
+            already-visible posts again would double-mount the same post.id and, with
+            the shared preview context, open two previews at once. */}
         {overflowCount > 0 && (
           <Popover>
             <PopoverTrigger asChild>
@@ -108,7 +110,7 @@ export function WeekHourCell({ date, hour, posts, onClickDateTime, onEdit, onDel
               </button>
             </PopoverTrigger>
             <PopoverContent className="w-64 p-2 space-y-1 max-h-80 overflow-y-auto" side="right" align="start">
-              {posts.map((post) => (
+              {posts.slice(MAX_VISIBLE).map((post) => (
                 <CalendarPostCard key={post.id} post={post} compact onEdit={onEdit} onDelete={onDelete} timezone={tz} />
               ))}
             </PopoverContent>

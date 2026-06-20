@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useContext, useCallback } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { Play, Settings, Film, ImageIcon, ExternalLink, Loader2, ThumbsUp, MessageSquare, Eye, TrendingUp } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
@@ -7,6 +7,7 @@ import { platformIcons } from "@/lib/platform-icons";
 import { platformColors, platformLabels } from "@/lib/platform-maps";
 import { PostDetailPopover, formatDateTime, formatNumber } from "./post-detail-popover";
 import { PostDetailModal } from "./post-detail-modal";
+import { CalendarPopoverContext } from "./calendar-popover-context";
 import type { CalendarPost } from "./use-calendar-posts";
 
 /** Simple popover for external (synced) posts — no API fetch needed, data is already on the card */
@@ -21,7 +22,7 @@ function ExternalPostPopover({ post }: { post: CalendarPost }) {
       <div className="px-4 pt-3 pb-2">
         <span className="text-[11px] text-muted-foreground">
           {dateStr ? formatDateTime(dateStr) : "External post"}
-          {" \u00b7 Published"}
+          {" · Published"}
         </span>
       </div>
       <div className="px-4 pb-3">
@@ -133,7 +134,25 @@ interface CalendarPostCardProps {
 }
 
 export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, timezone }: CalendarPostCardProps) {
-  const [popoverOpen, setPopoverOpen] = useState(false);
+  // Preview popover open state is shared across the calendar (via context) so that
+  // opening one preview closes any other. Falls back to local state when rendered
+  // outside the provider (e.g. the drag overlay).
+  const popoverCtx = useContext(CalendarPopoverContext);
+  const [localPopoverOpen, setLocalPopoverOpen] = useState(false);
+  const popoverOpen = popoverCtx ? popoverCtx.openId === post.id : localPopoverOpen;
+  const setPopoverOpen = useCallback(
+    (open: boolean) => {
+      if (popoverCtx) {
+        // Functional update on close guards against a race where another card has
+        // already become the open one (its dismiss must not clear the new selection).
+        if (open) popoverCtx.setOpenId(post.id);
+        else popoverCtx.setOpenId((prev) => (prev === post.id ? null : prev));
+      } else {
+        setLocalPopoverOpen(open);
+      }
+    },
+    [popoverCtx, post.id],
+  );
   const [modalOpen, setModalOpen] = useState(false);
   const [imgError, setImgError] = useState(false);
   const didDrag = useRef(false);
