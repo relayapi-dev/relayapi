@@ -7,7 +7,7 @@ import { platformIcons } from "@/lib/platform-icons";
 import { platformColors, platformLabels } from "@/lib/platform-maps";
 import { PostDetailPopover, formatDateTime, formatNumber } from "./post-detail-popover";
 import { PostDetailModal } from "./post-detail-modal";
-import { CalendarPopoverContext } from "./calendar-popover-context";
+import { CalendarPopoverContext, CALENDAR_CARD_ATTR, handleCalendarPreviewInteractOutside } from "./calendar-popover-context";
 import type { CalendarPost } from "./use-calendar-posts";
 
 /** Simple popover for external (synced) posts — no API fetch needed, data is already on the card */
@@ -18,7 +18,7 @@ function ExternalPostPopover({ post }: { post: CalendarPost }) {
   const popoverIsVideo = thumbType === "video" || thumbType.startsWith("video/") || (() => { try { return /\.(mp4|mov|webm|avi)$/i.test(new URL(thumbUrl ?? "").pathname); } catch { return /\.(mp4|mov|webm|avi)$/i.test(thumbUrl ?? ""); } })();
   const accountName = post.accountName || platformLabels[post.platform] || post.platform || "Account";
   return (
-    <PopoverContent className="w-80 p-0" side="right" align="start">
+    <PopoverContent className="w-80 p-0" side="right" align="start" onInteractOutside={handleCalendarPreviewInteractOutside}>
       <div className="px-4 pt-3 pb-2">
         <span className="text-[11px] text-muted-foreground">
           {dateStr ? formatDateTime(dateStr) : "External post"}
@@ -214,6 +214,7 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
           {/* biome-ignore lint/a11y/useSemanticElements: interactive wrapper cannot be a button — it is a dnd-kit draggable and a Radix PopoverTrigger asChild target */}
           <div
             ref={setNodeRef}
+            {...{ [CALENDAR_CARD_ATTR]: "" }}
             {...(isDraggable ? { ...listeners, ...attributes } : {})}
             role="button"
             tabIndex={0}

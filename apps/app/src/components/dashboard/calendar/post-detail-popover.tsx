@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PostErrorDetails, collectPostErrors } from "./post-error-details";
+import { handleCalendarPreviewInteractOutside } from "./calendar-popover-context";
 
 interface PostTarget {
   platform: string;
@@ -207,7 +208,7 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
 
   if (loading) {
     return (
-      <PopoverContent className="w-96 p-4" side="right" align="start">
+      <PopoverContent className="w-96 p-4" side="right" align="start" onInteractOutside={handleCalendarPreviewInteractOutside}>
         <div className="flex items-center justify-center py-8">
           <Loader2 className="size-4 animate-spin text-muted-foreground" />
         </div>
@@ -217,7 +218,7 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
 
   if (!detail) {
     return (
-      <PopoverContent className="w-96 p-4" side="right" align="start">
+      <PopoverContent className="w-96 p-4" side="right" align="start" onInteractOutside={handleCalendarPreviewInteractOutside}>
         <p className="text-xs text-muted-foreground text-center py-4">Failed to load post details</p>
       </PopoverContent>
     );
@@ -235,7 +236,7 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
   const hasErrors = errorRows.length > 0;
 
   return (
-    <PopoverContent className="w-96 p-0" side="right" align="start">
+    <PopoverContent className="w-96 p-0" side="right" align="start" onInteractOutside={handleCalendarPreviewInteractOutside}>
       {/* Header: date + status + expand button */}
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
         <span className="text-[11px] text-muted-foreground">

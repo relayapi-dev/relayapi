@@ -47,7 +47,7 @@ const {
 	linkHref,
 	side = "left",
 	panelTheme = "light",
-	windowTitle = "RelayAPI",
+	windowTitle,
 	animation = "rise",
 	height = "clamp(560px,52vw,720px)",
 	panelFill = false,
@@ -108,8 +108,12 @@ const animClass = {
 		<div
 			class:list={[
 				"relative mt-7 w-full md:absolute md:mt-0 md:w-auto",
-				panelFill ? "md:top-[8%] md:bottom-[8%]" : "md:top-1/2 md:-translate-y-1/2",
-				panelLeft ? "md:left-[-7%] md:right-[36.5%]" : "md:left-[36.5%] md:right-[-7%]",
+				panelFill
+					? "md:top-[8%] md:bottom-[8%]"
+					: "md:top-1/2 md:-translate-y-1/2",
+				panelLeft
+					? "md:left-[-7%] md:right-[36.5%]"
+					: "md:left-[36.5%] md:right-[-7%]",
 			]}
 		>
 			<!-- floating window (the animated element) -->
@@ -126,7 +130,7 @@ const animClass = {
 				<!-- window chrome -->
 				<div
 					class:list={[
-						"relative flex shrink-0 items-center px-4 py-[9px]",
+						"relative flex shrink-0 items-center px-4 py-2",
 						isDark
 							? "border-b border-landing-line-dark"
 							: "border-b border-landing-line",

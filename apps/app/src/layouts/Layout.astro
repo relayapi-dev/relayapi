@@ -38,7 +38,7 @@ const { title, description } = Astro.props;
 		scroll-behavior: smooth;
 	}
 	body {
-		background: #f4f2ec;
+		background: #f7f7f2;
 		padding-left: 0;
 		padding-right: 0;
 	}
@@ -50,7 +50,11 @@ const { title, description } = Astro.props;
 		   (BaseLayout, which Layout wraps, renders <Font>). The vars already bake
 		   in the optimized metric-matched fallbacks, so reference them rather than
 		   the literal "Geist Variable" family name (Astro hashes that name). */
-		font-family: var(--font-geist-sans), -apple-system, system-ui, sans-serif;
+		font-family:
+			var(--font-geist-sans),
+			-apple-system,
+			system-ui,
+			sans-serif;
 		--font-newsreader: "Newsreader", Georgia, "Times New Roman", serif;
 		--font-mono-landing: var(--font-geist-mono), ui-monospace, monospace;
 	}

@@ -325,6 +325,7 @@ export function MessageComposer({
               type="button"
               onClick={() => void handleSubmit()}
               disabled={!canSubmit}
+              title={isNote ? "Save note" : `Send to ${platformLabel}`}
               className={cn(
                 "inline-flex h-8 items-center gap-2 rounded-full px-4 text-[13px] font-semibold transition-colors",
                 isNote

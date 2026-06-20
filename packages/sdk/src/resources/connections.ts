@@ -22,6 +22,11 @@ export interface ConnectionListLogsResponse {
   has_more: boolean;
 
   next_cursor: string | null;
+
+  /**
+   * Total matching log entries (ignores pagination)
+   */
+  total: number;
 }
 
 export namespace ConnectionListLogsResponse {
@@ -73,6 +78,12 @@ export interface ConnectionListLogsParams {
    * Number of items per page
    */
   limit?: number;
+
+  /**
+   * Number of items to skip for offset-based pagination. Enables random access to
+   * any page; takes precedence over `cursor` when provided.
+   */
+  offset?: number;
 
   /**
    * End date (ISO 8601)

@@ -1,16 +1,24 @@
 ---
-import HeroDashboard from "./HeroDashboard.astro";
 import Container from "./Container.astro";
+import HeroDashboard from "./HeroDashboard.astro";
 ---
 
 <!-- ================= HERO PRODUCT BAND (painted backdrop + animated dashboard) ================= -->
 <Container as="section">
-  <div class="relative flex min-h-[clamp(560px,76vh,880px)] flex-col justify-center overflow-hidden rounded-2xl bg-[#c7b795] bg-[url('/hero.png')] bg-cover bg-[position:center_34%] px-[clamp(18px,2.6vw,46px)] pt-[clamp(64px,10vw,140px)] pb-[clamp(72px,10vw,140px)] shadow-[0_30px_80px_-44px_rgba(40,28,12,0.4)]">
-    <!-- top haze: lets the window read against the sky -->
-    <div class="pointer-events-none absolute inset-x-0 top-0 h-[46%] bg-gradient-to-b from-[#f4f2ec]/[0.42] to-transparent"></div>
-    <!-- gentle vignette so the bright window pops -->
-    <div class="pointer-events-none absolute inset-0 [background:radial-gradient(125%_95%_at_50%_12%,transparent_58%,rgba(40,28,12,0.18))]"></div>
+	<div
+		class="relative flex min-h-[clamp(640px,86vh,1000px)] flex-col justify-center overflow-hidden rounded-lg bg-[#c7b795] bg-[url('/hero.png')] bg-cover bg-[position:center_34%] px-[clamp(18px,2.6vw,46px)] pt-[clamp(64px,10vw,140px)] pb-[clamp(72px,10vw,140px)] shadow-[0_30px_80px_-44px_rgba(40,28,12,0.4)]"
+	>
+		<!-- top haze: lets the window read against the sky -->
+		<div
+			class="pointer-events-none absolute inset-x-0 top-0 h-[46%] bg-gradient-to-b from-[#f4f2ec]/[0.42] to-transparent"
+		>
+		</div>
+		<!-- gentle vignette so the bright window pops -->
+		<div
+			class="pointer-events-none absolute inset-0 [background:radial-gradient(125%_95%_at_50%_12%,transparent_58%,rgba(40,28,12,0.18))]"
+		>
+		</div>
 
-    <HeroDashboard />
-  </div>
+		<HeroDashboard />
+	</div>
 </Container>

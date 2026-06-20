@@ -1,24 +1,14 @@
-import { useState, useCallback, useDeferredValue, useEffect, useMemo, type ComponentType } from "react";
+import { useState, useCallback, useDeferredValue, useEffect, useMemo } from "react";
 import { useRealtimeUpdates } from "@/hooks/use-post-updates";
 import { useSilentRefresh } from "@/hooks/use-silent-refresh";
-import {
-  AlarmClockCheck,
-  ChevronLeft,
-  Filter,
-  Heart,
-  Inbox,
-  Lock,
-  Search,
-  TriangleAlert,
-  UserRound,
-  Users,
-} from "lucide-react";
+import { Lock, Search, SlidersHorizontal } from "lucide-react";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { usePaginatedApi } from "@/hooks/use-api";
 import { useUsage } from "@/hooks/use-usage";
 import { useFilter, useFilterQuery } from "@/components/dashboard/filter-context";
 import { useUser } from "@/components/dashboard/user-context";
 import { organization } from "@/lib/auth-client";
+import { Segmented } from "@/components/dashboard/segmented";
 import { WorkspaceSearchCombobox } from "@/components/dashboard/workspace-search-combobox";
 import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
 import {
@@ -40,30 +30,26 @@ import { ConversationList } from "@/components/dashboard/inbox/conversation-list
 import { ChatThread } from "@/components/dashboard/inbox/chat-thread";
 import { getConversationDisplayName, getPlatformDisplayName } from "@/components/dashboard/inbox/shared";
 
-type SidebarFilterKey =
-  | "all"
-  | "unassigned"
-  | "assigned"
-  | "reminders"
-  | "favorites"
-  | "team";
+type SidebarFilterKey = "all" | "unassigned" | "assigned";
 
-type SidebarItem = {
-  key: SidebarFilterKey;
-  label: string;
-  count: number;
-  icon: ComponentType<{ className?: string }>;
-  accentCount?: boolean;
-};
+// Soft elevation that lifts the panels off the warm canvas — the "floating" look.
+const PANEL =
+  "min-h-0 overflow-hidden rounded-2xl border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_24px_-14px_rgba(0,0,0,0.12)]";
+
+const filterOptions: Array<{ value: SidebarFilterKey; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "unassigned", label: "Unassigned" },
+  { value: "assigned", label: "Mine" },
+];
 
 const statusOptions = [
-  { value: "open", label: "Open Chats" },
+  { value: "open", label: "Open" },
   { value: "archived", label: "Archived" },
 ] as const;
 
 const sortOptions = [
-  { value: "newest", label: "Sort: Newest" },
-  { value: "oldest", label: "Sort: Oldest" },
+  { value: "newest", label: "Newest" },
+  { value: "oldest", label: "Oldest" },
 ] as const;
 
 function matchesSidebarFilter(
@@ -78,148 +64,161 @@ function matchesSidebarFilter(
       return !conversation.assigned_user_id;
     case "assigned":
       return currentUserId ? conversation.assigned_user_id === currentUserId : false;
-    case "reminders":
-    case "favorites":
-      return false;
-    case "team":
-      return Boolean(conversation.assigned_user_id);
     default:
       return true;
   }
 }
 
-function ToolbarSelect({
-  value,
-  onValueChange,
-  options,
-  className,
+function FilterToggle({
+  checked,
+  onChange,
+  label,
 }: {
-  value: string;
-  onValueChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-  className?: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
 }) {
   return (
-    <Select value={value} onValueChange={onValueChange}>
-      <SelectTrigger
-        size="sm"
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 text-left transition-colors hover:bg-accent"
+    >
+      <span className="text-[13px] font-medium text-foreground">{label}</span>
+      <span
         className={cn(
-          "h-8 min-w-[7.5rem] rounded-md border-border bg-card px-3 text-[12px] font-medium text-muted-foreground shadow-none hover:bg-accent",
-          className,
+          "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+          checked ? "bg-foreground" : "bg-input",
         )}
       >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {options.map((option) => (
-          <SelectItem key={option.value} value={option.value}>
-            {option.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+        <span
+          className={cn(
+            "absolute top-0.5 size-4 rounded-full bg-card shadow-xs transition-all",
+            checked ? "left-[1.125rem]" : "left-0.5",
+          )}
+        />
+      </span>
+    </button>
   );
 }
 
-function ScopeFiltersPanel() {
+function FiltersPanel({
+  activeStatus,
+  onStatusChange,
+  sortOrder,
+  onSortChange,
+  onlyUnread,
+  onUnreadChange,
+  platformFilter,
+  onPlatformChange,
+  platformOptions,
+  hasActiveFilters,
+  onClearAll,
+}: {
+  activeStatus: "open" | "archived";
+  onStatusChange: (value: "open" | "archived") => void;
+  sortOrder: "newest" | "oldest";
+  onSortChange: (value: "newest" | "oldest") => void;
+  onlyUnread: boolean;
+  onUnreadChange: (value: boolean) => void;
+  platformFilter: string;
+  onPlatformChange: (value: string) => void;
+  platformOptions: Array<{ value: string; label: string }>;
+  hasActiveFilters: boolean;
+  onClearAll: () => void;
+}) {
   const { workspaceId, accountId, setWorkspaceId, setAccountId } = useFilter();
 
   return (
-    <div className="space-y-3">
-      <div className="space-y-1">
-        <p className="text-[12px] font-semibold text-foreground">Filters</p>
-        <p className="text-[12px] leading-5 text-muted-foreground">
-          Limit the inbox to a workspace or a specific connected account.
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        <WorkspaceSearchCombobox
-          value={workspaceId}
-          onSelect={(nextWorkspaceId) => {
-            setWorkspaceId(nextWorkspaceId);
-            setAccountId(null);
-          }}
-          showAllOption
-          showUnassignedOption
-          placeholder="All workspaces"
-          variant="input"
-          className="w-full"
-        />
-        <AccountSearchCombobox
-          value={accountId}
-          onSelect={setAccountId}
-          workspaceId={workspaceId}
-          placeholder="All accounts"
-          variant="input"
-          className="w-full"
-        />
-      </div>
-
-      {(workspaceId || accountId) && (
-        <div className="flex justify-end">
+    <div className="space-y-3.5">
+      <div className="flex items-center justify-between">
+        <p className="text-[13px] font-semibold text-foreground">Filters</p>
+        {hasActiveFilters && (
           <button
             type="button"
-            onClick={() => {
-              setWorkspaceId(null);
-              setAccountId(null);
-            }}
+            onClick={onClearAll}
             className="text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
-            Clear filters
+            Reset
           </button>
-        </div>
-      )}
-    </div>
-  );
-}
+        )}
+      </div>
 
-function SidebarSection({
-  title,
-  items,
-  active,
-  onSelect,
-}: {
-  title?: string;
-  items: SidebarItem[];
-  active: SidebarFilterKey;
-  onSelect: (key: SidebarFilterKey) => void;
-}) {
-  return (
-    <div className="space-y-0.5">
-      {title && (
-        <div className="px-4 pb-1 pt-3 text-[11px] font-medium text-muted-foreground">
-          {title}
-        </div>
-      )}
-      {items.map((item) => {
-        const isActive = item.key === active;
-        return (
-          <button
-            key={item.key}
-            type="button"
-            onClick={() => onSelect(item.key)}
-            className={cn(
-              "flex w-full items-center gap-3 rounded-md px-4 py-2 text-left transition-colors",
-              isActive ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
-            )}
+      <div>
+        <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Status</p>
+        <Segmented
+          value={activeStatus}
+          onChange={onStatusChange}
+          options={[...statusOptions]}
+          className="w-full [&>button]:flex-1"
+        />
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Sort by</p>
+        <Segmented
+          value={sortOrder}
+          onChange={onSortChange}
+          options={[...sortOptions]}
+          className="w-full [&>button]:flex-1"
+        />
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Channel</p>
+        <Select value={platformFilter} onValueChange={onPlatformChange}>
+          <SelectTrigger
+            size="sm"
+            className="h-8 w-full rounded-md border-border bg-background text-[13px] text-foreground"
           >
-            <item.icon className="size-3.5 shrink-0" />
-            <span className="flex-1 text-[13px] font-medium">{item.label}</span>
-            <span className="flex items-center gap-1 text-[12px] font-medium text-muted-foreground">
-              {item.accentCount && item.count > 0 && <span className="size-1.5 rounded-full bg-foreground" />}
-              {item.count}
-            </span>
-          </button>
-        );
-      })}
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {platformOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <FilterToggle label="Unread only" checked={onlyUnread} onChange={onUnreadChange} />
+
+      <div>
+        <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Scope</p>
+        <div className="space-y-2">
+          <WorkspaceSearchCombobox
+            value={workspaceId}
+            onSelect={(nextWorkspaceId) => {
+              setWorkspaceId(nextWorkspaceId);
+              setAccountId(null);
+            }}
+            showAllOption
+            showUnassignedOption
+            placeholder="All workspaces"
+            variant="input"
+            className="w-full"
+          />
+          <AccountSearchCombobox
+            value={accountId}
+            onSelect={setAccountId}
+            workspaceId={workspaceId}
+            placeholder="All accounts"
+            variant="input"
+            className="w-full"
+          />
+        </div>
+      </div>
     </div>
   );
 }
 
 export function InboxMessagesPage() {
   const filterQuery = useFilterQuery();
-  const { workspaceId, accountId } = useFilter();
+  const { workspaceId, accountId, setWorkspaceId, setAccountId } = useFilter();
   const deferredSearch = useDeferredValue(filterQuery);
   const user = useUser();
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -360,6 +359,12 @@ export function InboxMessagesPage() {
     void silentRefresh();
   };
 
+  const handleStatusFilterChange = useCallback((nextStatus: "open" | "archived") => {
+    setActiveStatus(nextStatus);
+    setSelectedConversationId(null);
+    setMobileView("list");
+  }, []);
+
   const handleConversationStatusChange = useCallback(async (nextStatus: "open" | "archived") => {
     if (!selectedConversationId) return;
 
@@ -427,7 +432,7 @@ export function InboxMessagesPage() {
     ).sort((left, right) => left.localeCompare(right));
 
     return [
-      { value: "all", label: "All Channels" },
+      { value: "all", label: "All channels" },
       ...options.map((platform) => ({
         value: platform,
         label: getPlatformDisplayName(platform),
@@ -435,43 +440,30 @@ export function InboxMessagesPage() {
     ];
   }, [conversations]);
 
-  const hasScopedFilters = Boolean(workspaceId || accountId);
+  const hasActiveFilters =
+    activeStatus !== "open"
+    || onlyUnread
+    || sortOrder !== "newest"
+    || platformFilter !== "all"
+    || Boolean(workspaceId)
+    || Boolean(accountId);
 
-  const sidebarSections = useMemo<Array<{ title?: string; items: SidebarItem[] }>>(() => {
-    const all = conversations.length;
-    const unassigned = conversations.filter((conversation) => !conversation.assigned_user_id).length;
-    const assigned = user?.id
-      ? conversations.filter((conversation) => conversation.assigned_user_id === user.id).length
-      : 0;
-    return [
-      {
-        items: [
-          { key: "all" as const, label: "All chats", count: all, icon: Inbox },
-          { key: "unassigned" as const, label: "Unassigned", count: unassigned, icon: TriangleAlert, accentCount: true },
-          { key: "assigned" as const, label: "Assigned to me", count: assigned, icon: UserRound },
-          { key: "reminders" as const, label: "Reminders", count: 0, icon: AlarmClockCheck },
-        ],
-      },
-      {
-        title: "Labels",
-        items: [
-          { key: "favorites" as const, label: "Favorites", count: 0, icon: Heart },
-        ],
-      },
-      {
-        title: "Team",
-        items: [
-          { key: "team" as const, label: "Everyone", count: all, icon: Users },
-        ],
-      },
-    ];
-  }, [conversations, user?.id]);
+  const clearAllFilters = useCallback(() => {
+    setActiveStatus("open");
+    setSelectedConversationId(null);
+    setMobileView("list");
+    setOnlyUnread(false);
+    setSortOrder("newest");
+    setPlatformFilter("all");
+    setWorkspaceId(null);
+    setAccountId(null);
+  }, [setWorkspaceId, setAccountId]);
 
   if (!isPro && usage !== null) {
     return (
       <div className="space-y-5 p-6 md:p-8">
         <PageHeader title="Messages" docsHref="https://docs.relayapi.dev/api-reference/inbox" />
-        <div className="rounded-[12px] border border-border bg-card p-12 text-center">
+        <div className="rounded-2xl border border-border bg-card p-12 text-center">
           <Lock className="mx-auto mb-2 size-8 text-muted-foreground/40" />
           <p className="text-sm font-medium">Pro Feature</p>
           <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
@@ -490,255 +482,104 @@ export function InboxMessagesPage() {
 
   return (
     <div className="flex min-h-[calc(100dvh-3.25rem)] flex-col bg-background text-foreground md:h-full md:min-h-0">
-      <div className="border-b border-border bg-background px-4 py-3 md:px-6">
-        <PageHeader
-          title="Inbox"
-          docsHref="https://docs.relayapi.dev/api-reference/inbox"
-          action={
-            <div className="relative min-w-[14rem] md:w-[20rem]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search through Inbox conversations"
-                className="h-8 w-full rounded-md border border-border bg-card pl-10 pr-4 text-[13px] text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/40 placeholder:text-muted-foreground"
-              />
-            </div>
-          }
-        />
-      </div>
-
-      <div className="border-b border-border bg-background px-4 py-2.5 md:hidden">
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {sidebarSections.flatMap((section) => section.items).map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setSidebarFilter(item.key)}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap transition-colors",
-                sidebarFilter === item.key
-                  ? "bg-sidebar-accent text-foreground"
-                  : "bg-card text-muted-foreground border border-border",
-              )}
-            >
-              <item.icon className="size-4" />
-              {item.label}
-              <span className="text-[11px] text-muted-foreground">
-                {item.count}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="hidden min-h-0 flex-1 md:flex">
-        <aside className="flex w-[228px] shrink-0 flex-col border-r border-border bg-sidebar px-3 py-3">
-          <div className="space-y-4">
-            {sidebarSections.map((section) => (
-              <SidebarSection
-                key={section.title || "primary"}
-                title={section.title}
-                items={section.items}
-                active={sidebarFilter}
-                onSelect={setSidebarFilter}
-              />
-            ))}
-          </div>
-        </aside>
-
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="border-b border-border bg-background px-4 py-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <ToolbarSelect
-                value={activeStatus}
-                onValueChange={(value) => {
-                  setActiveStatus(value as "open" | "archived");
-                  setSelectedConversationId(null);
-                  setMobileView("list");
-                }}
-                options={[...statusOptions]}
-                className="min-w-[9rem]"
-              />
-
-              <button
-                type="button"
-                onClick={() => setOnlyUnread((current) => !current)}
-                className={cn(
-                  "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition-colors",
-                  onlyUnread
-                    ? "border-foreground/30 bg-accent text-foreground"
-                    : "border-border bg-card text-muted-foreground hover:bg-accent",
-                )}
-              >
-                <Inbox className="size-4" />
-                Unread
-              </button>
-
-              <ToolbarSelect
-                value={sortOrder}
-                onValueChange={(value) => setSortOrder(value as "newest" | "oldest")}
-                options={[...sortOptions]}
-                className="min-w-[9rem]"
-              />
-
-              <ToolbarSelect
-                value={platformFilter}
-                onValueChange={setPlatformFilter}
-                options={platformOptions}
-                className="min-w-[9rem]"
-              />
-
+      <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 md:flex-row md:gap-4 md:p-4">
+        {/* Conversations */}
+        <section
+          className={cn(
+            PANEL,
+            "flex-1 flex-col md:flex md:w-[360px] md:flex-none",
+            mobileView === "chat" ? "hidden" : "flex",
+          )}
+        >
+          <div className="flex flex-col gap-2.5 border-b border-border p-3">
+            <div className="flex items-center gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search conversations"
+                  className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-[13px] text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30 placeholder:text-muted-foreground"
+                />
+              </div>
               <Popover>
                 <PopoverTrigger asChild>
                   <button
                     type="button"
+                    title="Filters"
                     className={cn(
-                      "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition-colors",
-                      hasScopedFilters
+                      "relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border transition-colors",
+                      hasActiveFilters
                         ? "border-foreground/30 bg-accent text-foreground"
-                        : "border-border bg-card text-muted-foreground hover:bg-accent",
+                        : "border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground",
                     )}
                   >
-                    <Filter className="size-4" />
-                    Filter
+                    <SlidersHorizontal className="size-4" />
+                    {hasActiveFilters && (
+                      <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-foreground" />
+                    )}
                   </button>
                 </PopoverTrigger>
-                <PopoverContent align="end" sideOffset={8} className="w-[22rem] p-4">
-                  <ScopeFiltersPanel />
+                <PopoverContent
+                  align="end"
+                  sideOffset={8}
+                  className="w-[20rem] max-w-[calc(100vw-2rem)] p-3"
+                >
+                  <FiltersPanel
+                    activeStatus={activeStatus}
+                    onStatusChange={handleStatusFilterChange}
+                    sortOrder={sortOrder}
+                    onSortChange={setSortOrder}
+                    onlyUnread={onlyUnread}
+                    onUnreadChange={setOnlyUnread}
+                    platformFilter={platformFilter}
+                    onPlatformChange={setPlatformFilter}
+                    platformOptions={platformOptions}
+                    hasActiveFilters={hasActiveFilters}
+                    onClearAll={clearAllFilters}
+                  />
                 </PopoverContent>
               </Popover>
             </div>
-          </div>
 
-          <div className="flex min-h-0 min-w-0 flex-1">
-            <div className="w-[300px] shrink-0 border-r border-border bg-card">
-              <ConversationList
-                conversations={visibleConversations}
-                selectedId={selectedConversationId}
-                onSelect={handleSelectConversation}
-                loading={loading || usage === null}
-                hasMore={hasMore}
-                loadingMore={loadingMore}
-                onLoadMore={loadMore}
-              />
-            </div>
-
-            <div className="min-w-0 flex-1">
-              <ChatThread
-                conversation={selectedConversation}
-                members={members}
-                membersLoading={membersLoading}
-                onMessageSent={handleMessageSent}
-                onAssignmentChange={handleConversationAssignmentChange}
-                onStatusChange={handleConversationStatusChange}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col md:hidden">
-        <div className="border-b border-border bg-background px-4 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <ToolbarSelect
-              value={activeStatus}
-              onValueChange={(value) => {
-                setActiveStatus(value as "open" | "archived");
-                setSelectedConversationId(null);
-                setMobileView("list");
-              }}
-              options={[...statusOptions]}
-              className="min-w-[9rem]"
-            />
-
-            <button
-              type="button"
-              onClick={() => setOnlyUnread((current) => !current)}
-              className={cn(
-                "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition-colors",
-                onlyUnread
-                  ? "border-foreground/30 bg-accent text-foreground"
-                  : "border-border bg-card text-muted-foreground hover:bg-accent",
-              )}
-            >
-              <Inbox className="size-4" />
-              Unread
-            </button>
-
-            <ToolbarSelect
-              value={sortOrder}
-              onValueChange={(value) => setSortOrder(value as "newest" | "oldest")}
-              options={[...sortOptions]}
-              className="min-w-[9rem]"
-            />
-
-            <ToolbarSelect
-              value={platformFilter}
-              onValueChange={setPlatformFilter}
-              options={platformOptions}
-              className="min-w-[9rem]"
-            />
-
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className={cn(
-                    "inline-flex h-8 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition-colors",
-                    hasScopedFilters
-                      ? "border-foreground/30 bg-accent text-foreground"
-                      : "border-border bg-card text-muted-foreground hover:bg-accent",
-                  )}
-                >
-                  <Filter className="size-4" />
-                  Filter
-                </button>
-              </PopoverTrigger>
-              <PopoverContent align="end" sideOffset={8} className="w-[22rem] max-w-[calc(100vw-2rem)] p-4">
-                <ScopeFiltersPanel />
-              </PopoverContent>
-            </Popover>
-          </div>
-        </div>
-
-        {mobileView === "list" ? (
-          <div className="min-h-0 flex-1">
-            <ConversationList
-              conversations={visibleConversations}
-              selectedId={selectedConversationId}
-              onSelect={handleSelectConversation}
-              loading={loading || usage === null}
-              hasMore={hasMore}
-              loadingMore={loadingMore}
-              onLoadMore={loadMore}
+            <Segmented
+              value={sidebarFilter}
+              onChange={setSidebarFilter}
+              options={filterOptions}
+              className="w-full [&>button]:flex-1"
             />
           </div>
-        ) : (
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="border-b border-border bg-background px-4 py-3">
-              <button
-                type="button"
-                onClick={() => setMobileView("list")}
-                className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground"
-              >
-                <ChevronLeft className="size-4" />
-                Back to conversations
-              </button>
-            </div>
-            <div className="min-h-0 flex-1">
-              <ChatThread
-                conversation={selectedConversation}
-                members={members}
-                membersLoading={membersLoading}
-                onMessageSent={handleMessageSent}
-                onAssignmentChange={handleConversationAssignmentChange}
-                onStatusChange={handleConversationStatusChange}
-              />
-            </div>
-          </div>
-        )}
+
+          <ConversationList
+            conversations={visibleConversations}
+            selectedId={selectedConversationId}
+            onSelect={handleSelectConversation}
+            loading={loading || usage === null}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={loadMore}
+          />
+        </section>
+
+        {/* Chat */}
+        <section
+          className={cn(
+            PANEL,
+            "flex-1 md:block",
+            mobileView === "list" ? "hidden" : "block",
+          )}
+        >
+          <ChatThread
+            conversation={selectedConversation}
+            members={members}
+            membersLoading={membersLoading}
+            onMessageSent={handleMessageSent}
+            onAssignmentChange={handleConversationAssignmentChange}
+            onStatusChange={handleConversationStatusChange}
+            onBack={() => setMobileView("list")}
+          />
+        </section>
       </div>
     </div>
   );

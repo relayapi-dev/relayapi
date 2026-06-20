@@ -3,11 +3,11 @@ import { heroChannels } from "./data";
 
 // Shared utility strings (kept as literals so the Tailwind scanner picks them up).
 const TILE =
-  "group/tile relative flex aspect-square items-center justify-center rounded-lg border bg-[#f1efe8] border-[#1a1815]/[0.07] text-[#9a968c] opacity-50 transition-all duration-[450ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none group-data-[reset=true]/hp:transition-none data-[state=publishing]:opacity-90 data-[state=publishing]:text-[#6e6a62] data-[state=delivered]:opacity-100 data-[state=delivered]:text-[#1a1815] data-[state=delivered]:bg-[#f4f6f1] data-[state=delivered]:border-[#7fb88a]/50 data-[state=delivered]:-translate-y-px";
+	"group/tile relative flex aspect-square items-center justify-center rounded-lg border bg-[#f1efe8] border-[#1a1815]/[0.07] text-[#9a968c] opacity-50 transition-all duration-[450ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none group-data-[reset=true]/hp:transition-none data-[state=publishing]:opacity-90 data-[state=publishing]:text-[#6e6a62] data-[state=delivered]:opacity-100 data-[state=delivered]:text-[#1a1815] data-[state=delivered]:bg-[#f4f6f1] data-[state=delivered]:border-[#7fb88a]/50 data-[state=delivered]:-translate-y-px";
 const DOT =
-  "h-[7px] w-[7px] rounded-full border-[1.5px] border-[#1a1815]/20 group-data-[state=publishing]/tile:hidden group-data-[state=delivered]/tile:hidden";
+	"h-[7px] w-[7px] rounded-full border-[1.5px] border-[#1a1815]/20 group-data-[state=publishing]/tile:hidden group-data-[state=delivered]/tile:hidden";
 const SPIN =
-  "hidden h-[11px] w-[11px] rounded-full border-[1.6px] border-[#6e6a62]/30 border-t-[#6e6a62] animate-spin motion-reduce:animate-none group-data-[state=publishing]/tile:block";
+	"hidden h-[11px] w-[11px] rounded-full border-[1.6px] border-[#6e6a62]/30 border-t-[#6e6a62] animate-spin motion-reduce:animate-none group-data-[state=publishing]/tile:block";
 const CHECK = "hidden text-[#7fb88a] group-data-[state=delivered]/tile:block";
 ---
 
@@ -18,231 +18,346 @@ const CHECK = "hidden text-[#7fb88a] group-data-[state=delivered]/tile:block";
   to the start state on init and replays the loop. JS sequences the timeline via
   data-* attributes; Tailwind variants handle the per-state styling.
 -->
-<div class="group/hp relative" data-hp="root" data-reset="false" aria-hidden="true">
-  <!-- ============ main window ============ -->
-  <div class="relative mx-auto w-[min(1080px,100%)] overflow-hidden rounded-[10px] border border-[#1a1815]/[0.08] bg-[#faf9f4] shadow-[0_40px_90px_-28px_rgba(40,28,12,0.5),0_12px_30px_rgba(40,28,12,0.18)]">
-    <div class="relative flex items-center border-b border-[#1a1815]/[0.07] bg-[#f1efe8] px-4 py-[13px]">
-      <div class="flex gap-[7px]">
-        <span class="h-[11px] w-[11px] rounded-full bg-[#cfc9bd]"></span>
-        <span class="h-[11px] w-[11px] rounded-full bg-[#cfc9bd]"></span>
-        <span class="h-[11px] w-[11px] rounded-full bg-[#cfc9bd]"></span>
-      </div>
-      <span class="absolute left-1/2 -translate-x-1/2 text-[13px] text-[#6e6a62]">RelayAPI Studio</span>
-    </div>
+<div
+	class="group/hp relative"
+	data-hp="root"
+	data-reset="false"
+	aria-hidden="true"
+>
+	<!-- ============ main window ============ -->
+	<div
+		class="relative mx-auto w-[min(1080px,100%)] overflow-hidden rounded-[10px] border border-[#1a1815]/[0.08] bg-[#faf9f4] shadow-[0_40px_90px_-28px_rgba(40,28,12,0.5),0_12px_30px_rgba(40,28,12,0.18)]"
+	>
+		<div
+			class="relative flex items-center border-b border-[#1a1815]/[0.07] bg-[#f1efe8] px-4 py-2"
+		>
+			<div class="flex gap-[7px]">
+				<span class="h-[11px] w-[11px] rounded-full bg-[#cfc9bd]"
+				></span>
+				<span class="h-[11px] w-[11px] rounded-full bg-[#cfc9bd]"
+				></span>
+				<span class="h-[11px] w-[11px] rounded-full bg-[#cfc9bd]"
+				></span>
+			</div>
+		</div>
 
-    <div class="transition-opacity duration-[260ms]" data-hp="stage">
-      <div class="grid min-h-[320px] grid-cols-[minmax(250px,0.92fr)_1.45fr] max-[720px]:grid-cols-1">
-        <!-- LEFT: composer -->
-        <div class="border-r border-[#1a1815]/[0.07] px-[18px] py-5 max-[720px]:border-r-0 max-[720px]:border-b">
-          <div class="mb-3 text-[11px] uppercase tracking-[0.07em] text-[#9a968c]">New post</div>
-          <div class="relative min-h-[132px] rounded-lg border border-[#1a1815]/10 bg-white px-[14px] py-[13px] text-[14.5px] leading-[1.5] text-[#2a2620]">
-            <span data-hp="typed">Shipping RelayAPI v2 today — one API, every channel. 🚀</span><span class="ml-px inline-block h-[1.05em] w-[2px] animate-blink-cursor bg-[#1a1815] align-text-bottom motion-reduce:hidden data-[hide=true]:hidden" data-hp="caret" data-hide="true"></span>
-            <span class="mt-[13px] inline-flex items-center gap-[6px] rounded-md border border-[#1a1815]/[0.08] bg-[#f1efe8] px-[9px] py-[5px] text-[12px] text-[#6e6a62] transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] [font-family:var(--font-mono-landing)] data-[shown=false]:translate-y-[3px] data-[shown=false]:opacity-0" data-hp="attach" data-shown="true">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="text-[#9a968c]"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
-              hero.png
-            </span>
-          </div>
-          <div class="mt-4 inline-flex items-center gap-2 text-[12.5px] text-[#6e6a62]">
-            <span class="h-[7px] w-[7px] rounded-full bg-[#7fb88a]"></span>
-            <span>21 channels selected</span>
-          </div>
-          <button class="group/btn mt-[14px] flex w-full items-center justify-center gap-2 rounded-lg bg-[#1a1815] px-[14px] py-[11px] text-[14px] font-medium text-[#f3f1ea] transition-transform duration-[120ms] data-[pressed=true]:scale-[0.975]" type="button" tabindex="-1" data-hp="btn" data-state="done" data-pressed="false">
-            <span class="hidden h-[13px] w-[13px] animate-spin rounded-full border-2 border-[#f3f1ea]/35 border-t-[#f3f1ea] motion-reduce:animate-none group-data-[state=busy]/btn:inline-block"></span>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" class="hidden text-[#8fd29b] group-data-[state=done]/btn:inline-block"><path d="m5 12 5 5 9-11"></path></svg>
-            <span data-hp="btnLabel">Delivered to 21 channels</span>
-          </button>
-        </div>
+		<div class="transition-opacity duration-[260ms]" data-hp="stage">
+			<div
+				class="grid min-h-[420px] grid-cols-[minmax(250px,0.92fr)_1.45fr] max-[720px]:grid-cols-1"
+			>
+				<!-- LEFT: composer -->
+				<div
+					class="border-r border-[#1a1815]/[0.07] px-[18px] py-5 max-[720px]:border-r-0 max-[720px]:border-b"
+				>
+					<div
+						class="mb-3 text-[11px] uppercase tracking-[0.07em] text-[#9a968c]"
+					>
+						New post
+					</div>
+					<div
+						class="relative min-h-[132px] rounded-lg border border-[#1a1815]/10 bg-white px-[14px] py-[13px] text-[14.5px] leading-[1.5] text-[#2a2620]"
+					>
+						<span data-hp="typed"
+							>Shipping RelayAPI v2 today — one API, every
+							channel. 🚀</span
+						><span
+							class="ml-px inline-block h-[1.05em] w-[2px] animate-blink-cursor bg-[#1a1815] align-text-bottom motion-reduce:hidden data-[hide=true]:hidden"
+							data-hp="caret"
+							data-hide="true"></span>
+						<span
+							class="mt-[13px] inline-flex items-center gap-[6px] rounded-md border border-[#1a1815]/[0.08] bg-[#f1efe8] px-[9px] py-[5px] text-[12px] text-[#6e6a62] transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] [font-family:var(--font-mono-landing)] data-[shown=false]:translate-y-[3px] data-[shown=false]:opacity-0"
+							data-hp="attach"
+							data-shown="true"
+						>
+							<svg
+								width="13"
+								height="13"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.8"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class="text-[#9a968c]"
+								><path
+									d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+								></path></svg
+							>
+							hero.png
+						</span>
+					</div>
+					<div
+						class="mt-4 inline-flex items-center gap-2 text-[12.5px] text-[#6e6a62]"
+					>
+						<span class="h-[7px] w-[7px] rounded-full bg-[#7fb88a]"
+						></span>
+						<span>21 channels selected</span>
+					</div>
+					<button
+						class="group/btn mt-[14px] flex w-full items-center justify-center gap-2 rounded-lg bg-[#1a1815] px-[14px] py-[11px] text-[14px] font-medium text-[#f3f1ea] transition-transform duration-[120ms] data-[pressed=true]:scale-[0.975]"
+						type="button"
+						tabindex="-1"
+						data-hp="btn"
+						data-state="done"
+						data-pressed="false"
+					>
+						<span
+							class="hidden h-[13px] w-[13px] animate-spin rounded-full border-2 border-[#f3f1ea]/35 border-t-[#f3f1ea] motion-reduce:animate-none group-data-[state=busy]/btn:inline-block"
+						></span>
+						<svg
+							width="15"
+							height="15"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.4"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							class="hidden text-[#8fd29b] group-data-[state=done]/btn:inline-block"
+							><path d="m5 12 5 5 9-11"></path></svg
+						>
+						<span data-hp="btnLabel">Delivered to 21 channels</span>
+					</button>
+				</div>
 
-        <!-- RIGHT: channels -->
-        <div class="p-5">
-          <div class="mb-[11px] flex items-baseline justify-between">
-            <span class="text-[13.5px] font-medium text-[#3a3833]">Publishing to all channels</span>
-            <span class="text-[12.5px] text-[#9a968c] [font-family:var(--font-mono-landing)]" data-hp="counter">21 / 21</span>
-          </div>
-          <div class="mb-4 h-[6px] overflow-hidden rounded-full bg-[#ece8df]">
-            <div class="h-full w-full rounded-full bg-gradient-to-r from-[#9cc0a4] to-[#7fb88a] transition-[width] duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none group-data-[reset=true]/hp:transition-none" data-hp="bar"></div>
-          </div>
-          <div class="grid grid-cols-7 gap-[6px]">
-            {
-              heroChannels.map((c) => (
-                <div class={TILE} data-hp="tile" data-state="delivered" title={c.name}>
-                  {c.glyph ? (
-                    <svg class="h-[19px] w-[19px]" viewBox="0 0 24 24" aria-hidden="true">
-                      <path fill="currentColor" d={c.glyph} />
-                    </svg>
-                  ) : (
-                    <span class="text-[12px] font-semibold">{c.initial}</span>
-                  )}
-                  <span class="absolute right-[5px] top-[5px] flex h-[13px] w-[13px] items-center justify-center">
-                    <span class={DOT} />
-                    <span class={SPIN} />
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class={CHECK}>
-                      <path d="m5 12 5 5 9-11" />
-                    </svg>
-                  </span>
-                </div>
-              ))
-            }
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+				<!-- RIGHT: channels -->
+				<div class="p-5">
+					<div class="mb-[11px] flex items-baseline justify-between">
+						<span class="text-[13.5px] font-medium text-[#3a3833]"
+							>Publishing to all channels</span
+						>
+						<span
+							class="text-[12.5px] text-[#9a968c] [font-family:var(--font-mono-landing)]"
+							data-hp="counter">21 / 21</span
+						>
+					</div>
+					<div
+						class="mb-4 h-[6px] overflow-hidden rounded-full bg-[#ece8df]"
+					>
+						<div
+							class="h-full w-full rounded-full bg-gradient-to-r from-[#9cc0a4] to-[#7fb88a] transition-[width] duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none group-data-[reset=true]/hp:transition-none"
+							data-hp="bar"
+						>
+						</div>
+					</div>
+					<div class="grid grid-cols-7 gap-[6px]">
+						{
+							heroChannels.map((c) => (
+								<div
+									class={TILE}
+									data-hp="tile"
+									data-state="delivered"
+									title={c.name}
+								>
+									{c.glyph ? (
+										<svg
+											class="h-[19px] w-[19px]"
+											viewBox="0 0 24 24"
+											aria-hidden="true"
+										>
+											<path
+												fill="currentColor"
+												d={c.glyph}
+											/>
+										</svg>
+									) : (
+										<span class="text-[12px] font-semibold">
+											{c.initial}
+										</span>
+									)}
+									<span class="absolute right-[5px] top-[5px] flex h-[13px] w-[13px] items-center justify-center">
+										<span class={DOT} />
+										<span class={SPIN} />
+										<svg
+											width="13"
+											height="13"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="3"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											class={CHECK}
+										>
+											<path d="m5 12 5 5 9-11" />
+										</svg>
+									</span>
+								</div>
+							))
+						}
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
 
-  <!-- ============ CLI peek ============ -->
-  <div class="absolute -bottom-6 right-0 w-[min(420px,46%)] overflow-hidden rounded-[10px] border border-[#1a1815]/[0.08] bg-[#faf9f4] shadow-[0_18px_40px_-20px_rgba(40,28,12,0.4)] max-[720px]:hidden">
-    <div class="relative flex items-center border-b border-[#1a1815]/[0.07] bg-[#f1efe8] px-[14px] py-[11px]">
-      <div class="flex gap-[6px]">
-        <span class="h-[10px] w-[10px] rounded-full bg-[#cfc9bd]"></span>
-        <span class="h-[10px] w-[10px] rounded-full bg-[#cfc9bd]"></span>
-        <span class="h-[10px] w-[10px] rounded-full bg-[#cfc9bd]"></span>
-      </div>
-      <span class="absolute left-1/2 -translate-x-1/2 text-[12px] text-[#6e6a62]">RelayAPI CLI</span>
-    </div>
-    <pre class="m-0 whitespace-pre-wrap p-4 text-[12px] leading-[1.75] text-[#3a3833] [font-family:var(--font-mono-landing)]"><span class="text-[#4e9a5a]">$</span> relay post --all "ship day!"
+	<!-- ============ CLI peek ============ -->
+	<div
+		class="absolute -bottom-6 right-0 w-[min(420px,46%)] overflow-hidden rounded-[10px] border border-[#1a1815]/[0.08] bg-[#faf9f4] shadow-[0_18px_40px_-20px_rgba(40,28,12,0.4)] max-[720px]:hidden"
+	>
+		<div
+			class="relative flex items-center border-b border-[#1a1815]/[0.07] bg-[#f1efe8] px-[14px] py-[11px]"
+		>
+			<div class="flex gap-[6px]">
+				<span class="h-[10px] w-[10px] rounded-full bg-[#cfc9bd]"
+				></span>
+				<span class="h-[10px] w-[10px] rounded-full bg-[#cfc9bd]"
+				></span>
+				<span class="h-[10px] w-[10px] rounded-full bg-[#cfc9bd]"
+				></span>
+			</div>
+			<span
+				class="absolute left-1/2 -translate-x-1/2 text-[12px] text-[#6e6a62]"
+				>RelayAPI CLI</span
+			>
+		</div>
+		<pre
+			class="m-0 whitespace-pre-wrap p-4 text-[12px] leading-[1.75] text-[#3a3833] [font-family:var(--font-mono-landing)]"><span class="text-[#4e9a5a]">$</span> relay post --all "ship day!"
 <span class="text-[#9a968c] data-[state=success]:text-[#4e9a5a]" data-hp="cli" data-state="success">✓ 21/21 delivered</span></pre>
-  </div>
+	</div>
 </div>
 
 <script>
-  const root = document.querySelector<HTMLElement>('[data-hp="root"]');
-  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+	const root = document.querySelector<HTMLElement>('[data-hp="root"]');
+	const reduce = window.matchMedia(
+		"(prefers-reduced-motion: reduce)",
+	).matches;
 
-  if (root && !reduce) {
-    const get = (k: string) =>
-      root.querySelector<HTMLElement>(`[data-hp="${k}"]`)!;
-    const stage = get("stage");
-    const typed = get("typed");
-    const caret = get("caret");
-    const attach = get("attach");
-    const btn = get("btn");
-    const btnLabel = get("btnLabel");
-    const counter = get("counter");
-    const bar = get("bar");
-    const cli = get("cli");
-    const tiles = Array.from(
-      root.querySelectorAll<HTMLElement>('[data-hp="tile"]'),
-    );
-    const total = tiles.length;
+	if (root && !reduce) {
+		const get = (k: string) =>
+			root.querySelector<HTMLElement>(`[data-hp="${k}"]`)!;
+		const stage = get("stage");
+		const typed = get("typed");
+		const caret = get("caret");
+		const attach = get("attach");
+		const btn = get("btn");
+		const btnLabel = get("btnLabel");
+		const counter = get("counter");
+		const bar = get("bar");
+		const cli = get("cli");
+		const tiles = Array.from(
+			root.querySelectorAll<HTMLElement>('[data-hp="tile"]'),
+		);
+		const total = tiles.length;
 
-    const TEXT = "Shipping RelayAPI v2 today — one API, every channel. 🚀";
-    const chars = Array.from(TEXT);
+		const TEXT = "Shipping RelayAPI v2 today — one API, every channel. 🚀";
+		const chars = Array.from(TEXT);
 
-    // timeline (ms)
-    const TYPE_START = 320;
-    const CHAR = 27;
-    const typeEnd = TYPE_START + chars.length * CHAR;
-    const ATTACH = typeEnd + 250;
-    const PRESS = ATTACH + 520;
-    const BUSY = PRESS + 250;
-    const CLI_DELIVER = BUSY + 120;
-    const CASCADE = CLI_DELIVER + 260;
-    const STEP = 225;
-    const PUB = 150;
-    const DONE = CASCADE + total * STEP + 250;
-    const HOLD = DONE + 1900;
-    const FADE = 280;
+		// timeline (ms)
+		const TYPE_START = 320;
+		const CHAR = 27;
+		const typeEnd = TYPE_START + chars.length * CHAR;
+		const ATTACH = typeEnd + 250;
+		const PRESS = ATTACH + 520;
+		const BUSY = PRESS + 250;
+		const CLI_DELIVER = BUSY + 120;
+		const CASCADE = CLI_DELIVER + 260;
+		const STEP = 225;
+		const PUB = 150;
+		const DONE = CASCADE + total * STEP + 250;
+		const HOLD = DONE + 1900;
+		const FADE = 280;
 
-    let timers: number[] = [];
-    const at = (ms: number, fn: () => void) =>
-      timers.push(window.setTimeout(fn, ms));
-    const clearAll = () => {
-      for (const t of timers) clearTimeout(t);
-      timers = [];
-    };
+		let timers: number[] = [];
+		const at = (ms: number, fn: () => void) =>
+			timers.push(window.setTimeout(fn, ms));
+		const clearAll = () => {
+			for (const t of timers) clearTimeout(t);
+			timers = [];
+		};
 
-    function deliver(n: number) {
-      const tile = tiles[n];
-      if (!tile) return;
-      tile.dataset.state = "delivered";
-      const done = n + 1;
-      counter.textContent = `${done} / ${total}`;
-      bar.style.width = `${(done / total) * 100}%`;
-      if (done < total) cli.textContent = `→ ${done}/${total} delivered`;
-    }
+		function deliver(n: number) {
+			const tile = tiles[n];
+			if (!tile) return;
+			tile.dataset.state = "delivered";
+			const done = n + 1;
+			counter.textContent = `${done} / ${total}`;
+			bar.style.width = `${(done / total) * 100}%`;
+			if (done < total) cli.textContent = `→ ${done}/${total} delivered`;
+		}
 
-    function reset() {
-      root!.dataset.reset = "true";
-      typed.textContent = "";
-      caret.dataset.hide = "false";
-      attach.dataset.shown = "false";
-      btn.dataset.state = "idle";
-      btn.dataset.pressed = "false";
-      btnLabel.textContent = "Publish to all channels";
-      cli.dataset.state = "";
-      cli.textContent = "→ ready";
-      counter.textContent = `0 / ${total}`;
-      bar.style.width = "0%";
-      for (const t of tiles) t.dataset.state = "pending";
-      stage.style.opacity = "1";
-      void root!.offsetWidth; // force reflow so the reset is instant
-      root!.dataset.reset = "false";
-    }
+		function reset() {
+			root!.dataset.reset = "true";
+			typed.textContent = "";
+			caret.dataset.hide = "false";
+			attach.dataset.shown = "false";
+			btn.dataset.state = "idle";
+			btn.dataset.pressed = "false";
+			btnLabel.textContent = "Publish to all channels";
+			cli.dataset.state = "";
+			cli.textContent = "→ ready";
+			counter.textContent = `0 / ${total}`;
+			bar.style.width = "0%";
+			for (const t of tiles) t.dataset.state = "pending";
+			stage.style.opacity = "1";
+			void root!.offsetWidth; // force reflow so the reset is instant
+			root!.dataset.reset = "false";
+		}
 
-    function run() {
-      clearAll();
-      reset();
+		function run() {
+			clearAll();
+			reset();
 
-      chars.forEach((_, i) => {
-        at(TYPE_START + i * CHAR, () => {
-          typed.textContent = chars.slice(0, i + 1).join("");
-        });
-      });
-      at(ATTACH, () => {
-        attach.dataset.shown = "true";
-      });
-      at(PRESS, () => {
-        btn.dataset.pressed = "true";
-      });
-      at(PRESS + 240, () => {
-        btn.dataset.pressed = "false";
-      });
-      at(BUSY, () => {
-        btn.dataset.state = "busy";
-        btnLabel.textContent = "Publishing…";
-        caret.dataset.hide = "true";
-      });
-      at(CLI_DELIVER, () => {
-        cli.textContent = `→ delivering to ${total} platforms…`;
-      });
-      for (let n = 0; n < total; n++) {
-        at(CASCADE + n * STEP, () => {
-          tiles[n].dataset.state = "publishing";
-        });
-        at(CASCADE + n * STEP + PUB, () => deliver(n));
-      }
-      at(DONE, () => {
-        btn.dataset.state = "done";
-        btnLabel.textContent = `Delivered to ${total} channels`;
-        cli.dataset.state = "success";
-        cli.textContent = `✓ ${total}/${total} delivered`;
-      });
-      at(HOLD, () => {
-        stage.style.opacity = "0";
-      });
-      at(HOLD + FADE, () => run());
-    }
+			chars.forEach((_, i) => {
+				at(TYPE_START + i * CHAR, () => {
+					typed.textContent = chars.slice(0, i + 1).join("");
+				});
+			});
+			at(ATTACH, () => {
+				attach.dataset.shown = "true";
+			});
+			at(PRESS, () => {
+				btn.dataset.pressed = "true";
+			});
+			at(PRESS + 240, () => {
+				btn.dataset.pressed = "false";
+			});
+			at(BUSY, () => {
+				btn.dataset.state = "busy";
+				btnLabel.textContent = "Publishing…";
+				caret.dataset.hide = "true";
+			});
+			at(CLI_DELIVER, () => {
+				cli.textContent = `→ delivering to ${total} platforms…`;
+			});
+			for (let n = 0; n < total; n++) {
+				at(CASCADE + n * STEP, () => {
+					tiles[n].dataset.state = "publishing";
+				});
+				at(CASCADE + n * STEP + PUB, () => deliver(n));
+			}
+			at(DONE, () => {
+				btn.dataset.state = "done";
+				btnLabel.textContent = `Delivered to ${total} channels`;
+				cli.dataset.state = "success";
+				cli.textContent = `✓ ${total}/${total} delivered`;
+			});
+			at(HOLD, () => {
+				stage.style.opacity = "0";
+			});
+			at(HOLD + FADE, () => run());
+		}
 
-    // Only animate while the band is on screen; freeze + restart otherwise.
-    let running = false;
-    if ("IntersectionObserver" in window) {
-      const io = new IntersectionObserver(
-        (entries) => {
-          for (const e of entries) {
-            if (e.isIntersecting && !running) {
-              running = true;
-              run();
-            } else if (!e.isIntersecting && running) {
-              running = false;
-              clearAll();
-            }
-          }
-        },
-        { threshold: 0.05 },
-      );
-      io.observe(root);
-    } else {
-      run();
-    }
-  }
+		// Only animate while the band is on screen; freeze + restart otherwise.
+		let running = false;
+		if ("IntersectionObserver" in window) {
+			const io = new IntersectionObserver(
+				(entries) => {
+					for (const e of entries) {
+						if (e.isIntersecting && !running) {
+							running = true;
+							run();
+						} else if (!e.isIntersecting && running) {
+							running = false;
+							clearAll();
+						}
+					}
+				},
+				{ threshold: 0.05 },
+			);
+			io.observe(root);
+		} else {
+			run();
+		}
+	}
 </script>

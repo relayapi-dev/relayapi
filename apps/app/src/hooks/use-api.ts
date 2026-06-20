@@ -174,11 +174,14 @@ export function usePagedApi<T = unknown>(
 	const [error, setError] = useState<string | null>(null);
 	const [page, setPage] = useState(0);
 	const [totalPages, setTotalPages] = useState(0);
-	const cursorsRef = useRef<(string | null)[]>([null]);
 	const fetchId = useRef(0);
 	const limit = options?.limit || 20;
 	const requestKey = buildApiRequestKey(path, { limit, ...options?.query });
 
+	// Offset-based pagination: every page is directly addressable via
+	// `offset = page * limit`, so the numbered page buttons (including "last
+	// page") can jump straight to any page instead of only stepping forward one
+	// cursor at a time. Relies on the endpoint returning a `total` count.
 	const fetchPage = useCallback(
 		async (pageIndex: number) => {
 			if (!path) return;
@@ -189,8 +192,9 @@ export function usePagedApi<T = unknown>(
 			try {
 				const url = new URL(`/api/${path}`, window.location.origin);
 				url.searchParams.set("limit", String(limit));
-				const cursor = cursorsRef.current[pageIndex];
-				if (cursor) url.searchParams.set("cursor", cursor);
+				if (pageIndex > 0) {
+					url.searchParams.set("offset", String(pageIndex * limit));
+				}
 				applyQuery(url, options?.query);
 
 				const res = await fetch(url.toString(), {
@@ -212,11 +216,6 @@ export function usePagedApi<T = unknown>(
 				if (typeof json.total === "number") {
 					setTotalPages(Math.max(1, Math.ceil(json.total / limit)));
 				}
-
-				const nextCursor = json.next_cursor || null;
-				if (json.has_more && nextCursor) {
-					cursorsRef.current[pageIndex + 1] = nextCursor;
-				}
 			} catch {
 				if (id !== fetchId.current) return;
 				setError("Network connection lost.");
@@ -229,7 +228,6 @@ export function usePagedApi<T = unknown>(
 
 	useEffect(() => {
 		if (!path) return;
-		cursorsRef.current = [null];
 		setPage(0);
 		void fetchPage(0);
 	}, [fetchPage, path]);
@@ -237,9 +235,7 @@ export function usePagedApi<T = unknown>(
 	const goToPage = useCallback(
 		(target: number) => {
 			if (target >= 0 && target < totalPages && target !== page) {
-				if (cursorsRef.current[target] !== undefined) {
-					void fetchPage(target);
-				}
+				void fetchPage(target);
 			}
 		},
 		[totalPages, page, fetchPage],

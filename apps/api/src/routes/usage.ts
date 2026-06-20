@@ -8,7 +8,6 @@ import { and, count, desc, eq, gte, lt, lte, sql } from "drizzle-orm";
 import {
 	ErrorResponse,
 	OffsetPaginationParams,
-	PaginationParams,
 	paginatedResponse,
 } from "../schemas/common";
 import { UsageResponse } from "../schemas/usage";
@@ -222,7 +221,7 @@ app.openapi(listRequestLogs, async (c) => {
 		.limit(limit + 1);
 
 	const [rows, countRows] = await Promise.all([
-		useOffset ? dataQuery.offset(offset) : dataQuery,
+		offset !== undefined ? dataQuery.offset(offset) : dataQuery,
 		db
 			.select({ total: count() })
 			.from(apiRequestLogs)

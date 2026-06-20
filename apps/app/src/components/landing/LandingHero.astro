@@ -1,12 +1,27 @@
 ---
-import { LANDING_LINKS } from "./data";
 import Container from "./Container.astro";
+import { LANDING_LINKS } from "./data";
 ---
 
-<Container as="section" class="pt-[clamp(4rem,8vw,7rem)] pb-[clamp(2.5rem,5vw,4.1875rem)] text-left">
-  <h1 class="m-0 mb-[22px] max-w-[26ch] text-balance text-[clamp(22px,1.9vw,26px)] font-normal leading-[1.25] tracking-[-0.0125em] text-[#1a1815]">The agent-native way to post everywhere.</h1>
-  <div class="flex flex-wrap justify-start gap-[10px]">
-    <a href={LANDING_LINKS.signup} class="inline-flex items-center gap-2 rounded-full bg-[#1a1815] px-[22px] py-[12.5px] text-[16px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]">Get started <span class="text-[14px]">→</span></a>
-    <a href={LANDING_LINKS.signup} class="inline-flex items-center gap-2 rounded-full bg-[#e4e1d9] px-[22px] py-[12.5px] text-[16px] font-medium text-[#1a1815]! transition-colors duration-150 hover:bg-[#dbd7cc]">Request a demo <span class="text-[14px]">→</span></a>
-  </div>
+<Container
+	as="section"
+	class="pt-[clamp(4rem,8vw,7rem)] pb-[clamp(2.5rem,5vw,4.1875rem)] text-left"
+>
+	<h1
+		class="m-0 mb-[22px] max-w-[26ch] text-balance text-[clamp(22px,1.9vw,26px)] font-normal leading-[1.25] tracking-[-0.0125em] text-[#1a1815]"
+	>
+		The agent-native way to post everywhere.
+	</h1>
+	<div class="flex flex-wrap justify-start gap-[10px]">
+		<a
+			href={LANDING_LINKS.signup}
+			class="inline-flex items-center gap-2 rounded-full bg-[#1a1815] px-[22px] py-[12.5px] text-[16px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
+			>Get started <span class="text-[14px]">→</span></a
+		>
+		<a
+			href={LANDING_LINKS.signup}
+			class="inline-flex items-center gap-2 rounded-full bg-[#e4e1d9] px-[22px] py-[12.5px] text-[16px] font-medium text-[#1a1815]! transition-colors duration-150 hover:bg-[#dbd7cc]"
+			>Request a demo <span class="text-[14px]">→</span></a
+		>
+	</div>
 </Container>

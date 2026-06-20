@@ -85,28 +85,43 @@ const listConnectionLogs = createRoute({
 
 app.openapi(listConnectionLogs, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit, from, to, cursor } = c.req.valid("query");
+	const { limit, from, to, cursor, offset } = c.req.valid("query");
 	const db = c.get("db");
 
+	// Base conditions (org + time range) drive the total count; cursor/offset
+	// only narrow the data page, never the count.
 	const baseConditions = [eq(connectionLogs.organizationId, orgId)];
 	if (from) baseConditions.push(gte(connectionLogs.createdAt, new Date(from)));
 	if (to) baseConditions.push(lte(connectionLogs.createdAt, new Date(to)));
+
+	// `offset` enables random page access and takes precedence over `cursor`.
+	const useOffset = offset !== undefined;
+	const conditions = [...baseConditions];
 	// Keyset pagination: cursor is the createdAt of the last row from the previous
 	// page (results are ordered createdAt DESC). Guard against an invalid date so a
 	// malformed cursor doesn't produce an `IS NULL`-style no-op filter.
-	if (cursor) {
+	if (!useOffset && cursor) {
 		const cursorDate = new Date(cursor);
 		if (!Number.isNaN(cursorDate.getTime())) {
-			baseConditions.push(lt(connectionLogs.createdAt, cursorDate));
+			conditions.push(lt(connectionLogs.createdAt, cursorDate));
 		}
 	}
 
-	const rows = await db
+	const dataQuery = db
 		.select()
 		.from(connectionLogs)
-		.where(and(...baseConditions))
+		.where(and(...conditions))
 		.orderBy(desc(connectionLogs.createdAt))
 		.limit(limit + 1);
+
+	const [rows, countRows] = await Promise.all([
+		offset !== undefined ? dataQuery.offset(offset) : dataQuery,
+		db
+			.select({ total: count() })
+			.from(connectionLogs)
+			.where(and(...baseConditions)),
+	]);
+	const total = countRows[0]?.total ?? 0;
 
 	const hasMore = rows.length > limit;
 	const data = rows.slice(0, limit);
@@ -123,6 +138,7 @@ app.openapi(listConnectionLogs, async (c) => {
 			})),
 			next_cursor: hasMore ? (data.at(-1)?.createdAt.toISOString() ?? null) : null,
 			has_more: hasMore,
+			total,
 		},
 		200,
 	);

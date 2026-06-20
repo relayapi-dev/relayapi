@@ -176,6 +176,12 @@ export interface UsageListLogsParams {
 
   limit?: number;
 
+  /**
+   * Number of items to skip for offset-based pagination. Enables random access to
+   * any page; takes precedence over `cursor` when provided.
+   */
+  offset?: number;
+
   to?: string;
 }
 

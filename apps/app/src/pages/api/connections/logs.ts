@@ -11,6 +11,8 @@ export const GET: APIRoute = async (ctx) => {
     };
     const cursor = url.searchParams.get("cursor");
     if (cursor) query.cursor = cursor;
+    const offset = url.searchParams.get("offset");
+    if (offset !== null) query.offset = Number(offset);
     const from = url.searchParams.get("from");
     if (from) query.from = from;
     const to = url.searchParams.get("to");
