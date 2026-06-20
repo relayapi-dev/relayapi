@@ -942,20 +942,7 @@ export function ChatThread({
                         </div>
                       )}
 
-                      <div className={cn("flex items-end gap-2", isOutbound ? "justify-end" : "justify-start")}>
-                        {!isOutbound && (
-                          sameNext ? (
-                            <div className="size-7 shrink-0" />
-                          ) : (
-                            <Avatar
-                              src={msg.author_avatar_url ?? conversation.participant_avatar}
-                              name={msg.author_name || displayName}
-                              className="size-7 shrink-0"
-                              fallbackClassName="text-[11px]"
-                            />
-                          )
-                        )}
-
+                      <div className={cn("flex items-end", isOutbound ? "justify-end" : "justify-start")}>
                         <div className={cn("flex min-w-0 max-w-[80%] flex-col", isOutbound ? "items-end" : "items-start")}>
                           {msg.text && (
                             <div

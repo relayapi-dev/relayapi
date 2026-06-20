@@ -19,15 +19,16 @@ const freeFeatures: { text: string; included: boolean }[] = [
 ];
 
 // Pro-plan feature checklist (highlight = the always-included extras others charge for).
-const proFeatures: { text: string; included: boolean; highlight?: boolean }[] = [
-	{ text: "All 21 platforms", included: true },
-	{ text: "Unlimited profiles", included: true },
-	{ text: "Media uploads & scheduling", included: true },
-	{ text: "Webhook notifications", included: true },
-	{ text: "1,000 req/min rate limit", included: true },
-	{ text: "Comments API", included: true, highlight: true },
-	{ text: "Analytics API", included: true, highlight: true },
-];
+const proFeatures: { text: string; included: boolean; highlight?: boolean }[] =
+	[
+		{ text: "All 21 platforms", included: true },
+		{ text: "Unlimited profiles", included: true },
+		{ text: "Media uploads & scheduling", included: true },
+		{ text: "Webhook notifications", included: true },
+		{ text: "1,000 req/min rate limit", included: true },
+		{ text: "Comments API", included: true, highlight: true },
+		{ text: "Analytics API", included: true, highlight: true },
+	];
 
 // Real-cost comparison. RelayAPI is the highlighted row. Figures mirror the
 // long-standing pricing copy (as of March 2026).
@@ -103,7 +104,11 @@ const headCell =
 		slot="head"
 		title="Pricing"
 		description="Simple, transparent pricing for RelayAPI. Start free, scale as you grow — analytics and comments always included."
-		keywords={["api pricing", "social media api pricing", "relayapi pricing"]}
+		keywords={[
+			"api pricing",
+			"social media api pricing",
+			"relayapi pricing",
+		]}
 	/>
 
 	{/* ===================== HERO ===================== */}
@@ -124,22 +129,22 @@ const headCell =
 		<p
 			class="mx-auto mt-5 max-w-[52ch] text-balance text-[17px] leading-[1.55] text-[#6e6a62]"
 		>
-			Start free with 200 requests a month. Move to Pro at $5/mo and pay only
-			for what you use. Analytics and comments are always included.
+			Start free with 200 requests a month. Move to Pro at $5/mo and pay
+			only for what you use. Analytics and comments are always included.
 		</p>
 	</Container>
 
 	{/* ===================== PLAN CARDS ===================== */}
 	<Container as="section" class="pb-[clamp(2rem,4vw,3.5rem)]">
-		<div
-			class="mx-auto grid max-w-[60rem] gap-5 md:grid-cols-2"
-		>
+		<div class="mx-auto grid max-w-[60rem] gap-5 md:grid-cols-2">
 			{/* ---- Free ---- */}
 			<div
 				class="flex flex-col rounded-[20px] border border-landing-ink/[0.1] bg-landing-card p-7 sm:p-8"
 			>
 				<div class="flex items-center gap-2.5">
-					<h2 class="text-[15px] font-semibold uppercase tracking-[0.08em] text-landing-ink">
+					<h2
+						class="text-[15px] font-semibold uppercase tracking-[0.08em] text-landing-ink"
+					>
 						Free
 					</h2>
 					<span
@@ -154,7 +159,9 @@ const headCell =
 					>
 					<span class="text-[16px] text-[#6e6a62]">/month</span>
 				</div>
-				<p class="mt-2 text-[14px] text-[#6e6a62]">200 requests / month</p>
+				<p class="mt-2 text-[14px] text-[#6e6a62]">
+					200 requests / month
+				</p>
 
 				<ul class="mt-7 flex flex-1 flex-col gap-3">
 					{
@@ -214,7 +221,9 @@ const headCell =
 				class="relative flex flex-col rounded-[20px] border border-landing-ink/[0.18] bg-landing-card p-7 shadow-[0_24px_60px_-32px_rgba(40,28,12,0.45)] ring-1 ring-landing-ink/[0.06] sm:p-8"
 			>
 				<div class="flex items-center gap-2.5">
-					<h2 class="text-[15px] font-semibold uppercase tracking-[0.08em] text-landing-ink">
+					<h2
+						class="text-[15px] font-semibold uppercase tracking-[0.08em] text-landing-ink"
+					>
 						Pro
 					</h2>
 					<span
@@ -228,8 +237,9 @@ const headCell =
 						class="text-[clamp(40px,5vw,52px)] font-medium tracking-[-0.03em] text-landing-ink"
 						>$5</span
 					>
-					<span id="pro-price-suffix" class="text-[16px] text-[#6e6a62]"
-						>/month</span
+					<span
+						id="pro-price-suffix"
+						class="text-[16px] text-[#6e6a62]">/month</span
 					>
 				</div>
 				<p id="pro-sub" class="mt-2 text-[14px] text-[#6e6a62]">
@@ -283,7 +293,9 @@ const headCell =
 								<svg
 									class:list={[
 										"mt-0.5 size-4 shrink-0",
-										f.highlight ? "text-landing-accent" : "text-landing-ink",
+										f.highlight
+											? "text-landing-accent"
+											: "text-landing-ink",
 									]}
 									viewBox="0 0 24 24"
 									fill="none"
@@ -296,7 +308,11 @@ const headCell =
 									<path d="M5 13l4 4L19 7" />
 								</svg>
 								<span
-									id={f.text === "1,000 req/min rate limit" ? "pro-ratelimit" : undefined}
+									id={
+										f.text === "1,000 req/min rate limit"
+											? "pro-ratelimit"
+											: undefined
+									}
 									class:list={[
 										"text-[14.5px]",
 										f.highlight
@@ -320,7 +336,9 @@ const headCell =
 			</div>
 		</div>
 
-		<p class="mx-auto mt-6 max-w-[60rem] text-center text-[13px] text-[#9a968c]">
+		<p
+			class="mx-auto mt-6 max-w-[60rem] text-center text-[13px] text-[#9a968c]"
+		>
 			Spending over $100/mo? <a
 				href={LANDING_LINKS.signup}
 				class="text-landing-accent! underline-offset-4 hover:underline"
@@ -334,16 +352,18 @@ const headCell =
 
 	{/* ===================== COMPARISON ===================== */}
 	<Container as="section" class="py-[clamp(2.5rem,5vw,4rem)]">
-		<div data-reveal class="mx-auto max-w-[64rem]">
+		<div data-reveal class="mx-auto">
 			<h2
 				class="text-[clamp(26px,3vw,40px)] font-medium tracking-[-0.03em] text-landing-ink"
 			>
 				Compare the real cost.
 			</h2>
-			<p class="mt-3 max-w-[56ch] text-[16px] leading-[1.55] text-[#6e6a62]">
-				Most social APIs charge per connected account or stack analytics and
-				comments on top as paid add-ons. Here's how RelayAPI compares as you
-				grow.
+			<p
+				class="mt-3 max-w-[56ch] text-[16px] leading-[1.55] text-[#6e6a62]"
+			>
+				Most social APIs charge per connected account or stack analytics
+				and comments on top as paid add-ons. Here's how RelayAPI
+				compares as you grow.
 			</p>
 
 			<div
@@ -351,12 +371,22 @@ const headCell =
 			>
 				<table class="w-full min-w-[640px] border-collapse text-left">
 					<thead>
-						<tr class="border-b border-landing-ink/[0.08] bg-[#f1efe8]">
+						<tr
+							class="border-b border-landing-ink/[0.08] bg-[#f1efe8]"
+						>
 							<th class={headCell}>Provider</th>
-							<th class={`${headCell} text-right`}>10 customers</th>
-							<th class={`${headCell} text-right`}>50 customers</th>
-							<th class={`${headCell} text-right`}>500 customers</th>
-							<th class={`${headCell} hidden lg:table-cell`}>Notes</th>
+							<th class={`${headCell} text-right`}
+								>10 customers</th
+							>
+							<th class={`${headCell} text-right`}
+								>50 customers</th
+							>
+							<th class={`${headCell} text-right`}
+								>500 customers</th
+							>
+							<th class={`${headCell} hidden lg:table-cell`}
+								>Notes</th
+							>
 						</tr>
 					</thead>
 					<tbody>
@@ -365,7 +395,8 @@ const headCell =
 								<tr
 									class:list={[
 										"border-b border-landing-ink/[0.06] last:border-0",
-										c.highlight && "bg-landing-accent/[0.06]",
+										c.highlight &&
+											"bg-landing-accent/[0.06]",
 									]}
 								>
 									<td class="px-4 py-4 pl-6">
@@ -380,21 +411,25 @@ const headCell =
 											{c.name}
 										</span>
 									</td>
-									{[c.price10, c.price50, c.price500].map((p) => (
-										<td class="px-4 py-4 text-right">
-											<span
-												class:list={[
-													"text-[14.5px] font-semibold tabular-nums",
-													c.highlight
-														? "text-landing-accent"
-														: "text-landing-ink",
-												]}
-											>
-												{p}
-											</span>
-											<span class="text-[13px] text-[#9a968c]">/mo</span>
-										</td>
-									))}
+									{[c.price10, c.price50, c.price500].map(
+										(p) => (
+											<td class="px-4 py-4 text-right">
+												<span
+													class:list={[
+														"text-[14.5px] font-semibold tabular-nums",
+														c.highlight
+															? "text-landing-accent"
+															: "text-landing-ink",
+													]}
+												>
+													{p}
+												</span>
+												<span class="text-[13px] text-[#9a968c]">
+													/mo
+												</span>
+											</td>
+										),
+									)}
 									<td class="hidden px-4 py-4 pr-6 text-[13px] leading-[1.5] text-[#6e6a62] lg:table-cell">
 										{c.note}
 									</td>
@@ -423,7 +458,9 @@ const headCell =
 				>
 					Questions &amp; answers
 				</h2>
-				<p class="mt-3 max-w-[34ch] text-[16px] leading-[1.55] text-[#6e6a62]">
+				<p
+					class="mt-3 max-w-[34ch] text-[16px] leading-[1.55] text-[#6e6a62]"
+				>
 					Everything else you might be wondering. Still stuck? <a
 						href={`mailto:support@relayapi.dev`}
 						class="text-landing-accent! underline-offset-4 hover:underline"
@@ -435,12 +472,8 @@ const headCell =
 			<div class="flex flex-col">
 				{
 					faqs.map((item) => (
-						<details
-							class="group border-b border-landing-ink/[0.1] py-5 first:pt-0"
-						>
-							<summary
-								class="flex cursor-pointer list-none items-center justify-between gap-4 text-[16.5px] font-medium text-landing-ink [&::-webkit-details-marker]:hidden"
-							>
+						<details class="group border-b border-landing-ink/[0.1] py-5 first:pt-0">
+							<summary class="flex cursor-pointer list-none items-center justify-between gap-4 text-[16.5px] font-medium text-landing-ink [&::-webkit-details-marker]:hidden">
 								{item.q}
 								<svg
 									class="size-4 shrink-0 text-[#9a968c] transition-transform duration-200 group-open:rotate-45"
@@ -501,15 +534,20 @@ const headCell =
 		PRO_BASE + (Math.max(0, calls - INCLUDED) / 1000) * PER_1K;
 
 	const fmtNum = (n: number) => n.toLocaleString("en-US");
-	const fmtPrice = (p: number) => (p % 1 === 0 ? `$${p}` : `$${p.toFixed(2)}`);
+	const fmtPrice = (p: number) =>
+		p % 1 === 0 ? `$${p}` : `$${p.toFixed(2)}`;
 
-	const slider = document.getElementById("pro-slider") as HTMLInputElement | null;
+	const slider = document.getElementById(
+		"pro-slider",
+	) as HTMLInputElement | null;
 	const priceEl = document.getElementById("pro-price");
 	const suffixEl = document.getElementById("pro-price-suffix");
 	const subEl = document.getElementById("pro-sub");
 	const fillEl = document.getElementById("pro-track-fill");
 	const thumbEl = document.getElementById("pro-thumb");
-	const ctaEl = document.getElementById("pro-cta") as HTMLAnchorElement | null;
+	const ctaEl = document.getElementById(
+		"pro-cta",
+	) as HTMLAnchorElement | null;
 	const rateEl = document.getElementById("pro-ratelimit");
 
 	function render() {

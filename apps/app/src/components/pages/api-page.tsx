@@ -309,32 +309,28 @@ function FaqSection({ api }: { api: ApiData }) {
 
 function CtaSection() {
 	return (
-		<section className={`${SECTION} py-9`}>
-			<div
-				className="rounded-[1.875rem] bg-landing-ink p-[clamp(40px,5vw,72px)] text-center"
-			>
-				<h2 className="mx-auto max-w-[20ch] text-[clamp(28px,3.2vw,46px)] font-medium tracking-[-0.03em] text-[#f3f1ea]">
-					Ready to start building?
-				</h2>
-				<p className="mx-auto mt-4 max-w-[48ch] text-[17px] leading-[1.5] text-[#8c887e]">
-					Get your API key and publish across 21 platforms in minutes.
-				</p>
-				<div className="mt-8 flex flex-wrap justify-center gap-[12px]">
-					<a
-						href="/signup"
-						className="rounded-full bg-[#f3f1ea] px-[26px] py-[13px] text-[15px] font-medium text-landing-ink! transition-opacity duration-150 hover:opacity-[0.88]"
-					>
-						Start building free
-					</a>
-					<a
-						href="https://docs.relayapi.dev/"
-						target="_blank"
-						rel="noopener noreferrer"
-						className="rounded-full border border-white/20 px-[26px] py-[13px] text-[15px] font-medium text-[#f3f1ea]! transition-colors duration-150 hover:bg-white/[0.06]"
-					>
-						Read the docs
-					</a>
-				</div>
+		<section className={`${SECTION} py-[clamp(4rem,8vw,7rem)] text-center`}>
+			<h2 className="mx-auto max-w-[18ch] text-balance text-[clamp(34px,5vw,60px)] font-medium tracking-[-0.04em] text-landing-ink">
+				Ready to start building?
+			</h2>
+			<p className="mx-auto mt-5 max-w-[48ch] text-balance text-[17px] leading-[1.5] text-[#6e6a62]">
+				Get your API key and publish across 21 platforms in minutes.
+			</p>
+			<div className="mt-8 flex flex-wrap justify-center gap-[12px]">
+				<a
+					href="/signup"
+					className="rounded-full bg-landing-ink px-[30px] py-[15px] text-[17px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
+				>
+					Start building free
+				</a>
+				<a
+					href="https://docs.relayapi.dev/"
+					target="_blank"
+					rel="noopener noreferrer"
+					className="rounded-full bg-[#e4e1d9] px-[30px] py-[15px] text-[17px] font-medium text-landing-ink! transition-colors duration-150 hover:bg-[#dbd7cc]"
+				>
+					Read the docs
+				</a>
 			</div>
 		</section>
 	);
