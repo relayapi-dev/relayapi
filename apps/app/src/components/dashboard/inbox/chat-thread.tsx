@@ -4,22 +4,26 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   Archive,
   ArrowDown,
+  AtSign,
   Check,
   ChevronDown,
   ChevronLeft,
+  CornerUpLeft,
   ExternalLink,
+  ImageOff,
   Loader2,
   MessageCircle,
   MoreHorizontal,
   PauseCircle,
   PlayCircle,
   RotateCcw,
+  Share2,
   TriangleAlert,
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./avatar";
-import type { ConversationItem, InboxOrganizationMember, MessageItem, NoteItem, ThreadItem } from "./shared";
+import type { ConversationItem, InboxOrganizationMember, MessageItem, NoteItem, StoryMessageType, ThreadItem } from "./shared";
 import {
   formatMessageDayLabel,
   formatMessageTime,
@@ -104,10 +108,34 @@ interface ApiMessage {
   author_avatar_url?: string | null;
   text?: string | null;
   attachments?: unknown;
+  platform_data?: unknown;
   created_at: string;
 }
 
+const STORY_MESSAGE_TYPES = new Set<StoryMessageType>([
+  "story_mention",
+  "story_reply",
+  "share",
+]);
+
+function parseStoryMeta(platformData: unknown): {
+  message_type: StoryMessageType | null;
+  story_url: string | null;
+} {
+  if (!platformData || typeof platformData !== "object") {
+    return { message_type: null, story_url: null };
+  }
+  const data = platformData as { message_type?: unknown; story_url?: unknown };
+  const type =
+    typeof data.message_type === "string" && STORY_MESSAGE_TYPES.has(data.message_type as StoryMessageType)
+      ? (data.message_type as StoryMessageType)
+      : null;
+  const url = typeof data.story_url === "string" && data.story_url.length > 0 ? data.story_url : null;
+  return { message_type: type, story_url: url };
+}
+
 function mapApiMessage(message: ApiMessage): MessageItem {
+  const story = parseStoryMeta(message.platform_data);
   return {
     id: message.id,
     sender: message.direction === "outbound" ? "user" : "participant",
@@ -115,6 +143,8 @@ function mapApiMessage(message: ApiMessage): MessageItem {
     author_avatar_url: message.author_avatar_url ?? null,
     text: message.text ?? "",
     attachments: normalizeAttachments(message.attachments),
+    message_type: story.message_type,
+    story_url: story.story_url,
     created_at: message.created_at,
   };
 }
@@ -138,6 +168,83 @@ function EmptyThreadState() {
           Pick a chat from the list to read and reply across all your connected channels.
         </p>
       </div>
+    </div>
+  );
+}
+
+const STORY_CARD_CONFIG: Record<
+  StoryMessageType,
+  { label: string; Icon: typeof AtSign }
+> = {
+  story_mention: { label: "Mentioned you in their story", Icon: AtSign },
+  story_reply: { label: "Replied to your story", Icon: CornerUpLeft },
+  share: { label: "Shared a post", Icon: Share2 },
+};
+
+/**
+ * Renders Instagram story mentions/replies and shared posts — which arrive with
+ * no message text — as a labeled card with the story image when available. The
+ * Meta CDN link is short-lived, so a failed image load falls back to the label.
+ */
+function StoryMentionCard({
+  messageType,
+  storyUrl,
+  isOutbound,
+}: {
+  messageType: StoryMessageType;
+  storyUrl?: string | null;
+  isOutbound: boolean;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const { label, Icon } = STORY_CARD_CONFIG[messageType];
+  const showImage = Boolean(storyUrl) && !imageFailed;
+
+  return (
+    <div
+      className={cn(
+        "flex max-w-full flex-col gap-2 rounded-2xl border border-border bg-muted/60 p-2",
+        isOutbound ? "items-end" : "items-start",
+      )}
+    >
+      <div className="flex items-center gap-1.5 px-1 text-[12px] font-medium text-muted-foreground">
+        <Icon className="size-3.5 shrink-0" />
+        <span>{label}</span>
+      </div>
+      {showImage && (
+        <a
+          href={storyUrl ?? undefined}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block overflow-hidden rounded-xl border border-border bg-card"
+        >
+          <img
+            src={storyUrl ?? undefined}
+            alt={label}
+            loading="lazy"
+            onError={() => setImageFailed(true)}
+            className="max-h-72 w-auto max-w-full object-cover"
+          />
+        </a>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Fallback for messages that have no renderable content (no text, attachments,
+ * or story metadata) — e.g. historical story mentions ingested before the media
+ * was captured. Keeps the timeline legible instead of showing a blank row.
+ */
+function UnsupportedMessage({ isOutbound }: { isOutbound: boolean }) {
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-2xl border border-dashed border-border bg-muted/40 px-3 py-1.5 text-[12px] text-muted-foreground",
+        isOutbound ? "rounded-br-sm" : "rounded-bl-sm",
+      )}
+    >
+      <ImageOff className="size-3.5 shrink-0" />
+      <span>Unsupported message</span>
     </div>
   );
 }
@@ -839,7 +946,7 @@ export function ChatThread({
         }}
         className="relative flex-1"
       >
-        <div className="mx-auto flex min-h-full max-w-3xl flex-col px-4 py-5 sm:px-6">
+        <div className="flex min-h-full flex-col px-4 py-5 sm:px-6">
           {loading ? (
             <div className="flex flex-1 items-center justify-center py-12">
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -915,6 +1022,9 @@ export function ChatThread({
                     !previousMessage || dayKey(previousMessage.created_at) !== dayKey(msg.created_at);
 
                   const hasAttachments = Boolean(msg.attachments && msg.attachments.length > 0);
+                  const storyType = msg.message_type ?? null;
+                  const hasRenderableContent =
+                    Boolean(msg.text) || hasAttachments || Boolean(storyType);
 
                   return (
                     <motion.div
@@ -944,6 +1054,14 @@ export function ChatThread({
 
                       <div className={cn("flex items-end", isOutbound ? "justify-end" : "justify-start")}>
                         <div className={cn("flex min-w-0 max-w-[80%] flex-col", isOutbound ? "items-end" : "items-start")}>
+                          {storyType && (
+                            <StoryMentionCard
+                              messageType={storyType}
+                              storyUrl={msg.story_url}
+                              isOutbound={isOutbound}
+                            />
+                          )}
+
                           {msg.text && (
                             <div
                               className={cn(
@@ -954,6 +1072,7 @@ export function ChatThread({
                                 isOutbound
                                   ? (sameNext ? "rounded-br-md" : "rounded-br-sm")
                                   : (sameNext ? "rounded-bl-md" : "rounded-bl-sm"),
+                                storyType && "mt-2",
                               )}
                             >
                               <p className="whitespace-pre-wrap break-words">{msg.text}</p>
@@ -961,9 +1080,9 @@ export function ChatThread({
                           )}
 
                           {hasAttachments && (
-                            <div className={cn("space-y-2", msg.text && "mt-2")}>
+                            <div className={cn("space-y-2", (msg.text || storyType) && "mt-2")}>
                               {msg.attachments?.map((attachment, attachmentIndex) => {
-                                if (attachment.type.startsWith("image/")) {
+                                if (attachment.type.startsWith("image/") || attachment.type === "image") {
                                   return (
                                     <a
                                       key={attachmentIndex}
@@ -995,6 +1114,10 @@ export function ChatThread({
                                 );
                               })}
                             </div>
+                          )}
+
+                          {!hasRenderableContent && (
+                            <UnsupportedMessage isOutbound={isOutbound} />
                           )}
 
                           {!sameNext && (

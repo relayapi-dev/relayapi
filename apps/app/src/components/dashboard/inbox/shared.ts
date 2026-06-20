@@ -44,6 +44,8 @@ export interface ConversationItem {
   updated_at: string;
 }
 
+export type StoryMessageType = "story_mention" | "story_reply" | "share";
+
 export interface MessageItem {
   id: string;
   sender: "user" | "participant";
@@ -52,6 +54,10 @@ export interface MessageItem {
   text: string;
   created_at: string;
   attachments?: Array<{ type: string; url: string }>;
+  /** Set for Instagram story mentions/replies and shared posts (from platform_data). */
+  message_type?: StoryMessageType | null;
+  /** Best-effort story media URL (Meta CDN, may expire). */
+  story_url?: string | null;
 }
 
 export interface NoteItem {
