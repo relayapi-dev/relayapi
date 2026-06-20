@@ -51,6 +51,7 @@ export function WorkspaceSearchCombobox({
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const newWorkspaceInputRef = useRef<HTMLInputElement>(null);
 
@@ -140,6 +141,8 @@ export function WorkspaceSearchCombobox({
         setOpen(false);
         setSearch("");
         setNewWorkspaceName("");
+        // Keep focus inside any host dialog (see handleSelect).
+        triggerRef.current?.focus();
       }
     } catch {
       // ignore
@@ -152,6 +155,11 @@ export function WorkspaceSearchCombobox({
     onSelect(id, name);
     setOpen(false);
     setSearch("");
+    // Return focus to the trigger before the portaled dropdown unmounts.
+    // Otherwise focus falls back to <body>, which a host Radix Dialog reads as
+    // a "focus outside" interaction and dismisses itself — closing this dialog
+    // the moment a workspace is picked.
+    triggerRef.current?.focus();
   };
 
   const triggerLabel = value === "__ungrouped"
@@ -164,6 +172,7 @@ export function WorkspaceSearchCombobox({
     <div ref={containerRef} className={cn("relative", variant === "icon" ? "inline-flex" : "", className)}>
       {variant === "icon" ? (
         <button
+          ref={triggerRef}
           type="button"
           title={triggerLabel}
           onClick={() => { setOpen(!open); setTimeout(() => inputRef.current?.focus(), 50); }}
@@ -178,6 +187,7 @@ export function WorkspaceSearchCombobox({
         </button>
       ) : (
         <button
+          ref={triggerRef}
           type="button"
           onClick={() => { setOpen(!open); setTimeout(() => inputRef.current?.focus(), 50); }}
           className={cn(

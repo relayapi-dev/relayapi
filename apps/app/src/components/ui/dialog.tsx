@@ -13,6 +13,16 @@ function isPortaledComboboxTarget(target: EventTarget | null | undefined) {
   return false
 }
 
+// When a portaled popover (e.g. the workspace combobox dropdown) closes, it
+// unmounts its focused element and focus falls back to <body>. Radix surfaces
+// that as a focus-outside event targeting <body> — but it is not a genuine
+// outside interaction (real outside clicks are caught by onPointerDownOutside),
+// so it must not dismiss the dialog.
+function isFocusFallbackToBody(target: EventTarget | null | undefined) {
+  if (!target) return true
+  return target instanceof Element && target === target.ownerDocument.body
+}
+
 function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
@@ -79,7 +89,11 @@ function DialogContent({
         }}
         onFocusOutside={(e) => {
           const originalTarget = e.detail.originalEvent.target
-          if (isPortaledComboboxTarget(originalTarget) || isPortaledComboboxTarget(e.target)) {
+          if (
+            isFocusFallbackToBody(originalTarget) ||
+            isPortaledComboboxTarget(originalTarget) ||
+            isPortaledComboboxTarget(e.target)
+          ) {
             e.preventDefault()
             return
           }

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { getApiBySlug } from "../../lib/api-data";
 import type { ApiData } from "../../lib/api-data";
+import { getApiBySlug } from "../../lib/api-data";
 import { highlightCode } from "../../lib/code-highlight";
 import { platforms } from "../../lib/platform-data";
 import { apiIconPaths, platformGlyph } from "../../lib/product-glyphs";
@@ -66,7 +66,7 @@ function HeroSection({ api }: { api: ApiData }) {
 		<section
 			className={`${SECTION} pb-[clamp(2rem,4vw,3rem)] pt-[clamp(3.5rem,7vw,6rem)] text-center`}
 		>
-			<span className="mx-auto mb-7 flex size-14 items-center justify-center rounded-[14px] bg-landing-card text-landing-ink ring-1 ring-landing-ink/[0.08] [&>svg]:size-7">
+			<span className="mx-auto mb-7 flex size-14 items-center justify-center rounded-md bg-landing-card text-landing-ink ring-1 ring-landing-ink/[0.08] [&>svg]:size-7">
 				<svg
 					viewBox="0 0 24 24"
 					fill="none"
@@ -120,7 +120,7 @@ function FeaturesSection({ api }: { api: ApiData }) {
 					{api.features.map((feature) => (
 						<div
 							key={feature.title}
-							className="rounded-[20px] border border-landing-ink/[0.08] bg-landing-card p-7"
+							className="rounded-md border border-landing-ink/[0.08] bg-landing-card p-7"
 						>
 							<h3 className="text-[16px] font-semibold tracking-[-0.01em] text-landing-ink">
 								{feature.title}
@@ -143,7 +143,10 @@ function HowItWorksSection() {
 				<h2 className={H2}>Up and running in minutes</h2>
 				<div className="mt-10 grid gap-8 sm:grid-cols-3">
 					{STEPS.map((step) => (
-						<div key={step.n} className="flex flex-col items-center text-center">
+						<div
+							key={step.n}
+							className="flex flex-col items-center text-center"
+						>
 							<span className="flex size-11 items-center justify-center rounded-full bg-landing-ink text-[17px] font-medium text-[#f3f1ea]">
 								{step.n}
 							</span>
@@ -170,7 +173,7 @@ function BenefitsSection({ api }: { api: ApiData }) {
 					{api.benefits.map((benefit) => (
 						<div
 							key={benefit.title}
-							className="rounded-[20px] border border-landing-ink/[0.08] bg-landing-card p-7"
+							className="rounded-md border border-landing-ink/[0.08] bg-landing-card p-7"
 						>
 							<h3 className="text-[16px] font-semibold tracking-[-0.01em] text-landing-ink">
 								{benefit.title}
@@ -253,7 +256,7 @@ function PlatformsSection() {
 						<a
 							key={p.slug}
 							href={`/product/${p.slug}`}
-							className="flex flex-col items-center gap-2.5 rounded-[16px] border border-landing-ink/[0.08] bg-landing-card p-4 text-landing-ink! transition-colors duration-150 hover:bg-landing-ink/[0.04] [&>svg]:size-5"
+							className="flex flex-col items-center gap-2.5 rounded-md border border-landing-ink/[0.08] bg-landing-card p-4 text-landing-ink! transition-colors duration-150 hover:bg-landing-ink/[0.04] [&>svg]:size-5"
 						>
 							<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 								<path d={platformGlyph(p.slug)} />

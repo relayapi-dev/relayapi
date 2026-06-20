@@ -1,5 +1,5 @@
-import { getPlatformBySlug, platforms } from "../../lib/platform-data";
 import { highlightCode } from "../../lib/code-highlight";
+import { getPlatformBySlug, platforms } from "../../lib/platform-data";
 import { platformGlyph } from "../../lib/product-glyphs";
 
 /**
@@ -20,7 +20,8 @@ const STEPS = [
 	{
 		n: 2,
 		title: "Build your integration",
-		body: () => "Use the REST API or our SDKs to publish content from your stack.",
+		body: () =>
+			"Use the REST API or our SDKs to publish content from your stack.",
 	},
 	{
 		n: 3,
@@ -60,7 +61,7 @@ export function PlatformPage({ slug }: { slug: string }) {
 		<>
 			{/* ===================== HERO ===================== */}
 			<section className="mx-auto w-full max-w-[77.5rem] px-5 pb-[clamp(2rem,4vw,3rem)] pt-[clamp(3.5rem,7vw,6rem)] text-center sm:px-8">
-				<span className="mx-auto mb-7 flex size-14 items-center justify-center rounded-[14px] bg-landing-card text-landing-ink ring-1 ring-landing-ink/[0.08] [&>svg]:size-7">
+				<span className="mx-auto mb-7 flex size-14 items-center justify-center rounded-md bg-landing-card text-landing-ink ring-1 ring-landing-ink/[0.08] [&>svg]:size-7">
 					<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 						<path d={platformGlyph(platform.slug)} />
 					</svg>
@@ -94,9 +95,7 @@ export function PlatformPage({ slug }: { slug: string }) {
 
 			{/* ===================== CODE WINDOW ===================== */}
 			<section className="mx-auto w-full max-w-[77.5rem] px-5 pb-[clamp(2.5rem,5vw,4rem)] sm:px-8">
-				<div
-					className="mx-auto max-w-[52rem] overflow-hidden rounded-feature-window bg-landing-panel-dark shadow-feature-window"
-				>
+				<div className="mx-auto max-w-[52rem] overflow-hidden rounded-feature-window bg-landing-panel-dark shadow-feature-window">
 					<div className="flex items-center border-b border-landing-line-dark px-4 py-2.5">
 						<div className="flex gap-[7px]">
 							<span className="size-[10px] rounded-full bg-white/15" />
@@ -119,7 +118,7 @@ export function PlatformPage({ slug }: { slug: string }) {
 			<section className="mx-auto w-full max-w-[77.5rem] px-5 py-[clamp(2.5rem,5vw,4rem)] sm:px-8">
 				<div className="mx-auto max-w-[60rem]">
 					<div className="grid gap-5 md:grid-cols-2">
-						<div className="rounded-[20px] border border-landing-ink/[0.08] bg-landing-card p-7 sm:p-8">
+						<div className="rounded-md border border-landing-ink/[0.08] bg-landing-card p-7 sm:p-8">
 							<h2 className="text-[18px] font-semibold tracking-[-0.01em] text-landing-ink">
 								{platform.directApiName}
 							</h2>
@@ -146,7 +145,7 @@ export function PlatformPage({ slug }: { slug: string }) {
 							</ul>
 						</div>
 
-						<div className="rounded-[20px] border border-landing-ink/[0.14] bg-landing-card p-7 ring-1 ring-landing-ink/[0.05] sm:p-8">
+						<div className="rounded-md border border-landing-ink/[0.14] bg-landing-card p-7 ring-1 ring-landing-ink/[0.05] sm:p-8">
 							<h2 className="text-[18px] font-semibold tracking-[-0.01em] text-landing-ink">
 								RelayAPI
 							</h2>
@@ -191,9 +190,7 @@ export function PlatformPage({ slug }: { slug: string }) {
 			{/* ===================== WARNING (conditional) ===================== */}
 			{platform.warningBanner && (
 				<section className="mx-auto w-full max-w-[77.5rem] px-5 pb-[clamp(2rem,4vw,3rem)] sm:px-8">
-					<div
-						className="mx-auto max-w-[60rem] rounded-[18px] border border-[#e0c08a] bg-[#f7eeda] p-6"
-					>
+					<div className="mx-auto max-w-[60rem] rounded-md border border-[#e0c08a] bg-[#f7eeda] p-6">
 						<h3 className="text-[16px] font-semibold text-[#7a5a1e]">
 							{platform.warningBanner.title}
 						</h3>
@@ -252,13 +249,11 @@ export function PlatformPage({ slug }: { slug: string }) {
 
 			{/* ===================== FEATURE CARDS ===================== */}
 			<section className="mx-auto w-full max-w-[77.5rem] px-5 py-[clamp(2.5rem,5vw,4rem)] sm:px-8">
-				<div
-					className="mx-auto grid max-w-[60rem] gap-5 sm:grid-cols-3"
-				>
+				<div className="mx-auto grid max-w-[60rem] gap-5 sm:grid-cols-3">
 					{platform.features.map((feature) => (
 						<div
 							key={feature.title}
-							className="rounded-[20px] border border-landing-ink/[0.08] bg-landing-card p-7"
+							className="rounded-md border border-landing-ink/[0.08] bg-landing-card p-7"
 						>
 							<h3 className="text-[16px] font-semibold tracking-[-0.01em] text-landing-ink">
 								{feature.title}
@@ -318,7 +313,7 @@ export function PlatformPage({ slug }: { slug: string }) {
 							<a
 								key={p.slug}
 								href={`/product/${p.slug}`}
-								className="flex flex-col items-center gap-2.5 rounded-[16px] border border-landing-ink/[0.08] bg-landing-card p-4 text-landing-ink! transition-colors duration-150 hover:bg-landing-ink/[0.04] [&>svg]:size-5"
+								className="flex flex-col items-center gap-2.5 rounded-md border border-landing-ink/[0.08] bg-landing-card p-4 text-landing-ink! transition-colors duration-150 hover:bg-landing-ink/[0.04] [&>svg]:size-5"
 							>
 								<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 									<path d={platformGlyph(p.slug)} />
