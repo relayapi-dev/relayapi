@@ -82,16 +82,6 @@ const navSections: NavItem[][] = [
 	[
 		{ label: "Overview", icon: House, href: "overview" },
 		{ label: "Connections", icon: Link2, href: "connections" },
-		{
-			label: "Inbox",
-			icon: Inbox,
-			href: "inbox-comments",
-			children: [
-				{ label: "Comments", href: "inbox-comments" },
-				{ label: "Messages", href: "inbox-messages" },
-				{ label: "Reviews", href: "inbox-reviews" },
-			],
-		},
 	],
 	[
 		{
@@ -104,6 +94,16 @@ const navSections: NavItem[][] = [
 				{ label: "Media", href: "media" },
 				{ label: "Ideas", href: "ideas" },
 				{ label: "Templates", href: "templates" },
+			],
+		},
+		{
+			label: "Inbox",
+			icon: Inbox,
+			href: "inbox-comments",
+			children: [
+				{ label: "Comments", href: "inbox-comments" },
+				{ label: "Messages", href: "inbox-messages" },
+				{ label: "Reviews", href: "inbox-reviews" },
 			],
 		},
 		{ label: "Analytics", icon: BarChart3, href: "analytics" },
