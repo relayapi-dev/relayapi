@@ -8,9 +8,10 @@ import { LANDING_LINKS } from "./data";
 /**
  * Fixed top bar — sizing modeled on cursor.com's header (52px tall, solid bar,
  * pill buttons), on RelayAPI's cream/ink palette. "Product" and "Platforms" open
- * mega-menu panels (driven by the script below: hover + click + keyboard +
- * outside-click, with a hover-intent close delay). On ≤860px the centre links
- * collapse into a hamburger menu. The bar shares the page canvas (bg-landing-page).
+ * mega-menu panels anchored directly under their trigger (driven by the script
+ * below: hover + click + keyboard + outside-click, with a hover-intent close
+ * delay). On ≤860px the centre links collapse into a hamburger menu. The bar
+ * shares the page canvas (bg-landing-page).
  */
 
 // Short taglines for the Product mega menu (heroDescription is too long here).
@@ -24,13 +25,18 @@ const API_TAGLINES: Record<string, string> = {
 const navLink =
 	"text-[14px] text-[#3a3833]! transition-colors duration-150 hover:text-landing-ink!";
 const trigger =
-	"group flex items-center gap-1 text-[14px] text-[#3a3833] transition-colors duration-150 hover:text-landing-ink data-[open=true]:text-landing-ink";
+	"group flex h-full items-center gap-1 text-[14px] text-[#3a3833] transition-colors duration-150 hover:text-landing-ink data-[open=true]:text-landing-ink";
 const chevron =
 	"size-3 transition-transform duration-200 group-data-[open=true]:rotate-180";
+// Panel anchored + centered under its trigger, opening with a scale-from-top
+// drop. `pt-2` is a transparent hover bridge to the bar so the menu doesn't
+// close while the cursor crosses the gap.
 const panelWrap =
-	"invisible absolute left-1/2 top-full z-[70] -translate-x-1/2 -translate-y-1 pt-2 opacity-0 transition-[opacity,transform,visibility] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] data-[open=true]:visible data-[open=true]:translate-y-0 data-[open=true]:opacity-100";
+	"invisible absolute left-1/2 top-full z-[70] origin-top -translate-x-1/2 -translate-y-2 scale-[0.96] pt-2 opacity-0 transition-[opacity,transform,visibility] duration-[230ms] ease-[cubic-bezier(0.32,0.72,0,1)] data-[open=true]:visible data-[open=true]:translate-y-0 data-[open=true]:scale-100 data-[open=true]:opacity-100";
 const panelCard =
-	"overflow-hidden rounded-[16px] border border-landing-ink/[0.08] bg-[#fbfaf6] shadow-[0_28px_70px_-30px_rgba(40,28,12,0.5)]";
+	"max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-[16px] border border-landing-ink/[0.08] bg-[#fbfaf6] shadow-[0_28px_70px_-30px_rgba(40,28,12,0.5)]";
+const panelFooter =
+	"flex items-center justify-between gap-4 border-t border-landing-ink/[0.08] bg-landing-ink/[0.02] px-5 py-3 text-[13px] font-medium text-landing-ink! transition-colors hover:bg-landing-ink/[0.05]";
 ---
 
 <header
@@ -53,56 +59,6 @@ const panelCard =
 				>RELAYAPI</span
 			>
 		</a>
-
-		<div
-			class="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-[clamp(14px,2vw,28px)] max-[860px]:hidden"
-		>
-			<button
-				type="button"
-				data-menu-trigger="product"
-				aria-haspopup="true"
-				aria-expanded="false"
-				class={trigger}
-			>
-				Product
-				<svg
-					class={chevron}
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg
-				>
-			</button>
-			<button
-				type="button"
-				data-menu-trigger="platforms"
-				aria-haspopup="true"
-				aria-expanded="false"
-				class={trigger}
-			>
-				Platforms
-				<svg
-					class={chevron}
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg
-				>
-			</button>
-			<a href={LANDING_LINKS.pricing} class={navLink}>Pricing</a>
-			<a
-				href={LANDING_LINKS.docs}
-				class={navLink}
-				target="_blank"
-				rel="noopener noreferrer">Docs</a
-			>
-		</div>
 
 		<div class="flex shrink-0 items-center gap-2 max-[400px]:gap-1.5">
 			<a
@@ -135,101 +91,152 @@ const panelCard =
 					stroke="currentColor"
 					stroke-width="2"
 					stroke-linecap="round"
-					aria-hidden="true"
+					aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"></path></svg
 				>
-					<path d="M3 6h18M3 12h18M3 18h18"></path>
-				</svg>
 			</button>
 		</div>
 	</Container>
 
-	{/* ===== PRODUCT mega panel (APIs) ===== */}
-	<div data-menu-panel="product" class:list={[panelWrap, "max-[860px]:hidden"]}>
-		<div class:list={[panelCard, "w-[34rem]"]}>
-			<div class="grid grid-cols-2 gap-1 p-2">
-				{
-					apis.map((a) => (
-						<a
-							href={`/product/${a.slug}`}
-							class="flex items-start gap-3 rounded-[12px] p-3 transition-colors duration-150 hover:bg-landing-ink/[0.05]"
-						>
-							<span class="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-landing-ink/[0.05] text-landing-ink [&>svg]:size-[18px]">
-								<svg
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									aria-hidden="true"
-								>
-									{apiIconPaths(a.slug).map((d) => (
-										<path d={d} />
-									))}
-								</svg>
-							</span>
-							<span class="flex flex-col gap-0.5">
-								<span class="text-[14px] font-medium text-landing-ink">
-									{a.name}
-								</span>
-								<span class="text-[12.5px] leading-snug text-[#6e6a62]">
-									{API_TAGLINES[a.slug]}
-								</span>
-							</span>
-						</a>
-					))
-				}
-			</div>
-			<a
-				href={LANDING_LINKS.docs}
-				target="_blank"
-				rel="noopener noreferrer"
-				class="flex items-center justify-between border-t border-landing-ink/[0.08] bg-landing-ink/[0.02] px-5 py-3 text-[13px] font-medium text-landing-ink! transition-colors hover:bg-landing-ink/[0.05]"
+	{/* Centre nav — absolute over the bar (full 52px height) so each panel can
+	    anchor to its trigger via top-full. */}
+	<div
+		class="absolute left-1/2 top-0 flex h-[52px] -translate-x-1/2 items-center justify-center gap-[clamp(14px,2vw,28px)] max-[860px]:hidden"
+	>
+		<div class="relative flex h-full items-center">
+			<button
+				type="button"
+				data-menu-trigger="product"
+				aria-haspopup="true"
+				aria-expanded="false"
+				class={trigger}
 			>
-				Browse the full API reference
-				<span aria-hidden="true">→</span>
-			</a>
-		</div>
-	</div>
-
-	{/* ===== PLATFORMS mega panel ===== */}
-	<div data-menu-panel="platforms" class:list={[panelWrap, "max-[860px]:hidden"]}>
-		<div class:list={[panelCard, "w-[42rem]"]}>
-			<div class="p-3">
-				<p
-					class="px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[#9a968c]"
+				Product
+				<svg
+					class={chevron}
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg
 				>
-					Publish to 21 platforms
-				</p>
-				<div class="grid grid-cols-4 gap-0.5">
-					{
-						platforms.map((p) => (
-							<a
-								href={`/product/${p.slug}`}
-								class="flex items-center gap-2.5 rounded-[10px] px-2.5 py-2 transition-colors duration-150 hover:bg-landing-ink/[0.05]"
-							>
-								<svg
-									viewBox="0 0 24 24"
-									fill="currentColor"
-									class="size-[18px] shrink-0 text-landing-ink"
-									aria-hidden="true"
+			</button>
+			<div data-menu-panel="product" class={panelWrap}>
+				<div class:list={[panelCard, "w-[34rem]"]}>
+					<div class="grid grid-cols-2 gap-1 p-2">
+						{
+							apis.map((a) => (
+								<a
+									href={`/product/${a.slug}`}
+									class="flex items-start gap-3 rounded-[12px] p-3 transition-colors duration-150 hover:bg-landing-ink/[0.05]"
 								>
-									<path d={platformGlyph(p.slug)} />
-								</svg>
-								<span class="truncate text-[13px] text-[#46443d]">{p.name}</span>
-							</a>
-						))
-					}
+									<span class="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-landing-ink/[0.05] text-landing-ink [&>svg]:size-[18px]">
+										<svg
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											aria-hidden="true"
+										>
+											{apiIconPaths(a.slug).map((d) => (
+												<path d={d} />
+											))}
+										</svg>
+									</span>
+									<span class="flex flex-col gap-0.5">
+										<span class="text-[14px] font-medium text-landing-ink">
+											{a.name}
+										</span>
+										<span class="text-[12.5px] leading-snug text-[#6e6a62]">
+											{API_TAGLINES[a.slug]}
+										</span>
+									</span>
+								</a>
+							))
+						}
+					</div>
+					<a
+						href={LANDING_LINKS.docs}
+						target="_blank"
+						rel="noopener noreferrer"
+						class={panelFooter}
+					>
+						Browse the full API reference
+						<span aria-hidden="true">→</span>
+					</a>
 				</div>
 			</div>
-			<a
-				href={LANDING_LINKS.pricing}
-				class="flex items-center justify-between border-t border-landing-ink/[0.08] bg-landing-ink/[0.02] px-5 py-3 text-[13px] font-medium text-landing-ink! transition-colors hover:bg-landing-ink/[0.05]"
-			>
-				One price for every platform — see pricing
-				<span aria-hidden="true">→</span>
-			</a>
 		</div>
+
+		<div class="relative flex h-full items-center">
+			<button
+				type="button"
+				data-menu-trigger="platforms"
+				aria-haspopup="true"
+				aria-expanded="false"
+				class={trigger}
+			>
+				Platforms
+				<svg
+					class={chevron}
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg
+				>
+			</button>
+			<div data-menu-panel="platforms" class={panelWrap}>
+				<div class:list={[panelCard, "w-[42rem]"]}>
+					<div class="p-3">
+						<p
+							class="px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[#9a968c]"
+						>
+							Publish to 21 platforms
+						</p>
+						<div class="grid grid-cols-4 gap-0.5">
+							{
+								platforms.map((p) => (
+									<a
+										href={`/product/${p.slug}`}
+										class="flex items-center gap-2.5 rounded-[10px] px-2.5 py-2 transition-colors duration-150 hover:bg-landing-ink/[0.05]"
+									>
+										<svg
+											viewBox="0 0 24 24"
+											fill="currentColor"
+											class="size-[18px] shrink-0 text-landing-ink"
+											aria-hidden="true"
+										>
+											<path d={platformGlyph(p.slug)} />
+										</svg>
+										<span class="truncate text-[13px] text-[#46443d]">
+											{p.name}
+										</span>
+									</a>
+								))
+							}
+						</div>
+					</div>
+					<a href={LANDING_LINKS.pricing} class={panelFooter}>
+						One price for every platform — see pricing
+						<span aria-hidden="true">→</span>
+					</a>
+				</div>
+			</div>
+		</div>
+
+		<a href={LANDING_LINKS.pricing} class={navLink}>Pricing</a>
+		<a
+			href={LANDING_LINKS.docs}
+			class={navLink}
+			target="_blank"
+			rel="noopener noreferrer">Docs</a
+		>
 	</div>
 
 	{/* ===== MOBILE menu ===== */}
