@@ -169,7 +169,7 @@ export function SignupForm() {
 							placeholder="Your name"
 							required
 							autoComplete="name"
-							className={`${INPUT} px-3.5`}
+							className={`${INPUT} px-3.5 text-lg`}
 						/>
 					</div>
 
@@ -188,7 +188,7 @@ export function SignupForm() {
 							placeholder="you@example.com"
 							required
 							autoComplete="email"
-							className={`${INPUT} px-3.5`}
+							className={`${INPUT} px-3.5 text-lg`}
 						/>
 					</div>
 

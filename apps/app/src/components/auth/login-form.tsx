@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { motion } from "motion/react";
 import { Eye, EyeOff } from "lucide-react";
+import { motion } from "motion/react";
+import { useEffect, useMemo, useState } from "react";
 import { signIn } from "../../lib/auth-client";
 import {
 	AuthDivider,
@@ -125,7 +125,7 @@ export function LoginForm() {
 							placeholder="Your email address"
 							required
 							autoComplete="email"
-							className={`${INPUT} px-3.5`}
+							className={`${INPUT} px-3.5 text-lg`}
 						/>
 					</div>
 
@@ -145,7 +145,7 @@ export function LoginForm() {
 								placeholder="Enter your password"
 								required
 								autoComplete="current-password"
-								className={`${INPUT} pl-3.5 pr-10`}
+								className={`${INPUT} pl-3.5 pr-10 text-lg`}
 							/>
 							<button
 								type="button"
