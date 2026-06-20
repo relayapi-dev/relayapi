@@ -187,6 +187,11 @@
 	   tracking-feature, rounded-feature*, shadow-feature-window) so the
 	   <Feature> component and any future landing block reuse them instead of
 	   hardcoding hexes/sizes. Numbers measured from cursor.com's feature card. */
+	/* Page canvas — the lightest cream painted on <body>, behind everything. The
+	   fixed nav shares it (bg-landing-page) so it blends seamlessly into the page.
+	   (--color-landing-bg #f4f2ec is the slightly warmer cream used for the
+	   painted footer/hero bands, not the page itself.) */
+	--color-landing-page: #f7f7f2;
 	--color-landing-bg: #f4f2ec;
 	/* Subtle card — barely darker than the page, like cursor's #F2F1ED on
 	   #F7F7F4; the floating window's shadow is what reads, not the card. */

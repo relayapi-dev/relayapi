@@ -56,7 +56,7 @@ const { title, description } = Astro.props;
 	   full-bleed (each <Container> owns its own gutters). Targets the parent
 	   <body>, which a utility on the wrapper child cannot reach. */
 	body:has(.relay-landing) {
-		background: #f7f7f2;
+		background: var(--color-landing-page);
 		padding-left: 0;
 		padding-right: 0;
 	}
