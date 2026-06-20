@@ -10,7 +10,7 @@ import { Icons } from "../icons";
  */
 export function AuthShell({ children }: { children: ReactNode }) {
 	return (
-		<div className="flex min-h-screen flex-col bg-landing-page text-[#1a1815] antialiased">
+		<div className="auth-shell flex min-h-screen flex-col bg-landing-page text-[#1a1815] antialiased">
 			<header className="flex items-center justify-between px-6 py-5">
 				<a
 					href="/"

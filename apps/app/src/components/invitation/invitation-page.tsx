@@ -39,7 +39,7 @@ interface InvitationPageProps {
 }
 
 const PAGE =
-  "flex min-h-screen flex-col items-center justify-center bg-landing-page px-4 text-[#1a1815]";
+  "auth-shell flex min-h-screen flex-col items-center justify-center bg-landing-page px-4 text-[#1a1815]";
 const INPUT =
   "w-full rounded-[12px] border border-[#1a1815]/12 bg-white py-2.5 pl-10 pr-3 text-sm text-[#1a1815] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[#9a968c] focus:border-[#1a1815]/35 focus:ring-[3px] focus:ring-[#1a1815]/10";
 const PRIMARY_BTN =

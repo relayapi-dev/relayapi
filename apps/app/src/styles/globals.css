@@ -440,3 +440,16 @@
 		color: var(--foreground);
 	}
 }
+
+/* Auth + invite screens (login / signup / invite) render directly under
+   BaseLayout — without Layout.astro's `.relay-landing` wrapper — so they don't
+   inherit its body treatment. Mirror it here: paint the cream page canvas on the
+   <body> (so the iOS/macOS overscroll gutter reads cream, not white) and
+   neutralize BaseLayout's `px-4 lg:px-0` body gutters, which otherwise show as
+   white bars on either side of the cream column on mobile. Unlayered so it wins
+   over the Tailwind padding utilities, exactly like `body:has(.relay-landing)`. */
+body:has(.auth-shell) {
+	background: var(--color-landing-page);
+	padding-left: 0;
+	padding-right: 0;
+}
