@@ -35,6 +35,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { cn } from "@/lib/utils";
 import { authClient } from "@/lib/auth-client";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -56,15 +57,6 @@ const roleColors: Record<string, string> = {
   admin: "text-foreground bg-muted border border-border",
   user: "text-muted-foreground bg-muted",
 };
-
-function getInitials(name: string): string {
-  return name
-    .split(" ")
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
-}
 
 export function AdminUsersPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -212,17 +204,13 @@ export function AdminUsersPage() {
           const u = row.original;
           return (
             <div className="flex items-center gap-3">
-              <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground">
-                {u.image ? (
-                  <img
-                    src={u.image}
-                    alt=""
-                    className="size-8 rounded-full object-cover"
-                  />
-                ) : (
-                  getInitials(u.name || u.email)
-                )}
-              </div>
+              <UserAvatar
+                image={u.image}
+                name={u.name}
+                seed={u.id ?? u.email}
+                className="size-8"
+                fallbackBgClassName="bg-muted"
+              />
               <div className="min-w-0">
                 <p className="text-[13px] font-medium truncate">
                   {u.name || "Unnamed"}
