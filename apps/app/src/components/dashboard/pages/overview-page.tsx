@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	AlertCircle,
 	ArrowUpRight,
@@ -78,11 +78,44 @@ interface IntegrationAccount {
 }
 
 // Fixed card height shared by Connections + API key so the row stays balanced
-// regardless of how many accounts are connected.
-const CARD_H = "md:h-[300px]";
-// Max avatar tiles rendered in the connections grid before collapsing the rest
-// into a single "+N" overflow tile (N can be in the thousands).
-const CONN_CAP = 18;
+// regardless of how many accounts are connected (and so the avatar grid always
+// has a defined area to measure against).
+const CARD_H = "h-[300px]";
+// Avatar tile geometry (Tailwind size-10 + gap-2) used to compute how many
+// tiles fit the grid. Keep in sync with the classNames below.
+const TILE_PX = 40;
+const TILE_GAP_PX = 8;
+// How many accounts to fetch — an upper bound on tiles the grid can ever show
+// (the card is fixed-height, so even a very wide screen tops out well under
+// this). Beyond what fits, the remainder collapses into one "+N" tile.
+const CONN_FETCH = 40;
+
+// Measures a wrap-grid container and returns how many fixed-size tiles fit.
+// Recomputes on resize so the "+N" overflow tile always lands on the last
+// visible cell instead of being clipped.
+function useGridCapacity(tile = TILE_PX, gap = TILE_GAP_PX) {
+	const ref = useRef<HTMLDivElement>(null);
+	const [capacity, setCapacity] = useState(0);
+
+	useEffect(() => {
+		const el = ref.current;
+		if (!el) return;
+		const measure = () => {
+			const w = el.clientWidth;
+			const h = el.clientHeight;
+			if (w <= 0 || h <= 0) return;
+			const cols = Math.max(1, Math.floor((w + gap) / (tile + gap)));
+			const rows = Math.max(1, Math.floor((h + gap) / (tile + gap)));
+			setCapacity(cols * rows);
+		};
+		measure();
+		const ro = new ResizeObserver(measure);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [tile, gap]);
+
+	return [ref, capacity] as const;
+}
 
 function AccountAvatar({ acc }: { acc: IntegrationAccount }) {
 	const title = `${acc.display_name || acc.username || "Account"} · ${platformLabel(acc.platform)}`;
@@ -113,15 +146,23 @@ function ConnectionsCard() {
 		data: IntegrationAccount[];
 		total?: number;
 		has_more?: boolean;
-	}>(`accounts?limit=${CONN_CAP}`);
+	}>(`accounts?limit=${CONN_FETCH}`);
+	const [gridRef, capacity] = useGridCapacity();
 
 	const accounts = data?.data ?? [];
 	const total = data?.total ?? accounts.length;
-	const showOverflow = total > CONN_CAP;
-	// Reserve the last cell for the "+N" tile only when overflowing.
-	const visibleCount = showOverflow ? CONN_CAP - 1 : Math.min(total, CONN_CAP);
+	const isEmpty = !loading && total === 0;
+
+	// Until the grid is measured, render nothing in it (the skeleton covers the
+	// loading frame). Once measured, fit `capacity` tiles; if more accounts exist
+	// than fit, give the last cell to a "+N" tile.
+	const showOverflow = capacity > 0 && total > capacity;
+	const visibleCount = showOverflow
+		? Math.max(0, capacity - 1)
+		: Math.min(total, capacity);
 	const visible = accounts.slice(0, visibleCount);
 	const overflow = Math.max(0, total - visible.length);
+	const showSkeleton = loading || capacity === 0;
 
 	return (
 		<div className={card(`flex flex-col ${CARD_H}`)}>
@@ -135,16 +176,7 @@ function ConnectionsCard() {
 				</a>
 			</div>
 
-			{loading && !data ? (
-				<div className="mt-4 flex min-h-0 flex-1 flex-wrap content-start gap-2 overflow-hidden">
-					{Array.from({ length: 12 }, (_, i) => (
-						<div
-							key={i}
-							className="size-10 animate-pulse rounded-md bg-muted"
-						/>
-					))}
-				</div>
-			) : total === 0 ? (
+			{isEmpty ? (
 				<>
 					<p className="mt-3 text-[14.5px] leading-normal text-muted-foreground">
 						Link a social channel to start publishing and listening across
@@ -160,10 +192,20 @@ function ConnectionsCard() {
 				</>
 			) : (
 				<>
-					<div className="mt-4 flex min-h-0 flex-1 flex-wrap content-start gap-2 overflow-hidden">
-						{visible.map((acc) => (
-							<AccountAvatar key={acc.id} acc={acc} />
-						))}
+					<div
+						ref={gridRef}
+						className="mt-4 flex min-h-0 flex-1 flex-wrap content-start gap-2 overflow-hidden"
+					>
+						{showSkeleton
+							? Array.from({ length: 12 }, (_, i) => (
+									<div
+										key={i}
+										className="size-10 animate-pulse rounded-md bg-muted"
+									/>
+								))
+							: visible.map((acc) => (
+									<AccountAvatar key={acc.id} acc={acc} />
+								))}
 						{showOverflow ? (
 							<a
 								href="/app/connections"
@@ -176,7 +218,7 @@ function ConnectionsCard() {
 					</div>
 					<div className="mt-auto flex items-center justify-between pt-4">
 						<span className="text-[13px] text-muted-foreground">
-							{formatNumber(total)} connected
+							{loading ? "" : `${formatNumber(total)} connected`}
 						</span>
 						<Button variant="outline" size="sm" asChild>
 							<a href="/app/connections">

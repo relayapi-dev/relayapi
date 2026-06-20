@@ -51,7 +51,8 @@ export function DashboardShell({
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
 	const buildPageUrl = (page: string) => {
-		const nextPath = `/app/${page}`;
+		// Overview canonically lives at /app, not /app/overview.
+		const nextPath = page === "overview" ? "/app" : `/app/${page}`;
 		if (typeof window === "undefined") return nextPath;
 
 		const prevParams = new URLSearchParams(window.location.search);
@@ -66,7 +67,7 @@ export function DashboardShell({
 
 	const navigate = (page: string) => {
 		const currentPath = window.location.pathname.replace(/\/$/, "");
-		const nextPath = `/app/${page}`;
+		const nextPath = page === "overview" ? "/app" : `/app/${page}`;
 
 		// Same page: nothing to load, just close the drawer.
 		if (currentPath === nextPath) {

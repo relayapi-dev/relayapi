@@ -206,20 +206,27 @@ export function Sidebar({
 	organization,
 }: SidebarProps) {
 	// Overview lives at /app (and /app/overview); everything else at /app/<page>.
+	// buildHref (= buildPageUrl) preserves workspace/account query params for
+	// every page, Overview included, so the native href carries them too.
 	const hrefFor = (page: string) =>
-		page === "overview" ? "/app" : (buildHref?.(page) ?? `/app/${page}`);
+		buildHref?.(page) ?? (page === "overview" ? "/app" : `/app/${page}`);
 
-	// Navigate via onNavigate (programmatic full-document nav) instead of the
-	// native <a> default. iOS Safari drops the default navigation when onClose()
-	// slides this drawer off-screen mid-tap; programmatic navigation isn't
-	// affected. Keep the href (below) for a11y, prefetch, and open-in-new-tab.
+	// Let the native <a href> perform navigation. A real anchor tap begins
+	// document unload synchronously, which is reliable on iOS Safari and wins the
+	// race against any prefetch-triggered vite:preloadError reload. We only
+	// intercept a tap on the CURRENT page, closing the drawer instead of firing a
+	// full reload. Crucially, do NOT close/animate the drawer on a cross-page tap:
+	// sliding it off-screen mid-tap is what makes iOS drop the navigation, and the
+	// full-document load tears the drawer down anyway.
 	const handleNavClick = (
 		e: ReactMouseEvent<HTMLAnchorElement>,
 		page: string,
 	) => {
 		if (isModifiedClick(e)) return; // let the browser open in a new tab
-		e.preventDefault();
-		onNavigate(page);
+		if (page === currentPage) {
+			e.preventDefault();
+			onClose();
+		}
 	};
 
 	// --- Usage / streak (plan label + upgrade CTA) ---
@@ -268,17 +275,15 @@ export function Sidebar({
 		});
 	}, [currentPage]);
 
+	// Expand-only: tapping a collapsible parent toggles its group; navigation
+	// happens when the user taps a specific child anchor (native <a href>).
 	const toggleExpand = (item: NavItem) => {
-		const wasExpanded = expandedItems.has(item.label);
 		setExpandedItems((prev) => {
 			const next = new Set(prev);
 			if (next.has(item.label)) next.delete(item.label);
 			else next.add(item.label);
 			return next;
 		});
-		if (!wasExpanded && item.children?.[0]) {
-			onNavigate(item.children[0].href);
-		}
 	};
 
 	// --- Account menu (consolidated: theme, org switcher, account, sign out) ---

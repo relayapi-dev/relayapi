@@ -28,7 +28,20 @@ import "../styles/globals.css";
 	</head>
 	<body class="antialiased font-sans overflow-hidden">
 		<script>
+			// Recover from stale chunk hashes (e.g. after a deploy) by reloading —
+			// UNLESS a navigation is already tearing the page down. A tap on a nav
+			// link starts a native document unload AND (via hover/focus prefetch on
+			// iOS's synthesized mouseenter) a dynamic import() that may reject and
+			// fire vite:preloadError; reloading then would clobber the in-flight
+			// navigation and show up as "tap just refreshes the page" on iOS.
+			let navigatingAway = false;
+			const markNavigating = () => {
+				navigatingAway = true;
+			};
+			window.addEventListener("pagehide", markNavigating);
+			window.addEventListener("beforeunload", markNavigating);
 			window.addEventListener("vite:preloadError", () => {
+				if (navigatingAway) return;
 				window.location.reload();
 			});
 		</script>
