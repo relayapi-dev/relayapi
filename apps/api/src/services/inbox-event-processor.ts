@@ -433,6 +433,21 @@ export async function processInboxEvent(
 							hadPriorInboundOnChannel = false;
 						}
 					}
+					// Story mentions/replies and shared posts arrive with no
+					// `message.text`; surface the kind + story media so the dashboard
+					// can render "Mentioned you in their story" instead of a blank row.
+					const messageType = event.is_story_mention
+						? "story_mention"
+						: event.is_story_reply
+							? "story_reply"
+							: event.is_share_to_dm
+								? "share"
+								: null;
+					const platformData: Record<string, unknown> = {};
+					if (messageType) platformData.message_type = messageType;
+					if (event.story_id) platformData.story_id = event.story_id;
+					if (event.story_url) platformData.story_url = event.story_url;
+
 					await insertMessage(db, {
 						conversationId: conversation.id,
 						organizationId: event.organization_id,
@@ -442,6 +457,12 @@ export async function processInboxEvent(
 						authorAvatarUrl: event.author?.avatar_url ?? null,
 						text: event.text ?? null,
 						direction,
+						attachments: event.attachments ?? [],
+						platformData:
+							Object.keys(platformData).length > 0
+								? platformData
+								: undefined,
+						previewText: derivePreviewText(event),
 						createdAt: new Date(event.created_at),
 					});
 				}
@@ -1275,6 +1296,7 @@ function normalizeFacebookEvent(
 				interactive_payload: interactivePayload,
 				interactive_kind: interactiveKind,
 				created_at: new Date(msg.timestamp).toISOString(),
+				attachments: extractMetaAttachments(msg),
 				raw: payload,
 				...markers,
 			},
@@ -1287,6 +1309,7 @@ function normalizeFacebookEvent(
 		const text = msg.message?.text ?? msg.postback?.title;
 		const eventId = msg.message?.mid ?? `postback_${msg.timestamp}`;
 		const customerId = msg.recipient.id;
+		const markers = extractMetaMessageMarkers(msg);
 		const quickReplyPayload = msg.message?.quick_reply?.payload;
 		const interactivePayload =
 			msg.postback?.payload ?? quickReplyPayload;
@@ -1310,8 +1333,10 @@ function normalizeFacebookEvent(
 				interactive_payload: interactivePayload,
 				interactive_kind: interactiveKind,
 				created_at: new Date(msg.timestamp).toISOString(),
+				attachments: extractMetaAttachments(msg),
 				direction: "outbound",
 				raw: payload,
+				...markers,
 			},
 		];
 	}
@@ -1463,6 +1488,7 @@ function normalizeInstagramEvent(
 				interactive_payload: interactivePayload,
 				interactive_kind: interactiveKind,
 				created_at: new Date(msg.timestamp).toISOString(),
+				attachments: extractMetaAttachments(msg),
 				raw: payload,
 				...markers,
 			},
@@ -1476,6 +1502,7 @@ function normalizeInstagramEvent(
 		const text = msg.message?.text ?? msg.postback?.title;
 		const eventId = msg.message?.mid ?? `postback_${msg.timestamp}`;
 		const customerId = msg.recipient.id;
+		const markers = extractMetaMessageMarkers(msg);
 		const quickReplyPayload = msg.message?.quick_reply?.payload;
 		const interactivePayload =
 			msg.postback?.payload ?? quickReplyPayload;
@@ -1499,8 +1526,10 @@ function normalizeInstagramEvent(
 				interactive_payload: interactivePayload,
 				interactive_kind: interactiveKind,
 				created_at: new Date(msg.timestamp).toISOString(),
+				attachments: extractMetaAttachments(msg),
 				direction: "outbound",
 				raw: payload,
+				...markers,
 			},
 		];
 	}

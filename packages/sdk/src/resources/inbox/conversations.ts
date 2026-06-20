@@ -290,6 +290,12 @@ export namespace ConversationGetResponse {
     attachments?: unknown;
 
     /**
+     * Platform-specific data — e.g. `{ message_type: "story_mention", story_id,
+     * story_url }` for Instagram story mentions/replies and shared posts.
+     */
+    platform_data?: unknown;
+
+    /**
      * Message timestamp
      */
     created_at: string;

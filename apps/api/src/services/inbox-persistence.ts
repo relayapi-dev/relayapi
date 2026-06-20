@@ -53,6 +53,12 @@ export interface InsertMessageData {
 	sentimentScore?: number | null;
 	classification?: string | null;
 	platformData?: Record<string, unknown> | null;
+	/**
+	 * Conversation-list preview override (`lastMessageText`) for messages with an
+	 * empty body — e.g. "Mentioned you in their story". Does not touch the stored
+	 * message `text`. Falls back to `text` when omitted.
+	 */
+	previewText?: string | null;
 	isHidden?: boolean;
 	isLiked?: boolean;
 	createdAt?: Date;
@@ -237,10 +243,13 @@ export async function insertMessage(
 	const nowTs = sql`${now.toISOString()}::timestamptz`;
 	const insertedAt = new Date();
 	const isNewer = sql`(${inboxConversations.lastMessageAt} IS NULL OR ${inboxConversations.lastMessageAt} <= ${nowTs})`;
+	// Empty-body messages (story mentions, media-only DMs) supply a synthesized
+	// preview so the conversation list never shows a blank/"No messages yet" row.
+	const previewText = data.previewText ?? data.text ?? null;
 	await db
 		.update(inboxConversations)
 		.set({
-			lastMessageText: sql`CASE WHEN ${isNewer} THEN ${data.text ?? null} ELSE ${inboxConversations.lastMessageText} END`,
+			lastMessageText: sql`CASE WHEN ${isNewer} THEN ${previewText} ELSE ${inboxConversations.lastMessageText} END`,
 			lastMessageAt: sql`GREATEST(COALESCE(${inboxConversations.lastMessageAt}, ${nowTs}), ${nowTs})`,
 			lastMessageDirection: sql`CASE WHEN ${isNewer} THEN ${data.direction} ELSE ${inboxConversations.lastMessageDirection} END`,
 			messageCount: sql`${inboxConversations.messageCount} + 1`,
