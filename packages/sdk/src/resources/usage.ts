@@ -21,6 +21,18 @@ export class Usage extends APIResource {
   ): APIPromise<UsageListLogsResponse> {
     return this._client.get('/v1/usage/logs', { query, ...options });
   }
+
+  /**
+   * Returns per-day API call counts for the organization over the requested
+   * window, split into publish (write) and listen (read) calls. Days with no
+   * calls are omitted.
+   */
+  timeseries(
+    query: UsageTimeseriesParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<UsageTimeseriesResponse> {
+    return this._client.get('/v1/usage/timeseries', { query, ...options });
+  }
 }
 
 export interface UsageRetrieveResponse {
@@ -167,10 +179,55 @@ export interface UsageListLogsParams {
   to?: string;
 }
 
+export interface UsageTimeseriesResponse {
+  days: Array<UsageTimeseriesResponse.Day>;
+
+  range: UsageTimeseriesResponse.Range;
+}
+
+export namespace UsageTimeseriesResponse {
+  export interface Day {
+    /**
+     * UTC day, YYYY-MM-DD
+     */
+    date: string;
+
+    /**
+     * Read calls (GET)
+     */
+    listen: number;
+
+    /**
+     * Write calls (POST/PUT/PATCH/DELETE)
+     */
+    publish: number;
+
+    /**
+     * All API calls that day
+     */
+    total: number;
+  }
+
+  export interface Range {
+    from: string;
+
+    to: string;
+  }
+}
+
+export interface UsageTimeseriesParams {
+  /**
+   * Number of days of history to include (1–365)
+   */
+  days?: number;
+}
+
 export declare namespace Usage {
   export {
     type UsageRetrieveResponse as UsageRetrieveResponse,
     type UsageListLogsResponse as UsageListLogsResponse,
+    type UsageTimeseriesResponse as UsageTimeseriesResponse,
     type UsageListLogsParams as UsageListLogsParams,
+    type UsageTimeseriesParams as UsageTimeseriesParams,
   };
 }

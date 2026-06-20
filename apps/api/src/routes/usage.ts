@@ -4,7 +4,7 @@ import {
 	usageRecords,
 	apiRequestLogs,
 } from "@relayapi/db";
-import { and, count, desc, eq, gte, lt, lte } from "drizzle-orm";
+import { and, count, desc, eq, gte, lt, lte, sql } from "drizzle-orm";
 import {
 	ErrorResponse,
 	PaginationParams,
@@ -242,6 +242,98 @@ app.openapi(listRequestLogs, async (c) => {
 			next_cursor: hasMore ? String(data.at(-1)?.id ?? "") || null : null,
 			has_more: hasMore,
 			total,
+		},
+		200,
+	);
+});
+
+// --- Daily call timeseries (powers the dashboard "API Calls" heatmap) ---
+
+const UsageTimeseriesQuery = z.object({
+	days: z.coerce
+		.number()
+		.int()
+		.min(1)
+		.max(365)
+		.default(365)
+		.describe("Number of days of history to include (1–365)"),
+});
+
+const UsageTimeseriesDay = z.object({
+	date: z.string().describe("UTC day, YYYY-MM-DD"),
+	total: z.number().describe("All API calls that day"),
+	publish: z.number().describe("Write calls (POST/PUT/PATCH/DELETE)"),
+	listen: z.number().describe("Read calls (GET)"),
+});
+
+const UsageTimeseriesResponse = z.object({
+	range: z.object({
+		from: z.string().datetime(),
+		to: z.string().datetime(),
+	}),
+	days: z.array(UsageTimeseriesDay),
+});
+
+const getUsageTimeseries = createRoute({
+	operationId: "getUsageTimeseries",
+	method: "get",
+	path: "/timeseries",
+	tags: ["Usage"],
+	summary: "Get daily API call counts",
+	description:
+		"Returns per-day API call counts for the organization over the requested window, split into publish (write) and listen (read) calls. Days with no calls are omitted.",
+	security: [{ Bearer: [] }],
+	request: { query: UsageTimeseriesQuery },
+	responses: {
+		200: {
+			description: "Daily API call counts",
+			content: { "application/json": { schema: UsageTimeseriesResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(getUsageTimeseries, async (c) => {
+	const orgId = c.get("orgId");
+	const { days } = c.req.valid("query");
+	const db = c.get("db");
+
+	const now = new Date();
+	const since = new Date(now.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+
+	// Group by UTC calendar day. Publish/listen is split off the HTTP method —
+	// writes vs reads — a simple, defensible heuristic that can be refined later
+	// (e.g. classifying by path) without changing the response shape.
+	const dayExpr = sql<string>`to_char(date_trunc('day', ${apiRequestLogs.createdAt} AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
+	const rows = await db
+		.select({
+			date: dayExpr,
+			total: sql<number>`count(*)::int`,
+			publish: sql<number>`count(*) FILTER (WHERE ${apiRequestLogs.method} IN ('POST','PUT','PATCH','DELETE'))::int`,
+			listen: sql<number>`count(*) FILTER (WHERE ${apiRequestLogs.method} = 'GET')::int`,
+		})
+		.from(apiRequestLogs)
+		.where(
+			and(
+				eq(apiRequestLogs.organizationId, orgId),
+				gte(apiRequestLogs.createdAt, since),
+			),
+		)
+		.groupBy(dayExpr)
+		.orderBy(dayExpr);
+
+	return c.json(
+		{
+			range: { from: since.toISOString(), to: now.toISOString() },
+			days: rows.map((r) => ({
+				date: r.date,
+				total: Number(r.total),
+				publish: Number(r.publish),
+				listen: Number(r.listen),
+			})),
 		},
 		200,
 	);

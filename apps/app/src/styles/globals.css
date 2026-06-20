@@ -379,6 +379,22 @@
 		scrollbar-gutter: stable;
 	}
 
+	/* Tailwind v4 Preflight follows the new browser default of `cursor: default`
+	   on buttons. Restore the pointer cursor on every interactive control so
+	   buttons (native, role=button, summary, selects) feel clickable. Disabled
+	   controls keep the default cursor. */
+	button:not(:disabled),
+	[role="button"]:not([aria-disabled="true"]),
+	[role="tab"]:not([aria-disabled="true"]),
+	[role="menuitem"]:not([aria-disabled="true"]),
+	[role="option"]:not([aria-disabled="true"]),
+	[role="switch"]:not([aria-disabled="true"]),
+	label[for],
+	summary,
+	select:not(:disabled) {
+		cursor: pointer;
+	}
+
 	::selection {
 		background-color: #D40B1A;
 		color: white;

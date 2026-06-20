@@ -222,7 +222,9 @@ export {
   Usage,
   type UsageRetrieveResponse,
   type UsageListLogsResponse,
+  type UsageTimeseriesResponse,
   type UsageListLogsParams,
+  type UsageTimeseriesParams,
 } from './usage';
 export {
   WsTicket,

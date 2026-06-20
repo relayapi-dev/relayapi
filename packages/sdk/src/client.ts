@@ -308,7 +308,14 @@ import {
   OrgSettingsUpdateParams,
   OrgSettingsUpdateResponse,
 } from './resources/org-settings';
-import { Usage, UsageListLogsParams, UsageListLogsResponse, UsageRetrieveResponse } from './resources/usage';
+import {
+  Usage,
+  UsageListLogsParams,
+  UsageListLogsResponse,
+  UsageRetrieveResponse,
+  UsageTimeseriesParams,
+  UsageTimeseriesResponse,
+} from './resources/usage';
 import { WsTicket, WsTicketRetrieveResponse } from './resources/ws-ticket';
 import {
   WebhookCreateParams,
@@ -1504,7 +1511,9 @@ export declare namespace Relay {
     Usage as Usage,
     type UsageRetrieveResponse as UsageRetrieveResponse,
     type UsageListLogsResponse as UsageListLogsResponse,
+    type UsageTimeseriesResponse as UsageTimeseriesResponse,
     type UsageListLogsParams as UsageListLogsParams,
+    type UsageTimeseriesParams as UsageTimeseriesParams,
   };
 
   export {
