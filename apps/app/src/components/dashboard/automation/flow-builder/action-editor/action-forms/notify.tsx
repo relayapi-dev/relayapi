@@ -96,7 +96,7 @@ export function NotifyAdminForm({ action, onChange, errors }: Props) {
 					onChange={(e) => onChange({ ...action, body: e.target.value })}
 					rows={3}
 					placeholder="What happened?"
-					className="w-full resize-y rounded-xl border border-[#d9dde6] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#8ab4ff]"
+					className="w-full resize-y rounded-xl border border-[#d9dde6] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#c0c6d0]"
 				/>
 			</Field>
 
@@ -127,7 +127,7 @@ export function NotifyAdminForm({ action, onChange, errors }: Props) {
 					{members.map((m) => (
 						<label
 							key={m.user.id}
-							className="flex items-center gap-2 rounded-md px-1 py-1 text-[12px] hover:bg-[#f5f8fc]"
+							className="flex items-center gap-2 rounded-md px-1 py-1 text-[12px] hover:bg-[#f0f1f4]"
 						>
 							<input
 								type="checkbox"

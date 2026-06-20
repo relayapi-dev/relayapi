@@ -217,7 +217,7 @@ export function RunDetail({ runId, onShowOnCanvas }: Props) {
 								{formatDate(run.started_at)}
 							</span>
 							{run.current_node_key && run.status === "waiting" && (
-								<span className="inline-flex items-center gap-1 text-amber-600">
+								<span className="inline-flex items-center gap-1 text-[#8b92a0]">
 									<MapPin className="size-3" />
 									at <span className="font-mono">{run.current_node_key}</span>
 								</span>
@@ -301,7 +301,7 @@ export function RunDetail({ runId, onShowOnCanvas }: Props) {
 						"border-b px-4 py-2 text-xs",
 						toast.type === "error"
 							? "border-destructive/30 bg-destructive/10 text-destructive"
-							: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+							: "border-[#e6e9ef] bg-[#f4f5f7] text-[#5a6373]",
 					)}
 				>
 					{toast.message}

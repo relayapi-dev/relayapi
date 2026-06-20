@@ -520,35 +520,20 @@ function isPlatformStyledActionGroup(node: AutomationNode): boolean {
 	return actions.some((action) => action?.type === "reply_to_comment");
 }
 
-// Icon bubble tinted for the node's channel — gradient for Instagram, solid
-// brand colours for the rest. Used by both the trigger card and the generic
-// canvas nodes so the palette stays in sync.
+// Neutral monochrome icon bubble. The platform glyph (or the node-kind icon
+// for non-platform nodes) is rendered in grey on a soft grey disc — no brand
+// gradients or fills, so every card reads as one quiet system.
 function canvasPlatformBubble(
 	channel: string,
 	Icon: React.ComponentType<{ className?: string }>,
 ) {
-	const palette =
-		channel === "instagram"
-			? "bg-[linear-gradient(135deg,#ffd776_0%,#f74a5c_48%,#7d3cff_100%)] text-white"
-			: channel === "facebook"
-				? "bg-[#1877f2] text-white"
-				: channel === "whatsapp"
-					? "bg-[#25d366] text-white"
-					: channel === "telegram"
-						? "bg-[#27a7e7] text-white"
-						: "bg-[#eef1f5] text-[#7b8598]";
 	const showSocialMark =
 		channel === "instagram" ||
 		channel === "facebook" ||
 		channel === "whatsapp" ||
 		channel === "telegram";
 	return (
-		<div
-			className={cn(
-				"flex size-8 shrink-0 items-center justify-center rounded-full shadow-[0_2px_6px_rgba(15,23,42,0.1)]",
-				palette,
-			)}
-		>
+		<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#f1f3f6] text-[#5a6373]">
 			{showSocialMark ? (
 				<div className="scale-[0.8]">
 					{platformIcons[channel] ?? <Icon className="size-4" />}
@@ -603,9 +588,9 @@ function CanvasNodeInner({ data, selected }: NodeProps<NodeData>) {
 	return (
 		<div
 			className={cn(
-				"group relative w-[346px] overflow-visible rounded-[22px] border bg-white shadow-[0_2px_10px_rgba(34,44,66,0.08)] transition-all duration-150",
+				"group relative w-[346px] overflow-visible rounded-[22px] border bg-white transition-all duration-150",
 				selected
-					? "border-[#4680ff] shadow-[0_0_0_1px_rgba(70,128,255,0.3),0_3px_12px_rgba(34,44,66,0.1)]"
+					? "border-[#353a44] shadow-[0_0_0_1px_rgba(53,58,68,0.16)]"
 					: "border-[#e6e9ef]",
 				"cursor-grab active:cursor-grabbing",
 			)}
@@ -704,23 +689,8 @@ function humanizeEntrypointKind(kind: string): string {
 }
 
 function platformIconBubble(channel: string) {
-	const palette =
-		channel === "instagram"
-			? "bg-[linear-gradient(135deg,#ffd776_0%,#f74a5c_48%,#7d3cff_100%)]"
-			: channel === "facebook"
-				? "bg-[#1877f2]"
-				: channel === "whatsapp"
-					? "bg-[#25d366]"
-					: channel === "telegram"
-						? "bg-[#27a7e7]"
-						: "bg-[#7c8ca5]";
 	return (
-		<div
-			className={cn(
-				"flex size-7 items-center justify-center rounded-full text-white shadow-[0_2px_8px_rgba(15,23,42,0.15)]",
-				palette,
-			)}
-		>
+		<div className="flex size-7 items-center justify-center rounded-full bg-[#f1f3f6] text-[#5a6373]">
 			<div className="scale-[0.8]">
 				{platformIcons[channel] ?? <MessageSquare className="size-3.5" />}
 			</div>
@@ -735,9 +705,9 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 		// biome-ignore lint/a11y/useSemanticElements: interactive wrapper cannot be a button due to nested controls
 		<div
 			className={cn(
-				"group relative w-[390px] overflow-visible rounded-[22px] border bg-white shadow-[0_2px_10px_rgba(34,44,66,0.08)] transition-all duration-150",
+				"group relative w-[390px] overflow-visible rounded-[22px] border bg-white transition-all duration-150",
 				selected
-					? "border-[#63d26f] shadow-[0_0_0_1px_rgba(99,210,111,0.3),0_3px_12px_rgba(34,44,66,0.1)]"
+					? "border-[#353a44] shadow-[0_0_0_1px_rgba(53,58,68,0.16)]"
 					: "border-[#e6e9ef]",
 				"cursor-grab active:cursor-grabbing",
 			)}
@@ -836,9 +806,9 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 										event.stopPropagation();
 										data.onSelectBinding(binding.id);
 									}}
-									className="nodrag flex w-full items-center gap-3 rounded-[16px] border border-[#dfe6ff] bg-[#f2f5ff] px-4 py-3 text-left transition hover:bg-[#e9edff]"
+									className="nodrag flex w-full items-center gap-3 rounded-[16px] border border-[#e6e9ef] bg-[#f4f5f8] px-4 py-3 text-left transition hover:bg-[#eef0f3]"
 								>
-									<div className="flex size-7 items-center justify-center rounded-full bg-[#4680ff] text-white shadow-[0_2px_8px_rgba(15,23,42,0.15)]">
+									<div className="flex size-7 items-center justify-center rounded-full bg-[#eceff3] text-[#5a6373]">
 										<Link2 className="size-3.5" />
 									</div>
 									<div className="min-w-0 flex-1">
@@ -871,7 +841,7 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 							<button
 								type="button"
 								onClick={(event) => event.stopPropagation()}
-								className="nodrag mt-4 flex h-[48px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[15px] font-semibold text-[#4680ff] transition hover:border-[#4680ff] hover:bg-[#f4f8ff]"
+								className="nodrag mt-4 flex h-[48px] w-full items-center justify-center rounded-[14px] border border-dashed border-[#d9dde6] text-[15px] font-semibold text-[#5a6373] transition hover:border-[#9aa3b2] hover:bg-[#f4f5f8]"
 								disabled={
 									data.availableKinds.length === 0 &&
 									data.bindingTypes.length === 0
@@ -926,7 +896,7 @@ function TriggerNodeInner({ data, selected }: NodeProps<TriggerNodeData>) {
 											}}
 										>
 											<span className="flex items-center gap-2 text-[13px] font-medium text-foreground">
-												<Link2 className="size-3.5 text-[#4680ff]" />
+												<Link2 className="size-3.5 text-[#5a6373]" />
 												{b.label}
 												{b.v1_status === "stubbed" && (
 													<span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0 text-[9px] font-medium text-amber-600">
@@ -985,7 +955,7 @@ function CanvasControls({ onAutoArrange }: { onAutoArrange?: () => void }) {
 	const rf = useReactFlow();
 	return (
 		<Panel position="top-right" className="!right-4 !top-1/2 !-translate-y-1/2">
-			<div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_14px_32px_rgba(15,23,42,0.08)]">
+			<div className="overflow-hidden rounded-2xl border border-[#e6e9ef] bg-white shadow-[0_4px_16px_rgba(15,23,42,0.06)]">
 				<button
 					type="button"
 					onClick={() => rf.zoomIn({ duration: 180 })}
@@ -1525,10 +1495,14 @@ function CanvasInner({
 						});
 						continue;
 					}
-					// Commit to the graph store on drag stop only (dragging === false,
-					// strict). Intermediate ticks (dragging === true) are owned by
-					// React Flow; programmatic position changes (dragging === undefined)
-					// originate from our own sync and must not be re-committed.
+					// This branch only fires for keyboard-a11y moves (arrow keys),
+					// which emit a position change carrying both a `position` and
+					// `dragging === false`. Mouse drags do NOT reach here on drop:
+					// React Flow's drag-stop change has `dragging === false` but no
+					// `position`, so the `change.position` guard above skips it — those
+					// are committed from onNodeDragStop / onSelectionDragStop instead.
+					// Intermediate ticks (dragging === true) are React Flow's live
+					// drag; sync echoes (dragging === undefined) must not be committed.
 					if (change.dragging === false) {
 						graphStore.moveNode(change.id, {
 							x: change.position.x,
@@ -2047,14 +2021,35 @@ function CanvasInner({
 				onNodeDragStart={() => {
 					isDraggingRef.current = true;
 				}}
-				onNodeDragStop={() => {
+				onNodeDragStop={(_evt, node) => {
 					isDraggingRef.current = false;
+					// Commit the dropped position to the graph store. React Flow's
+					// drag-stop NodeChange omits `position` (it is emitted with
+					// positionChanged=false), so onNodesChange never sees it — we read
+					// the final position from the node RF hands us here instead.
+					// moveNode is idempotent (a click that doesn't move the node is a
+					// no-op), and dirties the graph so autosave persists the move.
+					if (node && node.id !== TRIGGER_NODE_ID) {
+						graphStore.moveNode(node.id, {
+							x: node.position.x,
+							y: node.position.y,
+						});
+					}
 				}}
 				onSelectionDragStart={() => {
 					isDraggingRef.current = true;
 				}}
-				onSelectionDragStop={() => {
+				onSelectionDragStop={(_evt, draggedNodes) => {
 					isDraggingRef.current = false;
+					// Multi-node drag: commit every moved node's final position (same
+					// reason as onNodeDragStop — the drag-stop change has no position).
+					for (const node of draggedNodes) {
+						if (node.id === TRIGGER_NODE_ID) continue;
+						graphStore.moveNode(node.id, {
+							x: node.position.x,
+							y: node.position.y,
+						});
+					}
 				}}
 				onPaneClick={() => {
 					if (suppressNextPaneClickRef.current) return;

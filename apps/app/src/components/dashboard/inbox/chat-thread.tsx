@@ -6,6 +6,7 @@ import {
   ArrowDown,
   Check,
   ChevronDown,
+  ChevronLeft,
   ExternalLink,
   Loader2,
   MessageCircle,
@@ -24,6 +25,8 @@ import {
   formatMessageTime,
   getConversationDisplayName,
   getPlatformDisplayName,
+  platformColors,
+  platformLabels,
 } from "./shared";
 import {
   DropdownMenu,
@@ -123,14 +126,16 @@ function dayKey(dateStr: string) {
 
 function EmptyThreadState() {
   return (
-    <div className="flex h-full items-center justify-center bg-card px-6">
-      <div className="max-w-sm text-center">
-        <div className="mx-auto mb-6 flex size-16 items-center justify-center rounded-full bg-muted text-muted-foreground">
-          <MessageCircle className="size-7" />
+    <div className="flex h-full items-center justify-center px-6">
+      <div className="max-w-xs text-center">
+        <div className="mx-auto mb-5 flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+          <MessageCircle className="size-6" />
         </div>
-        <h3 className="text-[22px] font-semibold tracking-[-0.01em] text-foreground">Inbox</h3>
-        <p className="mt-3 text-[15px] leading-6 text-muted-foreground">
-          This is where messages from your connected channels appear. Select a chat to continue the conversation.
+        <h3 className="text-[17px] font-semibold tracking-[-0.01em] text-foreground">
+          No conversation selected
+        </h3>
+        <p className="mt-2 text-[13px] leading-6 text-muted-foreground">
+          Pick a chat from the list to read and reply across all your connected channels.
         </p>
       </div>
     </div>
@@ -144,6 +149,7 @@ export function ChatThread({
   onMessageSent,
   onAssignmentChange,
   onStatusChange,
+  onBack,
 }: {
   conversation: ConversationItem | null;
   members: InboxOrganizationMember[];
@@ -151,6 +157,7 @@ export function ChatThread({
   onMessageSent?: () => void;
   onAssignmentChange?: (assignedUserId: string | null) => Promise<void>;
   onStatusChange?: (nextStatus: "open" | "archived") => Promise<void>;
+  onBack?: () => void;
 }) {
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [notes, setNotes] = useState<NoteItem[]>([]);
@@ -584,9 +591,10 @@ export function ChatThread({
     return <EmptyThreadState />;
   }
 
+  const platform = conversation.platform?.toLowerCase() || "";
   const displayName = getConversationDisplayName(conversation);
   const platformLabel = getPlatformDisplayName(conversation.platform);
-  const platformUrl = platformInboxUrls[conversation.platform?.toLowerCase() || ""];
+  const platformUrl = platformInboxUrls[platform];
   const isArchived = conversation.status === "archived";
   const automationsPaused = automationControls.length > 0;
   const assignedMember = members.find((member) => member.user.id === conversation.assigned_user_id);
@@ -600,204 +608,215 @@ export function ChatThread({
   ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-card">
-      <div className="border-b border-border bg-card">
-        <div className="flex min-h-[52px] items-center justify-between gap-4 px-4 py-2.5">
-          <div className="flex min-w-0 items-center gap-3">
-            <Avatar
-              src={conversation.participant_avatar}
-              name={displayName}
-              className="size-10"
-              fallbackClassName="text-sm"
-            />
+    <div className="relative flex h-full min-h-0 flex-col">
+      {/* Header */}
+      <div className="flex items-center gap-3 border-b border-border px-3 py-2.5 sm:px-4">
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="-ml-1 flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden"
+            title="Back to conversations"
+          >
+            <ChevronLeft className="size-5" />
+          </button>
+        )}
 
-            <div className="min-w-0">
-              <p className="truncate text-[14px] font-semibold text-foreground">{displayName}</p>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    disabled={assignmentPending}
-                    className="inline-flex max-w-full items-center gap-1 rounded-sm text-[12px] text-muted-foreground outline-none transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    <span className="truncate">{assigneeLabel}</span>
-                    {assignmentPending ? (
-                      <Loader2 className="size-3 animate-spin" />
-                    ) : (
-                      <ChevronDown className="size-3.5" />
-                    )}
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="start"
-                  sideOffset={8}
-                  className="w-[17rem] p-1.5"
-                >
-                  <DropdownMenuLabel className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
-                    Assign chat
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {membersLoading ? (
-                    <div className="flex items-center gap-2 px-2 py-2 text-[13px] text-muted-foreground">
-                      <Loader2 className="size-3.5 animate-spin" />
-                      Loading team members
-                    </div>
-                  ) : (
-                    <DropdownMenuRadioGroup value={assigneeValue} onValueChange={(value) => void handleAssignmentSelect(value)}>
-                      <DropdownMenuRadioItem
-                        value={UNASSIGNED_VALUE}
-                        className="gap-3 rounded-md px-2 py-2 [&>span:first-child]:hidden"
-                        disabled={assignmentPending}
-                      >
-                        <div className="flex size-7 items-center justify-center rounded-full border border-border bg-muted text-[11px] font-semibold text-muted-foreground">
-                          U
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-[13px] font-medium text-foreground">Unassigned</p>
-                          <p className="truncate text-[11px] text-muted-foreground">No owner</p>
-                        </div>
-                        {assigneeValue === UNASSIGNED_VALUE && (
-                          <Check className="size-4 shrink-0 text-muted-foreground" />
-                        )}
-                      </DropdownMenuRadioItem>
-                      {members.map((member) => {
-                        const memberLabel = member.user.name?.trim() || member.user.email;
+        <div className="relative shrink-0">
+          <Avatar
+            src={conversation.participant_avatar}
+            name={displayName}
+            className="size-9"
+            fallbackClassName="text-sm"
+          />
+          <span
+            className={cn(
+              "absolute -bottom-0.5 -right-0.5 flex size-[14px] items-center justify-center rounded-full border-2 border-card text-[7px] font-bold text-white",
+              platformColors[platform] || "bg-neutral-700",
+            )}
+          >
+            {(platformLabels[platform] || platform.slice(0, 1)).charAt(0)}
+          </span>
+        </div>
 
-                        return (
-                          <DropdownMenuRadioItem
-                            key={member.user.id}
-                            value={member.user.id}
-                            className="gap-3 rounded-md px-2 py-2 [&>span:first-child]:hidden"
-                            disabled={assignmentPending}
-                          >
-                            {member.user.image ? (
-                              <img
-                                src={member.user.image}
-                                alt={memberLabel}
-                                className="size-7 rounded-full border border-border object-cover"
-                              />
-                            ) : (
-                              <div className="flex size-7 items-center justify-center rounded-full border border-border bg-muted text-[11px] font-semibold text-muted-foreground">
-                                {memberLabel.charAt(0).toUpperCase()}
-                              </div>
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-[13px] font-medium text-foreground">{memberLabel}</p>
-                              <p className="truncate text-[11px] text-muted-foreground">{member.user.email}</p>
-                            </div>
-                            {assigneeValue === member.user.id && (
-                              <Check className="size-4 shrink-0 text-muted-foreground" />
-                            )}
-                          </DropdownMenuRadioItem>
-                        );
-                      })}
-                    </DropdownMenuRadioGroup>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="truncate text-[14px] font-semibold text-foreground">{displayName}</p>
+            {automationsPaused && (
+              <span className="hidden shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10.5px] font-medium text-amber-700 sm:inline">
+                Paused
+              </span>
+            )}
+            {isArchived && (
+              <span className="hidden shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground sm:inline">
+                Archived
+              </span>
+            )}
           </div>
 
-          <div className="flex items-center gap-1">
-            {conversation.contact_id ? (
-              <div className="mr-1 hidden md:inline-flex">
-                <AutomationBadge
-                  contactId={conversation.contact_id}
-                  channel={conversation.platform}
-                />
-              </div>
-            ) : null}
-            {platformUrl && (
-              <a
-                href={platformUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-                title={`Open ${platformLabel}`}
-              >
-                <ExternalLink className="size-4" />
-              </a>
-            )}
-            <button
-              type="button"
-              onClick={() => void handleAutomationControlToggle()}
-              disabled={automationControlPending || !conversation.contact_id}
-              className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-              title={
-                !conversation.contact_id
-                  ? "Pause / resume available once the contact is resolved"
-                  : automationsPaused
-                    ? "Resume automations for this contact"
-                    : "Pause automations for this contact"
-              }
-            >
-              {automationControlPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : automationsPaused ? (
-                <PlayCircle className="size-4" />
-              ) : (
-                <PauseCircle className="size-4" />
-              )}
-            </button>
+          <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
+            <span className="shrink-0">{platformLabel}</span>
+            <span className="text-border">·</span>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                  title="More actions"
+                  disabled={assignmentPending}
+                  className="inline-flex min-w-0 items-center gap-1 rounded-sm outline-none transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  <MoreHorizontal className="size-4" />
+                  <span className="truncate">{assigneeLabel}</span>
+                  {assignmentPending ? (
+                    <Loader2 className="size-3 shrink-0 animate-spin" />
+                  ) : (
+                    <ChevronDown className="size-3.5 shrink-0" />
+                  )}
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" sideOffset={8} className="min-w-[14rem]">
-                <DropdownMenuItem
-                  disabled={!conversation.contact_id}
-                  onSelect={(event) => {
-                    event.preventDefault();
-                    if (!conversation.contact_id) return;
-                    setStartDialogOpen(true);
-                  }}
-                  className="gap-2"
-                >
-                  <Zap className="size-4" />
-                  <span>Start an automation</span>
-                </DropdownMenuItem>
+              <DropdownMenuContent align="start" sideOffset={8} className="w-[17rem] p-1.5">
+                <DropdownMenuLabel className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                  Assign chat
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {membersLoading ? (
+                  <div className="flex items-center gap-2 px-2 py-2 text-[13px] text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Loading team members
+                  </div>
+                ) : (
+                  <DropdownMenuRadioGroup value={assigneeValue} onValueChange={(value) => void handleAssignmentSelect(value)}>
+                    <DropdownMenuRadioItem
+                      value={UNASSIGNED_VALUE}
+                      className="gap-3 rounded-md px-2 py-2 [&>span:first-child]:hidden"
+                      disabled={assignmentPending}
+                    >
+                      <div className="flex size-7 items-center justify-center rounded-full border border-border bg-muted text-[11px] font-semibold text-muted-foreground">
+                        U
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-medium text-foreground">Unassigned</p>
+                        <p className="truncate text-[11px] text-muted-foreground">No owner</p>
+                      </div>
+                      {assigneeValue === UNASSIGNED_VALUE && (
+                        <Check className="size-4 shrink-0 text-muted-foreground" />
+                      )}
+                    </DropdownMenuRadioItem>
+                    {members.map((member) => {
+                      const memberLabel = member.user.name?.trim() || member.user.email;
+
+                      return (
+                        <DropdownMenuRadioItem
+                          key={member.user.id}
+                          value={member.user.id}
+                          className="gap-3 rounded-md px-2 py-2 [&>span:first-child]:hidden"
+                          disabled={assignmentPending}
+                        >
+                          {member.user.image ? (
+                            <img
+                              src={member.user.image}
+                              alt={memberLabel}
+                              className="size-7 rounded-full border border-border object-cover"
+                            />
+                          ) : (
+                            <div className="flex size-7 items-center justify-center rounded-full border border-border bg-muted text-[11px] font-semibold text-muted-foreground">
+                              {memberLabel.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[13px] font-medium text-foreground">{memberLabel}</p>
+                            <p className="truncate text-[11px] text-muted-foreground">{member.user.email}</p>
+                          </div>
+                          {assigneeValue === member.user.id && (
+                            <Check className="size-4 shrink-0 text-muted-foreground" />
+                          )}
+                        </DropdownMenuRadioItem>
+                      );
+                    })}
+                  </DropdownMenuRadioGroup>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
-            <button
-              type="button"
-              onClick={() => void handleStatusButton()}
-              disabled={statusPending || !onStatusChange}
-              className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-              title={isArchived ? "Restore conversation" : "Archive conversation"}
-            >
-              {statusPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : isArchived ? (
-                <RotateCcw className="size-4" />
-              ) : (
-                <Archive className="size-4" />
-              )}
-            </button>
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-t border-border px-4">
-          <span className="border-b-2 border-foreground px-1 py-2 text-[13px] font-medium text-foreground">
-            {platformLabel}
-          </span>
-          <div className="flex items-center gap-3 text-[12px] text-muted-foreground">
-            <span>{assigneeLabel}</span>
-            {(conversation.unread_count ?? 0) > 0 && (
-              <span className="font-medium text-foreground">{conversation.unread_count} unread</span>
-            )}
-            {automationsPaused && (
-              <span className="font-medium text-amber-600">Automations paused</span>
-            )}
-            {isArchived && (
-              <span className="font-medium text-muted-foreground">Archived</span>
-            )}
-          </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {conversation.contact_id ? (
+            <div className="hidden md:inline-flex">
+              <AutomationBadge
+                contactId={conversation.contact_id}
+                channel={conversation.platform}
+              />
+            </div>
+          ) : null}
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="More actions"
+              >
+                <MoreHorizontal className="size-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sideOffset={8} className="min-w-[15rem]">
+              {platformUrl && (
+                <DropdownMenuItem
+                  onSelect={() => window.open(platformUrl, "_blank", "noopener,noreferrer")}
+                  className="gap-2"
+                >
+                  <ExternalLink className="size-4" />
+                  <span>Open in {platformLabel}</span>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                disabled={automationControlPending || !conversation.contact_id}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  void handleAutomationControlToggle();
+                }}
+                className="gap-2"
+              >
+                {automationControlPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : automationsPaused ? (
+                  <PlayCircle className="size-4" />
+                ) : (
+                  <PauseCircle className="size-4" />
+                )}
+                <span>{automationsPaused ? "Resume automations" : "Pause automations"}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!conversation.contact_id}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  if (!conversation.contact_id) return;
+                  setStartDialogOpen(true);
+                }}
+                className="gap-2"
+              >
+                <Zap className="size-4" />
+                <span>Start an automation</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={statusPending || !onStatusChange}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  void handleStatusButton();
+                }}
+                className="gap-2"
+              >
+                {statusPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : isArchived ? (
+                  <RotateCcw className="size-4" />
+                ) : (
+                  <Archive className="size-4" />
+                )}
+                <span>{isArchived ? "Restore conversation" : "Archive conversation"}</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -818,36 +837,91 @@ export function ChatThread({
           onScroll: handleScroll,
           className: "[&>div]:!block [&>div]:min-h-full",
         }}
-        className="relative flex-1 bg-card"
+        className="relative flex-1"
       >
-        <div className="flex min-h-full flex-col px-4 py-5 sm:px-6">
-        {loading ? (
-          <div className="flex flex-1 items-center justify-center py-12">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" />
-          </div>
-        ) : error ? (
-          <div className="mx-auto flex max-w-xl items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-            <span>{error}</span>
-          </div>
-        ) : messages.length === 0 && notes.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center py-12">
-            <div className="text-center">
-              <MessageCircle className="mx-auto size-9 text-muted-foreground/40" />
-              <p className="mt-3 text-sm font-medium text-foreground">No messages yet</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                When this contact replies, the thread will appear here.
-              </p>
+        <div className="mx-auto flex min-h-full max-w-3xl flex-col px-4 py-5 sm:px-6">
+          {loading ? (
+            <div className="flex flex-1 items-center justify-center py-12">
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
             </div>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <AnimatePresence initial={false}>
-              {threadItems.map((item, index) => {
-                if (item.kind === "note") {
+          ) : error ? (
+            <div className="mx-auto flex max-w-xl items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          ) : messages.length === 0 && notes.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center py-12">
+              <div className="text-center">
+                <MessageCircle className="mx-auto size-9 text-muted-foreground/40" />
+                <p className="mt-3 text-[13px] font-medium text-foreground">No messages yet</p>
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  When {displayName} replies, the thread will appear here.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col">
+              <AnimatePresence initial={false}>
+                {threadItems.map((item, index) => {
+                  const prevItem = threadItems[index - 1];
+                  const nextItem = threadItems[index + 1];
+
+                  if (item.kind === "note") {
+                    return (
+                      <motion.div
+                        key={`note-${item.data.id}`}
+                        className={index === 0 ? "" : "mt-3"}
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{
+                          opacity: 1,
+                          y: 0,
+                          transition: { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
+                        }}
+                      >
+                        <NoteCard
+                          note={item.data}
+                          canDelete={item.data.user_id === currentUserId}
+                          onDelete={async () => {
+                            const res = await fetch(
+                              `/api/inbox/notes/${item.data.id}`,
+                              { method: "DELETE" },
+                            );
+                            if (res.ok) {
+                              setNotes((prev) => prev.filter((n) => n.id !== item.data.id));
+                            }
+                          }}
+                        />
+                      </motion.div>
+                    );
+                  }
+
+                  const msg = item.data;
+                  const isOutbound = msg.sender === "user";
+
+                  const samePrev =
+                    prevItem?.kind === "message"
+                    && prevItem.data.sender === msg.sender
+                    && dayKey(prevItem.data.created_at) === dayKey(msg.created_at);
+                  const sameNext =
+                    nextItem?.kind === "message"
+                    && nextItem.data.sender === msg.sender
+                    && dayKey(nextItem.data.created_at) === dayKey(msg.created_at);
+
+                  const previousMessage = threadItems
+                    .slice(0, index)
+                    .reverse()
+                    .find((t) => t.kind === "message")?.data;
+                  const showDayDivider =
+                    !previousMessage || dayKey(previousMessage.created_at) !== dayKey(msg.created_at);
+
+                  const hasAttachments = Boolean(msg.attachments && msg.attachments.length > 0);
+
                   return (
                     <motion.div
-                      key={`note-${item.data.id}`}
+                      key={msg.id}
+                      className={cn(
+                        index !== 0 && !showDayDivider && (samePrev ? "mt-0.5" : "mt-3"),
+                      )}
                       initial={{ opacity: 0, y: 6 }}
                       animate={{
                         opacity: 1,
@@ -855,143 +929,117 @@ export function ChatThread({
                         transition: { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
                       }}
                     >
-                      <NoteCard
-                        note={item.data}
-                        canDelete={item.data.user_id === currentUserId}
-                        onDelete={async () => {
-                          const res = await fetch(
-                            `/api/inbox/notes/${item.data.id}`,
-                            { method: "DELETE" },
-                          );
-                          if (res.ok) {
-                            setNotes((prev) => prev.filter((n) => n.id !== item.data.id));
-                          }
-                        }}
-                      />
-                    </motion.div>
-                  );
-                }
-
-                const isOutbound = item.data.sender === "user";
-                const previous = threadItems
-                  .slice(0, index)
-                  .reverse()
-                  .find((t) => t.kind === "message")?.data;
-                const showDayDivider = !previous || dayKey(previous.created_at) !== dayKey(item.data.created_at);
-
-                return (
-                  <motion.div
-                    key={item.data.id}
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{
-                      opacity: 1,
-                      y: 0,
-                      transition: { duration: 0.12, ease: [0.32, 0.72, 0, 1] },
-                    }}
-                  >
-                    {showDayDivider && (
-                      <div className="relative my-4 flex items-center justify-center">
-                        <div className="absolute inset-x-0 top-1/2 border-t border-border" />
-                        <span className="relative bg-card px-3 text-[12px] font-medium text-muted-foreground">
-                          {formatMessageDayLabel(item.data.created_at)}
-                        </span>
-                      </div>
-                    )}
-
-                    <div className={cn("flex gap-3", isOutbound ? "justify-end" : "justify-start")}>
-                      {!isOutbound && (
-                        <Avatar
-                          src={item.data.author_avatar_url ?? conversation.participant_avatar}
-                          name={item.data.author_name || displayName}
-                          className="mt-1 size-8 shrink-0"
-                          fallbackClassName="bg-card text-[11px]"
-                        />
+                      {showDayDivider && (
+                        <div
+                          className={cn(
+                            "flex items-center justify-center",
+                            index === 0 ? "mb-3" : "my-4",
+                          )}
+                        >
+                          <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                            {formatMessageDayLabel(msg.created_at)}
+                          </span>
+                        </div>
                       )}
 
-                      <div className="max-w-[78%] min-w-0">
-                        {item.data.text && (
-                          <div
-                            className={cn(
-                              "rounded-[18px] px-4 py-2.5 text-[14px] leading-6",
-                              isOutbound
-                                ? "rounded-br-md bg-foreground text-background"
-                                : "rounded-bl-md bg-muted text-foreground",
-                            )}
-                          >
-                            <p className="whitespace-pre-wrap break-words">{item.data.text}</p>
-                          </div>
+                      <div className={cn("flex items-end gap-2", isOutbound ? "justify-end" : "justify-start")}>
+                        {!isOutbound && (
+                          sameNext ? (
+                            <div className="size-7 shrink-0" />
+                          ) : (
+                            <Avatar
+                              src={msg.author_avatar_url ?? conversation.participant_avatar}
+                              name={msg.author_name || displayName}
+                              className="size-7 shrink-0"
+                              fallbackClassName="text-[11px]"
+                            />
+                          )
                         )}
 
-                        {item.data.attachments && item.data.attachments.length > 0 && (
-                          <div className="mt-2 space-y-2">
-                            {item.data.attachments.map((attachment, attachmentIndex) => {
-                              if (attachment.type.startsWith("image/")) {
+                        <div className={cn("flex min-w-0 max-w-[80%] flex-col", isOutbound ? "items-end" : "items-start")}>
+                          {msg.text && (
+                            <div
+                              className={cn(
+                                "rounded-2xl px-3.5 py-2 text-[14px] leading-6",
+                                isOutbound
+                                  ? "bg-foreground text-background"
+                                  : "bg-muted text-foreground",
+                                isOutbound
+                                  ? (sameNext ? "rounded-br-md" : "rounded-br-sm")
+                                  : (sameNext ? "rounded-bl-md" : "rounded-bl-sm"),
+                              )}
+                            >
+                              <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                            </div>
+                          )}
+
+                          {hasAttachments && (
+                            <div className={cn("space-y-2", msg.text && "mt-2")}>
+                              {msg.attachments?.map((attachment, attachmentIndex) => {
+                                if (attachment.type.startsWith("image/")) {
+                                  return (
+                                    <a
+                                      key={attachmentIndex}
+                                      href={attachment.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="block overflow-hidden rounded-2xl border border-border bg-card"
+                                    >
+                                      <img
+                                        src={attachment.url}
+                                        alt=""
+                                        className="max-h-64 w-full object-cover"
+                                      />
+                                    </a>
+                                  );
+                                }
+
                                 return (
                                   <a
                                     key={attachmentIndex}
                                     href={attachment.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="block overflow-hidden rounded-xl border border-border bg-card"
+                                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent"
                                   >
-                                    <img
-                                      src={attachment.url}
-                                      alt=""
-                                      className="max-h-64 w-full object-cover"
-                                    />
+                                    <ExternalLink className="size-3" />
+                                    Attachment
                                   </a>
                                 );
-                              }
-
-                              return (
-                                <a
-                                  key={attachmentIndex}
-                                  href={attachment.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent"
-                                >
-                                  <ExternalLink className="size-3" />
-                                  Attachment
-                                </a>
-                              );
-                            })}
-                          </div>
-                        )}
-
-                        <p
-                          className={cn(
-                            "mt-1 px-1 text-[11px] text-muted-foreground",
-                            isOutbound ? "text-right" : "text-left",
+                              })}
+                            </div>
                           )}
-                        >
-                          {formatMessageTime(item.data.created_at)}
-                        </p>
+
+                          {!sameNext && (
+                            <p className="mt-1 px-1 text-[10.5px] text-muted-foreground">
+                              {formatMessageTime(msg.created_at)}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </AnimatePresence>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
 
-            <div ref={messagesEndRef} />
-          </div>
-        )}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
 
-        {showScrollButton && (
-          <button
-            type="button"
-            onClick={scrollToBottom}
-            className="sticky bottom-4 left-1/2 flex -translate-x-1/2 items-center justify-center rounded-full border border-border bg-card p-2 text-muted-foreground shadow-sm transition-colors hover:bg-accent"
-          >
-            <ArrowDown className="size-4" />
-          </button>
-        )}
+          {showScrollButton && (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="sticky bottom-4 z-10 flex size-9 self-center items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-popover transition-colors hover:bg-accent"
+            >
+              <ArrowDown className="size-4" />
+            </button>
+          )}
         </div>
       </ScrollArea>
 
       {sendError && (
-        <div className="border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+        <div className="mx-3 mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-[13px] text-destructive sm:mx-4">
           {sendError}
         </div>
       )}
@@ -1007,7 +1055,7 @@ export function ChatThread({
       {enrollNotice && (
         <div
           className={cn(
-            "pointer-events-none absolute bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg",
+            "pointer-events-none absolute bottom-28 left-1/2 z-40 -translate-x-1/2 rounded-full px-3 py-1.5 text-[12px] font-medium shadow-lg",
             enrollNotice.kind === "ok"
               ? "bg-foreground text-background"
               : "bg-destructive text-white",

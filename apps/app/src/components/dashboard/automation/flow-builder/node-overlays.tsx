@@ -68,8 +68,9 @@ interface InsightsResponse {
 }
 
 const TONE_CLASSES: Record<BadgeTone, string> = {
-	green:
-		"bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100",
+	// Healthy is quiet/neutral; amber + rose stay as functional "needs
+	// attention" / "failing" signals so the success-rate pill still reads.
+	green: "bg-[#f4f5f7] text-[#5a6373] border-[#e6e9ef] hover:bg-[#eef0f3]",
 	yellow: "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100",
 	red: "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100",
 	grey: "bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100",

@@ -95,8 +95,8 @@ function PreviewBlock({
 									className={cn(
 										"rounded-full border px-3 py-1 text-center text-[11px] font-medium",
 										b.type === "branch"
-											? "border-[#c5b3f2] bg-[#ede4ff] text-[#6b46c1]"
-											: "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]",
+											? "border-[#e6e9ef] bg-[#f4f5f7] text-[#5a6373]"
+											: "border-[#e6e9ef] bg-[#f4f5f7] text-[#5a6373]",
 									)}
 								>
 									{resolveText(b.label) || "(button)"}
@@ -152,7 +152,7 @@ function PreviewBlock({
 								{block.buttons.map((b) => (
 									<div
 										key={b.id}
-										className="rounded-full border border-[#c5b3f2] bg-[#ede4ff] px-3 py-1 text-center text-[11px] font-medium text-[#6b46c1]"
+										className="rounded-full border border-[#e6e9ef] bg-[#f4f5f7] px-3 py-1 text-center text-[11px] font-medium text-[#5a6373]"
 									>
 										{resolveText(b.label) || "(button)"}
 									</div>

@@ -95,7 +95,7 @@ export function ActionList({ actions, onChange }: Props) {
 						className={cn(
 							"overflow-hidden rounded-xl border bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)]",
 							expanded
-								? "border-[#c7d2fe]"
+								? "border-[#c0c6d0]"
 								: hasProblems
 									? "border-amber-300"
 									: "border-[#e6e9ef]",
@@ -106,7 +106,7 @@ export function ActionList({ actions, onChange }: Props) {
 							<button
 								type="button"
 								onClick={() => setExpandedId(expanded ? null : action.id)}
-								className="flex flex-1 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[#f5f8fc]"
+								className="flex flex-1 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[#f0f1f4]"
 								aria-expanded={expanded}
 							>
 								{expanded ? (
@@ -114,7 +114,7 @@ export function ActionList({ actions, onChange }: Props) {
 								) : (
 									<ChevronRight className="size-3.5 text-[#64748b]" />
 								)}
-								<span className="rounded-md bg-[#eef4ff] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#4f46e5]">
+								<span className="rounded-md bg-[#f4f5f8] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#353a44]">
 									{idx + 1}
 								</span>
 								<span className="flex-1 truncate text-[12px] text-[#353a44]">
@@ -212,7 +212,7 @@ function RowMenu({
 			<button
 				type="button"
 				onClick={() => setOpen(!open)}
-				className="rounded p-1 text-[#94a3b8] hover:bg-[#f5f8fc] hover:text-[#334155]"
+				className="rounded p-1 text-[#94a3b8] hover:bg-[#f0f1f4] hover:text-[#334155]"
 				aria-label="Row menu"
 			>
 				<MoreHorizontal className="size-3.5" />
@@ -277,7 +277,7 @@ function MenuItem({
 					? "cursor-not-allowed opacity-40"
 					: destructive
 						? "text-destructive hover:bg-destructive/10"
-						: "text-[#334155] hover:bg-[#f5f8fc]",
+						: "text-[#334155] hover:bg-[#f0f1f4]",
 			)}
 		>
 			{icon}

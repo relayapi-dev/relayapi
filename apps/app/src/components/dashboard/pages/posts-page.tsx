@@ -47,6 +47,10 @@ interface PostTarget {
 
 interface Post {
   id: string;
+  // External (synced-from-platform) posts come back with source "external" and no
+  // status; internal posts created via RelayAPI are "internal". Used to keep the
+  // "all" tab in sync with the "published" tab, which renders both.
+  source?: "internal" | "external";
   content: string;
   platforms: string[];
   status: "scheduled" | "published" | "draft" | "failed" | "publishing" | "partial";
@@ -55,6 +59,20 @@ interface Post {
   created_at: string;
   targets?: Record<string, PostTarget>;
   media?: Array<{ url: string; type?: string }> | null;
+}
+
+// Statuses the "all" tab actually renders (published + external go to SentPostList,
+// the in-flight statuses go to QueuePostList). Drafts are fetched by the unfiltered
+// feed but shown only on their own tab, so they don't count as "surfaced" here.
+function isRenderedInAllTab(p: Post): boolean {
+  return (
+    p.status === "published" ||
+    p.source === "external" ||
+    p.status === "publishing" ||
+    p.status === "scheduled" ||
+    p.status === "failed" ||
+    p.status === "partial"
+  );
 }
 
 const topTabs = ["All", "Queue", "Drafts", "Published"] as const;
@@ -297,6 +315,19 @@ export function PostsPage({
   useRealtimeUpdates(useCallback((event) => {
     if (event.type.startsWith("post.")) refetchActiveTab();
   }, [refetchActiveTab]), { defer: true });
+
+  // The "all" feed is paged by date and includes statuses this view doesn't
+  // render here (drafts have their own tab). A single page can therefore contain
+  // no visible cards, which makes "Load more" look like it does nothing. Keep
+  // paging until a batch surfaces a renderable card or the feed runs out, so the
+  // button always advances through the timeline no matter how far back it reaches.
+  const handleAllLoadMore = useCallback(async () => {
+    for (let i = 0; i < 8; i++) {
+      const page = await allLoadMore();
+      if (page.length === 0) break; // feed exhausted
+      if (page.some(isRenderedInAllTab)) break; // surfaced at least one card
+    }
+  }, [allLoadMore]);
 
   const handleRetry = async (id: string) => {
     try {
@@ -604,11 +635,11 @@ export function PostsPage({
             />
           )}
           <SentPostList
-            posts={allPosts.filter((p) => p.status === "published")}
+            posts={allPosts.filter((p) => p.status === "published" || p.source === "external")}
             loading={allLoading}
             hasMore={allHasMore}
             loadingMore={allLoadingMore}
-            onLoadMore={allLoadMore}
+            onLoadMore={handleAllLoadMore}
             onDelete={handleDelete}
             onUnpublish={(id) => handleShowUnpublish(id)}
           />

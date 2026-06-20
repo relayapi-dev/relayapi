@@ -209,7 +209,7 @@ export function Timeline({ runId, onShowOnCanvas }: Props) {
 										className={cn(
 											"rounded px-1 py-0 font-mono",
 											s.entered_via_port_key
-												? "bg-sky-500/10 text-sky-700"
+												? "bg-[#f1f3f6] text-[#5a6373]"
 												: "text-muted-foreground/60",
 										)}
 									>
@@ -220,7 +220,7 @@ export function Timeline({ runId, onShowOnCanvas }: Props) {
 										className={cn(
 											"rounded px-1 py-0 font-mono",
 											s.exited_via_port_key
-												? "bg-emerald-500/10 text-emerald-700"
+												? "bg-[#f1f3f6] text-[#5a6373]"
 												: "text-muted-foreground/60",
 										)}
 									>

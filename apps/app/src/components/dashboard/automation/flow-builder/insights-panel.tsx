@@ -5,10 +5,11 @@
 // per-node are rendered inline. No charting library — simple HTML/Tailwind.
 
 import { useMemo, useState } from "react";
-import { BarChart3, Loader2, X } from "lucide-react";
+import { BarChart3, Loader2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useApi } from "@/hooks/use-api";
+import { PANEL_BODY_CLS, PANEL_SHELL_CLS, PanelHeader } from "./panel-styles";
 
 // ---------------------------------------------------------------------------
 // Types — mirror SDK AutomationInsightsResponse
@@ -97,39 +98,27 @@ export function InsightsPanel({ automationId, onClose }: Props) {
 	}, [data?.exit_reasons]);
 
 	return (
-		<div className="w-full border-l border-border bg-card/30 flex flex-col overflow-hidden md:w-96">
-			<div className="px-3 py-2 border-b border-border flex items-center justify-between">
-				<div>
-					<h3 className="text-xs font-medium flex items-center gap-1.5">
-						<BarChart3 className="size-3.5" />
-						Insights
-					</h3>
-					<p className="text-[10px] text-muted-foreground mt-0.5">
-						Totals, exit reasons, entrypoints, and per-node metrics
-					</p>
-				</div>
-				<button
-					type="button"
-					onClick={onClose}
-					className="text-muted-foreground hover:text-foreground"
-				>
-					<X className="size-3.5" />
-				</button>
-			</div>
+		<div className={cn(PANEL_SHELL_CLS, "min-w-0 flex-1 md:w-96 md:flex-none")}>
+			<PanelHeader
+				icon={<BarChart3 className="size-[18px]" />}
+				title="Insights"
+				subtitle="Totals, exit reasons, entrypoints, and per-node metrics"
+				onClose={onClose}
+			/>
 
 			{/* Period selector */}
-			<div className="border-b border-border px-3 py-2">
-				<div className="flex items-center gap-1 rounded-md border border-border bg-muted/30 p-0.5">
+			<div className="border-b border-[#eef0f4] px-4 py-3">
+				<div className="flex items-center gap-1 rounded-lg border border-[#e6e9ef] bg-[#f4f5f7] p-0.5">
 					{(Object.keys(PERIOD_LABELS) as InsightsPeriod[]).map((p) => (
 						<button
 							key={p}
 							type="button"
 							onClick={() => setPeriod(p)}
 							className={cn(
-								"flex-1 rounded px-2 py-1 text-[11px] font-medium transition-colors",
+								"flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
 								period === p
-									? "bg-background text-foreground shadow-sm"
-									: "text-muted-foreground hover:text-foreground",
+									? "bg-white text-[#353a44] shadow-sm"
+									: "text-[#8b92a0] hover:text-[#353a44]",
 							)}
 						>
 							{PERIOD_LABELS[p]}
@@ -138,8 +127,8 @@ export function InsightsPanel({ automationId, onClose }: Props) {
 				</div>
 			</div>
 
-			<ScrollArea className="flex-1">
-				<div className="px-3 py-3 space-y-3">
+			<ScrollArea className={PANEL_BODY_CLS}>
+				<div className="px-4 py-4 space-y-3">
 					{loading ? (
 						<div className="flex justify-center py-8">
 							<Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -149,7 +138,7 @@ export function InsightsPanel({ automationId, onClose }: Props) {
 							{error}
 						</div>
 					) : !data || isEmpty || !totals ? (
-						<div className="rounded-md border border-border/60 bg-card/50 px-3 py-6 text-[11px] text-muted-foreground text-center">
+						<div className="rounded-xl border border-[#e6e9ef] bg-white px-3 py-6 text-[11px] text-[#8b92a0] text-center">
 							No runs in this period.
 						</div>
 					) : (
@@ -184,9 +173,9 @@ export function InsightsPanel({ automationId, onClose }: Props) {
 														{row.count}
 													</span>
 												</div>
-												<div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-muted">
+												<div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-[#eef0f4]">
 													<div
-														className="h-full bg-foreground/40"
+														className="h-full bg-[#9aa3b2]"
 														style={{
 															width: `${maxExitReason > 0 ? (row.count / maxExitReason) * 100 : 0}%`,
 														}}
@@ -297,9 +286,9 @@ export function InsightsPanel({ automationId, onClose }: Props) {
 
 function Tile({ label, value }: { label: string; value: string | number }) {
 	return (
-		<div className="rounded-md border border-border bg-background/80 px-2.5 py-2">
-			<div className="text-[10px] text-muted-foreground">{label}</div>
-			<div className="mt-1 text-sm font-semibold text-foreground">
+		<div className="rounded-xl border border-[#e6e9ef] bg-white px-3 py-2.5">
+			<div className="text-[10px] text-[#8b92a0]">{label}</div>
+			<div className="mt-1 text-sm font-semibold text-[#353a44]">
 				{typeof value === "number" ? value.toLocaleString() : value}
 			</div>
 		</div>
@@ -314,8 +303,8 @@ function Section({
 	children: React.ReactNode;
 }) {
 	return (
-		<div className="rounded-md border border-border bg-background/80 px-3 py-2">
-			<div className="text-[10px] font-medium text-muted-foreground mb-2">
+		<div className="rounded-xl border border-[#e6e9ef] bg-white px-3 py-2.5">
+			<div className="text-[10px] font-medium text-[#8b92a0] mb-2">
 				{title}
 			</div>
 			{children}

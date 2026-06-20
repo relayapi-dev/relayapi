@@ -343,9 +343,11 @@ export function AdsPage({
           action={
             activeTab === "ads" ? (
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => setBoostDialogOpen(true)}>
+                {/* Secondary action collapses to icon-only on mobile so the
+                    two-button Ads header stays uncramped on small screens. */}
+                <Button variant="outline" size="sm" onClick={() => setBoostDialogOpen(true)} title="Boost Post">
                   <Megaphone className="size-4" />
-                  Boost Post
+                  <span className="hidden sm:inline">Boost Post</span>
                 </Button>
                 <Button size="sm" onClick={() => setCreateAdOpen(true)}>
                   <Plus className="size-4" />
@@ -371,8 +373,11 @@ export function AdsPage({
           }
         />
 
-        {/* Tabs + filters */}
+        {/* Tabs + filters — flex-nowrap keeps the tab strip + filters on one row
+            on mobile (tabs scroll horizontally) instead of wrapping the filters
+            onto a second line. Matches the Posts/Connections toolbars. */}
         <PageToolbar
+          className="flex-nowrap"
           left={
             <Segmented
               value={activeTab}
@@ -431,7 +436,7 @@ export function AdsPage({
             </div>
           ) : (
             <>
-              <motion.div className="overflow-hidden rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
+              <motion.div className="overflow-x-auto scrollbar-hide rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-muted/40 text-xs font-medium text-muted-foreground">
@@ -531,7 +536,7 @@ export function AdsPage({
             </div>
           ) : (
             <>
-              <motion.div className="overflow-hidden rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
+              <motion.div className="overflow-x-auto scrollbar-hide rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-muted/40 text-xs font-medium text-muted-foreground">
@@ -596,12 +601,12 @@ export function AdsPage({
         <>
           {/* Ad account selector */}
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Ad Account:</span>
+            <span className="shrink-0 text-xs text-muted-foreground">Ad Account:</span>
             <AdAccountCombobox
               value={selectedAdAccountId}
               onSelect={setSelectedAdAccountId}
               workspaceId={filterQuery.workspace_id}
-              className="w-64"
+              className="w-full sm:w-64"
             />
           </div>
 
@@ -620,7 +625,7 @@ export function AdsPage({
             </div>
           ) : (
             <>
-              <motion.div className="overflow-hidden rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
+              <motion.div className="overflow-x-auto scrollbar-hide rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-muted/40 text-xs font-medium text-muted-foreground">
@@ -713,7 +718,7 @@ export function AdsPage({
             </div>
           ) : (
             <>
-            <motion.div className="overflow-hidden rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
+            <motion.div className="overflow-x-auto scrollbar-hide rounded-[12px] border border-border bg-card" variants={stagger} initial="hidden" animate="visible">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border bg-muted/40 text-xs font-medium text-muted-foreground">

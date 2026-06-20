@@ -293,7 +293,7 @@ export function InsertMenu({
 
 	return (
 		<div
-			className="absolute z-40 w-[320px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_40px_rgba(15,23,42,0.18)]"
+			className="absolute z-40 w-[320px] overflow-hidden rounded-2xl border border-[#e6e9ef] bg-white shadow-[0_10px_30px_rgba(15,23,42,0.12)]"
 			style={{
 				left: Math.max(8, position.x),
 				top: Math.max(8, position.y),
@@ -309,7 +309,7 @@ export function InsertMenu({
 					placeholder="Search nodes…"
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
-					className="h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-[#4680ff] focus:ring-1 focus:ring-[#4680ff]/20"
+					className="h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-[#9aa3b2] focus:ring-1 focus:ring-[#e6e9ef]"
 					data-testid="insert-menu-search"
 				/>
 			</div>
@@ -350,7 +350,7 @@ export function InsertMenu({
 												className={cn(
 													"flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left",
 													selected
-														? "bg-[#eef3ff]"
+														? "bg-[#f0f1f4]"
 														: "hover:bg-slate-50",
 												)}
 											>

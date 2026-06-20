@@ -33,7 +33,7 @@ export function ReplyToCommentForm({ action, onChange, error }: Props) {
 					onChange={(e) => onChange({ ...action, text: e.target.value })}
 					rows={4}
 					placeholder="Thanks for commenting!"
-					className="w-full resize-y rounded-xl border border-[#d9dde6] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#8ab4ff]"
+					className="w-full resize-y rounded-xl border border-[#d9dde6] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#c0c6d0]"
 				/>
 			</Field>
 		</FormShell>

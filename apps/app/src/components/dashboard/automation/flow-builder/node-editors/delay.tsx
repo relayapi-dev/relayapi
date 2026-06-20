@@ -68,7 +68,7 @@ export function DelayEditor({
 					</Field>
 				))}
 			</div>
-			<p className="text-[12px] font-medium text-[#4680ff]">
+			<p className="text-[12px] font-medium text-[#353a44]">
 				{formatTotal(totalMs)}
 			</p>
 		</FormShell>

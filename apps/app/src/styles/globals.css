@@ -399,4 +399,12 @@
 		background-color: #D40B1A;
 		color: white;
 	}
+
+	/* The dashboard is grayscale-themed, so the brand-red selection above
+	   doesn't belong there — override it with a neutral gray that adapts to
+	   light/dark. (Marketing/auth keep the on-brand red.) */
+	.dash-theme ::selection {
+		background-color: var(--neutral-300);
+		color: var(--foreground);
+	}
 }

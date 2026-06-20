@@ -6,16 +6,9 @@
 // edges — so React Flow's `sourceHandle` / `targetHandle` bindings line up
 // with the port model without any translation layer.
 //
-// Colour cues come from `port.role` plus sub-role detection on branch ports:
-//   - branch / key "true"   -> green
-//   - branch / key "false"  -> red
-//   - branch (other)        -> purple
-//   - error / invalid       -> red
-//   - success               -> green
-//   - interactive           -> blue
-//   - timeout               -> amber
-//   - skip                  -> grey-subtle
-//   - default               -> neutral grey
+// Handles are monochrome: a single neutral dot/chip treatment for every role.
+// The chip *label* (e.g. "True", "False", "Error") carries the meaning, so the
+// canvas stays calm and readable without a rainbow of port colours.
 //
 // A small chip sits next to the handle showing `port.label` (falling back to
 // the key). Clicking the chip is intentionally a no-op — port editing happens
@@ -36,60 +29,12 @@ interface PortStyle {
 }
 
 /**
- * Role → handle colours. Exported so tests can assert on the mapping without
- * re-deriving it.
+ * Port style. Monochrome by design: every role shares one neutral treatment
+ * and the chip *label* (e.g. "True", "False", "Error") carries the meaning
+ * instead of colour. Exported for symmetry with the renderer; kept as a
+ * function so a future variant could reintroduce per-role cues in one place.
  */
-export function stylesForPort(port: AutomationPort): PortStyle {
-	const role = port.role ?? "default";
-	if (role === "branch") {
-		if (port.key === "true") {
-			return {
-				dot: "!border-[#1fa971] !bg-[#d9f5e5]",
-				chip: "bg-[#e7f7ee] text-[#196a47] border-[#b7e6c9]",
-			};
-		}
-		if (port.key === "false") {
-			return {
-				dot: "!border-[#d64545] !bg-[#fde2e2]",
-				chip: "bg-[#fde7e7] text-[#8a2323] border-[#f4b3b3]",
-			};
-		}
-		return {
-			dot: "!border-[#7c4dff] !bg-[#e8e0ff]",
-			chip: "bg-[#efe9ff] text-[#503399] border-[#d0c1ff]",
-		};
-	}
-	if (role === "error" || role === "invalid") {
-		return {
-			dot: "!border-[#d64545] !bg-[#fde2e2]",
-			chip: "bg-[#fde7e7] text-[#8a2323] border-[#f4b3b3]",
-		};
-	}
-	if (role === "success") {
-		return {
-			dot: "!border-[#1fa971] !bg-[#d9f5e5]",
-			chip: "bg-[#e7f7ee] text-[#196a47] border-[#b7e6c9]",
-		};
-	}
-	if (role === "interactive") {
-		return {
-			dot: "!border-[#2f6bff] !bg-[#dceaff]",
-			chip: "bg-[#e4eeff] text-[#1b3e9e] border-[#c0d4ff]",
-		};
-	}
-	if (role === "timeout") {
-		return {
-			dot: "!border-[#c78028] !bg-[#ffe8c7]",
-			chip: "bg-[#fff0d6] text-[#7a4a0a] border-[#f2cf8a]",
-		};
-	}
-	if (role === "skip") {
-		return {
-			dot: "!border-[#b7bdc9] !bg-[#eef0f4]",
-			chip: "bg-[#eef0f4] text-[#6f7786] border-[#d6dae2]",
-		};
-	}
-	// default / anything we don't know
+export function stylesForPort(_port: AutomationPort): PortStyle {
 	return {
 		dot: "!border-[#98a6bd] !bg-white",
 		chip: "bg-[#f4f5f8] text-[#4f5765] border-[#e5e8ee]",

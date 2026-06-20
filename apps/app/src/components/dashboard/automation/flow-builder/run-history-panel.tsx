@@ -6,14 +6,14 @@
 // exit reason inline so operators can see the status of each run.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-	History,
-	Loader2,
-	RefreshCw,
-	X,
-} from "lucide-react";
+import { History, Loader2, RefreshCw } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import {
+	PANEL_ICON_BUTTON_CLS,
+	PANEL_SHELL_CLS,
+	PanelHeader,
+} from "./panel-styles";
 
 // ---------------------------------------------------------------------------
 // Types — mirror SDK AutomationRunResponse (plus optional contact hydration)
@@ -99,19 +99,13 @@ function formatDuration(
 }
 
 function statusColor(status: string): string {
+	// Monochrome pills — the status word carries the meaning; red is reserved
+	// for genuine failures.
 	switch (status) {
-		case "completed":
-			return "text-emerald-600 bg-emerald-500/10 border-emerald-500/30";
-		case "active":
-			return "text-sky-600 bg-sky-500/10 border-sky-500/30";
-		case "waiting":
-			return "text-amber-600 bg-amber-500/10 border-amber-500/30";
 		case "failed":
 			return "text-destructive bg-destructive/10 border-destructive/30";
-		case "exited":
-			return "text-neutral-600 bg-neutral-500/10 border-neutral-500/30";
 		default:
-			return "text-muted-foreground bg-muted border-border";
+			return "text-[#5a6373] bg-[#f4f5f7] border-[#e6e9ef]";
 	}
 }
 
@@ -214,45 +208,33 @@ export function RunHistoryPanel({
 	const selectedRun = runs.find((r) => r.id === selectedRunId) ?? null;
 
 	return (
-		<div className="w-full border-l border-border bg-card/30 flex flex-col overflow-hidden md:w-80">
-			<div className="px-3 py-2 border-b border-border flex items-center justify-between">
-				<div>
-					<h3 className="text-xs font-medium flex items-center gap-1.5">
-						<History className="size-3.5" />
-						Runs
-					</h3>
-					<p className="text-[10px] text-muted-foreground mt-0.5">
-						Recent runs for this automation
-					</p>
-				</div>
-				<div className="flex items-center gap-1">
+		<div className={cn(PANEL_SHELL_CLS, "min-w-0 flex-1 md:w-80 md:flex-none")}>
+			<PanelHeader
+				icon={<History className="size-[18px]" />}
+				title="Runs"
+				subtitle="Recent runs for this automation"
+				onClose={onClose}
+				actions={
 					<button
 						type="button"
 						onClick={() => {
 							setCursor(null);
 							void loadRuns(false);
 						}}
-						className="text-muted-foreground hover:text-foreground"
+						className={PANEL_ICON_BUTTON_CLS}
 						title="Refresh"
 					>
-						<RefreshCw className="size-3.5" />
+						<RefreshCw className="size-4" />
 					</button>
-					<button
-						type="button"
-						onClick={onClose}
-						className="text-muted-foreground hover:text-foreground"
-					>
-						<X className="size-3.5" />
-					</button>
-				</div>
-			</div>
+				}
+			/>
 
 			{/* Filters */}
-			<div className="border-b border-border px-3 py-2 space-y-1.5">
+			<div className="space-y-2 border-b border-[#eef0f4] px-4 py-3">
 				<select
 					value={statusFilter}
 					onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-					className="h-7 w-full rounded-md border border-border bg-background px-2 text-xs"
+					className="h-9 w-full rounded-lg border border-[#d9dde6] bg-white px-2.5 text-[12px] text-[#353a44] outline-none transition focus:border-[#9aa3b2]"
 				>
 					<option value="">All statuses</option>
 					<option value="active">Active</option>
@@ -266,7 +248,7 @@ export function RunHistoryPanel({
 					value={contactFilter}
 					onChange={(e) => setContactFilter(e.target.value)}
 					placeholder="Filter by contact id"
-					className="h-7 w-full rounded-md border border-border bg-background px-2 text-xs placeholder:text-muted-foreground"
+					className="h-9 w-full rounded-lg border border-[#d9dde6] bg-white px-2.5 text-[12px] text-[#353a44] outline-none transition focus:border-[#9aa3b2] placeholder:text-[#9aa3b2]"
 				/>
 			</div>
 
@@ -300,8 +282,8 @@ export function RunHistoryPanel({
 											type="button"
 											onClick={() => handleSelect(r.id)}
 											className={cn(
-												"w-full px-3 py-2 text-left hover:bg-accent/30 border-b border-border/60 text-[11px]",
-												isSelected && "bg-accent/40",
+												"w-full px-4 py-2.5 text-left hover:bg-[#f7f8fa] border-b border-[#eef0f4] text-[11px]",
+												isSelected && "bg-[#f4f5f7]",
 											)}
 										>
 											<div className="flex items-start justify-between gap-2">
@@ -314,7 +296,7 @@ export function RunHistoryPanel({
 														{duration && ` · ${duration}`}
 													</div>
 													{r.status === "waiting" && r.current_node_key && (
-														<div className="mt-0.5 text-[10px] text-amber-600">
+														<div className="mt-0.5 text-[10px] text-[#8b92a0]">
 															at{" "}
 															<span className="font-mono">
 																{r.current_node_key}
@@ -347,7 +329,7 @@ export function RunHistoryPanel({
 									type="button"
 									onClick={() => void loadRuns(true)}
 									disabled={loadingMore}
-									className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[11px] font-medium text-foreground hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+									className="w-full rounded-lg border border-[#d9dde6] bg-white px-2 py-1.5 text-[11px] font-medium text-[#353a44] hover:bg-[#f4f5f8] disabled:cursor-not-allowed disabled:opacity-60"
 								>
 									{loadingMore ? (
 										<span className="inline-flex items-center gap-1">

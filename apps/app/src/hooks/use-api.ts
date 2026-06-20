@@ -254,7 +254,8 @@ interface UsePaginatedApiResult<T> {
 	loadingMore: boolean;
 	error: string | null;
 	hasMore: boolean;
-	loadMore: () => void;
+	/** Fetches the next page and resolves with just-fetched items (empty if none). */
+	loadMore: () => Promise<T[]>;
 	refetch: () => void;
 	setData: Dispatch<SetStateAction<T[]>>;
 }
@@ -294,8 +295,8 @@ export function usePaginatedApi<T = unknown>(
 	const fetchId = useRef(0);
 
 	const fetchPage = useCallback(
-		async (cursor: string | null, append: boolean) => {
-			if (!path) return;
+		async (cursor: string | null, append: boolean): Promise<T[]> => {
+			if (!path) return [];
 			const id = append ? fetchId.current : ++fetchId.current;
 			if (append) setLoadingMore(true);
 			else setLoading(true);
@@ -310,7 +311,7 @@ export function usePaginatedApi<T = unknown>(
 				const res = await fetch(url.toString(), {
 					signal: AbortSignal.timeout(15_000),
 				});
-				if (!append && id !== fetchId.current) return;
+				if (!append && id !== fetchId.current) return [];
 
 				if (!res.ok) {
 					const err = await res.json().catch(() => null);
@@ -322,7 +323,7 @@ export function usePaginatedApi<T = unknown>(
 					} else {
 						setError(err?.error?.message || err?.message || `Error ${res.status}`);
 					}
-					return;
+					return [];
 				}
 
 				const json = await res.json();
@@ -330,9 +331,11 @@ export function usePaginatedApi<T = unknown>(
 				setData((prev) => (append ? [...prev, ...items] : items));
 				cursorRef.current = json.next_cursor || null;
 				setHasMore(!!json.has_more);
+				return items;
 			} catch {
-				if (!append && id !== fetchId.current) return;
+				if (!append && id !== fetchId.current) return [];
 				setError("Network connection lost.");
+				return [];
 			} finally {
 				if (append) setLoadingMore(false);
 				else setLoading(false);
@@ -351,10 +354,11 @@ export function usePaginatedApi<T = unknown>(
 		void fetchPage(null, false);
 	}, [fetchPage, path, requestKey, options?.initialRequestKey]);
 
-	const loadMore = useCallback(() => {
+	const loadMore = useCallback((): Promise<T[]> => {
 		if (!loadingMore && hasMore && cursorRef.current) {
-			void fetchPage(cursorRef.current, true);
+			return fetchPage(cursorRef.current, true);
 		}
+		return Promise.resolve([]);
 	}, [loadingMore, hasMore, fetchPage]);
 
 	const refetch = useCallback(() => {

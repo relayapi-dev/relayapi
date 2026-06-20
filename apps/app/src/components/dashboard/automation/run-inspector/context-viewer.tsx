@@ -54,7 +54,7 @@ export function ContextViewer({ context }: Props) {
 					onClick={handleCopy}
 					className={cn(
 						"inline-flex items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground",
-						copied && "text-emerald-600 border-emerald-500/40",
+						copied && "text-[#353a44] border-[#9aa3b2]",
 					)}
 				>
 					{copied ? (

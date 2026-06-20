@@ -13,10 +13,11 @@
 //   3. Every edge references existing `(node, port)` pairs on both ends; the
 //      port direction must match (output on the from side, input on the to
 //      side).
-//   4. Non-root nodes must have at least one incoming edge.
 //   5. No cycles — unless the cycle contains an `input`, `delay`, or `goto`
 //      node that naturally pauses the run.
-//   6. Warnings: output ports that exist but have no outgoing edge.
+//   Warnings (advisory, never block save/activation):
+//   - Non-root nodes with no incoming edge (orphan / unreachable).
+//   - Output ports that exist but have no outgoing edge.
 //
 // Ports are derived client-side via `derive-ports.ts` so the rules operate on
 // the same canonical port set the server will produce on save.
@@ -157,16 +158,19 @@ export function validateGraph(graph: AutomationGraph): GraphValidationResult {
 		}
 	}
 
-	// 4. Orphan nodes.
+	// 4. Orphan nodes — WARNING, not error. A node with no incoming edge is
+	// unreachable (the runner only ever follows edges out from the root), so it
+	// never runs. Flagging it as fatal would block save/activation on every
+	// not-yet-wired node mid-edit. Mirrors the server validator.
 	const incoming = new Set<string>();
 	for (const e of graph.edges) incoming.add(e.to_node);
 	for (const n of canonicalNodes) {
 		if (n.key === graph.root_node_key) continue;
 		if (!incoming.has(n.key)) {
-			errors.push({
+			warnings.push({
 				code: "orphan_node",
 				message: `node "${n.key}" has no incoming edge`,
-				severity: "error",
+				severity: "warning",
 				nodeKey: n.key,
 			});
 		}

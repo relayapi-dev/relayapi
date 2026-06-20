@@ -7,6 +7,7 @@ import {
 import { and, count, desc, eq, gte, lt, lte, sql } from "drizzle-orm";
 import {
 	ErrorResponse,
+	OffsetPaginationParams,
 	PaginationParams,
 	paginatedResponse,
 } from "../schemas/common";
@@ -172,7 +173,7 @@ const listRequestLogs = createRoute({
 	description:
 		"Returns per-request API logs for the organization, ordered by most recent first.",
 	security: [{ Bearer: [] }],
-	request: { query: PaginationParams },
+	request: { query: OffsetPaginationParams },
 	responses: {
 		200: {
 			description: "Request log entries",
@@ -193,31 +194,35 @@ const listRequestLogs = createRoute({
 
 app.openapi(listRequestLogs, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit, cursor, from, to } = c.req.valid("query");
+	const { limit, cursor, from, to, offset } = c.req.valid("query");
 	const db = c.get("db");
 
 	const baseConditions = [eq(apiRequestLogs.organizationId, orgId)];
 	if (from) baseConditions.push(gte(apiRequestLogs.createdAt, new Date(from)));
 	if (to) baseConditions.push(lte(apiRequestLogs.createdAt, new Date(to)));
 
+	// `offset` enables random page access and takes precedence over `cursor`.
+	const useOffset = offset !== undefined;
 	const conditions = [...baseConditions];
 	// Keyset pagination on the bigserial id. Guard against a non-numeric cursor
 	// (stale/typoed) which would otherwise be sent to postgres as "NaN" and 500
 	// the request. Mirror the media.ts pattern: ignore an unparseable cursor.
-	if (cursor) {
+	if (!useOffset && cursor) {
 		const cursorId = Number(cursor);
 		if (!Number.isNaN(cursorId)) {
 			conditions.push(lt(apiRequestLogs.id, cursorId));
 		}
 	}
 
+	const dataQuery = db
+		.select()
+		.from(apiRequestLogs)
+		.where(and(...conditions))
+		.orderBy(desc(apiRequestLogs.id))
+		.limit(limit + 1);
+
 	const [rows, countRows] = await Promise.all([
-		db
-			.select()
-			.from(apiRequestLogs)
-			.where(and(...conditions))
-			.orderBy(desc(apiRequestLogs.id))
-			.limit(limit + 1),
+		useOffset ? dataQuery.offset(offset) : dataQuery,
 		db
 			.select({ total: count() })
 			.from(apiRequestLogs)

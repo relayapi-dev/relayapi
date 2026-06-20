@@ -11,7 +11,7 @@
 //   - create: `createType` set, `binding` null → account picker + editor + Create
 //   - edit:   `binding` set → account shown read-only, editor + Save/Pause/Unbind
 
-import { ExternalLink, Link2, Loader2, Unlink, X } from "lucide-react";
+import { ExternalLink, Link2, Loader2, Unlink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
 	AccountSearchCombobox,
@@ -29,6 +29,7 @@ import {
 	type CanvasBindingRow,
 } from "../bindings-tab/display";
 import type { BindingChannel, BindingType } from "../bindings-tab/types";
+import { PANEL_BODY_CLS, PANEL_SHELL_CLS, PanelHeader } from "./panel-styles";
 
 const PANEL_WIDTH_CLS = "w-[360px] xl:w-[392px]";
 
@@ -340,31 +341,15 @@ export function BindingDetailPanel({
 	const statusBadge = binding ? bindingStatusBadge(binding.status) : null;
 
 	return (
-		<div
-			className={cn(
-				PANEL_WIDTH_CLS,
-				"m-3 flex flex-col overflow-hidden rounded-[22px] border border-[#e6e9ef] bg-white shadow-[0_12px_40px_rgba(15,23,42,0.10)]",
-			)}
-		>
-			<div className="flex shrink-0 items-center justify-between border-b border-[#e6e9ef] bg-[#eef2ff] px-4 py-4">
-				<div className="min-w-0 flex-1">
-					<h3 className="flex items-center gap-1.5 truncate text-[16px] font-semibold text-[#353a44]">
-						<Link2 className="size-4 text-[#4680ff]" />
-						{isCreate ? `New ${ed.title}` : ed.title}
-					</h3>
-					<p className="mt-1 text-[11px] text-[#6f7786]">{ed.subtitle}</p>
-				</div>
-				<button
-					type="button"
-					onClick={onClose}
-					className="rounded-full p-1 text-[#6f7786] transition hover:bg-white/70 hover:text-[#353a44]"
-					aria-label="Close"
-				>
-					<X className="size-4" />
-				</button>
-			</div>
+		<div className={cn(PANEL_SHELL_CLS, PANEL_WIDTH_CLS)}>
+			<PanelHeader
+				icon={<Link2 className="size-[18px]" />}
+				title={isCreate ? `New ${ed.title}` : ed.title}
+				subtitle={ed.subtitle}
+				onClose={onClose}
+			/>
 
-			<ScrollArea className="flex-1 bg-[#fbfcfe]">
+			<ScrollArea className={PANEL_BODY_CLS}>
 				<div className="space-y-4 px-4 py-4">
 					{banner && (
 						<div
@@ -372,7 +357,7 @@ export function BindingDetailPanel({
 								"rounded-md border px-3 py-2 text-xs",
 								banner.type === "error"
 									? "border-destructive/30 bg-destructive/10 text-destructive"
-									: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+									: "border-[#e6e9ef] bg-[#f4f5f7] text-[#5a6373]",
 							)}
 						>
 							{banner.message}

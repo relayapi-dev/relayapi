@@ -123,13 +123,21 @@ export function validateGraph(graph: Graph): ValidationResult {
     }
   }
 
-  // 4. orphan nodes (non-root with no incoming edges)
+  // 4. orphan nodes (non-root with no incoming edges) — WARNING, not error.
+  //
+  // A node with no incoming edge is unreachable, not invalid: the runner starts
+  // at `root_node_key` and only ever follows edges (see runner.ts — runLoop
+  // seeds `currentNodeKey: rootKey`), so an orphan node simply never executes.
+  // Treating this as a fatal error meant every freshly-added-but-not-yet-wired
+  // node force-paused the active automation and bounced the save with a 422 —
+  // making incremental canvas editing impossible. It mirrors the symmetric
+  // `port_no_outgoing_edge` case below, which is already a warning.
   const incoming = new Set<string>();
   for (const e of canonical.edges) incoming.add(e.to_node);
   for (const n of canonical.nodes) {
     if (n.key === canonical.root_node_key) continue;
     if (!incoming.has(n.key)) {
-      errors.push({ code: "orphan_node", message: `node "${n.key}" has no incoming edge`, node_key: n.key });
+      warnings.push({ code: "orphan_node", message: `node "${n.key}" has no incoming edge`, node_key: n.key });
     }
   }
 

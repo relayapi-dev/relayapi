@@ -19,13 +19,11 @@
 
 import { useCallback, useMemo, type ChangeEvent } from "react";
 import {
-	ChevronLeft,
 	ChevronRight,
 	Link2,
 	Loader2,
 	Plus,
 	Trash2,
-	X,
 	Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -56,6 +54,7 @@ import {
 import type { AutomationEntrypoint } from "./guided-flow";
 import { FilterGroupEditor, type FilterGroup } from "./filter-group-editor";
 import { INPUT_CLS } from "./field-styles";
+import { PANEL_BODY_CLS, PANEL_SHELL_CLS, PanelHeader } from "./panel-styles";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -272,30 +271,13 @@ function TriggerListMode({
 	onAddBinding: (bindingType: string) => void;
 }) {
 	return (
-		<div
-			className={cn(
-				PANEL_WIDTH_CLS,
-				"m-3 flex flex-col overflow-hidden rounded-[22px] border border-[#e6e9ef] bg-white shadow-[0_12px_40px_rgba(15,23,42,0.10)]",
-			)}
-		>
-			<div className="flex shrink-0 items-center justify-between border-b border-[#e6e9ef] bg-[#e4f5e6] px-4 py-4">
-				<div className="min-w-0 flex-1">
-					<h3 className="truncate text-[16px] font-semibold text-[#353a44]">
-						When...
-					</h3>
-					<p className="mt-1 text-[11px] text-[#6f7786]">
-						Triggers that start this automation.
-					</p>
-				</div>
-				<button
-					type="button"
-					onClick={onClose}
-					className="rounded-full p-1 text-[#6f7786] transition hover:bg-white/70 hover:text-[#353a44]"
-					aria-label="Close"
-				>
-					<X className="size-4" />
-				</button>
-			</div>
+		<div className={cn(PANEL_SHELL_CLS, PANEL_WIDTH_CLS)}>
+			<PanelHeader
+				icon={<Zap className="size-[18px]" />}
+				title="When..."
+				subtitle="Triggers that start this automation."
+				onClose={onClose}
+			/>
 
 			{createError && (
 				<div className="mx-3 mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
@@ -303,7 +285,7 @@ function TriggerListMode({
 				</div>
 			)}
 
-			<ScrollArea className="flex-1 bg-[#fbfcfe]">
+			<ScrollArea className={PANEL_BODY_CLS}>
 				<div className="space-y-3 px-4 py-4">
 					{entrypoints.length === 0 && bindings.length === 0 ? (
 						<div className="rounded-[16px] border border-dashed border-[#d9dde6] bg-white px-4 py-6 text-center text-[13px] text-[#7e8695]">
@@ -317,9 +299,9 @@ function TriggerListMode({
 								key={ep.id}
 								type="button"
 								onClick={() => onSelectEntrypoint(ep.id)}
-								className="flex w-full items-center gap-3 rounded-[16px] border border-[#e6e9ef] bg-white px-4 py-3 text-left transition hover:border-[#4680ff]/40 hover:bg-[#f5f8ff]"
+								className="flex w-full items-center gap-3 rounded-[16px] border border-[#e6e9ef] bg-white px-4 py-3 text-left transition hover:border-[#9aa3b2] hover:bg-[#f7f8fa]"
 							>
-								<div className="flex size-10 items-center justify-center rounded-full bg-[#f0f4ff] text-[#4680ff]">
+								<div className="flex size-10 items-center justify-center rounded-full bg-[#f1f3f6] text-[#5a6373]">
 									<Zap className="size-4" />
 								</div>
 								<div className="min-w-0 flex-1">
@@ -331,10 +313,8 @@ function TriggerListMode({
 											className={cn(
 												"text-[10px]",
 												ep.status === "active"
-													? "text-emerald-600"
-													: ep.status === "paused"
-														? "text-amber-600"
-														: "text-[#7e8695]",
+													? "text-[#353a44]"
+													: "text-[#8b92a0]",
 											)}
 										>
 											· {ep.status}
@@ -360,9 +340,9 @@ function TriggerListMode({
 								key={binding.id}
 								type="button"
 								onClick={() => onSelectBinding(binding.id)}
-								className="flex w-full items-center gap-3 rounded-[16px] border border-[#dfe6ff] bg-[#f7f9ff] px-4 py-3 text-left transition hover:border-[#4680ff]/40 hover:bg-[#eef3ff]"
+								className="flex w-full items-center gap-3 rounded-[16px] border border-[#e6e9ef] bg-[#f4f5f8] px-4 py-3 text-left transition hover:border-[#9aa3b2] hover:bg-[#eef0f3]"
 							>
-								<div className="flex size-10 items-center justify-center rounded-full bg-[#4680ff] text-white shadow-[0_2px_8px_rgba(15,23,42,0.15)]">
+								<div className="flex size-10 items-center justify-center rounded-full bg-[#eceff3] text-[#5a6373]">
 									<Link2 className="size-4" />
 								</div>
 								<div className="min-w-0 flex-1">
@@ -398,7 +378,7 @@ function TriggerListMode({
 											availableBindingTypes.length === 0) ||
 										creating
 									}
-									className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-[14px] border border-dashed border-[#d9dde6] text-[14px] font-semibold text-[#4680ff] transition hover:border-[#4680ff] hover:bg-[#f4f8ff] disabled:cursor-not-allowed disabled:opacity-60"
+									className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-[14px] border border-dashed border-[#d9dde6] text-[14px] font-semibold text-[#5a6373] transition hover:border-[#9aa3b2] hover:bg-[#f4f5f8] disabled:cursor-not-allowed disabled:opacity-60"
 									title={
 										availableKinds.length === 0 &&
 										availableBindingTypes.length === 0
@@ -448,7 +428,7 @@ function TriggerListMode({
 												}}
 											>
 												<span className="flex items-center gap-2 text-[13px] font-medium text-foreground">
-													<Link2 className="size-3.5 text-[#4680ff]" />
+													<Link2 className="size-3.5 text-[#5a6373]" />
 													{b.label}
 													{b.v1_status === "stubbed" && (
 														<span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0 text-[9px] font-medium text-amber-600">
@@ -588,32 +568,14 @@ function TriggerDetailMode({
 	);
 
 	return (
-		<div
-			className={cn(
-				PANEL_WIDTH_CLS,
-				"m-3 flex flex-col overflow-hidden rounded-[22px] border border-[#e6e9ef] bg-white shadow-[0_12px_40px_rgba(15,23,42,0.10)]",
-			)}
-		>
-			<div className="flex shrink-0 items-center gap-2 border-b border-[#e6e9ef] bg-[#e4f5e6] px-3 py-3">
-				<button
-					type="button"
-					onClick={onBack}
-					className="rounded-full p-1 text-[#6f7786] transition hover:bg-white/70 hover:text-[#353a44]"
-					aria-label="Back to trigger list"
-				>
-					<ChevronLeft className="size-4" />
-				</button>
-				<div className="min-w-0 flex-1">
-					<div className="truncate text-[15px] font-semibold text-[#353a44]">
-						{humanizeKind(entrypoint.kind)}
-					</div>
-					<div className="text-[10px] capitalize text-[#7e8695]">
-						{entrypoint.status}
-					</div>
-				</div>
-			</div>
+		<div className={cn(PANEL_SHELL_CLS, PANEL_WIDTH_CLS)}>
+			<PanelHeader
+				onBack={onBack}
+				title={humanizeKind(entrypoint.kind)}
+				subtitle={<span className="capitalize">{entrypoint.status}</span>}
+			/>
 
-			<ScrollArea className="flex-1 bg-[#fbfcfe]">
+			<ScrollArea className={PANEL_BODY_CLS}>
 				<div className="space-y-4 px-3 py-4">
 					<div className="rounded-[16px] border border-[#e6e9ef] bg-white p-3">
 						<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">

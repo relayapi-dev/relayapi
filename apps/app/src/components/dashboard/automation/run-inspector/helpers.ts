@@ -60,19 +60,13 @@ export type RunStatus =
  * values fall back to a neutral muted variant.
  */
 export function statusColor(status: RunStatus): string {
+	// Monochrome by design — the status word carries the meaning. Red is the
+	// only retained hue so genuine failures still read as an alarm.
 	switch (status) {
-		case "completed":
-			return "text-emerald-600 bg-emerald-500/10 border-emerald-500/30";
-		case "active":
-			return "text-sky-600 bg-sky-500/10 border-sky-500/30";
-		case "waiting":
-			return "text-amber-600 bg-amber-500/10 border-amber-500/30";
 		case "failed":
 			return "text-destructive bg-destructive/10 border-destructive/30";
-		case "exited":
-			return "text-neutral-600 bg-neutral-500/10 border-neutral-500/30";
 		default:
-			return "text-muted-foreground bg-muted border-border";
+			return "text-[#5a6373] bg-[#f4f5f7] border-[#e6e9ef]";
 	}
 }
 
@@ -128,13 +122,13 @@ export function outcomeAccent(outcome: StepOutcome): string {
 		case "advance":
 		case "success":
 		case "end":
-			return "border-emerald-500/40 bg-emerald-500/5";
+			return "border-[#e6e9ef] bg-[#f4f5f7]";
 		case "skipped":
-			return "border-border bg-muted/40";
+			return "border-[#eef0f4] bg-[#f9fafb]";
 		case "waiting":
 		case "wait_input":
 		case "wait_delay":
-			return "border-amber-500/40 bg-amber-500/5";
+			return "border-[#e6e9ef] bg-[#f4f5f7]";
 		case "failed":
 		case "error":
 		case "fail":

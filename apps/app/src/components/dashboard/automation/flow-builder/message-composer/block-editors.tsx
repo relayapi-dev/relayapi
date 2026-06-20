@@ -84,7 +84,7 @@ function TextBlockEditor({
 				value={block.text}
 				onChange={(e) => onChange({ ...block, text: e.target.value })}
 				rows={4}
-				className="w-full resize-y rounded-lg border border-[#d9dde6] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#8ab4ff]"
+				className="w-full resize-y rounded-lg border border-[#d9dde6] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#c0c6d0]"
 				placeholder="Write your message. Type {{ or use the tag picker to insert merge tags."
 			/>
 

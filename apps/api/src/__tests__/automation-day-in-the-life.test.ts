@@ -1037,10 +1037,13 @@ describe("day-in-the-life", () => {
 		const sampleResponseBody = {
 			graph: {
 				schema_version: 1 as const,
-				root_node_key: "orphan",
+				// root_node_key references a node that doesn't exist → a genuinely
+				// fatal error that force-pauses an active automation. (Orphan /
+				// unreachable nodes are only warnings and never trigger this path.)
+				root_node_key: "ghost",
 				nodes: [
 					{
-						key: "orphan",
+						key: "m1",
 						kind: "message",
 						config: {},
 						ports: [{ key: "in", direction: "input" }],
@@ -1052,9 +1055,9 @@ describe("day-in-the-life", () => {
 				valid: false,
 				errors: [
 					{
-						code: "orphan_node",
-						message: "Node has no incoming edges",
-						node_key: "orphan",
+						code: "missing_root",
+						message: 'root_node_key "ghost" not found',
+						node_key: "ghost",
 					},
 				],
 				warnings: [],

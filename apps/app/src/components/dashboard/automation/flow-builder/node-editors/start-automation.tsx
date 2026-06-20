@@ -133,7 +133,7 @@ export function StartAutomationEditor({
 				<button
 					type="button"
 					onClick={() => setManual(true)}
-					className="text-[11px] text-[#4680ff] hover:underline"
+					className="text-[11px] text-[#353a44] hover:underline"
 				>
 					Enter an ID manually
 				</button>

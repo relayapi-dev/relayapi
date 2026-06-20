@@ -108,7 +108,7 @@ export function MergeTagPicker({
 				type="button"
 				variant="ghost"
 				size="sm"
-				className="h-7 gap-1 rounded-md border border-[#d9dde6] bg-white px-2 text-[11px] font-medium text-[#475569] hover:bg-[#f5f8fc]"
+				className="h-7 gap-1 rounded-md border border-[#d9dde6] bg-white px-2 text-[11px] font-medium text-[#475569] hover:bg-[#f0f1f4]"
 				onClick={() => setOpen((v) => !v)}
 				aria-expanded={open}
 			>
@@ -137,7 +137,7 @@ export function MergeTagPicker({
 										value={customContextKey}
 										onChange={(e) => setCustomContextKey(e.target.value)}
 										placeholder="context key (e.g. shirt_size)"
-										className="h-7 w-full rounded border border-[#d9dde6] px-2 text-[11px] outline-none focus:border-[#8ab4ff]"
+										className="h-7 w-full rounded border border-[#d9dde6] px-2 text-[11px] outline-none focus:border-[#c0c6d0]"
 									/>
 								</div>
 							) : null}
@@ -152,7 +152,7 @@ export function MergeTagPicker({
 											key={tag.token}
 											type="button"
 											onClick={() => pick(tag.token)}
-											className="group flex flex-col items-start rounded px-2 py-1 text-left hover:bg-[#f5f8fc]"
+											className="group flex flex-col items-start rounded px-2 py-1 text-left hover:bg-[#f0f1f4]"
 											title={tag.description ?? tag.token}
 										>
 											<span className="font-mono text-[11px] text-[#334155]">

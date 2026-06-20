@@ -163,7 +163,7 @@ export function ButtonEditor({
 			) : null}
 
 			{portPreview ? (
-				<div className="flex items-center gap-1.5 rounded-md bg-[#f3eeff] px-2 py-1 text-[10px] text-[#6b46c1]">
+				<div className="flex items-center gap-1.5 rounded-md bg-[#f4f5f7] px-2 py-1 text-[10px] text-[#5a6373]">
 					<span className="font-semibold">Connect&nbsp;→</span>
 					<span className="font-mono">{portPreview}</span>
 				</div>

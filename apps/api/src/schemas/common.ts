@@ -49,6 +49,22 @@ export const PaginationParams = z.object({
 	to: z.string().datetime({ offset: true }).optional().describe("Filter: end date (ISO 8601)"),
 });
 
+// Cursor pagination only supports sequential (next/prev) navigation. Log
+// endpoints that also expose a `total` count add an optional `offset` so clients
+// can jump directly to any page (e.g. the dashboard's numbered page buttons,
+// including "last page"). When `offset` is provided it takes precedence over
+// `cursor`. Only honored by endpoints whose query uses this schema.
+export const OffsetPaginationParams = PaginationParams.extend({
+	offset: z.coerce
+		.number()
+		.int()
+		.min(0)
+		.optional()
+		.describe(
+			"Number of items to skip for offset-based pagination. Enables random access to any page; takes precedence over `cursor` when provided.",
+		),
+});
+
 export const FilterParams = PaginationParams.extend({
 	workspace_id: z.string().optional().describe("Filter by workspace ID"),
 	account_id: z.string().optional().describe("Filter by specific account ID"),

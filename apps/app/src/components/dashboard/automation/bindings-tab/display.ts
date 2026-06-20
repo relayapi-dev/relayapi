@@ -68,31 +68,22 @@ export function bindingStatusBadge(status: string): {
 	label: string;
 	cls: string;
 } {
+	// Monochrome pills — the label carries the state. Red is kept only for a
+	// genuine sync failure so it still reads as an alarm.
+	const neutral = "border-[#e6e9ef] bg-[#f4f5f7] text-[#5a6373]";
 	switch (status) {
 		case "active":
-			return {
-				label: "active",
-				cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
-			};
+			return { label: "active", cls: neutral };
 		case "paused":
-			return {
-				label: "paused",
-				cls: "border-amber-500/30 bg-amber-500/10 text-amber-600",
-			};
+			return { label: "paused", cls: neutral };
 		case "pending_sync":
-			return {
-				label: "syncing",
-				cls: "border-sky-500/30 bg-sky-500/10 text-sky-600",
-			};
+			return { label: "syncing", cls: neutral };
 		case "sync_failed":
 			return {
 				label: "sync failed",
 				cls: "border-destructive/30 bg-destructive/10 text-destructive",
 			};
 		default:
-			return {
-				label: status,
-				cls: "border-border bg-muted text-muted-foreground",
-			};
+			return { label: status, cls: neutral };
 	}
 }

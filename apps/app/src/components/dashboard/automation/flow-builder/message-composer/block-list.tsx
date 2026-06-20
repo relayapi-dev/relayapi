@@ -62,7 +62,7 @@ export function BlockList({
 				>
 					<div className="mb-2 flex items-center justify-between">
 						<div className="flex items-center gap-2">
-							<span className="rounded-md bg-[#f3eeff] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#6b46c1]">
+							<span className="rounded-md bg-[#f4f5f7] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#5a6373]">
 								{idx + 1}. {blockLabel(block.type)}
 							</span>
 						</div>
@@ -72,7 +72,7 @@ export function BlockList({
 								onClick={() => move(idx, idx - 1)}
 								disabled={idx === 0}
 								className={cn(
-									"rounded p-1 text-[#94a3b8] hover:bg-[#f5f8fc] hover:text-[#334155]",
+									"rounded p-1 text-[#94a3b8] hover:bg-[#f0f1f4] hover:text-[#334155]",
 									idx === 0 && "opacity-30 hover:bg-transparent",
 								)}
 								aria-label="Move block up"
@@ -84,7 +84,7 @@ export function BlockList({
 								onClick={() => move(idx, idx + 1)}
 								disabled={idx === blocks.length - 1}
 								className={cn(
-									"rounded p-1 text-[#94a3b8] hover:bg-[#f5f8fc] hover:text-[#334155]",
+									"rounded p-1 text-[#94a3b8] hover:bg-[#f0f1f4] hover:text-[#334155]",
 									idx === blocks.length - 1 &&
 										"opacity-30 hover:bg-transparent",
 								)}

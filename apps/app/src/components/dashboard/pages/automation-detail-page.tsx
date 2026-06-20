@@ -698,7 +698,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 						/>
 					)}
 					{tab === "insights" && (
-						<div className="flex flex-1">
+						<div className="flex min-h-0 flex-1">
 							<div className="hidden flex-1 items-start justify-center p-6 md:flex">
 								<div className="max-w-xl text-sm text-muted-foreground">
 									Totals and outcomes over the last 30 days.
@@ -878,8 +878,8 @@ function StatusBadge({
 	const draft = { label: "Draft", classes: "text-muted-foreground" };
 	const map: Record<string, { label: string; classes: string }> = {
 		draft,
-		active: { label: "Active", classes: "text-success" },
-		paused: { label: "Paused", classes: "text-amber-500" },
+		active: { label: "Active", classes: "text-[#353a44]" },
+		paused: { label: "Paused", classes: "text-[#8b92a0]" },
 		archived: { label: "Archived", classes: "text-muted-foreground" },
 	};
 	const cfg = map[status] ?? draft;

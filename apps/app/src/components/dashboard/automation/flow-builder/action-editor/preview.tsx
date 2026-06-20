@@ -151,7 +151,7 @@ function Transcript({
 				)}
 			</div>
 			<div className="flex items-center gap-1.5 pt-1 text-[11px] text-[#64748b]">
-				<CheckCircle2 className="size-3 text-emerald-600" />
+				<CheckCircle2 className="size-3 text-[#5a6373]" />
 				Ended at{" "}
 				<span className="font-mono">{result.ended_at_node ?? "—"}</span> with
 				reason{" "}
@@ -177,7 +177,7 @@ function StepRow({
 	return (
 		<div className="rounded-lg border border-[#eef2f7] bg-[#fbfcfe] p-2">
 			<div className="flex items-center gap-2">
-				<span className="rounded bg-[#eef4ff] px-1.5 py-0.5 text-[10px] font-semibold text-[#4f46e5]">
+				<span className="rounded bg-[#f4f5f8] px-1.5 py-0.5 text-[10px] font-semibold text-[#353a44]">
 					{step.node_kind}
 				</span>
 				<span className="text-[11px] text-[#475569]">
@@ -203,7 +203,7 @@ function StepRow({
 								className={cn(
 									"flex items-start gap-2 rounded px-2 py-1 text-[11px]",
 									r.would_fire
-										? "bg-emerald-50 text-emerald-800"
+										? "bg-[#f4f5f7] text-[#353a44]"
 										: "bg-amber-50 text-amber-800",
 								)}
 							>

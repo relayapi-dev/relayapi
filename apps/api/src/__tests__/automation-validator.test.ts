@@ -35,7 +35,10 @@ describe("validateGraph", () => {
     expect(r.errors.some((e) => e.code === "invalid_root_kind")).toBe(true);
   });
 
-  test("orphan node is error", () => {
+  test("orphan node is a warning, not an error", () => {
+    // An unreachable node never executes (the runner only follows edges out
+    // from the root), so it must not block save/activation. It surfaces as a
+    // warning instead.
     const r = validateGraph(mkGraph({
       nodes: [
         { key: "a", kind: "message", config: { blocks: [] }, ports: [] },
@@ -43,7 +46,9 @@ describe("validateGraph", () => {
         { key: "c", kind: "end", config: {}, ports: [] },
       ],
     }));
-    expect(r.errors.some((e) => e.code === "orphan_node" && e.node_key === "c")).toBe(true);
+    expect(r.errors.some((e) => e.code === "orphan_node")).toBe(false);
+    expect(r.warnings.some((w) => w.code === "orphan_node" && w.node_key === "c")).toBe(true);
+    expect(r.valid).toBe(true);
   });
 
   test("edge to unknown node", () => {

@@ -5,12 +5,13 @@
 // from the store so the simulator reflects unsaved edits.
 
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Play, X } from "lucide-react";
+import { ChevronDown, ChevronRight, FlaskConical, Loader2, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { derivePorts } from "./derive-ports";
 import type { AutomationGraph } from "./graph-types";
+import { PANEL_BODY_CLS, PANEL_SHELL_CLS, PanelHeader } from "./panel-styles";
 
 // ---------------------------------------------------------------------------
 // Types (mirror SDK AutomationSimulateResponse)
@@ -40,30 +41,22 @@ interface Props {
 }
 
 const INPUT_CLS =
-	"h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground";
+	"h-8 w-full rounded-lg border border-[#d9dde6] bg-white px-2.5 text-xs text-[#353a44] outline-none transition focus:border-[#9aa3b2] placeholder:text-[#9aa3b2]";
 
 const BRANCHING_KINDS = new Set(["condition", "randomizer", "input"]);
+
+// Monochrome step pills — the label names the outcome; red is kept only for a
+// genuine failure.
+const NEUTRAL_OUTCOME = "border-[#e6e9ef] bg-[#f4f5f7] text-[#5a6373]";
 
 const OUTCOME_META: Record<
 	SimulateStep["outcome"],
 	{ label: string; cls: string }
 > = {
-	advance: {
-		label: "Advanced",
-		cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
-	},
-	wait_input: {
-		label: "Waiting for input",
-		cls: "border-sky-500/30 bg-sky-500/10 text-sky-600",
-	},
-	wait_delay: {
-		label: "Waiting",
-		cls: "border-sky-500/30 bg-sky-500/10 text-sky-600",
-	},
-	end: {
-		label: "Ended",
-		cls: "border-neutral-500/30 bg-neutral-500/10 text-neutral-600",
-	},
+	advance: { label: "Advanced", cls: NEUTRAL_OUTCOME },
+	wait_input: { label: "Waiting for input", cls: NEUTRAL_OUTCOME },
+	wait_delay: { label: "Waiting", cls: NEUTRAL_OUTCOME },
+	end: { label: "Ended", cls: NEUTRAL_OUTCOME },
 	fail: {
 		label: "Failed",
 		cls: "border-destructive/30 bg-destructive/10 text-destructive",
@@ -170,28 +163,19 @@ export function SimulatorPanel({
 		setExpanded((prev) => ({ ...prev, [idx]: !prev[idx] }));
 
 	return (
-		<div className="m-3 w-80 rounded-[22px] border border-border bg-card flex flex-col overflow-hidden shadow-[0_12px_40px_rgba(15,23,42,0.10)]">
-			<div className="px-3 py-2 border-b border-border flex items-center justify-between">
-				<div>
-					<h3 className="text-xs font-medium">Simulator</h3>
-					<p className="text-[10px] text-muted-foreground mt-0.5">
-						Dry-run the graph — no sends, no side effects
-					</p>
-				</div>
-				<button
-					type="button"
-					onClick={() => {
-						clear();
-						onClose();
-					}}
-					className="text-muted-foreground hover:text-foreground"
-				>
-					<X className="size-3.5" />
-				</button>
-			</div>
+		<div className={cn(PANEL_SHELL_CLS, "w-80")}>
+			<PanelHeader
+				icon={<FlaskConical className="size-[18px]" />}
+				title="Simulator"
+				subtitle="Dry-run the graph — no sends, no side effects"
+				onClose={() => {
+					clear();
+					onClose();
+				}}
+			/>
 
-			<ScrollArea className="flex-1">
-				<div className="px-3 py-3 space-y-3">
+			<ScrollArea className={PANEL_BODY_CLS}>
+				<div className="px-4 py-4 space-y-3">
 					<div>
 						<label
 							htmlFor="simulator-start-node"

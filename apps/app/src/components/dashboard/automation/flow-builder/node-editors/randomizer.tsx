@@ -94,7 +94,7 @@ export function RandomizerEditor({
 					<button
 						type="button"
 						onClick={() => setVariants([...variants, { key: "", weight: 1 }])}
-						className="flex h-8 w-full items-center justify-center gap-1 rounded-md border border-dashed border-[#d9dde6] text-[11px] text-[#475569] hover:bg-[#f5f8fc]"
+						className="flex h-8 w-full items-center justify-center gap-1 rounded-md border border-dashed border-[#d9dde6] text-[11px] text-[#475569] hover:bg-[#f0f1f4]"
 					>
 						<Plus className="size-3" />
 						Add variant

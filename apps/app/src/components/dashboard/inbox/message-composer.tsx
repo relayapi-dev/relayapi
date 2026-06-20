@@ -42,6 +42,7 @@ export function MessageComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blobUrlsRef = useRef<Set<string>>(new Set());
   const singleAttachmentMode = platform === "whatsapp";
+  const isNote = mode === "note";
   const shortcutLabel =
     typeof navigator !== "undefined" && navigator.platform?.includes("Mac")
       ? "Cmd"
@@ -196,156 +197,161 @@ export function MessageComposer({
     }
   };
 
+  const canSubmit =
+    mode === "note"
+      ? Boolean(text.trim()) && !sending && !disabled
+      : (Boolean(text.trim()) || attachments.some((a) => !a.uploading && !a.error))
+        && !attachments.some((a) => a.uploading || a.error)
+        && !sending
+        && !disabled;
+
   return (
-    <div className="border-t border-border bg-card">
-      <div className="flex items-center gap-5 border-b border-border px-4 pt-3">
-        <button
-          type="button"
-          onClick={() => setMode("reply")}
-          className={cn(
-            "px-0.5 pb-2 text-sm font-semibold transition-colors",
-            mode === "reply"
-              ? "border-b-2 border-foreground text-foreground"
-              : "border-b-2 border-transparent text-muted-foreground hover:text-foreground",
-          )}
-        >
-          Reply
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("note")}
-          className={cn(
-            "inline-flex items-center gap-1.5 px-0.5 pb-2 text-sm font-medium transition-colors",
-            mode === "note"
-              ? "border-b-2 border-amber-500 text-amber-700"
-              : "border-b-2 border-transparent text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <StickyNote className="size-4" />
-          Note
-        </button>
-      </div>
-
-      <input
-        ref={imageInputRef}
-        type="file"
-        accept="image/*,video/*"
-        multiple={!singleAttachmentMode}
-        hidden
-        onChange={(e) => {
-          void handleFilesPicked(e.target.files);
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple={!singleAttachmentMode}
-        hidden
-        onChange={(e) => {
-          void handleFilesPicked(e.target.files);
-          e.target.value = "";
-        }}
-      />
-
-      {mode === "reply" && attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2 border-b border-border bg-muted/40 px-4 py-2">
-          {attachments.map((a) => (
-            <ComposerAttachmentChip
-              key={a.id}
-              url={a.url}
-              type={a.type}
-              filename={a.filename}
-              progress={a.uploading ? 50 : undefined}
-              error={a.error}
-              onRemove={() => removeAttachment(a.id)}
-            />
-          ))}
-        </div>
-      )}
-
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={mode === "note" ? "Add a private note for your team" : "Reply here"}
-        rows={3}
-        disabled={disabled}
+    <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+      <div
         className={cn(
-          "block min-h-[96px] w-full resize-none px-4 py-3 text-[14px] leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-          mode === "note" ? "bg-amber-50 text-amber-900" : "bg-card text-foreground",
+          "overflow-hidden rounded-2xl border shadow-xs transition-colors focus-within:border-ring/60",
+          isNote ? "border-amber-300 bg-amber-50/70" : "border-border bg-card",
+          disabled && "opacity-60",
         )}
-      />
-
-      <div className="flex items-center justify-between border-t border-border px-3 py-2">
-        <div className="flex items-center gap-0.5">
-          <EmojiPicker onInsert={insertAtCursor} />
-          {mode === "reply" && (
-            <>
-              <button
-                type="button"
-                onClick={() => imageInputRef.current?.click()}
-                title="Image"
-                className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-              >
-                <ImageIcon className="size-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                title="Attachment"
-                className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-              >
-                <Paperclip className="size-4" />
-              </button>
-              <AudioRecorderPopover onRecorded={handleAudioRecorded} />
-            </>
-          )}
-        </div>
-
-        <div className="flex items-center gap-3">
-          {mode === "reply" && singleAttachmentMode && (
-            <span className="hidden text-[11px] text-muted-foreground md:inline">
-              WhatsApp supports one attachment per message
-            </span>
-          )}
-          <span className="hidden text-[11px] text-muted-foreground sm:inline">
-            {shortcutLabel}+Enter to send
-          </span>
+      >
+        {/* Mode toggle */}
+        <div className="flex items-center gap-1 px-2 pt-2">
           <button
             type="button"
-            onClick={() => void handleSubmit()}
-            disabled={
-              mode === "note"
-                ? !text.trim() || sending || disabled
-                : (!text.trim() && attachments.filter((a) => !a.uploading && !a.error).length === 0)
-                  || attachments.some((a) => a.uploading || a.error)
-                  || sending
-                  || disabled
-            }
+            onClick={() => setMode("reply")}
             className={cn(
-              "inline-flex h-9 items-center gap-2 rounded-md px-4 text-sm font-semibold transition-colors",
-              mode === "note"
-                ? text.trim() && !disabled
-                  ? "bg-amber-500 text-white hover:bg-amber-600"
-                  : "bg-amber-500/40 text-white"
-                : (text.trim() || attachments.some((a) => !a.uploading && !a.error))
-                  && !attachments.some((a) => a.uploading || a.error)
-                  && !disabled
-                  ? "bg-foreground text-background hover:bg-foreground/90"
-                  : "bg-muted text-muted-foreground",
+              "rounded-full px-3 py-1 text-[12px] font-medium transition-colors",
+              !isNote ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {sending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <SendHorizonal className="size-4" />
+            Reply
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("note")}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors",
+              isNote ? "bg-amber-500 text-white" : "text-muted-foreground hover:text-foreground",
             )}
-            {mode === "note" ? "Save note" : `Send to ${platformLabel}`}
+          >
+            <StickyNote className="size-3.5" />
+            Note
           </button>
         </div>
+
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*,video/*"
+          multiple={!singleAttachmentMode}
+          hidden
+          onChange={(e) => {
+            void handleFilesPicked(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple={!singleAttachmentMode}
+          hidden
+          onChange={(e) => {
+            void handleFilesPicked(e.target.files);
+            e.target.value = "";
+          }}
+        />
+
+        {mode === "reply" && attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-3 pt-2.5">
+            {attachments.map((a) => (
+              <ComposerAttachmentChip
+                key={a.id}
+                url={a.url}
+                type={a.type}
+                filename={a.filename}
+                progress={a.uploading ? 50 : undefined}
+                error={a.error}
+                onRemove={() => removeAttachment(a.id)}
+              />
+            ))}
+          </div>
+        )}
+
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={isNote ? "Add a private note for your team" : "Write a reply"}
+          rows={2}
+          disabled={disabled}
+          className={cn(
+            "block min-h-[52px] w-full resize-none bg-transparent px-3.5 py-2.5 text-[14px] leading-6 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            isNote ? "text-amber-900 placeholder:text-amber-700/60" : "text-foreground",
+          )}
+        />
+
+        <div className="flex items-center justify-between px-2 pb-2">
+          <div className="flex items-center gap-0.5">
+            <EmojiPicker onInsert={insertAtCursor} />
+            {mode === "reply" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => imageInputRef.current?.click()}
+                  title="Add image or video"
+                  className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <ImageIcon className="size-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Attach a file"
+                  className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Paperclip className="size-4" />
+                </button>
+                <AudioRecorderPopover onRecorded={handleAudioRecorded} />
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <span className="hidden text-[11px] text-muted-foreground sm:inline">
+              {shortcutLabel}+Enter
+            </span>
+            <button
+              type="button"
+              onClick={() => void handleSubmit()}
+              disabled={!canSubmit}
+              className={cn(
+                "inline-flex h-8 items-center gap-2 rounded-full px-4 text-[13px] font-semibold transition-colors",
+                isNote
+                  ? canSubmit
+                    ? "bg-amber-500 text-white hover:bg-amber-600"
+                    : "bg-amber-500/40 text-white"
+                  : canSubmit
+                    ? "bg-foreground text-background hover:bg-foreground/90"
+                    : "bg-muted text-muted-foreground",
+              )}
+            >
+              {sending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <SendHorizonal className="size-4" />
+              )}
+              {isNote ? "Save note" : "Send"}
+            </button>
+          </div>
+        </div>
       </div>
+
+      {mode === "reply" && singleAttachmentMode && (
+        <p className="mt-1.5 px-1 text-[11px] text-muted-foreground">
+          WhatsApp supports one attachment per message.
+        </p>
+      )}
     </div>
   );
 }

@@ -37,7 +37,7 @@ export function CheckboxRow({
 				type="checkbox"
 				checked={checked}
 				onChange={(e) => onChange(e.target.checked)}
-				className="mt-0.5 size-4 rounded border-[#d9dde6] accent-[#4680ff] focus:ring-[#dce8ff]"
+				className="mt-0.5 size-4 rounded border-[#d9dde6] accent-[#353a44] focus:ring-[#e6e9ef]"
 			/>
 			<span className="min-w-0">
 				<span className="block text-[12px] font-medium text-[#353a44]">

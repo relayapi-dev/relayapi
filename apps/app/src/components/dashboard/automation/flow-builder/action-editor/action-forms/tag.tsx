@@ -94,7 +94,7 @@ export function TagActionForm({ action, onChange, error }: Props) {
 										onChange({ ...action, tag: tag.name });
 										setOpen(false);
 									}}
-									className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-[#f5f8fc]"
+									className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-[#f0f1f4]"
 								>
 									<TagIcon
 										className="size-3"

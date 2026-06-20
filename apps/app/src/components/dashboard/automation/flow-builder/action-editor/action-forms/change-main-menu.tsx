@@ -16,11 +16,11 @@ type Props = {
 export function ChangeMainMenuForm({ action: _action, onChange: _onChange }: Props) {
 	return (
 		<FormShell>
-			<div className="rounded-xl border border-[#c7d6ff] bg-[#f0f4ff] p-4">
+			<div className="rounded-xl border border-[#e6e9ef] bg-[#f4f5f8] p-4">
 				<div className="flex items-start gap-3">
-					<Sparkles className="mt-0.5 size-4 text-[#4f46e5]" />
+					<Sparkles className="mt-0.5 size-4 text-[#353a44]" />
 					<div>
-						<div className="text-[13px] font-semibold text-[#312e81]">
+						<div className="text-[13px] font-semibold text-[#353a44]">
 							Coming in v1.1
 						</div>
 						<p className="mt-1 text-[11px] text-[#475569]">

@@ -59,14 +59,21 @@ describe("validateGraph (new graph-store API)", () => {
 		expect(result.errors.some((e) => e.code === "invalid_root_kind")).toBe(true);
 	});
 
-	it("flags an orphan node (non-root with no incoming edges)", () => {
+	it("flags an orphan node (non-root, no incoming edge) as a warning, not an error", () => {
+		// Unreachable nodes never run, so they must not block save/activation —
+		// they surface as advisory warnings instead.
 		const g = graph(
 			[node("a", "message"), node("b", "message")],
 			[],
 			"a",
 		);
 		const result = validateGraph(g);
-		expect(result.errors.some((e) => e.code === "orphan_node")).toBe(true);
+		expect(result.errors.some((e) => e.code === "orphan_node")).toBe(false);
+		expect(
+			result.warnings.some(
+				(w) => w.code === "orphan_node" && w.nodeKey === "b",
+			),
+		).toBe(true);
 	});
 
 	it("flags an edge to an unknown node", () => {

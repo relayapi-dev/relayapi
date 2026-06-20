@@ -114,7 +114,6 @@ const navSections: NavItem[][] = [
 			children: [
 				{ label: "Flows", href: "automation" },
 				{ label: "Campaigns", href: "campaigns" },
-				{ label: "Broadcasts", href: "broadcasts" },
 				{ label: "WhatsApp", href: "whatsapp" },
 			],
 		},
@@ -275,7 +274,7 @@ export function Sidebar({
 		});
 	}, [currentPage]);
 
-	// Expand-only: tapping a collapsible parent toggles its group; navigation
+	// Mobile: tapping a collapsible parent toggles its group in place; navigation
 	// happens when the user taps a specific child anchor (native <a href>).
 	const toggleExpand = (item: NavItem) => {
 		setExpandedItems((prev) => {
@@ -284,6 +283,40 @@ export function Sidebar({
 			else next.add(item.label);
 			return next;
 		});
+	};
+
+	// A collapsible parent tap diverges by viewport:
+	// - Desktop: navigate to the section's first page via the native <a href> (the
+	//   active section then auto-expands after load via the currentPage effect),
+	//   so the rail behaves like a normal link with the sub-pages revealed.
+	// - Mobile: keep the expand-only behavior so the drawer reveals the sub-pages
+	//   in place without a navigation.
+	const handleParentClick = (
+		e: ReactMouseEvent<HTMLAnchorElement>,
+		item: NavItem,
+	) => {
+		if (isModifiedClick(e)) return; // let the browser open in a new tab
+
+		const isDesktop =
+			typeof window !== "undefined" &&
+			window.matchMedia("(min-width: 768px)").matches;
+
+		if (!isDesktop) {
+			e.preventDefault();
+			toggleExpand(item);
+			return;
+		}
+
+		// Desktop: keep the group open for immediate feedback, then let the anchor
+		// navigate to the first child — unless we're already on it (avoid a reload).
+		setExpandedItems((prev) => {
+			const next = new Set(prev);
+			next.add(item.label);
+			return next;
+		});
+		if (item.children?.[0]?.href === currentPage) {
+			e.preventDefault();
+		}
 	};
 
 	// --- Account menu (consolidated: theme, org switcher, account, sign out) ---
@@ -468,12 +501,13 @@ export function Sidebar({
 	const renderCollapsibleItem = (item: NavItem) => {
 		const isExpanded = expandedItems.has(item.label);
 		const hasActiveChild = isChildActive(item, currentPage);
+		const firstChild = item.children?.[0];
 
 		return (
 			<div key={item.label}>
-				<button
-					type="button"
-					onClick={() => toggleExpand(item)}
+				<a
+					href={hrefFor(firstChild?.href ?? item.href)}
+					onClick={(e) => handleParentClick(e, item)}
 					onMouseEnter={() => prefetchItem(item)}
 					onFocus={() => prefetchItem(item)}
 					className={cn(
@@ -491,7 +525,7 @@ export function Sidebar({
 					>
 						<ChevronRight className="size-3 text-muted-foreground/60" />
 					</motion.div>
-				</button>
+				</a>
 
 				<AnimatePresence initial={false}>
 					{isExpanded && item.children && (

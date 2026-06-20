@@ -1,7 +1,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { createDb, connectionLogs } from "@relayapi/db";
-import { and, desc, eq, gte, lt, lte } from "drizzle-orm";
-import { ErrorResponse, PaginationParams } from "../schemas/common";
+import { and, count, desc, eq, gte, lt, lte } from "drizzle-orm";
+import { ErrorResponse, OffsetPaginationParams } from "../schemas/common";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -23,6 +23,7 @@ const ConnectionLogListResponse = z.object({
 	data: z.array(ConnectionLogEntry),
 	next_cursor: z.string().nullable(),
 	has_more: z.boolean(),
+	total: z.number().describe("Total matching log entries (ignores pagination)"),
 });
 
 // --- Helper: log a connection event to DB ---
@@ -65,7 +66,7 @@ const listConnectionLogs = createRoute({
 	summary: "List connection logs",
 	description: "Returns connection event history for the organization.",
 	security: [{ Bearer: [] }],
-	request: { query: PaginationParams },
+	request: { query: OffsetPaginationParams },
 	responses: {
 		200: {
 			description: "Connection log entries",

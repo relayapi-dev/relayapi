@@ -22,7 +22,6 @@ import {
 	Shuffle,
 	StopCircle,
 	Trash2,
-	X,
 	Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -32,6 +31,7 @@ import { platformIcons } from "@/lib/platform-icons";
 import { cn } from "@/lib/utils";
 import { ActionEditor } from "./action-editor";
 import { INPUT_CLS } from "./field-styles";
+import { PANEL_BODY_CLS, PANEL_SHELL_CLS, PanelHeader } from "./panel-styles";
 import { MessageComposer } from "./message-composer";
 import type { MessageConfig } from "./message-composer/types";
 import {
@@ -95,28 +95,6 @@ const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 	end: StopCircle,
 };
 
-function panelHeaderTone(nodeKind: string) {
-	if (nodeKind === "message") {
-		return {
-			bar: "bg-[#edd5f5]",
-			badge: "text-[#8f5bb3]",
-			iconBg: "bg-[#f7ecfb]",
-		};
-	}
-	if (nodeKind === "condition" || nodeKind === "randomizer") {
-		return {
-			bar: "bg-[#e6f1ff]",
-			badge: "text-[#4a7ae8]",
-			iconBg: "bg-[#edf4ff]",
-		};
-	}
-	return {
-		bar: "bg-[#eef5ff]",
-		badge: "text-[#61758a]",
-		iconBg: "bg-[#f5f8fc]",
-	};
-}
-
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -167,8 +145,9 @@ export function PropertyPanel({
 		return (
 			<div
 				className={cn(
+					PANEL_SHELL_CLS,
 					PANEL_WIDTH_CLS,
-					"m-3 flex items-center justify-center rounded-[22px] border border-[#e6e9ef] bg-white p-8 shadow-[0_12px_40px_rgba(15,23,42,0.10)]",
+					"items-center justify-center p-8",
 				)}
 			>
 				<p className="text-sm text-[#7e8695] text-center">
@@ -184,7 +163,7 @@ export function PropertyPanel({
 	const title = PANEL_TITLE_OVERRIDES[node.kind] ?? titleize(node.kind);
 	const description =
 		PANEL_DESCRIPTIONS[node.kind] ?? "Configure this step";
-	const headerTone = panelHeaderTone(node.kind);
+	const HeaderIcon = KIND_ICON[node.kind] ?? Settings2;
 	const platformIcon = platformIcons[automationChannel];
 
 	const editor = renderEditor({
@@ -196,28 +175,18 @@ export function PropertyPanel({
 	});
 
 	return (
-		<div
-			className={cn(
-				PANEL_WIDTH_CLS,
-				"m-3 flex flex-col overflow-hidden rounded-[22px] border border-[#e6e9ef] bg-white shadow-[0_12px_40px_rgba(15,23,42,0.10)]",
-			)}
-		>
+		<div className={cn(PANEL_SHELL_CLS, PANEL_WIDTH_CLS)}>
 			<PanelHeader
-				headerTone={headerTone}
-				kind={node.kind}
+				icon={<HeaderIcon className="size-[18px]" />}
 				title={title}
-				description={description}
+				subtitle={description}
 				onClose={onClose}
 			/>
 
-			<ScrollArea className="flex-1 bg-[#fbfcfe]">
+			<ScrollArea className={PANEL_BODY_CLS}>
 				<div className="space-y-5 px-4 py-5">
 					{node.kind === "message" ? (
-						<ChannelWindowBanner
-							iconBg={headerTone.iconBg}
-							badge={headerTone.badge}
-							platformIcon={platformIcon}
-						/>
+						<ChannelWindowBanner platformIcon={platformIcon} />
 					) : null}
 
 					{editor}
@@ -251,75 +220,22 @@ export function PropertyPanel({
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function PanelHeader({
-	headerTone,
-	kind,
-	title,
-	description,
-	onClose,
-}: {
-	headerTone: ReturnType<typeof panelHeaderTone>;
-	kind: string;
-	title: string;
-	description: string;
-	onClose: () => void;
-}) {
-	const Icon = KIND_ICON[kind] ?? Settings2;
-	return (
-		<div className="flex items-center gap-3 border-b border-[#eef0f4] px-5 py-4">
-			<div
-				className={cn(
-					"flex size-9 shrink-0 items-center justify-center rounded-full",
-					headerTone.iconBg,
-				)}
-			>
-				<Icon className={cn("size-[18px]", headerTone.badge)} />
-			</div>
-			<div className="min-w-0 flex-1">
-				<h3 className="truncate text-[16px] font-semibold leading-5 text-[#353a44]">
-					{title}
-				</h3>
-				<p className="mt-0.5 truncate text-[12px] leading-4 text-[#8b92a0]">
-					{description}
-				</p>
-			</div>
-			<button
-				type="button"
-				onClick={onClose}
-				className="shrink-0 rounded-full p-1.5 text-[#9aa1ad] transition hover:bg-[#f1f2f5] hover:text-[#353a44]"
-				aria-label="Close editor"
-			>
-				<X className="size-4" />
-			</button>
-		</div>
-	);
-}
-
 function ChannelWindowBanner({
-	iconBg,
-	badge,
 	platformIcon,
 }: {
-	iconBg: string;
-	badge: string;
 	platformIcon: React.ReactNode;
 }) {
 	return (
 		<div className="rounded-[20px] border border-[#e6e9ef] bg-white p-4">
 			<div className="flex items-center gap-3">
-				<div
-					className={cn(
-						"flex size-10 items-center justify-center rounded-full",
-						iconBg,
-					)}
-				>
-					<div className={cn("scale-[0.9]", badge)}>{platformIcon}</div>
+				<div className="flex size-10 items-center justify-center rounded-full bg-[#f1f3f6] text-[#5a6373]">
+					<div className="scale-[0.9]">{platformIcon}</div>
 				</div>
 				<div>
 					<div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#8b92a0]">
 						Message Window
 					</div>
-					<div className="mt-1 text-[14px] font-medium text-[#4680ff]">
+					<div className="mt-1 text-[14px] font-medium text-[#353a44]">
 						Send within 24 hour window
 					</div>
 				</div>

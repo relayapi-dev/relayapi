@@ -110,7 +110,7 @@ function PortsHint({ actions }: { actions: Action[] }) {
 			<div className="font-medium text-[#1f2937]">Ports on this node</div>
 			<ul className="mt-1 space-y-0.5">
 				<li>
-					<span className="font-mono text-[11px] text-[#4f46e5]">next</span> —
+					<span className="font-mono text-[11px] text-[#353a44]">next</span> —
 					fires after all actions complete.
 				</li>
 				{hasAbort ? (
@@ -166,7 +166,7 @@ function AddActionButton({ onAdd }: { onAdd(type: ActionType): void }) {
 				type="button"
 				variant="outline"
 				onClick={() => setOpen((v) => !v)}
-				className="h-9 w-full gap-1 rounded-lg border border-dashed border-[#c4d2ff] bg-[#f5f8ff] text-[12px] font-medium text-[#4f46e5] hover:bg-[#eef2ff]"
+				className="h-9 w-full gap-1 rounded-lg border border-dashed border-[#d9dde6] bg-[#f4f5f8] text-[12px] font-medium text-[#5a6373] hover:bg-[#eef0f3]"
 				aria-expanded={open}
 			>
 				<Plus className="size-3.5" />
@@ -196,7 +196,7 @@ function AddActionButton({ onAdd }: { onAdd(type: ActionType): void }) {
 											setOpen(false);
 										}}
 										className={cn(
-											"flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-[#f5f8fc]",
+											"flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-[#f0f1f4]",
 											entry.category === "v1_1_stubs" &&
 												"text-[#64748b]",
 											entry.category === "destructive" &&

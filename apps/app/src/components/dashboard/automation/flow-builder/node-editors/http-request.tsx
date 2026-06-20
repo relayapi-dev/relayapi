@@ -131,7 +131,7 @@ export function HttpRequestEditor({
 					<button
 						type="button"
 						onClick={() => writeHeaders([...headerRows, ["", ""]])}
-						className="flex h-8 w-full items-center justify-center gap-1 rounded-md border border-dashed border-[#d9dde6] text-[11px] text-[#475569] hover:bg-[#f5f8fc]"
+						className="flex h-8 w-full items-center justify-center gap-1 rounded-md border border-dashed border-[#d9dde6] text-[11px] text-[#475569] hover:bg-[#f0f1f4]"
 					>
 						<Plus className="size-3" />
 						Add header
@@ -150,7 +150,7 @@ export function HttpRequestEditor({
 					onChange={(e) => patch({ body: e.target.value || undefined })}
 					rows={4}
 					placeholder='{"event": "reply", "name": "{{contact.first_name}}"}'
-					className="w-full resize-y rounded-xl border border-[#d9dde6] bg-white px-3 py-2 font-mono text-[12px] outline-none focus:border-[#8ab4ff]"
+					className="w-full resize-y rounded-xl border border-[#d9dde6] bg-white px-3 py-2 font-mono text-[12px] outline-none focus:border-[#c0c6d0]"
 				/>
 			</Field>
 
