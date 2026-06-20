@@ -1,66 +1,545 @@
 ---
-import BaseLayout from "../layouts/BaseLayout.astro";
+import Container from "../components/landing/Container.astro";
+import { LANDING_LINKS } from "../components/landing/data";
+import FinalCTA from "../components/landing/FinalCTA.astro";
+import OpenSource from "../components/landing/OpenSource.astro";
+import TrustStrip from "../components/landing/TrustStrip.astro";
 import SEO from "../components/SEO.astro";
-import { Navbar } from "../components/section/navbar";
-import { PricingSection } from "../components/section/pricing-section";
-import { FAQSection } from "../components/section/faq-section";
-import { SelfHostSection } from "../components/section/self-host-section";
-import { Button } from "../components/ui/button";
+import Layout from "../layouts/Layout.astro";
+
+// Free-plan feature checklist (included / excluded).
+const freeFeatures: { text: string; included: boolean }[] = [
+	{ text: "All 21 platforms", included: true },
+	{ text: "Unlimited profiles", included: true },
+	{ text: "Media uploads", included: true },
+	{ text: "Webhook notifications", included: true },
+	{ text: "100 req/min rate limit", included: true },
+	{ text: "Comments API", included: false },
+	{ text: "Analytics API", included: false },
+];
+
+// Pro-plan feature checklist (highlight = the always-included extras others charge for).
+const proFeatures: { text: string; included: boolean; highlight?: boolean }[] = [
+	{ text: "All 21 platforms", included: true },
+	{ text: "Unlimited profiles", included: true },
+	{ text: "Media uploads & scheduling", included: true },
+	{ text: "Webhook notifications", included: true },
+	{ text: "1,000 req/min rate limit", included: true },
+	{ text: "Comments API", included: true, highlight: true },
+	{ text: "Analytics API", included: true, highlight: true },
+];
+
+// Real-cost comparison. RelayAPI is the highlighted row. Figures mirror the
+// long-standing pricing copy (as of March 2026).
+const competitors: {
+	name: string;
+	highlight: boolean;
+	price10: string;
+	price50: string;
+	price500: string;
+	note: string;
+}[] = [
+	{
+		name: "RelayAPI",
+		highlight: true,
+		price10: "$5",
+		price50: "$10",
+		price500: "$145",
+		note: "$5 base incl. 10K calls + $1 / 1K extra. GET/HEAD requests are free.",
+	},
+	{
+		name: "Per-account API",
+		highlight: false,
+		price10: "$299",
+		price50: "$779",
+		price500: "$2,624",
+		note: "Profile-based pricing with high base fees and per-account overage.",
+	},
+	{
+		name: "Usage-based account API",
+		highlight: false,
+		price10: "$55",
+		price50: "$275",
+		price500: "$2,750",
+		note: "Account-priced model with linear per-account growth.",
+	},
+];
+
+// Pricing FAQ — kept in sync with the marketing site config copy.
+const faqs: { q: string; a: string }[] = [
+	{
+		q: "What is RelayAPI?",
+		a: "RelayAPI is a unified social media API that lets you post to 21 platforms (Instagram, LinkedIn, TikTok, Facebook, YouTube, Reddit, Pinterest, Bluesky, Threads, Telegram, Snapchat, Google Business, WhatsApp, Mastodon, Discord, X/Twitter, and SMS via Twilio) with a single API call. No need to build and maintain separate integrations for each network.",
+	},
+	{
+		q: "How does it work?",
+		a: "Connect your social accounts via OAuth, get your API key, and make a single POST request with your content and target platforms. RelayAPI handles authentication, media formatting, rate limiting, and delivery to each platform.",
+	},
+	{
+		q: "How secure is my data?",
+		a: "All social account credentials are encrypted with AES-256-GCM at rest. API keys are SHA-256 hashed before storage. We run on Cloudflare Workers — edge-deployed infrastructure with built-in DDoS protection.",
+	},
+	{
+		q: "What counts as a request?",
+		a: "A request is any action that creates or changes data — publishing a post, uploading media, or connecting an account. Listing posts, checking analytics, and reading data never count toward your limit.",
+	},
+	{
+		q: "Is there a free plan?",
+		a: "Yes. The Free plan gives you 200 requests/month across all 21 platforms — no credit card required. When you're ready for more, Pro is $5/month with 10,000 requests included and $1 per 1,000 extra calls. Analytics and Comments are included in Pro at no extra cost.",
+	},
+	{
+		q: "Can I use it with my existing app?",
+		a: "Absolutely. RelayAPI is a standard REST API that works with any language or framework. We provide OpenAPI specs, and our docs include examples in cURL, JavaScript, Python, and more.",
+	},
+];
+
+// Shared cell classes for the comparison table.
+const headCell =
+	"px-4 py-3 text-[13px] font-medium text-[#6e6a62] first:pl-6 last:pr-6";
 ---
 
-<BaseLayout>
-  <SEO
-    slot="head"
-    title="Pricing"
-    description="Simple, transparent pricing for RelayAPI. Start free, scale as you grow."
-    keywords={["api pricing", "social media api pricing", "relayapi pricing"]}
-  />
-  <div class="max-w-7xl mx-auto border-x border-border">
-    <Navbar client:load />
-    <main class="flex flex-col divide-y divide-border pt-16">
-      <section class="py-16 md:py-24 px-6 text-center">
-        <p class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-          Pricing
-        </p>
-        <h1 class="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tighter text-foreground mt-4 text-balance">
-          Simple, transparent pricing
-        </h1>
-        <p class="text-lg text-muted-foreground max-w-2xl mx-auto mt-6 text-balance">
-          Start free with 200 requests/month. Upgrade to Pro for $5/mo.
-          No hidden fees, no per-platform charges.
-        </p>
-      </section>
+<Layout>
+	<SEO
+		slot="head"
+		title="Pricing"
+		description="Simple, transparent pricing for RelayAPI. Start free, scale as you grow — analytics and comments always included."
+		keywords={["api pricing", "social media api pricing", "relayapi pricing"]}
+	/>
 
-      <PricingSection client:load />
-      <FAQSection client:visible />
-      <SelfHostSection />
+	{/* ===================== HERO ===================== */}
+	<Container
+		as="section"
+		class="pt-[clamp(3.5rem,7vw,6rem)] pb-[clamp(1.5rem,3vw,2.5rem)] text-center"
+	>
+		<p
+			class="mb-4 text-[13px] font-medium uppercase tracking-[0.16em] text-[#8c887e]"
+		>
+			Pricing
+		</p>
+		<h1
+			class="mx-auto max-w-[18ch] text-balance text-[clamp(32px,5vw,56px)] font-medium leading-[1.05] tracking-[-0.035em] text-landing-ink"
+		>
+			Priced to scale, not to gouge.
+		</h1>
+		<p
+			class="mx-auto mt-5 max-w-[52ch] text-balance text-[17px] leading-[1.55] text-[#6e6a62]"
+		>
+			Start free with 200 requests a month. Move to Pro at $5/mo and pay only
+			for what you use. Analytics and comments are always included.
+		</p>
+	</Container>
 
-      <section class="py-8">
-        <div class="px-6 md:px-12 pb-8">
-          <div class="bg-primary rounded-2xl p-8 md:p-12 flex flex-col items-center text-center space-y-6">
-            <h2 class="text-3xl md:text-4xl font-medium tracking-tighter text-white text-balance">
-              Ready to get started?
-            </h2>
-            <p class="text-white/80 text-lg font-medium">
-              Free plan available. No credit card required.
-            </p>
-            <Button
-              asChild
-              size="lg"
-              variant="outline"
-              className="border-white text-white hover:bg-white/10 rounded-full px-8"
-            >
-              <a href="/signup">Start Free Trial</a>
-            </Button>
-          </div>
-        </div>
+	{/* ===================== PLAN CARDS ===================== */}
+	<Container as="section" class="pb-[clamp(2rem,4vw,3.5rem)]">
+		<div
+			class="mx-auto grid max-w-[60rem] gap-5 md:grid-cols-2"
+		>
+			{/* ---- Free ---- */}
+			<div
+				class="flex flex-col rounded-[20px] border border-landing-ink/[0.1] bg-landing-card p-7 sm:p-8"
+			>
+				<div class="flex items-center gap-2.5">
+					<h2 class="text-[15px] font-semibold uppercase tracking-[0.08em] text-landing-ink">
+						Free
+					</h2>
+					<span
+						class="rounded-full bg-landing-ink/[0.07] px-2.5 py-0.5 text-[11px] font-medium text-[#6e6a62]"
+						>For getting started</span
+					>
+				</div>
+				<div class="mt-5 flex items-baseline gap-1.5">
+					<span
+						class="text-[clamp(40px,5vw,52px)] font-medium tracking-[-0.03em] text-landing-ink"
+						>$0</span
+					>
+					<span class="text-[16px] text-[#6e6a62]">/month</span>
+				</div>
+				<p class="mt-2 text-[14px] text-[#6e6a62]">200 requests / month</p>
 
-        <div class="border-t border-border py-4">
-          <p class="text-sm text-muted-foreground text-center">
-            &copy; {new Date().getFullYear()} Relay. All rights reserved.
-          </p>
-        </div>
-      </section>
-    </main>
-  </div>
-</BaseLayout>
+				<ul class="mt-7 flex flex-1 flex-col gap-3">
+					{
+						freeFeatures.map((f) => (
+							<li class="flex items-start gap-2.5">
+								{f.included ? (
+									<svg
+										class="mt-0.5 size-4 shrink-0 text-landing-ink"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2.2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M5 13l4 4L19 7" />
+									</svg>
+								) : (
+									<svg
+										class="mt-0.5 size-4 shrink-0 text-landing-ink/25"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M18 6 6 18M6 6l12 12" />
+									</svg>
+								)}
+								<span
+									class:list={[
+										"text-[14.5px]",
+										f.included
+											? "text-[#46443d]"
+											: "text-landing-ink/35 line-through",
+									]}
+								>
+									{f.text}
+								</span>
+							</li>
+						))
+					}
+				</ul>
+
+				<a
+					href={LANDING_LINKS.signup}
+					class="mt-8 inline-flex items-center justify-center rounded-full border border-landing-ink/20 bg-transparent px-6 py-3 text-[15px] font-medium text-landing-ink! transition-colors duration-150 hover:bg-landing-ink/[0.05]"
+					>Start for free</a
+				>
+			</div>
+
+			{/* ---- Pro (recommended) ---- */}
+			<div
+				class="relative flex flex-col rounded-[20px] border border-landing-ink/[0.18] bg-landing-card p-7 shadow-[0_24px_60px_-32px_rgba(40,28,12,0.45)] ring-1 ring-landing-ink/[0.06] sm:p-8"
+			>
+				<div class="flex items-center gap-2.5">
+					<h2 class="text-[15px] font-semibold uppercase tracking-[0.08em] text-landing-ink">
+						Pro
+					</h2>
+					<span
+						class="rounded-full bg-landing-accent/[0.12] px-2.5 py-0.5 text-[11px] font-medium text-landing-accent"
+						>Most popular</span
+					>
+				</div>
+				<div class="mt-5 flex items-baseline gap-1.5">
+					<span
+						id="pro-price"
+						class="text-[clamp(40px,5vw,52px)] font-medium tracking-[-0.03em] text-landing-ink"
+						>$5</span
+					>
+					<span id="pro-price-suffix" class="text-[16px] text-[#6e6a62]"
+						>/month</span
+					>
+				</div>
+				<p id="pro-sub" class="mt-2 text-[14px] text-[#6e6a62]">
+					10,000 requests included
+				</p>
+
+				{/* ---- usage slider ---- */}
+				<div class="mt-6">
+					<p class="mb-2.5 text-[12.5px] text-[#6e6a62]">
+						Estimate your monthly requests
+					</p>
+					<div class="relative flex h-6 items-center">
+						<div
+							class="absolute inset-x-0 h-1.5 rounded-full bg-landing-ink/[0.12]"
+						>
+						</div>
+						<div
+							id="pro-track-fill"
+							class="absolute left-0 h-1.5 rounded-full bg-landing-ink"
+							style="width:0%"
+						>
+						</div>
+						<div
+							id="pro-thumb"
+							class="pointer-events-none absolute size-4 -translate-x-1/2 rounded-full bg-landing-ink shadow-[0_0_0_4px_rgba(26,24,21,0.14)]"
+							style="left:0%"
+						>
+						</div>
+						<input
+							id="pro-slider"
+							type="range"
+							min="0"
+							max="1000"
+							value="0"
+							aria-label="Estimated monthly requests"
+							class="absolute inset-0 h-6 w-full cursor-pointer appearance-none bg-transparent [&::-moz-range-thumb]:size-6 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-transparent [&::-webkit-slider-thumb]:size-6 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-transparent"
+						/>
+					</div>
+					<div
+						class="mt-2 flex justify-between text-[11.5px] text-[#9a968c]"
+					>
+						<span>10,000</span>
+						<span>200,000+</span>
+					</div>
+				</div>
+
+				<ul class="mt-6 flex flex-1 flex-col gap-3">
+					{
+						proFeatures.map((f) => (
+							<li class="flex items-start gap-2.5">
+								<svg
+									class:list={[
+										"mt-0.5 size-4 shrink-0",
+										f.highlight ? "text-landing-accent" : "text-landing-ink",
+									]}
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									aria-hidden="true"
+								>
+									<path d="M5 13l4 4L19 7" />
+								</svg>
+								<span
+									id={f.text === "1,000 req/min rate limit" ? "pro-ratelimit" : undefined}
+									class:list={[
+										"text-[14.5px]",
+										f.highlight
+											? "font-medium text-landing-ink"
+											: "text-[#46443d]",
+									]}
+								>
+									{f.text}
+								</span>
+							</li>
+						))
+					}
+				</ul>
+
+				<a
+					id="pro-cta"
+					href={LANDING_LINKS.signup}
+					class="mt-8 inline-flex items-center justify-center rounded-full bg-landing-ink px-6 py-3 text-[15px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
+					>Get started</a
+				>
+			</div>
+		</div>
+
+		<p class="mx-auto mt-6 max-w-[60rem] text-center text-[13px] text-[#9a968c]">
+			Spending over $100/mo? <a
+				href={LANDING_LINKS.signup}
+				class="text-landing-accent! underline-offset-4 hover:underline"
+				>Talk to us</a
+			> and we'll tailor a rate for your volume.
+		</p>
+	</Container>
+
+	{/* ===================== TRUST STRIP ===================== */}
+	<TrustStrip />
+
+	{/* ===================== COMPARISON ===================== */}
+	<Container as="section" class="py-[clamp(2.5rem,5vw,4rem)]">
+		<div data-reveal class="mx-auto max-w-[64rem]">
+			<h2
+				class="text-[clamp(26px,3vw,40px)] font-medium tracking-[-0.03em] text-landing-ink"
+			>
+				Compare the real cost.
+			</h2>
+			<p class="mt-3 max-w-[56ch] text-[16px] leading-[1.55] text-[#6e6a62]">
+				Most social APIs charge per connected account or stack analytics and
+				comments on top as paid add-ons. Here's how RelayAPI compares as you
+				grow.
+			</p>
+
+			<div
+				class="mt-8 overflow-x-auto rounded-[18px] border border-landing-ink/[0.08] bg-[#fbfaf6]"
+			>
+				<table class="w-full min-w-[640px] border-collapse text-left">
+					<thead>
+						<tr class="border-b border-landing-ink/[0.08] bg-[#f1efe8]">
+							<th class={headCell}>Provider</th>
+							<th class={`${headCell} text-right`}>10 customers</th>
+							<th class={`${headCell} text-right`}>50 customers</th>
+							<th class={`${headCell} text-right`}>500 customers</th>
+							<th class={`${headCell} hidden lg:table-cell`}>Notes</th>
+						</tr>
+					</thead>
+					<tbody>
+						{
+							competitors.map((c) => (
+								<tr
+									class:list={[
+										"border-b border-landing-ink/[0.06] last:border-0",
+										c.highlight && "bg-landing-accent/[0.06]",
+									]}
+								>
+									<td class="px-4 py-4 pl-6">
+										<span
+											class:list={[
+												"text-[14.5px] font-semibold",
+												c.highlight
+													? "text-landing-accent"
+													: "text-landing-ink",
+											]}
+										>
+											{c.name}
+										</span>
+									</td>
+									{[c.price10, c.price50, c.price500].map((p) => (
+										<td class="px-4 py-4 text-right">
+											<span
+												class:list={[
+													"text-[14.5px] font-semibold tabular-nums",
+													c.highlight
+														? "text-landing-accent"
+														: "text-landing-ink",
+												]}
+											>
+												{p}
+											</span>
+											<span class="text-[13px] text-[#9a968c]">/mo</span>
+										</td>
+									))}
+									<td class="hidden px-4 py-4 pr-6 text-[13px] leading-[1.5] text-[#6e6a62] lg:table-cell">
+										{c.note}
+									</td>
+								</tr>
+							))
+						}
+					</tbody>
+				</table>
+			</div>
+			<p class="mt-4 text-[12.5px] leading-[1.5] text-[#9a968c]">
+				Prices as of March 2026, including analytics and comments where
+				available. RelayAPI never charges per connected customer.
+			</p>
+		</div>
+	</Container>
+
+	{/* ===================== FAQ ===================== */}
+	<Container as="section" class="py-[clamp(2.5rem,5vw,4rem)]">
+		<div
+			data-reveal
+			class="grid gap-x-12 gap-y-8 md:grid-cols-[0.8fr_1.2fr]"
+		>
+			<div>
+				<h2
+					class="text-[clamp(26px,3vw,40px)] font-medium tracking-[-0.03em] text-landing-ink"
+				>
+					Questions &amp; answers
+				</h2>
+				<p class="mt-3 max-w-[34ch] text-[16px] leading-[1.55] text-[#6e6a62]">
+					Everything else you might be wondering. Still stuck? <a
+						href={`mailto:support@relayapi.dev`}
+						class="text-landing-accent! underline-offset-4 hover:underline"
+						>Email support</a
+					>.
+				</p>
+			</div>
+
+			<div class="flex flex-col">
+				{
+					faqs.map((item) => (
+						<details
+							class="group border-b border-landing-ink/[0.1] py-5 first:pt-0"
+						>
+							<summary
+								class="flex cursor-pointer list-none items-center justify-between gap-4 text-[16.5px] font-medium text-landing-ink [&::-webkit-details-marker]:hidden"
+							>
+								{item.q}
+								<svg
+									class="size-4 shrink-0 text-[#9a968c] transition-transform duration-200 group-open:rotate-45"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									aria-hidden="true"
+								>
+									<path d="M12 5v14M5 12h14" />
+								</svg>
+							</summary>
+							<p class="mt-3 max-w-[60ch] text-[15px] leading-[1.6] text-[#6e6a62]">
+								{item.a}
+							</p>
+						</details>
+					))
+				}
+			</div>
+		</div>
+	</Container>
+
+	{/* ===================== SELF-HOST + CTA ===================== */}
+	<OpenSource />
+	<FinalCTA />
+</Layout>
+
+<script>
+	// Interactive Pro-plan request estimator. Mirrors the pricing math used
+	// across the product: $5 base includes 10K calls, then $1 per extra 1K.
+	const PRO_BASE = 5;
+	const INCLUDED = 10_000;
+	const PER_1K = 1;
+	const CUSTOM_THRESHOLD = 100;
+	const MIN = 10_000;
+	const MAX = 200_000;
+	const BREAK_PCT = 0.4;
+	const BREAK_CALLS = 50_000;
+	const STEPS = 1000;
+
+	const pctToCalls = (pct: number) =>
+		pct <= BREAK_PCT
+			? MIN + (pct / BREAK_PCT) * (BREAK_CALLS - MIN)
+			: BREAK_CALLS +
+				((pct - BREAK_PCT) / (1 - BREAK_PCT)) * (MAX - BREAK_CALLS);
+
+	const roundCalls = (raw: number) => {
+		if (raw <= MIN) return MIN;
+		if (raw >= MAX) return MAX;
+		if (raw <= 50_000) return Math.round(raw / 1_000) * 1_000;
+		if (raw <= 100_000) return Math.round(raw / 5_000) * 5_000;
+		return Math.round(raw / 10_000) * 10_000;
+	};
+
+	const price = (calls: number) =>
+		PRO_BASE + (Math.max(0, calls - INCLUDED) / 1000) * PER_1K;
+
+	const fmtNum = (n: number) => n.toLocaleString("en-US");
+	const fmtPrice = (p: number) => (p % 1 === 0 ? `$${p}` : `$${p.toFixed(2)}`);
+
+	const slider = document.getElementById("pro-slider") as HTMLInputElement | null;
+	const priceEl = document.getElementById("pro-price");
+	const suffixEl = document.getElementById("pro-price-suffix");
+	const subEl = document.getElementById("pro-sub");
+	const fillEl = document.getElementById("pro-track-fill");
+	const thumbEl = document.getElementById("pro-thumb");
+	const ctaEl = document.getElementById("pro-cta") as HTMLAnchorElement | null;
+	const rateEl = document.getElementById("pro-ratelimit");
+
+	function render() {
+		if (!slider) return;
+		const pct = Number(slider.value) / STEPS;
+		const calls = roundCalls(pctToCalls(pct));
+		const p = price(calls);
+		const isCustom = p > CUSTOM_THRESHOLD;
+
+		if (fillEl) fillEl.style.width = `${pct * 100}%`;
+		if (thumbEl) thumbEl.style.left = `${pct * 100}%`;
+
+		if (priceEl) priceEl.textContent = isCustom ? "Custom" : fmtPrice(p);
+		if (suffixEl) suffixEl.style.display = isCustom ? "none" : "";
+		if (subEl)
+			subEl.textContent = isCustom
+				? "Let's build a plan for your volume"
+				: calls <= INCLUDED
+					? "10,000 requests included"
+					: `${fmtNum(calls)} requests / month`;
+		if (rateEl)
+			rateEl.textContent = isCustom
+				? "Custom rate limit"
+				: "1,000 req/min rate limit";
+		if (ctaEl) {
+			ctaEl.textContent = isCustom ? "Contact sales" : "Get started";
+			ctaEl.href = isCustom ? "mailto:support@relayapi.dev" : "/signup";
+		}
+	}
+
+	slider?.addEventListener("input", render);
+	render();
+</script>

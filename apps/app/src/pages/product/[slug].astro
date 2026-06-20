@@ -1,10 +1,10 @@
 ---
-import BaseLayout from "../../layouts/BaseLayout.astro";
 import SEO from "../../components/SEO.astro";
-import { PlatformPage } from "../../components/pages/platform-page";
 import { ApiPage } from "../../components/pages/api-page";
-import { getPlatformBySlug } from "../../lib/platform-data";
+import { PlatformPage } from "../../components/pages/platform-page";
 import { getApiBySlug } from "../../lib/api-data";
+import { getPlatformBySlug } from "../../lib/platform-data";
+import Layout from "../../layouts/Layout.astro";
 
 const { slug } = Astro.params;
 
@@ -13,7 +13,7 @@ const api = slug ? getApiBySlug(slug) : undefined;
 
 const data = platform ?? api;
 if (!data) {
-  return Astro.redirect("/404");
+	return Astro.redirect("/404");
 }
 
 const title = platform ? `${platform.name} API` : data.name;
@@ -21,17 +21,19 @@ const description = platform ? platform.heroDescription : data.heroDescription;
 const pageType = platform ? "platform" : "api";
 ---
 
-<BaseLayout>
-  <SEO
-    slot="head"
-    title={title}
-    description={description}
-    keywords={[data.name.toLowerCase(), "api", "social media api", slug!]}
-    faqs={data.faq}
-  />
-  {pageType === "platform" ? (
-    <PlatformPage slug={slug!} client:load />
-  ) : (
-    <ApiPage slug={slug!} client:load />
-  )}
-</BaseLayout>
+<Layout>
+	<SEO
+		slot="head"
+		title={title}
+		description={description}
+		keywords={[data.name.toLowerCase(), "api", "social media api", slug!]}
+		faqs={data.faq}
+	/>
+	{
+		pageType === "platform" ? (
+			<PlatformPage slug={slug!} client:load />
+		) : (
+			<ApiPage slug={slug!} client:load />
+		)
+	}
+</Layout>

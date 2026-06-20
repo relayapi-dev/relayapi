@@ -25,7 +25,16 @@ const { title, description } = Astro.props;
 		<slot name="head" />
 	</Fragment>
 
-	<div class="relay-landing">
+	<div
+		class:list={[
+			"relay-landing",
+			"min-h-screen overflow-x-hidden text-landing-ink",
+			"selection:bg-landing-ink selection:text-[#f3f1ea]",
+			"[&_a]:text-inherit [&_a]:no-underline",
+			'[--font-newsreader:"Newsreader",Georgia,"Times_New_Roman",serif]',
+			"[--font-mono-landing:var(--font-geist-mono),ui-monospace,monospace]",
+		]}
+	>
 		<LandingNav />
 		<slot />
 		<LandingFooter />
@@ -33,41 +42,30 @@ const { title, description } = Astro.props;
 </BaseLayout>
 
 <style is:global>
-	/* Landing-only overrides — applied wherever Layout is used. */
+	/* Only the two rules that cannot be expressed as Tailwind utilities on the
+	   .relay-landing wrapper remain here. */
+
+	/* (a) Must target the root scroll element, not the wrapper. */
 	html {
 		scroll-behavior: smooth;
 	}
-	body {
+
+	/* (b) Page canvas + full-bleed gutters. Paints the cream page background on
+	   the <body> itself (so the iOS/macOS overscroll gutter reads cream, not
+	   white) and neutralizes BaseLayout's <body> `px-4 lg:px-0` so the landing is
+	   full-bleed (each <Container> owns its own gutters). Targets the parent
+	   <body>, which a utility on the wrapper child cannot reach. */
+	body:has(.relay-landing) {
 		background: #f7f7f2;
 		padding-left: 0;
 		padding-right: 0;
 	}
-	.relay-landing {
-		min-height: 100vh;
-		overflow-x: hidden;
-		color: #1a1815;
-		/* Geist now comes from Astro's Fonts API via the --font-geist-* vars
-		   (BaseLayout, which Layout wraps, renders <Font>). The vars already bake
-		   in the optimized metric-matched fallbacks, so reference them rather than
-		   the literal "Geist Variable" family name (Astro hashes that name). */
-		font-family:
-			var(--font-geist-sans),
-			-apple-system,
-			system-ui,
-			sans-serif;
-		--font-newsreader: "Newsreader", Georgia, "Times New Roman", serif;
-		--font-mono-landing: var(--font-geist-mono), ui-monospace, monospace;
-	}
-	.relay-landing ::selection {
-		background: #1a1815;
-		color: #f3f1ea;
-	}
-	.relay-landing a {
-		color: inherit;
-		text-decoration: none;
-	}
-	/* Scroll-reveal — only armed once JS adds `reveal-ready`, so content is
-     never hidden when JS is unavailable. */
+
+	/* (c) Scroll-reveal engine — descendant selectors on SLOTTED children of
+	   other components, toggled by the page IntersectionObserver script below.
+	   Layout cannot attach utilities to those elements, so the rules stay global.
+	   Only armed once JS adds `reveal-ready`, so content is never hidden when JS
+	   is unavailable. */
 	.relay-landing.reveal-ready [data-reveal] {
 		opacity: 0;
 		transform: translateY(24px);

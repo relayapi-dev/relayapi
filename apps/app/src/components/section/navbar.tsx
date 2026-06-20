@@ -4,6 +4,7 @@ import { apis } from "../../lib/api-data";
 import { siteConfig } from "../../lib/config";
 import { followLink } from "../../lib/link-nav";
 import { platforms } from "../../lib/platform-data";
+import { apiIconPaths, platformGlyph } from "../../lib/product-glyphs";
 import { Icons } from "../icons";
 import {
 	Accordion,
@@ -79,7 +80,7 @@ function DesktopNav() {
 														className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-foreground hover:bg-accent/50 transition-colors"
 													>
 														<span className="shrink-0 text-muted-foreground">
-															{p.icon}
+															<svg viewBox="0 0 24 24" fill="currentColor" className="size-4" aria-hidden="true"><path d={platformGlyph(p.slug)} /></svg>
 														</span>
 														{p.name}
 													</a>
@@ -98,7 +99,7 @@ function DesktopNav() {
 														className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-foreground hover:bg-accent/50 transition-colors"
 													>
 														<span className="shrink-0 text-muted-foreground">
-															{a.icon}
+															<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="size-4" aria-hidden="true">{apiIconPaths(a.slug).map((d) => (<path key={d} d={d} />))}</svg>
 														</span>
 														{a.name}
 													</a>
@@ -273,7 +274,7 @@ function MobileNav({
 																				className="flex items-center gap-3 px-1 py-2 transition-colors"
 																			>
 																				<span className="shrink-0 text-muted-foreground">
-																					{p.icon}
+																					<svg viewBox="0 0 24 24" fill="currentColor" className="size-4" aria-hidden="true"><path d={platformGlyph(p.slug)} /></svg>
 																				</span>
 																				<span className="text-sm font-medium text-foreground">
 																					{p.name}
@@ -333,7 +334,7 @@ function MobileNav({
 																				className="flex items-center gap-3 px-1 py-2 transition-colors"
 																			>
 																				<span className="shrink-0 text-muted-foreground">
-																					{a.icon}
+																					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="size-4" aria-hidden="true">{apiIconPaths(a.slug).map((d) => (<path key={d} d={d} />))}</svg>
 																				</span>
 																				<span className="text-sm font-medium text-foreground">
 																					{a.name}

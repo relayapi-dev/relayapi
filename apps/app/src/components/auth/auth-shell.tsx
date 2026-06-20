@@ -2,44 +2,39 @@ import type { ReactNode } from "react";
 import { Icons } from "../icons";
 
 /**
- * Shared chrome for the auth screens (login / signup), modelled on the
- * RelayAPI design-system "Sign in" mockup: a slim top bar with the brand mark,
- * a flat centered column (no card — borders do the structural work), and a
- * muted legal footer pinned to the bottom of the viewport.
+ * Shared chrome for the auth screens (login / signup) in the cream / Cursor
+ * landing style: a slim top bar with the brand mark, a flat centered column
+ * (borders do the structural work — no card), and a muted legal footer pinned
+ * to the bottom. These render under BaseLayout (no `.relay-landing` wrapper),
+ * so link colours work without the `!` suffix.
  */
 export function AuthShell({ children }: { children: ReactNode }) {
 	return (
-		<div className="flex min-h-screen flex-col bg-background text-foreground">
+		<div className="flex min-h-screen flex-col bg-[#f7f7f2] text-[#1a1815] antialiased">
 			<header className="flex items-center justify-between px-6 py-5">
 				<a
 					href="/"
 					className="inline-flex items-center gap-2.5 transition-opacity hover:opacity-80"
 				>
-					<span className="inline-flex size-[1.625rem] items-center justify-center rounded-[0.4375rem] bg-foreground">
-						<Icons.logo className="size-3.5 text-background" />
+					<span className="inline-flex size-[1.625rem] items-center justify-center rounded-[0.45rem] bg-[#1a1815]">
+						<Icons.logo className="size-3.5 text-[#f3f1ea]" />
 					</span>
-					<span className="text-[0.9375rem] font-semibold tracking-[-0.01em]">
-						RelayAPI
+					<span className="text-[0.95rem] font-semibold tracking-[0.04em]">
+						RELAYAPI
 					</span>
 				</a>
 			</header>
 
 			<main className="flex flex-1 items-center justify-center px-6 pb-10">
-				<div className="w-full max-w-[23.75rem]">{children}</div>
+				<div className="w-full max-w-[24rem]">{children}</div>
 			</main>
 
-			<footer className="px-6 pb-7 text-center text-xs text-muted-foreground">
-				<a
-					href="/terms"
-					className="transition-colors hover:text-foreground"
-				>
+			<footer className="px-6 pb-7 text-center text-xs text-[#8c887e]">
+				<a href="/terms" className="transition-colors hover:text-[#1a1815]">
 					Terms of Service
 				</a>
 				<span className="px-1.5">·</span>
-				<a
-					href="/privacy"
-					className="transition-colors hover:text-foreground"
-				>
+				<a href="/privacy" className="transition-colors hover:text-[#1a1815]">
 					Privacy Policy
 				</a>
 			</footer>
@@ -71,9 +66,8 @@ function GoogleGlyph({ className }: { className?: string }) {
 }
 
 /**
- * Full-width OAuth provider button. Grayscale glyph + "Continue with …" label,
- * with an optional "Last used" badge floating off the top-right corner (shown
- * to returning users — see the `relayapi:last_auth_method` localStorage hint).
+ * Full-width OAuth provider button — white surface, hairline border, with an
+ * optional "Last used" badge for returning users.
  */
 export function ProviderButton({
 	label,
@@ -88,12 +82,12 @@ export function ProviderButton({
 		<button
 			type="button"
 			onClick={onClick}
-			className="relative flex h-[2.875rem] w-full items-center justify-center gap-2.5 rounded-md border border-border bg-card text-sm font-medium text-foreground transition-colors duration-100 ease-[var(--ease-relay)] hover:bg-accent"
+			className="relative flex h-[2.875rem] w-full items-center justify-center gap-2.5 rounded-[12px] border border-[#1a1815]/12 bg-white text-sm font-medium text-[#1a1815] transition-colors duration-150 hover:bg-[#1a1815]/[0.03]"
 		>
-			<GoogleGlyph className="size-[1.0625rem] grayscale opacity-90" />
+			<GoogleGlyph className="size-[1.0625rem]" />
 			<span>Continue with {label}</span>
 			{lastUsed ? (
-				<span className="absolute -top-2 right-2.5 rounded-full bg-foreground px-[0.4375rem] py-0.5 text-[0.65625rem] font-medium text-background">
+				<span className="absolute -top-2 right-2.5 rounded-full bg-[#1a1815] px-[0.4375rem] py-0.5 text-[0.65625rem] font-medium text-[#f3f1ea]">
 					Last used
 				</span>
 			) : null}
@@ -104,10 +98,10 @@ export function ProviderButton({
 /** "OR" rule between the provider buttons and the email form. */
 export function AuthDivider() {
 	return (
-		<div className="my-5 flex items-center gap-3 text-[0.6875rem] tracking-[0.08em] text-muted-foreground">
-			<span className="h-px flex-1 bg-border" />
+		<div className="my-5 flex items-center gap-3 text-[0.6875rem] tracking-[0.08em] text-[#8c887e]">
+			<span className="h-px flex-1 bg-[#1a1815]/10" />
 			OR
-			<span className="h-px flex-1 bg-border" />
+			<span className="h-px flex-1 bg-[#1a1815]/10" />
 		</div>
 	);
 }

@@ -1,411 +1,367 @@
-import { Shield, Wrench, Zap } from "lucide-react";
 import { getPlatformBySlug, platforms } from "../../lib/platform-data";
-import { Navbar } from "../section/navbar";
-import {
-	Accordion,
-	AccordionContent,
-	AccordionItem,
-	AccordionTrigger,
-} from "../ui/accordion";
-import { Button } from "../ui/button";
+import { highlightCode } from "../../lib/code-highlight";
+import { platformGlyph } from "../../lib/product-glyphs";
 
-const FEATURE_ICONS = [Zap, Shield, Wrench];
+/**
+ * Platform product page — cream / Cursor-style landing for a single platform.
+ * Renders inside Layout.astro (which supplies the LandingNav, LandingFooter and
+ * the `.relay-landing` cream theme), so this component owns only the page body.
+ * Every coloured <a> needs a trailing `!` because the landing wrapper resets
+ * link colour to inherit (see project_landing_anchor_important).
+ */
+
+const STEPS = [
+	{
+		n: 1,
+		title: "Connect your account",
+		body: (name: string) =>
+			`Authorize your ${name} account via OAuth in about 30 seconds.`,
+	},
+	{
+		n: 2,
+		title: "Build your integration",
+		body: () => "Use the REST API or our SDKs to publish content from your stack.",
+	},
+	{
+		n: 3,
+		title: "We handle the rest",
+		body: () =>
+			"RelayAPI manages publishing, rate limits, and delivery notifications.",
+	},
+];
 
 export function PlatformPage({ slug }: { slug: string }) {
 	const platform = getPlatformBySlug(slug);
 
 	if (!platform) {
 		return (
-			<div className="flex items-center justify-center min-h-screen">
-				<p className="text-lg text-muted-foreground">Platform not found.</p>
+			<div className="flex min-h-[60vh] items-center justify-center">
+				<p className="text-[16px] text-landing-muted">Platform not found.</p>
 			</div>
 		);
 	}
 
-	const otherPlatforms = platforms.filter((p) => p.slug !== platform.slug);
+	const others = platforms.filter((p) => p.slug !== platform.slug);
+
+	const code = `const res = await fetch("https://api.relayapi.dev/v1/posts", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer rlay_live_xxxx",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    content: "Check out our latest update!",
+    platforms: ["${platform.slug}"],
+    media: ["https://cdn.example.com/image.jpg"],
+  }),
+});`;
 
 	return (
-		<div className="max-w-7xl mx-auto border-x border-border">
-			{/* 1. Navbar */}
-			<Navbar />
+		<>
+			{/* ===================== HERO ===================== */}
+			<section className="mx-auto w-full max-w-[77.5rem] px-5 pb-[clamp(2rem,4vw,3rem)] pt-[clamp(3.5rem,7vw,6rem)] text-center sm:px-8">
+				<span className="mx-auto mb-7 flex size-14 items-center justify-center rounded-[14px] bg-landing-card text-landing-ink ring-1 ring-landing-ink/[0.08] [&>svg]:size-7">
+					<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+						<path d={platformGlyph(platform.slug)} />
+					</svg>
+				</span>
+				<h1 className="mx-auto max-w-[20ch] text-balance text-[clamp(30px,4.5vw,52px)] font-medium leading-[1.08] tracking-[-0.035em] text-landing-ink">
+					{platform.heroTitle}
+				</h1>
+				<p className="mx-auto mt-5 max-w-[58ch] text-balance text-[17px] leading-[1.55] text-[#6e6a62]">
+					{platform.heroDescription}
+				</p>
+				<div className="mt-8 flex flex-wrap justify-center gap-[10px]">
+					<a
+						href="/signup"
+						className="rounded-full bg-landing-ink px-[22px] py-3 text-[15px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
+					>
+						Get started free
+					</a>
+					<a
+						href="https://docs.relayapi.dev/"
+						target="_blank"
+						rel="noopener noreferrer"
+						className="rounded-full bg-[#e4e1d9] px-[22px] py-3 text-[15px] font-medium text-landing-ink! transition-colors duration-150 hover:bg-[#dbd7cc]"
+					>
+						View API docs
+					</a>
+				</div>
+				<p className="mt-4 text-[13px] text-[#9a968c]">
+					No credit card required · Free plan available
+				</p>
+			</section>
 
-			<main className="pt-16">
-				{/* 2. Hero Section */}
-				<section className="pt-16 md:pt-32 pb-10 md:pb-16 px-4 md:px-6">
-					<div className="max-w-5xl mx-auto flex flex-col items-center text-center">
-						<h1 className="text-3xl md:text-5xl lg:text-6xl font-bold tracking-tighter text-center text-balance text-foreground">
-							{platform.heroTitle}
-						</h1>
-						<p className="text-base md:text-lg text-muted-foreground text-center max-w-2xl mx-auto mt-4 md:mt-6">
-							{platform.heroDescription}
-						</p>
-						<div className="flex flex-col sm:flex-row items-center gap-3 mt-6 md:mt-8 w-full sm:w-auto px-2 sm:px-0">
-							<Button
-								asChild
-								className="w-full sm:w-auto bg-primary text-primary-foreground hover:bg-primary/90 rounded-full px-8 py-3 text-base font-medium"
-							>
-								<a href="/signup">Get Started Free</a>
-							</Button>
-							<Button
-								asChild
-								variant="outline"
-								className="w-full sm:w-auto rounded-full px-8 py-3 text-base font-medium border-border"
-							>
-								<a href="https://docs.relayapi.dev/">View API Docs</a>
-							</Button>
+			{/* ===================== CODE WINDOW ===================== */}
+			<section className="mx-auto w-full max-w-[77.5rem] px-5 pb-[clamp(2.5rem,5vw,4rem)] sm:px-8">
+				<div
+					className="mx-auto max-w-[52rem] overflow-hidden rounded-feature-window bg-landing-panel-dark shadow-feature-window"
+				>
+					<div className="flex items-center border-b border-landing-line-dark px-4 py-2.5">
+						<div className="flex gap-[7px]">
+							<span className="size-[10px] rounded-full bg-white/15" />
+							<span className="size-[10px] rounded-full bg-white/15" />
+							<span className="size-[10px] rounded-full bg-white/15" />
 						</div>
-						<p className="text-sm text-muted-foreground mt-4">
-							No credit card required &middot; Free plan available
+						<span className="ml-3 text-[12px] text-white/45 [font-family:var(--font-mono-landing)]">
+							POST /v1/posts
+						</span>
+					</div>
+					<div className="overflow-x-auto px-5 py-5 sm:px-6">
+						<pre className="text-[12.5px] leading-[1.7] text-[#d7d2c7] [font-family:var(--font-mono-landing)] sm:text-[13.5px]">
+							<code dangerouslySetInnerHTML={{ __html: highlightCode(code) }} />
+						</pre>
+					</div>
+				</div>
+			</section>
+
+			{/* ===================== COMPARISON ===================== */}
+			<section className="mx-auto w-full max-w-[77.5rem] px-5 py-[clamp(2.5rem,5vw,4rem)] sm:px-8">
+				<div className="mx-auto max-w-[60rem]">
+					<div className="grid gap-5 md:grid-cols-2">
+						<div className="rounded-[20px] border border-landing-ink/[0.08] bg-landing-card p-7 sm:p-8">
+							<h2 className="text-[18px] font-semibold tracking-[-0.01em] text-landing-ink">
+								{platform.directApiName}
+							</h2>
+							<ul className="mt-6 flex flex-col gap-4">
+								{platform.painPoints.map((point) => (
+									<li key={point} className="flex items-start gap-3">
+										<svg
+											className="mt-[3px] size-4 shrink-0 text-landing-ink/30"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="2.2"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											aria-hidden="true"
+										>
+											<path d="M18 6 6 18M6 6l12 12" />
+										</svg>
+										<span className="text-[14.5px] leading-[1.55] text-[#6e6a62]">
+											{point}
+										</span>
+									</li>
+								))}
+							</ul>
+						</div>
+
+						<div className="rounded-[20px] border border-landing-ink/[0.14] bg-landing-card p-7 ring-1 ring-landing-ink/[0.05] sm:p-8">
+							<h2 className="text-[18px] font-semibold tracking-[-0.01em] text-landing-ink">
+								RelayAPI
+							</h2>
+							<ul className="mt-6 flex flex-col gap-4">
+								{platform.solutions.map((solution) => (
+									<li key={solution} className="flex items-start gap-3">
+										<svg
+											className="mt-[3px] size-4 shrink-0 text-landing-accent"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="2.4"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											aria-hidden="true"
+										>
+											<path d="M5 13l4 4L19 7" />
+										</svg>
+										<span className="text-[14.5px] leading-[1.55] text-[#46443d]">
+											{solution}
+										</span>
+									</li>
+								))}
+							</ul>
+						</div>
+					</div>
+					<div className="mt-7 flex justify-center">
+						<span className="inline-flex items-center gap-2 rounded-full bg-landing-accent/[0.1] px-4 py-2 text-[13.5px] font-medium text-landing-accent">
+							<svg
+								viewBox="0 0 24 24"
+								className="size-4 fill-current"
+								aria-hidden="true"
+							>
+								<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" />
+							</svg>
+							{platform.savingText}
+						</span>
+					</div>
+				</div>
+			</section>
+
+			{/* ===================== WARNING (conditional) ===================== */}
+			{platform.warningBanner && (
+				<section className="mx-auto w-full max-w-[77.5rem] px-5 pb-[clamp(2rem,4vw,3rem)] sm:px-8">
+					<div
+						className="mx-auto max-w-[60rem] rounded-[18px] border border-[#e0c08a] bg-[#f7eeda] p-6"
+					>
+						<h3 className="text-[16px] font-semibold text-[#7a5a1e]">
+							{platform.warningBanner.title}
+						</h3>
+						<p className="mt-2 text-[14.5px] leading-[1.55] text-[#8a6a30]">
+							{platform.warningBanner.description}
 						</p>
 					</div>
 				</section>
+			)}
 
-				{/* 3. Code Example Block */}
-				<section className="py-10 md:py-24 px-4 md:px-6">
-					<div className="max-w-5xl mx-auto">
-						<div className="rounded-xl overflow-hidden border border-border">
-							{/* Window chrome */}
-							<div className="bg-[#1a1a2e] px-4 py-3 flex items-center justify-between">
-								<div className="flex items-center gap-2">
-									<span className="w-3 h-3 rounded-full bg-[#ff5f57]" />
-									<span className="w-3 h-3 rounded-full bg-[#febc2e]" />
-									<span className="w-3 h-3 rounded-full bg-[#28c840]" />
-								</div>
-								<span className="text-sm font-mono text-white/60">
-									POST /v1/posts
-								</span>
-								<div className="w-[52px]" />
-							</div>
-							{/* Code body */}
-							<div className="bg-[#1a1a2e] px-3 md:px-6 pb-6 overflow-x-auto">
-								<pre className="text-xs md:text-sm leading-relaxed font-mono">
-									<code>
-										<span className="text-purple-400">const</span>{" "}
-										<span className="text-white">response</span>{" "}
-										<span className="text-white">=</span>{" "}
-										<span className="text-purple-400">await</span>{" "}
-										<span className="text-blue-400">fetch</span>
-										<span className="text-white">(</span>
-										<span className="text-green-400">
-											'https://api.relayapi.dev/v1/posts'
-										</span>
-										<span className="text-white">, {"{"}</span>
-										{"\n"}
-										{"  "}
-										<span className="text-white">method:</span>{" "}
-										<span className="text-green-400">'POST'</span>
-										<span className="text-white">,</span>
-										{"\n"}
-										{"  "}
-										<span className="text-white">headers: {"{"}</span>
-										{"\n"}
-										{"    "}
-										<span className="text-green-400">'Authorization'</span>
-										<span className="text-white">: </span>
-										<span className="text-green-400">
-											'Bearer rlay_live_xxxxxxxxxx'
-										</span>
-										<span className="text-white">,</span>
-										{"\n"}
-										{"    "}
-										<span className="text-green-400">'Content-Type'</span>
-										<span className="text-white">: </span>
-										<span className="text-green-400">'application/json'</span>
-										<span className="text-white">,</span>
-										{"\n"}
-										{"  "}
-										<span className="text-white">{"}"},</span>
-										{"\n"}
-										{"  "}
-										<span className="text-white">body:</span>{" "}
-										<span className="text-white">JSON.</span>
-										<span className="text-blue-400">stringify</span>
-										<span className="text-white">({"{"}</span>
-										{"\n"}
-										{"    "}
-										<span className="text-white">content:</span>{" "}
-										<span className="text-green-400">
-											'Check out our latest update!'
-										</span>
-										<span className="text-white">,</span>
-										{"\n"}
-										{"    "}
-										<span className="text-white">platforms: [</span>
-										<span className="text-green-400">'{platform.slug}'</span>
-										<span className="text-white">],</span>
-										{"\n"}
-										{"    "}
-										<span className="text-white">media: [</span>
-										<span className="text-green-400">
-											'https://cdn.example.com/image.jpg'
-										</span>
-										<span className="text-white">],</span>
-										{"\n"}
-										{"  "}
-										<span className="text-white">{"}"}),</span>
-										{"\n"}
-										<span className="text-white">{"}"});</span>
-									</code>
-								</pre>
-							</div>
-						</div>
-					</div>
-				</section>
-
-				{/* 4. Comparison Table */}
-				<section className="py-10 md:py-24 px-4 md:px-6 border-t border-border">
-					<div className="max-w-5xl mx-auto">
-						<div className="grid md:grid-cols-2 gap-8">
-							{/* Direct API column */}
-							<div className="rounded-xl border border-border bg-card p-8">
-								<h3 className="text-xl font-semibold text-foreground mb-6">
-									{platform.directApiName}
-								</h3>
-								<ul className="space-y-4">
-									{platform.painPoints.map((point, index) => (
-										<li key={index} className="flex items-start gap-3">
-											<svg aria-hidden="true"
-												xmlns="http://www.w3.org/2000/svg"
-												width="20"
-												height="20"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												strokeWidth="2"
-												strokeLinecap="round"
-												strokeLinejoin="round"
-												className="text-red-500 shrink-0 mt-0.5"
-											>
-												<path d="M18 6 6 18" />
-												<path d="m6 6 12 12" />
-											</svg>
-											<span className="text-muted-foreground">{point}</span>
-										</li>
-									))}
-								</ul>
-							</div>
-
-							{/* RelayAPI column */}
-							<div className="rounded-xl border border-border bg-card p-8">
-								<h3 className="text-xl font-semibold text-foreground mb-6">
-									RelayAPI
-								</h3>
-								<ul className="space-y-4">
-									{platform.solutions.map((solution, index) => (
-										<li key={index} className="flex items-start gap-3">
-											<svg aria-hidden="true"
-												xmlns="http://www.w3.org/2000/svg"
-												width="20"
-												height="20"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												strokeWidth="2"
-												strokeLinecap="round"
-												strokeLinejoin="round"
-												className="text-green-500 shrink-0 mt-0.5"
-											>
-												<path d="M20 6 9 17l-5-5" />
-											</svg>
-											<span className="text-muted-foreground">{solution}</span>
-										</li>
-									))}
-								</ul>
-							</div>
-						</div>
-
-						{/* Saving badge */}
-						<div className="flex justify-center mt-8">
-							<span className="inline-flex items-center px-4 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium">
-								{platform.savingText}
+			{/* ===================== CONTENT TYPES ===================== */}
+			<section className="mx-auto w-full max-w-[77.5rem] px-5 py-[clamp(2.5rem,5vw,4rem)] text-center sm:px-8">
+				<div>
+					<h2 className="text-[clamp(24px,3vw,36px)] font-medium tracking-[-0.03em] text-landing-ink">
+						Supported content types
+					</h2>
+					<div className="mt-7 flex flex-wrap items-center justify-center gap-2.5">
+						{platform.contentTypes.map((type) => (
+							<span
+								key={type}
+								className="rounded-full border border-landing-ink/[0.1] bg-landing-card px-4 py-2 text-[14px] font-medium text-[#46443d]"
+							>
+								{type}
 							</span>
-						</div>
+						))}
 					</div>
-				</section>
+				</div>
+			</section>
 
-				{/* 5. Warning Banner (conditional) */}
-				{platform.warningBanner && (
-					<section className="py-10 md:py-24 px-4 md:px-6 border-t border-border">
-						<div className="max-w-5xl mx-auto">
-							<div className="bg-amber-50 border border-amber-200 rounded-xl p-6">
-								<h3 className="text-lg font-bold text-foreground mb-2">
-									{platform.warningBanner.title}
+			{/* ===================== HOW IT WORKS ===================== */}
+			<section className="mx-auto w-full max-w-[77.5rem] px-5 py-[clamp(2.5rem,5vw,4rem)] sm:px-8">
+				<div className="mx-auto max-w-[60rem]">
+					<h2 className="text-center text-[clamp(24px,3vw,36px)] font-medium tracking-[-0.03em] text-landing-ink">
+						How it works
+					</h2>
+					<div className="mt-10 grid gap-8 sm:grid-cols-3">
+						{STEPS.map((step) => (
+							<div
+								key={step.n}
+								className="flex flex-col items-center text-center"
+							>
+								<span className="flex size-11 items-center justify-center rounded-full bg-landing-ink text-[17px] font-medium text-[#f3f1ea]">
+									{step.n}
+								</span>
+								<h3 className="mt-5 text-[16px] font-semibold text-landing-ink">
+									{step.title}
 								</h3>
-								<p className="text-muted-foreground">
-									{platform.warningBanner.description}
+								<p className="mt-2 max-w-[26ch] text-[14.5px] leading-[1.55] text-[#6e6a62]">
+									{step.body(platform.name)}
 								</p>
 							</div>
-						</div>
-					</section>
-				)}
-
-				{/* 6. Content Types */}
-				<section className="py-10 md:py-24 px-4 md:px-6 border-t border-border">
-					<div className="max-w-5xl mx-auto">
-						<h2 className="text-3xl md:text-4xl font-bold tracking-tighter text-center text-foreground mb-8">
-							Supported Content Types
-						</h2>
-						<div className="flex flex-wrap items-center justify-center gap-3">
-							{platform.contentTypes.map((type) => (
-								<span
-									key={type}
-									className="px-4 py-2 rounded-full bg-card border border-border text-sm font-medium"
-								>
-									{type}
-								</span>
-							))}
-						</div>
+						))}
 					</div>
-				</section>
-
-				{/* 7. How It Works */}
-				<section className="py-10 md:py-24 px-4 md:px-6 border-t border-border">
-					<div className="max-w-5xl mx-auto">
-						<h2 className="text-3xl md:text-4xl font-bold tracking-tighter text-center text-foreground mb-12">
-							How It Works
-						</h2>
-						<div className="grid md:grid-cols-3 gap-8">
-							{[
-								{
-									step: 1,
-									title: "Connect Your Account",
-									description: `Authorize your ${platform.name} account via OAuth in 30 seconds`,
-								},
-								{
-									step: 2,
-									title: "Build Your Integration",
-									description:
-										"Use the REST API or our SDKs to publish content",
-								},
-								{
-									step: 3,
-									title: "RelayAPI Handles the Rest",
-									description:
-										"We manage publishing, rate limits, and delivery notifications",
-								},
-							].map((item) => (
-								<div
-									key={item.step}
-									className="flex flex-col items-center text-center space-y-4"
-								>
-									<div className="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-lg font-bold">
-										{item.step}
-									</div>
-									<h3 className="text-lg font-semibold text-foreground">
-										{item.title}
-									</h3>
-									<p className="text-muted-foreground">{item.description}</p>
-								</div>
-							))}
-						</div>
-					</div>
-				</section>
-
-				{/* 8. Feature Cards */}
-				<section className="py-10 md:py-24 px-4 md:px-6 border-t border-border">
-					<div className="max-w-5xl mx-auto">
-						<div className="grid md:grid-cols-3 gap-6">
-							{platform.features.map((feature, index) => {
-								const Icon = FEATURE_ICONS[index] ?? Zap;
-								return (
-									<div
-										key={feature.title}
-										className="rounded-xl border border-border bg-card p-8"
-									>
-										<Icon className="w-6 h-6 text-primary mb-4" />
-										<h3 className="text-lg font-semibold text-foreground mb-2">
-											{feature.title}
-										</h3>
-										<p className="text-muted-foreground">
-											{feature.description}
-										</p>
-									</div>
-								);
-							})}
-						</div>
-					</div>
-				</section>
-
-				{/* 9. FAQ Accordion */}
-				<section className="py-10 md:py-24 px-4 md:px-6 border-t border-border">
-					<div className="max-w-5xl mx-auto">
-						<h2 className="text-3xl md:text-4xl font-bold tracking-tighter text-center text-foreground mb-12">
-							Frequently Asked Questions
-						</h2>
-						<div className="max-w-3xl mx-auto">
-							<Accordion type="single" collapsible className="w-full">
-								{platform.faq.map((item, index) => (
-									<AccordionItem
-										key={index}
-										value={index.toString()}
-										className="border-b border-border py-4 first:pt-0"
-									>
-										<AccordionTrigger className="text-left no-underline hover:no-underline py-0 text-base">
-											{item.question}
-										</AccordionTrigger>
-										<AccordionContent className="text-muted-foreground pt-4 pb-0">
-											<p className="leading-relaxed">{item.answer}</p>
-										</AccordionContent>
-									</AccordionItem>
-								))}
-							</Accordion>
-						</div>
-					</div>
-				</section>
-
-				{/* 10. Other Platforms Grid */}
-				<section className="py-10 md:py-24 px-4 md:px-6 border-t border-border">
-					<div className="max-w-5xl mx-auto">
-						<h2 className="text-3xl md:text-4xl font-bold tracking-tighter text-center text-foreground mb-8">
-							Explore Other Platforms
-						</h2>
-						<div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-							{otherPlatforms.map((p) => (
-								<a
-									key={p.slug}
-									href={`/product/${p.slug}`}
-									className="flex flex-col items-center gap-2 rounded-xl border border-border bg-card p-4 hover:bg-accent/50 transition-colors"
-								>
-									<span className="text-2xl">{p.icon}</span>
-									<span className="text-sm font-medium text-foreground">
-										{p.name}
-									</span>
-								</a>
-							))}
-						</div>
-					</div>
-				</section>
-
-				{/* 11. Footer CTA */}
-				<section className="py-10 md:py-24 px-4 md:px-6">
-					<div className="max-w-5xl mx-auto">
-						<div className="bg-primary rounded-2xl p-8 md:p-12 flex flex-col items-center text-center space-y-6">
-							<h2 className="text-3xl md:text-4xl lg:text-5xl font-medium tracking-tighter text-white text-balance">
-								Start Building with {platform.name}
-							</h2>
-							<p className="text-white/80 text-lg font-medium">
-								Join developers who chose RelayAPI over building with{" "}
-								{platform.directApiName} directly.
-							</p>
-							<Button
-								asChild
-								size="lg"
-								variant="outline"
-								className="border-white text-white hover:bg-white/10 rounded-full px-8"
-							>
-								<a href="/signup">Get Started Free</a>
-							</Button>
-						</div>
-					</div>
-				</section>
-
-				{/* 12. Copyright bar */}
-				<div className="border-t border-border py-4">
-					<p className="text-sm text-muted-foreground text-center">
-						&copy; 2026 Relay. All rights reserved.
-					</p>
 				</div>
-			</main>
-		</div>
+			</section>
+
+			{/* ===================== FEATURE CARDS ===================== */}
+			<section className="mx-auto w-full max-w-[77.5rem] px-5 py-[clamp(2.5rem,5vw,4rem)] sm:px-8">
+				<div
+					className="mx-auto grid max-w-[60rem] gap-5 sm:grid-cols-3"
+				>
+					{platform.features.map((feature) => (
+						<div
+							key={feature.title}
+							className="rounded-[20px] border border-landing-ink/[0.08] bg-landing-card p-7"
+						>
+							<h3 className="text-[16px] font-semibold tracking-[-0.01em] text-landing-ink">
+								{feature.title}
+							</h3>
+							<p className="mt-2.5 text-[14.5px] leading-[1.55] text-[#6e6a62]">
+								{feature.description}
+							</p>
+						</div>
+					))}
+				</div>
+			</section>
+
+			{/* ===================== FAQ ===================== */}
+			<section className="mx-auto w-full max-w-[77.5rem] px-5 py-[clamp(2.5rem,5vw,4rem)] sm:px-8">
+				<div className="mx-auto max-w-[48rem]">
+					<h2 className="text-center text-[clamp(24px,3vw,36px)] font-medium tracking-[-0.03em] text-landing-ink">
+						Frequently asked questions
+					</h2>
+					<div className="mt-8 flex flex-col">
+						{platform.faq.map((item) => (
+							<details
+								key={item.question}
+								className="group border-b border-landing-ink/[0.1] py-5 first:pt-0"
+							>
+								<summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-[16.5px] font-medium text-landing-ink [&::-webkit-details-marker]:hidden">
+									{item.question}
+									<svg
+										className="size-4 shrink-0 text-[#9a968c] transition-transform duration-200 group-open:rotate-45"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2"
+										strokeLinecap="round"
+										strokeLinejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M12 5v14M5 12h14" />
+									</svg>
+								</summary>
+								<p className="mt-3 max-w-[64ch] text-[15px] leading-[1.6] text-[#6e6a62]">
+									{item.answer}
+								</p>
+							</details>
+						))}
+					</div>
+				</div>
+			</section>
+
+			{/* ===================== OTHER PLATFORMS ===================== */}
+			<section className="mx-auto w-full max-w-[77.5rem] px-5 py-[clamp(2.5rem,5vw,4rem)] sm:px-8">
+				<div className="mx-auto max-w-[60rem]">
+					<h2 className="text-center text-[clamp(24px,3vw,36px)] font-medium tracking-[-0.03em] text-landing-ink">
+						Explore other platforms
+					</h2>
+					<div className="mt-8 grid grid-cols-3 gap-2.5 sm:grid-cols-4 lg:grid-cols-6">
+						{others.map((p) => (
+							<a
+								key={p.slug}
+								href={`/product/${p.slug}`}
+								className="flex flex-col items-center gap-2.5 rounded-[16px] border border-landing-ink/[0.08] bg-landing-card p-4 text-landing-ink! transition-colors duration-150 hover:bg-landing-ink/[0.04] [&>svg]:size-5"
+							>
+								<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+									<path d={platformGlyph(p.slug)} />
+								</svg>
+								<span className="text-center text-[12.5px] font-medium text-[#46443d]">
+									{p.name}
+								</span>
+							</a>
+						))}
+					</div>
+				</div>
+			</section>
+
+			{/* ===================== CTA BAND ===================== */}
+			<section className="mx-auto w-full max-w-[77.5rem] px-5 py-9 sm:px-8">
+				<div
+					className="rounded-[1.875rem] bg-landing-ink p-[clamp(40px,5vw,72px)] text-center"
+				>
+					<h2 className="mx-auto max-w-[20ch] text-[clamp(28px,3.2vw,46px)] font-medium tracking-[-0.03em] text-[#f3f1ea]">
+						Start building with {platform.name}.
+					</h2>
+					<p className="mx-auto mt-4 max-w-[48ch] text-[17px] leading-[1.5] text-[#8c887e]">
+						Join developers who chose RelayAPI over wiring up{" "}
+						{platform.directApiName} by hand.
+					</p>
+					<div className="mt-8 flex flex-wrap justify-center gap-[12px]">
+						<a
+							href="/signup"
+							className="rounded-full bg-[#f3f1ea] px-[26px] py-[13px] text-[15px] font-medium text-landing-ink! transition-opacity duration-150 hover:opacity-[0.88]"
+						>
+							Get started free
+						</a>
+						<a
+							href="https://docs.relayapi.dev/"
+							target="_blank"
+							rel="noopener noreferrer"
+							className="rounded-full border border-white/20 px-[26px] py-[13px] text-[15px] font-medium text-[#f3f1ea]! transition-colors duration-150 hover:bg-white/[0.06]"
+						>
+							Read the docs
+						</a>
+					</div>
+				</div>
+			</section>
+		</>
 	);
 }

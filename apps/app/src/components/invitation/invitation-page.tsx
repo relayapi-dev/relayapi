@@ -15,7 +15,12 @@ import {
 } from "lucide-react";
 import { organization, signUp, signIn } from "@/lib/auth-client";
 import { Icons } from "@/components/icons";
-import { Button } from "@/components/ui/button";
+
+/**
+ * Team-invitation page in the cream / Cursor landing style. Renders under
+ * BaseLayout (no `.relay-landing` wrapper), so link colours work without `!`.
+ * All accept/decline/login/signup logic is unchanged.
+ */
 
 interface InvitationDetails {
   id: string;
@@ -32,6 +37,16 @@ interface InvitationPageProps {
   invitationId: string;
   user: { id: string; name: string; email: string } | null;
 }
+
+const PAGE =
+  "flex min-h-screen flex-col items-center justify-center bg-[#f7f7f2] px-4 text-[#1a1815]";
+const INPUT =
+  "w-full rounded-[12px] border border-[#1a1815]/12 bg-white py-2.5 pl-10 pr-3 text-sm text-[#1a1815] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[#9a968c] focus:border-[#1a1815]/35 focus:ring-[3px] focus:ring-[#1a1815]/10";
+const PRIMARY_BTN =
+  "flex h-[2.875rem] w-full items-center justify-center rounded-[12px] bg-[#1a1815] text-sm font-medium text-[#f3f1ea] transition-opacity duration-150 hover:opacity-[0.9] disabled:pointer-events-none disabled:opacity-60";
+const OUTLINE_BTN =
+  "flex h-[2.875rem] w-full items-center justify-center rounded-[12px] border border-[#1a1815]/15 bg-transparent text-sm font-medium text-[#1a1815] transition-colors duration-150 hover:bg-[#1a1815]/[0.04] disabled:pointer-events-none disabled:opacity-60";
+const CARD = "rounded-[18px] border border-[#1a1815]/10 bg-white p-6 shadow-[0_24px_60px_-40px_rgba(40,28,12,0.5)]";
 
 export function InvitationPage({ invitationId, user }: InvitationPageProps) {
   const [invite, setInvite] = useState<InvitationDetails | null>(null);
@@ -174,29 +189,29 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+      <div className={PAGE}>
+        <Loader2 className="size-6 animate-spin text-[#9a968c]" />
       </div>
     );
   }
 
   if (error && !invite) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-4">
+      <div className={PAGE}>
         <motion.div
           initial={{ opacity: 0, y: 20, filter: "blur(10px)" }}
           animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
           transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
           className="w-full max-w-[420px] text-center"
         >
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-destructive/10">
-            <XCircle className="size-6 text-destructive" />
+          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-[14px] bg-[#f7e8e4]">
+            <XCircle className="size-6 text-[#a3402f]" />
           </div>
-          <h1 className="text-2xl font-semibold text-foreground">{error}</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <h1 className="text-2xl font-semibold text-[#1a1815]">{error}</h1>
+          <p className="mt-2 text-sm text-[#6e6a62]">
             This invitation may have expired or been cancelled.
           </p>
-          <a href="/login" className="mt-6 inline-block text-sm font-medium text-primary hover:underline">
+          <a href="/login" className="mt-6 inline-block text-sm font-medium text-[#1a1815] hover:underline">
             Go to login
           </a>
         </motion.div>
@@ -212,31 +227,31 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
 
   if (isExpired || isAlreadyAccepted || isCancelled) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-4">
+      <div className={PAGE}>
         <motion.div
           initial={{ opacity: 0, y: 20, filter: "blur(10px)" }}
           animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
           transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
           className="w-full max-w-[420px] text-center"
         >
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-muted">
-            {isExpired ? <Clock className="size-6 text-muted-foreground" /> : <Check className="size-6 text-muted-foreground" />}
+          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-[14px] bg-[#efece4]">
+            {isExpired ? <Clock className="size-6 text-[#6e6a62]" /> : <Check className="size-6 text-[#6e6a62]" />}
           </div>
-          <h1 className="text-2xl font-semibold text-foreground">
+          <h1 className="text-2xl font-semibold text-[#1a1815]">
             {isExpired
               ? "Invitation expired"
               : isAlreadyAccepted
                 ? "Invitation already accepted"
                 : "Invitation cancelled"}
           </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <p className="mt-2 text-sm text-[#6e6a62]">
             {isExpired
               ? "This invitation has expired. Please ask the team admin to send a new one."
               : isAlreadyAccepted
                 ? "You've already accepted this invitation."
                 : "This invitation has been cancelled."}
           </p>
-          <a href="/login" className="mt-6 inline-block text-sm font-medium text-primary hover:underline">
+          <a href="/login" className="mt-6 inline-block text-sm font-medium text-[#1a1815] hover:underline">
             {isAlreadyAccepted ? "Go to dashboard" : "Go to login"}
           </a>
         </motion.div>
@@ -247,7 +262,7 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
   // -- Logged-in user: show accept/decline --
   if (user) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-4">
+      <div className={PAGE}>
         <motion.div
           initial={{ opacity: 0, y: 20, filter: "blur(10px)" }}
           animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
@@ -255,22 +270,22 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
           className="w-full max-w-[420px]"
         >
           <div className="mb-8 text-center">
-            <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-primary/10">
-              <Users className="size-6 text-primary" />
+            <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-[14px] bg-landing-accent/[0.12]">
+              <Users className="size-6 text-landing-accent" />
             </div>
-            <h1 className="text-2xl font-semibold text-foreground">
+            <h1 className="text-2xl font-semibold text-[#1a1815]">
               You're invited
             </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
+            <p className="mt-2 text-sm text-[#6e6a62]">
               {invite.inviterEmail} invited you to join
             </p>
           </div>
 
-          <div className="rounded-xl border border-border bg-card shadow-sm p-6 space-y-5">
+          <div className={`${CARD} space-y-5`}>
             <div className="text-center">
-              <p className="text-lg font-semibold">{invite.organizationName}</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Role: <span className="capitalize font-medium">{invite.role}</span>
+              <p className="text-lg font-semibold text-[#1a1815]">{invite.organizationName}</p>
+              <p className="mt-1 text-sm text-[#6e6a62]">
+                Role: <span className="font-medium capitalize text-[#1a1815]">{invite.role}</span>
               </p>
             </div>
 
@@ -278,19 +293,20 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
               <motion.div
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2.5 text-sm text-destructive"
+                className="rounded-[10px] border border-[#e0b4ab] bg-[#f7e8e4] px-3 py-2.5 text-sm text-[#a3402f]"
               >
                 {error}
               </motion.div>
             )}
 
             <div className="flex gap-3">
-              <Button
-                className="flex-1"
+              <button
+                type="button"
+                className={`${PRIMARY_BTN} flex-1`}
                 disabled={accepting || declining}
                 onClick={handleAccept}
               >
-                <span className="flex items-center justify-center gap-2 text-sm font-medium">
+                <span className="flex items-center justify-center gap-2">
                   {accepting ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (
@@ -300,19 +316,19 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                     </>
                   )}
                 </span>
-              </Button>
-              <Button
-                variant="outline"
-                className="flex-1"
+              </button>
+              <button
+                type="button"
+                className={`${OUTLINE_BTN} flex-1`}
                 disabled={accepting || declining}
                 onClick={handleDecline}
               >
                 {declining ? <Loader2 className="size-4 animate-spin" /> : "Decline"}
-              </Button>
+              </button>
             </div>
           </div>
 
-          <p className="mt-6 text-center text-sm text-muted-foreground">
+          <p className="mt-6 text-center text-sm text-[#6e6a62]">
             Signed in as {user.email}
           </p>
         </motion.div>
@@ -322,7 +338,7 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
 
   // -- Not logged in: show login/signup options --
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
+    <div className={PAGE}>
       <motion.div
         initial={{ opacity: 0, y: 20, filter: "blur(10px)" }}
         animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
@@ -330,43 +346,46 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
         className="w-full max-w-[420px]"
       >
         <div className="mb-8 text-center">
-          <a href="/" className="inline-flex items-center gap-2 mb-8 mx-auto text-xl font-semibold">
-            <Icons.logo className="h-8 w-8" />
-            <span>RelayAPI</span>
+          <a href="/" className="mx-auto mb-8 inline-flex items-center gap-2.5">
+            <span className="inline-flex size-7 items-center justify-center rounded-[0.45rem] bg-[#1a1815]">
+              <Icons.logo className="size-4 text-[#f3f1ea]" />
+            </span>
+            <span className="text-base font-semibold tracking-[0.04em]">RELAYAPI</span>
           </a>
-          <h1 className="text-2xl font-semibold text-foreground">
+          <h1 className="text-2xl font-semibold text-[#1a1815]">
             You're invited to join
           </h1>
-          <p className="mt-1 text-lg font-medium text-primary">
+          <p className="mt-1 text-lg font-medium text-landing-accent">
             {invite.organizationName}
           </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {invite.inviterEmail} invited you as <span className="capitalize font-medium">{invite.role}</span>
+          <p className="mt-2 text-sm text-[#6e6a62]">
+            {invite.inviterEmail} invited you as <span className="font-medium capitalize text-[#1a1815]">{invite.role}</span>
           </p>
         </div>
 
-        <div className="rounded-xl border border-border bg-card shadow-sm p-6">
+        <div className={CARD}>
           {mode === "choose" && (
             <div className="space-y-3">
-              <Button
-                className="w-full"
+              <button
+                type="button"
+                className={PRIMARY_BTN}
                 onClick={() => setMode("login")}
               >
-                <span className="flex items-center justify-center gap-2 text-sm font-medium">
+                <span className="flex items-center justify-center gap-2">
                   I have an account
                   <ArrowRight className="size-3.5" />
                 </span>
-              </Button>
-              <Button
-                variant="outline"
-                className="w-full"
+              </button>
+              <button
+                type="button"
+                className={OUTLINE_BTN}
                 onClick={() => setMode("signup")}
               >
-                <span className="flex items-center justify-center gap-2 text-sm font-medium">
+                <span className="flex items-center justify-center gap-2">
                   Create an account
                   <ArrowRight className="size-3.5" />
                 </span>
-              </Button>
+              </button>
             </div>
           )}
 
@@ -376,18 +395,18 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                 <motion.div
                   initial={{ opacity: 0, y: -8 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2.5 text-sm text-destructive"
+                  className="rounded-[10px] border border-[#e0b4ab] bg-[#f7e8e4] px-3 py-2.5 text-sm text-[#a3402f]"
                 >
                   {loginError}
                 </motion.div>
               )}
 
               <div className="space-y-1.5">
-                <label htmlFor="login-email" className="text-xs font-medium text-muted-foreground">
+                <label htmlFor="login-email" className="text-xs font-medium text-[#6e6a62]">
                   Email
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Mail className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#9a968c]" />
                   <input
                     id="login-email"
                     type="email"
@@ -396,17 +415,17 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                     placeholder="you@example.com"
                     required
                     autoComplete="email"
-                    className="w-full rounded-lg border border-border bg-background py-2.5 pl-10 pr-3 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25"
+                    className={INPUT}
                   />
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label htmlFor="login-password" className="text-xs font-medium text-muted-foreground">
+                <label htmlFor="login-password" className="text-xs font-medium text-[#6e6a62]">
                   Password
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Lock className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#9a968c]" />
                   <input
                     id="login-password"
                     type={showPassword ? "text" : "password"}
@@ -415,22 +434,22 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                     placeholder="Enter your password"
                     required
                     autoComplete="current-password"
-                    className="w-full rounded-lg border border-border bg-background py-2.5 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25"
+                    className={`${INPUT} pr-10`}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#9a968c] transition-colors hover:text-[#1a1815]"
                   >
                     {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </div>
               </div>
 
-              <Button type="submit" className="w-full" disabled={loginLoading}>
-                <span className="flex items-center justify-center gap-2 text-sm font-medium">
+              <button type="submit" className={PRIMARY_BTN} disabled={loginLoading}>
+                <span className="flex items-center justify-center gap-2">
                   {loginLoading ? (
-                    <div className="size-4 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                    <div className="size-4 animate-spin rounded-full border-2 border-[#f3f1ea]/30 border-t-[#f3f1ea]" />
                   ) : (
                     <>
                       Sign in & accept
@@ -438,12 +457,12 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                     </>
                   )}
                 </span>
-              </Button>
+              </button>
 
               <button
                 type="button"
                 onClick={() => { setMode("choose"); setLoginError(null); }}
-                className="w-full text-center text-sm text-muted-foreground hover:text-foreground transition-colors"
+                className="w-full text-center text-sm text-[#6e6a62] transition-colors hover:text-[#1a1815]"
               >
                 Back
               </button>
@@ -456,18 +475,18 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                 <motion.div
                   initial={{ opacity: 0, y: -8 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2.5 text-sm text-destructive"
+                  className="rounded-[10px] border border-[#e0b4ab] bg-[#f7e8e4] px-3 py-2.5 text-sm text-[#a3402f]"
                 >
                   {signupError}
                 </motion.div>
               )}
 
               <div className="space-y-1.5">
-                <label htmlFor="signup-name" className="text-xs font-medium text-muted-foreground">
+                <label htmlFor="signup-name" className="text-xs font-medium text-[#6e6a62]">
                   Name
                 </label>
                 <div className="relative">
-                  <User className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <User className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#9a968c]" />
                   <input
                     id="signup-name"
                     type="text"
@@ -476,33 +495,33 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                     placeholder="Your name"
                     required
                     autoComplete="name"
-                    className="w-full rounded-lg border border-border bg-background py-2.5 pl-10 pr-3 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25"
+                    className={INPUT}
                   />
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label htmlFor="signup-email" className="text-xs font-medium text-muted-foreground">
+                <label htmlFor="signup-email" className="text-xs font-medium text-[#6e6a62]">
                   Email
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Mail className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#9a968c]" />
                   <input
                     id="signup-email"
                     type="email"
                     value={invite.email}
                     readOnly
-                    className="w-full rounded-lg border border-border bg-muted py-2.5 pl-10 pr-3 text-sm text-muted-foreground cursor-not-allowed"
+                    className="w-full cursor-not-allowed rounded-[12px] border border-[#1a1815]/12 bg-[#efece4] py-2.5 pl-10 pr-3 text-sm text-[#6e6a62]"
                   />
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label htmlFor="signup-password" className="text-xs font-medium text-muted-foreground">
+                <label htmlFor="signup-password" className="text-xs font-medium text-[#6e6a62]">
                   Password
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Lock className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#9a968c]" />
                   <input
                     id="signup-password"
                     type={showPassword ? "text" : "password"}
@@ -512,22 +531,22 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                     required
                     minLength={8}
                     autoComplete="new-password"
-                    className="w-full rounded-lg border border-border bg-background py-2.5 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/25"
+                    className={`${INPUT} pr-10`}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#9a968c] transition-colors hover:text-[#1a1815]"
                   >
                     {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </div>
               </div>
 
-              <Button type="submit" className="w-full" disabled={signupLoading}>
-                <span className="flex items-center justify-center gap-2 text-sm font-medium">
+              <button type="submit" className={PRIMARY_BTN} disabled={signupLoading}>
+                <span className="flex items-center justify-center gap-2">
                   {signupLoading ? (
-                    <div className="size-4 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                    <div className="size-4 animate-spin rounded-full border-2 border-[#f3f1ea]/30 border-t-[#f3f1ea]" />
                   ) : (
                     <>
                       Create account & accept
@@ -535,12 +554,12 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
                     </>
                   )}
                 </span>
-              </Button>
+              </button>
 
               <button
                 type="button"
                 onClick={() => { setMode("choose"); setSignupError(null); }}
-                className="w-full text-center text-sm text-muted-foreground hover:text-foreground transition-colors"
+                className="w-full text-center text-sm text-[#6e6a62] transition-colors hover:text-[#1a1815]"
               >
                 Back
               </button>
@@ -548,11 +567,11 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
           )}
         </div>
 
-        <p className="mt-4 text-center text-[11px] text-muted-foreground/70">
+        <p className="mt-4 text-center text-[11px] text-[#9a968c]">
           By continuing, you agree to our{" "}
-          <a href="/terms" className="underline hover:text-muted-foreground">Terms of Service</a>{" "}
+          <a href="/terms" className="underline hover:text-[#6e6a62]">Terms of Service</a>{" "}
           and{" "}
-          <a href="/privacy" className="underline hover:text-muted-foreground">Privacy Policy</a>
+          <a href="/privacy" className="underline hover:text-[#6e6a62]">Privacy Policy</a>
         </p>
       </motion.div>
     </div>

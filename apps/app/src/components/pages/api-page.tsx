@@ -1,410 +1,341 @@
-"use client";
-
 import { useState } from "react";
-import { Zap, Shield, Heart } from "lucide-react";
 import { getApiBySlug } from "../../lib/api-data";
 import type { ApiData } from "../../lib/api-data";
+import { highlightCode } from "../../lib/code-highlight";
 import { platforms } from "../../lib/platform-data";
-import { Navbar } from "../section/navbar";
-import { Button } from "../ui/button";
-import {
-    Accordion,
-    AccordionContent,
-    AccordionItem,
-    AccordionTrigger,
-} from "../ui/accordion";
+import { apiIconPaths, platformGlyph } from "../../lib/product-glyphs";
 
-// ---------- Syntax highlighting helpers ----------
+/**
+ * API product page — cream / Cursor-style landing for a single API surface.
+ * Renders inside Layout.astro (LandingNav + LandingFooter + `.relay-landing`
+ * cream theme), so this owns only the page body. Coloured <a> need a trailing
+ * `!` (landing wrapper resets link colour — see project_landing_anchor_important).
+ */
 
-function highlightCode(code: string, _language: string) {
-    const keywords =
-        /\b(const|let|var|function|return|import|from|export|default|if|else|async|await|new|class|try|catch|throw|for|while|of|in|typeof|instanceof|void|null|undefined|true|false)\b/g;
-    const strings = /(["'`])(?:(?=(\\?))\2.)*?\1/g;
-    const comments = /(\/\/.*$|\/\*[\s\S]*?\*\/|#.*$)/gm;
-    const numbers = /\b(\d+\.?\d*)\b/g;
+const SECTION = "mx-auto w-full max-w-[77.5rem] px-5 sm:px-8";
+const H2 =
+	"text-center text-[clamp(24px,3vw,36px)] font-medium tracking-[-0.03em] text-landing-ink";
+const EYEBROW =
+	"text-center text-[13px] font-medium uppercase tracking-[0.16em] text-[#9a968c]";
 
-    let result = code
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-
-    // Order matters: comments first, then strings, then keywords
-    result = result.replace(
-        comments,
-        '<span style="color:#6a9955">$&</span>'
-    );
-    result = result.replace(
-        strings,
-        '<span style="color:#ce9178">$&</span>'
-    );
-    result = result.replace(
-        keywords,
-        '<span style="color:#569cd6">$&</span>'
-    );
-    result = result.replace(
-        numbers,
-        '<span style="color:#b5cea8">$&</span>'
-    );
-
-    return result;
-}
-
-// ---------- Main component ----------
+const STEPS = [
+	{
+		n: 1,
+		title: "Get your API key",
+		body: "Sign up and generate your credentials in seconds.",
+	},
+	{
+		n: 2,
+		title: "Connect social accounts",
+		body: "Link platforms via OAuth with our guided setup flow.",
+	},
+	{
+		n: 3,
+		title: "Start building",
+		body: "Use the API to publish, manage, and track content everywhere.",
+	},
+];
 
 export function ApiPage({ slug }: { slug: string }) {
-    const api = getApiBySlug(slug);
+	const api = getApiBySlug(slug);
 
-    if (!api) {
-        return (
-            <div className="max-w-7xl mx-auto border-x border-border">
-                <Navbar />
-                <div className="pt-16 md:pt-32 pb-10 md:pb-16 px-4 md:px-6 text-center">
-                    <h1 className="text-4xl font-medium tracking-tighter text-foreground">
-                        API not found
-                    </h1>
-                    <p className="mt-4 text-muted-foreground">
-                        The API you're looking for doesn't exist.
-                    </p>
-                    <Button asChild size="lg" className="mt-8 rounded-full px-8">
-                        <a href="/">Go Home</a>
-                    </Button>
-                </div>
-            </div>
-        );
-    }
+	if (!api) {
+		return (
+			<div className="flex min-h-[60vh] items-center justify-center">
+				<p className="text-[16px] text-landing-muted">API not found.</p>
+			</div>
+		);
+	}
 
-    return (
-        <div className="max-w-7xl mx-auto border-x border-border">
-            {/* 1. Navbar */}
-            <Navbar />
-
-            <main className="pt-16">
-            {/* 2. Hero Section */}
-            <HeroSection api={api} />
-
-            {/* 3. Features Grid */}
-            <FeaturesSection api={api} />
-
-            {/* 4. How It Works */}
-            <HowItWorksSection />
-
-            {/* 5. Why Developers Choose RelayAPI */}
-            <BenefitsSection api={api} />
-
-            {/* 6. Code Examples */}
-            <CodeExamplesSection api={api} />
-
-            {/* 7. Supported Platforms */}
-            <PlatformsSection />
-
-            {/* 8. FAQ */}
-            <FaqSection api={api} />
-
-            {/* 9. Footer CTA */}
-            <FooterCta />
-
-            {/* 10. Copyright */}
-            <div className="border-t border-border py-4">
-                <p className="text-sm text-muted-foreground text-center">
-                    &copy; 2026 Relay. All rights reserved.
-                </p>
-            </div>
-            </main>
-        </div>
-    );
+	return (
+		<>
+			<HeroSection api={api} />
+			<FeaturesSection api={api} />
+			<HowItWorksSection />
+			<BenefitsSection api={api} />
+			<CodeExamplesSection api={api} />
+			<PlatformsSection />
+			<FaqSection api={api} />
+			<CtaSection />
+		</>
+	);
 }
 
-// ---------- Section components ----------
-
 function HeroSection({ api }: { api: ApiData }) {
-    return (
-        <section className="pt-16 md:pt-32 pb-10 md:pb-16 px-4 md:px-6">
-            <div className="max-w-5xl mx-auto text-center space-y-6">
-                <h1 className="text-4xl md:text-5xl lg:text-6xl font-medium tracking-tighter text-foreground text-balance">
-                    {api.heroTitle}
-                </h1>
-                <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto text-balance">
-                    {api.heroDescription}
-                </p>
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4 w-full sm:w-auto px-2 sm:px-0">
-                    <Button
-                        asChild
-                        size="lg"
-                        className="w-full sm:w-auto rounded-full px-8"
-                    >
-                        <a href="/signup">Start Building Free</a>
-                    </Button>
-                    <Button
-                        asChild
-                        size="lg"
-                        variant="outline"
-                        className="w-full sm:w-auto rounded-full px-8"
-                    >
-                        <a href="https://docs.relayapi.dev/">View API Docs</a>
-                    </Button>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                    No credit card required &middot; Full API access
-                </p>
-            </div>
-        </section>
-    );
+	return (
+		<section
+			className={`${SECTION} pb-[clamp(2rem,4vw,3rem)] pt-[clamp(3.5rem,7vw,6rem)] text-center`}
+		>
+			<span className="mx-auto mb-7 flex size-14 items-center justify-center rounded-[14px] bg-landing-card text-landing-ink ring-1 ring-landing-ink/[0.08] [&>svg]:size-7">
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					strokeWidth={2}
+					strokeLinecap="round"
+					strokeLinejoin="round"
+					aria-hidden="true"
+				>
+					{apiIconPaths(api.slug).map((d) => (
+						<path key={d} d={d} />
+					))}
+				</svg>
+			</span>
+			<h1 className="mx-auto max-w-[20ch] text-balance text-[clamp(30px,4.5vw,52px)] font-medium leading-[1.08] tracking-[-0.035em] text-landing-ink">
+				{api.heroTitle}
+			</h1>
+			<p className="mx-auto mt-5 max-w-[58ch] text-balance text-[17px] leading-[1.55] text-[#6e6a62]">
+				{api.heroDescription}
+			</p>
+			<div className="mt-8 flex flex-wrap justify-center gap-[10px]">
+				<a
+					href="/signup"
+					className="rounded-full bg-landing-ink px-[22px] py-3 text-[15px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
+				>
+					Start building free
+				</a>
+				<a
+					href="https://docs.relayapi.dev/"
+					target="_blank"
+					rel="noopener noreferrer"
+					className="rounded-full bg-[#e4e1d9] px-[22px] py-3 text-[15px] font-medium text-landing-ink! transition-colors duration-150 hover:bg-[#dbd7cc]"
+				>
+					View API docs
+				</a>
+			</div>
+			<p className="mt-4 text-[13px] text-[#9a968c]">
+				No credit card required · Full API access
+			</p>
+		</section>
+	);
 }
 
 function FeaturesSection({ api }: { api: ApiData }) {
-    return (
-        <section className="py-10 md:py-24 px-4 md:px-6">
-            <div className="max-w-5xl mx-auto space-y-8">
-                <div className="space-y-3">
-                    <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wider text-center">
-                        Features
-                    </p>
-                    <h2 className="text-3xl md:text-4xl font-medium tracking-tighter text-foreground text-center">
-                        Everything you need
-                    </h2>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-8 md:p-12">
-                    {api.features.map((feature) => (
-                        <div
-                            key={feature.title}
-                            className="rounded-xl border border-border bg-card p-6 space-y-3"
-                        >
-                            <h3 className="font-semibold text-foreground">
-                                {feature.title}
-                            </h3>
-                            <p className="text-sm text-muted-foreground">
-                                {feature.description}
-                            </p>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </section>
-    );
+	return (
+		<section className={`${SECTION} py-[clamp(2.5rem,5vw,4rem)]`}>
+			<div className="mx-auto max-w-[60rem]">
+				<p className={EYEBROW}>Features</p>
+				<h2 className={`mt-3 ${H2}`}>Everything you need</h2>
+				<div className="mt-9 grid gap-5 sm:grid-cols-2">
+					{api.features.map((feature) => (
+						<div
+							key={feature.title}
+							className="rounded-[20px] border border-landing-ink/[0.08] bg-landing-card p-7"
+						>
+							<h3 className="text-[16px] font-semibold tracking-[-0.01em] text-landing-ink">
+								{feature.title}
+							</h3>
+							<p className="mt-2.5 text-[14.5px] leading-[1.55] text-[#6e6a62]">
+								{feature.description}
+							</p>
+						</div>
+					))}
+				</div>
+			</div>
+		</section>
+	);
 }
 
 function HowItWorksSection() {
-    const steps = [
-        {
-            number: 1,
-            title: "Get Your API Key",
-            description:
-                "Sign up and generate your credentials in seconds.",
-        },
-        {
-            number: 2,
-            title: "Connect Social Accounts",
-            description:
-                "Link platforms via OAuth with our guided setup flow.",
-        },
-        {
-            number: 3,
-            title: "Start Building",
-            description:
-                "Use the API to publish, manage, and track content across all platforms.",
-        },
-    ];
-
-    return (
-        <section className="py-10 md:py-24 px-4 md:px-6">
-            <div className="max-w-5xl mx-auto space-y-12">
-                <div className="space-y-3">
-                    <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wider text-center">
-                        How It Works
-                    </p>
-                    <h2 className="text-3xl md:text-4xl font-medium tracking-tighter text-foreground text-center">
-                        Up and running in minutes
-                    </h2>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    {steps.map((step) => (
-                        <div
-                            key={step.number}
-                            className="flex flex-col items-center text-center space-y-4"
-                        >
-                            <div className="flex items-center justify-center w-10 h-10 bg-primary text-white rounded-full text-lg font-semibold">
-                                {step.number}
-                            </div>
-                            <h3 className="text-lg font-semibold text-foreground">
-                                {step.title}
-                            </h3>
-                            <p className="text-sm text-muted-foreground max-w-xs">
-                                {step.description}
-                            </p>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </section>
-    );
+	return (
+		<section className={`${SECTION} py-[clamp(2.5rem,5vw,4rem)]`}>
+			<div className="mx-auto max-w-[60rem]">
+				<h2 className={H2}>Up and running in minutes</h2>
+				<div className="mt-10 grid gap-8 sm:grid-cols-3">
+					{STEPS.map((step) => (
+						<div key={step.n} className="flex flex-col items-center text-center">
+							<span className="flex size-11 items-center justify-center rounded-full bg-landing-ink text-[17px] font-medium text-[#f3f1ea]">
+								{step.n}
+							</span>
+							<h3 className="mt-5 text-[16px] font-semibold text-landing-ink">
+								{step.title}
+							</h3>
+							<p className="mt-2 max-w-[26ch] text-[14.5px] leading-[1.55] text-[#6e6a62]">
+								{step.body}
+							</p>
+						</div>
+					))}
+				</div>
+			</div>
+		</section>
+	);
 }
 
 function BenefitsSection({ api }: { api: ApiData }) {
-    const icons = [Zap, Shield, Heart];
-
-    return (
-        <section className="py-10 md:py-24 px-4 md:px-6">
-            <div className="max-w-5xl mx-auto space-y-8">
-                <h2 className="text-3xl md:text-4xl font-medium tracking-tighter text-foreground text-center">
-                    Why Developers Choose RelayAPI
-                </h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {api.benefits.map((benefit, index) => {
-                        const Icon = icons[index] ?? Zap;
-                        return (
-                            <div
-                                key={benefit.title}
-                                className="rounded-xl border border-border bg-card p-8 space-y-4"
-                            >
-                                <Icon className="w-6 h-6 text-primary" />
-                                <h3 className="text-lg font-semibold text-foreground">
-                                    {benefit.title}
-                                </h3>
-                                <p className="text-sm text-muted-foreground">
-                                    {benefit.description}
-                                </p>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-        </section>
-    );
+	return (
+		<section className={`${SECTION} py-[clamp(2.5rem,5vw,4rem)]`}>
+			<div className="mx-auto max-w-[60rem]">
+				<h2 className={H2}>Why developers choose RelayAPI</h2>
+				<div className="mt-9 grid gap-5 sm:grid-cols-3">
+					{api.benefits.map((benefit) => (
+						<div
+							key={benefit.title}
+							className="rounded-[20px] border border-landing-ink/[0.08] bg-landing-card p-7"
+						>
+							<h3 className="text-[16px] font-semibold tracking-[-0.01em] text-landing-ink">
+								{benefit.title}
+							</h3>
+							<p className="mt-2.5 text-[14.5px] leading-[1.55] text-[#6e6a62]">
+								{benefit.description}
+							</p>
+						</div>
+					))}
+				</div>
+			</div>
+		</section>
+	);
 }
 
 function CodeExamplesSection({ api }: { api: ApiData }) {
-    const [activeTab, setActiveTab] = useState(0);
+	const [active, setActive] = useState(0);
+	if (api.codeExamples.length === 0) return null;
+	const current = api.codeExamples[active];
 
-    if (api.codeExamples.length === 0) return null;
+	return (
+		<section className={`${SECTION} py-[clamp(2.5rem,5vw,4rem)]`}>
+			<div className="mx-auto max-w-[52rem]">
+				<p className={EYEBROW}>Quick start</p>
+				<h2 className={`mt-3 ${H2}`}>Start building in minutes</h2>
 
-    return (
-        <section className="py-10 md:py-24 px-4 md:px-6">
-            <div className="max-w-5xl mx-auto space-y-8">
-                <div className="space-y-3">
-                    <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wider text-center">
-                        Quick Start
-                    </p>
-                    <h2 className="text-3xl md:text-4xl font-medium tracking-tighter text-foreground text-center">
-                        Start building in minutes
-                    </h2>
-                </div>
-                <div className="space-y-4">
-                    {/* Tab buttons */}
-                    <div className="flex flex-wrap gap-2">
-                        {api.codeExamples.map((example, index) => (
-                            <button
-                                type="button"
-                                key={example.label}
-                                onClick={() => setActiveTab(index)}
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                    index === activeTab
-                                        ? "bg-primary text-primary-foreground"
-                                        : "bg-card border border-border text-foreground hover:bg-muted"
-                                }`}
-                            >
-                                {example.label}
-                            </button>
-                        ))}
-                    </div>
+				<div className="mt-8">
+					<div className="mb-3 flex flex-wrap gap-2">
+						{api.codeExamples.map((ex, i) => (
+							<button
+								type="button"
+								key={ex.label}
+								onClick={() => setActive(i)}
+								className={`rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition-colors duration-150 ${
+									i === active
+										? "border-landing-ink bg-landing-ink text-[#f3f1ea]"
+										: "border-landing-ink/[0.12] text-[#6e6a62] hover:text-landing-ink"
+								}`}
+							>
+								{ex.label}
+							</button>
+						))}
+					</div>
 
-                    {/* Code block */}
-                    <div className="rounded-xl overflow-hidden">
-                        <pre className="bg-[#1a1a2e] text-gray-100 p-6 overflow-x-auto text-sm leading-relaxed">
-                            <code
-                                dangerouslySetInnerHTML={{
-                                    __html: highlightCode(
-                                        api.codeExamples[activeTab]?.code ?? "",
-                                        api.codeExamples[activeTab]?.language ?? ""
-                                    ),
-                                }}
-                            />
-                        </pre>
-                    </div>
-                </div>
-            </div>
-        </section>
-    );
+					<div className="overflow-hidden rounded-feature-window bg-landing-panel-dark shadow-feature-window">
+						<div className="flex items-center border-b border-landing-line-dark px-4 py-2.5">
+							<div className="flex gap-[7px]">
+								<span className="size-[10px] rounded-full bg-white/15" />
+								<span className="size-[10px] rounded-full bg-white/15" />
+								<span className="size-[10px] rounded-full bg-white/15" />
+							</div>
+							<span className="ml-3 text-[12px] text-white/45 [font-family:var(--font-mono-landing)]">
+								{current?.label}
+							</span>
+						</div>
+						<div className="overflow-x-auto px-5 py-5 sm:px-6">
+							<pre className="text-[12.5px] leading-[1.7] text-[#d7d2c7] [font-family:var(--font-mono-landing)] sm:text-[13.5px]">
+								<code
+									dangerouslySetInnerHTML={{
+										__html: highlightCode(current?.code ?? ""),
+									}}
+								/>
+							</pre>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+	);
 }
 
 function PlatformsSection() {
-    return (
-        <section className="py-10 md:py-24 px-4 md:px-6">
-            <div className="max-w-5xl mx-auto space-y-8">
-                <div className="space-y-3">
-                    <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wider text-center">
-                        Integrations
-                    </p>
-                    <h2 className="text-3xl md:text-4xl font-medium tracking-tighter text-foreground text-center">
-                        Works With All 17 Platforms
-                    </h2>
-                </div>
-                <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                    {platforms.map((platform) => (
-                        <a
-                            key={platform.slug}
-                            href={`/product/${platform.slug}`}
-                            className="flex flex-col items-center gap-2 rounded-xl border border-border bg-card p-4 text-center transition-colors hover:bg-muted hover:border-primary/30"
-                        >
-                            <span className="text-foreground">
-                                {platform.icon}
-                            </span>
-                            <span className="text-xs font-medium text-muted-foreground">
-                                {platform.name}
-                            </span>
-                        </a>
-                    ))}
-                </div>
-            </div>
-        </section>
-    );
+	return (
+		<section className={`${SECTION} py-[clamp(2.5rem,5vw,4rem)]`}>
+			<div className="mx-auto max-w-[60rem]">
+				<p className={EYEBROW}>Integrations</p>
+				<h2 className={`mt-3 ${H2}`}>Works with every platform</h2>
+				<div className="mt-8 grid grid-cols-3 gap-2.5 sm:grid-cols-4 lg:grid-cols-6">
+					{platforms.map((p) => (
+						<a
+							key={p.slug}
+							href={`/product/${p.slug}`}
+							className="flex flex-col items-center gap-2.5 rounded-[16px] border border-landing-ink/[0.08] bg-landing-card p-4 text-landing-ink! transition-colors duration-150 hover:bg-landing-ink/[0.04] [&>svg]:size-5"
+						>
+							<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+								<path d={platformGlyph(p.slug)} />
+							</svg>
+							<span className="text-center text-[12.5px] font-medium text-[#46443d]">
+								{p.name}
+							</span>
+						</a>
+					))}
+				</div>
+			</div>
+		</section>
+	);
 }
 
 function FaqSection({ api }: { api: ApiData }) {
-    if (api.faq.length === 0) return null;
-
-    return (
-        <section className="py-10 md:py-24 px-4 md:px-6">
-            <div className="max-w-3xl mx-auto space-y-8">
-                <h2 className="text-3xl md:text-4xl font-medium tracking-tighter text-foreground text-center">
-                    Frequently Asked Questions
-                </h2>
-                <Accordion type="single" collapsible className="w-full">
-                    {api.faq.map((item, index) => (
-                        <AccordionItem key={index} value={`faq-${index}`}>
-                            <AccordionTrigger>{item.question}</AccordionTrigger>
-                            <AccordionContent>
-                                <p className="text-muted-foreground">
-                                    {item.answer}
-                                </p>
-                            </AccordionContent>
-                        </AccordionItem>
-                    ))}
-                </Accordion>
-            </div>
-        </section>
-    );
+	if (api.faq.length === 0) return null;
+	return (
+		<section className={`${SECTION} py-[clamp(2.5rem,5vw,4rem)]`}>
+			<div className="mx-auto max-w-[48rem]">
+				<h2 className={H2}>Frequently asked questions</h2>
+				<div className="mt-8 flex flex-col">
+					{api.faq.map((item) => (
+						<details
+							key={item.question}
+							className="group border-b border-landing-ink/[0.1] py-5 first:pt-0"
+						>
+							<summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-[16.5px] font-medium text-landing-ink [&::-webkit-details-marker]:hidden">
+								{item.question}
+								<svg
+									className="size-4 shrink-0 text-[#9a968c] transition-transform duration-200 group-open:rotate-45"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									aria-hidden="true"
+								>
+									<path d="M12 5v14M5 12h14" />
+								</svg>
+							</summary>
+							<p className="mt-3 max-w-[64ch] text-[15px] leading-[1.6] text-[#6e6a62]">
+								{item.answer}
+							</p>
+						</details>
+					))}
+				</div>
+			</div>
+		</section>
+	);
 }
 
-function FooterCta() {
-    return (
-        <section className="w-full">
-            <div className="bg-primary rounded-2xl p-8 md:p-12 mx-6 md:mx-12 mb-8 flex flex-col items-center text-center space-y-6">
-                <h2 className="text-3xl md:text-4xl lg:text-5xl font-medium tracking-tighter text-white text-balance">
-                    Ready to Start Building?
-                </h2>
-                <p className="text-white/80 text-lg font-medium max-w-lg">
-                    Get your API key and start publishing across 21 platforms in
-                    minutes.
-                </p>
-                <Button
-                    asChild
-                    size="lg"
-                    variant="outline"
-                    className="border-white text-white hover:bg-white/10 rounded-full px-8"
-                >
-                    <a href="/signup">Start Building Free</a>
-                </Button>
-            </div>
-        </section>
-    );
+function CtaSection() {
+	return (
+		<section className={`${SECTION} py-9`}>
+			<div
+				className="rounded-[1.875rem] bg-landing-ink p-[clamp(40px,5vw,72px)] text-center"
+			>
+				<h2 className="mx-auto max-w-[20ch] text-[clamp(28px,3.2vw,46px)] font-medium tracking-[-0.03em] text-[#f3f1ea]">
+					Ready to start building?
+				</h2>
+				<p className="mx-auto mt-4 max-w-[48ch] text-[17px] leading-[1.5] text-[#8c887e]">
+					Get your API key and publish across 21 platforms in minutes.
+				</p>
+				<div className="mt-8 flex flex-wrap justify-center gap-[12px]">
+					<a
+						href="/signup"
+						className="rounded-full bg-[#f3f1ea] px-[26px] py-[13px] text-[15px] font-medium text-landing-ink! transition-opacity duration-150 hover:opacity-[0.88]"
+					>
+						Start building free
+					</a>
+					<a
+						href="https://docs.relayapi.dev/"
+						target="_blank"
+						rel="noopener noreferrer"
+						className="rounded-full border border-white/20 px-[26px] py-[13px] text-[15px] font-medium text-[#f3f1ea]! transition-colors duration-150 hover:bg-white/[0.06]"
+					>
+						Read the docs
+					</a>
+				</div>
+			</div>
+		</section>
+	);
 }

@@ -28,13 +28,10 @@ import { LANDING_LINKS, scheduleRows } from "./data";
 						{r.name}
 					</span>
 					<span
-						class="flex items-center gap-1.5 text-[12.5px] [font-family:var(--font-mono-landing)]"
-						style={`color:${r.color}`}
+						class="flex items-center gap-1.5 text-[12.5px] text-[var(--row-color)] [font-family:var(--font-mono-landing)]"
+						style={`--row-color:${r.color}`}
 					>
-						<span
-							class="size-1.5 rounded-full"
-							style={`background:${r.color}`}
-						/>
+						<span class="size-1.5 rounded-full bg-[var(--row-color)]" />
 						{r.status}
 					</span>
 				</div>

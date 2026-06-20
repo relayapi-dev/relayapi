@@ -5,18 +5,21 @@ import Container from "./Container.astro";
 
 <!-- ================= FINAL CTA ================= -->
 <Container as="section" class="py-[clamp(4.5rem,9vw,7.5rem)] text-center">
-  <h2 style="font-size:clamp(40px,6vw,84px); letter-spacing:-0.04em; font-weight:500; margin:0 0 36px; color:#1A1815;">Try RelayAPI now.</h2>
-  <div style="display:flex; gap:14px; justify-content:center; flex-wrap:wrap;">
-    <a href={LANDING_LINKS.signup} class="cta-primary" style="font-size:17px; font-weight:500; color:#F3F1EA; background:#1A1815; padding:15px 30px; border-radius:999px; transition:opacity .15s;">Get started →</a>
-    <a href={LANDING_LINKS.signup} class="cta-secondary" style="font-size:17px; font-weight:500; color:#1A1815; background:#E4E1D9; padding:15px 30px; border-radius:999px; transition:background .15s;">Request a demo →</a>
+  <h2
+    class="mb-9 text-[clamp(40px,6vw,84px)] font-medium tracking-[-0.04em] text-landing-ink"
+  >
+    Try RelayAPI now.
+  </h2>
+  <div class="flex flex-wrap justify-center gap-[14px]">
+    <a
+      href={LANDING_LINKS.signup}
+      class="rounded-full bg-landing-ink px-[30px] py-[15px] text-[17px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
+      >Get started →</a
+    >
+    <a
+      href={LANDING_LINKS.signup}
+      class="rounded-full bg-[#e4e1d9] px-[30px] py-[15px] text-[17px] font-medium text-landing-ink! transition-colors duration-150 hover:bg-[#dbd7cc]"
+      >Request a demo →</a
+    >
   </div>
 </Container>
-
-<style>
-  .cta-primary:hover {
-    opacity: 0.88;
-  }
-  .cta-secondary:hover {
-    background: #DBD7CC;
-  }
-</style>

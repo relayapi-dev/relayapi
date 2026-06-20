@@ -8,7 +8,7 @@ import {
   generateId,
   eq,
 } from "@relayapi/db";
-import { sql, desc, count, and, lte, gte } from "drizzle-orm";
+import { sql, desc, count, and, lte, gte, inArray } from "drizzle-orm";
 import { PRICING } from "@relayapi/config";
 
 // Mirror the API's apikey:* KV TTL convention (apps/api/src/middleware/auth.ts
@@ -80,7 +80,7 @@ export const GET: APIRoute = async (context) => {
         count: count(),
       })
       .from(member)
-      .where(sql`${member.organizationId} = ANY(${orgIds}::text[])`)
+      .where(inArray(member.organizationId, orgIds))
       .groupBy(member.organizationId);
 
     const memberCountMap = new Map(
@@ -98,12 +98,12 @@ export const GET: APIRoute = async (context) => {
         aiEnabled: organizationSubscriptions.aiEnabled,
       })
       .from(organizationSubscriptions)
-      .where(sql`${organizationSubscriptions.organizationId} = ANY(${orgIds}::text[])`);
+      .where(inArray(organizationSubscriptions.organizationId, orgIds));
 
     const subMap = new Map(subs.map((s) => [s.organizationId, s]));
 
     // Get current period usage only for this page of orgs
-    const now = new Date().toISOString();
+    const now = new Date();
     const usage = await db
       .select({
         organizationId: usageRecords.organizationId,
@@ -111,7 +111,13 @@ export const GET: APIRoute = async (context) => {
         apiCallsIncluded: usageRecords.apiCallsIncluded,
       })
       .from(usageRecords)
-      .where(sql`${usageRecords.organizationId} = ANY(${orgIds}::text[]) AND ${usageRecords.periodStart} <= ${now} AND ${usageRecords.periodEnd} >= ${now}`);
+      .where(
+        and(
+          inArray(usageRecords.organizationId, orgIds),
+          lte(usageRecords.periodStart, now),
+          gte(usageRecords.periodEnd, now),
+        ),
+      );
 
     const usageMap = new Map(usage.map((u) => [u.organizationId, u]));
 

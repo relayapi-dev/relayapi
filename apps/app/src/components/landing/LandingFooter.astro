@@ -3,54 +3,35 @@ import Container from "./Container.astro";
 import { footerCols } from "./data";
 
 /**
- * LandingFooter — "Horizon".
+ * LandingFooter — cursor-style panel.
  *
- * The page bottoms out into a painterly dawn landscape (public/footer.png):
- * a luminous sky fills the top, soft blue-grey mountains and a still lake sit
- * along the bottom. The functional content (brand mark, tagline, four link
- * columns parted by hairline dividers) stays compact in the top sky band, in
- * solid black; generous bottom spacing then lets the landscape breathe through
- * as an open horizon before the legal bar.
+ * A full-bleed, soft warm-gray panel (bg-landing-footer) that sits a step below
+ * the page colour, modelled on cursor.com's footer. It holds the brand mark +
+ * tagline and four link columns, with a legal bar
+ * (copyright + language toggle) along the bottom. The content is centred at the
+ * shared Container max-width; the panel colour itself runs edge to edge.
  *
- * A top-weighted scrim (landing-bg → transparent) sits over the image but under
- * the text so the black ink reads crisply across the peach-glow centre while
- * the landscape still glows through.
- *
- * Pure Tailwind v4 utilities — no inline styles, no <style> block. Hover/state
- * is driven with `hover:` / `group-hover:` variants; colours and spacing come
- * from the shared landing theme tokens (--color-landing-ink/-accent/-line/-bg).
+ * Muted uppercase column headings (text-landing-muted) sit over dark links,
+ * matching the cursor footer hierarchy. Pure Tailwind v4 utilities — colours
+ * and spacing come from the shared landing theme tokens
+ * (--color-landing-footer / -ink / -muted / -accent).
  */
 ---
 
-<!-- ================= FOOTER ================= -->
-<footer
-	class="relative isolate overflow-hidden bg-landing-bg bg-[url('/footer.png')] bg-cover bg-bottom bg-no-repeat"
->
-	{
-		/* Legibility scrim — lightens the top sky band behind the functional
-      content, then fades to nothing so the mountains and lake breathe through
-      lower down where the open horizon and the legal bar sit. */
-	}
-	<div
-		aria-hidden="true"
-		class="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[58%] bg-gradient-to-b from-landing-bg via-landing-bg/65 to-transparent"
-	>
-	</div>
-
-	{/* Primary grid: brand block + four link columns, parted by hairlines */}
+<!-- ================= FOOTER (cursor-style gray panel) ================= -->
+<footer class="bg-landing-footer">
+	{/* Primary grid: brand block + four link columns */}
 	<Container
-		class="grid grid-cols-2 gap-x-8 gap-y-12 pt-16 pb-48 sm:grid-cols-3 lg:grid-cols-[1.7fr_1fr_1fr_1fr_1fr] lg:gap-x-0 lg:pb-56 lg:pt-20 xl:pb-64"
+		class="grid grid-cols-2 gap-x-8 gap-y-12 pt-16 pb-20 sm:grid-cols-3 lg:grid-cols-[1.7fr_1fr_1fr_1fr_1fr] lg:pb-28 lg:pt-20"
 	>
 		{/* Brand */}
-		<div
-			class="col-span-2 max-w-[30ch] sm:col-span-3 lg:col-span-1 lg:pr-10"
-		>
+		<div class="col-span-2 max-w-[30ch] sm:col-span-3 lg:col-span-1">
 			<a href="/" class="group inline-flex items-center gap-2.5">
 				<span
 					class="flex size-7 items-center justify-center rounded-[0.45rem] bg-landing-ink transition-transform duration-200 ease-out group-hover:-rotate-6 motion-reduce:transition-none motion-reduce:group-hover:rotate-0"
 				>
 					<svg
-						class="size-[0.94rem] fill-landing-bg"
+						class="size-[0.94rem] fill-landing-footer"
 						viewBox="0 0 150 150"
 						aria-hidden="true"
 					>
@@ -65,22 +46,17 @@ import { footerCols } from "./data";
 					>RELAYAPI</span
 				>
 			</a>
-			<p
-				class="mt-3.5 text-[0.92rem] leading-relaxed text-landing-ink/75"
-			>
+			<p class="mt-3.5 text-[0.92rem] leading-relaxed text-landing-ink/70">
 				Unified social media API — post to 21 platforms with a single
 				call.
 			</p>
 		</div>
 
-		{/* Link columns: hairline divider on the leading edge from lg up */}
+		{/* Link columns */}
 		{
 			footerCols.map((col) => (
-				<nav
-					aria-label={col.title}
-					class="flex flex-col lg:border-l lg:border-landing-line lg:pl-8"
-				>
-					<h2 class="mb-5 text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-landing-ink">
+				<nav aria-label={col.title} class="flex flex-col">
+					<h2 class="mb-5 text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-landing-muted">
 						{col.title}
 					</h2>
 					<ul class="flex flex-col gap-3.5">
@@ -88,7 +64,7 @@ import { footerCols } from "./data";
 							<li>
 								<a
 									href="#"
-									class="group inline-flex w-fit text-[0.9rem] text-landing-ink/75 transition-colors duration-150 hover:text-landing-ink focus-visible:text-landing-ink focus-visible:outline-none motion-reduce:transition-none"
+									class="group inline-flex w-fit text-[0.9rem] text-landing-ink/80 transition-colors duration-150 hover:text-landing-ink focus-visible:text-landing-ink focus-visible:outline-none motion-reduce:transition-none"
 								>
 									<span class="relative">
 										{lnk}
@@ -103,16 +79,14 @@ import { footerCols } from "./data";
 		}
 	</Container>
 
-	{
-		/* Legal bar — rests over the clearest part of the horizon, ink stays black */
-	}
+	{/* Legal bar */}
 	<Container
-		class="relative flex flex-col-reverse items-start gap-3 pb-10 text-[0.8rem] text-landing-ink/80 sm:flex-row sm:items-center sm:justify-between"
+		class="flex flex-col-reverse items-start gap-3 pb-10 text-[0.8rem] text-landing-ink/70 sm:flex-row sm:items-center sm:justify-between"
 	>
 		<span>© 2026 Relay. All rights reserved.</span>
 		<button
 			type="button"
-			class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-landing-ink/80 transition-colors duration-150 hover:bg-landing-ink/[0.06] hover:text-landing-ink focus-visible:bg-landing-ink/[0.06] focus-visible:text-landing-ink focus-visible:outline-none motion-reduce:transition-none"
+			class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-landing-ink/70 transition-colors duration-150 hover:bg-landing-ink/[0.06] hover:text-landing-ink focus-visible:bg-landing-ink/[0.06] focus-visible:text-landing-ink focus-visible:outline-none motion-reduce:transition-none"
 		>
 			<svg
 				class="size-3.5 fill-none stroke-current"

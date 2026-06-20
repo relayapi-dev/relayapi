@@ -5,14 +5,14 @@ import Container from "./Container.astro";
 
 <!-- ================= BLOG HIGHLIGHTS ================= -->
 <Container as="section" class="py-12">
-  <h2 style="font-size:clamp(24px,2.4vw,34px); letter-spacing:-0.03em; font-weight:500; margin:0 0 28px;">Recent highlights</h2>
-  <div data-reveal style="display:grid; grid-template-columns:repeat(4,1fr); gap:20px;">
+  <h2 class="m-0 mb-7 text-[clamp(24px,2.4vw,34px)] font-medium tracking-[-0.03em]">Recent highlights</h2>
+  <div data-reveal class="grid grid-cols-4 gap-5">
     {blog.map((b) => (
-      <a href="#" class="blog-card" style="display:block;">
-        <div style={`height:140px; border-radius:16px; background:${b.bg}; margin-bottom:14px;`}></div>
-        <div style={`font-size:11.5px; color:#9A968C; font-family:var(--font-mono-landing); margin-bottom:6px;`}>{b.tag}</div>
-        <div style="font-size:15.5px; font-weight:500; letter-spacing:-0.01em; line-height:1.3; margin-bottom:6px;">{b.title}</div>
-        <div style="font-size:12.5px; color:#9A968C;">{b.meta}</div>
+      <a href="#" class="block">
+        <div class="mb-3.5 h-[140px] rounded-[16px] bg-[var(--thumb-bg)]" style={`--thumb-bg:${b.bg}`}></div>
+        <div class="mb-1.5 text-[11.5px] text-[#9a968c] [font-family:var(--font-mono-landing)]">{b.tag}</div>
+        <div class="mb-1.5 text-[15.5px] font-medium leading-[1.3] tracking-[-0.01em]">{b.title}</div>
+        <div class="text-[12.5px] text-[#9a968c]">{b.meta}</div>
       </a>
     ))}
   </div>

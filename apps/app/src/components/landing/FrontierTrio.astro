@@ -9,20 +9,22 @@ function cardHref(link: string): string {
 ---
 
 <Container as="section" class="pt-[clamp(4rem,8vw,6.5rem)] pb-10">
-  <h2 style="font-size:clamp(30px,3.2vw,44px); letter-spacing:-0.03em; font-weight:500; margin:0 0 48px; max-width:22ch;">Stay on the frontier of social.</h2>
-  <div data-reveal style="display:grid; grid-template-columns:repeat(3,1fr); gap:22px;">
+  <h2 class="mb-12 max-w-[22ch] text-[clamp(30px,3.2vw,44px)] font-medium tracking-[-0.03em]">Stay on the frontier of social.</h2>
+  <div data-reveal class="grid grid-cols-3 gap-[22px]">
     {frontier.map((f) => (
-      <div style="background:#EAE7DF; border-radius:20px; overflow:hidden;">
-        <div style={`height:170px; background:${f.bg}; display:flex; align-items:center; justify-content:center;`}>
-          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#1A1815" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7;"><path d={f.icon}></path></svg>
+      <div class="overflow-hidden rounded-[20px] bg-[#eae7df]">
+        <div
+          class="flex h-[170px] items-center justify-center bg-[var(--icon-bg)]"
+          style={`--icon-bg:${f.bg}`}
+        >
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#1A1815" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="opacity-70"><path d={f.icon}></path></svg>
         </div>
-        <div style="padding:24px;">
-          <h3 style="font-size:19px; font-weight:600; letter-spacing:-0.01em; margin:0 0 8px;">{f.title}</h3>
-          <p style="font-size:14.5px; color:#6E6A62; line-height:1.55; margin:0 0 14px;">{f.body}</p>
+        <div class="p-6">
+          <h3 class="mb-2 text-[19px] font-semibold tracking-[-0.01em]">{f.title}</h3>
+          <p class="mb-3.5 text-[14.5px] leading-[1.55] text-[#6e6a62]">{f.body}</p>
           <a
             href={cardHref(f.link)}
-            class="frontier-link"
-            style="font-size:14px; font-weight:500; color:#CB5A2C;"
+            class="text-[14px] font-medium text-landing-accent! hover:underline"
             target={cardHref(f.link).startsWith("https://") ? "_blank" : undefined}
             rel={cardHref(f.link).startsWith("https://") ? "noopener noreferrer" : undefined}
           >{f.link} →</a>
@@ -31,9 +33,3 @@ function cardHref(link: string): string {
     ))}
   </div>
 </Container>
-
-<style>
-  .frontier-link:hover {
-    text-decoration: underline;
-  }
-</style>

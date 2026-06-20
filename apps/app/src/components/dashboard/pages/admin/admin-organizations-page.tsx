@@ -407,7 +407,16 @@ export function AdminOrganizationsPage() {
 
   return (
     <div className="space-y-5 pb-16">
-      <PageHeader title="Organizations" subtitle={`${total} total`} />
+      <PageHeader
+        title="Organizations"
+        subtitle={
+          loading ? (
+            <span className="inline-block h-3.5 w-16 animate-pulse rounded bg-muted align-middle" />
+          ) : (
+            `${total} total`
+          )
+        }
+      />
 
       <AdminNav current="admin-organizations" />
 
@@ -428,85 +437,116 @@ export function AdminOrganizationsPage() {
         </div>
       )}
 
-      {loading ? (
-        <div className="flex items-center justify-center rounded-[12px] border border-border py-20">
-          <Loader2 className="size-5 animate-spin text-muted-foreground" />
-        </div>
-      ) : (
-        <>
-          <div className="overflow-hidden rounded-[12px] border border-border bg-card">
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <TableRow key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => (
-                      <TableHead key={header.id}>
-                        {header.isPlaceholder
-                          ? null
-                          : flexRender(
-                              header.column.columnDef.header,
-                              header.getContext()
-                            )}
-                      </TableHead>
-                    ))}
-                  </TableRow>
+      {/* Render the table shell (and pagination) in every state so the layout
+          height stays constant from load → loaded: a tiny spinner that expands
+          into a full table is what made the count/header jump on load. */}
+      <div className="overflow-hidden rounded-[12px] border border-border bg-card">
+        <Table>
+          <TableHeader>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => (
+                  <TableHead key={header.id}>
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(
+                          header.column.columnDef.header,
+                          header.getContext()
+                        )}
+                  </TableHead>
                 ))}
-              </TableHeader>
-              <TableBody>
-                {table.getRowModel().rows?.length ? (
-                  table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>
-                          {flexRender(
-                            cell.column.columnDef.cell,
-                            cell.getContext()
-                          )}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell
-                      colSpan={columns.length}
-                      className="h-24 text-center text-[13px] text-muted-foreground"
-                    >
-                      No organizations found.
+              </TableRow>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              Array.from({ length: 10 }, (_, i) => (
+                <TableRow key={`skeleton-${i}`}>
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      <div className="size-8 shrink-0 animate-pulse rounded-[8px] bg-muted" />
+                      <div className="space-y-1.5">
+                        <div className="h-3 w-32 animate-pulse rounded bg-muted" />
+                        <div className="h-2.5 w-20 animate-pulse rounded bg-muted" />
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="h-3 w-10 animate-pulse rounded bg-muted" />
+                  </TableCell>
+                  <TableCell>
+                    <div className="h-5 w-12 animate-pulse rounded-full bg-muted" />
+                  </TableCell>
+                  <TableCell>
+                    <div className="h-5 w-14 animate-pulse rounded-full bg-muted" />
+                  </TableCell>
+                  <TableCell>
+                    <div className="min-w-24 space-y-1">
+                      <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+                      <div className="h-1 w-full animate-pulse rounded-full bg-muted" />
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="h-3 w-20 animate-pulse rounded bg-muted" />
+                  </TableCell>
+                  <TableCell>
+                    <div className="size-8 animate-pulse rounded bg-muted" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : table.getRowModel().rows?.length ? (
+              table.getRowModel().rows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
+                  ))}
+                </TableRow>
+              ))
+            ) : (
+              <TableRow>
+                <TableCell
+                  colSpan={columns.length}
+                  className="h-24 text-center text-[13px] text-muted-foreground"
+                >
+                  No organizations found.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
 
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-muted-foreground">
-              {total === 0 ? "No results" : `Showing ${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} of ${total}`}
-            </p>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => setPage((p) => p + 1)}
-                disabled={(page + 1) * PAGE_SIZE >= total}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
-        </>
-      )}
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          {loading
+            ? " "
+            : total === 0
+              ? "No results"
+              : `Showing ${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} of ${total}`}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={loading || page === 0}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => setPage((p) => p + 1)}
+            disabled={loading || (page + 1) * PAGE_SIZE >= total}
+          >
+            Next
+          </Button>
+        </div>
+      </div>
 
       {/* Edit modal */}
       {editModal && (

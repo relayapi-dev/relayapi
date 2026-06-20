@@ -199,6 +199,10 @@
 	   separating, not a colour step. */
 	--color-landing-panel: #eeebe3;
 	--color-landing-panel-dark: #1b1915;
+	/* Footer surface — a soft warm-gray step below the page, like cursor's
+	   footer panel. The full-bleed footer carries no shadow or gutter, so this
+	   colour step is what separates it from the page above it. */
+	--color-landing-footer: #eae8e1;
 	--color-landing-line: color-mix(in oklab, #1a1815, transparent 92%);
 	--color-landing-line-dark: color-mix(in oklab, #ffffff, transparent 92%);
 

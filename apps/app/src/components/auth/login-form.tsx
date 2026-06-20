@@ -9,6 +9,9 @@ import {
 	ProviderButton,
 } from "./auth-shell";
 
+const INPUT =
+	"h-11 w-full rounded-[12px] border border-[#1a1815]/12 bg-white text-sm text-[#1a1815] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[#9a968c] focus:border-[#1a1815]/35 focus:ring-[3px] focus:ring-[#1a1815]/10";
+
 export function LoginForm() {
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
@@ -79,10 +82,10 @@ export function LoginForm() {
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ duration: 0.45, ease: [0.32, 0.72, 0, 1] }}
 			>
-				<h1 className="text-[1.6875rem] font-semibold tracking-[-0.02em]">
+				<h1 className="text-[1.7rem] font-semibold tracking-[-0.02em] text-[#1a1815]">
 					Welcome to RelayAPI
 				</h1>
-				<p className="mt-1.5 text-[0.9375rem] text-muted-foreground">
+				<p className="mt-1.5 text-[0.95rem] text-[#6e6a62]">
 					The unified social media API
 				</p>
 
@@ -101,7 +104,7 @@ export function LoginForm() {
 						<motion.div
 							initial={{ opacity: 0, y: -8 }}
 							animate={{ opacity: 1, y: 0 }}
-							className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+							className="rounded-[10px] border border-[#e0b4ab] bg-[#f7e8e4] px-3 py-2.5 text-sm text-[#a3402f]"
 						>
 							{error}
 						</motion.div>
@@ -110,7 +113,7 @@ export function LoginForm() {
 					<div className="flex flex-col gap-1.5">
 						<label
 							htmlFor="email"
-							className="text-[0.8125rem] font-medium text-muted-foreground"
+							className="text-[0.8125rem] font-medium text-[#6e6a62]"
 						>
 							Email
 						</label>
@@ -122,14 +125,14 @@ export function LoginForm() {
 							placeholder="Your email address"
 							required
 							autoComplete="email"
-							className="h-11 w-full rounded-md border border-input bg-card px-3.5 text-sm text-foreground outline-none transition-colors duration-100 ease-[var(--ease-relay)] placeholder:text-muted-foreground/60 focus:border-ring focus:ring-[3px] focus:ring-ring/30"
+							className={`${INPUT} px-3.5`}
 						/>
 					</div>
 
 					<div className="flex flex-col gap-1.5">
 						<label
 							htmlFor="password"
-							className="text-[0.8125rem] font-medium text-muted-foreground"
+							className="text-[0.8125rem] font-medium text-[#6e6a62]"
 						>
 							Password
 						</label>
@@ -142,13 +145,13 @@ export function LoginForm() {
 								placeholder="Enter your password"
 								required
 								autoComplete="current-password"
-								className="h-11 w-full rounded-md border border-input bg-card pl-3.5 pr-10 text-sm text-foreground outline-none transition-colors duration-100 ease-[var(--ease-relay)] placeholder:text-muted-foreground/60 focus:border-ring focus:ring-[3px] focus:ring-ring/30"
+								className={`${INPUT} pl-3.5 pr-10`}
 							/>
 							<button
 								type="button"
 								onClick={() => setShowPassword(!showPassword)}
 								aria-label={showPassword ? "Hide password" : "Show password"}
-								className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+								className="absolute right-3 top-1/2 -translate-y-1/2 text-[#9a968c] transition-colors hover:text-[#1a1815]"
 							>
 								{showPassword ? (
 									<EyeOff className="size-4" />
@@ -162,21 +165,21 @@ export function LoginForm() {
 					<button
 						type="submit"
 						disabled={loading}
-						className="mt-1 flex h-[2.875rem] w-full items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground transition-colors duration-100 ease-[var(--ease-relay)] hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-60"
+						className="mt-1 flex h-[2.875rem] w-full items-center justify-center rounded-[12px] bg-[#1a1815] text-sm font-semibold text-[#f3f1ea] transition-opacity duration-150 hover:opacity-[0.9] disabled:pointer-events-none disabled:opacity-60"
 					>
 						{loading ? (
-							<div className="size-4 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+							<div className="size-4 animate-spin rounded-full border-2 border-[#f3f1ea]/30 border-t-[#f3f1ea]" />
 						) : (
 							"Sign in"
 						)}
 					</button>
 				</form>
 
-				<p className="mt-6 text-center text-sm text-muted-foreground">
+				<p className="mt-6 text-center text-sm text-[#6e6a62]">
 					Don&apos;t have an account?{" "}
 					<a
 						href="/signup"
-						className="font-medium text-foreground hover:underline"
+						className="font-medium text-[#1a1815] hover:underline"
 					>
 						Sign up
 					</a>

@@ -5,21 +5,25 @@ import Container from "./Container.astro";
 
 <!-- ================= CHANGELOG ================= -->
 <Container as="section" class="py-12">
-  <h2 style="font-size:clamp(24px,2.4vw,34px); letter-spacing:-0.03em; font-weight:500; margin:0 0 28px;">Changelog</h2>
-  <div style="display:flex; flex-direction:column;">
+  <h2 class="mb-7 text-[clamp(24px,2.4vw,34px)] font-medium tracking-[-0.03em]">Changelog</h2>
+  <div class="flex flex-col">
     {changelog.map((c) => (
-      <a href={LANDING_LINKS.changelog} target="_blank" rel="noopener noreferrer" class="changelog-row" style="display:flex; align-items:center; gap:22px; padding:19px 4px; border-top:1px solid rgba(26,24,21,0.1); transition:opacity .15s;">
-        <span style={`font-size:13px; font-family:var(--font-mono-landing); color:#9A968C; width:100px; flex-shrink:0;`}>{c.date}</span>
-        <span style="font-size:16px; color:#1A1815; flex:1;">{c.title}</span>
-        <span style="font-size:16px; color:#9A968C;">→</span>
+      <a
+        href={LANDING_LINKS.changelog}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="flex items-center gap-[22px] border-t border-landing-ink/[0.1] px-1 py-[19px] transition-opacity duration-150 hover:opacity-60"
+      >
+        <span class="w-[100px] shrink-0 text-[13px] text-[#9a968c] [font-family:var(--font-mono-landing)]">{c.date}</span>
+        <span class="flex-1 text-[16px] text-landing-ink">{c.title}</span>
+        <span class="text-[16px] text-[#9a968c]">→</span>
       </a>
     ))}
   </div>
-  <a href={LANDING_LINKS.changelog} target="_blank" rel="noopener noreferrer" style="display:inline-block; margin-top:26px; font-size:15px; font-weight:500; color:#CB5A2C;">See what's new in RelayAPI →</a>
+  <a
+    href={LANDING_LINKS.changelog}
+    target="_blank"
+    rel="noopener noreferrer"
+    class="mt-[26px] inline-block text-[15px] font-medium text-landing-accent!"
+  >See what's new in RelayAPI →</a>
 </Container>
-
-<style>
-  .changelog-row:hover {
-    opacity: 0.6;
-  }
-</style>

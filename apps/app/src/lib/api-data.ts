@@ -1,9 +1,7 @@
-import type { ReactNode } from "react";
 
 export interface ApiData {
 	slug: string;
 	name: string;
-	icon: ReactNode;
 	heroTitle: string;
 	heroDescription: string;
 	features: { title: string; description: string }[];
@@ -17,21 +15,6 @@ export const apis: ApiData[] = [
 	{
 		slug: "posting-api",
 		name: "Posting API",
-		icon: (
-			<svg
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-				className="size-4"
-				aria-hidden="true"
-			>
-				<line x1="22" y1="2" x2="11" y2="13" />
-				<polygon points="22 2 15 22 11 13 2 9 22 2" />
-			</svg>
-		),
 		heroTitle: "Posting API for Developers",
 		heroDescription:
 			"One REST API to publish content across 21 platforms. Post text, images, videos, and more with a single endpoint.",
@@ -198,22 +181,6 @@ print(post["id"], post["status"])`,
 	{
 		slug: "media-api",
 		name: "Media API",
-		icon: (
-			<svg
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-				className="size-4"
-				aria-hidden="true"
-			>
-				<rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-				<circle cx="8.5" cy="8.5" r="1.5" />
-				<polyline points="21 15 16 10 5 21" />
-			</svg>
-		),
 		heroTitle: "Media API for Developers",
 		heroDescription:
 			"Upload, optimize, and manage media files for social publishing. Automatic format conversion and platform-specific optimization.",
@@ -362,22 +329,6 @@ print(media["variants"])  # platform-specific versions`,
 	{
 		slug: "analytics-api",
 		name: "Analytics API",
-		icon: (
-			<svg
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-				className="size-4"
-				aria-hidden="true"
-			>
-				<line x1="12" y1="20" x2="12" y2="10" />
-				<line x1="18" y1="20" x2="18" y2="4" />
-				<line x1="6" y1="20" x2="6" y2="16" />
-			</svg>
-		),
 		heroTitle: "Analytics API for Developers",
 		heroDescription:
 			"Track engagement, reach, and performance across all connected platforms. Unified metrics in one dashboard.",
@@ -535,21 +486,6 @@ print(f"Top platform: {overview['top_platform']['name']}")`,
 	{
 		slug: "webhooks-api",
 		name: "Webhooks API",
-		icon: (
-			<svg
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-				className="size-4"
-				aria-hidden="true"
-			>
-				<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-				<path d="M13.73 21a2 2 0 0 1-3.46 0" />
-			</svg>
-		),
 		heroTitle: "Webhooks API for Developers",
 		heroDescription:
 			"Real-time notifications for post delivery, engagement milestones, and account events. Never poll for status again.",
