@@ -76,8 +76,8 @@ export const PLANS: Record<"free" | "pro", PlanTier> = {
 
 /** System-wide limits */
 export const LIMITS = {
-	/** Maximum organizations a single user can create */
-	maxOrgsPerUser: 2,
+	/** Maximum FREE organizations a single user can own (paid orgs are unlimited) */
+	maxFreeOrgsPerUser: 2,
 	/** Maximum members per organization */
 	maxMembersPerOrg: 50,
 	/** Maximum posts in a single bulk create request */

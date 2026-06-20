@@ -10,6 +10,7 @@
 	"dependencies": {
 		"better-auth": "catalog:",
 		"@better-auth/api-key": "catalog:",
+		"@relayapi/config": "workspace:*",
 		"@relayapi/db": "workspace:*"
 	},
 	"devDependencies": {

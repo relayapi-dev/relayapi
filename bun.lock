@@ -144,6 +144,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@better-auth/api-key": "catalog:",
+        "@relayapi/config": "workspace:*",
         "@relayapi/db": "workspace:*",
         "better-auth": "catalog:",
       },
