@@ -237,6 +237,8 @@ function ConnectionsCard() {
 // ---------------------------------------------------------------------------
 
 const MASKED_KEY = `rlay_live_${"•".repeat(24)}`;
+// Mobile shows an abbreviated mask so the key never crowds the narrow card.
+const MASKED_KEY_SHORT = `rlay_live_${"•".repeat(3)}`;
 
 function ApiKeyCard() {
 	const { data: status, loading, refetch } = useApi<{ has_api_key: boolean }>(
@@ -290,8 +292,6 @@ function ApiKeyCard() {
 		refetch();
 	};
 
-	const display = revealed && key ? key : MASKED_KEY;
-
 	return (
 		<div className={card(`flex flex-col ${CARD_H}`)}>
 			<div className="flex items-center justify-between">
@@ -342,8 +342,15 @@ function ApiKeyCard() {
 					</p>
 					<div className="mt-auto pt-[22px]">
 						<div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2">
-							<code className="min-w-0 flex-1 truncate font-mono text-[13px]">
-								{display}
+							<code className="min-w-0 flex-1 truncate font-mono text-[11px] sm:text-[13px]">
+								{revealed && key ? (
+									key
+								) : (
+									<>
+										<span className="sm:hidden">{MASKED_KEY_SHORT}</span>
+										<span className="hidden sm:inline">{MASKED_KEY}</span>
+									</>
+								)}
 							</code>
 							<button
 								type="button"
@@ -815,7 +822,7 @@ function PlanUsageCard() {
 
 	return (
 		<div className={card()}>
-			<div className="grid gap-10 md:grid-cols-2">
+			<div className="grid grid-cols-1 gap-10 md:grid-cols-2">
 				<div className="flex flex-col">
 					<div className="flex items-center gap-2.5">
 						<h3 className="text-[17px] font-semibold">{planName}</h3>
@@ -865,7 +872,7 @@ function PlanUsageCard() {
 export function OverviewPage() {
 	return (
 		<div className="flex flex-col gap-[18px] pb-12">
-			<div className="grid gap-5 md:grid-cols-2">
+			<div className="grid grid-cols-1 gap-5 md:grid-cols-2">
 				<ConnectionsCard />
 				<ApiKeyCard />
 			</div>

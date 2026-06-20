@@ -1103,6 +1103,25 @@ function persistOverlayPeriod(period: OverlayPeriod): void {
 	}
 }
 
+// Reactive desktop-viewport check (md breakpoint). React Flow's `selectionOnDrag`
+// is great on desktop (rubber-band multi-select) but on touch it hijacks the
+// one-finger drag into a selection box, leaving no way to pan the canvas on a
+// phone. We gate it on a desktop viewport so touch users get one-finger panning
+// (React Flow's default `panOnDrag`) instead. Re-evaluates on resize/rotate;
+// SSR-safe (assumes desktop until mounted, matching client:load hydration).
+function useIsDesktopViewport(): boolean {
+	const [isDesktop, setIsDesktop] = useState(true);
+	useEffect(() => {
+		if (typeof window === "undefined" || !window.matchMedia) return;
+		const mq = window.matchMedia("(min-width: 768px)");
+		const apply = () => setIsDesktop(mq.matches);
+		apply();
+		mq.addEventListener("change", apply);
+		return () => mq.removeEventListener("change", apply);
+	}, []);
+	return isDesktop;
+}
+
 function CanvasInner({
 	automationId,
 	channel,
@@ -1122,6 +1141,7 @@ function CanvasInner({
 	onAddBinding,
 }: GuidedFlowProps) {
 	const rf = useReactFlow();
+	const isDesktop = useIsDesktopViewport();
 	const wrapperRef = useRef<HTMLDivElement | null>(null);
 	const fitSignatureRef = useRef<string | null>(null);
 	const connectStartRef = useRef<{ nodeKey: string; portKey: string } | null>(
@@ -2063,7 +2083,10 @@ function CanvasInner({
 				edgesUpdatable={!readOnly}
 				nodesConnectable={!readOnly}
 				nodesDraggable={!readOnly}
-				selectionOnDrag
+				// Desktop only: rubber-band multi-select. On touch it would capture
+				// one-finger drags and block panning, so we leave it off and let
+				// React Flow's default panOnDrag move the canvas instead.
+				selectionOnDrag={isDesktop}
 				multiSelectionKeyCode={["Meta", "Shift"]}
 				deleteKeyCode={null} // we handle delete ourselves to surface the root-node toast
 				minZoom={0.2}

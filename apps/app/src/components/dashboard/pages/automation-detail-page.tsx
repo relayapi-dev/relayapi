@@ -310,6 +310,19 @@ export function AutomationDetailPage({ automationId }: Props) {
 		return graphStore.graph.nodes.find((n) => n.key === selection[0]) ?? null;
 	}, [graphStore.graph.nodes, selection]);
 
+	// True when any canvas side panel (simulator / binding / trigger / property)
+	// is showing. On mobile a 360px panel beside the canvas would crush it, so we
+	// hand the panel the full width and hide the canvas column behind it — the
+	// panel's close button returns to the canvas. On desktop both sit side by
+	// side. Mirrors the inbox "primary vs secondary pane" mobile pattern.
+	const canvasSidePanelOpen =
+		tab === "canvas" &&
+		(toolbarPanel === "simulator" ||
+			!!selectedBindingId ||
+			!!creatingBindingType ||
+			triggerSelected ||
+			!!selectedNode);
+
 	// When the user selects a graph node, dismiss trigger + toolbar panels so
 	// the property panel takes over the right side.
 	useEffect(() => {
@@ -483,7 +496,13 @@ export function AutomationDetailPage({ automationId }: Props) {
 	const hasValidationErrors = validationErrors.length > 0;
 
 	return (
-		<div className="flex h-full min-h-0 flex-col overflow-hidden border-t border-border bg-background">
+		// Mobile: a definite viewport-based height (minus the sticky mobile menu
+		// bar) so the flex-1 canvas row resolves to real pixels — React Flow needs
+		// a bounded height or it collapses to nothing. The shell's fullBleed
+		// wrapper is only `min-h-full` on mobile, and a child `h-full` can't
+		// resolve against a parent that has no definite height, so we set our own.
+		// Desktop keeps `h-full`. Mirrors the inbox-messages fullBleed page.
+		<div className="flex min-h-[calc(100dvh-3.25rem)] flex-col overflow-hidden border-t border-border bg-background md:h-full md:min-h-0">
 			{/* ===== Header ===== */}
 			<header className="z-20 flex shrink-0 flex-wrap items-center justify-between gap-2 bg-background px-4 py-2 sm:flex-nowrap sm:gap-4">
 				<div className="flex min-w-0 items-center gap-3">
@@ -671,7 +690,12 @@ export function AutomationDetailPage({ automationId }: Props) {
 
 			<div className="flex min-h-0 flex-1">
 				{/* ===== Canvas / tab content ===== */}
-				<div className="flex min-w-0 flex-1">
+				<div
+					className={cn(
+						"flex min-w-0 flex-1",
+						canvasSidePanelOpen && "hidden md:flex",
+					)}
+				>
 					{tab === "canvas" && (
 						<GuidedFlow
 							automationId={automation.id}

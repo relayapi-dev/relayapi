@@ -645,12 +645,12 @@ export function IdeaDetailDialog({
 				showCloseButton={false}
 				className={cn(
 					"max-h-[90vh] p-0 gap-0 transition-[max-width] duration-200 ease-out",
-					sidePanel ? "max-w-2xl md:max-w-4xl" : "max-w-2xl",
+					sidePanel ? "sm:max-w-2xl md:max-w-4xl" : "sm:max-w-2xl",
 				)}
 			>
 			<div className="flex flex-col md:flex-row max-h-[90vh]">
 			<div className="flex-1 flex flex-col min-w-0">
-				<DialogHeader className="flex-row items-center justify-between px-5 py-3 border-b border-border gap-3 space-y-0">
+				<DialogHeader className="flex-row flex-wrap items-center justify-between px-5 py-3 border-b border-border gap-3 space-y-0">
 					<DialogTitle className="text-sm font-medium shrink-0">
 						{dialogTitle}
 					</DialogTitle>
@@ -665,7 +665,7 @@ export function IdeaDetailDialog({
 											type="button"
 											variant="outline"
 											size="sm"
-											className="h-7 text-xs gap-1 px-2"
+											className="h-7 max-w-[10rem] text-xs gap-1 px-2"
 										>
 											{selectedGroup?.color && (
 												<span
@@ -673,8 +673,10 @@ export function IdeaDetailDialog({
 													style={{ backgroundColor: selectedGroup.color }}
 												/>
 											)}
-											{selectedGroup?.name ?? "Group"}
-											<ChevronDown className="size-3 opacity-50" />
+											<span className="min-w-0 truncate">
+												{selectedGroup?.name ?? "Group"}
+											</span>
+											<ChevronDown className="size-3 opacity-50 shrink-0" />
 										</Button>
 									</PopoverTrigger>
 									<PopoverContent align="end" className="w-52 p-2">
@@ -893,7 +895,7 @@ export function IdeaDetailDialog({
 
 				</div>
 
-				<div className="flex items-center justify-between px-5 py-3 border-t border-border gap-3">
+				<div className="flex flex-wrap items-center px-5 py-3 border-t border-border gap-x-3 gap-y-2">
 					<div className="flex items-center gap-1">
 						{isEditMode && (
 							<>
@@ -945,7 +947,7 @@ export function IdeaDetailDialog({
 						)}
 					</div>
 
-					<div className="flex items-center gap-2">
+					<div className="flex items-center gap-2 ml-auto">
 						{isEditMode && idea && (
 							<Button
 								type="button"

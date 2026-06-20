@@ -54,7 +54,12 @@ interface WaGroup {
   created_at: string;
 }
 
-const tabs = ["Broadcasts", "Templates", "Groups", "Settings"] as const;
+const tabs = [
+  { value: "broadcasts", label: "Broadcasts", icon: Send },
+  { value: "templates", label: "Templates", icon: FileText },
+  { value: "groups", label: "Groups", icon: MessageCircle },
+  { value: "settings", label: "Settings", icon: Settings },
+] as const;
 
 const statusColors: Record<string, string> = {
   sent: "text-success bg-success/10",
@@ -147,8 +152,11 @@ export function WhatsAppPage({
               value={activeTab}
               onChange={(v) => switchTab(v)}
               options={tabs.map((tab) => ({
-                value: tab.toLowerCase() as typeof initialTab,
-                label: tab,
+                value: tab.value as typeof initialTab,
+                // Mobile: icon only. Desktop (md+): text label only.
+                icon: <tab.icon className="md:hidden" />,
+                label: <span className="hidden md:inline">{tab.label}</span>,
+                title: tab.label,
               }))}
             />
           }

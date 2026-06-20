@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import {
 	DndContext,
 	DragOverlay,
-	PointerSensor,
+	MouseSensor,
+	TouchSensor,
 	closestCenter,
 	useSensor,
 	useSensors,
@@ -189,8 +190,18 @@ export function IdeaBoard({
 	}, [ideasByGroup]);
 
 	const sensors = useSensors(
-		useSensor(PointerSensor, {
+		// Mouse: begin dragging after a small movement so plain clicks still
+		// register as clicks (opening the idea detail dialog).
+		useSensor(MouseSensor, {
 			activationConstraint: { distance: 8 },
+		}),
+		// Touch: press-and-hold to drag. A dedicated TouchSensor with a `delay`
+		// constraint lets normal swipes scroll the board/columns and taps open a
+		// card, while a long-press starts a drag. Without this, the browser
+		// claims the touch for scrolling and cancels the pointer-based drag, so
+		// drag-and-drop was impossible on mobile.
+		useSensor(TouchSensor, {
+			activationConstraint: { delay: 250, tolerance: 8 },
 		}),
 	);
 

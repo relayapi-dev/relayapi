@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Loader2, FileText } from "lucide-react";
+import {
+  Loader2,
+  FileText,
+  ArrowLeftRight,
+  PenSquare,
+  Link2,
+  CalendarRange,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePagedApi } from "@/hooks/use-api";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -9,6 +16,17 @@ import { Segmented } from "@/components/dashboard/segmented";
 import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
 import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 const stagger = {
   hidden: {},
@@ -133,9 +151,9 @@ function formatDate(ts: string | null): string {
 // --- Config ---
 
 const tabs = [
-  { key: "api", label: "API Requests" },
-  { key: "posts", label: "Posts" },
-  { key: "connections", label: "Connections" },
+  { key: "api", label: "API Requests", icon: ArrowLeftRight },
+  { key: "posts", label: "Posts", icon: PenSquare },
+  { key: "connections", label: "Connections", icon: Link2 },
 ] as const;
 
 const levelFilters = ["All", "Info", "Warn", "Error"] as const;
@@ -172,6 +190,8 @@ export function LogsPage({
     to: dateTo ? new Date(dateTo).toISOString() : undefined,
   };
 
+  const hasDateFilter = Boolean(dateFrom || dateTo);
+
   const {
     data: logs,
     loading,
@@ -205,7 +225,11 @@ export function LogsPage({
             <Segmented
               value={activeTab}
               onChange={(v) => switchTab(v)}
-              options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+              options={tabs.map(({ key, label, icon: Icon }) => ({
+                value: key,
+                label,
+                icon: <Icon />,
+              }))}
             />
           }
           right={
@@ -224,43 +248,60 @@ export function LogsPage({
           options={levelFilters.map((f) => ({ value: f, label: f }))}
         />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <label
-            htmlFor="logs-date-from"
-            className="text-[13px] text-muted-foreground shrink-0"
-          >
-            From
-          </label>
-          <input
-            id="logs-date-from"
-            type="datetime-local"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="text-[13px] bg-transparent border border-border rounded-md px-2 py-1 text-foreground max-w-full [&::-webkit-calendar-picker-indicator]:dark:invert"
+        {/* Desktop: inline date-range filter. */}
+        <div className="hidden sm:flex flex-wrap items-center gap-2">
+          <DateRangeFields
+            idPrefix="logs-date"
+            layout="inline"
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            setDateFrom={setDateFrom}
+            setDateTo={setDateTo}
           />
-          <label
-            htmlFor="logs-date-to"
-            className="text-[13px] text-muted-foreground shrink-0"
-          >
-            To
-          </label>
-          <input
-            id="logs-date-to"
-            type="datetime-local"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="text-[13px] bg-transparent border border-border rounded-md px-2 py-1 text-foreground max-w-full [&::-webkit-calendar-picker-indicator]:dark:invert"
-          />
-          {(dateFrom || dateTo) && (
+        </div>
+
+        {/* Mobile: collapse the date-range filter into a dialog so the trigger
+            fits on the same row as the level tabs. */}
+        <Dialog>
+          <DialogTrigger asChild>
             <button
               type="button"
-              onClick={() => { setDateFrom(""); setDateTo(""); }}
-              className="text-[13px] text-muted-foreground hover:text-foreground transition-colors"
+              title="Filter by date"
+              className={cn(
+                "sm:hidden relative inline-flex size-8 items-center justify-center rounded-md transition-colors ease-[var(--ease-relay)] [&_svg]:size-4 [&_svg]:shrink-0",
+                hasDateFilter
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+              )}
             >
-              Clear
+              <CalendarRange strokeWidth={1.75} />
+              {hasDateFilter && (
+                <span className="absolute right-1 top-1 size-1.5 rounded-full bg-foreground" />
+              )}
             </button>
-          )}
-        </div>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Filter by date</DialogTitle>
+              <DialogDescription>
+                Show logs within a specific time range.
+              </DialogDescription>
+            </DialogHeader>
+            <DateRangeFields
+              idPrefix="logs-dialog-date"
+              layout="stacked"
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              setDateFrom={setDateFrom}
+              setDateTo={setDateTo}
+            />
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button className="w-full sm:w-auto">Done</Button>
+              </DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {error && (
@@ -304,6 +345,106 @@ export function LogsPage({
         </>
       )}
     </div>
+  );
+}
+
+// --- Date range filter ---
+
+const dateInputClass =
+  "text-[13px] bg-transparent border border-border rounded-md px-2 py-1 text-foreground max-w-full [&::-webkit-calendar-picker-indicator]:dark:invert";
+
+/**
+ * From/To datetime range used by the logs toolbar. `layout="inline"` renders a
+ * compact horizontal row for the desktop toolbar; `layout="stacked"` renders
+ * full-width labelled fields for the mobile filter dialog. `idPrefix` keeps the
+ * input ids unique so both layouts can coexist in the DOM.
+ */
+function DateRangeFields({
+  idPrefix,
+  layout,
+  dateFrom,
+  dateTo,
+  setDateFrom,
+  setDateTo,
+}: {
+  idPrefix: string;
+  layout: "inline" | "stacked";
+  dateFrom: string;
+  dateTo: string;
+  setDateFrom: (value: string) => void;
+  setDateTo: (value: string) => void;
+}) {
+  const fromId = `${idPrefix}-from`;
+  const toId = `${idPrefix}-to`;
+  const clearButton = (dateFrom || dateTo) ? (
+    <button
+      type="button"
+      onClick={() => {
+        setDateFrom("");
+        setDateTo("");
+      }}
+      className="text-[13px] text-muted-foreground hover:text-foreground transition-colors"
+    >
+      Clear
+    </button>
+  ) : null;
+
+  if (layout === "stacked") {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={fromId} className="text-[13px] font-medium text-foreground">
+            From
+          </label>
+          <input
+            id={fromId}
+            type="datetime-local"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className={cn(dateInputClass, "w-full")}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={toId} className="text-[13px] font-medium text-foreground">
+            To
+          </label>
+          <input
+            id={toId}
+            type="datetime-local"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className={cn(dateInputClass, "w-full")}
+          />
+        </div>
+        {clearButton && <div>{clearButton}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <label htmlFor={fromId} className="text-[13px] text-muted-foreground shrink-0">
+        From
+      </label>
+      <input
+        id={fromId}
+        type="datetime-local"
+        value={dateFrom}
+        onChange={(e) => setDateFrom(e.target.value)}
+        className={dateInputClass}
+      />
+      <label htmlFor={toId} className="text-[13px] text-muted-foreground shrink-0">
+        To
+      </label>
+      <input
+        id={toId}
+        type="datetime-local"
+        value={dateTo}
+        onChange={(e) => setDateTo(e.target.value)}
+        className={dateInputClass}
+      />
+      {clearButton}
+    </>
   );
 }
 

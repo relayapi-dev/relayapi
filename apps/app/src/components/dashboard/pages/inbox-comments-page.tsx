@@ -242,7 +242,9 @@ function CommentsListView({
   }, []);
 
   return (
-    <div className="pb-16">
+    // -mx-5 sm:mx-0 cancels the dashboard shell's mobile side gutter (px-5) so
+    // the cards run edge-to-edge on phones; each card keeps its own p-4 inset.
+    <div className="pb-16 -mx-5 sm:mx-0">
       <div
         ref={containerRef}
         className="space-y-3"
@@ -598,7 +600,9 @@ function ByPostView({
             {detailPanel}
           </div>
         ) : (
-          postList
+          // -mx-5 sm:mx-0 cancels the shell's mobile side gutter so the post
+          // list's own p-3 is the only inset (no doubled padding on phones).
+          <div className="-mx-5 sm:mx-0">{postList}</div>
         )}
       </div>
     </>

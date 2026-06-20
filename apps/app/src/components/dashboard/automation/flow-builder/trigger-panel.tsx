@@ -82,7 +82,9 @@ interface Props {
 // Constants
 // ---------------------------------------------------------------------------
 
-const PANEL_WIDTH_CLS = "w-[360px] xl:w-[392px]";
+// Full-width on mobile (the canvas column is hidden behind it there); fixed
+// width from md+ where it sits beside the canvas.
+const PANEL_WIDTH_CLS = "flex-1 md:w-[360px] md:flex-none xl:w-[392px]";
 
 function humanizeKind(kind: string): string {
 	return kind

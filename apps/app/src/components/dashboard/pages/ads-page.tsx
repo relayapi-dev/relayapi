@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { motion } from "motion/react";
 import {
   Plus, Megaphone, Loader2, BarChart3, Pause, Play, X as XIcon,
-  RefreshCw, Upload, Trash2, Search,
+  RefreshCw, Upload, Trash2, Search, Target, Users, Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -149,10 +149,10 @@ function formatBudget(cents: number | null, currency?: string | null) {
 // --- Tab Definitions ---
 
 const tabs = [
-  { key: "ads", label: "Ads" },
-  { key: "campaigns", label: "Campaigns" },
-  { key: "audiences", label: "Audiences" },
-  { key: "accounts", label: "Accounts" },
+  { key: "ads", label: "Ads", Icon: Megaphone },
+  { key: "campaigns", label: "Campaigns", Icon: Target },
+  { key: "audiences", label: "Audiences", Icon: Users },
+  { key: "accounts", label: "Accounts", Icon: Wallet },
 ] as const;
 
 const adStatuses = ["all", "active", "paused", "draft", "pending_review", "completed", "rejected", "cancelled"] as const;
@@ -382,7 +382,13 @@ export function AdsPage({
             <Segmented
               value={activeTab}
               onChange={(v) => switchTab(v)}
-              options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+              // Icon-only on mobile (label hidden); text label on sm+ (icon hidden).
+              options={tabs.map((tab) => ({
+                value: tab.key,
+                title: tab.label,
+                icon: <tab.Icon className="sm:hidden" />,
+                label: <span className="hidden sm:inline">{tab.label}</span>,
+              }))}
             />
           }
           right={
@@ -397,8 +403,9 @@ export function AdsPage({
       {/* ====== ADS TAB ====== */}
       {activeTab === "ads" && (
         <>
-          {/* Status + Source filters */}
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Status + Source filters — hidden on mobile (only the type switcher
+              is kept on small screens); shown from sm: upward. */}
+          <div className="hidden flex-wrap items-center gap-2 sm:flex">
             <Segmented
               value={adStatus}
               onChange={setAdStatus}
@@ -508,9 +515,12 @@ export function AdsPage({
       {/* ====== CAMPAIGNS TAB ====== */}
       {activeTab === "campaigns" && (
         <>
+          {/* Hidden on mobile to match the Ads tab — only the type switcher is
+              kept on small screens. */}
           <Segmented
             value={campaignStatus}
             onChange={setCampaignStatus}
+            className="hidden sm:inline-flex"
             options={campaignStatuses.map((s) => ({
               value: s,
               label: s === "all" ? "All" : (statusConfig[s]?.label ?? s),

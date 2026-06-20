@@ -163,7 +163,7 @@ export function SimulatorPanel({
 		setExpanded((prev) => ({ ...prev, [idx]: !prev[idx] }));
 
 	return (
-		<div className={cn(PANEL_SHELL_CLS, "w-80")}>
+		<div className={cn(PANEL_SHELL_CLS, "flex-1 md:w-80 md:flex-none")}>
 			<PanelHeader
 				icon={<FlaskConical className="size-[18px]" />}
 				title="Simulator"
