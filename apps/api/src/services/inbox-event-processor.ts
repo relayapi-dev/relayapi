@@ -64,6 +64,12 @@ interface NormalizedInboxEvent {
 	ad_id?: string;
 	story_id?: string;
 	/**
+	 * Media URL of the referenced story — from a `story_mention` attachment's
+	 * `payload.url` or `reply_to.story.url`. Best-effort: Meta CDN links are
+	 * short-lived, so the dashboard renders it with a graceful fallback.
+	 */
+	story_url?: string;
+	/**
 	 * Structured file payload for inbound media messages (WhatsApp image/video/
 	 * document/audio, Telegram photo/document, Twilio MMS, etc.). Used by the
 	 * automation bridge to satisfy `user_input_file` waits — the validator reads
@@ -80,6 +86,14 @@ interface NormalizedInboxEvent {
 		mime_type?: string;
 		size_bytes?: number;
 	};
+	/**
+	 * Display attachments persisted to `inbox_messages.attachments` so the
+	 * dashboard can render media DMs and shared posts. NOTE: distinct from the
+	 * singular `attachment` above, which feeds the automation `user_input_file`
+	 * bridge and is not persisted. Each entry is the platform attachment type
+	 * plus a direct media URL.
+	 */
+	attachments?: Array<{ type: string; url: string }>;
 	parent_id?: string;
 	post_id?: string;
 	conversation_id?: string;
@@ -1056,6 +1070,7 @@ function extractMetaMessageMarkers(msg: FacebookMessagingPayload): {
 	is_share_to_dm?: boolean;
 	is_ad_click?: boolean;
 	story_id?: string;
+	story_url?: string;
 	ad_id?: string;
 } {
 	const markers: {
@@ -1064,6 +1079,7 @@ function extractMetaMessageMarkers(msg: FacebookMessagingPayload): {
 		is_share_to_dm?: boolean;
 		is_ad_click?: boolean;
 		story_id?: string;
+		story_url?: string;
 		ad_id?: string;
 	} = {};
 
@@ -1072,10 +1088,12 @@ function extractMetaMessageMarkers(msg: FacebookMessagingPayload): {
 	if (replyStory && (replyStory.id || replyStory.url)) {
 		markers.is_story_reply = true;
 		if (replyStory.id) markers.story_id = replyStory.id;
+		if (replyStory.url) markers.story_url = replyStory.url;
 	}
 
 	// Attachment-driven markers: share_to_dm (type=share), story_mention
-	// (type=story_mention).
+	// (type=story_mention). Story mentions carry the story media in
+	// `payload.url` and have no `message.text`.
 	for (const att of msg.message?.attachments ?? []) {
 		if (att.type === "share") markers.is_share_to_dm = true;
 		if (att.type === "story_mention") {
@@ -1083,6 +1101,8 @@ function extractMetaMessageMarkers(msg: FacebookMessagingPayload): {
 			const storyId = (att.payload as { story_id?: string; id?: string })
 				?.story_id ?? (att.payload as { id?: string })?.id;
 			if (storyId) markers.story_id = String(storyId);
+			const storyUrl = (att.payload as { url?: string })?.url;
+			if (storyUrl) markers.story_url = String(storyUrl);
 		}
 	}
 
@@ -1097,6 +1117,49 @@ function extractMetaMessageMarkers(msg: FacebookMessagingPayload): {
 	}
 
 	return markers;
+}
+
+/**
+ * Extracts display attachments (media URLs) from a Meta messaging payload for
+ * persistence on the inbox message row. Skips `story_mention` — that media is
+ * surfaced via the `story_url` / `is_story_mention` markers instead so the
+ * dashboard can label it ("Mentioned you in their story") rather than render a
+ * bare file link.
+ */
+function extractMetaAttachments(
+	msg: FacebookMessagingPayload,
+): Array<{ type: string; url: string }> {
+	const out: Array<{ type: string; url: string }> = [];
+	for (const att of msg.message?.attachments ?? []) {
+		if (att.type === "story_mention") continue;
+		const url = (att.payload as { url?: string } | undefined)?.url;
+		if (typeof url === "string" && url.length > 0) {
+			out.push({ type: att.type ?? "file", url });
+		}
+	}
+	return out;
+}
+
+/**
+ * Synthesizes a conversation-list preview for messages with no text body so
+ * story mentions/replies, shared posts, and media-only DMs don't show up as
+ * "No messages yet". Returns undefined when the message has real text (caller
+ * falls back to the body) or has nothing to describe.
+ */
+function derivePreviewText(event: NormalizedInboxEvent): string | undefined {
+	if (event.text && event.text.trim().length > 0) return undefined;
+	if (event.is_story_mention) return "Mentioned you in their story";
+	if (event.is_story_reply) return "Replied to your story";
+	if (event.is_share_to_dm) return "Shared a post";
+	const first = event.attachments?.[0];
+	if (first) {
+		const t = first.type;
+		if (t === "image" || t.startsWith("image/")) return "Photo";
+		if (t === "video" || t.startsWith("video/")) return "Video";
+		if (t === "audio" || t.startsWith("audio/")) return "Voice message";
+		return "Attachment";
+	}
+	return undefined;
 }
 
 function normalizeFacebookEvent(
