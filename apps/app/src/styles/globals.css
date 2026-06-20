@@ -181,6 +181,29 @@
 		}
 	}
 
+	/* Mega-menu open — a smooth drop with a soft overshoot (bounce). Animates the
+	   `transform` property, which is independent of the panel's `translate`-based
+	   centering (-translate-x-1/2), so the two never fight. transform-origin:top
+	   (origin-top) makes it grow downward from the trigger. */
+	--animate-menu-in: menu-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+
+	@keyframes menu-in {
+		0% {
+			opacity: 0;
+			transform: translateY(-8px) scale(0.96);
+		}
+
+		55% {
+			opacity: 1;
+			transform: translateY(2.5px) scale(1.012);
+		}
+
+		100% {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
+	}
+
 	/* ---- Landing feature design tokens ----
 	   Single source of truth for the Cursor-style feature cards. Surfaced as
 	   Tailwind utilities (bg-landing-*, text-landing-*, text-feature,
