@@ -122,6 +122,14 @@ function formatTime(ts: string | null): string {
   });
 }
 
+function formatDate(ts: string | null): string {
+  if (!ts) return "";
+  return new Date(ts).toLocaleDateString("en-US", {
+    month: "short",
+    day: "2-digit",
+  });
+}
+
 // --- Config ---
 
 const tabs = [
@@ -308,8 +316,9 @@ function RequestLogRow({ log }: { log: RequestLogEntry }) {
       variants={fadeUp}
       className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 hover:bg-accent/30 transition-colors"
     >
-      <span className="text-muted-foreground shrink-0 w-14 tabular-nums hidden sm:block">
-        {formatTime(log.created_at)}
+      <span className="text-muted-foreground shrink-0 w-14 tabular-nums hidden sm:flex flex-col leading-tight">
+        <span className="text-[10px]">{formatDate(log.created_at)}</span>
+        <span>{formatTime(log.created_at)}</span>
       </span>
       <span
         className={cn(

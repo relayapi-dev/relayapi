@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { motion } from "motion/react";
-import { Home, Lock, Loader2, AlertTriangle } from "lucide-react";
+import { Home, Lock, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useApi } from "@/hooks/use-api";
 import { useUsage } from "@/hooks/use-usage";
@@ -44,6 +44,15 @@ interface ChannelsResponse {
     engagement_change: number | null;
   };
 }
+
+const EMPTY_TOTALS: ChannelsResponse["totals"] = {
+  total_audience: 0,
+  total_impressions: 0,
+  total_engagement: 0,
+  audience_change: null,
+  impressions_change: null,
+  engagement_change: null,
+};
 
 // ---------------------------------------------------------------------------
 // Date range helpers
@@ -104,24 +113,36 @@ const fadeUp = {
 function AnalyticsPageLoadingSkeleton() {
   return (
     <div className="space-y-5 pb-16">
-      <PageHeader
-        title="Analytics"
-        docsHref={DOCS_HREF}
-        action={
-          <div className="h-8 w-32 rounded-md bg-muted animate-pulse" />
-        }
-      />
+      {/* Header + date-range toolbar — mirrors the loaded layout exactly so the
+          header doesn't shift when usage resolves. The date Segmented is the
+          only data-independent control, shown here as a pill-shaped placeholder. */}
+      <div className="space-y-3">
+        <PageHeader title="Analytics" docsHref={DOCS_HREF} />
+        <PageToolbar
+          right={
+            <div className="h-[30px] w-[200px] rounded-md bg-muted animate-pulse" />
+          }
+        />
+      </div>
 
+      {/* Mobile channel selector (matches the real <select> height) */}
       <div className="sm:hidden">
-        <div className="h-10 w-full rounded-[12px] border border-border bg-muted animate-pulse" />
+        <div className="h-9 w-full rounded-[12px] border border-border bg-muted animate-pulse" />
       </div>
 
       <div className="flex gap-6">
         <nav className="hidden sm:block w-[200px] shrink-0">
           <div className="space-y-1">
-            <div className="h-9 w-full rounded-md bg-muted-foreground/10 animate-pulse" />
-            <div className="h-3 w-16 rounded bg-muted-foreground/10 animate-pulse mt-4 mb-2" />
-            {Array.from({ length: 4 }).map((_, index) => (
+            {/* Static Home item + Channels label render for real — only the
+                channel list is data-dependent and shown as pulses. */}
+            <div className="flex w-full items-center gap-2 rounded-md bg-accent px-2.5 py-2 text-sm font-medium text-foreground">
+              <Home className="size-4" />
+              Home
+            </div>
+            <p className="px-2.5 pt-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Channels
+            </p>
+            {Array.from({ length: 3 }).map((_, index) => (
               <div key={index} className="flex items-center gap-2 px-2.5 py-2">
                 <div className="size-5 rounded-full bg-muted-foreground/10 animate-pulse" />
                 <div className="h-3 w-24 rounded bg-muted-foreground/10 animate-pulse" />
@@ -133,14 +154,7 @@ function AnalyticsPageLoadingSkeleton() {
         <div className="min-w-0 flex-1">
           <AnalyticsHome
             channels={[]}
-            totals={{
-              total_audience: 0,
-              total_impressions: 0,
-              total_engagement: 0,
-              audience_change: null,
-              impressions_change: null,
-              engagement_change: null,
-            }}
+            totals={EMPTY_TOTALS}
             loading
             onSelectChannel={() => {}}
           />
@@ -212,14 +226,7 @@ export function AnalyticsPageNew({
   );
 
   const channels = channelsResponse?.data ?? [];
-  const totals = channelsResponse?.totals ?? {
-    total_audience: 0,
-    total_impressions: 0,
-    total_engagement: 0,
-    audience_change: null,
-    impressions_change: null,
-    engagement_change: null,
-  };
+  const totals = channelsResponse?.totals ?? EMPTY_TOTALS;
 
   const selectedChannelData = useMemo(
     () => channels.find((c) => c.account_id === selectedChannel) ?? null,
@@ -386,10 +393,16 @@ export function AnalyticsPageNew({
 
         {/* Content area */}
         <div className="min-w-0 flex-1">
-          {channelsLoading ? (
-            <div className="flex items-center justify-center py-20">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            </div>
+          {/* Only the initial channels load (no data yet) shows the skeleton;
+              date-range refetches keep the prior data on screen (useApi is
+              stale-while-revalidate), so the layout never collapses to a spinner. */}
+          {channelsLoading && channels.length === 0 ? (
+            <AnalyticsHome
+              channels={[]}
+              totals={EMPTY_TOTALS}
+              loading
+              onSelectChannel={selectChannel}
+            />
           ) : selectedChannel === null ? (
             <AnalyticsHome
               channels={channels}

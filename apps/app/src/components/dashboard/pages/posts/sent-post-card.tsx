@@ -181,16 +181,16 @@ export function SentPostCard({
           </div>
         </div>
 
-        {/* Content + media */}
+        {/* Content + media — caption beside a large preview on desktop; preview stacked on top, caption below on mobile */}
         <div className="px-4 pb-3">
-          <div className="flex gap-4">
-            <div className="flex-1 min-w-0">
-              {content && (
+          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
+            {content && (
+              <div className="order-2 sm:order-1 flex-1 min-w-0">
                 <p className="text-[13px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
                   {content}
                 </p>
-              )}
-            </div>
+              </div>
+            )}
             {thumbUrl && (
               <button
                 type="button"
@@ -201,14 +201,17 @@ export function SentPostCard({
                     setPreviewOpen(true);
                   }
                 }}
-                className={cn("shrink-0 relative", target.platformUrl ? "cursor-pointer" : "cursor-zoom-in")}
+                className={cn(
+                  "order-1 sm:order-2 shrink-0 relative w-full sm:w-auto sm:ml-auto",
+                  target.platformUrl ? "cursor-pointer" : "cursor-zoom-in",
+                )}
               >
                 {hasVideo ? (
                   posterUrl ? (
                     <img
                       src={posterUrl}
                       alt=""
-                      className="w-20 h-20 sm:w-36 sm:h-36 rounded-md object-cover"
+                      className="w-full aspect-[4/3] sm:aspect-auto sm:size-52 rounded-md object-cover"
                     />
                   ) : (
                     <video
@@ -216,20 +219,20 @@ export function SentPostCard({
                       muted
                       preload="metadata"
                       onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
-                      className="w-20 h-20 sm:w-36 sm:h-36 rounded-md object-cover"
+                      className="w-full aspect-[4/3] sm:aspect-auto sm:size-52 rounded-md object-cover"
                     />
                   )
                 ) : (
                   <img
                     src={thumbUrl}
                     alt=""
-                    className="w-20 h-20 sm:w-36 sm:h-36 rounded-md object-cover"
+                    className="w-full aspect-[4/3] sm:aspect-auto sm:size-52 rounded-md object-cover"
                   />
                 )}
                 {hasVideo && (
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="size-9 rounded-full bg-black/60 flex items-center justify-center">
-                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="white" className="size-4 ml-0.5">
+                    <div className="size-10 sm:size-12 rounded-full bg-black/60 flex items-center justify-center">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="white" className="size-4 sm:size-5 ml-0.5">
                         <polygon points="5,3 19,12 5,21" />
                       </svg>
                     </div>

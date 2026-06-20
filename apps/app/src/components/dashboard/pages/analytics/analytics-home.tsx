@@ -68,16 +68,38 @@ function ChangeBadge({ change }: { change: number | null }) {
   );
 }
 
+// Skeletons below mirror the real card chrome (border, padding, static titles)
+// and only pulse the data-dependent rows, so the loading state lines up 1:1
+// with the loaded `AnalyticsHome` layout (Totals → Posting Streak → channels).
+
 function SkeletonTotals() {
   return (
     <div className="rounded-[12px] border border-border bg-card p-5">
-      <div className="h-4 w-16 rounded bg-muted-foreground/10 animate-pulse mb-4" />
+      <h3 className="text-[13px] font-medium mb-4">Totals</h3>
       <div className="grid gap-3 sm:grid-cols-3">
         {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="space-y-2">
+          <div key={i}>
             <div className="h-3 w-24 rounded bg-muted-foreground/10 animate-pulse" />
-            <div className="h-7 w-20 rounded bg-muted-foreground/10 animate-pulse" />
-            <div className="h-3 w-14 rounded bg-muted-foreground/10 animate-pulse" />
+            <div className="mt-2 h-7 w-20 rounded bg-muted-foreground/10 animate-pulse" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SkeletonStreak() {
+  return (
+    <div className="rounded-[12px] border border-border bg-card p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <Flame className="size-4 text-muted-foreground" />
+        <h3 className="text-[13px] font-medium">Posting Streak</h3>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="space-y-2">
+            <div className="h-3 w-20 rounded bg-muted-foreground/10 animate-pulse" />
+            <div className="h-7 w-14 rounded bg-muted-foreground/10 animate-pulse" />
           </div>
         ))}
       </div>
@@ -88,18 +110,18 @@ function SkeletonTotals() {
 function SkeletonTable() {
   return (
     <div className="rounded-[12px] border border-border bg-card p-5">
-      <div className="h-4 w-44 rounded bg-muted-foreground/10 animate-pulse mb-4" />
+      <h3 className="text-[13px] font-medium mb-4">Social channels overview</h3>
       <div className="space-y-3">
         {Array.from({ length: 4 }).map((_, i) => (
           <div key={i} className="flex items-center gap-3">
-            <div className="size-8 rounded-full bg-muted-foreground/10 animate-pulse" />
-            <div className="flex-1 space-y-1.5">
+            <div className="size-8 shrink-0 rounded-full bg-muted-foreground/10 animate-pulse" />
+            <div className="flex-1 min-w-0 space-y-1.5">
               <div className="h-3 w-32 rounded bg-muted-foreground/10 animate-pulse" />
               <div className="h-2.5 w-20 rounded bg-muted-foreground/10 animate-pulse" />
             </div>
-            <div className="h-3 w-16 rounded bg-muted-foreground/10 animate-pulse" />
-            <div className="h-3 w-16 rounded bg-muted-foreground/10 animate-pulse" />
-            <div className="h-3 w-16 rounded bg-muted-foreground/10 animate-pulse" />
+            <div className="h-3 w-12 rounded bg-muted-foreground/10 animate-pulse" />
+            <div className="h-3 w-12 rounded bg-muted-foreground/10 animate-pulse" />
+            <div className="h-3 w-12 rounded bg-muted-foreground/10 animate-pulse" />
           </div>
         ))}
       </div>
@@ -111,19 +133,7 @@ function StreakCard() {
   const { streak, loading } = useStreak();
 
   if (loading) {
-    return (
-      <div className="rounded-[12px] border border-border bg-card p-5">
-        <div className="h-4 w-28 rounded bg-muted-foreground/10 animate-pulse mb-4" />
-        <div className="grid gap-3 sm:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="space-y-2">
-              <div className="h-3 w-20 rounded bg-muted-foreground/10 animate-pulse" />
-              <div className="h-7 w-14 rounded bg-muted-foreground/10 animate-pulse" />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
+    return <SkeletonStreak />;
   }
 
   if (!streak) return null;
@@ -223,6 +233,7 @@ export function AnalyticsHome({
     return (
       <div className="space-y-4">
         <SkeletonTotals />
+        <SkeletonStreak />
         <SkeletonTable />
       </div>
     );
