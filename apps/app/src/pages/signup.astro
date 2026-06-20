@@ -1,12 +1,16 @@
 ---
-import BaseLayout from "../layouts/BaseLayout.astro";
-import SEO from "../components/SEO.astro";
 import { SignupForm } from "../components/auth/signup-form";
+import SEO from "../components/SEO.astro";
+import BaseLayout from "../layouts/BaseLayout.astro";
 ---
 
 <BaseLayout>
-  <SEO slot="head" title="Sign Up" description="Create your free RelayAPI account." />
-  <div class="relative">
-    <SignupForm client:load />
-  </div>
+	<SEO
+		slot="head"
+		title="Sign Up"
+		description="Create your free RelayAPI account."
+	/>
+	<div class="relative">
+		<SignupForm client:load />
+	</div>
 </BaseLayout>

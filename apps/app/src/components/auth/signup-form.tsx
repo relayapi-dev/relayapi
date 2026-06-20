@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
-import { motion } from "motion/react";
 import { Eye, EyeOff } from "lucide-react";
+import { motion } from "motion/react";
+import { useMemo, useState } from "react";
 import { signIn, signUp } from "../../lib/auth-client";
 import {
 	AuthDivider,
@@ -98,8 +98,8 @@ export function SignupForm() {
 						Coming soon
 					</h1>
 					<p className="mx-auto mt-2 max-w-[20rem] text-[0.95rem] text-[#6e6a62]">
-						RelayAPI is still in development and will be released soon. Thanks for
-						your interest.
+						RelayAPI is still in development and will be released soon. Thanks
+						for your interest.
 					</p>
 					<p className="mt-7 text-sm text-[#6e6a62]">
 						Already have an account?{" "}
