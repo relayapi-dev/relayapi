@@ -16,6 +16,7 @@ import {
   Camera,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { cn } from "@/lib/utils";
 import { authClient, useSession } from "@/lib/auth-client";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -318,15 +319,6 @@ export function ProfilePage() {
     return { device: isMobile ? "Mobile" : "Desktop", browser };
   };
 
-  const userInitials = user?.name
-    ? user.name
-        .split(" ")
-        .map((n) => n[0])
-        .join("")
-        .toUpperCase()
-        .slice(0, 2)
-    : "?";
-
   if (sessionLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -363,17 +355,13 @@ export function ProfilePage() {
                 onClick={() => fileInputRef.current?.click()}
                 disabled={avatarUploading}
               >
-                {user?.image ? (
-                  <img
-                    src={user.image}
-                    alt={user.name}
-                    className="size-14 rounded-full object-cover"
-                  />
-                ) : (
-                  <div className="flex size-14 items-center justify-center rounded-full bg-primary text-lg font-bold text-primary-foreground">
-                    {userInitials}
-                  </div>
-                )}
+                <UserAvatar
+                  image={user?.image}
+                  name={user?.name}
+                  seed={user?.id}
+                  className="size-14"
+                  fallbackBgClassName="bg-primary"
+                />
                 <div className={cn(
                   "absolute inset-0 rounded-full bg-black/50 flex items-center justify-center transition-opacity",
                   avatarUploading ? "opacity-100" : "opacity-0 group-hover:opacity-100",

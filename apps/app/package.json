@@ -15,6 +15,8 @@
     "@astrojs/react": "catalog:astro",
     "@better-auth/api-key": "catalog:",
     "@dagrejs/dagre": "catalog:",
+    "@dicebear/core": "catalog:",
+    "@dicebear/styles": "catalog:",
     "@dnd-kit/core": "catalog:",
     "@dnd-kit/sortable": "catalog:",
     "@dnd-kit/utilities": "catalog:",

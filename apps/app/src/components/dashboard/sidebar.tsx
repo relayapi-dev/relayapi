@@ -41,6 +41,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { useStreak } from "@/hooks/use-streak";
 import { useUsage } from "@/hooks/use-usage";
 import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
@@ -433,15 +434,6 @@ export function Sidebar({
 		}, 1500);
 	}, [organization?.id]);
 
-	const userInitials = user?.name
-		? user.name
-				.split(" ")
-				.map((n) => n[0])
-				.join("")
-				.toUpperCase()
-				.slice(0, 2)
-		: "?";
-
 	const handleSignOut = async () => {
 		const { signOut } = await loadAuthClient();
 		await signOut();
@@ -600,17 +592,13 @@ export function Sidebar({
 					{/* Profile block (top) */}
 					<div className="shrink-0 px-3 pt-3 pb-2 md:pt-10 lg:pt-12">
 						<div className="flex items-center gap-2.5 px-1">
-							{user?.image ? (
-								<img
-									src={user.image}
-									alt={user.name}
-									className="size-[30px] shrink-0 rounded-full object-cover"
-								/>
-							) : (
-								<div className="flex size-[30px] shrink-0 items-center justify-center rounded-full bg-secondary text-[12px] font-semibold text-foreground">
-									{userInitials}
-								</div>
-							)}
+							<UserAvatar
+								image={user?.image}
+								name={user?.name}
+								seed={user?.id}
+								className="size-[30px] shrink-0"
+								fallbackBgClassName="bg-secondary"
+							/>
 							<div className="min-w-0 flex-1 leading-tight">
 								<div className="truncate text-[12.5px] font-semibold">
 									{user?.name || "User"}

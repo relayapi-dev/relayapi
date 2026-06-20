@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { Plus, MoreHorizontal, Mail, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { cn } from "@/lib/utils";
 import { organization } from "@/lib/auth-client";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -34,15 +35,6 @@ const roleColors: Record<string, string> = {
   member: "text-muted-foreground bg-muted",
   viewer: "text-muted-foreground bg-muted",
 };
-
-function getInitials(name: string): string {
-  return name
-    .split(" ")
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
-}
 
 const avatarColors = [
   "bg-muted",
@@ -202,18 +194,13 @@ export function UsersPage() {
               )}
             >
               <div className="flex items-center gap-3">
-                <div
-                  className={cn(
-                    "flex size-9 items-center justify-center rounded-full text-xs font-semibold text-muted-foreground",
-                    avatarColors[colorIdx]
-                  )}
-                >
-                  {user.image ? (
-                    <img src={user.image} alt="" className="size-9 rounded-full object-cover" />
-                  ) : (
-                    getInitials(user.name || user.email)
-                  )}
-                </div>
+                <UserAvatar
+                  image={user.image}
+                  name={user.name}
+                  seed={user.id ?? user.email}
+                  className="size-9"
+                  fallbackBgClassName={avatarColors[colorIdx]}
+                />
                 <div>
                   <p className="text-[13px] font-medium">{user.name || "Unnamed"}</p>
                   <p className="text-xs text-muted-foreground">{user.email}</p>
