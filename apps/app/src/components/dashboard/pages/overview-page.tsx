@@ -591,49 +591,55 @@ function ApiCallsCard() {
 				/>
 			</div>
 
-			<div className="mt-[22px] overflow-x-auto">
-				<div className="mb-1.5 flex gap-[3px] pl-[22px]">
-					{monthLabels.map((mo, i) => (
-						<div
-							key={i}
-							className="flex-1 text-[11px] text-muted-foreground"
-						>
-							{mo}
-						</div>
-					))}
-				</div>
-				<div className="flex gap-1.5">
-					<div className="flex w-4 flex-col justify-between py-px">
-						{["", "M", "", "W", "", "F", ""].map((d, i) => (
+			{/* The 52-week grid has a fixed minimum width so the day cells never
+			    collapse below ~10px. On narrow screens the inner wrapper overflows
+			    the card and scrolls horizontally; on desktop the card is wider than
+			    the min-width, so flex-1 fills it as before. */}
+			<div className="scrollbar-hide mt-[22px] overflow-x-auto">
+				<div className="min-w-[700px]">
+					<div className="mb-1.5 flex gap-[3px] pl-[22px]">
+						{monthLabels.map((mo, i) => (
 							<div
 								key={i}
-								className="h-[13px] text-[11px] leading-[13px] text-muted-foreground"
+								className="flex-1 text-[11px] text-muted-foreground"
 							>
-								{d}
+								{mo}
 							</div>
 						))}
 					</div>
-					<div className="flex flex-1 gap-[3px]">
-						{weeks.map((col, wi) => (
-							<div key={wi} className="flex flex-1 flex-col gap-[3px]">
-								{col.map((cell, di) => (
-									<div
-										key={di}
-										title={
-											cell.future
-												? undefined
-												: `${cell.count} call${cell.count === 1 ? "" : "s"} · ${cell.key}`
-										}
-										className="aspect-square w-full rounded-[2.5px]"
-										style={{
-											background: cell.future
-												? "transparent"
-												: HEAT_COLORS[levelFor(cell.count, max)],
-										}}
-									/>
-								))}
-							</div>
-						))}
+					<div className="flex gap-1.5">
+						<div className="flex w-4 flex-col justify-between py-px">
+							{["", "M", "", "W", "", "F", ""].map((d, i) => (
+								<div
+									key={i}
+									className="h-[13px] text-[11px] leading-[13px] text-muted-foreground"
+								>
+									{d}
+								</div>
+							))}
+						</div>
+						<div className="flex flex-1 gap-[3px]">
+							{weeks.map((col, wi) => (
+								<div key={wi} className="flex flex-1 flex-col gap-[3px]">
+									{col.map((cell, di) => (
+										<div
+											key={di}
+											title={
+												cell.future
+													? undefined
+													: `${cell.count} call${cell.count === 1 ? "" : "s"} · ${cell.key}`
+											}
+											className="aspect-square w-full rounded-[2.5px]"
+											style={{
+												background: cell.future
+													? "transparent"
+													: HEAT_COLORS[levelFor(cell.count, max)],
+											}}
+										/>
+									))}
+								</div>
+							))}
+						</div>
 					</div>
 				</div>
 			</div>
