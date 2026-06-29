@@ -157,6 +157,37 @@ function attachThumbnails(
 	});
 }
 
+/** Durable thumbnail URLs for a post's own R2 media, in `_media` order. */
+function durableThumbnailsFor(
+	rawMedia: MediaItem[] | null,
+	thumbMap: Map<string, string>,
+): Array<string | undefined> {
+	if (!rawMedia) return [];
+	return rawMedia.map((item) => {
+		const key = relayStorageKeyFromUrl(item.url);
+		return key ? thumbMap.get(key) : undefined;
+	});
+}
+
+/**
+ * Serve platform CDN media as the full-res `url`, but prefer our own durable R2
+ * thumbnail (permanent) over the platform's expiring CDN thumbnail. Keeps the
+ * platform thumbnail only where we have no durable copy (posts published outside
+ * RelayAPI). Index-matched to the post's `_media` order.
+ */
+function preferDurableThumbnails(
+	extMedia: MediaItem[],
+	rawMedia: MediaItem[] | null,
+	thumbMap: Map<string, string>,
+): MediaItem[] {
+	const durable = durableThumbnailsFor(rawMedia, thumbMap);
+	if (durable.length === 0) return extMedia;
+	return extMedia.map((item, i) => {
+		const dur = durable[i];
+		return dur ? { ...item, thumbnail: dur } : item;
+	});
+}
+
 // Matches an explicit UTC offset or "Z" at the end of an ISO datetime string.
 const ISO_HAS_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
 
@@ -940,14 +971,15 @@ app.openapi(listPosts, async (c) => {
 						? (overrides._media as MediaItem[])
 						: null;
 
-				// Prefer platform CDN media from external posts for published posts
+				// Prefer platform CDN media for published posts (full-res), but keep our
+				// durable R2 thumbnail as the preview so it survives platform-URL expiry.
 				let mediaArr: MediaItem[] | null = null;
 				if (includeMedia && p.status === "published") {
 					for (const t of pTargets) {
 						if (t.status === "published" && t.platformPostId) {
 							const extMedia = extMediaByPlatformPostId.get(t.platformPostId);
 							if (extMedia) {
-								mediaArr = extMedia;
+								mediaArr = preferDurableThumbnails(extMedia, rawMedia, thumbMap);
 								break;
 							}
 						}
@@ -1956,9 +1988,11 @@ app.openapi(getPost, async (c) => {
 	const rawMedia = overrides?._media
 		? (overrides._media as MediaItem[])
 		: null;
+	const thumbMap = await buildThumbnailMap(db, orgId, [rawMedia]);
 
 	// Prefer platform CDN media from external posts for published posts (parity
-	// with the list endpoint), so previews persist after the R2 original expires.
+	// with the list endpoint), but keep our durable R2 thumbnail as the preview so
+	// it survives platform-URL expiry.
 	let mediaArr: MediaItem[] | null = null;
 	if (post.status === "published") {
 		const publishedPostIds = targets
@@ -1998,7 +2032,7 @@ app.openapi(getPost, async (c) => {
 					});
 				}
 				if (items.length > 0) {
-					mediaArr = items;
+					mediaArr = preferDurableThumbnails(items, rawMedia, thumbMap);
 					break;
 				}
 			}
@@ -2006,7 +2040,6 @@ app.openapi(getPost, async (c) => {
 	}
 	// Fall back to presigned R2 URLs, attaching durable thumbnails first.
 	if (!mediaArr) {
-		const thumbMap = await buildThumbnailMap(db, orgId, [rawMedia]);
 		mediaArr = await presignMediaUrls(c.env, attachThumbnails(rawMedia, thumbMap));
 	}
 	const targetOpts = overrides
