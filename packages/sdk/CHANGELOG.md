@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.24.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.23.0...sdk-v0.24.0) (2026-06-29)
+
+
+### Features
+
+* add avatar caching and improve route handling in API ([a638926](https://github.com/relayapi-dev/relayapi/commit/a638926c3b0773b9b3e1a2e21221fb7086848960))
+* add support for boosting external posts in ad boosting API ([63235ad](https://github.com/relayapi-dev/relayapi/commit/63235addf71e1977901939f36d63cdc8323d56ae))
+* add support for multiple enrollment triggers in automation system ([218f713](https://github.com/relayapi-dev/relayapi/commit/218f713935640a56c53900771824350cd48ee4b5))
+* add support for processing and displaying story interactions ([d28c04b](https://github.com/relayapi-dev/relayapi/commit/d28c04ba3c621eb0062b10ef454d2424d68a479c))
+* consolidate template creation and reserve story-reply route ([9e2daff](https://github.com/relayapi-dev/relayapi/commit/9e2daff92ced6952fc412e92f878a4bb62616089))
+* enable direct enrollment and enhance automation graph update ([e86622c](https://github.com/relayapi-dev/relayapi/commit/e86622cfcd4179849343f0cc566d9259dc5f0464))
+* enforce node presence for active automations and improve type handling ([8198ae8](https://github.com/relayapi-dev/relayapi/commit/8198ae83ca0e666c30f67af1043ef4cc181a86a7))
+* enhance automation workflows with new node types and editor improvements ([5849aea](https://github.com/relayapi-dev/relayapi/commit/5849aeacc67e4920812351fa18b4d0a44c5edce6))
+* enhance error handling with detailed error logging and UI feedback ([e5cafde](https://github.com/relayapi-dev/relayapi/commit/e5cafde519d5e470890089e846b9c0a372644ee4))
+* enhance usage tracking and API functions for improved analytics ([178b081](https://github.com/relayapi-dev/relayapi/commit/178b08120be41c7b6e30da57857d5d748e144fb4))
+* implement ad audience discovery and enhance ad account details ([81ef53f](https://github.com/relayapi-dev/relayapi/commit/81ef53f1df76678c1bcaaf7186e04ff4f515dc95))
+* implement asynchronous processing for WhatsApp bulk sends ([8b31af1](https://github.com/relayapi-dev/relayapi/commit/8b31af1371a109d3e8300ca9fde3fd5ec6e6a94f))
+* implement multi-account support and enhance automation workflows ([339d0a0](https://github.com/relayapi-dev/relayapi/commit/339d0a0e4868499de5292f92ffea1651f5413927))
+* implement offset-based pagination and enhance UI interactions ([7d29c1d](https://github.com/relayapi-dev/relayapi/commit/7d29c1d86c5607b33bad1e13ecaa39be91399ad5))
+* improve code style and add detailed state logging in automations ([5746175](https://github.com/relayapi-dev/relayapi/commit/5746175c369b004a1695af0a46e8bee8a4f94c88))
+* improve UI consistency and loading state handling in the dashboard ([06bc1a1](https://github.com/relayapi-dev/relayapi/commit/06bc1a1e012106c211102890350578a342fa7b4d))
+* unify automation manifest registry and enhance workflow capabilities ([56d108c](https://github.com/relayapi-dev/relayapi/commit/56d108c510df22118f2be17f685823582ea2d5de))
+
+
+### Bug Fixes
+
+* resolve key issues in data sync, caching, routing, and API validation ([7b2c92b](https://github.com/relayapi-dev/relayapi/commit/7b2c92b1cfd43476616cbcae4a1d7db57e094461))
+
 ## [0.23.0](https://github.com/relayapi-dev/relayapi/compare/sdk-v0.22.0...sdk-v0.23.0) (2026-04-17)
 
 
