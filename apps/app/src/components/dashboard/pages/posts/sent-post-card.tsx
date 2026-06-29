@@ -57,7 +57,7 @@ export interface SentPostTarget {
 export interface SentPostCardProps {
   postId: string;
   content: string | null;
-  media: Array<{ url: string; type?: string; poster?: string }> | null;
+  media: Array<{ url: string; type?: string; poster?: string; thumbnail?: string }> | null;
   target: SentPostTarget;
   engagement: SentPostEngagement | null;
   onDelete?: (postId: string) => void;
@@ -78,12 +78,12 @@ function formatTime(dateStr: string | null): string {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-function getMediaThumbUrl(media: Array<{ url: string; type?: string; poster?: string }>): string | null {
+function getMediaThumbUrl(media: Array<{ url: string; type?: string; poster?: string; thumbnail?: string }>): string | null {
   if (!media.length) return null;
   return media[0]?.url ?? null;
 }
 
-function isVideo(media: Array<{ url: string; type?: string; poster?: string }>): boolean {
+function isVideo(media: Array<{ url: string; type?: string; poster?: string; thumbnail?: string }>): boolean {
   const first = media[0];
   if (!first) return false;
   if (first.type === "video") return true;
@@ -107,8 +107,16 @@ export function SentPostCard({
 }: SentPostCardProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const thumbUrl = media ? getMediaThumbUrl(media) : null;
-  const posterUrl = media?.[0]?.poster ?? null;
+  // Durable poster: legacy synced `poster` OR the API's hyper-optimized thumbnail
+  // (survives after the R2 original is lifecycle-deleted).
+  const posterUrl = media?.[0]?.poster ?? media?.[0]?.thumbnail ?? null;
   const hasVideo = media ? isVideo(media) : false;
+  // Small card prefers the durable poster (rendered as a plain image); the
+  // full-screen overlay prefers the original for playback / full quality.
+  const cardThumb = posterUrl ?? thumbUrl;
+  const showVideoInCard = hasVideo && !posterUrl;
+  const overlayUrl = thumbUrl ?? posterUrl;
+  const overlayIsVideo = hasVideo && !!thumbUrl;
   const accountName = target.displayName || target.username || "Unknown";
   const platformLabel = platformLabels[target.platform] || target.platform;
   const time = formatTime(target.publishedAt);
@@ -191,7 +199,7 @@ export function SentPostCard({
                 </p>
               </div>
             )}
-            {thumbUrl && (
+            {cardThumb && (
               <button
                 type="button"
                 onClick={() => {
@@ -206,27 +214,20 @@ export function SentPostCard({
                   target.platformUrl ? "cursor-pointer" : "cursor-zoom-in",
                 )}
               >
-                {hasVideo ? (
-                  posterUrl ? (
-                    <img
-                      src={posterUrl}
-                      alt=""
-                      className="w-full aspect-[4/3] sm:aspect-auto sm:size-52 rounded-md object-cover"
-                    />
-                  ) : (
-                    <video
-                      src={thumbUrl}
-                      muted
-                      preload="metadata"
-                      onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
-                      className="w-full aspect-[4/3] sm:aspect-auto sm:size-52 rounded-md object-cover"
-                    />
-                  )
+                {showVideoInCard ? (
+                  <video
+                    src={cardThumb}
+                    muted
+                    preload="metadata"
+                    onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
+                    className="w-full aspect-[4/3] sm:aspect-auto sm:size-52 rounded-md object-cover"
+                  />
                 ) : (
                   <img
-                    src={thumbUrl}
+                    src={cardThumb}
                     alt=""
                     className="w-full aspect-[4/3] sm:aspect-auto sm:size-52 rounded-md object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                   />
                 )}
                 {hasVideo && (
@@ -244,7 +245,7 @@ export function SentPostCard({
         </div>
 
         {/* Media preview overlay */}
-        {previewOpen && thumbUrl && (
+        {previewOpen && overlayUrl && (
           // biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop that closes on click; it contains a close button so it cannot be a <button> itself
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
@@ -260,9 +261,9 @@ export function SentPostCard({
             >
               <X className="size-6" />
             </button>
-            {hasVideo ? (
+            {overlayIsVideo ? (
               <video
-                src={thumbUrl}
+                src={overlayUrl}
                 controls
                 autoPlay
                 className="max-w-[90vw] max-h-[90vh] rounded-lg"
@@ -274,7 +275,7 @@ export function SentPostCard({
             ) : (
               // biome-ignore lint/a11y/noStaticElementInteractions: preview image only stops backdrop-close propagation; it is not an interactive control
               <img
-                src={thumbUrl}
+                src={overlayUrl}
                 alt=""
                 className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain"
                 onClick={(e) => e.stopPropagation()}

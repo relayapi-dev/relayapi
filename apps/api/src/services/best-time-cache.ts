@@ -27,7 +27,9 @@ function cacheKey(orgId: string): string {
 export async function getCachedBestTimes(
 	env: Env,
 	orgId: string,
-	executionCtx?: ExecutionContext,
+	// Only waitUntil is used; narrowing keeps Hono's c.executionCtx assignable here
+	// regardless of fields @cloudflare/workers-types adds to ExecutionContext.
+	executionCtx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<BestTimeSlot[]> {
 	// Try KV cache first
 	const cached = await env.KV.get<BestTimeSlot[]>(cacheKey(orgId), "json");

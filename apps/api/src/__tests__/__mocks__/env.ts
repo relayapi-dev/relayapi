@@ -73,6 +73,7 @@ export function createMockEnv(kvOverride?: MockKV): { env: Env; kv: MockKV } {
 	const env = {
 		KV: kv as unknown as KVNamespace,
 		MEDIA_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
+		THUMBNAIL_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
 		HYPERDRIVE: {
 			connectionString: "postgresql://mock:mock@localhost:5432/mock",
 		} as unknown as Hyperdrive,

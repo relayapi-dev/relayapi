@@ -11,8 +11,8 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@astrojs/cloudflare": "catalog:astro",
-    "@astrojs/react": "catalog:astro",
+    "@astrojs/cloudflare": "catalog:",
+    "@astrojs/react": "catalog:",
     "@better-auth/api-key": "catalog:",
     "@dagrejs/dagre": "catalog:",
     "@dicebear/core": "catalog:",
@@ -38,7 +38,7 @@
     "@tsparticles/engine": "catalog:",
     "@tsparticles/react": "catalog:",
     "@tsparticles/slim": "catalog:",
-    "astro": "catalog:astro",
+    "astro": "catalog:",
     "better-auth": "catalog:",
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",

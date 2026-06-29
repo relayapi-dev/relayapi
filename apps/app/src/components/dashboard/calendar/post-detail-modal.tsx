@@ -140,8 +140,13 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
   const targets = detail ? Object.values(detail.targets) : [];
   const firstTarget = targets[0];
   const accountName = firstTarget?.displayName || firstTarget?.username || platformLabels[firstTarget?.platform ?? ""] || "Account";
-  const thumbUrl = detail?.media?.[0]?.url ?? null;
-  const hasVideo = detail?.media?.[0]?.type === "video" || (thumbUrl && /\.(mp4|mov|webm|avi)$/i.test(thumbUrl));
+  const original = detail?.media?.[0]?.url ?? null;
+  const poster = detail?.media?.[0]?.thumbnail ?? null;
+  // Image display + onError fallback prefer the durable poster; the <video>
+  // element needs the original to seek/play.
+  const thumbUrl = poster ?? original;
+  const videoSrc = original ?? poster;
+  const hasVideo = detail?.media?.[0]?.type === "video" || (original ? /\.(mp4|mov|webm|avi)$/i.test(original) : false);
   const platformUrl = targets.find((t) => t.platformUrl)?.platformUrl;
   const primaryPlatform = firstTarget?.platform;
   const errorRows = detail ? collectPostErrors(detail.targets) : [];
@@ -206,7 +211,7 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
                 hasVideo ? (
                   <div className="relative mt-3 rounded-lg overflow-hidden">
                     <video
-                      src={thumbUrl}
+                      src={videoSrc ?? undefined}
                       controls
                       muted
                       preload="metadata"

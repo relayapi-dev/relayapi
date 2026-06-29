@@ -65,8 +65,26 @@
 		{
 			"binding": "MEDIA_BUCKET",
 			"bucket_name": "relayapi-media"
+		},
+		{
+			// Durable, hyper-optimized post previews. Separate bucket so the
+			// ~30-day lifecycle rule on relayapi-media never deletes thumbnails.
+			// Serve publicly via a custom domain (thumbs.relayapi.dev) for
+			// permanently CDN-cacheable preview URLs.
+			"binding": "THUMBNAIL_BUCKET",
+			"bucket_name": "relayapi-media-thumbnails"
 		}
 	],
+	// Resize/encode tiny image thumbnails directly from R2 bytes (no public URL needed).
+	// Docs: https://developers.cloudflare.com/images/optimization/binding/
+	"images": {
+		"binding": "IMAGES"
+	},
+	// Extract a still poster frame from video originals stored in R2.
+	// Docs: https://developers.cloudflare.com/stream/transform-videos/bindings/
+	"media": {
+		"binding": "MEDIA"
+	},
 	"hyperdrive": [
 		{
 			"binding": "HYPERDRIVE",

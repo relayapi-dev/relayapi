@@ -12,7 +12,7 @@ const perform = async (z: ZObject, bundle: Bundle) => {
   const params: Record<string, string> = {};
 
   if (bundle.inputData.platform) {
-    params.platform = bundle.inputData.platform;
+    params.platform = String(bundle.inputData.platform);
   }
 
   const response = await z.request({

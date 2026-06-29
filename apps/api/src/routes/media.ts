@@ -19,6 +19,7 @@ import {
 	purgePresignedViewCache,
 	RELAY_MEDIA_HOST,
 } from "../lib/r2-presign";
+import { thumbnailKeyFor } from "../lib/thumbnails";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -567,10 +568,14 @@ app.openapi(deleteMedia, async (c) => {
 		);
 	}
 
-	// Delete from R2 + DB in parallel (independent systems), and purge any cached
-	// presigned GET URL so list responses stop returning a URL that now 404s.
+	// Delete original + thumbnail from R2 + DB row in parallel (independent
+	// systems), and purge any cached presigned GET URL so list responses stop
+	// returning a URL that now 404s.
 	await Promise.all([
 		c.env.MEDIA_BUCKET.delete(record.storageKey),
+		c.env.THUMBNAIL_BUCKET.delete(thumbnailKeyFor(record.storageKey)).catch(
+			() => {},
+		),
 		db.delete(media).where(eq(media.id, id)),
 		purgePresignedViewCache(c.env, record.storageKey, PRESIGN_GET_EXPIRES),
 	]);

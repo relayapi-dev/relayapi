@@ -564,6 +564,11 @@ export const media = pgTable(
 			.notNull()
 			.default("r2"),
 		url: text("url"),
+		// Durable, hyper-optimized preview. Stored in a separate, never-expiring R2
+		// bucket so card/list previews survive after the full-res original is purged
+		// by the relayapi-media lifecycle rule. thumbnailUrl is a stable public URL.
+		thumbnailKey: text("thumbnail_key"),
+		thumbnailUrl: text("thumbnail_url"),
 		width: integer("width"),
 		height: integer("height"),
 		duration: integer("duration"),

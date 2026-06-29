@@ -288,6 +288,13 @@
       "when": 1781176273191,
       "tag": "0040_round_kinsey_walden",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1782742326201,
+      "tag": "0041_hard_naoko",
+      "breakpoints": true
     }
   ]
 }

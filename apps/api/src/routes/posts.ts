@@ -3,9 +3,11 @@ import {
 	contentTemplates,
 	type createDb,
 	crossPostActions,
+	type Database,
 	externalPosts,
 	ideaActivity,
 	ideas,
+	media as mediaTable,
 	postRecyclingConfigs,
 	posts,
 	postTargets,
@@ -21,7 +23,7 @@ import { maybeDecrypt } from "../lib/crypto";
 import { parseCsv } from "../lib/csv-parser";
 import { getLinkedInRestHeaders, LINKEDIN_REST_BASE } from "../lib/linkedin-rest";
 import { notifyRealtime } from "../lib/notify-post-update";
-import { presignRelayMediaUrls } from "../lib/r2-presign";
+import { presignRelayMediaUrls, RELAY_MEDIA_HOST } from "../lib/r2-presign";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
@@ -68,11 +70,79 @@ type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 const PRESIGN_GET_EXPIRES = 3600;
 
+type MediaItem = { url: string; type?: string; thumbnail?: string };
+
 async function presignMediaUrls(
 	env: Env,
-	mediaArr: Array<{ url: string; type?: string }> | null,
-): Promise<Array<{ url: string; type?: string }> | null> {
+	mediaArr: MediaItem[] | null,
+): Promise<MediaItem[] | null> {
 	return presignRelayMediaUrls(env, mediaArr, PRESIGN_GET_EXPIRES);
+}
+
+/**
+ * Derive the relayapi-media storage key from a canonical media URL
+ * (https://media.relayapi.dev/<storageKey>), or null if it isn't one. This is
+ * the join key from the denormalized post `_media` snapshot back to the media row.
+ */
+function relayStorageKeyFromUrl(url: string): string | null {
+	try {
+		const u = new URL(url);
+		if (u.hostname !== RELAY_MEDIA_HOST) return null;
+		return decodeURIComponent(u.pathname.slice(1));
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * One query mapping every relay-hosted media URL across the given posts to its
+ * durable thumbnail URL, so card/list previews can fall back to the tiny stored
+ * thumbnail after the full-res original is lifecycle-deleted.
+ */
+async function buildThumbnailMap(
+	db: Database,
+	orgId: string,
+	mediaArrays: Array<MediaItem[] | null | undefined>,
+): Promise<Map<string, string>> {
+	const keys = new Set<string>();
+	for (const arr of mediaArrays) {
+		if (!arr) continue;
+		for (const item of arr) {
+			const key = relayStorageKeyFromUrl(item.url);
+			if (key) keys.add(key);
+		}
+	}
+	if (keys.size === 0) return new Map();
+	const rows = await db
+		.select({
+			storageKey: mediaTable.storageKey,
+			thumbnailUrl: mediaTable.thumbnailUrl,
+		})
+		.from(mediaTable)
+		.where(
+			and(
+				eq(mediaTable.organizationId, orgId),
+				inArray(mediaTable.storageKey, [...keys]),
+			),
+		);
+	const map = new Map<string, string>();
+	for (const r of rows) {
+		if (r.thumbnailUrl) map.set(r.storageKey, r.thumbnailUrl);
+	}
+	return map;
+}
+
+/** Attach durable thumbnail URLs to relay-hosted media items (before presigning). */
+function attachThumbnails(
+	mediaArr: MediaItem[] | null,
+	thumbMap: Map<string, string>,
+): MediaItem[] | null {
+	if (!mediaArr || thumbMap.size === 0) return mediaArr;
+	return mediaArr.map((item) => {
+		const key = relayStorageKeyFromUrl(item.url);
+		const thumbnail = key ? thumbMap.get(key) : undefined;
+		return thumbnail ? { ...item, thumbnail } : item;
+	});
 }
 
 // Matches an explicit UTC offset or "Z" at the end of an ISO datetime string.
@@ -795,10 +865,7 @@ app.openapi(listPosts, async (c) => {
 				}
 			}
 		}
-		const extMediaByPlatformPostId = new Map<
-			string,
-			Array<{ url: string; type?: string }>
-		>();
+		const extMediaByPlatformPostId = new Map<string, MediaItem[]>();
 		if (includeMedia && allPlatformPostIds.length > 0) {
 			const extRows = await db
 				.select({
@@ -815,24 +882,42 @@ app.openapi(listPosts, async (c) => {
 					),
 				);
 			for (const row of extRows) {
-				const media: Array<{ url: string; type?: string }> = [];
+				const items: MediaItem[] = [];
 				const urls = row.mediaUrls as string[] | null;
 				if (urls && urls.length > 0) {
 					for (const url of urls) {
-						media.push({ url, type: row.mediaType ?? undefined });
+						items.push({
+							url,
+							type: row.mediaType ?? undefined,
+							thumbnail: row.thumbnailUrl ?? undefined,
+						});
 					}
 				} else if (row.thumbnailUrl) {
 					// Fallback to thumbnail only when no full media URLs exist (e.g. video poster)
-					media.push({
+					items.push({
 						url: row.thumbnailUrl,
 						type: row.mediaType ?? undefined,
+						thumbnail: row.thumbnailUrl,
 					});
 				}
-				if (media.length > 0) {
-					extMediaByPlatformPostId.set(row.platformPostId, media);
+				if (items.length > 0) {
+					extMediaByPlatformPostId.set(row.platformPostId, items);
 				}
 			}
 		}
+
+		// One query maps every relay-hosted media URL on this page to its durable
+		// thumbnail, so previews survive after the full-res original is purged.
+		const thumbMap = includeMedia
+			? await buildThumbnailMap(
+					db,
+					orgId,
+					data.map((p) => {
+						const ov = p.platformOverrides as Record<string, unknown> | null;
+						return (ov?._media as MediaItem[] | undefined) ?? null;
+					}),
+				)
+			: new Map<string, string>();
 
 		const internalItems = await Promise.all(
 			data.map(async (p) => {
@@ -840,11 +925,11 @@ app.openapi(listPosts, async (c) => {
 				const overrides = p.platformOverrides as Record<string, unknown> | null;
 				const rawMedia =
 					includeMedia && overrides?._media
-						? (overrides._media as Array<{ url: string; type?: string }>)
+						? (overrides._media as MediaItem[])
 						: null;
 
 				// Prefer platform CDN media from external posts for published posts
-				let mediaArr: Array<{ url: string; type?: string }> | null = null;
+				let mediaArr: MediaItem[] | null = null;
 				if (includeMedia && p.status === "published") {
 					for (const t of pTargets) {
 						if (t.status === "published" && t.platformPostId) {
@@ -856,10 +941,10 @@ app.openapi(listPosts, async (c) => {
 						}
 					}
 				}
-				// Fall back to presigned R2 URLs
+				// Fall back to presigned R2 URLs, attaching durable thumbnails first.
 				if (!mediaArr) {
 					mediaArr = includeMedia
-						? await presignMediaUrls(c.env, rawMedia)
+						? await presignMediaUrls(c.env, attachThumbnails(rawMedia, thumbMap))
 						: rawMedia;
 				}
 
@@ -940,15 +1025,29 @@ app.openapi(listPosts, async (c) => {
 		platformsByPost.set(t.postId, list);
 	}
 
+	const leanThumbMap = includeMedia
+		? await buildThumbnailMap(
+				db,
+				orgId,
+				data.map((p) => {
+					const ov = p.platformOverrides as Record<string, unknown> | null;
+					return (ov?._media as MediaItem[] | undefined) ?? null;
+				}),
+			)
+		: new Map<string, string>();
+
 	const leanItems = await Promise.all(
 		data.map(async (p) => {
-			let mediaArr: Array<{ url: string; type?: string }> | null = null;
+			let mediaArr: MediaItem[] | null = null;
 			if (includeMedia) {
 				const overrides = p.platformOverrides as Record<string, unknown> | null;
 				const rawMedia = overrides?._media
-					? (overrides._media as Array<{ url: string; type?: string }>)
+					? (overrides._media as MediaItem[])
 					: null;
-				mediaArr = await presignMediaUrls(c.env, rawMedia);
+				mediaArr = await presignMediaUrls(
+					c.env,
+					attachThumbnails(rawMedia, leanThumbMap),
+				);
 			}
 			return {
 				id: p.id,
@@ -1843,9 +1942,61 @@ app.openapi(getPost, async (c) => {
 
 	const overrides = post.platformOverrides as Record<string, unknown> | null;
 	const rawMedia = overrides?._media
-		? (overrides._media as Array<{ url: string; type?: string }>)
+		? (overrides._media as MediaItem[])
 		: null;
-	const mediaArr = await presignMediaUrls(c.env, rawMedia);
+
+	// Prefer platform CDN media from external posts for published posts (parity
+	// with the list endpoint), so previews persist after the R2 original expires.
+	let mediaArr: MediaItem[] | null = null;
+	if (post.status === "published") {
+		const publishedPostIds = targets
+			.filter((t) => t.status === "published" && t.platformPostId)
+			.map((t) => t.platformPostId as string);
+		if (publishedPostIds.length > 0) {
+			const extRows = await db
+				.select({
+					platformPostId: externalPosts.platformPostId,
+					mediaUrls: externalPosts.mediaUrls,
+					mediaType: externalPosts.mediaType,
+					thumbnailUrl: externalPosts.thumbnailUrl,
+				})
+				.from(externalPosts)
+				.where(
+					and(
+						inArray(externalPosts.platformPostId, publishedPostIds),
+						eq(externalPosts.organizationId, orgId),
+					),
+				);
+			for (const row of extRows) {
+				const items: MediaItem[] = [];
+				const urls = row.mediaUrls as string[] | null;
+				if (urls && urls.length > 0) {
+					for (const url of urls) {
+						items.push({
+							url,
+							type: row.mediaType ?? undefined,
+							thumbnail: row.thumbnailUrl ?? undefined,
+						});
+					}
+				} else if (row.thumbnailUrl) {
+					items.push({
+						url: row.thumbnailUrl,
+						type: row.mediaType ?? undefined,
+						thumbnail: row.thumbnailUrl,
+					});
+				}
+				if (items.length > 0) {
+					mediaArr = items;
+					break;
+				}
+			}
+		}
+	}
+	// Fall back to presigned R2 URLs, attaching durable thumbnails first.
+	if (!mediaArr) {
+		const thumbMap = await buildThumbnailMap(db, orgId, [rawMedia]);
+		mediaArr = await presignMediaUrls(c.env, attachThumbnails(rawMedia, thumbMap));
+	}
 	const targetOpts = overrides
 		? Object.fromEntries(
 				Object.entries(overrides).filter(([k]) => k !== "_media"),

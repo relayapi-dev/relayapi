@@ -23,6 +23,12 @@ const MediaItem = z.object({
 		.enum(["image", "video", "gif", "document"])
 		.optional()
 		.describe("Media type. Inferred from URL extension if omitted."),
+	thumbnail: z
+		.string()
+		.optional()
+		.describe(
+			"Read-only. Stable, hyper-optimized preview URL that persists after the full-res original expires. Ignored on write.",
+		),
 });
 
 // --- Scheduled at: "now" | "draft" | ISO timestamp ---

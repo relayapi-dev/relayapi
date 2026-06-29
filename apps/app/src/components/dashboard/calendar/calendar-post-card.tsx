@@ -13,7 +13,8 @@ import type { CalendarPost } from "./use-calendar-posts";
 /** Simple popover for external (synced) posts — no API fetch needed, data is already on the card */
 function ExternalPostPopover({ post }: { post: CalendarPost }) {
   const dateStr = post.published_at || post.created_at;
-  const thumbUrl = post.media?.[0]?.url ?? null;
+  // Detail popover prefers the full-res original, falling back to the durable thumbnail.
+  const thumbUrl = post.media?.[0]?.url ?? post.media?.[0]?.thumbnail ?? null;
   const thumbType = post.media?.[0]?.type ?? "";
   const popoverIsVideo = thumbType === "video" || thumbType.startsWith("video/") || (() => { try { return /\.(mp4|mov|webm|avi)$/i.test(new URL(thumbUrl ?? "").pathname); } catch { return /\.(mp4|mov|webm|avi)$/i.test(thumbUrl ?? ""); } })();
   const accountName = post.accountName || platformLabels[post.platform] || post.platform || "Account";
@@ -171,11 +172,16 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
     : null;
 
   const primaryPlatform = post.platform || post.platforms?.[0] || "";
-  const thumbUrl = post.media?.[0]?.url ?? null;
-  const thumbType = post.media?.[0]?.type ?? "";
-  const isVideo = thumbType === "video" || thumbType.startsWith("video/") || (() => { try { return /\.(mp4|mov|webm|avi)$/i.test(new URL(thumbUrl ?? "").pathname); } catch { return /\.(mp4|mov|webm|avi)$/i.test(thumbUrl ?? ""); } })();
+  const media0 = post.media?.[0];
+  const originalUrl = media0?.url ?? null;
+  const thumbnailUrl = media0?.thumbnail ?? null;
+  // Cards prefer the durable, hyper-optimized thumbnail — it survives after the
+  // full-res original is purged by the R2 lifecycle rule.
+  const thumbUrl = thumbnailUrl ?? originalUrl;
+  const thumbType = media0?.type ?? "";
+  const isVideo = thumbType === "video" || thumbType.startsWith("video/") || (() => { try { return /\.(mp4|mov|webm|avi)$/i.test(new URL(originalUrl ?? "").pathname); } catch { return /\.(mp4|mov|webm|avi)$/i.test(originalUrl ?? ""); } })();
   const [videoError, setVideoError] = useState(false);
-  const hasMedia = thumbUrl && (!imgError || isVideo);
+  const hasMedia = thumbUrl && !imgError;
 
   const handlePointerDown = () => { didDrag.current = false; };
   const handlePointerMove = () => { didDrag.current = true; };
@@ -267,18 +273,20 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
             {/* Media thumbnail (right side, like Buffer) */}
             {hasMedia && thumbUrl && (
               <div className={cn("relative shrink-0", compact ? "w-10" : "w-12")}>
-                {isVideo ? (
+                {isVideo && !thumbnailUrl ? (
+                  // No durable poster yet — fall back to seeking the original video,
+                  // then to the original frame as an image if the video element fails.
                   videoError ? (
                     <img
-                      src={thumbUrl}
+                      src={originalUrl ?? ""}
                       alt=""
                       className="h-full w-full object-cover"
                       loading="lazy"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      onError={() => setImgError(true)}
                     />
                   ) : (
                     <video
-                      src={thumbUrl}
+                      src={originalUrl ?? ""}
                       muted
                       preload="metadata"
                       onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
@@ -287,6 +295,7 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
                     />
                   )
                 ) : (
+                  // Durable thumbnail (or a still image) — always a plain <img>.
                   <img
                     src={thumbUrl}
                     alt=""

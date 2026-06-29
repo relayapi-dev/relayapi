@@ -52,7 +52,7 @@ export interface PostDetail {
   scheduled_at: string | null;
   published_at: string | null;
   created_at: string | null;
-  media: Array<{ url: string; type?: string }> | null;
+  media: Array<{ url: string; type?: string; thumbnail?: string }> | null;
   targets: Record<string, PostTarget>;
 }
 
@@ -228,8 +228,13 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
   const targets = Object.values(detail.targets);
   const firstTarget = targets[0];
   const accountName = firstTarget?.displayName || firstTarget?.username || platformLabels[firstTarget?.platform ?? ""] || "Account";
-  const thumbUrl = detail.media?.[0]?.url ?? null;
-  const hasVideo = detail.media?.[0]?.type === "video" || (thumbUrl && /\.(mp4|mov|webm|avi)$/i.test(thumbUrl));
+  const original = detail.media?.[0]?.url ?? null;
+  const poster = detail.media?.[0]?.thumbnail ?? null;
+  // Image display + onError fallback prefer the durable poster (survives original
+  // expiry); the <video> element needs the original to seek/play.
+  const thumbUrl = poster ?? original;
+  const videoSrc = original ?? poster;
+  const hasVideo = detail.media?.[0]?.type === "video" || (original ? /\.(mp4|mov|webm|avi)$/i.test(original) : false);
   const platformUrl = targets.find((t) => t.platformUrl)?.platformUrl;
   const primaryPlatform = firstTarget?.platform;
   const errorRows = collectPostErrors(detail.targets);
@@ -325,7 +330,7 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
                 title="Click to preview video"
               >
                 <video
-                  src={thumbUrl}
+                  src={videoSrc ?? undefined}
                   muted
                   preload="metadata"
                   onLoadedMetadata={(e) => {
@@ -373,7 +378,7 @@ export function PostDetailPopover({ postId, onEdit, onDelete, onRetry, onExpand 
               title="Click to preview video"
             >
               <video
-                src={thumbUrl}
+                src={videoSrc ?? undefined}
                 muted
                 preload="metadata"
                 onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}

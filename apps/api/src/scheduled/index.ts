@@ -15,6 +15,7 @@ import { generateInvoices } from "../services/invoice-generator";
 import { processRecyclingPosts } from "../services/recycling-processor";
 import { processScheduledPosts } from "../services/scheduler";
 import { syncShortLinkClicks } from "../services/short-link-click-sync";
+import { backfillMissingThumbnails } from "../services/thumbnail-backfill";
 import { checkStreaks } from "../services/streak";
 import { enqueueExpiringTokenRefresh } from "../services/token-refresh";
 import { renewYouTubePubSubSubscriptions } from "../services/webhook-subscription";
@@ -68,8 +69,11 @@ export async function handleScheduled(
 		ctx.waitUntil(syncShortLinkClicks(env));
 	}
 
-	// Every 30 minutes: sync external ads and refresh ad metrics
+	// Every 30 minutes: sync external ads and refresh ad metrics + a small
+	// thumbnail-backfill batch (self-terminating once all eligible media has a
+	// durable preview).
 	if (event.cron === "*/30 * * * *") {
 		ctx.waitUntil(syncAllExternalAds(env));
+		ctx.waitUntil(backfillMissingThumbnails(env));
 	}
 }

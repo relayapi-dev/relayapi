@@ -1015,7 +1015,9 @@ function overviewCacheKey(accountId: string, dateRange: DateRange): string {
 
 async function getCachedPlatformOverview(
 	env: Env,
-	executionCtx: ExecutionContext,
+	// Only waitUntil is used; narrowing keeps Hono's c.executionCtx assignable here
+	// regardless of fields @cloudflare/workers-types adds to ExecutionContext.
+	executionCtx: Pick<ExecutionContext, "waitUntil">,
 	account: {
 		id: string;
 		platform: string;

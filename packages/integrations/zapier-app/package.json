@@ -10,13 +10,13 @@
     "zapier:validate": "zapier validate"
   },
   "dependencies": {
-    "zapier-platform-core": "15.*"
+    "zapier-platform-core": "^19.0.0"
   },
   "devDependencies": {
-    "jest": "^29.0.0",
-    "zapier-platform-cli": "15.*",
+    "jest": "^30.4.2",
+    "zapier-platform-cli": "^19.0.0",
     "typescript": "^6.0.3",
-    "@types/jest": "^29.0.0"
+    "@types/jest": "^30.0.0"
   },
   "zapier": {
     "id": 0,

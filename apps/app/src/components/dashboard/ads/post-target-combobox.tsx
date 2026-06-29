@@ -126,7 +126,8 @@ export function PostTargetCombobox({
                 platform: target.platform,
                 accountName: acc.display_name ?? acc.username ?? null,
                 content: post.content ?? null,
-                thumbnailUrl: post.media?.[0]?.url ?? null,
+                thumbnailUrl:
+                  post.media?.[0]?.thumbnail ?? post.media?.[0]?.url ?? null,
                 publishedAt: post.published_at ?? null,
               });
             }

@@ -84,7 +84,8 @@ export function PostSearchCombobox({
                       platformPostId: acc.platform_post_id,
                       content: post.content,
                       platform,
-                      thumbnailUrl: post.media?.[0]?.url ?? null,
+                      thumbnailUrl:
+                        post.media?.[0]?.thumbnail ?? post.media?.[0]?.url ?? null,
                       publishedAt: post.published_at ?? null,
                     });
                   }

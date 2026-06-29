@@ -53,14 +53,14 @@ export interface QueuePost {
   published_at: string | null;
   created_at: string;
   targets?: Record<string, PostTarget>;
-  media?: Array<{ url: string; type?: string }> | null;
+  media?: Array<{ url: string; type?: string; thumbnail?: string }> | null;
 }
 
 /** A flattened card — one per target (account + platform). */
 export interface FlatQueueCard {
   postId: string;
   content: string;
-  media: Array<{ url: string; type?: string }> | null;
+  media: Array<{ url: string; type?: string; thumbnail?: string }> | null;
   platform: string;
   accountId: string;
   displayName: string | null;
@@ -118,12 +118,12 @@ function formatTime(dateStr: string | null): string {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-function getMediaThumbUrl(media: Array<{ url: string; type?: string }>): string | null {
+function getMediaThumbUrl(media: Array<{ url: string; type?: string; thumbnail?: string }>): string | null {
   if (!media.length) return null;
   return media[0]?.url ?? null;
 }
 
-function isVideo(media: Array<{ url: string; type?: string }>): boolean {
+function isVideo(media: Array<{ url: string; type?: string; thumbnail?: string }>): boolean {
   const first = media[0];
   if (!first) return false;
   if (first.type === "video") return true;
@@ -191,6 +191,14 @@ export function QueuePostCard({
   const [previewOpen, setPreviewOpen] = useState(false);
   const thumbUrl = card.media ? getMediaThumbUrl(card.media) : null;
   const hasVideo = card.media ? isVideo(card.media) : false;
+  // Durable, hyper-optimized poster that survives after the R2 original expires.
+  const posterUrl = card.media?.[0]?.thumbnail ?? null;
+  // Small card prefers the durable poster and renders it as a plain image;
+  // the full-screen preview prefers the original (for video playback / quality).
+  const cardThumb = posterUrl ?? thumbUrl;
+  const showVideoInCard = hasVideo && !posterUrl;
+  const overlayUrl = thumbUrl ?? posterUrl;
+  const overlayIsVideo = hasVideo && !!thumbUrl;
   const accountName = card.displayName || card.username || platformLabels[card.platform] || card.platform;
   const st = statusConfig[card.targetStatus] ?? draftStatusConfig;
   const StIcon = st.icon;
@@ -291,15 +299,15 @@ export function QueuePostCard({
                 <p className="text-[13px] text-muted-foreground italic">No content</p>
               )}
             </div>
-            {thumbUrl && (
+            {cardThumb && (
               <button
                 type="button"
                 onClick={() => setPreviewOpen(true)}
                 className="shrink-0 relative cursor-zoom-in"
               >
-                {hasVideo ? (
+                {showVideoInCard ? (
                   <video
-                    src={thumbUrl}
+                    src={cardThumb}
                     muted
                     preload="metadata"
                     onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
@@ -307,7 +315,7 @@ export function QueuePostCard({
                   />
                 ) : (
                   <img
-                    src={thumbUrl}
+                    src={cardThumb}
                     alt=""
                     className="w-20 h-20 sm:w-36 sm:h-36 rounded-md object-cover"
                   />
@@ -327,7 +335,7 @@ export function QueuePostCard({
         </div>
 
         {/* Media preview overlay */}
-        {previewOpen && thumbUrl && (
+        {previewOpen && overlayUrl && (
           // biome-ignore lint/a11y/noStaticElementInteractions: modal backdrop that closes on click; it contains a close button so it cannot be a <button> itself
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
@@ -343,9 +351,9 @@ export function QueuePostCard({
             >
               <X className="size-6" />
             </button>
-            {hasVideo ? (
+            {overlayIsVideo ? (
               <video
-                src={thumbUrl}
+                src={overlayUrl}
                 controls
                 autoPlay
                 className="max-w-[90vw] max-h-[90vh] rounded-lg"
@@ -357,7 +365,7 @@ export function QueuePostCard({
             ) : (
               // biome-ignore lint/a11y/noStaticElementInteractions: preview image only stops backdrop-close propagation; it is not an interactive control
               <img
-                src={thumbUrl}
+                src={overlayUrl}
                 alt=""
                 className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain"
                 onClick={(e) => e.stopPropagation()}

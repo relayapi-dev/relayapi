@@ -1,6 +1,36 @@
+/**
+ * Media Transformations binding (env.MEDIA) — extracts still frames from video
+ * originals stored in R2. Typed minimally here; the official workers-types may
+ * not export this binding yet. Optional: absent in tests/local without the beta.
+ * Docs: https://developers.cloudflare.com/stream/transform-videos/bindings/
+ */
+export interface MediaTransformResult {
+	response(): Promise<Response>;
+	media(): Promise<ReadableStream<Uint8Array>>;
+	contentType(): Promise<string>;
+}
+export interface MediaTransformInput {
+	transform(opts: { width?: number; height?: number }): MediaTransformInput;
+	output(opts: {
+		mode: "frame" | "video" | "spritesheet" | "audio";
+		time?: string;
+		duration?: string;
+		format?: "jpg" | "png" | "m4a";
+	}): MediaTransformResult;
+}
+export interface MediaTransformBinding {
+	input(stream: ReadableStream<Uint8Array> | null): MediaTransformInput;
+}
+
 export interface Env {
 	KV: KVNamespace;
 	MEDIA_BUCKET: R2Bucket;
+	/** Durable, never-expiring store for hyper-optimized post preview thumbnails. */
+	THUMBNAIL_BUCKET: R2Bucket;
+	/** Cloudflare Images binding for generating tiny WebP thumbnails from R2 bytes. */
+	IMAGES?: ImagesBinding;
+	/** Media Transformations binding for extracting video poster frames. */
+	MEDIA?: MediaTransformBinding;
 	HYPERDRIVE: Hyperdrive;
 	PUBLISH_QUEUE: Queue;
 	EMAIL_QUEUE: Queue;

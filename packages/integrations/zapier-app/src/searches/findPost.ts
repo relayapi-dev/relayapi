@@ -4,7 +4,7 @@ const perform = async (z: ZObject, bundle: Bundle) => {
   const params: Record<string, string> = {};
 
   if (bundle.inputData.status) {
-    params.status = bundle.inputData.status;
+    params.status = String(bundle.inputData.status);
   }
 
   params.limit = String(bundle.inputData.limit || 10);

@@ -27,12 +27,12 @@
     "start": "bun src/index.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@relayapi/sdk": "workspace:*",
-    "zod": "^3.23.8"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "typescript": "^6.0.3",
-    "@types/node": "^22"
+    "@types/node": "^26"
   }
 }

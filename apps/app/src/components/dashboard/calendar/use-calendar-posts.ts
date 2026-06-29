@@ -32,7 +32,7 @@ export interface CalendarPost {
   scheduled_at: string | null;
   published_at: string | null;
   created_at: string;
-  media?: Array<{ url: string; type?: string }> | null;
+  media?: Array<{ url: string; type?: string; thumbnail?: string }> | null;
   /** External posts from synced platforms — can't be edited/fetched via /api/posts/{id} */
   isExternal?: boolean;
   platformUrl?: string | null;
@@ -52,7 +52,7 @@ interface RawCalendarPost {
   scheduled_at?: string | null;
   published_at?: string | null;
   created_at?: string | null;
-  media?: Array<{ url: string; type?: string }> | null;
+  media?: Array<{ url: string; type?: string; thumbnail?: string }> | null;
   media_type?: string;
   media_urls?: string[];
   thumbnail_url?: string | null;
@@ -146,7 +146,7 @@ export function useCalendarPosts(
               scheduled_at: null,
               published_at: raw.published_at || null,
               created_at: raw.created_at || raw.published_at || "",
-              media: raw.thumbnail_url ? [{ url: raw.thumbnail_url, type: raw.media_type === "video" ? "video/mp4" : "image/jpeg" }] : (raw.media_urls?.length ? raw.media_urls.map((u: string) => ({ url: u })) : null),
+              media: raw.thumbnail_url ? [{ url: raw.thumbnail_url, type: raw.media_type === "video" ? "video/mp4" : "image/jpeg", thumbnail: raw.thumbnail_url }] : (raw.media_urls?.length ? raw.media_urls.map((u: string) => ({ url: u, thumbnail: raw.thumbnail_url ?? undefined })) : null),
               isExternal: true,
               platformUrl: raw.platform_url || null,
               accountName: raw.account_name || null,

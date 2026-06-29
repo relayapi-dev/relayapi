@@ -25,7 +25,7 @@ interface SentPost {
   id: string;
   source?: "internal" | "external";
   content: string | null;
-  media?: Array<{ url: string; type?: string; poster?: string }> | null;
+  media?: Array<{ url: string; type?: string; poster?: string; thumbnail?: string }> | null;
   published_at: string | null;
   created_at: string;
   // Internal posts have targets
@@ -83,7 +83,7 @@ export interface SentPostListProps {
 interface FlatCard {
   postId: string;
   content: string | null;
-  media: Array<{ url: string; type?: string; poster?: string }> | null;
+  media: Array<{ url: string; type?: string; poster?: string; thumbnail?: string }> | null;
   target: SentPostTarget;
   dateKey: string;
   sortTime: number;

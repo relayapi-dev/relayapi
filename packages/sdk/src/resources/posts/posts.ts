@@ -320,6 +320,12 @@ export namespace PostCreateResponse {
      * Media type. Inferred from URL extension if omitted.
      */
     type?: 'image' | 'video' | 'gif' | 'document';
+
+    /**
+     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+     * original expires. Ignored on write.
+     */
+    thumbnail?: string;
   }
 
   export interface Targets {
@@ -466,6 +472,12 @@ export namespace PostRetrieveResponse {
      * Media type. Inferred from URL extension if omitted.
      */
     type?: 'image' | 'video' | 'gif' | 'document';
+
+    /**
+     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+     * original expires. Ignored on write.
+     */
+    thumbnail?: string;
   }
 
   export interface Targets {
@@ -602,6 +614,12 @@ export namespace PostUpdateResponse {
      * Media type. Inferred from URL extension if omitted.
      */
     type?: 'image' | 'video' | 'gif' | 'document';
+
+    /**
+     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+     * original expires. Ignored on write.
+     */
+    thumbnail?: string;
   }
 
   export interface Targets {
@@ -743,6 +761,12 @@ export namespace PostListResponse {
        * Media type. Inferred from URL extension if omitted.
        */
       type?: 'image' | 'video' | 'gif' | 'document';
+
+      /**
+       * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+       * original expires. Ignored on write.
+       */
+      thumbnail?: string;
     }
 
     export interface Targets {
@@ -872,6 +896,12 @@ export namespace PostBulkCreateResponse {
        * Media type. Inferred from URL extension if omitted.
        */
       type?: 'image' | 'video' | 'gif' | 'document';
+
+      /**
+       * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+       * original expires. Ignored on write.
+       */
+      thumbnail?: string;
     }
 
     export interface Targets {
@@ -1002,6 +1032,12 @@ export namespace PostRetryResponse {
      * Media type. Inferred from URL extension if omitted.
      */
     type?: 'image' | 'video' | 'gif' | 'document';
+
+    /**
+     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+     * original expires. Ignored on write.
+     */
+    thumbnail?: string;
   }
 
   export interface Targets {
@@ -1123,6 +1159,12 @@ export namespace PostUnpublishResponse {
      * Media type. Inferred from URL extension if omitted.
      */
     type?: 'image' | 'video' | 'gif' | 'document';
+
+    /**
+     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+     * original expires. Ignored on write.
+     */
+    thumbnail?: string;
   }
 
   export interface Targets {
@@ -1413,6 +1455,12 @@ export namespace PostCreateParams {
      * Media type. Inferred from URL extension if omitted.
      */
     type?: 'image' | 'video' | 'gif' | 'document';
+
+    /**
+     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+     * original expires. Ignored on write.
+     */
+    thumbnail?: string;
   }
 }
 
@@ -1469,6 +1517,12 @@ export namespace PostUpdateParams {
      * Media type. Inferred from URL extension if omitted.
      */
     type?: 'image' | 'video' | 'gif' | 'document';
+
+    /**
+     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+     * original expires. Ignored on write.
+     */
+    thumbnail?: string;
   }
 }
 
@@ -1580,6 +1634,12 @@ export namespace PostBulkCreateParams {
        * Media type. Inferred from URL extension if omitted.
        */
       type?: 'image' | 'video' | 'gif' | 'document';
+
+      /**
+       * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
+       * original expires. Ignored on write.
+       */
+      thumbnail?: string;
     }
   }
 }

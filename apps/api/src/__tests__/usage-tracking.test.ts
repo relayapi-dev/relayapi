@@ -96,13 +96,13 @@ function createTestApp(opts: {
  */
 function createExecutionCtx() {
 	const promises: Promise<unknown>[] = [];
-	const ctx: ExecutionContext = {
+	const ctx = {
 		waitUntil: (p: Promise<unknown>) => {
 			promises.push(p);
 		},
 		passThroughOnException: () => {},
 		props: undefined,
-	};
+	} as unknown as ExecutionContext;
 	return { ctx, promises };
 }
 

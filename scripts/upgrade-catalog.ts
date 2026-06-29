@@ -23,9 +23,8 @@
  * logs each one it skips. Pass --force to bump them anyway.
  *
  * Each catalog resolves against the npm `latest` dist-tag by default. Named
- * catalogs can opt into a different tag via CATALOG_DIST_TAG — e.g. the `astro`
- * catalog tracks the `beta` tag so the Astro 7 pre-releases keep moving forward
- * instead of being reverted to the v6 `latest`.
+ * catalogs can opt into a different tag via CATALOG_DIST_TAG (currently none —
+ * the Astro packages now live in the default catalog on the stable `latest` tag).
  *
  * Usage:
  *   bun run deps:upgrade              # upgrade catalog (minus HELD), then `bun install`
@@ -65,13 +64,10 @@ const HELD: Record<string, string> = {};
 
 const FORCE = process.argv.includes("--force");
 
-// npm dist-tag to resolve each catalog against. Anything not listed uses "latest".
-// The Astro 7 packages live in the named `astro` catalog and track `beta`: their
-// npm `latest` tag still points at the v6 stable line, so resolving against
-// `latest` would silently downgrade them.
-const CATALOG_DIST_TAG: Record<string, string> = {
-	astro: "beta",
-};
+// npm dist-tag to resolve each named catalog against. Anything not listed (and the
+// default catalog) uses "latest". Empty today — add an entry to track a named
+// catalog against a pre-release tag (e.g. `beta`) during a future migration.
+const CATALOG_DIST_TAG: Record<string, string> = {};
 
 function distTagFor(label: string): string {
 	// `label` is "catalog" for the default catalog or "catalogs.<name>" for a
