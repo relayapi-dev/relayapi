@@ -113,18 +113,30 @@ async function buildThumbnailMap(
 		}
 	}
 	if (keys.size === 0) return new Map();
-	const rows = await db
-		.select({
-			storageKey: mediaTable.storageKey,
-			thumbnailUrl: mediaTable.thumbnailUrl,
-		})
-		.from(mediaTable)
-		.where(
-			and(
-				eq(mediaTable.organizationId, orgId),
-				inArray(mediaTable.storageKey, [...keys]),
-			),
+	// Thumbnails are an optional enrichment: never let this lookup fail the whole
+	// posts list. If it throws (e.g. the thumbnail columns aren't migrated yet on
+	// this DB), serve posts without thumbnails instead of 500ing the calendar.
+	let rows: Array<{ storageKey: string; thumbnailUrl: string | null }> = [];
+	try {
+		rows = await db
+			.select({
+				storageKey: mediaTable.storageKey,
+				thumbnailUrl: mediaTable.thumbnailUrl,
+			})
+			.from(mediaTable)
+			.where(
+				and(
+					eq(mediaTable.organizationId, orgId),
+					inArray(mediaTable.storageKey, [...keys]),
+				),
+			);
+	} catch (err) {
+		console.error(
+			"[posts] thumbnail lookup failed; serving without thumbnails:",
+			err,
 		);
+		return new Map();
+	}
 	const map = new Map<string, string>();
 	for (const r of rows) {
 		if (r.thumbnailUrl) map.set(r.storageKey, r.thumbnailUrl);
