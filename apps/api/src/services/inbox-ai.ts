@@ -67,7 +67,7 @@ interface MessageForPriority {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// The base model may not be in @cloudflare/workers-types yet — cast to satisfy the Ai interface.
+// The base model may not be in the generated runtime types yet — cast to satisfy the Ai interface.
 const MODEL =
 	"@cf/meta/llama-3.1-8b-instruct" as "@cf/meta/llama-3.1-8b-instruct-fp8";
 

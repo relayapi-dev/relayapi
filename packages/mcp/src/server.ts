@@ -27,7 +27,7 @@ function tool<Args>(
 	mcp: McpServer,
 	name: string,
 	description: string,
-	inputSchema: Record<string, z.ZodTypeAny>,
+	inputSchema: Record<string, z.ZodType>,
 	handler: ToolHandler<Args>,
 ): void {
 	const loose = mcp as unknown as LooseServer;

@@ -28,7 +28,7 @@ export async function getCachedBestTimes(
 	env: Env,
 	orgId: string,
 	// Only waitUntil is used; narrowing keeps Hono's c.executionCtx assignable here
-	// regardless of fields @cloudflare/workers-types adds to ExecutionContext.
+	// regardless of fields Cloudflare's generated runtime types add to ExecutionContext.
 	executionCtx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<BestTimeSlot[]> {
 	// Try KV cache first

@@ -193,7 +193,9 @@ describe("http_request handler", () => {
 		);
 
 		expect(captured.url).toBe("https://example.com/hook?name=bob");
-		const headerVal = (captured.init?.headers as Record<string, string>)["x-email"];
+		const headerVal = (
+			captured.init?.headers as Record<string, string> | undefined
+		)?.["x-email"];
 		expect(headerVal).toBe("bob@example.com");
 		expect(captured.init?.body).toBe('{"greet":"hi bob"}');
 	});

@@ -7,19 +7,19 @@
 		"dev": "dotenv -e .dev.vars -- wrangler dev --port 8789 --persist-to ../../.wrangler/state",
 		"build": "cd ../.. && bun install && cd apps/api",
 		"deploy": "wrangler deploy",
+		"types": "wrangler types --include-env=false",
 		"test": "bun run scripts/run-tests-isolated.ts",
 		"test:single-process": "bun test",
 		"test:billing": "bun run scripts/run-tests-isolated.ts auth.test stripe-webhooks usage-tracking billing-flows"
 	},
 	"dependencies": {
-		"@aws-sdk/client-s3": "catalog:",
-		"@aws-sdk/s3-request-presigner": "catalog:",
 		"@dagrejs/dagre": "catalog:",
 		"@hono/swagger-ui": "catalog:",
 		"@hono/zod-openapi": "catalog:",
 		"@react-email/components": "catalog:",
 		"@react-email/render": "catalog:",
 		"@relayapi/db": "workspace:*",
+		"aws4fetch": "catalog:",
 		"fast-xml-parser": "catalog:",
 		"hono": "catalog:",
 		"resend": "catalog:",
@@ -27,7 +27,7 @@
 		"zod": "catalog:"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "catalog:",
+		"@types/node": "catalog:",
 		"dotenv-cli": "catalog:",
 		"typescript": "catalog:",
 		"wrangler": "catalog:"

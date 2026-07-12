@@ -29,10 +29,10 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@relayapi/sdk": "workspace:*",
-    "zod": "^3.25.76"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
-    "@types/node": "^26"
+    "typescript": "^7.0.2",
+    "@types/node": "^26.1.1"
   }
 }

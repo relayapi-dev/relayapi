@@ -37,7 +37,6 @@ const createPost = {
   display: {
     label: 'Create Post',
     description: 'Publish or schedule a post to one or more social media platforms.',
-    important: true,
   },
 
   operation: {

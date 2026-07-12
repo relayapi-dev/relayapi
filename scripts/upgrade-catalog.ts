@@ -60,7 +60,10 @@ interface Change {
 // latest release needs a deliberate migration or breaks the build. Upgrade these
 // by hand (and re-validate with `bun run typecheck`) when you're ready to migrate.
 // Pass `--force` to ignore this list. Keep the reasons up to date.
-const HELD: Record<string, string> = {};
+const HELD: Record<string, string> = {
+	typescript:
+		"TypeScript 7 does not yet expose the stable compiler API required by Astro and MDX; keep the shared catalog on TypeScript 6 until those tools support v7",
+};
 
 const FORCE = process.argv.includes("--force");
 

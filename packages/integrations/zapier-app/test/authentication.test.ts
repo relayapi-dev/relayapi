@@ -1,19 +1,8 @@
-import { beforeAll, describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from 'vitest';
 import type { ZObject } from 'zapier-platform-core';
-
-// Minimal mock of zapier-platform-core's createAppTester and tools
-const zapier = require('zapier-platform-core');
-zapier.tools = zapier.tools || { env: { inject: () => {} } };
-
-import App from '../src/index';
-
-zapier.createAppTester(App);
+import { addAuthHeader, handleErrors } from '../src/lib/requestHelper';
 
 describe('Authentication', () => {
-  beforeAll(() => {
-    zapier.tools.env.inject();
-  });
-
   it('should pass the API key in the Authorization header', async () => {
     const bundle = {
       authData: {
@@ -22,7 +11,6 @@ describe('Authentication', () => {
     };
 
     // Test the beforeRequest middleware directly
-    const { addAuthHeader } = require('../src/lib/requestHelper');
     const request = { headers: {} };
     const result = addAuthHeader(request, {} as unknown as ZObject, bundle);
 
@@ -31,8 +19,6 @@ describe('Authentication', () => {
   });
 
   it('should handle 401 errors as ExpiredAuthError', () => {
-    const { handleErrors } = require('../src/lib/requestHelper');
-
     const mockResponse = {
       status: 401,
       data: JSON.stringify({ error: { code: 'unauthorized', message: 'Invalid API key' } }),
@@ -61,8 +47,6 @@ describe('Authentication', () => {
   });
 
   it('should handle generic errors with status code', () => {
-    const { handleErrors } = require('../src/lib/requestHelper');
-
     const mockResponse = {
       status: 422,
       data: { error: { code: 'validation_error', message: 'Content is required' } },
@@ -91,8 +75,6 @@ describe('Authentication', () => {
   });
 
   it('should pass through successful responses', () => {
-    const { handleErrors } = require('../src/lib/requestHelper');
-
     const mockResponse = {
       status: 200,
       data: { plan: 'pro', requests_used: 150, requests_limit: 10000 },

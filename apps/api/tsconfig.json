@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "types": ["bun-types", "@cloudflare/workers-types"],
+    "types": ["bun-types", "./worker-configuration.d.ts", "node"],
     "outDir": "./dist",
     // typecheck-only (noEmit); the @relayapi/* paths pull workspace source into
     // the program, so root the project at the repo root to satisfy TS 6.0's

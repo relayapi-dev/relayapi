@@ -51,7 +51,6 @@ const postPublished = {
   display: {
     label: 'Post Published',
     description: 'Triggers when a post is successfully published to a platform.',
-    important: true,
   },
 
   operation: {
