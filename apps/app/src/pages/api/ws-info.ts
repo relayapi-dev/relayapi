@@ -28,7 +28,7 @@ export const GET: APIRoute = async (ctx) => {
   const wsUrl = `${API_BASE_URL.replace(/^http/, "ws")}/v1/ws`;
 
   return Response.json(
-    { url: wsUrl, ticket: data.ticket, expires_at: data.expires_at },
+    { url: wsUrl, protocol: data.protocol, expires_at: data.expires_at },
     { headers: { "Cache-Control": "no-store" } },
   );
 };

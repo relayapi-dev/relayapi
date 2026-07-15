@@ -8,6 +8,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "deploy": "wrangler deploy",
+    "types": "wrangler types worker-configuration.d.ts --env-file /dev/null --env-interface AppWorkerEnv --include-runtime=false",
+    "types:check": "wrangler types worker-configuration.d.ts --env-file /dev/null --env-interface AppWorkerEnv --include-runtime=false --check",
     "test": "bun test"
   },
   "dependencies": {
@@ -31,6 +33,7 @@
     "@react-three/fiber": "catalog:",
     "@react-three/postprocessing": "catalog:",
     "@relayapi/auth": "workspace:*",
+    "@relayapi/config": "workspace:*",
     "@relayapi/db": "workspace:*",
     "@relayapi/sdk": "workspace:*",
     "@tailwindcss/vite": "catalog:",

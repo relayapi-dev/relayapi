@@ -109,6 +109,7 @@ export interface AutoPostRuleCreateParams {
   content_template?: string;
   append_feed_url?: boolean;
   account_ids?: Array<string>;
+  /** Omission inherits the sole account workspace in either policy mode. Without a scoped account parent, strict mode requires an explicit value. */
   workspace_id?: string;
 }
 

@@ -22,6 +22,7 @@ export function createMockStripe(overrides?: Record<string, unknown>) {
 		},
 		invoices: {
 			list: async (_params?: unknown) => ({ data: [] as unknown[] }),
+			retrieve: async (id: string) => createMockInvoice({ id }),
 		},
 		invoiceItems: {
 			create: async (_params?: unknown) => ({ id: "ii_mock" }),
@@ -47,6 +48,41 @@ export function createMockStripe(overrides?: Record<string, unknown>) {
 	};
 }
 
+export function createMockInvoice(
+	overrides?: Partial<{
+		id: string;
+		status: "draft" | "open" | "paid" | "uncollectible" | "void";
+		subscriptionId: string | null;
+		amountDue: number;
+		hostedUrl: string | null;
+		periodStart: number;
+		periodEnd: number;
+		created: number;
+	}>,
+) {
+	const now = Math.floor(Date.now() / 1000);
+	const subscriptionId =
+		overrides?.subscriptionId === undefined
+			? "sub_test_123"
+			: overrides.subscriptionId;
+	return {
+		id: overrides?.id ?? "in_test_123",
+		status: overrides?.status ?? "open",
+		parent: subscriptionId
+			? { subscription_details: { subscription: subscriptionId } }
+			: null,
+		amount_due: overrides?.amountDue ?? 500,
+		hosted_invoice_url:
+			overrides?.hostedUrl ?? "https://stripe.com/invoice/mock",
+		period_start: overrides?.periodStart ?? now - 30 * 86400,
+		period_end: overrides?.periodEnd ?? now,
+		created: overrides?.created ?? now - 30 * 86400,
+		status_transitions: {
+			paid_at: (overrides?.status ?? "open") === "paid" ? now : null,
+		},
+	};
+}
+
 // ── Mock Stripe Objects ──
 
 export function createMockSubscription(
@@ -56,7 +92,9 @@ export function createMockSubscription(
 		cancel_at_period_end: boolean;
 		metadata: Record<string, string>;
 		customer: string;
-		items: { data: Array<{ current_period_start: number; current_period_end: number }> };
+		items: {
+			data: Array<{ current_period_start: number; current_period_end: number }>;
+		};
 	}>,
 ) {
 	const now = Math.floor(Date.now() / 1000);
@@ -128,8 +166,7 @@ export function createSubscriptionUpdatedEvent(overrides?: {
 				items: {
 					data: [
 						{
-							current_period_start:
-								overrides?.periodStart ?? now - 30 * 86400,
+							current_period_start: overrides?.periodStart ?? now - 30 * 86400,
 							current_period_end: overrides?.periodEnd ?? now + 30 * 86400,
 						},
 					],
@@ -192,7 +229,8 @@ export function createInvoiceFinalizedEvent(overrides?: {
 							},
 						},
 				amount_due: overrides?.amountDue ?? 500,
-				hosted_invoice_url: overrides?.hostedUrl ?? "https://stripe.com/invoice/mock",
+				hosted_invoice_url:
+					overrides?.hostedUrl ?? "https://stripe.com/invoice/mock",
 				period_start: overrides?.periodStart ?? now - 30 * 86400,
 				period_end: overrides?.periodEnd ?? now,
 			},

@@ -334,7 +334,7 @@ Indexes:
 
 ### 4.5 Preserved adjacent tables (not modified by this rebuild)
 
-These tables remain intact; the new runtime reads from them: `contacts`, `conversations`, `inbox_messages`, `inbox_conversations`, `custom_field_definitions`, `custom_field_values`, `tags`, `contact_tags`, `segments`, `contact_segment_memberships`, `social_accounts`, `workspaces`, `organizations`, `subscription_lists`, `contact_subscriptions`, `ref_urls`, `qr_codes`, `landing_pages`, `broadcasts`, `whatsapp_broadcasts`, `ai_knowledge_bases`, `ai_knowledge_documents`, `ai_knowledge_chunks`, `ai_agents` (AI tables remain untouched even though AI nodes are dropped — inbox AI features may still use them).
+These tables remain intact; the new runtime reads from them: `contacts`, `conversations`, `inbox_messages`, `inbox_conversations`, `custom_field_definitions`, `custom_field_values`, `tags`, `contact_tags`, `segments`, `contact_segment_memberships`, `social_accounts`, `workspaces`, `organizations`, `subscription_lists`, `contact_subscriptions`, `ref_urls`, `qr_codes`, `landing_pages`, `broadcasts`, `ai_knowledge_bases`, `ai_knowledge_documents`, `ai_knowledge_chunks`, `ai_agents` (AI tables remain untouched even though AI nodes are dropped — inbox AI features may still use them).
 
 ---
 

@@ -52,7 +52,7 @@ describe("uploadMedia", () => {
 		]);
 	});
 
-	it("falls back to the direct upload proxy when confirm fails", async () => {
+	it("does not upload the bytes again when confirm fails", async () => {
 		const calls: string[] = [];
 		const getUrl = (input: RequestInfo | URL) =>
 			typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -71,28 +71,24 @@ describe("uploadMedia", () => {
 				return new Response(null, { status: 200 });
 			}
 
-			// Confirm rejects (e.g. MIME/size re-validation) — must not return the
-			// unconfirmed URL; fall through to the direct upload proxy instead.
+			// Confirm rejects (e.g. MIME/size re-validation). The bytes already
+			// reached storage, so the proxy must not upload them a second time.
 			if (url === "/api/media/confirm") {
 				return new Response(null, { status: 400 });
-			}
-
-			if (url === "/api/media/upload?filename=hello.png") {
-				return Response.json({ url: "https://cdn.example.test/hello.png" });
 			}
 
 			throw new Error(`Unexpected fetch: ${url}`);
 		}) as typeof fetch;
 
 		const file = new File(["hello"], "hello.png", { type: "image/png" });
-		const result = await uploadMedia(file);
+		await expect(uploadMedia(file)).rejects.toThrow(
+			"Upload confirmation failed: 400",
+		);
 
-		expect(result.url).toBe("https://cdn.example.test/hello.png");
 		expect(calls).toEqual([
 			"/api/media/presign",
 			"https://uploads.example.test/file.png",
 			"/api/media/confirm",
-			"/api/media/upload?filename=hello.png",
 		]);
 	});
 

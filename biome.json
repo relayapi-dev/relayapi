@@ -6,7 +6,12 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["**", "!packages/sdk", "!apps/api/worker-configuration.d.ts"]
+		"includes": [
+			"**",
+			"!packages/sdk",
+			"!apps/api/worker-configuration.d.ts",
+			"!apps/docs/openapi.json"
+		]
 	},
 	"css": {
 		"parser": {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock } from "bun:test";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
 
 let activeDb: ReturnType<typeof import("./__mocks__/db").createMockDb>;
 
@@ -20,10 +20,16 @@ mock.module("@relayapi/db", () => {
 		dailyToolLimit: { name: "dailyToolLimit" },
 		toString: () => "organization_subscriptions",
 	};
+	const organization = {
+		id: { name: "id" },
+		lifecycleStatus: { name: "lifecycleStatus" },
+		toString: () => "organization",
+	};
 
 	return {
 		createDb: () => activeDb,
 		apikey,
+		organization,
 		organizationSubscriptions,
 	};
 });
@@ -36,10 +42,15 @@ mock.module("drizzle-orm", () => {
 });
 
 import { Hono } from "hono";
-import type { Env, Variables, KVKeyData } from "../types";
 import { authMiddleware } from "../middleware/auth";
-import { type MockKV, createMockEnv, seedApiKeyInKV, hashKey } from "./__mocks__/env";
+import type { Env, KVKeyData, Variables } from "../types";
 import { createMockDb } from "./__mocks__/db";
+import {
+	createMockEnv,
+	hashKey,
+	type MockKV,
+	seedApiKeyInKV,
+} from "./__mocks__/env";
 
 const TEST_KEY = "rlay_live_testauthkey0000000000000000000000000000000";
 type AuthErrorResponse = { error: { code: string; message: string } };
@@ -103,6 +114,12 @@ function seedDbApiKey(
 			status: overrides.status ?? "active",
 			aiEnabled: overrides.aiEnabled ?? true,
 			dailyToolLimit: overrides.dailyToolLimit ?? 10,
+		},
+	]);
+	activeDb._seed("organization", [
+		{
+			id: overrides.organizationId ?? "org_db_1",
+			lifecycleStatus: "active",
 		},
 	]);
 }
@@ -197,6 +214,8 @@ describe("authMiddleware", () => {
 			expires_at: null,
 			plan: "pro",
 			calls_included: 10_000,
+			principal_type: "service",
+			principal_id: null,
 			ai_enabled: true,
 			daily_tool_limit: 10,
 			// Stripe billing-period bounds — null here because the mock subscription
@@ -204,6 +223,50 @@ describe("authMiddleware", () => {
 			period_start: null,
 			period_end: null,
 		});
+	});
+
+	it("fails closed when a cached workspace grant has a malformed shape", async () => {
+		const hashedKey = await hashKey(TEST_KEY);
+		await kv.put(
+			`apikey:${hashedKey}`,
+			JSON.stringify({
+				org_id: "org_cached",
+				key_id: "key_cached",
+				permissions: ["write"],
+				workspace_scope: "ws_123",
+				expires_at: null,
+				plan: "pro",
+				calls_included: 10_000,
+			}),
+		);
+
+		const res = await app.fetch(
+			makeRequest({ Authorization: `Bearer ${TEST_KEY}` }),
+			env,
+			mockCtx,
+		);
+
+		expect(res.status).toBe(401);
+		const body = await readJson<AuthErrorResponse>(res);
+		expect(body.error.message).toBe("Invalid API key scope");
+		expect(await kv.get(`apikey:${hashedKey}`)).toBeNull();
+	});
+
+	it("does not cache or authorize malformed database workspace metadata", async () => {
+		const hashedKey = await hashKey(TEST_KEY);
+		seedDbApiKey(hashedKey, {
+			metadata: { workspace_scope: "ws_123" },
+		});
+
+		const res = await app.fetch(
+			makeRequest({ Authorization: `Bearer ${TEST_KEY}` }),
+			env,
+			mockCtx,
+		);
+
+		expect(res.status).toBe(401);
+		const body = await readJson<AuthErrorResponse>(res);
+		expect(body.error.message).toBe("Invalid API key");
 	});
 
 	it("rejects expired API key with 401", async () => {

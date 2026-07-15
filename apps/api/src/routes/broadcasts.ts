@@ -1,15 +1,31 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import {
+	broadcastRecipients,
+	broadcasts,
+	contactChannels,
+	contacts,
 	type createDb,
 	socialAccounts,
-	broadcasts,
-	broadcastRecipients,
-	contacts,
-	contactChannels,
 } from "@relayapi/db";
-import { and, eq, desc, inArray, sql, } from "drizzle-orm";
-import { maybeDecrypt } from "../lib/crypto";
-import { ErrorResponse } from "../schemas/common";
+import {
+	and,
+	desc,
+	eq,
+	inArray,
+	isNotNull,
+	isNull,
+	or,
+	sql,
+} from "drizzle-orm";
+import { decryptAccountToken } from "../lib/account-token-crypto";
+import { inheritOperationalCreateScope } from "../lib/request-access";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+	canAccessWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+} from "../lib/workspace-scope";
 import {
 	AddRecipientsBody,
 	AddRecipientsResponse,
@@ -23,10 +39,19 @@ import {
 	ScheduleBroadcastBody,
 	UpdateBroadcastBody,
 } from "../schemas/broadcasts";
+import { ErrorResponse } from "../schemas/common";
+import {
+	getAllowedRecipientHashes,
+	hashRecipientIdentifier,
+} from "../services/contact-consent";
 import type { Env, Variables } from "../types";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+const WorkspaceDeniedResponse = {
+	description: "Workspace access denied",
+	content: { "application/json": { schema: ErrorResponse } },
+} as const;
 
 type BroadcastStatus =
 	| "draft"
@@ -34,6 +59,7 @@ type BroadcastStatus =
 	| "sending"
 	| "sent"
 	| "partially_failed"
+	| "requires_attention"
 	| "failed"
 	| "cancelled";
 
@@ -79,18 +105,21 @@ async function getAccount(
 			and(
 				eq(socialAccounts.id, accountId),
 				eq(socialAccounts.organizationId, orgId),
+				eq(socialAccounts.lifecycleStatus, "active"),
 			),
 		)
 		.limit(1);
 	if (!account) return null;
-	if (workspaceScope !== "all") {
-		if (!account.workspaceId || !workspaceScope.includes(account.workspaceId)) {
-			return null;
-		}
-	}
+	if (!canAccessWorkspaceScope(workspaceScope, account.workspaceId))
+		return null;
 	return {
 		...account,
-		accessToken: await maybeDecrypt(account.accessToken, encryptionKey),
+		accessToken: await decryptAccountToken(
+			account.accessToken,
+			encryptionKey,
+			account.id,
+			"access_token",
+		),
 	};
 }
 
@@ -112,6 +141,10 @@ const createBroadcast = createRoute({
 		201: {
 			description: "Broadcast created",
 			content: { "application/json": { schema: BroadcastResponse } },
+		},
+		400: {
+			description: "Account and workspace do not match",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
 			description: "Account not found",
@@ -145,6 +178,7 @@ const getBroadcast = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: BroadcastIdParams },
 	responses: {
+		403: WorkspaceDeniedResponse,
 		200: {
 			description: "Broadcast details",
 			content: { "application/json": { schema: BroadcastResponse } },
@@ -168,6 +202,7 @@ const updateBroadcast = createRoute({
 		body: { content: { "application/json": { schema: UpdateBroadcastBody } } },
 	},
 	responses: {
+		403: WorkspaceDeniedResponse,
 		200: {
 			description: "Broadcast updated",
 			content: { "application/json": { schema: BroadcastResponse } },
@@ -192,6 +227,7 @@ const deleteBroadcast = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: BroadcastIdParams },
 	responses: {
+		403: WorkspaceDeniedResponse,
 		204: { description: "Deleted" },
 		400: {
 			description: "Invalid status",
@@ -216,6 +252,7 @@ const addRecipients = createRoute({
 		body: { content: { "application/json": { schema: AddRecipientsBody } } },
 	},
 	responses: {
+		403: WorkspaceDeniedResponse,
 		200: {
 			description: "Recipients added",
 			content: { "application/json": { schema: AddRecipientsResponse } },
@@ -243,6 +280,7 @@ const listRecipients = createRoute({
 		query: RecipientListQuery,
 	},
 	responses: {
+		403: WorkspaceDeniedResponse,
 		200: {
 			description: "Recipients list",
 			content: { "application/json": { schema: RecipientListResponse } },
@@ -265,6 +303,7 @@ const sendBroadcastRoute = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: BroadcastIdParams },
 	responses: {
+		403: WorkspaceDeniedResponse,
 		202: {
 			description: "Broadcast queued for sending",
 			content: { "application/json": { schema: BroadcastResponse } },
@@ -294,6 +333,7 @@ const scheduleBroadcastRoute = createRoute({
 		},
 	},
 	responses: {
+		403: WorkspaceDeniedResponse,
 		200: {
 			description: "Broadcast scheduled",
 			content: { "application/json": { schema: BroadcastResponse } },
@@ -318,6 +358,7 @@ const cancelBroadcast = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: BroadcastIdParams },
 	responses: {
+		403: WorkspaceDeniedResponse,
 		200: {
 			description: "Broadcast cancelled",
 			content: { "application/json": { schema: BroadcastResponse } },
@@ -343,11 +384,59 @@ app.openapi(createBroadcast, async (c) => {
 	const db = c.get("db");
 
 	// Validate account exists and belongs to org
-	const account = await getAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Social account not found" } },
 			404,
+		);
+	}
+	// The account is the authoritative parent. Its non-null scope satisfies
+	// Require Workspace ID even when the redundant request field is omitted.
+	const scope = await inheritOperationalCreateScope(
+		c,
+		body.workspace_id,
+		[account.workspaceId],
+		"broadcast",
+	);
+	if (!scope.ok) return scope.response as never;
+	if (account.workspaceId !== scope.workspaceId) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_ACCOUNT",
+					message: "Broadcast account must belong to the broadcast workspace",
+				},
+			},
+			400,
+		);
+	}
+	if (account.platform === "whatsapp" && !body.template) {
+		return c.json(
+			{
+				error: {
+					code: "VALIDATION_ERROR",
+					message: "WhatsApp broadcasts require an approved template",
+				},
+			},
+			400,
+		);
+	}
+	if (account.platform !== "whatsapp" && !body.message_text) {
+		return c.json(
+			{
+				error: {
+					code: "VALIDATION_ERROR",
+					message: "Non-WhatsApp broadcasts require message_text",
+				},
+			},
+			400,
 		);
 	}
 
@@ -355,7 +444,7 @@ app.openapi(createBroadcast, async (c) => {
 		.insert(broadcasts)
 		.values({
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: scope.workspaceId,
 			socialAccountId: account.id,
 			platform: account.platform,
 			name: body.name,
@@ -373,7 +462,8 @@ app.openapi(createBroadcast, async (c) => {
 
 app.openapi(listBroadcasts, async (c) => {
 	const orgId = c.get("orgId");
-	const { workspace_id, account_id, status, cursor, limit } = c.req.valid("query");
+	const { workspace_id, account_id, status, cursor, limit } =
+		c.req.valid("query");
 	const db = c.get("db");
 
 	const conditions = [eq(broadcasts.organizationId, orgId)];
@@ -435,6 +525,8 @@ app.openapi(getBroadcast, async (c) => {
 			404,
 		);
 	}
+	const denied = assertWorkspaceScope(c, row.workspaceId);
+	if (denied) return denied;
 
 	return c.json(serializeBroadcast(row));
 });
@@ -458,6 +550,8 @@ app.openapi(updateBroadcast, async (c) => {
 			404,
 		);
 	}
+	const denied = assertWorkspaceScope(c, existing.workspaceId);
+	if (denied) return denied;
 
 	if (existing.status !== "draft") {
 		return c.json(
@@ -471,23 +565,44 @@ app.openapi(updateBroadcast, async (c) => {
 		);
 	}
 
-	const updates: Record<string, unknown> = { updatedAt: new Date() };
+	const updates: Record<string, unknown> = {
+		updatedAt: new Date(),
+		revision: sql`${broadcasts.revision} + 1`,
+	};
 	if (body.name !== undefined) updates.name = body.name;
 	if (body.description !== undefined) updates.description = body.description;
 	if (body.message_text !== undefined) updates.messageText = body.message_text;
 	if (body.template) {
 		updates.templateName = body.template.name;
 		updates.templateLanguage = body.template.language;
-		if (body.template.components) updates.templateComponents = body.template.components;
+		if (body.template.components)
+			updates.templateComponents = body.template.components;
 	}
 
 	const [updated] = await db
 		.update(broadcasts)
 		.set(updates)
-		.where(eq(broadcasts.id, id))
+		.where(
+			and(
+				eq(broadcasts.id, id),
+				eq(broadcasts.organizationId, orgId),
+				eq(broadcasts.status, "draft"),
+				eq(broadcasts.revision, existing.revision),
+			),
+		)
 		.returning();
 
-	if (!updated) throw new Error("Failed to update broadcast");
+	if (!updated) {
+		return c.json(
+			{
+				error: {
+					code: "CONCURRENT_MODIFICATION",
+					message: "Broadcast changed while the update was being applied",
+				},
+			},
+			400,
+		);
+	}
 	return c.json(serializeBroadcast(updated));
 });
 
@@ -497,7 +612,11 @@ app.openapi(deleteBroadcast, async (c) => {
 	const db = c.get("db");
 
 	const [existing] = await db
-		.select({ status: broadcasts.status, workspaceId: broadcasts.workspaceId })
+		.select({
+			status: broadcasts.status,
+			workspaceId: broadcasts.workspaceId,
+			revision: broadcasts.revision,
+		})
 		.from(broadcasts)
 		.where(and(eq(broadcasts.id, id), eq(broadcasts.organizationId, orgId)))
 		.limit(1);
@@ -524,7 +643,28 @@ app.openapi(deleteBroadcast, async (c) => {
 		);
 	}
 
-	await db.delete(broadcasts).where(eq(broadcasts.id, id));
+	const deleted = await db
+		.delete(broadcasts)
+		.where(
+			and(
+				eq(broadcasts.id, id),
+				eq(broadcasts.organizationId, orgId),
+				inArray(broadcasts.status, ["draft", "cancelled"]),
+				eq(broadcasts.revision, existing.revision),
+			),
+		)
+		.returning({ id: broadcasts.id });
+	if (deleted.length === 0) {
+		return c.json(
+			{
+				error: {
+					code: "CONCURRENT_MODIFICATION",
+					message: "Broadcast changed before it could be deleted",
+				},
+			},
+			400,
+		);
+	}
 	return c.body(null, 204);
 });
 
@@ -547,6 +687,8 @@ app.openapi(addRecipients, async (c) => {
 			404,
 		);
 	}
+	const denied = assertWorkspaceScope(c, broadcast.workspaceId);
+	if (denied) return denied;
 
 	if (broadcast.status !== "draft" && broadcast.status !== "scheduled") {
 		return c.json(
@@ -559,7 +701,6 @@ app.openapi(addRecipients, async (c) => {
 			400,
 		);
 	}
-
 	// Collect all identifiers to insert
 	const toInsert: Array<{
 		contactId: string | null;
@@ -592,6 +733,7 @@ app.openapi(addRecipients, async (c) => {
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
+					eq(contacts.scopeKey, broadcast.scopeKey),
 					inArray(contacts.id, body.contact_ids),
 					eq(contactChannels.socialAccountId, broadcast.socialAccountId),
 				),
@@ -610,41 +752,107 @@ app.openapi(addRecipients, async (c) => {
 			{
 				error: {
 					code: "VALIDATION_ERROR",
-					message: "No recipients provided. Supply phones, contact_ids, or identifiers.",
+					message:
+						"No recipients provided. Supply phones, contact_ids, or identifiers.",
 				},
 			},
 			400,
 		);
 	}
 
-	// Bulk insert — returning the inserted rows lets us count added vs skipped
-	// without doing N round-trips. onConflictDoNothing matches the prior
-	// try/catch handling of unique constraint collisions.
-	const insertResult = await db
-		.insert(broadcastRecipients)
-		.values(
-			toInsert.map((item) => ({
-				broadcastId: id,
-				contactId: item.contactId,
-				contactIdentifier: item.contactIdentifier,
+	const allowedHashes = await getAllowedRecipientHashes(
+		db,
+		orgId,
+		broadcast.platform,
+		"marketing",
+		toInsert.map((item) => ({
+			identifier: item.contactIdentifier,
+			contactId: item.contactId,
+		})),
+	);
+	const authorized = (
+		await Promise.all(
+			toInsert.map(async (item) => ({
+				...item,
+				contactIdentifierHash: await hashRecipientIdentifier(
+					broadcast.platform,
+					item.contactIdentifier,
+				),
 			})),
 		)
-		.onConflictDoNothing()
-		.returning({ id: broadcastRecipients.id });
+	).filter((item) => allowedHashes.has(item.contactIdentifierHash));
 
-	const added = insertResult.length;
-	const skipped = toInsert.length - added;
+	// Lock and revalidate the parent, insert the recipient identities, and advance
+	// the aggregate count/revision atomically. A scheduler claim can no longer see
+	// a partially-added recipient set or race the pre-read status check.
+	const mutation = await db.transaction(async (tx) => {
+		const [locked] = await tx
+			.select()
+			.from(broadcasts)
+			.where(and(eq(broadcasts.id, id), eq(broadcasts.organizationId, orgId)))
+			.limit(1)
+			.for("update");
+		if (
+			!locked ||
+			(locked.status !== "draft" && locked.status !== "scheduled")
+		) {
+			return { ok: false as const, added: 0 };
+		}
 
-	// Update recipient count
-	if (added > 0) {
-		await db
-			.update(broadcasts)
-			.set({
-				recipientCount: sql`${broadcasts.recipientCount} + ${added}`,
-				updatedAt: new Date(),
-			})
-			.where(eq(broadcasts.id, id));
+		const inserted =
+			authorized.length > 0
+				? await tx
+						.insert(broadcastRecipients)
+						.values(
+							authorized.map((item) => ({
+								organizationId: orgId,
+								scopeKey: locked.scopeKey,
+								broadcastId: id,
+								contactId: item.contactId,
+								contactIdentifier: item.contactIdentifier,
+								contactIdentifierHash: item.contactIdentifierHash,
+							})),
+						)
+						.onConflictDoNothing()
+						.returning({ id: broadcastRecipients.id })
+				: [];
+		const added = inserted.length;
+		if (added > 0) {
+			const advanced = await tx
+				.update(broadcasts)
+				.set({
+					recipientCount: sql`${broadcasts.recipientCount} + ${added}`,
+					revision: sql`${broadcasts.revision} + 1`,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(broadcasts.id, id),
+						eq(broadcasts.organizationId, orgId),
+						inArray(broadcasts.status, ["draft", "scheduled"]),
+						eq(broadcasts.revision, locked.revision),
+					),
+				)
+				.returning({ id: broadcasts.id });
+			if (advanced.length === 0) {
+				throw new Error("Broadcast recipient revision fence failed");
+			}
+		}
+		return { ok: true as const, added };
+	});
+	if (!mutation.ok) {
+		return c.json(
+			{
+				error: {
+					code: "CONCURRENT_MODIFICATION",
+					message: "Broadcast started sending before recipients were added",
+				},
+			},
+			400,
+		);
 	}
+	const added = mutation.added;
+	const skipped = toInsert.length - added;
 
 	return c.json({ added, skipped });
 });
@@ -658,7 +866,11 @@ app.openapi(listRecipients, async (c) => {
 
 	// Verify broadcast exists and belongs to org
 	const [broadcast] = await db
-		.select({ id: broadcasts.id })
+		.select({
+			id: broadcasts.id,
+			workspaceId: broadcasts.workspaceId,
+			scopeKey: broadcasts.scopeKey,
+		})
 		.from(broadcasts)
 		.where(and(eq(broadcasts.id, id), eq(broadcasts.organizationId, orgId)))
 		.limit(1);
@@ -669,8 +881,14 @@ app.openapi(listRecipients, async (c) => {
 			404,
 		);
 	}
+	const denied = assertWorkspaceScope(c, broadcast.workspaceId);
+	if (denied) return denied;
 
-	const conditions = [eq(broadcastRecipients.broadcastId, id)];
+	const conditions = [
+		eq(broadcastRecipients.broadcastId, id),
+		eq(broadcastRecipients.organizationId, orgId),
+		eq(broadcastRecipients.scopeKey, broadcast.scopeKey),
+	];
 	if (status) conditions.push(eq(broadcastRecipients.status, status));
 
 	if (cursor) {
@@ -696,7 +914,13 @@ app.openapi(listRecipients, async (c) => {
 		id: r.id,
 		contact_id: r.contactId ?? null,
 		contact_identifier: r.contactIdentifier,
-		status: r.status as "pending" | "sent" | "failed",
+		status: r.status as
+			| "pending"
+			| "sending"
+			| "sent"
+			| "failed"
+			| "unknown"
+			| "cancelled",
 		message_id: r.messageId ?? null,
 		error: r.error ?? null,
 		sent_at: r.sentAt?.toISOString() ?? null,
@@ -726,6 +950,9 @@ app.openapi(sendBroadcastRoute, async (c) => {
 			404,
 		);
 	}
+	if (isWorkspaceScopeDenied(c, broadcast.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	if (broadcast.status !== "draft" && broadcast.status !== "scheduled") {
 		return c.json(
@@ -733,6 +960,17 @@ app.openapi(sendBroadcastRoute, async (c) => {
 				error: {
 					code: "INVALID_STATUS",
 					message: `Broadcast is already ${broadcast.status}`,
+				},
+			},
+			400,
+		);
+	}
+	if (broadcast.recipientCount === 0) {
+		return c.json(
+			{
+				error: {
+					code: "NO_RECIPIENTS",
+					message: "Add at least one recipient before sending",
 				},
 			},
 			400,
@@ -772,12 +1010,31 @@ app.openapi(sendBroadcastRoute, async (c) => {
 			status: "scheduled",
 			scheduledAt: new Date(),
 			completedAt: null,
+			leaseExpiresAt: null,
+			revision: sql`${broadcasts.revision} + 1`,
 			updatedAt: new Date(),
 		})
-		.where(eq(broadcasts.id, id))
+		.where(
+			and(
+				eq(broadcasts.id, id),
+				eq(broadcasts.organizationId, orgId),
+				inArray(broadcasts.status, ["draft", "scheduled"]),
+				eq(broadcasts.revision, broadcast.revision),
+			),
+		)
 		.returning();
 
-	if (!updated) throw new Error("Failed to update broadcast");
+	if (!updated) {
+		return c.json(
+			{
+				error: {
+					code: "CONCURRENT_MODIFICATION",
+					message: "Broadcast changed before it could be queued",
+				},
+			},
+			400,
+		);
+	}
 	return c.json(serializeBroadcast(updated), 202);
 });
 
@@ -800,6 +1057,8 @@ app.openapi(scheduleBroadcastRoute, async (c) => {
 			404,
 		);
 	}
+	const denied = assertWorkspaceScope(c, existing.workspaceId);
+	if (denied) return denied;
 
 	if (existing.status !== "draft" && existing.status !== "scheduled") {
 		return c.json(
@@ -807,6 +1066,17 @@ app.openapi(scheduleBroadcastRoute, async (c) => {
 				error: {
 					code: "INVALID_STATUS",
 					message: "Only draft or scheduled broadcasts can be scheduled",
+				},
+			},
+			400,
+		);
+	}
+	if (existing.recipientCount === 0) {
+		return c.json(
+			{
+				error: {
+					code: "NO_RECIPIENTS",
+					message: "Add at least one recipient before scheduling",
 				},
 			},
 			400,
@@ -831,12 +1101,31 @@ app.openapi(scheduleBroadcastRoute, async (c) => {
 		.set({
 			status: "scheduled",
 			scheduledAt,
+			leaseExpiresAt: null,
+			revision: sql`${broadcasts.revision} + 1`,
 			updatedAt: new Date(),
 		})
-		.where(eq(broadcasts.id, id))
+		.where(
+			and(
+				eq(broadcasts.id, id),
+				eq(broadcasts.organizationId, orgId),
+				inArray(broadcasts.status, ["draft", "scheduled"]),
+				eq(broadcasts.revision, existing.revision),
+			),
+		)
 		.returning();
 
-	if (!updated) throw new Error("Failed to update broadcast");
+	if (!updated) {
+		return c.json(
+			{
+				error: {
+					code: "CONCURRENT_MODIFICATION",
+					message: "Broadcast changed before it could be scheduled",
+				},
+			},
+			400,
+		);
+	}
 	return c.json(serializeBroadcast(updated));
 });
 
@@ -858,30 +1147,99 @@ app.openapi(cancelBroadcast, async (c) => {
 			404,
 		);
 	}
+	const denied = assertWorkspaceScope(c, existing.workspaceId);
+	if (denied) return denied;
 
-	if (existing.status !== "scheduled") {
+	if (existing.status !== "scheduled" && existing.status !== "sending") {
 		return c.json(
 			{
 				error: {
 					code: "INVALID_STATUS",
-					message: "Only scheduled broadcasts can be cancelled",
+					message: "Only scheduled or sending broadcasts can be cancelled",
 				},
 			},
 			400,
 		);
 	}
 
-	const [updated] = await db
-		.update(broadcasts)
-		.set({
-			status: "cancelled",
-			scheduledAt: null,
-			updatedAt: new Date(),
-		})
-		.where(eq(broadcasts.id, id))
-		.returning();
+	const updated = await db.transaction(async (tx) => {
+		const [cancelled] = await tx
+			.update(broadcasts)
+			.set({
+				status: "cancelled",
+				scheduledAt: null,
+				completedAt: new Date(),
+				leaseExpiresAt: null,
+				revision: sql`${broadcasts.revision} + 1`,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(broadcasts.id, id),
+					eq(broadcasts.organizationId, orgId),
+					inArray(broadcasts.status, ["scheduled", "sending"]),
+					eq(broadcasts.revision, existing.revision),
+				),
+			)
+			.returning();
+		if (!cancelled) return null;
+		await tx
+			.update(broadcastRecipients)
+			.set({
+				status: "cancelled",
+				deliveryState: "cancelled",
+				claimedAt: null,
+				error: "Broadcast cancelled before provider delivery",
+			})
+			.where(
+				and(
+					eq(broadcastRecipients.broadcastId, id),
+					eq(broadcastRecipients.organizationId, orgId),
+					eq(broadcastRecipients.scopeKey, existing.scopeKey),
+					or(
+						eq(broadcastRecipients.status, "pending"),
+						and(
+							eq(broadcastRecipients.status, "sending"),
+							isNull(broadcastRecipients.requestMayHaveBeenSentAt),
+						),
+					),
+				),
+			);
+		// Requests that already crossed the provider boundary cannot safely be
+		// called cancelled or retried. Freeze them as unknown immediately so a
+		// stopped, now-fenced worker cannot leave `sending` rows under a cancelled
+		// parent indefinitely (and a late response cannot overwrite the decision).
+		await tx
+			.update(broadcastRecipients)
+			.set({
+				status: "unknown",
+				deliveryState: "unknown",
+				claimedAt: null,
+				error: "Broadcast cancelled after the provider boundary",
+			})
+			.where(
+				and(
+					eq(broadcastRecipients.broadcastId, id),
+					eq(broadcastRecipients.organizationId, orgId),
+					eq(broadcastRecipients.scopeKey, existing.scopeKey),
+					eq(broadcastRecipients.status, "sending"),
+					isNotNull(broadcastRecipients.requestMayHaveBeenSentAt),
+				),
+			);
+		return cancelled;
+	});
 
-	if (!updated) throw new Error("Failed to update broadcast");
+	if (!updated) {
+		return c.json(
+			{
+				error: {
+					code: "CONCURRENT_MODIFICATION",
+					message: "Broadcast finished or changed before cancellation",
+				},
+			},
+			400,
+		);
+	}
 	return c.json(serializeBroadcast(updated));
 });
 

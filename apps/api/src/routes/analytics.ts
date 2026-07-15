@@ -7,7 +7,8 @@ import {
 	socialAccounts,
 } from "@relayapi/db";
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
-import { maybeDecrypt } from "../lib/crypto";
+import { decryptAccountToken } from "../lib/account-token-crypto";
+import { mapConcurrently } from "../lib/concurrency";
 import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
 import {
 	AnalyticsQuery,
@@ -24,6 +25,7 @@ import {
 	YouTubeDailyViewsQuery,
 	YouTubeDailyViewsResponse,
 } from "../schemas/analytics";
+import { ErrorResponse } from "../schemas/common";
 import {
 	ChannelsQuery,
 	ChannelsResponse,
@@ -34,19 +36,17 @@ import {
 	PlatformPostsQuery,
 	PlatformPostsResponse,
 } from "../schemas/platform-analytics";
-import { ErrorResponse } from "../schemas/common";
+import { getCachedBestTimes } from "../services/best-time-cache";
+import { getPlatformFetcher } from "../services/platform-analytics";
 import {
+	type DateRange,
+	hasAnalyticsScopes,
 	PLATFORMS_WITH_ANALYTICS,
 	PlatformAnalyticsError,
-	hasAnalyticsScopes,
-	type DateRange,
 	type PlatformOverview,
 	type PlatformPostMetrics,
 } from "../services/platform-analytics/types";
-import { getPlatformFetcher } from "../services/platform-analytics";
-import { getCachedBestTimes } from "../services/best-time-cache";
 import type { Env, Variables } from "../types";
-import { mapConcurrently } from "../lib/concurrency";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 const ANALYTICS_OVERVIEW_CACHE_TTL_SECONDS = 300;
@@ -997,7 +997,12 @@ async function getAccountWithToken(
 	if (!account) return null;
 	return {
 		...account,
-		accessToken: await maybeDecrypt(account.accessToken, encryptionKey),
+		accessToken: await decryptAccountToken(
+			account.accessToken,
+			encryptionKey,
+			account.id,
+			"access_token",
+		),
 	};
 }
 
@@ -1204,7 +1209,12 @@ app.openapi(getChannels, async (c) => {
 
 		if (hasAnalytics && !needsReconnect && account.accessToken) {
 			try {
-				const accessToken = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY);
+				const accessToken = await decryptAccountToken(
+					account.accessToken,
+					c.env.ENCRYPTION_KEY,
+					account.id,
+					"access_token",
+				);
 				if (accessToken) {
 					const overview = await getCachedPlatformOverview(
 						c.env,

@@ -1,12 +1,33 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { inboxConversationNotes, inboxConversations, inboxMessages, member, user as userTable } from "@relayapi/db";
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import {
+	inboxConversationNotes,
+	inboxConversations,
+	inboxMessages,
+	member,
+	user as userTable,
+} from "@relayapi/db";
+import { and, eq, inArray } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
+import { resolveInboxNoteActor } from "../lib/inbox-note-actor";
+import { notifyRealtime } from "../lib/notify-post-update";
+import {
+	INVALID_CURSOR_BODY,
+	InvalidPaginationCursorError,
+} from "../lib/pagination-cursor";
 import {
 	isWorkspaceScopeDenied,
 	WORKSPACE_ACCESS_DENIED_BODY,
+	workspaceScopeSqlCondition,
 } from "../lib/workspace-scope";
 import { ErrorResponse } from "../schemas/common";
+import {
+	AddReactionBody,
+	DeleteMessageQuery,
+	MessageActionResponse,
+	RemoveReactionQuery,
+	SendMessageBody,
+	SendTypingBody,
+} from "../schemas/inbox";
 import {
 	BulkActionBody,
 	BulkActionResponse,
@@ -22,22 +43,14 @@ import {
 	UpdateConversationResponse,
 } from "../schemas/inbox-feed";
 import {
-	AddReactionBody,
-	DeleteMessageQuery,
-	MessageActionResponse,
-	RemoveReactionQuery,
-	SendMessageBody,
-	SendTypingBody,
-} from "../schemas/inbox";
-import {
 	CreateInboxNoteBody,
-	DeleteInboxNoteQuery,
 	DeleteInboxNoteResponse,
 	InboxNoteResponse,
 	ListInboxNotesResponse,
 	NoteIdParam,
 	UpdateInboxNoteBody,
 } from "../schemas/inbox-notes";
+import { authorizeConversationReply } from "../services/conversation-reply-authorization";
 import {
 	getConversationWithMessages,
 	getInboxStats,
@@ -46,9 +59,8 @@ import {
 	searchMessages,
 	updateConversation,
 } from "../services/inbox-persistence";
-import { notifyRealtime } from "../lib/notify-post-update";
-import { getAccount, igGraphHost } from "./inbox-helpers";
 import type { Env, Variables } from "../types";
+import { igGraphHost, resolveInboxTarget } from "./inbox-helpers";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -151,6 +163,10 @@ const feedRoute = createRoute({
 			description: "Paginated list of conversations",
 			content: { "application/json": { schema: FeedResponse } },
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -165,19 +181,30 @@ app.openapi(feedRoute, async (c) => {
 		c.req.valid("query");
 
 	const parsedLabels = labels
-		? labels.split(",").map((l) => l.trim()).filter(Boolean)
+		? labels
+				.split(",")
+				.map((l) => l.trim())
+				.filter(Boolean)
 		: undefined;
 
-	const result = await listConversations(db, orgId, {
-		type,
-		platform,
-		status,
-		accountId: account_id,
-		labels: parsedLabels,
-		cursor,
-		limit,
-		workspaceScope: c.get("workspaceScope"),
-	});
+	let result: Awaited<ReturnType<typeof listConversations>>;
+	try {
+		result = await listConversations(db, orgId, {
+			type,
+			platform,
+			status,
+			accountId: account_id,
+			labels: parsedLabels,
+			cursor,
+			limit,
+			workspaceScope: c.get("workspaceScope"),
+		});
+	} catch (error) {
+		if (error instanceof InvalidPaginationCursorError) {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+		throw error;
+	}
 
 	return c.json(
 		{
@@ -234,13 +261,12 @@ app.openapi(bulkRoute, async (c) => {
 			eq(inboxConversations.organizationId, orgId),
 		];
 		if (workspaceScope !== "all") {
-			const scopeCondition = or(
-				inArray(inboxConversations.workspaceId, workspaceScope),
-				isNull(inboxConversations.workspaceId),
+			conds.push(
+				workspaceScopeSqlCondition(
+					workspaceScope,
+					inboxConversations.workspaceId,
+				),
 			);
-			if (scopeCondition) {
-				conds.push(scopeCondition);
-			}
 		}
 		return conds;
 	};
@@ -274,7 +300,8 @@ app.openapi(bulkRoute, async (c) => {
 		if (action === "archive") setClause.status = "archived";
 		else if (action === "unarchive") setClause.status = "open";
 		else if (action === "mark_read") setClause.unreadCount = 0;
-		else if (action === "set_priority") setClause.priority = params?.priority ?? "normal";
+		else if (action === "set_priority")
+			setClause.priority = params?.priority ?? "normal";
 
 		try {
 			const rows = await db
@@ -324,7 +351,11 @@ app.openapi(bulkRoute, async (c) => {
 				{ labels: merged },
 				workspaceScope,
 			);
-			return { id: conversationId, ok: !!result, error: result ? null : "not found" };
+			return {
+				id: conversationId,
+				ok: !!result,
+				error: result ? null : "not found",
+			};
 		}),
 	);
 
@@ -364,6 +395,10 @@ const searchRoute = createRoute({
 			description: "Search results",
 			content: { "application/json": { schema: SearchResponse } },
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -374,17 +409,24 @@ const searchRoute = createRoute({
 app.openapi(searchRoute, async (c) => {
 	const db = c.get("db");
 	const orgId = c.get("orgId");
-	const { q, platform, since, until, cursor, limit } =
-		c.req.valid("query");
+	const { q, platform, since, until, cursor, limit } = c.req.valid("query");
 
-	const result = await searchMessages(db, orgId, q, {
-		platform,
-		since,
-		until,
-		cursor,
-		limit,
-		workspaceScope: c.get("workspaceScope"),
-	});
+	let result: Awaited<ReturnType<typeof searchMessages>>;
+	try {
+		result = await searchMessages(db, orgId, q, {
+			platform,
+			since,
+			until,
+			cursor,
+			limit,
+			workspaceScope: c.get("workspaceScope"),
+		});
+	} catch (error) {
+		if (error instanceof InvalidPaginationCursorError) {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+		throw error;
+	}
 
 	return c.json(
 		{
@@ -478,7 +520,12 @@ app.openapi(getConversationRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 
-	const result = await getConversationWithMessages(db, id, orgId, c.get("workspaceScope"));
+	const result = await getConversationWithMessages(
+		db,
+		id,
+		orgId,
+		c.get("workspaceScope"),
+	);
 
 	if (!result) {
 		return c.json(
@@ -562,12 +609,18 @@ app.openapi(updateConversationRoute, async (c) => {
 		}
 	}
 
-	const updated = await updateConversation(db, id, orgId, {
-		status: body.status,
-		labels: body.labels,
-		priority: body.priority,
-		assignedUserId: body.assigned_user_id,
-	}, c.get("workspaceScope"));
+	const updated = await updateConversation(
+		db,
+		id,
+		orgId,
+		{
+			status: body.status,
+			labels: body.labels,
+			priority: body.priority,
+			assignedUserId: body.assigned_user_id,
+		},
+		c.get("workspaceScope"),
+	);
 
 	if (!updated) {
 		return c.json(
@@ -622,38 +675,52 @@ app.openapi(sendMessageRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id: conversationId } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const { account_id, text, attachments, message_tag, quick_replies, template, reply_to } = body;
+	const {
+		account_id,
+		text,
+		attachments,
+		message_tag,
+		quick_replies,
+		template,
+		reply_to,
+	} = body;
 	const db = c.get("db");
 
-	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	if (!account?.accessToken) {
+	const target = await resolveInboxTarget(db, {
+		conversationId,
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+		assertedAccountId: account_id,
+		encryptionKey: c.env.ENCRYPTION_KEY,
+	});
+	if (!target?.account.accessToken) {
 		return c.json({ success: false }, 200);
 	}
+	const account = target.account as typeof target.account & {
+		accessToken: string;
+	};
+	const { conversation } = target;
+	const resolvedConversationId = conversation.id;
 
 	try {
 		switch (account.platform) {
 			case "facebook":
 			case "instagram": {
-				const msgHost = account.platform === "instagram" ? igGraphHost(account.accessToken) : "graph.facebook.com";
-				let recipientId: string | undefined;
+				const msgHost =
+					account.platform === "instagram"
+						? igGraphHost(account.accessToken)
+						: "graph.facebook.com";
+				let recipientId: string | undefined =
+					conversation.participantPlatformId ??
+					conversation.platformConversationId ??
+					undefined;
 
-				// Local DB conversations (conv_ prefix) — look up recipient from DB
-				if (conversationId.startsWith("conv_")) {
-					const [conv] = await db
-						.select({ participantPlatformId: inboxConversations.participantPlatformId, platformConversationId: inboxConversations.platformConversationId })
-						.from(inboxConversations)
-						.where(
-							and(
-								eq(inboxConversations.id, conversationId),
-								eq(inboxConversations.organizationId, orgId),
-							),
-						)
-						.limit(1);
-					recipientId = conv?.participantPlatformId ?? conv?.platformConversationId ?? undefined;
-				} else {
-					// Graph API conversation — fetch participants
+				// Older Graph-synced rows may not have a participant id. The target
+				// tuple is already authorized above, so this provider read cannot be
+				// steered to a different account/conversation pair.
+				if (!conversation.participantPlatformId) {
 					const convRes = await fetch(
-						`https://${msgHost}/${API_VERSIONS.meta_graph}/${conversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
+						`https://${msgHost}/${API_VERSIONS.meta_graph}/${conversation.platformConversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
 					);
 					if (convRes.ok) {
 						const convJson = (await convRes.json()) as {
@@ -665,6 +732,23 @@ app.openapi(sendMessageRoute, async (c) => {
 					}
 				}
 				if (!recipientId) return c.json({ success: false }, 200);
+				const replyAuthorization = await authorizeConversationReply(db, {
+					organizationId: orgId,
+					scopeKey: conversation.scopeKey,
+					conversationId: conversation.id,
+					accountId: account.id,
+					platform: account.platform,
+					recipientIdentifier: recipientId,
+				});
+				if (!replyAuthorization.authorized) {
+					return c.json(
+						{
+							success: false,
+							error: "The 24-hour conversation reply window is closed",
+						},
+						200,
+					);
+				}
 
 				const fbSendUrl = `https://${msgHost}/${API_VERSIONS.meta_graph}/me/messages?access_token=${encodeURIComponent(account.accessToken)}`;
 				const fbHeaders = { "Content-Type": "application/json" };
@@ -752,7 +836,15 @@ app.openapi(sendMessageRoute, async (c) => {
 				} else {
 					// Text-only message (with optional quick replies)
 					// Docs: https://developers.facebook.com/docs/messenger-platform/send-messages/quick-replies
-					if (!text) return c.json({ success: false, error: "Message text is required when no template or attachments are provided" }, 200);
+					if (!text)
+						return c.json(
+							{
+								success: false,
+								error:
+									"Message text is required when no template or attachments are provided",
+							},
+							200,
+						);
 					const msgPayload: Record<string, unknown> = { text };
 					if (quick_replies) msgPayload.quick_replies = quick_replies;
 					const res = await fetch(fbSendUrl, {
@@ -773,12 +865,14 @@ app.openapi(sendMessageRoute, async (c) => {
 				// Persist outbound message for FB/IG
 				if (lastMessageId) {
 					await insertMessage(db, {
-						conversationId,
+						conversationId: resolvedConversationId,
 						organizationId: orgId,
 						platformMessageId: lastMessageId,
 						authorName: "You",
 						authorPlatformId: account.platformAccountId,
-						text: text ?? (template ? `[Template: ${template.type}]` : "[Attachment]"),
+						text:
+							text ??
+							(template ? `[Template: ${template.type}]` : "[Attachment]"),
 						direction: "outbound",
 						attachments: attachments ?? [],
 					});
@@ -796,43 +890,55 @@ app.openapi(sendMessageRoute, async (c) => {
 					c.executionCtx.waitUntil(
 						Promise.all(
 							uniqueMids.map((mid) =>
-								c.env.KV.put(`outbound-mid:${mid}`, "1", { expirationTtl: 300 }),
+								c.env.KV.put(`outbound-mid:${mid}`, "1", {
+									expirationTtl: 300,
+								}),
 							),
 						),
 					);
 				}
 
-				c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "inbox.message.sent", conversation_id: conversationId }));
+				c.executionCtx.waitUntil(
+					notifyRealtime(c.env, orgId, {
+						type: "inbox.message.sent",
+						conversation_id: resolvedConversationId,
+					}),
+				);
 				return c.json({ success: true, message_id: lastMessageId }, 200);
-				}
-				case "whatsapp": {
-					if (attachments && attachments.length > 1) {
-						return c.json(
-							{
-								success: false,
-								error: "WhatsApp supports only one attachment per message",
-							},
-							200,
-						);
-					}
-
-					// Look up the conversation to get the recipient phone number
-					const [conv] = await db
-						.select()
-						.from(inboxConversations)
-						.where(
-							and(
-							eq(inboxConversations.id, conversationId),
-							eq(inboxConversations.organizationId, orgId),
-						),
-						)
-						.limit(1);
-
-					if (!conv?.platformConversationId) {
-						return c.json({ success: false }, 200);
+			}
+			case "whatsapp": {
+				if (attachments && attachments.length > 1) {
+					return c.json(
+						{
+							success: false,
+							error: "WhatsApp supports only one attachment per message",
+						},
+						200,
+					);
 				}
 
-				const recipientPhone = conv.platformConversationId;
+				if (!conversation.platformConversationId) {
+					return c.json({ success: false }, 200);
+				}
+
+				const recipientPhone = conversation.platformConversationId;
+				const replyAuthorization = await authorizeConversationReply(db, {
+					organizationId: orgId,
+					scopeKey: conversation.scopeKey,
+					conversationId: conversation.id,
+					accountId: account.id,
+					platform: "whatsapp",
+					recipientIdentifier: recipientPhone,
+				});
+				if (!replyAuthorization.authorized) {
+					return c.json(
+						{
+							success: false,
+							error: "The 24-hour conversation reply window is closed",
+						},
+						200,
+					);
+				}
 				const phoneNumberId = account.platformAccountId;
 
 				// Build WhatsApp message payload
@@ -842,9 +948,7 @@ app.openapi(sendMessageRoute, async (c) => {
 				// reply_to threads the message to a prior WhatsApp message via the
 				// Cloud API `context.message_id` (the platform wamid).
 				// Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#reply-to-message
-				const waContext = reply_to
-					? { context: { message_id: reply_to } }
-					: {};
+				const waContext = reply_to ? { context: { message_id: reply_to } } : {};
 
 				const att = attachments?.[0];
 				if (att) {
@@ -874,7 +978,10 @@ app.openapi(sendMessageRoute, async (c) => {
 						...waContext,
 					};
 				} else {
-					return c.json({ success: false, error: "WhatsApp requires text or attachments" }, 200);
+					return c.json(
+						{ success: false, error: "WhatsApp requires text or attachments" },
+						200,
+					);
 				}
 
 				const waRes = await fetch(
@@ -890,22 +997,30 @@ app.openapi(sendMessageRoute, async (c) => {
 				);
 
 				if (!waRes.ok) {
-					const errData = await waRes.json() as { error?: { code?: number; message?: string } };
+					const errData = (await waRes.json()) as {
+						error?: { code?: number; message?: string };
+					};
 					if (errData.error?.code === 131047) {
-						return c.json({
-							success: false,
-							error: "Outside 24-hour messaging window. Use a template message instead.",
-						}, 200);
+						return c.json(
+							{
+								success: false,
+								error:
+									"Outside 24-hour messaging window. Use a template message instead.",
+							},
+							200,
+						);
 					}
 					return c.json({ success: false }, 200);
 				}
 
-				const waJson = await waRes.json() as { messages?: Array<{ id: string }> };
+				const waJson = (await waRes.json()) as {
+					messages?: Array<{ id: string }>;
+				};
 				const waMessageId = waJson.messages?.[0]?.id;
 
 				// Record outbound message in inbox
 				await insertMessage(db, {
-					conversationId,
+					conversationId: resolvedConversationId,
 					organizationId: orgId,
 					platformMessageId: waMessageId ?? `wa_out_${Date.now()}`,
 					authorName: "You",
@@ -915,7 +1030,12 @@ app.openapi(sendMessageRoute, async (c) => {
 					attachments: attachments ?? [],
 				});
 
-				c.executionCtx.waitUntil(notifyRealtime(c.env, orgId, { type: "inbox.message.sent", conversation_id: conversationId }));
+				c.executionCtx.waitUntil(
+					notifyRealtime(c.env, orgId, {
+						type: "inbox.message.sent",
+						conversation_id: resolvedConversationId,
+					}),
+				);
 				return c.json({ success: true, message_id: waMessageId }, 200);
 			}
 			default:
@@ -936,7 +1056,8 @@ const sendTypingRoute = createRoute({
 	path: "/conversations/{id}/typing",
 	tags: ["Inbox"],
 	summary: "Send a typing indicator",
-	description: "Shows a typing indicator to the recipient. Best-effort — always returns success.",
+	description:
+		"Shows a typing indicator to the recipient. Best-effort — always returns success.",
 	security: [{ Bearer: [] }],
 	request: {
 		params: ConversationIdParam,
@@ -962,39 +1083,34 @@ app.openapi(sendTypingRoute, async (c) => {
 	const { account_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	if (!account?.accessToken) {
+	const target = await resolveInboxTarget(db, {
+		conversationId,
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+		assertedAccountId: account_id,
+		encryptionKey: c.env.ENCRYPTION_KEY,
+	});
+	if (!target?.account.accessToken) {
 		return c.json({ success: true }, 200); // best-effort
 	}
+	const account = target.account as typeof target.account & {
+		accessToken: string;
+	};
+	const { conversation } = target;
 
 	try {
 		switch (account.platform) {
 			case "facebook":
 			case "instagram": {
-				// Get recipient ID from conversation.
+				// Get recipient ID from the already-authorized conversation.
 				// Docs: https://developers.facebook.com/docs/messenger-platform/send-messages/sender-actions
-				let recipientId: string | undefined;
-				// Local DB conversations (conv_ prefix) have no Graph conversation
-				// node — the participants fetch can only 404. Read the recipient
-				// straight from the DB instead, mirroring send-message.
-				if (conversationId.startsWith("conv_")) {
-					const [conv] = await db
-						.select({
-							participantPlatformId: inboxConversations.participantPlatformId,
-							platformConversationId: inboxConversations.platformConversationId,
-						})
-						.from(inboxConversations)
-						.where(
-							and(
-								eq(inboxConversations.id, conversationId),
-								eq(inboxConversations.organizationId, orgId),
-							),
-						)
-						.limit(1);
-					recipientId = conv?.participantPlatformId ?? conv?.platformConversationId ?? undefined;
-				} else {
+				let recipientId: string | undefined =
+					conversation.participantPlatformId ??
+					conversation.platformConversationId ??
+					undefined;
+				if (!conversation.participantPlatformId) {
 					const convRes = await fetch(
-						`${GRAPH_BASE.facebook}/${conversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
+						`${GRAPH_BASE.facebook}/${conversation.platformConversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
 					);
 					if (!convRes.ok) return c.json({ success: true }, 200);
 					const convJson = (await convRes.json()) as {
@@ -1020,18 +1136,7 @@ app.openapi(sendTypingRoute, async (c) => {
 				break;
 			}
 			case "telegram": {
-				// Look up conversation to get chat_id
-				const [conv] = await db
-					.select()
-					.from(inboxConversations)
-					.where(
-						and(
-							eq(inboxConversations.id, conversationId),
-							eq(inboxConversations.organizationId, orgId),
-						),
-					)
-					.limit(1);
-				if (!conv?.platformConversationId) break;
+				if (!conversation.platformConversationId) break;
 
 				// Docs: https://core.telegram.org/bots/api#sendchataction
 				await fetch(
@@ -1040,7 +1145,7 @@ app.openapi(sendTypingRoute, async (c) => {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
-							chat_id: conv.platformConversationId,
+							chat_id: conversation.platformConversationId,
 							action: "typing",
 						}),
 					},
@@ -1099,41 +1204,26 @@ app.openapi(addReactionRoute, async (c) => {
 	const { account_id, emoji } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	if (!account?.accessToken) {
+	const target = await resolveInboxTarget(db, {
+		conversationId,
+		messageId,
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+		assertedAccountId: account_id,
+		encryptionKey: c.env.ENCRYPTION_KEY,
+	});
+	if (!target?.account.accessToken || !target.message) {
 		return c.json({ success: false }, 200);
 	}
-
-	// Resolve platformMessageId from our DB
-	const [msg] = await db
-		.select()
-		.from(inboxMessages)
-		.where(
-			and(
-				eq(inboxMessages.id, messageId),
-				eq(inboxMessages.conversationId, conversationId),
-				eq(inboxMessages.organizationId, orgId),
-			),
-		)
-		.limit(1);
-	if (!msg) {
-		return c.json({ success: false, error: "Message not found" }, 200);
-	}
+	const account = target.account as typeof target.account & {
+		accessToken: string;
+	};
+	const { conversation, message: msg } = target;
 
 	try {
 		switch (account.platform) {
 			case "whatsapp": {
-				const [conv] = await db
-					.select()
-					.from(inboxConversations)
-					.where(
-						and(
-							eq(inboxConversations.id, conversationId),
-							eq(inboxConversations.organizationId, orgId),
-						),
-					)
-					.limit(1);
-				if (!conv?.platformConversationId) {
+				if (!conversation.platformConversationId) {
 					return c.json({ success: false }, 200);
 				}
 
@@ -1149,7 +1239,7 @@ app.openapi(addReactionRoute, async (c) => {
 						body: JSON.stringify({
 							messaging_product: "whatsapp",
 							recipient_type: "individual",
-							to: conv.platformConversationId,
+							to: conversation.platformConversationId,
 							type: "reaction",
 							reaction: {
 								message_id: msg.platformMessageId,
@@ -1162,17 +1252,7 @@ app.openapi(addReactionRoute, async (c) => {
 				return c.json({ success: true }, 200);
 			}
 			case "telegram": {
-				const [conv] = await db
-					.select()
-					.from(inboxConversations)
-					.where(
-						and(
-							eq(inboxConversations.id, conversationId),
-							eq(inboxConversations.organizationId, orgId),
-						),
-					)
-					.limit(1);
-				if (!conv?.platformConversationId) {
+				if (!conversation.platformConversationId) {
 					return c.json({ success: false }, 200);
 				}
 
@@ -1183,7 +1263,7 @@ app.openapi(addReactionRoute, async (c) => {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
-							chat_id: conv.platformConversationId,
+							chat_id: conversation.platformConversationId,
 							message_id: Number(msg.platformMessageId),
 							reaction: [{ type: "emoji", emoji }],
 						}),
@@ -1193,10 +1273,13 @@ app.openapi(addReactionRoute, async (c) => {
 				return c.json({ success: true }, 200);
 			}
 			default:
-				return c.json({
-					success: false,
-					error: "Reactions not supported for this platform",
-				}, 200);
+				return c.json(
+					{
+						success: false,
+						error: "Reactions not supported for this platform",
+					},
+					200,
+				);
 		}
 	} catch {
 		return c.json({ success: false }, 200);
@@ -1238,40 +1321,26 @@ app.openapi(removeReactionRoute, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	if (!account?.accessToken) {
+	const target = await resolveInboxTarget(db, {
+		conversationId,
+		messageId,
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+		assertedAccountId: account_id,
+		encryptionKey: c.env.ENCRYPTION_KEY,
+	});
+	if (!target?.account.accessToken || !target.message) {
 		return c.json({ success: false }, 200);
 	}
-
-	const [msg] = await db
-		.select()
-		.from(inboxMessages)
-		.where(
-			and(
-				eq(inboxMessages.id, messageId),
-				eq(inboxMessages.conversationId, conversationId),
-				eq(inboxMessages.organizationId, orgId),
-			),
-		)
-		.limit(1);
-	if (!msg) {
-		return c.json({ success: false, error: "Message not found" }, 200);
-	}
+	const account = target.account as typeof target.account & {
+		accessToken: string;
+	};
+	const { conversation, message: msg } = target;
 
 	try {
 		switch (account.platform) {
 			case "whatsapp": {
-				const [conv] = await db
-					.select()
-					.from(inboxConversations)
-					.where(
-						and(
-							eq(inboxConversations.id, conversationId),
-							eq(inboxConversations.organizationId, orgId),
-						),
-					)
-					.limit(1);
-				if (!conv?.platformConversationId) {
+				if (!conversation.platformConversationId) {
 					return c.json({ success: false }, 200);
 				}
 
@@ -1287,7 +1356,7 @@ app.openapi(removeReactionRoute, async (c) => {
 						body: JSON.stringify({
 							messaging_product: "whatsapp",
 							recipient_type: "individual",
-							to: conv.platformConversationId,
+							to: conversation.platformConversationId,
 							type: "reaction",
 							reaction: {
 								message_id: msg.platformMessageId,
@@ -1300,17 +1369,7 @@ app.openapi(removeReactionRoute, async (c) => {
 				return c.json({ success: true }, 200);
 			}
 			case "telegram": {
-				const [conv] = await db
-					.select()
-					.from(inboxConversations)
-					.where(
-						and(
-							eq(inboxConversations.id, conversationId),
-							eq(inboxConversations.organizationId, orgId),
-						),
-					)
-					.limit(1);
-				if (!conv?.platformConversationId) {
+				if (!conversation.platformConversationId) {
 					return c.json({ success: false }, 200);
 				}
 
@@ -1321,7 +1380,7 @@ app.openapi(removeReactionRoute, async (c) => {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
-							chat_id: conv.platformConversationId,
+							chat_id: conversation.platformConversationId,
 							message_id: Number(msg.platformMessageId),
 							reaction: [],
 						}),
@@ -1331,10 +1390,13 @@ app.openapi(removeReactionRoute, async (c) => {
 				return c.json({ success: true }, 200);
 			}
 			default:
-				return c.json({
-					success: false,
-					error: "Reactions not supported for this platform",
-				}, 200);
+				return c.json(
+					{
+						success: false,
+						error: "Reactions not supported for this platform",
+					},
+					200,
+				);
 		}
 	} catch {
 		return c.json({ success: false }, 200);
@@ -1376,40 +1438,26 @@ app.openapi(deleteMessageRoute, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	if (!account?.accessToken) {
+	const target = await resolveInboxTarget(db, {
+		conversationId,
+		messageId,
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+		assertedAccountId: account_id,
+		encryptionKey: c.env.ENCRYPTION_KEY,
+	});
+	if (!target?.account.accessToken || !target.message) {
 		return c.json({ success: false }, 200);
 	}
-
-	const [msg] = await db
-		.select()
-		.from(inboxMessages)
-		.where(
-			and(
-				eq(inboxMessages.id, messageId),
-				eq(inboxMessages.conversationId, conversationId),
-				eq(inboxMessages.organizationId, orgId),
-			),
-		)
-		.limit(1);
-	if (!msg) {
-		return c.json({ success: false, error: "Message not found" }, 200);
-	}
+	const account = target.account as typeof target.account & {
+		accessToken: string;
+	};
+	const { conversation, message: msg } = target;
 
 	try {
 		switch (account.platform) {
 			case "telegram": {
-				const [conv] = await db
-					.select()
-					.from(inboxConversations)
-					.where(
-						and(
-							eq(inboxConversations.id, conversationId),
-							eq(inboxConversations.organizationId, orgId),
-						),
-					)
-					.limit(1);
-				if (!conv?.platformConversationId) {
+				if (!conversation.platformConversationId) {
 					return c.json({ success: false }, 200);
 				}
 
@@ -1420,7 +1468,7 @@ app.openapi(deleteMessageRoute, async (c) => {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
-							chat_id: conv.platformConversationId,
+							chat_id: conversation.platformConversationId,
 							message_id: Number(msg.platformMessageId),
 						}),
 					},
@@ -1429,23 +1477,13 @@ app.openapi(deleteMessageRoute, async (c) => {
 				break;
 			}
 			case "twitter": {
-				const [conv] = await db
-					.select()
-					.from(inboxConversations)
-					.where(
-						and(
-							eq(inboxConversations.id, conversationId),
-							eq(inboxConversations.organizationId, orgId),
-						),
-					)
-					.limit(1);
-				if (!conv?.platformConversationId) {
+				if (!conversation.platformConversationId) {
 					return c.json({ success: false }, 200);
 				}
 
 				// Docs: https://developer.x.com/en/docs/twitter-api/direct-messages/manage/api-reference
 				const twRes = await fetch(
-					`https://api.x.com/2/dm_conversations/${conv.platformConversationId}/dm_events/${msg.platformMessageId}`,
+					`https://api.x.com/2/dm_conversations/${conversation.platformConversationId}/dm_events/${msg.platformMessageId}`,
 					{
 						method: "DELETE",
 						headers: {
@@ -1459,15 +1497,21 @@ app.openapi(deleteMessageRoute, async (c) => {
 			case "facebook":
 			case "instagram":
 			case "whatsapp":
-				return c.json({
-					success: false,
-					error: "Message deletion not supported for this platform",
-				}, 200);
+				return c.json(
+					{
+						success: false,
+						error: "Message deletion not supported for this platform",
+					},
+					200,
+				);
 			default:
-				return c.json({
-					success: false,
-					error: "Message deletion not supported for this platform",
-				}, 200);
+				return c.json(
+					{
+						success: false,
+						error: "Message deletion not supported for this platform",
+					},
+					200,
+				);
 		}
 
 		// Delete from local DB on success
@@ -1476,6 +1520,7 @@ app.openapi(deleteMessageRoute, async (c) => {
 			.where(
 				and(
 					eq(inboxMessages.id, messageId),
+					eq(inboxMessages.conversationId, conversation.id),
 					eq(inboxMessages.organizationId, orgId),
 				),
 			);
@@ -1539,7 +1584,9 @@ app.openapi(listNotesRoute, async (c) => {
 
 	if (!conv) {
 		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Conversation not found" } } as never,
+			{
+				error: { code: "NOT_FOUND", message: "Conversation not found" },
+			} as never,
 			404 as never,
 		);
 	}
@@ -1553,6 +1600,8 @@ app.openapi(listNotesRoute, async (c) => {
 			id: inboxConversationNotes.id,
 			conversationId: inboxConversationNotes.conversationId,
 			organizationId: inboxConversationNotes.organizationId,
+			actorType: inboxConversationNotes.actorType,
+			actorId: inboxConversationNotes.actorId,
 			userId: inboxConversationNotes.userId,
 			text: inboxConversationNotes.text,
 			createdAt: inboxConversationNotes.createdAt,
@@ -1571,6 +1620,8 @@ app.openapi(listNotesRoute, async (c) => {
 				id: r.id,
 				conversation_id: r.conversationId,
 				organization_id: r.organizationId,
+				actor_type: r.actorType,
+				actor_id: r.actorId,
 				user_id: r.userId,
 				author_name: r.authorName ?? null,
 				author_email: r.authorEmail ?? null,
@@ -1629,6 +1680,11 @@ app.openapi(createNoteRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id: conversationId } = c.req.valid("param");
 	const body = c.req.valid("json");
+	const actor = resolveInboxNoteActor({
+		principalType: c.get("principalType"),
+		principalId: c.get("principalId"),
+		keyId: c.get("keyId"),
+	});
 
 	const [conv] = await db
 		.select({
@@ -1646,7 +1702,9 @@ app.openapi(createNoteRoute, async (c) => {
 
 	if (!conv) {
 		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Conversation not found" } } as never,
+			{
+				error: { code: "NOT_FOUND", message: "Conversation not found" },
+			} as never,
 			404 as never,
 		);
 	}
@@ -1655,31 +1713,14 @@ app.openapi(createNoteRoute, async (c) => {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY as never, 403 as never);
 	}
 
-	// Verify the acting user belongs to the org
-	const orgMember = await db.query.member.findFirst({
-		where: and(
-			eq(member.organizationId, orgId),
-			eq(member.userId, body.user_id),
-		),
-	});
-	if (!orgMember) {
-		return c.json(
-			{
-				error: {
-					code: "BAD_REQUEST",
-					message: `Organization member '${body.user_id}' not found`,
-				},
-			} as never,
-			400 as never,
-		);
-	}
-
 	const [row] = await db
 		.insert(inboxConversationNotes)
 		.values({
 			conversationId,
 			organizationId: orgId,
-			userId: body.user_id,
+			actorType: actor.actorType,
+			actorId: actor.actorId,
+			userId: actor.userId,
 			text: body.text,
 		})
 		.returning();
@@ -1696,11 +1737,13 @@ app.openapi(createNoteRoute, async (c) => {
 		);
 	}
 
-	const [author] = await db
-		.select({ name: userTable.name, email: userTable.email })
-		.from(userTable)
-		.where(eq(userTable.id, body.user_id))
-		.limit(1);
+	const [author] = row.userId
+		? await db
+				.select({ name: userTable.name, email: userTable.email })
+				.from(userTable)
+				.where(eq(userTable.id, row.userId))
+				.limit(1)
+		: [];
 
 	return c.json(
 		{
@@ -1708,6 +1751,8 @@ app.openapi(createNoteRoute, async (c) => {
 				id: row.id,
 				conversation_id: row.conversationId,
 				organization_id: row.organizationId,
+				actor_type: row.actorType,
+				actor_id: row.actorId,
 				user_id: row.userId,
 				author_name: author?.name ?? null,
 				author_email: author?.email ?? null,
@@ -1764,12 +1809,18 @@ app.openapi(updateNoteRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { noteId } = c.req.valid("param");
 	const body = c.req.valid("json");
+	const actor = resolveInboxNoteActor({
+		principalType: c.get("principalType"),
+		principalId: c.get("principalId"),
+		keyId: c.get("keyId"),
+	});
 
 	const [existing] = await db
 		.select({
 			id: inboxConversationNotes.id,
 			organizationId: inboxConversationNotes.organizationId,
-			userId: inboxConversationNotes.userId,
+			actorType: inboxConversationNotes.actorType,
+			actorId: inboxConversationNotes.actorId,
 			conversationId: inboxConversationNotes.conversationId,
 			workspaceId: inboxConversations.workspaceId,
 		})
@@ -1792,28 +1843,17 @@ app.openapi(updateNoteRoute, async (c) => {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY as never, 403 as never);
 	}
 
-	// Verify the acting user belongs to the org
-	const orgMember = await db.query.member.findFirst({
-		where: and(
-			eq(member.organizationId, orgId),
-			eq(member.userId, body.user_id),
-		),
-	});
-	if (!orgMember) {
+	if (
+		existing.actorType !== actor.actorType ||
+		existing.actorId !== actor.actorId
+	) {
 		return c.json(
 			{
 				error: {
-					code: "BAD_REQUEST",
-					message: `Organization member '${body.user_id}' not found`,
+					code: "FORBIDDEN",
+					message: "Cannot edit a note created by another principal",
 				},
 			} as never,
-			400 as never,
-		);
-	}
-
-	if (existing.userId !== body.user_id) {
-		return c.json(
-			{ error: { code: "FORBIDDEN", message: "Cannot edit another user's note" } } as never,
 			403 as never,
 		);
 	}
@@ -1821,7 +1861,14 @@ app.openapi(updateNoteRoute, async (c) => {
 	const [row] = await db
 		.update(inboxConversationNotes)
 		.set({ text: body.text, updatedAt: new Date() })
-		.where(eq(inboxConversationNotes.id, noteId))
+		.where(
+			and(
+				eq(inboxConversationNotes.id, noteId),
+				eq(inboxConversationNotes.organizationId, orgId),
+				eq(inboxConversationNotes.actorType, actor.actorType),
+				eq(inboxConversationNotes.actorId, actor.actorId),
+			),
+		)
 		.returning();
 
 	if (!row) {
@@ -1831,11 +1878,13 @@ app.openapi(updateNoteRoute, async (c) => {
 		);
 	}
 
-	const [author] = await db
-		.select({ name: userTable.name, email: userTable.email })
-		.from(userTable)
-		.where(eq(userTable.id, row.userId))
-		.limit(1);
+	const [author] = row.userId
+		? await db
+				.select({ name: userTable.name, email: userTable.email })
+				.from(userTable)
+				.where(eq(userTable.id, row.userId))
+				.limit(1)
+		: [];
 
 	return c.json(
 		{
@@ -1843,6 +1892,8 @@ app.openapi(updateNoteRoute, async (c) => {
 				id: row.id,
 				conversation_id: row.conversationId,
 				organization_id: row.organizationId,
+				actor_type: row.actorType,
+				actor_id: row.actorId,
 				user_id: row.userId,
 				author_name: author?.name ?? null,
 				author_email: author?.email ?? null,
@@ -1868,7 +1919,6 @@ const deleteNoteRoute = createRoute({
 	security: [{ Bearer: [] }],
 	request: {
 		params: NoteIdParam,
-		query: DeleteInboxNoteQuery,
 	},
 	responses: {
 		200: {
@@ -1898,13 +1948,18 @@ app.openapi(deleteNoteRoute, async (c) => {
 	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { noteId } = c.req.valid("param");
-	const { user_id: actingUserId } = c.req.valid("query");
+	const actor = resolveInboxNoteActor({
+		principalType: c.get("principalType"),
+		principalId: c.get("principalId"),
+		keyId: c.get("keyId"),
+	});
 
 	const [existing] = await db
 		.select({
 			id: inboxConversationNotes.id,
 			organizationId: inboxConversationNotes.organizationId,
-			userId: inboxConversationNotes.userId,
+			actorType: inboxConversationNotes.actorType,
+			actorId: inboxConversationNotes.actorId,
 			workspaceId: inboxConversations.workspaceId,
 		})
 		.from(inboxConversationNotes)
@@ -1926,32 +1981,31 @@ app.openapi(deleteNoteRoute, async (c) => {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY as never, 403 as never);
 	}
 
-	const orgMember = await db.query.member.findFirst({
-		where: and(
-			eq(member.organizationId, orgId),
-			eq(member.userId, actingUserId),
-		),
-	});
-	if (!orgMember) {
+	if (
+		existing.actorType !== actor.actorType ||
+		existing.actorId !== actor.actorId
+	) {
 		return c.json(
 			{
 				error: {
-					code: "BAD_REQUEST",
-					message: `Organization member '${actingUserId}' not found`,
+					code: "FORBIDDEN",
+					message: "Cannot delete a note created by another principal",
 				},
 			} as never,
-			400 as never,
-		);
-	}
-
-	if (existing.userId !== actingUserId) {
-		return c.json(
-			{ error: { code: "FORBIDDEN", message: "Cannot delete another user's note" } } as never,
 			403 as never,
 		);
 	}
 
-	await db.delete(inboxConversationNotes).where(eq(inboxConversationNotes.id, noteId));
+	await db
+		.delete(inboxConversationNotes)
+		.where(
+			and(
+				eq(inboxConversationNotes.id, noteId),
+				eq(inboxConversationNotes.organizationId, orgId),
+				eq(inboxConversationNotes.actorType, actor.actorType),
+				eq(inboxConversationNotes.actorId, actor.actorId),
+			),
+		);
 
 	return c.json({ success: true } as never, 200);
 });

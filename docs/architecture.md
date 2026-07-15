@@ -19,7 +19,7 @@ RelayAPI is a TypeScript monorepo for a unified social publishing, messaging, ne
 - API requests are authenticated with Bearer API keys prefixed `rlay_live_*` or `rlay_test_*`.
 - API keys are SHA-256 hashed before lookup and cached in Cloudflare KV.
 - Better Auth manages user auth, organization membership, invitations, and API key lifecycle for the dashboard side.
-- Tenancy is organization-scoped by API key. Many list and create endpoints accept optional `workspace_id` filters to narrow scope inside the authenticated organization.
+- Tenancy is organization-scoped by API key, with nullable workspace ownership for operational resources. On lists, `workspace_id` narrows the rows already authorized by the credential. On independent creates, omission produces an organization-scoped row unless `Require Workspace ID` is enabled; parent-bound creates may instead inherit the authoritative parent workspace. Explicit workspace IDs are always tenant, lifecycle, and credential-grant checked.
 - PostgreSQL access goes through Drizzle ORM and Cloudflare Hyperdrive.
 - Background work is queue-driven. Publishing, refresh, webhook, and other async flows run through Cloudflare Queues.
 - Media assets live in Cloudflare R2.

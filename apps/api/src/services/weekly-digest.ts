@@ -3,15 +3,21 @@
  * Runs every Monday at 9am UTC via cron.
  */
 
-import { and, sql, inArray } from "drizzle-orm";
 import {
 	createDb,
 	member,
 	notificationPreferences,
 	posts,
+	publishOutbox,
 } from "@relayapi/db";
-import { sendNotification } from "./notification-manager";
+import { and, inArray, sql } from "drizzle-orm";
 import type { Env } from "../types";
+import {
+	dispatchPublishOutbox,
+	notificationOutboxRow,
+} from "./publish-outbox";
+
+const OUTBOX_INSERT_BATCH_SIZE = 100;
 
 export async function processWeeklyDigest(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
@@ -33,6 +39,7 @@ export async function processWeeklyDigest(env: Env): Promise<void> {
 
 	const now = new Date();
 	const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+	const digestOccurrenceDate = now.toISOString().slice(0, 10);
 
 	// Batch-fetch all memberships for enabled users in one query
 	const userIds = enabledUsers.map((u) => u.userId);
@@ -47,22 +54,23 @@ export async function processWeeklyDigest(env: Env): Promise<void> {
 	// scheduled weeks ago but published this week is correctly attributed to this
 	// week and a post merely created this week is not double-counted. Failed/partial
 	// posts have no dedicated timestamp, so they fall back to updated_at (approximate).
-	const allStats = orgIds.length > 0
-		? await db
-				.select({
-					orgId: posts.organizationId,
-					published: sql<number>`count(*) filter (where ${posts.status} = 'published' and ${posts.publishedAt} >= ${weekAgo} and ${posts.publishedAt} <= ${now})`,
-					failed: sql<number>`count(*) filter (where (${posts.status} = 'failed' or ${posts.status} = 'partial') and ${posts.updatedAt} >= ${weekAgo} and ${posts.updatedAt} <= ${now})`,
-				})
-				.from(posts)
-				.where(
-					and(
-						inArray(posts.organizationId, orgIds),
-						sql`(${posts.publishedAt} >= ${weekAgo} or ${posts.updatedAt} >= ${weekAgo})`,
-					),
-				)
-				.groupBy(posts.organizationId)
-		: [];
+	const allStats =
+		orgIds.length > 0
+			? await db
+					.select({
+						orgId: posts.organizationId,
+						published: sql<number>`count(*) filter (where ${posts.status} = 'published' and ${posts.publishedAt} >= ${weekAgo} and ${posts.publishedAt} <= ${now})`,
+						failed: sql<number>`count(*) filter (where (${posts.status} = 'failed' or ${posts.status} = 'partial') and ${posts.updatedAt} >= ${weekAgo} and ${posts.updatedAt} <= ${now})`,
+					})
+					.from(posts)
+					.where(
+						and(
+							inArray(posts.organizationId, orgIds),
+							sql`(${posts.publishedAt} >= ${weekAgo} or ${posts.updatedAt} >= ${weekAgo})`,
+						),
+					)
+					.groupBy(posts.organizationId)
+			: [];
 
 	const statsMap = new Map(allStats.map((s) => [s.orgId, s]));
 
@@ -77,8 +85,9 @@ export async function processWeeklyDigest(env: Env): Promise<void> {
 		}
 	}
 
-	// Send notifications — fire all in parallel
-	const notificationPromises: Promise<unknown>[] = [];
+	// Build durable notification jobs. Delivery preferences are re-checked by the
+	// consumer, while the stable occurrence ID makes cron replays idempotent.
+	const notificationRows: Array<typeof publishOutbox.$inferInsert> = [];
 
 	for (const userPref of enabledUsers) {
 		const userOrgIds = membershipsByUser.get(userPref.userId) ?? [];
@@ -89,11 +98,11 @@ export async function processWeeklyDigest(env: Env): Promise<void> {
 
 			if (postsPublished === 0 && postsFailed === 0) continue;
 
-			notificationPromises.push(
-				sendNotification(env, {
+			notificationRows.push(
+				notificationOutboxRow({
 					type: "weekly_digest",
 					userId: userPref.userId,
-					orgId,
+					organizationId: orgId,
 					title: "Your weekly summary",
 					body: `This week: ${postsPublished} posts published, ${postsFailed} failed`,
 					data: {
@@ -101,13 +110,30 @@ export async function processWeeklyDigest(env: Env): Promise<void> {
 						postsFailed,
 						totalImpressions: 0,
 					},
-				}).catch((err) => {
-					console.error(`[WeeklyDigest] Failed for user ${userPref.userId}:`, err);
+					occurrenceId: `weekly-digest:${orgId}:${digestOccurrenceDate}`,
 				}),
 			);
 		}
 	}
 
-	await Promise.allSettled(notificationPromises);
-	console.log(`[WeeklyDigest] Processed ${enabledUsers.length} users`);
+	for (
+		let offset = 0;
+		offset < notificationRows.length;
+		offset += OUTBOX_INSERT_BATCH_SIZE
+	) {
+		await db
+			.insert(publishOutbox)
+			.values(notificationRows.slice(offset, offset + OUTBOX_INSERT_BATCH_SIZE))
+			.onConflictDoNothing();
+	}
+	if (notificationRows.length > 0) {
+		try {
+			await dispatchPublishOutbox(env);
+		} catch (error) {
+			console.error("[WeeklyDigest] Durable notification dispatch deferred", error);
+		}
+	}
+	console.log(
+		`[WeeklyDigest] Queued ${notificationRows.length} durable notification(s) for ${enabledUsers.length} users`,
+	);
 }

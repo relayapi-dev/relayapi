@@ -166,7 +166,10 @@ describe("action_group handler", () => {
 				{
 					id: "wh1",
 					type: "webhook_out",
-					url: "https://example.com/hook",
+					// Persisted graphs contain only the non-secret placeholder. This keeps
+					// the test on the HMAC validation path instead of exercising the
+					// defense-in-depth rejection of unsealed destination credentials.
+					url: "https://redacted.invalid/",
 					method: "POST",
 					auth: { mode: "hmac" },
 					on_error: "abort",

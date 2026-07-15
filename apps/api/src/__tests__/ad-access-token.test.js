@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { encryptAccountToken } from "../lib/account-token-crypto";
 import {
 	mergePublicSocialAccountMetadata,
 	resolveAdsAccessToken,
@@ -6,31 +7,100 @@ import {
 	withMetaAdsUserAccessToken,
 } from "../services/ad-access-token";
 
+const ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const ACCOUNT_ID = "acc_ads_token_test";
+
 describe("ad-access-token", () => {
 	it("prefers the saved Meta user token for Facebook ads operations", async () => {
+		const pageToken = await encryptAccountToken(
+			"page_token",
+			ENCRYPTION_KEY,
+			ACCOUNT_ID,
+			"access_token",
+		);
+		const userToken = await encryptAccountToken(
+			"user_token",
+			ENCRYPTION_KEY,
+			ACCOUNT_ID,
+			"meta_ads_user_access_token",
+		);
 		const token = await resolveAdsAccessToken(
 			{
+				id: ACCOUNT_ID,
 				platform: "facebook",
-				accessToken: "page_token",
-				metadata: { meta_ads_user_access_token: "user_token" },
+				accessToken: pageToken,
+				metadata: { meta_ads_user_access_token: userToken },
 			},
-			{},
+			{ ENCRYPTION_KEY },
 		);
 
 		expect(token).toBe("user_token");
 	});
 
 	it("falls back to the primary token for non-Facebook platforms", async () => {
+		const encryptedToken = await encryptAccountToken(
+			"ig_token",
+			ENCRYPTION_KEY,
+			ACCOUNT_ID,
+			"access_token",
+		);
 		const token = await resolveAdsAccessToken(
 			{
+				id: ACCOUNT_ID,
 				platform: "instagram",
-				accessToken: "ig_token",
+				accessToken: encryptedToken,
 				metadata: { meta_ads_user_access_token: "user_token" },
 			},
-			{},
+			{ ENCRYPTION_KEY },
 		);
 
 		expect(token).toBe("ig_token");
+	});
+
+	it("rejects unwrapped primary and Meta user credentials", async () => {
+		await expect(
+			resolveAdsAccessToken(
+				{
+					id: ACCOUNT_ID,
+					platform: "instagram",
+					accessToken: "ig_token",
+					metadata: null,
+				},
+				{ ENCRYPTION_KEY },
+			),
+		).rejects.toThrow(/account token/i);
+
+		await expect(
+			resolveAdsAccessToken(
+				{
+					id: ACCOUNT_ID,
+					platform: "facebook",
+					accessToken: null,
+					metadata: { meta_ads_user_access_token: "user_token" },
+				},
+				{ ENCRYPTION_KEY },
+			),
+		).rejects.toThrow(/account token/i);
+	});
+
+	it("fails closed when the encryption key is unavailable", async () => {
+		const encryptedToken = await encryptAccountToken(
+			"ig_token",
+			ENCRYPTION_KEY,
+			ACCOUNT_ID,
+			"access_token",
+		);
+		await expect(
+			resolveAdsAccessToken(
+				{
+					id: ACCOUNT_ID,
+					platform: "instagram",
+					accessToken: encryptedToken,
+					metadata: null,
+				},
+				{},
+			),
+		).rejects.toThrow(/ENCRYPTION_KEY/);
 	});
 
 	it("merges Meta ads user token into existing metadata", () => {
@@ -54,6 +124,7 @@ describe("ad-access-token", () => {
 		await expect(
 			resolveAdsAccessToken(
 				{
+					id: ACCOUNT_ID,
 					platform: "facebook",
 					accessToken: "page_token",
 					metadata: { default_page_id: "page_123" },
@@ -69,6 +140,7 @@ describe("ad-access-token", () => {
 		await expect(
 			resolveAdsAccessToken(
 				{
+					id: ACCOUNT_ID,
 					platform: "facebook",
 					accessToken: "page_token",
 					metadata: {

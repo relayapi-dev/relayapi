@@ -1,6 +1,27 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { webhookEndpoints, webhookLogs } from "@relayapi/db";
-import { and, desc, eq, gte, inArray, isNull, lt, or } from "drizzle-orm";
+import {
+	generateId,
+	webhookEndpoints,
+	webhookEvents,
+	webhookLogs,
+} from "@relayapi/db";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { activeEncryptionKeyId, maybeEncrypt } from "../lib/crypto";
+import { fetchWithTimeout } from "../lib/fetch-timeout";
+import {
+	decodeTimestampIdCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+} from "../lib/pagination-cursor";
+import { resolveOperationalCreateScope } from "../lib/request-access";
+import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+	workspaceScopeSqlCondition,
+} from "../lib/workspace-scope";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
 	CreateWebhookBody,
@@ -12,25 +33,10 @@ import {
 	WebhookResponse,
 } from "../schemas/webhooks";
 import type { Env, Variables } from "../types";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
-import { assertScopedCreateWorkspace } from "../lib/request-access";
-
-import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
-import { maybeEncrypt } from "../lib/crypto";
-import { fetchWithTimeout } from "../lib/fetch-timeout";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
 // --- Helpers ---
-
-async function hashSecret(raw: string): Promise<string> {
-	const encoder = new TextEncoder();
-	const data = encoder.encode(raw);
-	const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-	return Array.from(new Uint8Array(hashBuffer))
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-}
 
 function generateWebhookSecret(): string {
 	const bytes = new Uint8Array(32);
@@ -39,6 +45,13 @@ function generateWebhookSecret(): string {
 		.map((b) => b.toString(16).padStart(2, "0"))
 		.join("");
 	return `whsec_${hex}`;
+}
+
+export function webhookLogWorkspaceAccessCondition(workspaceScope: string[]) {
+	return and(
+		workspaceScopeSqlCondition(workspaceScope, webhookEndpoints.workspaceId),
+		workspaceScopeSqlCondition(workspaceScope, webhookEvents.workspaceId),
+	);
 }
 
 // --- Route definitions ---
@@ -59,6 +72,10 @@ const listWebhooks = createRoute({
 		200: {
 			description: "List of webhooks",
 			content: { "application/json": { schema: WebhookListResponse } },
+		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -119,6 +136,32 @@ const updateWebhookRoute = createRoute({
 		},
 		401: {
 			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+const rotateWebhookSecretRoute = createRoute({
+	operationId: "rotateWebhookSecret",
+	method: "post",
+	path: "/{id}/rotate-secret",
+	tags: ["Webhooks"],
+	summary: "Rotate a webhook signing secret",
+	description:
+		"Atomically replaces the signing secret. The new secret is returned once.",
+	security: [{ Bearer: [] }],
+	request: { params: IdParam },
+	responses: {
+		200: {
+			description: "Webhook signing secret rotated",
+			content: { "application/json": { schema: WebhookCreatedResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
@@ -218,6 +261,10 @@ const getWebhookLogs = createRoute({
 				},
 			},
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -231,19 +278,24 @@ app.openapi(listWebhooks, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, workspace_id, cursor } = c.req.valid("query");
 	const db = c.get("db");
+	let decodedCursor: ReturnType<typeof decodeTimestampIdCursor> | null = null;
+	if (cursor) {
+		try {
+			decodedCursor = decodeTimestampIdCursor(cursor);
+		} catch {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+	}
 
 	const conditions = [eq(webhookEndpoints.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, webhookEndpoints.workspaceId);
 	if (workspace_id) {
 		conditions.push(eq(webhookEndpoints.workspaceId, workspace_id));
 	}
-	// Keyset pagination on createdAt (the sort key). The cursor is the
-	// created_at of the last item from the previous page.
-	if (cursor) {
-		const cursorDate = new Date(cursor);
-		if (!Number.isNaN(cursorDate.getTime())) {
-			conditions.push(lt(webhookEndpoints.createdAt, cursorDate));
-		}
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${webhookEndpoints.createdAt}, ${webhookEndpoints.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
 	}
 
 	const rows = await db
@@ -254,10 +306,11 @@ app.openapi(listWebhooks, async (c) => {
 			events: webhookEndpoints.events,
 			createdAt: webhookEndpoints.createdAt,
 			updatedAt: webhookEndpoints.updatedAt,
+			cursorTimestamp: sql<string>`to_char(${webhookEndpoints.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(webhookEndpoints)
 		.where(and(...conditions))
-		.orderBy(desc(webhookEndpoints.createdAt))
+		.orderBy(desc(webhookEndpoints.createdAt), desc(webhookEndpoints.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -274,7 +327,12 @@ app.openapi(listWebhooks, async (c) => {
 				updated_at: w.updatedAt.toISOString(),
 			})),
 			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},
@@ -282,38 +340,52 @@ app.openapi(listWebhooks, async (c) => {
 	);
 });
 
-// @ts-expect-error — handler may return 400/403 from scoped workspace and URL validation
 app.openapi(createWebhookRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const scopeDenied = assertScopedCreateWorkspace(c, body.workspace_id, "webhook");
-	if (scopeDenied) return scopeDenied;
+	const scope = await resolveOperationalCreateScope(
+		c,
+		body.workspace_id,
+		"webhook",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	// SECURITY: Block private/internal URLs
 	if (await isBlockedUrlWithDns(body.url)) {
 		return c.json(
-			{ error: { code: "INVALID_URL", message: "Webhook URL targets a blocked address" } },
+			{
+				error: {
+					code: "INVALID_URL",
+					message: "Webhook URL targets a blocked address",
+				},
+			},
 			400,
 		);
 	}
 
 	const rawSecret = generateWebhookSecret();
-	const hashedSecret = await hashSecret(rawSecret);
+	const webhookId = generateId("wh_");
+	const encryptedSecret = await maybeEncrypt(rawSecret, c.env.ENCRYPTION_KEY, {
+		recordId: webhookId,
+		field: "secret_ciphertext",
+	});
+	if (!encryptedSecret)
+		throw new Error("Webhook secret encryption returned empty");
 
-	const rows = await db
+	const [webhook] = await db
 		.insert(webhookEndpoints)
 		.values({
+			id: webhookId,
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: scope.workspaceId,
 			url: body.url,
-			secret: hashedSecret,
+			secretCiphertext: encryptedSecret,
+			secretKeyId: activeEncryptionKeyId(c.env.ENCRYPTION_KEY),
 			events: body.events,
 		})
 		.returning();
-
-	const webhook = rows[0];
 	if (!webhook) {
 		return c.json(
 			{
@@ -326,13 +398,6 @@ app.openapi(createWebhookRoute, async (c) => {
 		);
 	}
 
-	// Store raw secret in KV for HMAC signing (DB only has the hash).
-	// No expirationTtl: the encrypted raw secret is the sole recoverable copy
-	// used to sign every delivery, so it must outlive the endpoint. The key is
-	// explicitly deleted when the webhook is deleted, so it cannot orphan.
-	const encryptedSecret = await maybeEncrypt(rawSecret, c.env.ENCRYPTION_KEY);
-	await c.env.KV.put(`webhook-secret:${webhook.id}`, encryptedSecret ?? rawSecret);
-
 	return c.json(
 		{
 			id: webhook.id,
@@ -343,6 +408,65 @@ app.openapi(createWebhookRoute, async (c) => {
 			created_at: webhook.createdAt.toISOString(),
 		},
 		201,
+	);
+});
+
+app.openapi(rotateWebhookSecretRoute, async (c) => {
+	const orgId = c.get("orgId");
+	const { id } = c.req.valid("param");
+	const db = c.get("db");
+	const [existing] = await db
+		.select()
+		.from(webhookEndpoints)
+		.where(
+			and(
+				eq(webhookEndpoints.id, id),
+				eq(webhookEndpoints.organizationId, orgId),
+			),
+		)
+		.limit(1);
+	if (!existing) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Webhook not found" } },
+			404,
+		);
+	}
+	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
+	const rawSecret = generateWebhookSecret();
+	const secretCiphertext = await maybeEncrypt(rawSecret, c.env.ENCRYPTION_KEY, {
+		recordId: id,
+		field: "secret_ciphertext",
+	});
+	if (!secretCiphertext)
+		throw new Error("Webhook secret encryption returned empty");
+	const [updated] = await db
+		.update(webhookEndpoints)
+		.set({
+			secretCiphertext,
+			secretKeyId: activeEncryptionKeyId(c.env.ENCRYPTION_KEY),
+			enabled: true,
+			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(webhookEndpoints.id, id),
+				eq(webhookEndpoints.organizationId, orgId),
+			),
+		)
+		.returning();
+	if (!updated) throw new Error("Webhook secret rotation failed");
+	return c.json(
+		{
+			id: updated.id,
+			url: updated.url,
+			secret: rawSecret,
+			enabled: updated.enabled,
+			events: updated.events ?? [],
+			created_at: updated.createdAt.toISOString(),
+		},
+		200,
 	);
 });
 
@@ -375,9 +499,14 @@ app.openapi(updateWebhookRoute, async (c) => {
 	if (denied) return denied;
 
 	// SECURITY: Block private/internal URLs on update
-	if (body.url !== undefined && await isBlockedUrlWithDns(body.url)) {
+	if (body.url !== undefined && (await isBlockedUrlWithDns(body.url))) {
 		return c.json(
-			{ error: { code: "INVALID_URL", message: "Webhook URL targets a blocked address" } } as never,
+			{
+				error: {
+					code: "INVALID_URL",
+					message: "Webhook URL targets a blocked address",
+				},
+			} as never,
 			400 as never,
 		);
 	}
@@ -414,7 +543,10 @@ app.openapi(deleteWebhook, async (c) => {
 	const db = c.get("db");
 
 	const [existing] = await db
-		.select({ id: webhookEndpoints.id, workspaceId: webhookEndpoints.workspaceId })
+		.select({
+			id: webhookEndpoints.id,
+			workspaceId: webhookEndpoints.workspaceId,
+		})
 		.from(webhookEndpoints)
 		.where(
 			and(
@@ -435,8 +567,6 @@ app.openapi(deleteWebhook, async (c) => {
 	if (denied) return denied;
 
 	await db.delete(webhookEndpoints).where(eq(webhookEndpoints.id, id));
-	// Clean up raw secret from KV
-	await c.env.KV.delete(`webhook-secret:${id}`);
 
 	return c.body(null, 204);
 });
@@ -471,7 +601,12 @@ app.openapi(testWebhookRoute, async (c) => {
 	// SECURITY: Block requests to private/internal URLs
 	if (await isBlockedUrlWithDns(webhook.url)) {
 		return c.json(
-			{ error: { code: "INVALID_URL", message: "Webhook URL targets a blocked address" } },
+			{
+				error: {
+					code: "INVALID_URL",
+					message: "Webhook URL targets a blocked address",
+				},
+			},
 			400,
 		);
 	}
@@ -494,23 +629,35 @@ app.openapi(testWebhookRoute, async (c) => {
 		});
 		statusCode = response.status;
 		success = response.ok;
+		await response.body?.cancel().catch(() => {});
 	} catch {
 		success = false;
 	}
 
 	const responseTimeMs = Date.now() - start;
 
-	// Log the test delivery
+	// Store the test occurrence once and keep only attempt-specific data in the
+	// log row, matching the normal delivery path.
 	try {
-		await db.insert(webhookLogs).values({
-			webhookId: webhook.id,
-			organizationId: orgId,
-			event: "webhook.test",
-			payload: { test: true } as Record<string, unknown>,
-			statusCode,
-			responseTimeMs,
-			success,
-			error: success ? null : `HTTP ${statusCode ?? "connection failed"}`,
+		const webhookEventId = generateId("whe_");
+		await db.transaction(async (tx) => {
+			await tx.insert(webhookEvents).values({
+				id: webhookEventId,
+				occurrenceId: webhookEventId,
+				organizationId: orgId,
+				workspaceId: webhook.workspaceId,
+				event: "webhook.test",
+				payload: { test: true },
+			});
+			await tx.insert(webhookLogs).values({
+				webhookId: webhook.id,
+				webhookEventId,
+				organizationId: orgId,
+				statusCode,
+				responseTimeMs,
+				success,
+				error: success ? null : `HTTP ${statusCode ?? "connection failed"}`,
+			});
 		});
 	} catch {
 		// Non-critical: log failure is ok
@@ -531,54 +678,86 @@ app.openapi(getWebhookLogs, async (c) => {
 	const { limit, cursor } = c.req.valid("query");
 	const db = c.get("db");
 	const workspaceScope = c.get("workspaceScope");
+	let decodedCursor: ReturnType<typeof decodeTimestampIdCursor> | null = null;
+	if (cursor) {
+		try {
+			decodedCursor = decodeTimestampIdCursor(cursor);
+		} catch {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+	}
 
 	const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-	// Keyset pagination on createdAt (the sort key). The cursor is the
-	// created_at of the last item from the previous page.
 	const logConditions = [
 		eq(webhookLogs.organizationId, orgId),
 		gte(webhookLogs.createdAt, sevenDaysAgo),
 	];
-	if (cursor) {
-		const cursorDate = new Date(cursor);
-		if (!Number.isNaN(cursorDate.getTime())) {
-			logConditions.push(lt(webhookLogs.createdAt, cursorDate));
-		}
+	if (decodedCursor) {
+		logConditions.push(
+			sql`(${webhookLogs.createdAt}, ${webhookLogs.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
 	}
 
-	const rows = workspaceScope === "all"
-		? await db
-			.select()
-			.from(webhookLogs)
-			.where(and(...logConditions))
-			.orderBy(desc(webhookLogs.createdAt))
-			.limit(limit + 1)
-		: await db
-			.select({
-				id: webhookLogs.id,
-				webhookId: webhookLogs.webhookId,
-				event: webhookLogs.event,
-				statusCode: webhookLogs.statusCode,
-				responseTimeMs: webhookLogs.responseTimeMs,
-				success: webhookLogs.success,
-				error: webhookLogs.error,
-				payload: webhookLogs.payload,
-				createdAt: webhookLogs.createdAt,
-			})
-			.from(webhookLogs)
-			.innerJoin(webhookEndpoints, eq(webhookLogs.webhookId, webhookEndpoints.id))
-			.where(
-				and(
-					...logConditions,
-					or(
-						inArray(webhookEndpoints.workspaceId, workspaceScope),
-						isNull(webhookEndpoints.workspaceId),
-					),
-				),
-			)
-			.orderBy(desc(webhookLogs.createdAt))
-			.limit(limit + 1);
+	const rows =
+		workspaceScope === "all"
+			? await db
+					.select({
+						id: webhookLogs.id,
+						webhookId: webhookLogs.webhookId,
+						event: webhookEvents.event,
+						statusCode: webhookLogs.statusCode,
+						responseTimeMs: webhookLogs.responseTimeMs,
+						success: webhookLogs.success,
+						error: webhookLogs.error,
+						payload: webhookEvents.payload,
+						createdAt: webhookLogs.createdAt,
+						cursorTimestamp: sql<string>`to_char(${webhookLogs.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+					})
+					.from(webhookLogs)
+					.innerJoin(
+						webhookEvents,
+						and(
+							eq(webhookLogs.webhookEventId, webhookEvents.id),
+							eq(webhookLogs.organizationId, webhookEvents.organizationId),
+						),
+					)
+					.where(and(...logConditions))
+					.orderBy(desc(webhookLogs.createdAt), desc(webhookLogs.id))
+					.limit(limit + 1)
+			: await db
+					.select({
+						id: webhookLogs.id,
+						webhookId: webhookLogs.webhookId,
+						event: webhookEvents.event,
+						statusCode: webhookLogs.statusCode,
+						responseTimeMs: webhookLogs.responseTimeMs,
+						success: webhookLogs.success,
+						error: webhookLogs.error,
+						payload: webhookEvents.payload,
+						createdAt: webhookLogs.createdAt,
+						cursorTimestamp: sql<string>`to_char(${webhookLogs.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+					})
+					.from(webhookLogs)
+					.innerJoin(
+						webhookEvents,
+						and(
+							eq(webhookLogs.webhookEventId, webhookEvents.id),
+							eq(webhookLogs.organizationId, webhookEvents.organizationId),
+						),
+					)
+					.innerJoin(
+						webhookEndpoints,
+						eq(webhookLogs.webhookId, webhookEndpoints.id),
+					)
+					.where(
+						and(
+							...logConditions,
+							webhookLogWorkspaceAccessCondition(workspaceScope),
+						),
+					)
+					.orderBy(desc(webhookLogs.createdAt), desc(webhookLogs.id))
+					.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
 	const data = rows.slice(0, limit);
@@ -597,7 +776,12 @@ app.openapi(getWebhookLogs, async (c) => {
 				created_at: l.createdAt.toISOString(),
 			})),
 			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},

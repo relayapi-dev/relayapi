@@ -1,17 +1,18 @@
-import { describe, it, expect, beforeEach, mock } from "bun:test";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
+import type { Env, KVKeyData } from "../types";
 import { createMockDb, type MockDb } from "./__mocks__/db";
-import { createMockEnv, seedApiKeyInKV, type MockKV } from "./__mocks__/env";
+import { createMockEnv, type MockKV, seedApiKeyInKV } from "./__mocks__/env";
 import {
-	createMockStripe,
-	createMockSubscription,
 	createCheckoutCompletedEvent,
-	createSubscriptionUpdatedEvent,
-	createSubscriptionDeletedEvent,
 	createInvoiceFinalizedEvent,
 	createInvoicePaidEvent,
 	createInvoicePaymentFailedEvent,
+	createMockInvoice,
+	createMockStripe,
+	createMockSubscription,
+	createSubscriptionDeletedEvent,
+	createSubscriptionUpdatedEvent,
 } from "./__mocks__/stripe";
-import type { Env, KVKeyData } from "../types";
 
 // ===========================================================================
 // Module mocks — must be set up before importing the module under test
@@ -64,18 +65,123 @@ const whatsappPhoneNumbers = {
 	toString: () => "whatsapp_phone_numbers",
 };
 
+const billingOutbox = {
+	id: { name: "id" },
+	organizationId: { name: "organizationId" },
+	kind: { name: "kind" },
+	payload: { name: "payload" },
+	status: { name: "status" },
+	attempts: { name: "attempts" },
+	leaseToken: { name: "leaseToken" },
+	nextAttemptAt: { name: "nextAttemptAt" },
+	leaseExpiresAt: { name: "leaseExpiresAt" },
+	createdAt: { name: "createdAt" },
+	updatedAt: { name: "updatedAt" },
+	toString: () => "billing_outbox",
+};
+
+const stripeEvents = {
+	id: { name: "id" },
+	status: { name: "status" },
+	attempts: { name: "attempts" },
+	leaseToken: { name: "leaseToken" },
+	leaseExpiresAt: { name: "leaseExpiresAt" },
+	updatedAt: { name: "updatedAt" },
+	toString: () => "stripe_events",
+};
+
+const subscriptionCheckoutOperations = {
+	organizationId: { name: "organizationId" },
+	stripeCheckoutSessionId: { name: "stripeCheckoutSessionId" },
+	toString: () => "subscription_checkout_operations",
+};
+
+const billingOperations = {
+	id: { name: "id" },
+	organizationId: { name: "organizationId" },
+	stripeInvoiceItemId: { name: "stripeInvoiceItemId" },
+	completedAt: { name: "completedAt" },
+	toString: () => "billing_operations",
+};
+
+const usageBucketSettlements = {
+	id: { name: "id" },
+	organizationId: { name: "organizationId" },
+	bucketId: { name: "bucketId" },
+	invoiceId: { name: "invoiceId" },
+	state: { name: "state" },
+	revision: { name: "revision" },
+	committedUnitsSnapshot: { name: "committedUnitsSnapshot" },
+	amountCents: { name: "amountCents" },
+	toString: () => "usage_bucket_settlements",
+};
+
+const usageBuckets = {
+	id: { name: "id" },
+	organizationId: { name: "organizationId" },
+	includedUnits: { name: "includedUnits" },
+	toString: () => "usage_buckets",
+};
+
 mock.module("@relayapi/db", () => ({
 	createDb: () => mockDb,
 	organizationSubscriptions,
 	invoices,
 	apikey,
 	whatsappPhoneNumbers,
+	billingOutbox,
+	stripeEvents,
+	subscriptionCheckoutOperations,
+	billingOperations,
+	usageBucketSettlements,
+	usageBuckets,
 }));
 
 mock.module("drizzle-orm", () => ({
 	eq: (col: { name: string }, val: unknown) => ({
 		_filter: (row: Record<string, unknown>) => row[col.name] === val,
 	}),
+	and: (
+		...conditions: Array<{
+			_filter?: (row: Record<string, unknown>) => boolean;
+		}>
+	) => ({
+		_filter: (row: Record<string, unknown>) =>
+			conditions.every((c) => c._filter?.(row) ?? true),
+	}),
+	or: (
+		...conditions: Array<{
+			_filter?: (row: Record<string, unknown>) => boolean;
+		}>
+	) => ({
+		_filter: (row: Record<string, unknown>) =>
+			conditions.some((c) => c._filter?.(row) ?? false),
+	}),
+	inArray: (col: { name: string }, values: unknown[]) => ({
+		_filter: (row: Record<string, unknown>) => values.includes(row[col.name]),
+	}),
+	gt: (col: { name: string }, value: unknown) => ({
+		_filter: (row: Record<string, unknown>) =>
+			String(row[col.name]) > String(value),
+	}),
+	lte: (col: { name: string }, value: unknown) => ({
+		_filter: (row: Record<string, unknown>) => {
+			const candidate = row[col.name];
+			if (candidate == null) return true;
+			if (candidate instanceof Date && value instanceof Date) {
+				return candidate.getTime() <= value.getTime();
+			}
+			return String(candidate) <= String(value);
+		},
+	}),
+	asc: (value: unknown) => value,
+	sql: Object.assign(
+		(strings: TemplateStringsArray, ...values: unknown[]) =>
+			strings[0]?.includes("COALESCE(")
+				? { mockSql: strings.join("?"), values }
+				: 1,
+		{ join: () => "" },
+	),
 }));
 
 let mockStripeClient: ReturnType<typeof createMockStripe>;
@@ -92,9 +198,14 @@ mock.module("../services/notification-manager", () => ({
 }));
 
 // Import module under test AFTER mocks are set up
-const { handleEvent, syncOrgKeysToKV } = await import(
-	"../routes/stripe-webhooks"
-);
+const stripeWebhookModule = await import("../routes/stripe-webhooks");
+const {
+	default: stripeWebhooks,
+	handleEvent,
+	MAX_STRIPE_WEBHOOK_BYTES,
+	processStripeEvent,
+} = stripeWebhookModule;
+const { processBillingOutbox } = await import("../services/billing-outbox");
 
 // ===========================================================================
 // Helpers
@@ -104,7 +215,6 @@ const ORG_ID = "org_test_123";
 const SUB_ID = "sub_test_123";
 const CUSTOMER_ID = "cus_test_123";
 const HASHED_KEY_1 = "hashed_key_aaa";
-const HASHED_KEY_2 = "hashed_key_bbb";
 
 const PRICING = {
 	freeCallsIncluded: 200,
@@ -196,12 +306,136 @@ describe("Stripe webhook handler", () => {
 		notificationCalls.length = 0;
 	});
 
+	describe("durable event receipt", () => {
+		it("rejects an oversized declared body before Stripe processing", async () => {
+			const response = await stripeWebhooks.request(
+				"https://api.example.test/",
+				{
+					method: "POST",
+					headers: {
+						"stripe-signature": "test-signature",
+						"content-length": String(MAX_STRIPE_WEBHOOK_BYTES + 1),
+					},
+					body: "{}",
+				},
+				env,
+			);
+
+			expect(response.status).toBe(413);
+			expect(await response.json<{ error: string }>()).toEqual({
+				error: "Payload too large",
+			});
+		});
+
+		it("claims a pending receipt and marks it succeeded", async () => {
+			seedOrgSub(mockDb, { status: "cancelled" });
+			const event = createCheckoutCompletedEvent({
+				metadata: { organizationId: ORG_ID },
+			});
+			mockDb._seed("stripeEvents", [
+				{
+					id: event.id,
+					status: "pending",
+					attempts: 0,
+					leaseExpiresAt: null,
+					updatedAt: new Date(),
+				},
+			]);
+
+			expect(await processStripeEvent(event, env, mockDb as never)).toBe(
+				"processed",
+			);
+			expect(mockDb._getData("stripeEvents")[0]?.status).toBe("succeeded");
+			expect(mockDb._getData("stripeEvents")[0]?.payload).toEqual({});
+		});
+
+		it("does not reapply an already-succeeded event", async () => {
+			const event = createCheckoutCompletedEvent();
+			mockDb._seed("stripeEvents", [
+				{
+					id: event.id,
+					status: "succeeded",
+					attempts: 1,
+					leaseExpiresAt: null,
+					updatedAt: new Date(),
+				},
+			]);
+
+			expect(await processStripeEvent(event, env, mockDb as never)).toBe(
+				"already_claimed",
+			);
+			expect(
+				mockDb._updates.filter(
+					(update) => update.table === "organizationSubscriptions",
+				),
+			).toHaveLength(0);
+		});
+
+		it("parks an unresolvable checkout in durable manual review", async () => {
+			const event = createCheckoutCompletedEvent({
+				metadata: {},
+				customerId: "cus_unmapped",
+			});
+			mockDb._seed("stripeEvents", [
+				{
+					id: event.id,
+					status: "pending",
+					attempts: 0,
+					leaseToken: 0,
+					leaseExpiresAt: null,
+					updatedAt: new Date(),
+				},
+			]);
+
+			expect(await processStripeEvent(event, env, mockDb as never)).toBe(
+				"manual_review",
+			);
+			expect(mockDb._getData("stripeEvents")[0]?.status).toBe("manual_review");
+		});
+	});
+
+	describe("billing auth-cache outbox", () => {
+		it("delete-invalidates large organizations in bounded resumable pages", async () => {
+			const keys = Array.from({ length: 101 }, (_, index) => ({
+				key: `hashed_key_${String(index).padStart(3, "0")}`,
+				organizationId: ORG_ID,
+			}));
+			mockDb._seed("apikey", keys);
+			for (const { key } of keys) {
+				await seedApiKeyInKV(kv, key, makeKVData());
+			}
+			mockDb._seed("billingOutbox", [
+				{
+					id: "stripe:evt_cache:auth:org_test_123",
+					organizationId: ORG_ID,
+					kind: "auth_cache.refresh",
+					payload: { eventId: "evt_cache" },
+					status: "pending",
+					attempts: 0,
+					leaseToken: 0,
+					nextAttemptAt: new Date(0),
+					leaseExpiresAt: null,
+					createdAt: new Date(0),
+					updatedAt: new Date(0),
+				},
+			]);
+
+			expect(await processBillingOutbox(env, mockDb as never)).toBe(0);
+			expect(kv._raw().size).toBe(1);
+			expect(mockDb._getData("billingOutbox")[0]?.status).toBe("pending");
+
+			expect(await processBillingOutbox(env, mockDb as never)).toBe(1);
+			expect(kv._raw().size).toBe(0);
+			expect(mockDb._getData("billingOutbox")[0]?.status).toBe("succeeded");
+		});
+	});
+
 	// =========================================================================
 	// checkout.session.completed
 	// =========================================================================
 
 	describe("checkout.session.completed", () => {
-		it("upgrades org to pro when orgId is in session metadata", async () => {
+		it("upgrades org and durably invalidates auth cache when orgId is in session metadata", async () => {
 			seedOrgSub(mockDb, { status: "trialing" });
 			await seedApiKeyInKV(kv, HASHED_KEY_1, makeKVData());
 			mockDb._seed("apikey", [{ key: HASHED_KEY_1, organizationId: ORG_ID }]);
@@ -221,10 +455,15 @@ describe("Stripe webhook handler", () => {
 			expect(sub.stripeSubscriptionId).toBe(SUB_ID);
 			expect(sub.updatedAt).toBeInstanceOf(Date);
 
-			// KV key should be upgraded to pro
-			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
-			expect(kvData.plan).toBe("pro");
-			expect(kvData.calls_included).toBe(PRICING.proCallsIncluded);
+			// Request handling commits only the durable outbox. The background
+			// effect delete-invalidates KV so the next auth read rehydrates from DB.
+			const stale = (await kv.get(
+				`apikey:${HASHED_KEY_1}`,
+				"json",
+			)) as KVKeyData;
+			expect(stale.plan).toBe("free");
+			await processBillingOutbox(env, mockDb as never);
+			expect(await kv.get(`apikey:${HASHED_KEY_1}`, "json")).toBeNull();
 		});
 
 		it("upgrades org when orgId is in subscription metadata", async () => {
@@ -252,8 +491,8 @@ describe("Stripe webhook handler", () => {
 			];
 			expect(sub.status).toBe("active");
 
-			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
-			expect(kvData.plan).toBe("pro");
+			await processBillingOutbox(env, mockDb as never);
+			expect(await kv.get(`apikey:${HASHED_KEY_1}`, "json")).toBeNull();
 		});
 
 		it("upgrades org by stripeCustomerId lookup when no metadata", async () => {
@@ -266,8 +505,7 @@ describe("Stripe webhook handler", () => {
 
 			mockStripeClient = createMockStripe({
 				subscriptions: {
-					retrieve: async () =>
-						createMockSubscription({ metadata: {} }),
+					retrieve: async () => createMockSubscription({ metadata: {} }),
 				},
 			});
 
@@ -284,8 +522,8 @@ describe("Stripe webhook handler", () => {
 			expect(sub.status).toBe("active");
 			expect(sub.stripeSubscriptionId).toBe(SUB_ID);
 
-			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
-			expect(kvData.plan).toBe("pro");
+			await processBillingOutbox(env, mockDb as never);
+			expect(await kv.get(`apikey:${HASHED_KEY_1}`, "json")).toBeNull();
 		});
 
 		it("skips non-subscription checkout sessions", async () => {
@@ -298,12 +536,11 @@ describe("Stripe webhook handler", () => {
 			expect(mockDb._updates).toHaveLength(0);
 		});
 
-		it("logs error when no orgId can be resolved", async () => {
+		it("retains an unresolved checkout for manual review", async () => {
 			// No seeded org subscriptions at all
 			mockStripeClient = createMockStripe({
 				subscriptions: {
-					retrieve: async () =>
-						createMockSubscription({ metadata: {} }),
+					retrieve: async () => createMockSubscription({ metadata: {} }),
 				},
 			});
 
@@ -312,8 +549,9 @@ describe("Stripe webhook handler", () => {
 				customerId: "cus_unknown",
 			});
 
-			// Should not throw
-			await handleEvent(event, env);
+			await expect(handleEvent(event, env)).rejects.toThrow(
+				"could not be mapped to an organization",
+			);
 
 			expect(mockDb._updates).toHaveLength(0);
 		});
@@ -336,12 +574,29 @@ describe("Stripe webhook handler", () => {
 				periodStart,
 				periodEnd,
 			});
+			mockStripeClient = createMockStripe({
+				subscriptions: {
+					retrieve: async () =>
+						createMockSubscription({
+							status: "active",
+							items: {
+								data: [
+									{
+										current_period_start: periodStart,
+										current_period_end: periodEnd,
+									},
+								],
+							},
+						}),
+				},
+			});
 
 			await handleEvent(event, env);
 
-			expect(mockDb._updates).toHaveLength(1);
 			const update = requireValue(
-				mockDb._updates[0],
+				mockDb._updates.find(
+					(candidate) => candidate.table === "organizationSubscriptions",
+				),
 				"expected organization subscription update",
 			);
 			expect(update.table).toBe("organizationSubscriptions");
@@ -364,6 +619,15 @@ describe("Stripe webhook handler", () => {
 				status: "active",
 				cancelAtPeriodEnd: true,
 			});
+			mockStripeClient = createMockStripe({
+				subscriptions: {
+					retrieve: async () =>
+						createMockSubscription({
+							status: "active",
+							cancel_at_period_end: true,
+						}),
+				},
+			});
 
 			await handleEvent(event, env);
 
@@ -374,7 +638,10 @@ describe("Stripe webhook handler", () => {
 			expect(sub.status).toBe("active");
 
 			// KV should stay pro (still active, just scheduled to cancel)
-			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
+			const kvData = (await kv.get(
+				`apikey:${HASHED_KEY_1}`,
+				"json",
+			)) as KVKeyData;
 			expect(kvData.plan).toBe("pro");
 		});
 
@@ -394,7 +661,7 @@ describe("Stripe webhook handler", () => {
 			expect(sub.cancelAtPeriodEnd).toBe(false);
 		});
 
-		it("downgrades KV keys when subscription moves to past_due", async () => {
+		it("invalidates cached entitlement when subscription moves to past_due", async () => {
 			seedOrgSub(mockDb, { status: "active" });
 			await seedApiKeyInKV(
 				kv,
@@ -406,6 +673,11 @@ describe("Stripe webhook handler", () => {
 			const event = createSubscriptionUpdatedEvent({
 				status: "past_due",
 			});
+			mockStripeClient = createMockStripe({
+				subscriptions: {
+					retrieve: async () => createMockSubscription({ status: "past_due" }),
+				},
+			});
 
 			await handleEvent(event, env);
 
@@ -414,9 +686,8 @@ describe("Stripe webhook handler", () => {
 			];
 			expect(sub.status).toBe("past_due");
 
-			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
-			expect(kvData.plan).toBe("free");
-			expect(kvData.calls_included).toBe(PRICING.freeCallsIncluded);
+			await processBillingOutbox(env, mockDb as never);
+			expect(await kv.get(`apikey:${HASHED_KEY_1}`, "json")).toBeNull();
 		});
 
 		it("upgrades KV keys when recovering from non-active to active", async () => {
@@ -486,7 +757,7 @@ describe("Stripe webhook handler", () => {
 	// =========================================================================
 
 	describe("customer.subscription.deleted", () => {
-		it("cancels subscription and downgrades KV keys", async () => {
+		it("cancels subscription and invalidates cached entitlement", async () => {
 			seedOrgSub(mockDb, { status: "active" });
 			await seedApiKeyInKV(
 				kv,
@@ -506,9 +777,8 @@ describe("Stripe webhook handler", () => {
 			expect(sub.stripeSubscriptionId).toBeNull();
 			expect(sub.cancelAtPeriodEnd).toBe(false);
 
-			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
-			expect(kvData.plan).toBe("free");
-			expect(kvData.calls_included).toBe(PRICING.freeCallsIncluded);
+			await processBillingOutbox(env, mockDb as never);
+			expect(await kv.get(`apikey:${HASHED_KEY_1}`, "json")).toBeNull();
 		});
 
 		it("skips when subscription is not found in DB", async () => {
@@ -535,20 +805,33 @@ describe("Stripe webhook handler", () => {
 				amountDue: 500,
 				hostedUrl: "https://stripe.com/invoice/new",
 			});
+			mockStripeClient = createMockStripe({
+				subscriptions: { retrieve: async () => createMockSubscription() },
+				invoices: {
+					retrieve: async () =>
+						createMockInvoice({
+							status: "open",
+							amountDue: 500,
+							hostedUrl: "https://stripe.com/invoice/new",
+						}),
+				},
+			});
 
 			await handleEvent(event, env);
 
-			expect(mockDb._inserts).toHaveLength(1);
-			const insert = requireValue(
-				mockDb._inserts[0],
-				"expected invoice insert",
+			const invoiceInserts = mockDb._inserts.filter(
+				(insert) => insert.table === "invoices",
 			);
+			expect(invoiceInserts).toHaveLength(1);
+			const insert = requireValue(invoiceInserts[0], "expected invoice insert");
 			expect(insert.table).toBe("invoices");
 			expect(insert.values.organizationId).toBe(ORG_ID);
 			expect(insert.values.status).toBe("finalized");
 			expect(insert.values.totalCents).toBe(500);
 			expect(insert.values.stripeInvoiceId).toBe("in_test_123");
-			expect(insert.values.stripeHostedUrl).toBe("https://stripe.com/invoice/new");
+			expect(insert.values.stripeHostedUrl).toBe(
+				"https://stripe.com/invoice/new",
+			);
 			expect(insert.values.basePriceCents).toBe(PRICING.monthlyPriceCents);
 			expect(insert.values.finalizedAt).toBeInstanceOf(Date);
 		});
@@ -561,21 +844,41 @@ describe("Stripe webhook handler", () => {
 				amountDue: 500,
 				hostedUrl: "https://stripe.com/invoice/updated",
 			});
+			mockStripeClient = createMockStripe({
+				subscriptions: { retrieve: async () => createMockSubscription() },
+				invoices: {
+					retrieve: async () =>
+						createMockInvoice({
+							status: "open",
+							amountDue: 500,
+							hostedUrl: "https://stripe.com/invoice/updated",
+						}),
+				},
+			});
 
 			await handleEvent(event, env);
 
 			// Should update, not insert
-			expect(mockDb._inserts).toHaveLength(0);
-			expect(mockDb._updates).toHaveLength(1);
+			expect(
+				mockDb._inserts.filter((insert) => insert.table === "invoices"),
+			).toHaveLength(0);
 			const update = requireValue(
-				mockDb._updates[0],
+				mockDb._updates.find((candidate) => candidate.table === "invoices"),
 				"expected invoice update",
 			);
 			expect(update.table).toBe("invoices");
 			expect(update.set.status).toBe("finalized");
 			expect(update.set.totalCents).toBe(500);
-			expect(update.set.stripeHostedUrl).toBe("https://stripe.com/invoice/updated");
-			expect(update.set.finalizedAt).toBeInstanceOf(Date);
+			expect(update.set.stripeHostedUrl).toBe(
+				"https://stripe.com/invoice/updated",
+			);
+			const finalizedAt = update.set.finalizedAt as {
+				mockSql: string;
+				values: unknown[];
+			};
+			expect(finalizedAt.mockSql).toBe("COALESCE(?, ?)");
+			expect(finalizedAt.values[0]).toBe(invoices.finalizedAt);
+			expect(finalizedAt.values[1]).toBeInstanceOf(Date);
 		});
 
 		it("skips when no subscription ID in invoice parent", async () => {
@@ -584,6 +887,11 @@ describe("Stripe webhook handler", () => {
 			});
 			// Override the event to have no subscription_details
 			(event.data.object as { parent: unknown }).parent = null;
+			mockStripeClient = createMockStripe({
+				invoices: {
+					retrieve: async () => createMockInvoice({ subscriptionId: null }),
+				},
+			});
 
 			await handleEvent(event, env);
 
@@ -602,6 +910,12 @@ describe("Stripe webhook handler", () => {
 			seedInvoice(mockDb, { status: "finalized" });
 
 			const event = createInvoicePaidEvent();
+			mockStripeClient = createMockStripe({
+				subscriptions: { retrieve: async () => createMockSubscription() },
+				invoices: {
+					retrieve: async () => createMockInvoice({ status: "paid" }),
+				},
+			});
 
 			await handleEvent(event, env);
 
@@ -613,7 +927,7 @@ describe("Stripe webhook handler", () => {
 			expect(invoiceUpdate.set.paidAt).toBeInstanceOf(Date);
 		});
 
-		it("clears past_due status and upgrades KV when sub was past_due", async () => {
+		it("clears past_due status and invalidates stale auth cache", async () => {
 			seedOrgSub(mockDb, { status: "past_due" });
 			seedInvoice(mockDb, { status: "finalized" });
 			await seedApiKeyInKV(
@@ -624,6 +938,12 @@ describe("Stripe webhook handler", () => {
 			mockDb._seed("apikey", [{ key: HASHED_KEY_1, organizationId: ORG_ID }]);
 
 			const event = createInvoicePaidEvent();
+			mockStripeClient = createMockStripe({
+				subscriptions: { retrieve: async () => createMockSubscription() },
+				invoices: {
+					retrieve: async () => createMockInvoice({ status: "paid" }),
+				},
+			});
 
 			await handleEvent(event, env);
 
@@ -635,13 +955,11 @@ describe("Stripe webhook handler", () => {
 			if (!subUpdate) throw new Error("expected a subscription update");
 			expect(subUpdate.set.status).toBe("active");
 
-			// KV should be upgraded back to pro
-			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
-			expect(kvData.plan).toBe("pro");
-			expect(kvData.calls_included).toBe(PRICING.proCallsIncluded);
+			await processBillingOutbox(env, mockDb as never);
+			expect(await kv.get(`apikey:${HASHED_KEY_1}`, "json")).toBeNull();
 		});
 
-		it("does not upgrade KV when subscription is already active", async () => {
+		it("refreshes canonical state while keeping an active subscription pro", async () => {
 			seedOrgSub(mockDb, { status: "active" });
 			seedInvoice(mockDb, { status: "finalized" });
 			await seedApiKeyInKV(
@@ -652,6 +970,12 @@ describe("Stripe webhook handler", () => {
 			mockDb._seed("apikey", [{ key: HASHED_KEY_1, organizationId: ORG_ID }]);
 
 			const event = createInvoicePaidEvent();
+			mockStripeClient = createMockStripe({
+				subscriptions: { retrieve: async () => createMockSubscription() },
+				invoices: {
+					retrieve: async () => createMockInvoice({ status: "paid" }),
+				},
+			});
 
 			await handleEvent(event, env);
 
@@ -659,14 +983,18 @@ describe("Stripe webhook handler", () => {
 			const invoiceUpdate = mockDb._updates.find((u) => u.table === "invoices");
 			expect(invoiceUpdate).toBeDefined();
 
-			// But subscription should NOT be updated (already active)
+			// Canonical Stripe state is re-applied even when the status is unchanged,
+			// so period/cancellation drift is repaired deterministically.
 			const subUpdate = mockDb._updates.find(
 				(u) => u.table === "organizationSubscriptions",
 			);
-			expect(subUpdate).toBeUndefined();
+			expect(subUpdate?.set.status).toBe("active");
 
 			// KV should remain unchanged (still pro)
-			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
+			const kvData = (await kv.get(
+				`apikey:${HASHED_KEY_1}`,
+				"json",
+			)) as KVKeyData;
 			expect(kvData.plan).toBe("pro");
 		});
 	});
@@ -676,7 +1004,28 @@ describe("Stripe webhook handler", () => {
 	// =========================================================================
 
 	describe("invoice.payment_failed", () => {
-		it("sets subscription to past_due, downgrades KV, and notifies org", async () => {
+		it("does not regress a newer canonical active state for a delayed failure", async () => {
+			seedOrgSub(mockDb, { status: "active" });
+			const event = createInvoicePaymentFailedEvent();
+			mockStripeClient = createMockStripe({
+				subscriptions: {
+					retrieve: async () => createMockSubscription({ status: "active" }),
+				},
+				invoices: {
+					retrieve: async () => createMockInvoice({ status: "paid" }),
+				},
+			});
+
+			await handleEvent(event, env);
+
+			const [sub] = mockDb._getData("organizationSubscriptions") as [
+				Record<string, unknown>,
+			];
+			expect(sub.status).toBe("active");
+			expect(notificationCalls).toHaveLength(0);
+		});
+
+		it("sets subscription to past_due, invalidates cache, and notifies org", async () => {
 			seedOrgSub(mockDb, { status: "active" });
 			await seedApiKeyInKV(
 				kv,
@@ -686,6 +1035,14 @@ describe("Stripe webhook handler", () => {
 			mockDb._seed("apikey", [{ key: HASHED_KEY_1, organizationId: ORG_ID }]);
 
 			const event = createInvoicePaymentFailedEvent();
+			mockStripeClient = createMockStripe({
+				subscriptions: {
+					retrieve: async () => createMockSubscription({ status: "past_due" }),
+				},
+				invoices: {
+					retrieve: async () => createMockInvoice({ status: "open" }),
+				},
+			});
 
 			await handleEvent(event, env);
 
@@ -695,12 +1052,10 @@ describe("Stripe webhook handler", () => {
 			];
 			expect(sub.status).toBe("past_due");
 
-			// KV should be downgraded
-			const kvData = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
-			expect(kvData.plan).toBe("free");
-			expect(kvData.calls_included).toBe(PRICING.freeCallsIncluded);
+			await processBillingOutbox(env, mockDb as never);
+			expect(await kv.get(`apikey:${HASHED_KEY_1}`, "json")).toBeNull();
 
-			// Notification should have been sent
+			// Notification is the second durable outbox effect.
 			expect(notificationCalls).toHaveLength(1);
 			const [_notifEnv, notifPayload] = notificationCalls[0] as [
 				Env,
@@ -726,82 +1081,16 @@ describe("Stripe webhook handler", () => {
 			const event = createInvoicePaymentFailedEvent();
 			// Override the event to have no subscription_details
 			(event.data.object as { parent: unknown }).parent = null;
+			mockStripeClient = createMockStripe({
+				invoices: {
+					retrieve: async () => createMockInvoice({ subscriptionId: null }),
+				},
+			});
 
 			await handleEvent(event, env);
 
 			expect(mockDb._updates).toHaveLength(0);
 			expect(notificationCalls).toHaveLength(0);
-		});
-	});
-
-	// =========================================================================
-	// syncOrgKeysToKV
-	// =========================================================================
-
-	describe("syncOrgKeysToKV", () => {
-		it("updates all org keys in KV", async () => {
-			mockDb._seed("apikey", [
-				{ key: HASHED_KEY_1, organizationId: ORG_ID },
-				{ key: HASHED_KEY_2, organizationId: ORG_ID },
-			]);
-			await seedApiKeyInKV(kv, HASHED_KEY_1, makeKVData());
-			await seedApiKeyInKV(kv, HASHED_KEY_2, makeKVData({ key_id: "key_test_2" }));
-
-			await syncOrgKeysToKV(
-				env,
-				mockDb as never,
-				ORG_ID,
-				"pro",
-				PRICING.proCallsIncluded,
-			);
-
-			const kv1 = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
-			expect(kv1.plan).toBe("pro");
-			expect(kv1.calls_included).toBe(PRICING.proCallsIncluded);
-
-			const kv2 = await kv.get(`apikey:${HASHED_KEY_2}`, "json") as KVKeyData;
-			expect(kv2.plan).toBe("pro");
-			expect(kv2.calls_included).toBe(PRICING.proCallsIncluded);
-		});
-
-		it("skips KV entries that do not exist", async () => {
-			mockDb._seed("apikey", [
-				{ key: HASHED_KEY_1, organizationId: ORG_ID },
-				{ key: HASHED_KEY_2, organizationId: ORG_ID },
-			]);
-			// Only seed one key in KV, the other is missing
-			await seedApiKeyInKV(kv, HASHED_KEY_1, makeKVData());
-
-			await syncOrgKeysToKV(
-				env,
-				mockDb as never,
-				ORG_ID,
-				"pro",
-				PRICING.proCallsIncluded,
-			);
-
-			// First key should be updated
-			const kv1 = await kv.get(`apikey:${HASHED_KEY_1}`, "json") as KVKeyData;
-			expect(kv1.plan).toBe("pro");
-
-			// Second key should still be null (not created)
-			const kv2 = await kv.get(`apikey:${HASHED_KEY_2}`, "json");
-			expect(kv2).toBeNull();
-		});
-
-		it("handles org with no API keys", async () => {
-			// No apikey rows seeded
-			await syncOrgKeysToKV(
-				env,
-				mockDb as never,
-				ORG_ID,
-				"pro",
-				PRICING.proCallsIncluded,
-			);
-
-			// Should complete without error and not modify KV
-			const allKeys = await kv.list();
-			expect(allKeys.keys).toHaveLength(0);
 		});
 	});
 

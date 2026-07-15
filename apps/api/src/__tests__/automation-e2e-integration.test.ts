@@ -43,6 +43,7 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
+import { encryptToken } from "../lib/crypto";
 import type { Graph } from "../schemas/automation-graph";
 import { actionRegistry } from "../services/automations/actions";
 import { matchAndEnrollOrBinding } from "../services/automations/binding-router";
@@ -53,18 +54,18 @@ import {
 	buildGraphFromTemplate,
 	type TemplateKind,
 } from "../services/automations/templates";
-import {
-	matchAndEnroll,
-} from "../services/automations/trigger-matcher";
+import { matchAndEnroll } from "../services/automations/trigger-matcher";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
 import type { SendMessageRequest } from "../services/message-sender";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -162,21 +163,21 @@ async function teardownFixture() {
 	await db
 		.delete(customFieldDefinitions)
 		.where(eq(customFieldDefinitions.organizationId, orgId));
-	await db
-		.delete(inboxMessages)
-		.where(eq(inboxMessages.organizationId, orgId));
+	await db.delete(inboxMessages).where(eq(inboxMessages.organizationId, orgId));
 	await db
 		.delete(inboxConversations)
 		.where(eq(inboxConversations.organizationId, orgId));
-	await db.delete(contactChannels).where(
-		inArray(
-			contactChannels.contactId,
-			db
-				.select({ id: contacts.id })
-				.from(contacts)
-				.where(eq(contacts.organizationId, orgId)),
-		),
-	);
+	await db
+		.delete(contactChannels)
+		.where(
+			inArray(
+				contactChannels.contactId,
+				db
+					.select({ id: contacts.id })
+					.from(contacts)
+					.where(eq(contacts.organizationId, orgId)),
+			),
+		);
 	await db.delete(contacts).where(eq(contacts.organizationId, orgId));
 	await db
 		.delete(socialAccounts)
@@ -186,6 +187,7 @@ async function teardownFixture() {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;
@@ -242,9 +244,11 @@ async function createContactWithChannel(params: {
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	await db.insert(contactChannels).values({
+		organizationId: orgId,
 		contactId: ct.id,
 		socialAccountId,
-		platform: params.channel ?? "telegram",
+		platform: (params.channel ??
+			"telegram") as typeof contactChannels.$inferInsert.platform,
 		identifier: params.identifier,
 	});
 	return ct;
@@ -281,6 +285,7 @@ async function createEntrypoint(params: {
 	const [ep] = await db
 		.insert(automationEntrypoints)
 		.values({
+			organizationId: orgId,
 			automationId: params.automationId,
 			channel: (params.channel ?? "telegram") as never,
 			kind: params.kind as never,
@@ -318,7 +323,9 @@ describe("11.1 lead capture flow", () => {
 					key: "ask_hi",
 					kind: "message",
 					config: {
-						blocks: [{ id: "b1", type: "text", text: "hi, what's your email?" }],
+						blocks: [
+							{ id: "b1", type: "text", text: "hi, what's your email?" },
+						],
 					},
 					ports: [
 						{ key: "in", direction: "input" },
@@ -385,10 +392,30 @@ describe("11.1 lead capture flow", () => {
 				},
 			],
 			edges: [
-				{ from_node: "ask_hi", from_port: "next", to_node: "ask_email", to_port: "in" },
-				{ from_node: "ask_email", from_port: "captured", to_node: "save", to_port: "in" },
-				{ from_node: "save", from_port: "next", to_node: "thanks", to_port: "in" },
-				{ from_node: "thanks", from_port: "next", to_node: "stop", to_port: "in" },
+				{
+					from_node: "ask_hi",
+					from_port: "next",
+					to_node: "ask_email",
+					to_port: "in",
+				},
+				{
+					from_node: "ask_email",
+					from_port: "captured",
+					to_node: "save",
+					to_port: "in",
+				},
+				{
+					from_node: "save",
+					from_port: "next",
+					to_node: "thanks",
+					to_port: "in",
+				},
+				{
+					from_node: "thanks",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
 			],
 		};
 
@@ -518,7 +545,12 @@ describe("11.2 keyword DM trigger", () => {
 				},
 			],
 			edges: [
-				{ from_node: "reply", from_port: "next", to_node: "stop", to_port: "in" },
+				{
+					from_node: "reply",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
 			],
 		};
 
@@ -639,6 +671,7 @@ describe("11.3 comment-to-DM template", () => {
 
 		for (const ep of built.entrypoints) {
 			await db.insert(automationEntrypoints).values({
+				organizationId: orgId,
 				automationId: auto.id,
 				channel: "instagram",
 				kind: ep.kind as never,
@@ -666,6 +699,7 @@ describe("11.3 comment-to-DM template", () => {
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 		await db.insert(contactChannels).values({
+			organizationId: orgId,
 			contactId: ct.id,
 			socialAccountId: igAccountId,
 			platform: "instagram",
@@ -1023,11 +1057,10 @@ describe("11.4b interactive button resume", () => {
 // ---------------------------------------------------------------------------
 
 describe("11.5 webhook_inbound entrypoint", () => {
-	const secret =
-		"wh_test_secret_0123456789abcdef0123456789abcdef0123456789abcdef";
+	const secret = `wh_test_secret_${"0123456789abcdef".repeat(3)}`;
 	const webhookSlug = `e2ei-wh-${generateId("whk_").slice(-8)}`;
 
-	async function signBody(body: string): Promise<string> {
+	async function signPayload(signedPayload: string): Promise<string> {
 		const key = await crypto.subtle.importKey(
 			"raw",
 			new TextEncoder().encode(secret),
@@ -1038,7 +1071,7 @@ describe("11.5 webhook_inbound entrypoint", () => {
 		const sigBuf = await crypto.subtle.sign(
 			"HMAC",
 			key,
-			new TextEncoder().encode(body),
+			new TextEncoder().encode(signedPayload),
 		);
 		return Array.from(new Uint8Array(sigBuf))
 			.map((b) => b.toString(16).padStart(2, "0"))
@@ -1062,14 +1095,20 @@ describe("11.5 webhook_inbound entrypoint", () => {
 			edges: [],
 		};
 		const auto = await createAutomation("wh-auto", graph, "telegram");
+		const entrypointId = generateId("aep_");
 		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "telegram",
 			kind: "webhook_inbound",
 			status: "active",
 			config: {
 				webhook_slug: webhookSlug,
-				webhook_secret: secret,
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
 				contact_lookup: { by: "email", field_path: "$.email" },
 			} as never,
 			specificity: 30,
@@ -1079,7 +1118,8 @@ describe("11.5 webhook_inbound entrypoint", () => {
 		await createBareContact({ name: "wh-contact", email: emailValue });
 
 		const body = JSON.stringify({ email: emailValue, extra: "x" });
-		const sigHex = await signBody(body);
+		const timestamp = Math.floor(Date.now() / 1000).toString();
+		const sigHex = await signPayload(`${timestamp}.${body}`);
 
 		const res = await receiveAutomationWebhook(
 			db,
@@ -1087,8 +1127,9 @@ describe("11.5 webhook_inbound entrypoint", () => {
 				slug: webhookSlug,
 				rawBody: body,
 				signatureHeader: `sha256=${sigHex}`,
+				timestampHeader: timestamp,
 			},
-			{ db },
+			{ db, ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(res.status).toBe("ok");
 		if (res.status !== "ok") throw new Error("expected ok");
@@ -1098,14 +1139,16 @@ describe("11.5 webhook_inbound entrypoint", () => {
 	it("bad signature → bad_signature", async () => {
 		if (!dbAvailable) return;
 		const body = JSON.stringify({ email: "whatever@x.com" });
+		const timestamp = Math.floor(Date.now() / 1000).toString();
 		const res = await receiveAutomationWebhook(
 			db,
 			{
 				slug: webhookSlug,
 				rawBody: body,
 				signatureHeader: "sha256=deadbeef",
+				timestampHeader: timestamp,
 			},
-			{ db },
+			{ db, ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(res.status).toBe("bad_signature");
 	});
@@ -1127,15 +1170,17 @@ describe("11.5 webhook_inbound entrypoint", () => {
 	it("missing contact + no auto_create → contact_lookup_failed", async () => {
 		if (!dbAvailable) return;
 		const body = JSON.stringify({ email: "not-in-db@example.com" });
-		const sigHex = await signBody(body);
+		const timestamp = Math.floor(Date.now() / 1000).toString();
+		const sigHex = await signPayload(`${timestamp}.${body}`);
 		const res = await receiveAutomationWebhook(
 			db,
 			{
 				slug: webhookSlug,
 				rawBody: body,
 				signatureHeader: `sha256=${sigHex}`,
+				timestampHeader: timestamp,
 			},
-			{ db },
+			{ db, ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(res.status).toBe("contact_lookup_failed");
 	});
@@ -1167,6 +1212,7 @@ describe("11.6 scheduled_trigger", () => {
 		const [ep] = await db
 			.insert(automationEntrypoints)
 			.values({
+				organizationId: orgId,
 				automationId: auto.id,
 				channel: "telegram",
 				kind: "schedule",
@@ -1312,11 +1358,36 @@ describe("11.7 condition branching on tags", () => {
 				},
 			],
 			edges: [
-				{ from_node: "open", from_port: "next", to_node: "cond", to_port: "in" },
-				{ from_node: "cond", from_port: "true", to_node: "premium_msg", to_port: "in" },
-				{ from_node: "cond", from_port: "false", to_node: "free_msg", to_port: "in" },
-				{ from_node: "premium_msg", from_port: "next", to_node: "stop", to_port: "in" },
-				{ from_node: "free_msg", from_port: "next", to_node: "stop", to_port: "in" },
+				{
+					from_node: "open",
+					from_port: "next",
+					to_node: "cond",
+					to_port: "in",
+				},
+				{
+					from_node: "cond",
+					from_port: "true",
+					to_node: "premium_msg",
+					to_port: "in",
+				},
+				{
+					from_node: "cond",
+					from_port: "false",
+					to_node: "free_msg",
+					to_port: "in",
+				},
+				{
+					from_node: "premium_msg",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
+				{
+					from_node: "free_msg",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
 			],
 		};
 		const auto = await createAutomation("branch-auto", graph, "telegram");
@@ -1437,7 +1508,12 @@ describe("11.8 per-action error handling (continue)", () => {
 					},
 				],
 				edges: [
-					{ from_node: "save", from_port: "next", to_node: "stop", to_port: "in" },
+					{
+						from_node: "save",
+						from_port: "next",
+						to_node: "stop",
+						to_port: "in",
+					},
 				],
 			};
 			const auto = await createAutomation("err-continue", graph, "telegram");
@@ -1527,7 +1603,12 @@ describe("11.9 internal event cross-flow enrollment", () => {
 				},
 			],
 			edges: [
-				{ from_node: "save", from_port: "next", to_node: "stop", to_port: "in" },
+				{
+					from_node: "save",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
 			],
 		};
 		const autoA = await createAutomation("flow-a", graphA, "telegram");
@@ -1627,7 +1708,12 @@ describe("11.10 cycle protection", () => {
 				},
 			],
 			edges: [
-				{ from_node: "save", from_port: "next", to_node: "stop", to_port: "in" },
+				{
+					from_node: "save",
+					from_port: "next",
+					to_node: "stop",
+					to_port: "in",
+				},
 			],
 		};
 		const loopAuto = await createAutomation("loop-auto", graph, "telegram");

@@ -3,17 +3,17 @@
 // ---------------------------------------------------------------------------
 
 import {
-	createDb,
+	adAccounts,
 	adAudiences,
 	adAudienceUsers,
-	adAccounts,
-	socialAccounts,
+	createDb,
 	eq,
+	socialAccounts,
 } from "@relayapi/db";
 import { and, sql } from "drizzle-orm";
 import type { Env } from "../types";
-import { getAdPlatformAdapter } from "./ad-platforms";
 import { resolveAdsAccessToken } from "./ad-access-token";
+import { getAdPlatformAdapter } from "./ad-platforms";
 import { AdPlatformError } from "./ad-platforms/types";
 
 // ---------------------------------------------------------------------------
@@ -43,13 +43,13 @@ async function getAdAccountWithToken(
 		.from(adAccounts)
 		.innerJoin(
 			socialAccounts,
-			eq(adAccounts.socialAccountId, socialAccounts.id),
+			and(
+				eq(adAccounts.socialAccountId, socialAccounts.id),
+				eq(socialAccounts.organizationId, orgId),
+			),
 		)
 		.where(
-			and(
-				eq(adAccounts.id, adAccountId),
-				eq(adAccounts.organizationId, orgId),
-			),
+			and(eq(adAccounts.id, adAccountId), eq(adAccounts.organizationId, orgId)),
 		)
 		.limit(1);
 
@@ -179,6 +179,12 @@ export async function createAudience(
 				"Source audience not found or has no platform ID",
 			);
 		}
+		if (source.adAccountId !== params.adAccountId) {
+			throw new AdPlatformError(
+				"INVALID_SOURCE",
+				"Source audience does not belong to the selected ad account",
+			);
+		}
 		platformSourceAudienceId = source.platformAudienceId;
 	}
 
@@ -203,6 +209,7 @@ export async function createAudience(
 		.insert(adAudiences)
 		.values({
 			organizationId: orgId,
+			workspaceId: ctx.adAccount.workspaceId,
 			adAccountId: params.adAccountId,
 			platform: ctx.adAccount.platform,
 			platformAudienceId: result.platformAudienceId,
@@ -273,9 +280,7 @@ export async function addUsersToAudience(
 			emailHash: u.email
 				? await sha256(u.email.trim().toLowerCase())
 				: undefined,
-			phoneHash: u.phone
-				? await sha256(u.phone.replace(/\D/g, ""))
-				: undefined,
+			phoneHash: u.phone ? await sha256(u.phone.replace(/\D/g, "")) : undefined,
 		})),
 	);
 
@@ -303,12 +308,7 @@ export async function addUsersToAudience(
 	}
 
 	// Upload to platform
-	const ctx = await getAdAccountWithToken(
-		db,
-		audience.adAccountId,
-		orgId,
-		env,
-	);
+	const ctx = await getAdAccountWithToken(db, audience.adAccountId, orgId, env);
 	if (!ctx) throw new AdPlatformError("NOT_FOUND", "Ad account not found");
 
 	const adapter = getAdPlatformAdapter(ctx.adAccount.platform);

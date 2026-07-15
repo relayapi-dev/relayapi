@@ -1,1 +1,0 @@
-ALTER TABLE "automation_scheduled_ticks" ADD COLUMN "claimed_at" timestamp with time zone;

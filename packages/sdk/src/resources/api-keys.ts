@@ -68,6 +68,11 @@ export interface APIKeyCreateResponse {
   permission: 'read_write' | 'read_only';
 
   /**
+   * Whether this key can create, list, and revoke API keys
+   */
+  can_manage_api_keys: boolean;
+
+  /**
    * Key prefix
    */
   prefix: string;
@@ -125,6 +130,11 @@ export namespace APIKeyListResponse {
     permission: 'read_write' | 'read_only';
 
     /**
+     * Whether this key can create, list, and revoke API keys
+     */
+    can_manage_api_keys: boolean;
+
+    /**
      * Key prefix (e.g. rlay*live*)
      */
     prefix: string | null;
@@ -146,6 +156,12 @@ export interface APIKeyCreateParams {
    * Name for the API key
    */
   name: string;
+
+  /**
+   * Allow this key to administer organization API keys; requires read_write and
+   * workspace_scope='all'
+   */
+  can_manage_api_keys?: boolean;
 
   /**
    * Number of days until the key expires

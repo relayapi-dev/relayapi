@@ -12,8 +12,10 @@ import {
 	automationEntrypoints,
 	automations,
 	generateId,
+	socialAccounts,
 } from "@relayapi/db";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
+import type { Context } from "hono";
 import { encryptToken } from "../lib/crypto";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
 import {
@@ -21,10 +23,9 @@ import {
 	EntrypointUpdateSchema,
 	validateEntrypointConfig,
 } from "../schemas/automation-entrypoints";
-import { ErrorResponse, } from "../schemas/common";
+import { ErrorResponse } from "../schemas/common";
 import { armScheduleEntrypoint } from "../services/automations/scheduler";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
-import type { Context } from "hono";
 import type { Env, Variables } from "../types";
 import {
 	aggregateInsights,
@@ -44,7 +45,9 @@ const SECRET_MASK = "••••";
 
 type EntrypointRow = typeof automationEntrypoints.$inferSelect;
 
-function maskSecret(config: Record<string, unknown> | null): Record<string, unknown> | null {
+function maskSecret(
+	config: Record<string, unknown> | null,
+): Record<string, unknown> | null {
 	if (!config) return config;
 	if (typeof config.webhook_secret === "string") {
 		return { ...config, webhook_secret: SECRET_MASK };
@@ -73,7 +76,9 @@ const EntrypointCreateResponseSchema = EntrypointResponseSchema.extend({
 	webhook_secret_plaintext: z
 		.string()
 		.optional()
-		.describe("Plaintext HMAC secret — returned only on create/rotate for webhook_inbound entrypoints."),
+		.describe(
+			"Plaintext HMAC secret — returned only on create/rotate for webhook_inbound entrypoints.",
+		),
 	scheduling: z
 		.object({
 			queued: z.boolean(),
@@ -243,7 +248,9 @@ const createEntrypoint = createRoute({
 	responses: {
 		201: {
 			description: "Created",
-			content: { "application/json": { schema: EntrypointCreateResponseSchema } },
+			content: {
+				"application/json": { schema: EntrypointCreateResponseSchema },
+			},
 		},
 		400: {
 			description: "Validation error",
@@ -254,8 +261,7 @@ const createEntrypoint = createRoute({
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		409: {
-			description:
-				"A webhook_inbound entrypoint with this slug already exists",
+			description: "A webhook_inbound entrypoint with this slug already exists",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -268,11 +274,58 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 	const scoped = await loadScopedAutomation(c, automationId);
 	if (!scoped) return notFound(c, "Automation");
 	if ("denied" in scoped) return scoped.denied as never;
+	if (body.channel !== scoped.row.channel) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_CHANNEL",
+					message: "Entrypoint channel must match the automation channel",
+				},
+			},
+			400,
+		);
+	}
+	if (body.social_account_id) {
+		const [account] = await c
+			.get("db")
+			.select({
+				id: socialAccounts.id,
+				workspaceId: socialAccounts.workspaceId,
+				platform: socialAccounts.platform,
+				lifecycleStatus: socialAccounts.lifecycleStatus,
+			})
+			.from(socialAccounts)
+			.where(
+				and(
+					eq(socialAccounts.id, body.social_account_id),
+					eq(socialAccounts.organizationId, c.get("orgId")),
+				),
+			)
+			.limit(1);
+		if (
+			!account ||
+			account.workspaceId !== scoped.row.workspaceId ||
+			account.platform !== body.channel ||
+			account.lifecycleStatus !== "active"
+		) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_ACCOUNT",
+						message:
+							"Entrypoint account must belong to the automation workspace",
+					},
+				},
+				400,
+			);
+		}
+	}
 
 	// For webhook_inbound, auto-generate slug + plaintext secret and inject them
 	// into the config BEFORE validation so the schema sees the required keys.
 	let config: Record<string, unknown> = { ...(body.config ?? {}) };
 	let plaintextSecret: string | null = null;
+	const entrypointId = generateId("aep_");
 
 	if (body.kind === "webhook_inbound") {
 		if (typeof config.webhook_slug !== "string" || !config.webhook_slug) {
@@ -282,8 +335,7 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 			config.webhook_slug = generateId("whk_").slice("whk_".length);
 		}
 		plaintextSecret = randomSecretHex(32);
-		// The validator needs the secret to be a string; store plaintext here so
-		// validation passes. We'll replace with the encrypted value before insert.
+		// Validate the write-only plaintext, then replace it before persistence.
 		config.webhook_secret = plaintextSecret;
 	}
 
@@ -303,13 +355,11 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 	config = parsed.data as Record<string, unknown>;
 
 	if (body.kind === "webhook_inbound" && plaintextSecret) {
-		// Store an encrypted secret at rest. If ENCRYPTION_KEY is missing we fall
-		// back to plaintext so local dev without a key still works — the on-wire
-		// response has already captured the plaintext separately.
-		const envKey = c.env.ENCRYPTION_KEY as string | undefined;
-		config.webhook_secret = envKey
-			? await encryptToken(plaintextSecret, envKey)
-			: plaintextSecret;
+		config.webhook_secret = await encryptToken(
+			plaintextSecret,
+			c.env.ENCRYPTION_KEY,
+			{ recordId: entrypointId, field: "webhook_secret" },
+		);
 	}
 
 	const db = c.get("db");
@@ -357,6 +407,9 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 	const [inserted] = await db
 		.insert(automationEntrypoints)
 		.values({
+			id: entrypointId,
+			organizationId: scoped.row.organizationId,
+			scopeKey: scoped.row.scopeKey,
 			automationId,
 			channel: body.channel,
 			kind: body.kind,
@@ -397,10 +450,7 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 	const body201 = serializeEntrypoint(inserted, {
 		revealSecret: plaintextSecret ?? undefined,
 	});
-	return c.json(
-		scheduling ? { ...body201, scheduling } : body201,
-		201,
-	);
+	return c.json(scheduling ? { ...body201, scheduling } : body201, 201);
 });
 
 // ---------------------------------------------------------------------------
@@ -477,7 +527,58 @@ app.openapi(updateEntrypoint, async (c) => {
 	const scoped = await loadScopedEntrypoint(c, id);
 	if (!scoped) return notFound(c);
 	if ("denied" in scoped) return scoped.denied as never;
-	const { ep: existing } = scoped;
+	const { ep: existing, automation } = scoped;
+	const prospectiveChannel = body.channel ?? existing.channel;
+	const prospectiveAccountId =
+		body.social_account_id !== undefined
+			? (body.social_account_id ?? null)
+			: existing.socialAccountId;
+	if (prospectiveChannel !== automation.channel) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_CHANNEL",
+					message: "Entrypoint channel must match the automation channel",
+				},
+			},
+			400,
+		);
+	}
+	if (prospectiveAccountId) {
+		const [account] = await c
+			.get("db")
+			.select({
+				id: socialAccounts.id,
+				workspaceId: socialAccounts.workspaceId,
+				platform: socialAccounts.platform,
+				lifecycleStatus: socialAccounts.lifecycleStatus,
+			})
+			.from(socialAccounts)
+			.where(
+				and(
+					eq(socialAccounts.id, prospectiveAccountId),
+					eq(socialAccounts.organizationId, c.get("orgId")),
+				),
+			)
+			.limit(1);
+		if (
+			!account ||
+			account.workspaceId !== automation.workspaceId ||
+			account.platform !== prospectiveChannel ||
+			account.lifecycleStatus !== "active"
+		) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_ACCOUNT",
+						message:
+							"Entrypoint account, channel, and workspace must match the automation",
+					},
+				},
+				400,
+			);
+		}
+	}
 
 	const patch: Partial<typeof automationEntrypoints.$inferInsert> = {
 		updatedAt: new Date(),
@@ -503,22 +604,29 @@ app.openapi(updateEntrypoint, async (c) => {
 		const kind = body.kind ?? existing.kind;
 		const config = (body.config ??
 			(existing.config as Record<string, unknown>)) as Record<string, unknown>;
-		// Restore the stored (encrypted) webhook secret when the client echoes
-		// back the public mask. GET/list responses replace webhook_secret with
-		// SECRET_MASK, so a normal read-modify-write PATCH would otherwise persist
-		// the literal mask as the HMAC key — making inbound webhooks forgeable and
-		// breaking the org's own legitimate integration. Preserve the existing
-		// secret unless the caller supplied a genuinely new value.
-		if (
-			kind === "webhook_inbound" &&
-			config.webhook_secret === SECRET_MASK
-		) {
+		// Preserve the write-only value when the client echoes the public mask.
+		// Otherwise validate plaintext input and seal it before persistence.
+		if (kind === "webhook_inbound" && config.webhook_secret === SECRET_MASK) {
 			const existingCfg = (existing.config ?? {}) as Record<string, unknown>;
 			if (typeof existingCfg.webhook_secret === "string") {
 				config.webhook_secret = existingCfg.webhook_secret;
 			} else {
 				delete config.webhook_secret;
 			}
+		} else if (
+			kind === "webhook_inbound" &&
+			typeof config.webhook_secret === "string" &&
+			config.webhook_secret.startsWith("enc:")
+		) {
+			return c.json(
+				{
+					error: {
+						code: "VALIDATION_ERROR",
+						message: "webhook_secret must be supplied as plaintext",
+					},
+				},
+				400,
+			);
 		}
 		const parsed = validateEntrypointConfig(kind, config);
 		if (!parsed.success) {
@@ -534,6 +642,19 @@ app.openapi(updateEntrypoint, async (c) => {
 			);
 		}
 		resolvedConfig = parsed.data as Record<string, unknown>;
+		if (
+			kind === "webhook_inbound" &&
+			typeof resolvedConfig.webhook_secret === "string" &&
+			resolvedConfig.webhook_secret !==
+				((existing.config as Record<string, unknown> | null)?.webhook_secret ??
+					null)
+		) {
+			resolvedConfig.webhook_secret = await encryptToken(
+				resolvedConfig.webhook_secret,
+				c.env.ENCRYPTION_KEY,
+				{ recordId: existing.id, field: "webhook_secret" },
+			);
+		}
 		patch.config = resolvedConfig;
 	}
 
@@ -548,10 +669,10 @@ app.openapi(updateEntrypoint, async (c) => {
 			body.kind ?? existing.kind,
 			resolvedConfig ?? (existing.config as Record<string, unknown>),
 			body.filters !== undefined
-				? body.filters ?? null
+				? (body.filters ?? null)
 				: (existing.filters as Record<string, unknown> | null),
 			body.social_account_id !== undefined
-				? body.social_account_id ?? null
+				? (body.social_account_id ?? null)
 				: existing.socialAccountId,
 		);
 	}
@@ -565,7 +686,11 @@ app.openapi(updateEntrypoint, async (c) => {
 	if (resolvedConfig) {
 		const kind = body.kind ?? existing.kind;
 		const slug = resolvedConfig.webhook_slug;
-		if (kind === "webhook_inbound" && typeof slug === "string" && slug.length > 0) {
+		if (
+			kind === "webhook_inbound" &&
+			typeof slug === "string" &&
+			slug.length > 0
+		) {
 			const [conflict] = await db
 				.select({ id: automationEntrypoints.id })
 				.from(automationEntrypoints)
@@ -634,10 +759,7 @@ app.openapi(updateEntrypoint, async (c) => {
 	}
 
 	const serialized = serializeEntrypoint(updated);
-	return c.json(
-		scheduling ? { ...serialized, scheduling } : serialized,
-		200,
-	);
+	return c.json(scheduling ? { ...serialized, scheduling } : serialized, 200);
 });
 
 const deleteEntrypoint = createRoute({
@@ -664,7 +786,9 @@ app.openapi(deleteEntrypoint, async (c) => {
 	if ("denied" in scoped) return scoped.denied as never;
 
 	const db = c.get("db");
-	await db.delete(automationEntrypoints).where(eq(automationEntrypoints.id, id));
+	await db
+		.delete(automationEntrypoints)
+		.where(eq(automationEntrypoints.id, id));
 	return c.body(null, 204);
 });
 
@@ -706,7 +830,8 @@ app.openapi(rotateSecret, async (c) => {
 			{
 				error: {
 					code: "INVALID_KIND",
-					message: "rotate-secret is only valid for webhook_inbound entrypoints",
+					message:
+						"rotate-secret is only valid for webhook_inbound entrypoints",
 				},
 			},
 			400,
@@ -714,8 +839,10 @@ app.openapi(rotateSecret, async (c) => {
 	}
 
 	const plaintext = randomSecretHex(32);
-	const envKey = c.env.ENCRYPTION_KEY as string | undefined;
-	const stored = envKey ? await encryptToken(plaintext, envKey) : plaintext;
+	const stored = await encryptToken(plaintext, c.env.ENCRYPTION_KEY, {
+		recordId: ep.id,
+		field: "webhook_secret",
+	});
 
 	const nextConfig = {
 		...((ep.config as Record<string, unknown> | null) ?? {}),
@@ -730,10 +857,7 @@ app.openapi(rotateSecret, async (c) => {
 		.returning();
 	if (!updated) return notFound(c);
 
-	return c.json(
-		serializeEntrypoint(updated, { revealSecret: plaintext }),
-		200,
-	);
+	return c.json(serializeEntrypoint(updated, { revealSecret: plaintext }), 200);
 });
 
 // ---------------------------------------------------------------------------

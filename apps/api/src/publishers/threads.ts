@@ -1,11 +1,41 @@
 import { GRAPH_BASE } from "../config/api-versions";
-import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	classifyPublishError,
+	type EngagementAccount,
+	type EngagementActionResult,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 const GRAPH_API = GRAPH_BASE.threads;
 
 interface ThreadsAuth {
 	access_token: string;
 	user_id: string;
+}
+
+const THREADS_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, {
+	granularity: "grapheme",
+});
+const THREADS_EMOJI_GRAPHEME =
+	/(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3)/u;
+
+export function countThreadsCharacters(text: string): number {
+	// Official docs: https://developers.facebook.com/docs/threads/posts
+	// Section "Single Thread Posts" > "Limitations": text posts are limited to
+	// 500 characters, and "Emojis are counted as the number of UTF-8 bytes."
+	// Charge ordinary graphemes once, but charge a complete emoji grapheme by its
+	// encoded byte length so joined, modified, keycap, and flag emoji stay intact.
+	const encoder = new TextEncoder();
+	let count = 0;
+	for (const { segment } of THREADS_GRAPHEME_SEGMENTER.segment(text)) {
+		count += THREADS_EMOJI_GRAPHEME.test(segment)
+			? encoder.encode(segment).byteLength
+			: 1;
+	}
+	return count;
 }
 
 async function graphPost(
@@ -40,13 +70,26 @@ async function graphPost(
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		// Detect token expiration
 		// Docs: https://developers.facebook.com/docs/threads/troubleshooting
-		if (errCode === 190 || detail.includes("Error validating access token") || detail.includes("session has been invalidated")) {
-			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
+		if (
+			errCode === 190 ||
+			detail.includes("Error validating access token") ||
+			detail.includes("session has been invalidated")
+		) {
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
 		if (errSubcode === 4 || res.status === 429) {
-			throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
+			throw new PublishError(`RATE_LIMITED: ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
-		throw new PublishError(`Threads API error: ${detail}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`Threads API error: ${detail}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	return res.json() as Promise<Record<string, unknown>>;
@@ -72,7 +115,10 @@ async function graphGet(
 		};
 		const detail = err.error?.message ?? res.statusText;
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-		throw new PublishError(`Threads API error: ${detail}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`Threads API error: ${detail}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	return res.json() as Promise<Record<string, unknown>>;
@@ -212,7 +258,7 @@ async function publishSinglePost(
 }
 
 /**
- * Publish a carousel post with up to 10 items.
+ * Publish a carousel post with 2-20 items.
  */
 async function publishCarousel(
 	auth: ThreadsAuth,
@@ -223,13 +269,22 @@ async function publishCarousel(
 ): Promise<{ id: string; permalink: string | null }> {
 	// Threads carousels require 2-20 items
 	if (items.length < 2) {
-		throw new Error("Threads carousel requires at least 2 media items.");
+		throw new Error(
+			"CONTENT_ERROR: Threads carousel requires at least 2 media items.",
+		);
+	}
+	if (items.length > 20) {
+		// Official Meta docs: https://developers.facebook.com/docs/threads/posts
+		// Section "Carousel Posts" documents 2-20 children total.
+		throw new Error(
+			`CONTENT_ERROR: Threads carousels support at most 20 media items; received ${items.length}.`,
+		);
 	}
 
 	// Create child containers
 	const childIds: string[] = [];
 
-	for (const item of items.slice(0, 20)) {
+	for (const item of items) {
 		const isVideo = item.type === "video";
 		const childParams: Record<string, unknown> = {
 			media_type: isVideo ? "VIDEO" : "IMAGE",
@@ -284,6 +339,7 @@ async function publishThreadSequence(
 		content: string;
 		media?: Array<{ url: string; type?: string }>;
 	}>,
+	onRootPublished?: () => void,
 ): Promise<{ rootId: string; permalink: string | null }> {
 	let rootId: string | undefined;
 	let rootPermalink: string | null = null;
@@ -291,10 +347,10 @@ async function publishThreadSequence(
 
 	for (const item of items) {
 		// Validate character limit per item
-		const itemBytes = new TextEncoder().encode(item.content).byteLength;
-		if (itemBytes > 500) {
+		const itemCharacters = countThreadsCharacters(item.content);
+		if (itemCharacters > 500) {
 			throw new Error(
-				`Thread item exceeds 500 byte limit (${itemBytes} bytes)`,
+				`CONTENT_ERROR: Thread item exceeds the 500-character limit (${itemCharacters} characters).`,
 			);
 		}
 
@@ -329,6 +385,7 @@ async function publishThreadSequence(
 		if (!rootId) {
 			rootId = published.id;
 			rootPermalink = published.permalink;
+			onRootPublished?.();
 		}
 		previousId = published.id;
 	}
@@ -339,13 +396,22 @@ async function publishThreadSequence(
 export const threadsPublisher: Publisher = {
 	platform: "threads",
 
-	async comment(account: EngagementAccount, platformPostId: string, text: string): Promise<EngagementActionResult> {
+	async comment(
+		account: EngagementAccount,
+		platformPostId: string,
+		text: string,
+	): Promise<EngagementActionResult> {
 		try {
 			const auth: ThreadsAuth = {
 				access_token: account.access_token,
 				user_id: account.platform_account_id,
 			};
-			const result = await publishSinglePost(auth, text, undefined, platformPostId);
+			const result = await publishSinglePost(
+				auth,
+				text,
+				undefined,
+				platformPostId,
+			);
 			return { success: true, platform_post_id: result.id };
 		} catch (err) {
 			const result = classifyPublishError(err);
@@ -354,6 +420,7 @@ export const threadsPublisher: Publisher = {
 	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
+		let threadHasPublished = false;
 		try {
 			const opts = request.target_options;
 			const auth: ThreadsAuth = {
@@ -374,27 +441,28 @@ export const threadsPublisher: Publisher = {
 				| undefined;
 
 			if (threadItems && threadItems.length > 0) {
-				const result = await publishThreadSequence(auth, threadItems);
+				const result = await publishThreadSequence(auth, threadItems, () => {
+					threadHasPublished = true;
+				});
 				const username =
 					request.account.username ?? request.account.platform_account_id;
 
 				return {
 					success: true,
 					platform_post_id: result.rootId,
-					platform_url: result.permalink ?? `https://www.threads.net/@${username}`,
+					platform_url:
+						result.permalink ?? `https://www.threads.net/@${username}`,
 				};
 			}
 
-			// Validate character limit
-			// Threads counts characters by UTF-8 bytes for emoji
-			// Docs: https://developers.facebook.com/docs/threads/overview
-			const contentBytes = new TextEncoder().encode(content).byteLength;
-			if (contentBytes > 500) {
+			// Validate the official 500-character limit (see helper source above).
+			const contentCharacters = countThreadsCharacters(content);
+			if (contentCharacters > 500) {
 				return {
 					success: false,
 					error: {
 						code: "CONTENT_TOO_LONG",
-						message: `Content is ${contentBytes} bytes (UTF-8). Threads limit is 500.`,
+						message: `Content is ${contentCharacters} characters. Threads limit is 500.`,
 					},
 				};
 			}
@@ -402,34 +470,54 @@ export const threadsPublisher: Publisher = {
 			const extraParams: Record<string, unknown> = {};
 			if (opts.topic_tag) extraParams.topic_tag = opts.topic_tag;
 			if (opts.reply_control) extraParams.reply_control = opts.reply_control;
-			if (opts.link_attachment) extraParams.link_attachment = opts.link_attachment;
+			if (opts.link_attachment)
+				extraParams.link_attachment = opts.link_attachment;
 
 			const username =
 				request.account.username ?? request.account.platform_account_id;
 
 			// Carousel (multiple media)
 			if (media.length > 1) {
-				const carouselResult = await publishCarousel(auth, media, content || undefined, undefined, extraParams);
+				const carouselResult = await publishCarousel(
+					auth,
+					media,
+					content || undefined,
+					undefined,
+					extraParams,
+				);
 
 				return {
 					success: true,
 					platform_post_id: carouselResult.id,
-					platform_url: carouselResult.permalink ?? `https://www.threads.net/@${username}`,
+					platform_url:
+						carouselResult.permalink ?? `https://www.threads.net/@${username}`,
 				};
 			}
 
 			// Single post (text, image, or video)
 			const singleMedia = media.length === 1 ? media[0] : undefined;
 
-			const singleResult = await publishSinglePost(auth, content, singleMedia, undefined, extraParams);
+			const singleResult = await publishSinglePost(
+				auth,
+				content,
+				singleMedia,
+				undefined,
+				extraParams,
+			);
 
 			return {
 				success: true,
 				platform_post_id: singleResult.id,
-				platform_url: singleResult.permalink ?? `https://www.threads.net/@${username}`,
+				platform_url:
+					singleResult.permalink ?? `https://www.threads.net/@${username}`,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			const threadItems = request.target_options.thread;
+			const isThread = Array.isArray(threadItems) && threadItems.length > 0;
+			return classifyPublishError(err, {
+				safeToRetryRateLimit: !isThread || !threadHasPublished,
+				definitiveHttpRejection: isThread && !threadHasPublished,
+			});
 		}
 	},
 };

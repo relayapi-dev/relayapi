@@ -1,18 +1,15 @@
-import { member } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
 import type Relay from "@relayapi/sdk";
 import { API_BASE_URL } from "./api-base-url";
+import { canManageOrganizationCredentials } from "./credential-authorization";
+import {
+	dashboardCredentialErrorResponse,
+	ensureDashboardCredential,
+} from "./dashboard-credential";
 import { getRelayClient } from "./relay";
 
-const BILLING_ADMIN_ROLES = new Set(["owner", "admin"]);
-
-/**
- * Return a 401/403 Response if the current user isn't an owner/admin of the
- * active organization. Returns null when authorized. Use at the top of any
- * billing / subscription mutation route.
- */
-export async function requireBillingAdmin(
+export async function requireOrganizationAdmin(
   ctx: { locals: App.Locals },
+  message = "Only organization admins can perform this action.",
 ): Promise<Response | null> {
   const user = ctx.locals.user as { id: string } | null | undefined;
   const org = ctx.locals.organization as { id: string } | null | undefined;
@@ -23,26 +20,55 @@ export async function requireBillingAdmin(
     );
   }
 
-  const db = ctx.locals.db;
-  const [row] = await db
-    .select({ role: member.role })
-    .from(member)
-    .where(and(eq(member.userId, user.id), eq(member.organizationId, org.id)))
-    .limit(1);
-
-  if (!row || !BILLING_ADMIN_ROLES.has(row.role ?? "")) {
+  // Middleware resolves this role from the live member row on every request.
+  // Do not fall back to the signed session's activeOrganizationId here.
+  if (
+    !canManageOrganizationCredentials(ctx.locals.organizationMembershipRole)
+  ) {
     return Response.json(
-      {
-        error: {
-          code: "FORBIDDEN",
-          message: "Only organization admins can manage billing.",
-        },
-      },
+      { error: { code: "FORBIDDEN", message } },
       { status: 403 },
     );
   }
-
   return null;
+}
+
+export function requireOrganizationOwner(ctx: {
+  locals: App.Locals;
+}): Response | null {
+  if (!ctx.locals.user || !ctx.locals.organization) {
+    return Response.json(
+      { error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+      { status: 401 },
+    );
+  }
+  const roles = (ctx.locals.organizationMembershipRole ?? "")
+    .split(",")
+    .map((role) => role.trim());
+  if (roles.includes("owner")) return null;
+  return Response.json(
+    {
+      error: {
+        code: "FORBIDDEN",
+        message: "Only the organization owner can delete this organization.",
+      },
+    },
+    { status: 403 },
+  );
+}
+
+/**
+ * Return a 401/403 Response if the current user isn't an owner/admin of the
+ * active organization. Returns null when authorized. Use at the top of any
+ * billing / subscription mutation route.
+ */
+export async function requireBillingAdmin(ctx: {
+  locals: App.Locals;
+}): Promise<Response | null> {
+  return requireOrganizationAdmin(
+    ctx,
+    "Only organization admins can manage billing.",
+  );
 }
 
 /**
@@ -73,9 +99,9 @@ export function requireParam(
 /**
  * Get the SDK client from an Astro API context, or return an error Response.
  */
-export async function requireClient(
-  ctx: { locals: App.Locals },
-): Promise<Relay | Response> {
+export async function requireClient(ctx: {
+	locals: App.Locals;
+}): Promise<Relay | Response> {
   if (!ctx.locals.user || !ctx.locals.organization) {
     return Response.json(
       { error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
@@ -83,10 +109,22 @@ export async function requireClient(
     );
   }
 
-  const client = await getRelayClient(ctx.locals, API_BASE_URL);
+	let client = await getRelayClient(ctx.locals, API_BASE_URL);
+	if (!client) {
+		const credential = await ensureDashboardCredential(ctx.locals);
+		if (!credential.ok) {
+			return dashboardCredentialErrorResponse(credential);
+		}
+		client = await getRelayClient(ctx.locals, API_BASE_URL);
+	}
   if (!client) {
     return Response.json(
-      { error: { code: "NO_API_KEY", message: "No dashboard API key found. Please create one." } },
+			{
+				error: {
+					code: "DASHBOARD_CREDENTIAL_UNAVAILABLE",
+					message: "Dashboard credential could not be loaded.",
+				},
+			},
       { status: 500 },
     );
   }
@@ -107,21 +145,30 @@ export function handleSdkError(err: unknown): Response {
     // SDK error.error is the JSON body: { error: { code, message } }
     let code = "API_ERROR";
     let message = apiErr.message || "API error";
+    let details: Record<string, unknown> | undefined;
     const body = apiErr.error as
       | string
       | {
           code?: string;
           message?: string;
-          error?: { code?: string; message?: string; name?: string };
+          details?: Record<string, unknown>;
+          error?: {
+            code?: string;
+            message?: string;
+            name?: string;
+            details?: Record<string, unknown>;
+          };
         }
       | undefined;
     const bodyObj = typeof body === "object" ? body : undefined;
     if (bodyObj?.error?.code) {
       code = bodyObj.error.code;
       message = bodyObj.error.message || message;
+      details = bodyObj.error.details;
     } else if (bodyObj?.code) {
       code = bodyObj.code;
       message = bodyObj.message || message;
+      details = bodyObj.details;
     } else if (typeof body === "string") {
       message = body;
     } else if (bodyObj?.error?.name === "ZodError") {
@@ -147,7 +194,7 @@ export function handleSdkError(err: unknown): Response {
     }
 
     return Response.json(
-      { error: { code, message } },
+      { error: { code, message, ...(details ? { details } : {}) } },
       { status: apiErr.status || 500 },
     );
   }

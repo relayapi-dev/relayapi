@@ -51,10 +51,11 @@ import type { SendMessageRequest } from "../services/message-sender";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -153,9 +154,7 @@ async function teardownFixture() {
 			),
 		);
 	await db.delete(automations).where(eq(automations.organizationId, orgId));
-	await db
-		.delete(inboxMessages)
-		.where(eq(inboxMessages.organizationId, orgId));
+	await db.delete(inboxMessages).where(eq(inboxMessages.organizationId, orgId));
 	await db
 		.delete(inboxConversations)
 		.where(eq(inboxConversations.organizationId, orgId));
@@ -178,6 +177,7 @@ async function teardownFixture() {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;
@@ -270,6 +270,7 @@ describe("G1: follow trigger creates a valid run with conversation_id=null", () 
 			graph: replyGraph("Thanks for the follow!"),
 		});
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "instagram" as never,
 			kind: "follow" as never,
@@ -340,6 +341,7 @@ describe("G1: follow trigger creates a valid run with conversation_id=null", () 
 			graph: replyGraph("Welcome!"),
 		});
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "facebook" as never,
 			kind: "follow" as never,
@@ -398,6 +400,7 @@ describe("G2: standalone ad_click / referral creates a valid run", () => {
 			graph: replyGraph("CTM hello"),
 		});
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "instagram" as never,
 			kind: "ad_click" as never,
@@ -458,6 +461,7 @@ describe("G2: standalone ad_click / referral creates a valid run", () => {
 			graph: replyGraph("FB CTM hello"),
 		});
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "facebook" as never,
 			kind: "ad_click" as never,
@@ -534,6 +538,7 @@ describe("in-DM ad_click (messages event with referral.source=ADS) keeps a real 
 			graph: replyGraph("In-DM ad reply"),
 		});
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "instagram" as never,
 			kind: "ad_click" as never,

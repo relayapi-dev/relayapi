@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { compileSafeAutomationRegex } from "../services/automations/safe-regex";
 
 // NOTE: the dedicated `keyword` entrypoint kind was removed (spec §B3 fix).
 // The matcher filters candidate entrypoints by `eq(kind, event.kind)` and
@@ -12,23 +13,36 @@ import { z } from "@hono/zod-openapi";
 // empty `keywords` array as a catch-all inbound-DM entrypoint, and a non-empty
 // one as a keyword match (respecting `match_mode` / `case_sensitive`).
 export const DmReceivedEntrypointConfig = z.object({
-  keywords: z.array(z.string()).optional(),
+  keywords: z.array(z.string().min(1).max(256)).max(50).optional(),
   match_mode: z.enum(["exact", "contains", "regex"]).default("contains"),
   case_sensitive: z.boolean().default(false),
+}).superRefine((config, ctx) => {
+  if (config.match_mode !== "regex") return;
+
+  for (const [index, pattern] of (config.keywords ?? []).entries()) {
+    if (compileSafeAutomationRegex(pattern, config.case_sensitive ? "" : "i")) {
+      continue;
+    }
+    ctx.addIssue({
+      code: "custom",
+      path: ["keywords", index],
+      message: "Unsupported or unsafe regular expression",
+    });
+  }
 });
 
 export const CommentCreatedEntrypointConfig = z.object({
   post_ids: z.array(z.string()).nullable().default(null),
   // Matcher reads config.keywords (trigger-matcher.ts:190). Old key
   // `keyword_filter` was dropped as part of the entrypoint key-drift fix.
-  keywords: z.array(z.string()).optional(),
+  keywords: z.array(z.string().min(1).max(256)).max(50).optional(),
   include_replies: z.boolean().default(true),
 });
 
 export const StoryReplyEntrypointConfig = z.object({
   story_ids: z.array(z.string()).nullable().default(null),
   // Matcher reads config.keywords (trigger-matcher.ts:201).
-  keywords: z.array(z.string()).optional(),
+  keywords: z.array(z.string().min(1).max(256)).max(50).optional(),
 });
 
 export const ScheduleEntrypointConfig = z.object({

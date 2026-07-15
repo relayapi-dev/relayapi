@@ -1,23 +1,62 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { autoPostRules } from "@relayapi/db";
-import { and, desc, eq, sql } from "drizzle-orm";
-import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
-import {
-	CreateAutoPostRuleBody,
-	UpdateAutoPostRuleBody,
-	AutoPostRuleResponse,
-	AutoPostRuleListResponse,
-	TestFeedBody,
-	TestFeedResponse,
-} from "../schemas/auto-post-rules";
-import type { Env, Variables } from "../types";
+import { autoPostRules, socialAccounts } from "@relayapi/db";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import type { Context } from "hono";
+import { inheritOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
 } from "../lib/workspace-scope";
-import { parseFeed, validateFeedUrl } from "../services/auto-post-processor";
+import {
+	AutoPostRuleListResponse,
+	AutoPostRuleResponse,
+	CreateAutoPostRuleBody,
+	TestFeedBody,
+	TestFeedResponse,
+	UpdateAutoPostRuleBody,
+} from "../schemas/auto-post-rules";
+import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
+import { parseFeed, validateFeedUrl } from "../services/feed-parser";
+import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
+
+async function loadRuleAccountsInScope(
+	c: AppContext,
+	accountIds: string[],
+	workspaceId: string | null,
+): Promise<Array<{ id: string; workspaceId: string | null }>> {
+	const uniqueIds = [...new Set(accountIds)];
+	if (uniqueIds.length === 0) return [];
+	const conditions = [
+		eq(socialAccounts.organizationId, c.get("orgId")),
+		inArray(socialAccounts.id, uniqueIds),
+	];
+	if (workspaceId) conditions.push(eq(socialAccounts.workspaceId, workspaceId));
+	applyWorkspaceScope(c, conditions, socialAccounts.workspaceId);
+	const rows = await c
+		.get("db")
+		.select({ id: socialAccounts.id, workspaceId: socialAccounts.workspaceId })
+		.from(socialAccounts)
+		.where(and(...conditions))
+		.limit(uniqueIds.length);
+	return rows;
+}
+
+async function accountIdsBelongToRuleScope(
+	c: AppContext,
+	accountIds: string[],
+	workspaceId: string | null,
+): Promise<boolean> {
+	const uniqueIds = [...new Set(accountIds)];
+	return (
+		(await loadRuleAccountsInScope(c, uniqueIds, workspaceId)).length ===
+		uniqueIds.length
+	);
+}
 
 // ---------------------------------------------------------------------------
 // Helper: serialize a rule row to the API response shape
@@ -132,6 +171,10 @@ const getRuleRoute = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -169,6 +212,10 @@ const updateRuleRoute = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -188,6 +235,10 @@ const deleteRuleRoute = createRoute({
 		},
 		404: {
 			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -216,6 +267,10 @@ const activateRuleRoute = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -240,6 +295,10 @@ const pauseRuleRoute = createRoute({
 		},
 		404: {
 			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -290,10 +349,7 @@ app.openapi(createRuleRoute, async (c) => {
 			{
 				error: {
 					code: "VALIDATION_ERROR",
-					message:
-						err instanceof Error
-							? err.message
-							: "Invalid feed URL",
+					message: err instanceof Error ? err.message : "Invalid feed URL",
 				},
 			},
 			400,
@@ -301,12 +357,36 @@ app.openapi(createRuleRoute, async (c) => {
 	}
 
 	const db = c.get("db");
+	const uniqueAccountIds = [...new Set(body.account_ids)];
+	const ruleAccounts = await loadRuleAccountsInScope(
+		c,
+		uniqueAccountIds,
+		body.workspace_id ?? null,
+	);
+	if (ruleAccounts.length !== uniqueAccountIds.length) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_ACCOUNTS",
+					message: "Every account must belong to the rule workspace",
+				},
+			},
+			400,
+		);
+	}
+	const scope = await inheritOperationalCreateScope(
+		c,
+		body.workspace_id,
+		ruleAccounts.map((account) => account.workspaceId),
+		"auto-post rule",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	const [rule] = await db
 		.insert(autoPostRules)
 		.values({
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: scope.workspaceId,
 			name: body.name,
 			feedUrl: body.feed_url,
 			pollingIntervalMinutes: body.polling_interval_minutes,
@@ -393,10 +473,7 @@ app.openapi(getRuleRoute, async (c) => {
 		.select()
 		.from(autoPostRules)
 		.where(
-			and(
-				eq(autoPostRules.id, id),
-				eq(autoPostRules.organizationId, orgId),
-			),
+			and(eq(autoPostRules.id, id), eq(autoPostRules.organizationId, orgId)),
 		)
 		.limit(1);
 
@@ -405,6 +482,9 @@ app.openapi(getRuleRoute, async (c) => {
 			{ error: { code: "NOT_FOUND", message: "Rule not found" } },
 			404,
 		);
+	}
+	if (isWorkspaceScopeDenied(c, rule.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
 	return c.json(serializeRule(rule) as never, 200);
@@ -420,10 +500,7 @@ app.openapi(updateRuleRoute, async (c) => {
 		.select()
 		.from(autoPostRules)
 		.where(
-			and(
-				eq(autoPostRules.id, id),
-				eq(autoPostRules.organizationId, orgId),
-			),
+			and(eq(autoPostRules.id, id), eq(autoPostRules.organizationId, orgId)),
 		)
 		.limit(1);
 
@@ -431,6 +508,27 @@ app.openapi(updateRuleRoute, async (c) => {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Rule not found" } },
 			404,
+		);
+	}
+	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
+	if (
+		body.account_ids !== undefined &&
+		!(await accountIdsBelongToRuleScope(
+			c,
+			body.account_ids,
+			existing.workspaceId,
+		))
+	) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_ACCOUNTS",
+					message: "Every account must belong to the rule workspace",
+				},
+			},
+			400,
 		);
 	}
 
@@ -443,10 +541,7 @@ app.openapi(updateRuleRoute, async (c) => {
 				{
 					error: {
 						code: "VALIDATION_ERROR",
-						message:
-							err instanceof Error
-								? err.message
-								: "Invalid feed URL",
+						message: err instanceof Error ? err.message : "Invalid feed URL",
 					},
 				},
 				400,
@@ -488,10 +583,7 @@ app.openapi(deleteRuleRoute, async (c) => {
 		})
 		.from(autoPostRules)
 		.where(
-			and(
-				eq(autoPostRules.id, id),
-				eq(autoPostRules.organizationId, orgId),
-			),
+			and(eq(autoPostRules.id, id), eq(autoPostRules.organizationId, orgId)),
 		)
 		.limit(1);
 
@@ -519,10 +611,7 @@ app.openapi(activateRuleRoute, async (c) => {
 		.select()
 		.from(autoPostRules)
 		.where(
-			and(
-				eq(autoPostRules.id, id),
-				eq(autoPostRules.organizationId, orgId),
-			),
+			and(eq(autoPostRules.id, id), eq(autoPostRules.organizationId, orgId)),
 		)
 		.limit(1);
 
@@ -531,6 +620,9 @@ app.openapi(activateRuleRoute, async (c) => {
 			{ error: { code: "NOT_FOUND", message: "Rule not found" } },
 			404,
 		);
+	}
+	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
 	const [updated] = await db
@@ -556,10 +648,7 @@ app.openapi(pauseRuleRoute, async (c) => {
 		.select()
 		.from(autoPostRules)
 		.where(
-			and(
-				eq(autoPostRules.id, id),
-				eq(autoPostRules.organizationId, orgId),
-			),
+			and(eq(autoPostRules.id, id), eq(autoPostRules.organizationId, orgId)),
 		)
 		.limit(1);
 
@@ -569,10 +658,18 @@ app.openapi(pauseRuleRoute, async (c) => {
 			404,
 		);
 	}
+	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	const [updated] = await db
 		.update(autoPostRules)
-		.set({ status: "paused", updatedAt: new Date() })
+		.set({
+			status: "paused",
+			leaseToken: sql`${autoPostRules.leaseToken} + 1`,
+			leaseExpiresAt: null,
+			updatedAt: new Date(),
+		})
 		.where(eq(autoPostRules.id, id))
 		.returning();
 
@@ -589,10 +686,7 @@ app.openapi(testFeedRoute, async (c) => {
 			{
 				error: {
 					code: "VALIDATION_ERROR",
-					message:
-						err instanceof Error
-							? err.message
-							: "Invalid feed URL",
+					message: err instanceof Error ? err.message : "Invalid feed URL",
 				},
 			},
 			400,
@@ -618,10 +712,7 @@ app.openapi(testFeedRoute, async (c) => {
 			{
 				error: {
 					code: "VALIDATION_ERROR",
-					message:
-						err instanceof Error
-							? err.message
-							: "Failed to parse feed",
+					message: err instanceof Error ? err.message : "Failed to parse feed",
 				},
 			},
 			400,

@@ -1,0 +1,21 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "credentialed-database-url"
+description = "Database URL containing inline username and password"
+regex = '''(?i)(?:postgres(?:ql)?|mysql|mariadb)://[^/\s@:\"]+:[^/\s@\"]+@'''
+keywords = ["postgres://", "postgresql://", "mysql://", "mariadb://"]
+
+[rules.allowlist]
+description = "Exact synthetic database URLs used by CI, mocks, and documentation"
+regexTarget = "line"
+regexes = [
+	'''postgresql://postgres:postgres@127\.0\.0\.1:5432/relayapi_migration_test(?:["'\s]|$)''',
+	'''postgres://x:x@localhost:5433/x(?:["'\s]|$)''',
+	'''postgresql://mock:mock@localhost:5432/mock(?:["'\s]|$)''',
+	'''postgresql://user:password@host:5432/relayapi(?:["'\s]|$)''',
+	'''postgresql://user:password@localhost:5432/relayapi(?:["'\s]|$)''',
+	'''postgres://\$\{PG_USER\}:<pass>@\$\{CF_DB_HOSTNAME\}:5432/\$\{PG_DB\}(?:\\"|["'\s]|$)''',
+	'''postgres://\$\{PG_USER\}:<pass>@localhost:5432/\$\{PG_DB\}\?sslmode=require(?:["'\s]|$)''',
+]

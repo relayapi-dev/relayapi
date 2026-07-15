@@ -1,40 +1,73 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	type createDb,
-	ideas,
-	ideaMedia,
-	ideaTags,
-	ideaComments,
-	ideaActivity,
-	tags,
-	posts,
 	apikey,
+	type createDb,
+	type Database,
+	generateId,
+	ideaActivity,
+	ideaComments,
+	ideaConversionOperations,
+	ideaGroups,
+	ideaMedia,
+	ideas,
+	ideaTags,
+	media,
+	posts,
+	tags,
 	user,
 } from "@relayapi/db";
-import { and, asc, desc, eq, inArray, lt, max, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	getTableColumns,
+	inArray,
+	isNull,
+	lt,
+	sql,
+} from "drizzle-orm";
+import {
+	decodeTimestampIdCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+} from "../lib/pagination-cursor";
+import { presignRelayMediaUrls } from "../lib/r2-presign";
+import {
+	resolveOperationalCreateScope,
+	workspaceScopeKey,
+} from "../lib/request-access";
+import { thumbnailKeyFor } from "../lib/thumbnails";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+} from "../lib/workspace-scope";
 import { ErrorResponse, IdParam } from "../schemas/common";
 import {
-	CreateIdeaBody,
-	UpdateIdeaBody,
-	MoveIdeaBody,
 	ConvertIdeaBody,
-	IdeaResponse,
+	CreateIdeaBody,
+	CreateIdeaCommentBody,
+	IdeaActivityListQuery,
+	IdeaActivityListResponse,
+	IdeaCommentListQuery,
+	IdeaCommentListResponse,
+	IdeaCommentResponse,
 	IdeaListQuery,
 	IdeaListResponse,
 	IdeaMediaResponse,
-	IdeaActivityListQuery,
-	IdeaActivityListResponse,
-	IdeaCommentResponse,
-	CreateIdeaCommentBody,
+	IdeaResponse,
+	MoveIdeaBody,
+	UpdateIdeaBody,
 	UpdateIdeaCommentBody,
-	IdeaCommentListQuery,
-	IdeaCommentListResponse,
 } from "../schemas/ideas";
+import { processMediaDeletion } from "../services/media-reliability";
 import type { Env, Variables } from "../types";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
-import { assertScopedCreateWorkspace } from "../lib/request-access";
-import { presignRelayMediaUrls } from "../lib/r2-presign";
-import { ensureDefaultGroup } from "./idea-groups";
+import {
+	acquireAdvisoryLocks,
+	ensureDefaultGroup,
+	groupOrderLockKey,
+	ideaOrderLockKey,
+} from "./idea-groups";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -50,20 +83,59 @@ function serializeTag(row: typeof tags.$inferSelect) {
 	};
 }
 
-function serializeMedia(row: typeof ideaMedia.$inferSelect) {
+type IdeaMediaView = {
+	id: string;
+	ideaId: string;
+	mediaId: string;
+	organizationId: string;
+	workspaceId: string | null;
+	type: (typeof ideaMedia.$inferSelect)["type"];
+	alt: string | null;
+	position: number;
+	deleteWithIdea: boolean;
+	url: string | null;
+	thumbnailUrl: string | null;
+	status: (typeof media.$inferSelect)["status"];
+	originalDeletedAt: Date | null;
+};
+
+const ideaMediaSelection = {
+	id: ideaMedia.id,
+	ideaId: ideaMedia.ideaId,
+	mediaId: ideaMedia.mediaId,
+	organizationId: ideaMedia.organizationId,
+	workspaceId: ideaMedia.workspaceId,
+	type: ideaMedia.type,
+	alt: ideaMedia.alt,
+	position: ideaMedia.position,
+	deleteWithIdea: ideaMedia.deleteWithIdea,
+	url: sql<string | null>`COALESCE(${media.url}, ${media.thumbnailUrl})`,
+	thumbnailUrl: media.thumbnailUrl,
+	status: media.status,
+	originalDeletedAt: media.originalDeletedAt,
+};
+
+function serializeMedia(row: IdeaMediaView) {
 	return {
 		id: row.id,
+		media_id: row.mediaId,
 		url: row.url,
+		thumbnail: row.thumbnailUrl,
 		type: row.type,
 		alt: row.alt ?? null,
 		position: row.position,
+		status: row.status,
+		original_available:
+			row.status === "ready" &&
+			row.originalDeletedAt === null &&
+			row.url !== null,
 	};
 }
 
 function serializeIdea(
 	row: typeof ideas.$inferSelect,
 	tagRows: (typeof tags.$inferSelect)[],
-	mediaRows: (typeof ideaMedia.$inferSelect)[],
+	mediaRows: IdeaMediaView[],
 ) {
 	return {
 		id: row.id,
@@ -73,6 +145,7 @@ function serializeIdea(
 		position: row.position,
 		assigned_to: row.assignedTo ?? null,
 		converted_to_post_id: row.convertedToPostId ?? null,
+		revision: row.revision,
 		tags: tagRows.map(serializeTag),
 		media: mediaRows.map(serializeMedia),
 		workspace_id: row.workspaceId ?? null,
@@ -88,15 +161,19 @@ async function serializeIdeaWithMedia(
 	env: Env,
 	row: typeof ideas.$inferSelect,
 	tagRows: (typeof tags.$inferSelect)[],
-	mediaRows: (typeof ideaMedia.$inferSelect)[],
+	mediaRows: IdeaMediaView[],
 ) {
-	const presigned = (await presignRelayMediaUrls(env, mediaRows)) ?? mediaRows;
+	const presigned =
+		(await presignRelayMediaUrls(env, mediaRows, 3600, row.organizationId)) ??
+		mediaRows;
 	return serializeIdea(row, tagRows, presigned);
 }
 
 async function fetchIdeaTags(
 	db: ReturnType<typeof createDb>,
 	ideaId: string,
+	organizationId: string,
+	workspaceId: string | null,
 ): Promise<(typeof tags.$inferSelect)[]> {
 	const rows = await db
 		.select({
@@ -108,19 +185,122 @@ async function fetchIdeaTags(
 			createdAt: tags.createdAt,
 		})
 		.from(ideaTags)
-		.innerJoin(tags, eq(ideaTags.tagId, tags.id))
-		.where(eq(ideaTags.ideaId, ideaId));
+		.innerJoin(
+			tags,
+			and(
+				eq(ideaTags.tagId, tags.id),
+				eq(tags.organizationId, organizationId),
+				eq(tags.scopeKey, ideaTags.tagScopeKey),
+			),
+		)
+		.where(
+			and(
+				eq(ideaTags.ideaId, ideaId),
+				eq(ideaTags.organizationId, organizationId),
+				sql`${ideaTags.workspaceId} IS NOT DISTINCT FROM ${workspaceId}`,
+			),
+		);
 	return rows as (typeof tags.$inferSelect)[];
+}
+
+type IdeaRelationExecutor = Pick<Database, "execute">;
+
+export class InvalidIdeaRelationError extends Error {
+	constructor() {
+		super("One or more idea relations are invalid for this scope");
+		this.name = "InvalidIdeaRelationError";
+	}
+}
+
+/**
+ * Validates the target group and every tag in one organization/workspace-scoped
+ * query. The transaction then writes the idea and its relations using the same
+ * scope values, while composite FKs provide a final database-level guard.
+ */
+export async function validateIdeaRelations(
+	db: IdeaRelationExecutor,
+	organizationId: string,
+	workspaceId: string | null,
+	groupId: string,
+	tagIds: string[],
+): Promise<{ groupScopeKey: string; tagScopeKeys: Map<string, string> }> {
+	const uniqueTagIds = [...new Set(tagIds)];
+	const rows = await db.execute<{
+		kind: "group" | "tag";
+		id: string;
+		scopeKey: string;
+	}>(sql`
+		WITH group_match AS (
+			SELECT id, scope_key
+			FROM idea_groups
+			WHERE id = ${groupId}
+				AND organization_id = ${organizationId}
+				AND (workspace_id IS NULL OR workspace_id IS NOT DISTINCT FROM ${workspaceId})
+			FOR KEY SHARE
+		), tag_match AS (
+			SELECT id, scope_key
+			FROM tags
+			WHERE organization_id = ${organizationId}
+				AND (workspace_id IS NULL OR workspace_id IS NOT DISTINCT FROM ${workspaceId})
+				AND ${
+					uniqueTagIds.length > 0
+						? sql`id IN (${sql.join(
+								uniqueTagIds.map((tagId) => sql`${tagId}`),
+								sql`, `,
+							)})`
+						: sql`FALSE`
+				}
+			FOR KEY SHARE
+		)
+		SELECT 'group'::text AS kind, id, scope_key AS "scopeKey"
+		FROM group_match
+		UNION ALL
+		SELECT 'tag'::text AS kind, id, scope_key AS "scopeKey"
+		FROM tag_match
+	`);
+
+	const groupFound = rows.some(
+		(row) => row.kind === "group" && row.id === groupId,
+	);
+	const foundTagIds = new Set(
+		rows.filter((row) => row.kind === "tag").map((row) => row.id),
+	);
+	if (!groupFound || uniqueTagIds.some((tagId) => !foundTagIds.has(tagId))) {
+		throw new InvalidIdeaRelationError();
+	}
+	const group = rows.find((row) => row.kind === "group" && row.id === groupId);
+	return {
+		groupScopeKey: group?.scopeKey ?? workspaceScopeKey(workspaceId),
+		tagScopeKeys: new Map(
+			rows
+				.filter((row) => row.kind === "tag")
+				.map((row) => [row.id, row.scopeKey ?? workspaceScopeKey(workspaceId)]),
+		),
+	};
 }
 
 async function fetchIdeaMedia(
 	db: ReturnType<typeof createDb>,
 	ideaId: string,
-): Promise<(typeof ideaMedia.$inferSelect)[]> {
+	organizationId: string,
+): Promise<IdeaMediaView[]> {
 	return db
-		.select()
+		.select(ideaMediaSelection)
 		.from(ideaMedia)
-		.where(eq(ideaMedia.ideaId, ideaId))
+		.innerJoin(
+			media,
+			and(
+				eq(media.id, ideaMedia.mediaId),
+				eq(media.organizationId, ideaMedia.organizationId),
+				eq(media.scopeKey, ideaMedia.scopeKey),
+			),
+		)
+		.where(
+			and(
+				eq(ideaMedia.ideaId, ideaId),
+				eq(ideaMedia.organizationId, organizationId),
+			),
+		)
 		.orderBy(asc(ideaMedia.position));
 }
 
@@ -188,21 +368,6 @@ function serializeComment(
 	};
 }
 
-function inferMediaTypeFromUrl(
-	url: string,
-): "image" | "video" | "gif" | "document" {
-	const path = url.split("?")[0] ?? url;
-	const ext = path.split(".").pop()?.toLowerCase() ?? "";
-	if (ext === "gif") return "gif";
-	if (["jpg", "jpeg", "png", "webp", "heic", "heif", "avif"].includes(ext)) {
-		return "image";
-	}
-	if (["mp4", "mov", "webm", "mpeg", "m4v", "qt"].includes(ext)) {
-		return "video";
-	}
-	return "document";
-}
-
 async function logActivity(
 	db: ReturnType<typeof createDb>,
 	ideaId: string,
@@ -233,6 +398,10 @@ const listIdeas = createRoute({
 			description: "List of ideas",
 			content: { "application/json": { schema: IdeaListResponse } },
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -245,6 +414,14 @@ app.openapi(listIdeas, async (c) => {
 	const { limit, cursor, group_id, tag_id, assigned_to, workspace_id } =
 		c.req.valid("query");
 	const db = c.get("db");
+	let decodedCursor: ReturnType<typeof decodeTimestampIdCursor> | null = null;
+	if (cursor) {
+		try {
+			decodedCursor = decodeTimestampIdCursor(cursor);
+		} catch {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+	}
 
 	const conditions = [eq(ideas.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, ideas.workspaceId);
@@ -258,28 +435,37 @@ app.openapi(listIdeas, async (c) => {
 	if (assigned_to) {
 		conditions.push(eq(ideas.assignedTo, assigned_to));
 	}
-	if (cursor) {
-		conditions.push(lt(ideas.createdAt, new Date(cursor)));
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${ideas.createdAt}, ${ideas.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
 	}
 
-	// When filtering by tag_id, join through idea_tags
+	// Filter through the tenant-carrying join row in the main query, avoiding the
+	// old unscoped pre-query and its extra Worker-to-Postgres round trip.
 	if (tag_id) {
-		const taggedIdeaIds = await db
-			.select({ ideaId: ideaTags.ideaId })
-			.from(ideaTags)
-			.where(eq(ideaTags.tagId, tag_id));
-		const ids = taggedIdeaIds.map((r) => r.ideaId);
-		if (ids.length === 0) {
-			return c.json({ data: [], next_cursor: null, has_more: false }, 200);
-		}
-		conditions.push(inArray(ideas.id, ids));
+		conditions.push(sql`EXISTS (
+			SELECT 1
+			FROM idea_tags scoped_idea_tags
+			JOIN tags scoped_tags
+				ON scoped_tags.id = scoped_idea_tags.tag_id
+				AND scoped_tags.organization_id = ${orgId}
+				AND scoped_tags.scope_key = scoped_idea_tags.tag_scope_key
+			WHERE scoped_idea_tags.idea_id = ${ideas.id}
+				AND scoped_idea_tags.tag_id = ${tag_id}
+				AND scoped_idea_tags.organization_id = ${orgId}
+				AND scoped_idea_tags.workspace_id IS NOT DISTINCT FROM ${ideas.workspaceId}
+		)`);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(ideas),
+			cursorTimestamp: sql<string>`to_char(${ideas.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(ideas)
 		.where(and(...conditions))
-		.orderBy(desc(ideas.createdAt))
+		.orderBy(desc(ideas.createdAt), desc(ideas.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -307,12 +493,37 @@ app.openapi(listIdeas, async (c) => {
 				createdAt: tags.createdAt,
 			})
 			.from(ideaTags)
-			.innerJoin(tags, eq(ideaTags.tagId, tags.id))
-			.where(inArray(ideaTags.ideaId, ideaIds)),
+			.innerJoin(
+				tags,
+				and(
+					eq(ideaTags.tagId, tags.id),
+					eq(tags.organizationId, orgId),
+					eq(tags.scopeKey, ideaTags.tagScopeKey),
+				),
+			)
+			.where(
+				and(
+					inArray(ideaTags.ideaId, ideaIds),
+					eq(ideaTags.organizationId, orgId),
+				),
+			),
 		db
-			.select()
+			.select(ideaMediaSelection)
 			.from(ideaMedia)
-			.where(inArray(ideaMedia.ideaId, ideaIds))
+			.innerJoin(
+				media,
+				and(
+					eq(media.id, ideaMedia.mediaId),
+					eq(media.organizationId, ideaMedia.organizationId),
+					eq(media.scopeKey, ideaMedia.scopeKey),
+				),
+			)
+			.where(
+				and(
+					inArray(ideaMedia.ideaId, ideaIds),
+					eq(ideaMedia.organizationId, orgId),
+				),
+			)
 			.orderBy(asc(ideaMedia.position)),
 	]);
 
@@ -328,7 +539,7 @@ app.openapi(listIdeas, async (c) => {
 		group.push(tagRow as typeof tags.$inferSelect);
 	}
 
-	const mediaByIdeaId = new Map<string, (typeof ideaMedia.$inferSelect)[]>();
+	const mediaByIdeaId = new Map<string, IdeaMediaView[]>();
 	for (const row of allMediaRows) {
 		let group = mediaByIdeaId.get(row.ideaId);
 		if (!group) {
@@ -351,7 +562,12 @@ app.openapi(listIdeas, async (c) => {
 				),
 			),
 			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},
@@ -403,11 +619,14 @@ app.openapi(getIdea, async (c) => {
 	if (denied) return denied as never;
 
 	const [tagRows, mediaRows] = await Promise.all([
-		fetchIdeaTags(db, id),
-		fetchIdeaMedia(db, id),
+		fetchIdeaTags(db, id, orgId, row.workspaceId),
+		fetchIdeaMedia(db, id, orgId),
 	]);
 
-	return c.json(await serializeIdeaWithMedia(c.env, row, tagRows, mediaRows), 200);
+	return c.json(
+		await serializeIdeaWithMedia(c.env, row, tagRows, mediaRows),
+		200,
+	);
 });
 
 // ── Create idea ───────────────────────────────────────────────────────────────
@@ -429,6 +648,10 @@ const createIdea = createRoute({
 			description: "Idea created",
 			content: { "application/json": { schema: IdeaResponse } },
 		},
+		400: {
+			description: "Invalid group or tag association",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -436,88 +659,111 @@ const createIdea = createRoute({
 	},
 });
 
-// @ts-expect-error — handler may return 400/403 from scoped workspace checks
 app.openapi(createIdea, async (c) => {
 	const orgId = c.get("orgId");
 	const keyId = c.get("keyId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "idea");
-	if (denied) return denied;
+	const scope = await resolveOperationalCreateScope(
+		c,
+		body.workspace_id,
+		"idea",
+	);
+	if (!scope.ok) return scope.response as never;
 
-	// Resolve group ID
-	const workspaceId = body.workspace_id ?? null;
-	let groupId = body.group_id;
-	if (!groupId) {
-		groupId = await ensureDefaultGroup(db, orgId, workspaceId);
-	}
+	const workspaceId = scope.workspaceId;
+	const tagIds = [...new Set(body.tag_ids ?? [])];
+	let result: { row: typeof ideas.$inferSelect };
+	try {
+		result = await db.transaction(async (tx) => {
+			let groupId = body.group_id;
+			if (!groupId) {
+				// Groups are shared definitions. Provisioning creates this row, while
+				// the upsert is a durable fallback for imported/legacy organizations.
+				await acquireAdvisoryLocks(tx, [groupOrderLockKey(orgId, null)]);
+				groupId = await ensureDefaultGroup(tx, orgId, null);
+			}
+			const relationScopes = await validateIdeaRelations(
+				tx,
+				orgId,
+				workspaceId,
+				groupId,
+				tagIds,
+			);
+			await acquireAdvisoryLocks(tx, [
+				ideaOrderLockKey(orgId, workspaceScopeKey(workspaceId), groupId),
+			]);
 
-	// Place at end of group — fold the max-position read into the INSERT via a
-	// scalar subquery, which also closes the read-then-write race.
-	const [row] = await db
-		.insert(ideas)
-		.values({
-			organizationId: orgId,
-			workspaceId,
-			groupId,
-			title: body.title ?? null,
-			content: body.content ?? null,
-			position: sql`COALESCE((SELECT MAX(position) FROM ideas WHERE group_id = ${groupId}), 0) + 1`,
-			assignedTo: body.assigned_to ?? null,
-		})
-		.returning();
-
-	if (!row) {
-		return c.json(
-			{
-				error: { code: "INTERNAL_ERROR", message: "Failed to create idea" },
-			} as never,
-			500 as never,
-		);
-	}
-
-	const tagIds = body.tag_ids && body.tag_ids.length > 0 ? body.tag_ids : null;
-	const mediaItems = body.media && body.media.length > 0 ? body.media : null;
-
-	// The tag insert, media insert, and both activity-log inserts are mutually
-	// independent once the idea row exists, so run them in one parallel batch
-	// instead of a sequential chain. Capture inserted media via .returning() so
-	// the response is built without a follow-up fetch.
-	const [, insertedMedia] = await Promise.all([
-		tagIds
-			? db
-					.insert(ideaTags)
-					.values(tagIds.map((tagId) => ({ ideaId: row.id, tagId })))
-			: Promise.resolve(undefined),
-		mediaItems
-			? db
-					.insert(ideaMedia)
-					.values(
-						mediaItems.map((item, index) => ({
-							ideaId: row.id,
-							url: item.url,
-							type: item.type ?? inferMediaTypeFromUrl(item.url),
-							alt: item.alt ?? null,
-							position: index,
-						})),
-					)
-					.returning()
-			: Promise.resolve([] as (typeof ideaMedia.$inferSelect)[]),
-		logActivity(db, row.id, keyId, "created"),
-		mediaItems
-			? logActivity(db, row.id, keyId, "media_added", {
-					count: mediaItems.length,
+			// The scalar subquery uses the same complete scope as the validated
+			// group, so a foreign group's positions cannot affect this tenant.
+			const [row] = await tx
+				.insert(ideas)
+				.values({
+					organizationId: orgId,
+					workspaceId,
+					groupId,
+					groupScopeKey: relationScopes.groupScopeKey,
+					title: body.title ?? null,
+					content: body.content ?? null,
+					position: sql`COALESCE((
+						SELECT MAX(position)
+						FROM ideas
+						WHERE group_id = ${groupId}
+							AND organization_id = ${orgId}
+							AND workspace_id IS NOT DISTINCT FROM ${workspaceId}
+					), -1) + 1`,
+					assignedTo: body.assigned_to ?? null,
 				})
-			: Promise.resolve(undefined),
-	]);
+				.returning();
 
-	// Tags were just inserted; fetch their details (the insert above returns only
-	// the join rows). Media rows come straight from the insert's .returning().
-	const tagRows = tagIds ? await fetchIdeaTags(db, row.id) : [];
+			if (!row) throw new Error("Failed to create idea");
+
+			if (tagIds.length > 0) {
+				await tx.insert(ideaTags).values(
+					tagIds.map((tagId) => ({
+						ideaId: row.id,
+						tagId,
+						tagScopeKey:
+							relationScopes.tagScopeKeys.get(tagId) ??
+							workspaceScopeKey(workspaceId),
+						organizationId: orgId,
+						workspaceId,
+					})),
+				);
+			}
+
+			await tx.insert(ideaActivity).values({
+				ideaId: row.id,
+				actorId: keyId,
+				action: "created",
+			});
+
+			return { row };
+		});
+	} catch (error) {
+		if (error instanceof InvalidIdeaRelationError) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_IDEA_RELATION",
+						message:
+							"The group and tags must belong to the idea's organization and workspace",
+					},
+				},
+				400,
+			);
+		}
+		throw error;
+	}
+
+	const tagRows =
+		tagIds.length > 0
+			? await fetchIdeaTags(db, result.row.id, orgId, workspaceId)
+			: [];
 
 	return c.json(
-		await serializeIdeaWithMedia(c.env, row, tagRows, insertedMedia ?? []),
+		await serializeIdeaWithMedia(c.env, result.row, tagRows, []),
 		201,
 	);
 });
@@ -542,8 +788,16 @@ const updateIdea = createRoute({
 			description: "Idea updated",
 			content: { "application/json": { schema: IdeaResponse } },
 		},
+		400: {
+			description: "Invalid tag association",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Idea not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Revision conflict",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -556,23 +810,7 @@ app.openapi(updateIdea, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const [existing] = await db
-		.select()
-		.from(ideas)
-		.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
-		.limit(1);
-
-	if (!existing) {
-		return c.json(
-			{ error: { code: "idea_not_found", message: "Idea not found" } },
-			404,
-		);
-	}
-
-	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied as never;
-
-	const updates: Record<string, unknown> = { updatedAt: new Date() };
+	const updates: Record<string, unknown> = {};
 	const activities: Array<(typeof ideaActivity.$inferInsert)["action"]> = [];
 
 	if (body.title !== undefined) updates.title = body.title;
@@ -582,40 +820,169 @@ app.openapi(updateIdea, async (c) => {
 		activities.push("assigned");
 	}
 
-	if (Object.keys(updates).length > 1) {
-		// More than just updatedAt
-		activities.push("updated");
-		await db.update(ideas).set(updates).where(eq(ideas.id, id));
-	}
-
-	// Replace tags if provided
-	if (body.tag_ids !== undefined) {
-		await db.delete(ideaTags).where(eq(ideaTags.ideaId, id));
-		if (body.tag_ids.length > 0) {
-			await db.insert(ideaTags).values(
-				body.tag_ids.map((tagId) => ({ ideaId: id, tagId })),
+	if (Object.keys(updates).length > 0) activities.push("updated");
+	const tagIds =
+		body.tag_ids === undefined ? undefined : [...new Set(body.tag_ids)];
+	if (Object.keys(updates).length === 0 && tagIds === undefined) {
+		const [current] = await db
+			.select()
+			.from(ideas)
+			.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
+			.limit(1);
+		if (!current) {
+			return c.json(
+				{ error: { code: "idea_not_found", message: "Idea not found" } },
+				404,
 			);
 		}
+		const denied = assertWorkspaceScope(c, current.workspaceId);
+		if (denied) return denied as never;
+		if (current.revision !== body.expected_revision) {
+			return c.json(
+				{
+					error: {
+						code: "REVISION_CONFLICT",
+						message: "The Idea changed; reload it and retry.",
+					},
+				},
+				409 as never,
+			);
+		}
+		const [tagRows, mediaRows] = await Promise.all([
+			fetchIdeaTags(db, id, orgId, current.workspaceId),
+			fetchIdeaMedia(db, id, orgId),
+		]);
+		return c.json(
+			await serializeIdeaWithMedia(c.env, current, tagRows, mediaRows),
+			200,
+		);
 	}
 
-	// Log activities
-	for (const action of activities) {
-		await logActivity(db, id, keyId, action);
+	let updateResult:
+		| { kind: "missing" }
+		| { kind: "denied"; response: Response }
+		| { kind: "conflict" }
+		| { kind: "updated"; row: typeof ideas.$inferSelect };
+	try {
+		updateResult = await db.transaction(async (tx) => {
+			const [current] = await tx
+				.select()
+				.from(ideas)
+				.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
+				.for("update")
+				.limit(1);
+			if (!current) return { kind: "missing" } as const;
+			const denied = assertWorkspaceScope(c, current.workspaceId);
+			if (denied) return { kind: "denied", response: denied } as const;
+			if (current.revision !== body.expected_revision) {
+				return { kind: "conflict" } as const;
+			}
+
+			let tagScopeKeys: Map<string, string> | undefined;
+			if (tagIds !== undefined) {
+				const relationScopes = await validateIdeaRelations(
+					tx,
+					orgId,
+					current.workspaceId,
+					current.groupId,
+					tagIds,
+				);
+				tagScopeKeys = relationScopes.tagScopeKeys;
+			}
+
+			if (tagIds !== undefined) {
+				await tx
+					.delete(ideaTags)
+					.where(
+						and(eq(ideaTags.ideaId, id), eq(ideaTags.organizationId, orgId)),
+					);
+				if (tagIds.length > 0) {
+					await tx.insert(ideaTags).values(
+						tagIds.map((tagId) => ({
+							ideaId: id,
+							tagId,
+							tagScopeKey:
+								tagScopeKeys?.get(tagId) ??
+								workspaceScopeKey(current.workspaceId),
+							organizationId: orgId,
+							workspaceId: current.workspaceId,
+						})),
+					);
+				}
+			}
+
+			if (activities.length > 0) {
+				await tx.insert(ideaActivity).values(
+					activities.map((action) => ({
+						ideaId: id,
+						actorId: keyId,
+						action,
+					})),
+				);
+			}
+
+			const [row] = await tx
+				.update(ideas)
+				.set({
+					...updates,
+					revision: sql`${ideas.revision} + 1`,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(ideas.id, id),
+						eq(ideas.organizationId, orgId),
+						eq(ideas.revision, body.expected_revision),
+					),
+				)
+				.returning();
+			if (!row) return { kind: "conflict" } as const;
+
+			return { kind: "updated", row } as const;
+		});
+	} catch (error) {
+		if (error instanceof InvalidIdeaRelationError) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_IDEA_RELATION",
+						message:
+							"Every tag must belong to the idea's organization and workspace",
+					},
+				},
+				400,
+			);
+		}
+		throw error;
 	}
 
-	const [updatedRow] = await db
-		.select()
-		.from(ideas)
-		.where(eq(ideas.id, id))
-		.limit(1);
+	if (updateResult.kind === "missing") {
+		return c.json(
+			{ error: { code: "idea_not_found", message: "Idea not found" } },
+			404,
+		);
+	}
+	if (updateResult.kind === "denied") return updateResult.response as never;
+	if (updateResult.kind === "conflict") {
+		return c.json(
+			{
+				error: {
+					code: "REVISION_CONFLICT",
+					message: "The Idea changed; reload it and retry.",
+				},
+			},
+			409 as never,
+		);
+	}
+	const updatedRow = updateResult.row;
 
 	const [tagRows, mediaRows] = await Promise.all([
-		fetchIdeaTags(db, id),
-		fetchIdeaMedia(db, id),
+		fetchIdeaTags(db, id, orgId, updatedRow.workspaceId),
+		fetchIdeaMedia(db, id, orgId),
 	]);
 
 	return c.json(
-		await serializeIdeaWithMedia(c.env, updatedRow ?? existing, tagRows, mediaRows),
+		await serializeIdeaWithMedia(c.env, updatedRow, tagRows, mediaRows),
 		200,
 	);
 });
@@ -628,7 +995,8 @@ const deleteIdea = createRoute({
 	path: "/{id}",
 	tags: ["Ideas"],
 	summary: "Delete an idea",
-	description: "Deletes an idea. FK cascades handle media, tags, comments, and activity.",
+	description:
+		"Deletes an idea and durably schedules deletion of media still owned by it. Media copied to a converted post is retained.",
 	security: [{ Bearer: [] }],
 	request: { params: IdParam },
 	responses: {
@@ -645,23 +1013,85 @@ app.openapi(deleteIdea, async (c) => {
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
 
-	const [existing] = await db
-		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
-		.from(ideas)
-		.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
-		.limit(1);
+	const result = await db.transaction(async (tx) => {
+		const [existing] = await tx
+			.select({ id: ideas.id, workspaceId: ideas.workspaceId })
+			.from(ideas)
+			.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
+			.for("update")
+			.limit(1);
+		if (!existing) return { kind: "missing" } as const;
+		const denied = assertWorkspaceScope(c, existing.workspaceId);
+		if (denied) return { kind: "denied", response: denied } as const;
 
-	if (!existing) {
+		const owned = await tx
+			.select({
+				id: media.id,
+				storageKey: media.storageKey,
+				thumbnailKey: media.thumbnailKey,
+				status: media.status,
+			})
+			.from(ideaMedia)
+			.innerJoin(
+				media,
+				and(
+					eq(media.id, ideaMedia.mediaId),
+					eq(media.organizationId, ideaMedia.organizationId),
+					eq(media.scopeKey, ideaMedia.scopeKey),
+				),
+			)
+			.where(
+				and(
+					eq(ideaMedia.ideaId, id),
+					eq(ideaMedia.organizationId, orgId),
+					eq(ideaMedia.deleteWithIdea, true),
+				),
+			)
+			.for("update", { of: media });
+		const now = new Date();
+		for (const row of owned) {
+			const uploadMayStillFinish =
+				row.status === "uploading" || row.status === "upload_failed";
+			await tx
+				.update(media)
+				.set({
+					status: "deleting",
+					url: null,
+					thumbnailKey: row.thumbnailKey ?? thumbnailKeyFor(row.storageKey),
+					deletionRequestedAt: sql`COALESCE(${media.deletionRequestedAt}, ${now})`,
+					deletionNextRetryAt: uploadMayStillFinish
+						? new Date(now.getTime() + 5 * 60_000)
+						: now,
+					deletionLastError: null,
+				})
+				.where(and(eq(media.id, row.id), eq(media.organizationId, orgId)));
+		}
+		await tx
+			.delete(ideas)
+			.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)));
+		return {
+			kind: "deleted",
+			mediaIds: owned
+				.filter(
+					(row) => row.status !== "uploading" && row.status !== "upload_failed",
+				)
+				.map((row) => row.id),
+		} as const;
+	});
+
+	if (result.kind === "missing") {
 		return c.json(
 			{ error: { code: "idea_not_found", message: "Idea not found" } },
 			404,
 		);
 	}
+	if (result.kind === "denied") return result.response;
 
-	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied;
-
-	await db.delete(ideas).where(eq(ideas.id, id));
+	// The database tombstone is already committed. Provider failures cannot
+	// resurrect the Idea; the scheduled reconciler resumes unfinished phases.
+	await Promise.allSettled(
+		result.mediaIds.map((mediaId) => processMediaDeletion(db, c.env, mediaId)),
+	);
 
 	return c.body(null, 204);
 });
@@ -674,7 +1104,8 @@ const moveIdea = createRoute({
 	path: "/{id}/move",
 	tags: ["Ideas"],
 	summary: "Move an idea",
-	description: "Reposition an idea within its group or move it to a different group.",
+	description:
+		"Reposition an idea within its group or move it to a different group.",
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParam,
@@ -687,8 +1118,16 @@ const moveIdea = createRoute({
 			description: "Idea moved",
 			content: { "application/json": { schema: IdeaResponse } },
 		},
+		400: {
+			description: "Invalid target group or relative idea",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Idea not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Revision conflict",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -701,100 +1140,237 @@ app.openapi(moveIdea, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const [existing] = await db
-		.select()
-		.from(ideas)
-		.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
-		.limit(1);
+	let moveResult:
+		| { kind: "missing" }
+		| { kind: "denied"; response: Response }
+		| { kind: "conflict" }
+		| { kind: "updated"; row: typeof ideas.$inferSelect };
+	try {
+		moveResult = await db.transaction(async (tx) => {
+			const [observed] = await tx
+				.select()
+				.from(ideas)
+				.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
+				.limit(1);
+			if (!observed) return { kind: "missing" } as const;
+			const denied = assertWorkspaceScope(c, observed.workspaceId);
+			if (denied) return { kind: "denied", response: denied } as const;
+			if (observed.revision !== body.expected_revision) {
+				return { kind: "conflict" } as const;
+			}
 
-	if (!existing) {
+			const targetGroupId = body.group_id ?? observed.groupId;
+			// Group rows are locked in stable ID order before the ordering advisory
+			// locks. Group deletion uses the same order, avoiding move/delete cycles.
+			const groupIds = [...new Set([observed.groupId, targetGroupId])].sort();
+			const lockedGroups = await tx
+				.select({ id: ideaGroups.id })
+				.from(ideaGroups)
+				.where(
+					and(
+						eq(ideaGroups.organizationId, orgId),
+						inArray(ideaGroups.id, groupIds),
+					),
+				)
+				.orderBy(asc(ideaGroups.id))
+				.for("share");
+			if (lockedGroups.length !== groupIds.length) {
+				throw new InvalidIdeaRelationError();
+			}
+			const scopeKey = workspaceScopeKey(observed.workspaceId);
+			await acquireAdvisoryLocks(tx, [
+				ideaOrderLockKey(orgId, scopeKey, observed.groupId),
+				ideaOrderLockKey(orgId, scopeKey, targetGroupId),
+			]);
+
+			const [current] = await tx
+				.select()
+				.from(ideas)
+				.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
+				.for("update")
+				.limit(1);
+			if (
+				!current ||
+				current.revision !== body.expected_revision ||
+				current.groupId !== observed.groupId ||
+				current.workspaceId !== observed.workspaceId
+			) {
+				return { kind: "conflict" } as const;
+			}
+			const relationScopes = await validateIdeaRelations(
+				tx,
+				orgId,
+				current.workspaceId,
+				targetGroupId,
+				[],
+			);
+
+			const rows = await tx
+				.select({
+					id: ideas.id,
+					groupId: ideas.groupId,
+					position: ideas.position,
+				})
+				.from(ideas)
+				.where(
+					and(
+						eq(ideas.organizationId, orgId),
+						sql`${ideas.workspaceId} IS NOT DISTINCT FROM ${current.workspaceId}`,
+						inArray(ideas.groupId, groupIds),
+					),
+				)
+				.orderBy(asc(ideas.groupId), asc(ideas.position), asc(ideas.id))
+				.for("update");
+			const sourceRows = rows.filter((row) => row.groupId === current.groupId);
+			const targetRows = rows.filter(
+				(row) => row.groupId === targetGroupId && row.id !== id,
+			);
+			let insertIndex = targetRows.length;
+			if (body.after_idea_id === null) {
+				insertIndex = 0;
+			} else if (body.after_idea_id !== undefined) {
+				if (body.after_idea_id === id) throw new InvalidIdeaRelationError();
+				const afterIndex = targetRows.findIndex(
+					(row) => row.id === body.after_idea_id,
+				);
+				if (afterIndex < 0) throw new InvalidIdeaRelationError();
+				insertIndex = afterIndex + 1;
+			} else if (body.position !== undefined) {
+				insertIndex = Math.min(body.position, targetRows.length);
+			}
+			const finalTargetIds = targetRows.map((row) => row.id);
+			finalTargetIds.splice(insertIndex, 0, id);
+			const finalSourceIds = sourceRows
+				.filter((row) => row.id !== id)
+				.map((row) => row.id);
+			const maximumPosition = Math.max(-1, ...rows.map((row) => row.position));
+			const temporaryBase = maximumPosition + rows.length + 1;
+
+			const moveToTemporaryPositions = async (
+				groupId: string,
+				orderedRows: typeof sourceRows,
+			): Promise<void> => {
+				if (orderedRows.length === 0) return;
+				const values = sql.join(
+					orderedRows.map(
+						(row, index) =>
+							sql`(${row.id}::text, ${temporaryBase + index}::integer)`,
+					),
+					sql`, `,
+				);
+				await tx.execute(sql`
+					UPDATE ideas AS target
+					SET position = value.position
+					FROM (VALUES ${values}) AS value(id, position)
+					WHERE target.id = value.id
+						AND target.organization_id = ${orgId}
+						AND target.group_id = ${groupId}
+				`);
+			};
+
+			await moveToTemporaryPositions(current.groupId, sourceRows);
+			if (targetGroupId !== current.groupId) {
+				await moveToTemporaryPositions(targetGroupId, targetRows);
+				await tx
+					.update(ideas)
+					.set({
+						groupId: targetGroupId,
+						groupScopeKey: relationScopes.groupScopeKey,
+						position: temporaryBase + rows.length + 1,
+					})
+					.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)));
+			}
+
+			const applyFinalOrder = async (
+				groupId: string,
+				orderedIds: string[],
+			): Promise<void> => {
+				if (orderedIds.length === 0) return;
+				const values = sql.join(
+					orderedIds.map(
+						(ideaId, index) => sql`(${ideaId}::text, ${index}::integer)`,
+					),
+					sql`, `,
+				);
+				await tx.execute(sql`
+					UPDATE ideas AS target
+					SET position = value.position,
+						revision = target.revision + 1,
+						updated_at = now()
+					FROM (VALUES ${values}) AS value(id, position)
+					WHERE target.id = value.id
+						AND target.organization_id = ${orgId}
+						AND target.group_id = ${groupId}
+				`);
+			};
+
+			if (targetGroupId === current.groupId) {
+				await applyFinalOrder(targetGroupId, finalTargetIds);
+			} else {
+				await applyFinalOrder(current.groupId, finalSourceIds);
+				await applyFinalOrder(targetGroupId, finalTargetIds);
+			}
+			const [changed] = await tx
+				.select()
+				.from(ideas)
+				.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
+				.limit(1);
+			if (!changed) return { kind: "missing" } as const;
+
+			await tx.insert(ideaActivity).values({
+				ideaId: id,
+				actorId: keyId,
+				action: "moved",
+				metadata: {
+					from_group: current.groupId,
+					to_group: targetGroupId,
+				},
+			});
+			return { kind: "updated", row: changed } as const;
+		});
+	} catch (error) {
+		if (error instanceof InvalidIdeaRelationError) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_IDEA_RELATION",
+						message:
+							"The target group and relative idea must belong to the same organization and workspace",
+					},
+				},
+				400,
+			);
+		}
+		throw error;
+	}
+
+	if (moveResult.kind === "missing") {
 		return c.json(
 			{ error: { code: "idea_not_found", message: "Idea not found" } },
 			404,
 		);
 	}
-
-	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied as never;
-
-	const targetGroupId = body.group_id ?? existing.groupId;
-	let targetPosition: number;
-
-	if (body.after_idea_id) {
-		// Place after specific idea — calculate midpoint
-		const [afterIdea] = await db
-			.select({ position: ideas.position })
-			.from(ideas)
-			.where(and(eq(ideas.id, body.after_idea_id), eq(ideas.groupId, targetGroupId)))
-			.limit(1);
-
-		if (!afterIdea) {
-			// Fallback to end
-			const [res] = await db
-				.select({ maxPos: max(ideas.position) })
-				.from(ideas)
-				.where(eq(ideas.groupId, targetGroupId));
-			targetPosition = (res?.maxPos ?? 0) + 1;
-		} else {
-			// Find the idea that comes after afterIdea to calculate midpoint
-			const [nextIdea] = await db
-				.select({ position: ideas.position })
-				.from(ideas)
-				.where(
-					and(
-						eq(ideas.groupId, targetGroupId),
-						sql`${ideas.position} > ${afterIdea.position}`,
-						sql`${ideas.id} != ${id}`,
-					),
-				)
-				.orderBy(asc(ideas.position))
-				.limit(1);
-
-			if (nextIdea) {
-				targetPosition = (afterIdea.position + nextIdea.position) / 2;
-			} else {
-				targetPosition = afterIdea.position + 1;
-			}
-		}
-	} else if (body.position !== undefined) {
-		targetPosition = body.position;
-	} else {
-		// Place at end of target group
-		const [res] = await db
-			.select({ maxPos: max(ideas.position) })
-			.from(ideas)
-			.where(
-				and(
-					eq(ideas.groupId, targetGroupId),
-					sql`${ideas.id} != ${id}`,
-				),
-			);
-		targetPosition = (res?.maxPos ?? 0) + 1;
+	if (moveResult.kind === "denied") return moveResult.response as never;
+	if (moveResult.kind === "conflict") {
+		return c.json(
+			{
+				error: {
+					code: "REVISION_CONFLICT",
+					message: "The Idea order changed; reload and retry.",
+				},
+			},
+			409 as never,
+		);
 	}
-
-	await db
-		.update(ideas)
-		.set({ groupId: targetGroupId, position: targetPosition, updatedAt: new Date() })
-		.where(eq(ideas.id, id));
-
-	await logActivity(db, id, keyId, "moved", {
-		from_group: existing.groupId,
-		to_group: targetGroupId,
-	});
-
-	const [updatedRow] = await db
-		.select()
-		.from(ideas)
-		.where(eq(ideas.id, id))
-		.limit(1);
+	const updatedRow = moveResult.row;
 
 	const [tagRows, mediaRows] = await Promise.all([
-		fetchIdeaTags(db, id),
-		fetchIdeaMedia(db, id),
+		fetchIdeaTags(db, id, orgId, updatedRow.workspaceId),
+		fetchIdeaMedia(db, id, orgId),
 	]);
 
 	return c.json(
-		await serializeIdeaWithMedia(c.env, updatedRow ?? existing, tagRows, mediaRows),
+		await serializeIdeaWithMedia(c.env, updatedRow, tagRows, mediaRows),
 		200,
 	);
 });
@@ -807,7 +1383,8 @@ const convertIdea = createRoute({
 	path: "/{id}/convert",
 	tags: ["Ideas"],
 	summary: "Convert an idea to a post",
-	description: "Creates a draft post pre-filled from idea content and media.",
+	description:
+		"Idempotently creates one draft post in the Idea's exact scope. Ready original media is copied into the draft in the same transaction.",
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParam,
@@ -822,13 +1399,20 @@ const convertIdea = createRoute({
 				"application/json": {
 					schema: z.object({
 						idea: IdeaResponse,
-						post_id: z.string().describe("Newly created post ID"),
+						post_id: z
+							.string()
+							.describe("Created or previously converted post ID"),
+						media_copied: z.number().int().nonnegative(),
 					}),
 				},
 			},
 		},
 		404: {
 			description: "Idea not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Revision or idempotency conflict",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -841,65 +1425,278 @@ app.openapi(convertIdea, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const [existing] = await db
-		.select()
-		.from(ideas)
-		.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
-		.limit(1);
+	const result = await db.transaction(async (tx) => {
+		// Serialize the caller-supplied identity across Ideas before taking an
+		// Idea row lock. The database unique key remains the final fence.
+		await acquireAdvisoryLocks(tx, [
+			`idea-conversion:${orgId}:${body.idempotency_key}`,
+		]);
+		const [existing] = await tx
+			.select()
+			.from(ideas)
+			.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
+			.for("update")
+			.limit(1);
+		if (!existing) return { kind: "missing" } as const;
+		const denied = assertWorkspaceScope(c, existing.workspaceId);
+		if (denied) return { kind: "denied", response: denied } as const;
 
-	if (!existing) {
+		const [keyOwner] = await tx
+			.select({ ideaId: ideaConversionOperations.ideaId })
+			.from(ideaConversionOperations)
+			.where(
+				and(
+					eq(ideaConversionOperations.organizationId, orgId),
+					eq(ideaConversionOperations.idempotencyKey, body.idempotency_key),
+				),
+			)
+			.limit(1);
+		if (keyOwner && keyOwner.ideaId !== id) {
+			return { kind: "idempotency_conflict" } as const;
+		}
+		const [operation] = await tx
+			.select()
+			.from(ideaConversionOperations)
+			.where(
+				and(
+					eq(ideaConversionOperations.ideaId, id),
+					eq(ideaConversionOperations.organizationId, orgId),
+				),
+			)
+			.limit(1);
+		if (operation && operation.idempotencyKey !== body.idempotency_key) {
+			return { kind: "idempotency_conflict" } as const;
+		}
+		if (operation?.status === "succeeded" && operation.postId) {
+			if (existing.convertedToPostId !== operation.postId) {
+				throw new Error("Idea conversion ledger disagrees with the Idea row");
+			}
+			return {
+				kind: "converted",
+				row: existing,
+				postId: operation.postId,
+				mediaCopied: 0,
+			} as const;
+		}
+		if (existing.convertedToPostId) {
+			if (!operation) {
+				await tx.insert(ideaConversionOperations).values({
+					ideaId: id,
+					organizationId: orgId,
+					scopeKey: existing.scopeKey,
+					idempotencyKey: body.idempotency_key,
+					postId: existing.convertedToPostId,
+					status: "succeeded",
+					attempts: 1,
+					completedAt: new Date(),
+				});
+			} else {
+				await tx
+					.update(ideaConversionOperations)
+					.set({
+						postId: existing.convertedToPostId,
+						status: "succeeded",
+						completedAt: new Date(),
+						updatedAt: new Date(),
+						lastError: null,
+					})
+					.where(
+						and(
+							eq(ideaConversionOperations.id, operation.id),
+							eq(ideaConversionOperations.organizationId, orgId),
+						),
+					);
+			}
+			return {
+				kind: "converted",
+				row: existing,
+				postId: existing.convertedToPostId,
+				mediaCopied: 0,
+			} as const;
+		}
+		if (existing.revision !== body.expected_revision) {
+			return { kind: "revision_conflict" } as const;
+		}
+
+		if (operation) {
+			await tx
+				.update(ideaConversionOperations)
+				.set({
+					status: "processing",
+					attempts: sql`${ideaConversionOperations.attempts} + 1`,
+					revision: sql`${ideaConversionOperations.revision} + 1`,
+					lastError: null,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(ideaConversionOperations.id, operation.id),
+						eq(ideaConversionOperations.organizationId, orgId),
+					),
+				);
+		} else {
+			await tx.insert(ideaConversionOperations).values({
+				ideaId: id,
+				organizationId: orgId,
+				scopeKey: existing.scopeKey,
+				idempotencyKey: body.idempotency_key,
+				status: "processing",
+				attempts: 1,
+			});
+		}
+
+		const convertibleMedia = await tx
+			.select({
+				attachmentId: ideaMedia.id,
+				url: media.url,
+				thumbnail: media.thumbnailUrl,
+				type: ideaMedia.type,
+				position: ideaMedia.position,
+			})
+			.from(ideaMedia)
+			.innerJoin(
+				media,
+				and(
+					eq(media.id, ideaMedia.mediaId),
+					eq(media.organizationId, ideaMedia.organizationId),
+					eq(media.scopeKey, ideaMedia.scopeKey),
+				),
+			)
+			.where(
+				and(
+					eq(ideaMedia.ideaId, id),
+					eq(ideaMedia.organizationId, orgId),
+					eq(media.status, "ready"),
+					isNull(media.originalDeletedAt),
+					isNull(media.deletionRequestedAt),
+					sql`${media.url} IS NOT NULL`,
+				),
+			)
+			.orderBy(asc(ideaMedia.position));
+		const copiedMedia = convertibleMedia.flatMap((item) =>
+			item.url
+				? [
+						{
+							url: item.url,
+							type: item.type,
+							...(item.thumbnail ? { thumbnail: item.thumbnail } : {}),
+						},
+					]
+				: [],
+		);
+		const [newPost] = await tx
+			.insert(posts)
+			.values({
+				organizationId: orgId,
+				workspaceId: existing.workspaceId,
+				content: body.content ?? existing.content ?? null,
+				status: "draft",
+				timezone: body.timezone ?? "UTC",
+				platformOverrides:
+					copiedMedia.length > 0 ? { _media: copiedMedia } : null,
+			})
+			.returning({ id: posts.id });
+		if (!newPost) throw new Error("Failed to create converted draft");
+		const [updated] = await tx
+			.update(ideas)
+			.set({
+				convertedToPostId: newPost.id,
+				revision: sql`${ideas.revision} + 1`,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(ideas.id, id),
+					eq(ideas.organizationId, orgId),
+					eq(ideas.revision, body.expected_revision),
+				),
+			)
+			.returning();
+		if (!updated) throw new Error("Lost Idea conversion revision fence");
+		if (convertibleMedia.length > 0) {
+			await tx
+				.update(ideaMedia)
+				.set({ deleteWithIdea: false })
+				.where(
+					and(
+						eq(ideaMedia.ideaId, id),
+						eq(ideaMedia.organizationId, orgId),
+						inArray(
+							ideaMedia.id,
+							convertibleMedia.map((item) => item.attachmentId),
+						),
+					),
+				);
+		}
+		await tx.insert(ideaActivity).values({
+			ideaId: id,
+			actorId: keyId,
+			action: "converted",
+			metadata: { post_id: newPost.id, media_copied: copiedMedia.length },
+		});
+		await tx
+			.update(ideaConversionOperations)
+			.set({
+				postId: newPost.id,
+				status: "succeeded",
+				completedAt: new Date(),
+				updatedAt: new Date(),
+				lastError: null,
+			})
+			.where(
+				and(
+					eq(ideaConversionOperations.ideaId, id),
+					eq(ideaConversionOperations.organizationId, orgId),
+				),
+			);
+		return {
+			kind: "converted",
+			row: updated,
+			postId: newPost.id,
+			mediaCopied: copiedMedia.length,
+		} as const;
+	});
+
+	if (result.kind === "missing") {
 		return c.json(
 			{ error: { code: "idea_not_found", message: "Idea not found" } },
 			404,
 		);
 	}
-
-	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied as never;
-
-	// Create a draft post pre-filled from the idea
-	const postContent = body.content ?? existing.content ?? null;
-	const [newPost] = await db
-		.insert(posts)
-		.values({
-			organizationId: orgId,
-			workspaceId: existing.workspaceId,
-			content: postContent,
-			status: "draft",
-			timezone: body.timezone ?? "UTC",
-		})
-		.returning({ id: posts.id });
-
-	if (!newPost) {
+	if (result.kind === "denied") return result.response as never;
+	if (result.kind === "idempotency_conflict") {
 		return c.json(
-			{ error: { code: "INTERNAL_ERROR", message: "Failed to create post" } } as never,
-			500 as never,
+			{
+				error: {
+					code: "IDEMPOTENCY_KEY_REUSED",
+					message: "This idempotency key belongs to another Idea conversion.",
+				},
+			},
+			409 as never,
+		);
+	}
+	if (result.kind === "revision_conflict") {
+		return c.json(
+			{
+				error: {
+					code: "REVISION_CONFLICT",
+					message: "The Idea changed; reload it and retry conversion.",
+				},
+			},
+			409 as never,
 		);
 	}
 
-	// Update idea's convertedToPostId
-	await db
-		.update(ideas)
-		.set({ convertedToPostId: newPost.id, updatedAt: new Date() })
-		.where(eq(ideas.id, id));
-
-	await logActivity(db, id, keyId, "converted", { post_id: newPost.id });
-
-	const [updatedRow] = await db
-		.select()
-		.from(ideas)
-		.where(eq(ideas.id, id))
-		.limit(1);
-
 	const [tagRows, mediaRows] = await Promise.all([
-		fetchIdeaTags(db, id),
-		fetchIdeaMedia(db, id),
+		fetchIdeaTags(db, id, orgId, result.row.workspaceId),
+		fetchIdeaMedia(db, id, orgId),
 	]);
 
 	return c.json(
 		{
-			idea: await serializeIdeaWithMedia(c.env, updatedRow ?? existing, tagRows, mediaRows),
-			post_id: newPost.id,
+			idea: await serializeIdeaWithMedia(c.env, result.row, tagRows, mediaRows),
+			post_id: result.postId,
+			media_copied: result.mediaCopied,
 		},
 		200,
 	);
@@ -913,7 +1710,8 @@ const uploadIdeaMedia = createRoute({
 	path: "/{id}/media",
 	tags: ["Ideas"],
 	summary: "Upload media to an idea",
-	description: "Multipart form upload. Max 2MB.",
+	description:
+		"Multipart upload (max 2MB). The database upload intent is committed before R2 and recovered from object events or the scheduled reconciler.",
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParam,
@@ -952,29 +1750,18 @@ app.openapi(uploadIdeaMedia, async (c) => {
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
 
-	const [existing] = await db
-		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
-		.from(ideas)
-		.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
-		.limit(1);
-
-	if (!existing) {
-		return c.json(
-			{ error: { code: "idea_not_found", message: "Idea not found" } },
-			404,
-		);
-	}
-
-	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied;
-
 	// Parse multipart form
 	let formData: FormData;
 	try {
 		formData = await c.req.formData();
 	} catch {
 		return c.json(
-			{ error: { code: "BAD_REQUEST", message: "Request must be multipart/form-data" } },
+			{
+				error: {
+					code: "BAD_REQUEST",
+					message: "Request must be multipart/form-data",
+				},
+			},
 			400,
 		);
 	}
@@ -988,9 +1775,14 @@ app.openapi(uploadIdeaMedia, async (c) => {
 	}
 
 	const MAX_SIZE = 2 * 1024 * 1024; // 2MB
-	if (file.size > MAX_SIZE) {
+	if (file.size <= 0 || file.size > MAX_SIZE) {
 		return c.json(
-			{ error: { code: "FILE_TOO_LARGE", message: "Max upload size is 2MB" } },
+			{
+				error: {
+					code: file.size <= 0 ? "BAD_REQUEST" : "FILE_TOO_LARGE",
+					message: file.size <= 0 ? "File is empty" : "Max upload size is 2MB",
+				},
+			},
 			400,
 		);
 	}
@@ -998,67 +1790,172 @@ app.openapi(uploadIdeaMedia, async (c) => {
 	const altText = formData.get("alt");
 	const alt = typeof altText === "string" ? altText : null;
 
-	// Determine media type from MIME
-	const mime = file.type.toLowerCase();
+	const mime = file.type.split(";")[0]?.trim().toLowerCase() ?? "";
 	let mediaType: "image" | "video" | "gif" | "document";
 	if (mime === "image/gif") {
 		mediaType = "gif";
-	} else if (mime.startsWith("image/")) {
+	} else if (
+		[
+			"image/jpeg",
+			"image/png",
+			"image/webp",
+			"image/heic",
+			"image/heif",
+			"image/avif",
+		].includes(mime)
+	) {
 		mediaType = "image";
-	} else if (mime.startsWith("video/")) {
+	} else if (
+		["video/mp4", "video/webm", "video/quicktime", "video/mpeg"].includes(mime)
+	) {
 		mediaType = "video";
-	} else {
+	} else if (mime === "application/pdf") {
 		mediaType = "document";
+	} else {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_CONTENT_TYPE",
+					message:
+						"Supported Idea media types are images, videos, GIFs, and PDF.",
+				},
+			},
+			400,
+		);
 	}
 
-	// Upload to R2
 	const safeFilename = file.name
 		.replace(/[/\\]/g, "_")
 		.replace(/\.\./g, "_")
 		.replace(/\0/g, "")
-		.replace(/[<>"'&]/g, "_");
-	const storageKey = `ideas/${id}/${crypto.randomUUID()}-${safeFilename}`;
+		.replace(/[<>"'&]/g, "_")
+		.replace(/[%#?]/g, "_");
+	const coreMediaId = generateId("med_");
+	const storageKey = `${orgId}/ideas/${id}/${generateId("file_")}/${safeFilename}`;
+	const canonicalUrl = `https://media.relayapi.dev/${storageKey}`;
 
 	const arrayBuffer = await file.arrayBuffer();
-	await c.env.MEDIA_BUCKET.put(storageKey, arrayBuffer, {
-		httpMetadata: { contentType: file.type },
-	});
-
-	const url = `https://media.relayapi.dev/${storageKey}`;
-
-	// Get max position for this idea's media
-	const [posResult] = await db
-		.select({ maxPos: max(ideaMedia.position) })
-		.from(ideaMedia)
-		.where(eq(ideaMedia.ideaId, id));
-	const position = (posResult?.maxPos ?? -1) + 1;
-
-	const [mediaRow] = await db
-		.insert(ideaMedia)
-		.values({
+	const intent = await db.transaction(async (tx) => {
+		const [existing] = await tx
+			.select({
+				id: ideas.id,
+				workspaceId: ideas.workspaceId,
+				scopeKey: ideas.scopeKey,
+			})
+			.from(ideas)
+			.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
+			.for("update")
+			.limit(1);
+		if (!existing) return { kind: "missing" } as const;
+		const denied = assertWorkspaceScope(c, existing.workspaceId);
+		if (denied) return { kind: "denied", response: denied } as const;
+		await tx.insert(media).values({
+			id: coreMediaId,
+			organizationId: orgId,
+			workspaceId: existing.workspaceId,
+			filename: safeFilename,
+			mimeType: mime,
+			size: file.size,
+			storageKey,
+			url: canonicalUrl,
+			status: "uploading",
+		});
+		const [attachment] = await tx
+			.insert(ideaMedia)
+			.values({
+				ideaId: id,
+				mediaId: coreMediaId,
+				organizationId: orgId,
+				workspaceId: existing.workspaceId,
+				type: mediaType,
+				alt,
+				position: sql`COALESCE((
+					SELECT MAX(position) + 1
+					FROM idea_media
+					WHERE idea_id = ${id}
+				), 0)`,
+				deleteWithIdea: true,
+			})
+			.returning({ id: ideaMedia.id });
+		if (!attachment) throw new Error("Failed to persist Idea media intent");
+		await tx.insert(ideaActivity).values({
 			ideaId: id,
-			url,
-			type: mediaType,
-			alt,
-			position,
-		})
-		.returning();
-
-	if (!mediaRow) {
-		await c.env.MEDIA_BUCKET.delete(storageKey).catch(() => {});
+			actorId: keyId,
+			action: "media_added",
+			metadata: {
+				media_id: attachment.id,
+				core_media_id: coreMediaId,
+				filename: file.name,
+				state: "uploading",
+			},
+		});
+		return { kind: "ready", attachmentId: attachment.id } as const;
+	});
+	if (intent.kind === "missing") {
 		return c.json(
-			{ error: { code: "INTERNAL_ERROR", message: "Failed to save media" } } as never,
-			500 as never,
+			{ error: { code: "idea_not_found", message: "Idea not found" } },
+			404,
 		);
 	}
+	if (intent.kind === "denied") return intent.response;
 
-	await logActivity(db, id, keyId, "media_added", {
-		media_id: mediaRow.id,
-		filename: file.name,
-	});
+	try {
+		await c.env.MEDIA_BUCKET.put(storageKey, arrayBuffer, {
+			httpMetadata: { contentType: mime },
+			customMetadata: { orgId, ideaId: id, mediaId: coreMediaId },
+		});
+	} catch (error) {
+		await db
+			.update(media)
+			.set({ status: "upload_failed" })
+			.where(
+				and(
+					eq(media.id, coreMediaId),
+					eq(media.organizationId, orgId),
+					eq(media.status, "uploading"),
+				),
+			)
+			.catch(() => {});
+		throw error;
+	}
 
-	const [presignedRow] = (await presignRelayMediaUrls(c.env, [mediaRow])) ?? [mediaRow];
-	return c.json(serializeMedia(presignedRow ?? mediaRow), 201);
+	const completed = await db
+		.update(media)
+		.set({ status: "ready", size: arrayBuffer.byteLength })
+		.where(
+			and(
+				eq(media.id, coreMediaId),
+				eq(media.organizationId, orgId),
+				eq(media.status, "uploading"),
+				isNull(media.deletionRequestedAt),
+			),
+		)
+		.returning({ id: media.id });
+	if (completed.length === 0) {
+		// The Idea or attachment was deleted while R2 accepted the bytes. Its
+		// durable tombstone wins; immediately resume deletion to avoid an orphan.
+		await processMediaDeletion(db, c.env, coreMediaId).catch(() => {});
+		return c.json(
+			{
+				error: {
+					code: "MEDIA_UPLOAD_CANCELLED",
+					message: "The Idea media attachment was deleted during upload.",
+				},
+			},
+			409 as never,
+		);
+	}
+	const uploaded = (await fetchIdeaMedia(db, id, orgId)).find(
+		(row) => row.id === intent.attachmentId,
+	);
+	if (!uploaded) throw new Error("Uploaded Idea media relation disappeared");
+	const [presigned] = (await presignRelayMediaUrls(
+		c.env,
+		[uploaded],
+		3600,
+		orgId,
+	)) ?? [uploaded];
+	return c.json(serializeMedia(presigned ?? uploaded), 201);
 });
 
 // ── Delete idea media ─────────────────────────────────────────────────────────
@@ -1088,44 +1985,111 @@ app.openapi(deleteIdeaMedia, async (c) => {
 	const { id, media_id } = c.req.valid("param");
 	const db = c.get("db");
 
-	const [existing] = await db
-		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
-		.from(ideas)
-		.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
-		.limit(1);
+	const result = await db.transaction(async (tx) => {
+		const [existing] = await tx
+			.select({ id: ideas.id, workspaceId: ideas.workspaceId })
+			.from(ideas)
+			.where(and(eq(ideas.id, id), eq(ideas.organizationId, orgId)))
+			.for("update")
+			.limit(1);
+		if (!existing) return { kind: "idea_missing" } as const;
+		const denied = assertWorkspaceScope(c, existing.workspaceId);
+		if (denied) return { kind: "denied", response: denied } as const;
 
-	if (!existing) {
+		const [attachment] = await tx
+			.select({
+				id: ideaMedia.id,
+				coreMediaId: ideaMedia.mediaId,
+				deleteWithIdea: ideaMedia.deleteWithIdea,
+				storageKey: media.storageKey,
+				thumbnailKey: media.thumbnailKey,
+				status: media.status,
+			})
+			.from(ideaMedia)
+			.innerJoin(
+				media,
+				and(
+					eq(media.id, ideaMedia.mediaId),
+					eq(media.organizationId, ideaMedia.organizationId),
+					eq(media.scopeKey, ideaMedia.scopeKey),
+				),
+			)
+			.where(
+				and(
+					eq(ideaMedia.id, media_id),
+					eq(ideaMedia.ideaId, id),
+					eq(ideaMedia.organizationId, orgId),
+				),
+			)
+			.for("update", { of: media })
+			.limit(1);
+		if (!attachment) return { kind: "media_missing" } as const;
+
+		await tx
+			.delete(ideaMedia)
+			.where(
+				and(eq(ideaMedia.id, media_id), eq(ideaMedia.organizationId, orgId)),
+			);
+		let processNow = false;
+		if (attachment.deleteWithIdea) {
+			const now = new Date();
+			const uploadMayStillFinish =
+				attachment.status === "uploading" ||
+				attachment.status === "upload_failed";
+			await tx
+				.update(media)
+				.set({
+					status: "deleting",
+					url: null,
+					thumbnailKey:
+						attachment.thumbnailKey ?? thumbnailKeyFor(attachment.storageKey),
+					deletionRequestedAt: sql`COALESCE(${media.deletionRequestedAt}, ${now})`,
+					deletionNextRetryAt: uploadMayStillFinish
+						? new Date(now.getTime() + 5 * 60_000)
+						: now,
+					deletionLastError: null,
+				})
+				.where(
+					and(
+						eq(media.id, attachment.coreMediaId),
+						eq(media.organizationId, orgId),
+					),
+				);
+			processNow = !uploadMayStillFinish;
+		}
+		await tx.insert(ideaActivity).values({
+			ideaId: id,
+			actorId: keyId,
+			action: "media_removed",
+			metadata: {
+				media_id,
+				core_media_id: attachment.coreMediaId,
+				object_deleted: attachment.deleteWithIdea,
+			},
+		});
+		return {
+			kind: "deleted",
+			coreMediaId: attachment.coreMediaId,
+			processNow,
+		} as const;
+	});
+
+	if (result.kind === "idea_missing") {
 		return c.json(
 			{ error: { code: "idea_not_found", message: "Idea not found" } },
 			404,
 		);
 	}
-
-	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied;
-
-	const [mediaRow] = await db
-		.select()
-		.from(ideaMedia)
-		.where(and(eq(ideaMedia.id, media_id), eq(ideaMedia.ideaId, id)))
-		.limit(1);
-
-	if (!mediaRow) {
+	if (result.kind === "denied") return result.response;
+	if (result.kind === "media_missing") {
 		return c.json(
 			{ error: { code: "media_not_found", message: "Media not found" } },
 			404,
 		);
 	}
-
-	// Extract storage key from URL (https://media.relayapi.dev/{key})
-	const storageKey = mediaRow.url.replace("https://media.relayapi.dev/", "");
-
-	await Promise.all([
-		c.env.MEDIA_BUCKET.delete(storageKey).catch(() => {}),
-		db.delete(ideaMedia).where(eq(ideaMedia.id, media_id)),
-	]);
-
-	await logActivity(db, id, keyId, "media_removed", { media_id });
+	if (result.processNow) {
+		await processMediaDeletion(db, c.env, result.coreMediaId).catch(() => {});
+	}
 
 	return c.body(null, 204);
 });
@@ -1199,7 +2163,9 @@ app.openapi(listComments, async (c) => {
 
 	return c.json(
 		{
-			data: data.map((row) => serializeComment(row, actors.get(row.authorId) ?? null)),
+			data: data.map((row) =>
+				serializeComment(row, actors.get(row.authorId) ?? null),
+			),
 			next_cursor: hasMore
 				? (data.at(-1)?.createdAt.toISOString() ?? null)
 				: null,
@@ -1268,14 +2234,23 @@ app.openapi(createComment, async (c) => {
 	if (body.parent_id) {
 		// Validate parent exists and belongs to same idea
 		const [parent] = await db
-			.select({ id: ideaComments.id, parentId: ideaComments.parentId, ideaId: ideaComments.ideaId })
+			.select({
+				id: ideaComments.id,
+				parentId: ideaComments.parentId,
+				ideaId: ideaComments.ideaId,
+			})
 			.from(ideaComments)
 			.where(eq(ideaComments.id, body.parent_id))
 			.limit(1);
 
 		if (!parent || parent.ideaId !== id) {
 			return c.json(
-				{ error: { code: "parent_not_found", message: "Parent comment not found on this idea" } },
+				{
+					error: {
+						code: "parent_not_found",
+						message: "Parent comment not found on this idea",
+					},
+				},
 				400,
 			);
 		}
@@ -1283,7 +2258,12 @@ app.openapi(createComment, async (c) => {
 		// Enforce one level of threading — parent must be a root comment
 		if (parent.parentId !== null) {
 			return c.json(
-				{ error: { code: "THREADING_DEPTH_EXCEEDED", message: "Only one level of comment threading is supported" } },
+				{
+					error: {
+						code: "THREADING_DEPTH_EXCEEDED",
+						message: "Only one level of comment threading is supported",
+					},
+				},
 				400,
 			);
 		}
@@ -1303,7 +2283,9 @@ app.openapi(createComment, async (c) => {
 
 	if (!row) {
 		return c.json(
-			{ error: { code: "INTERNAL_ERROR", message: "Failed to create comment" } } as never,
+			{
+				error: { code: "INTERNAL_ERROR", message: "Failed to create comment" },
+			} as never,
 			500 as never,
 		);
 	}
@@ -1387,7 +2369,12 @@ app.openapi(updateComment, async (c) => {
 	// Only the author can edit
 	if (comment.authorId !== keyId) {
 		return c.json(
-			{ error: { code: "FORBIDDEN", message: "You can only edit your own comments" } },
+			{
+				error: {
+					code: "FORBIDDEN",
+					message: "You can only edit your own comments",
+				},
+			},
 			403,
 		);
 	}
@@ -1465,7 +2452,12 @@ app.openapi(deleteComment, async (c) => {
 	// Only the author can delete
 	if (comment.authorId !== keyId) {
 		return c.json(
-			{ error: { code: "FORBIDDEN", message: "You can only delete your own comments" } },
+			{
+				error: {
+					code: "FORBIDDEN",
+					message: "You can only delete your own comments",
+				},
+			},
 			403,
 		);
 	}
@@ -1555,5 +2547,5 @@ app.openapi(listActivity, async (c) => {
 	);
 });
 
-export { logActivity, fetchIdeaTags, fetchIdeaMedia, serializeIdea };
+export { fetchIdeaMedia, fetchIdeaTags, logActivity, serializeIdea };
 export default app;

@@ -1,7 +1,16 @@
 import type { APIRoute } from "astro";
-import { requireClient, handleSdkError } from "@/lib/api-utils";
+import {
+	handleSdkError,
+	requireClient,
+	requireOrganizationAdmin,
+} from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
+  const denied = await requireOrganizationAdmin(
+    ctx,
+    "Only organization admins can manage API keys.",
+  );
+  if (denied) return denied;
   const client = await requireClient(ctx);
   if (client instanceof Response) return client;
   try {
@@ -17,6 +26,11 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 export const POST: APIRoute = async (ctx) => {
+  const denied = await requireOrganizationAdmin(
+    ctx,
+    "Only organization admins can manage API keys.",
+  );
+  if (denied) return denied;
   const client = await requireClient(ctx);
   if (client instanceof Response) return client;
   try {

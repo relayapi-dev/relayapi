@@ -142,6 +142,12 @@ export interface WhatsappCompleteEmbeddedSignupParams {
    * Code from WhatsApp embedded signup flow
    */
   code: string;
+
+  /**
+   * Workspace for the connected account. Required only when Require Workspace ID
+   * is enabled.
+   */
+  workspace_id?: string;
 }
 
 export interface WhatsappConnectViaCredentialsParams {
@@ -159,6 +165,12 @@ export interface WhatsappConnectViaCredentialsParams {
    * WhatsApp Business Account ID
    */
   waba_id: string;
+
+  /**
+   * Workspace for the connected account. Required only when Require Workspace ID
+   * is enabled.
+   */
+  workspace_id?: string;
 }
 
 export declare namespace Whatsapp {

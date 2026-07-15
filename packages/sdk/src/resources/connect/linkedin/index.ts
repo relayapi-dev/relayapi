@@ -4,6 +4,7 @@ export { Linkedin } from './linkedin';
 export {
   Organizations,
   type OrganizationListResponse,
+  type OrganizationListParams,
   type OrganizationSelectResponse,
   type OrganizationSelectParams,
 } from './organizations';

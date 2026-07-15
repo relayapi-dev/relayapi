@@ -61,6 +61,38 @@ function makeStubDb(existingEmails: Set<string>) {
 	// Drizzle calls .insert(table).values(rows)..., so capture rows at .values().
 	// biome-ignore lint/suspicious/noExplicitAny: minimal query-builder stub
 	const db: any = {
+		select: () => ({
+			// biome-ignore lint/suspicious/noExplicitAny: drizzle table token
+			from: (table: any) => {
+				const tableName = table?.[Symbol.for("drizzle:Name")] ?? "";
+				if (tableName === "social_accounts") {
+					return {
+						where: async () => [
+							{
+								id: "acc_2",
+								platform: "whatsapp",
+								workspaceId: "ws_test",
+							},
+							{
+								id: "acc_3",
+								platform: "instagram",
+								workspaceId: "ws_test",
+							},
+						],
+					};
+				}
+				// biome-ignore lint/suspicious/noExplicitAny: chainable stub
+				const chain: any = {
+					where: () => chain,
+					for: () => chain,
+					limit: async () =>
+						tableName === "organization_settings"
+							? [{ requireWorkspaceId: false, revision: 0 }]
+							: [{ id: "ws_test", lifecycleStatus: "active" }],
+				};
+				return chain;
+			},
+		}),
 		// biome-ignore lint/suspicious/noExplicitAny: drizzle table token
 		insert: (table: any) => {
 			const tableName = table?.[Symbol.for("drizzle:Name")] ?? "";
@@ -118,7 +150,6 @@ describe("POST /v1/contacts/bulk channel attribution", () => {
 			await makeApp(existing);
 
 		const res = await post({
-			workspace_id: "ws_test",
 			contacts: [
 				{ email: "dupe@example.com" }, // skipped duplicate, no channel
 				{
@@ -160,8 +191,8 @@ describe("POST /v1/contacts/bulk channel attribution", () => {
 
 		// The duplicate's contact id must never carry a channel.
 		const dupeId = idByEmail.get("dupe@example.com");
-		expect(
-			capturedChannelValues.some((ch) => ch.contactId === dupeId),
-		).toBe(false);
+		expect(capturedChannelValues.some((ch) => ch.contactId === dupeId)).toBe(
+			false,
+		);
 	});
 });

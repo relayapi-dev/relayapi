@@ -2,8 +2,8 @@
   "name": "@relayapi/docs",
   "version": "0.0.1",
   "scripts": {
-    "dev": "bun run docs:ensure && next dev",
-    "docs:ensure": "test -d content/docs/api-reference || bun run generate-docs",
+    "dev": "bun run generate-docs && next dev",
+    "docs:check": "bun ./scripts/generate-docs.ts --check",
     "build": "opennextjs-cloudflare build",
     "build:next": "bun run generate-docs && fumadocs-mdx && next build",
     "build:worker": "bun run build",

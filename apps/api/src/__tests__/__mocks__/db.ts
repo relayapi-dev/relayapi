@@ -21,7 +21,11 @@ type Row = Record<string, unknown>;
 export function createMockDb() {
 	const data = new Map<string, Row[]>();
 	const calls: QueryCall[] = [];
-	const updates: Array<{ table: string; set: Record<string, unknown>; where?: unknown }> = [];
+	const updates: Array<{
+		table: string;
+		set: Record<string, unknown>;
+		where?: unknown;
+	}> = [];
 	const inserts: Array<{ table: string; values: Record<string, unknown> }> = [];
 
 	function resolveTable(tableRef: unknown): string {
@@ -31,14 +35,23 @@ export function createMockDb() {
 		}
 		// Fallback: stringify
 		const s = String(tableRef);
-		if (s.includes("organization_subscriptions")) return "organizationSubscriptions";
+		if (s.includes("organization_subscriptions"))
+			return "organizationSubscriptions";
 		if (s.includes("invoices")) return "invoices";
+		if (s.includes("billing_outbox")) return "billingOutbox";
+		if (s.includes("stripe_events")) return "stripeEvents";
+		if (s.includes("subscription_checkout_operations"))
+			return "subscriptionCheckoutOperations";
+		if (s.includes("billing_operations")) return "billingOperations";
+		if (s.includes("usage_bucket_settlements")) return "usageBucketSettlements";
+		if (s.includes("usage_buckets")) return "usageBuckets";
 		if (s.includes("apikey")) return "apikey";
 		if (s.includes("usage_records")) return "usageRecords";
 		if (s.includes("api_request_logs")) return "apiRequestLogs";
 		if (s.includes("connection_logs")) return "connectionLogs";
 		if (s.includes("social_accounts")) return "socialAccounts";
-		if (s.includes("social_account_sync_state")) return "socialAccountSyncState";
+		if (s.includes("social_account_sync_state"))
+			return "socialAccountSyncState";
 		return s;
 	}
 
@@ -54,6 +67,17 @@ export function createMockDb() {
 				tableName = resolveTable(table);
 				return chain;
 			},
+			innerJoin(table: unknown, condition: unknown) {
+				const cols =
+					condition && typeof condition === "object" && "_joinCols" in condition
+						? ((condition as { _joinCols: [string, string] })._joinCols as [
+								string,
+								string,
+							])
+						: null;
+				joins.push({ table: resolveTable(table), cols });
+				return chain;
+			},
 			leftJoin(table: unknown, condition: unknown) {
 				const cols =
 					condition && typeof condition === "object" && "_joinCols" in condition
@@ -67,12 +91,19 @@ export function createMockDb() {
 			},
 			where(condition: unknown) {
 				// condition is the result of eq() — we store a filter function
-				if (condition && typeof condition === "object" && "_filter" in condition) {
+				if (
+					condition &&
+					typeof condition === "object" &&
+					"_filter" in condition
+				) {
 					filterFn = (condition as { _filter: (row: Row) => boolean })._filter;
 				}
 				return chain;
 			},
 			orderBy(_value: unknown) {
+				return chain;
+			},
+			for(_strength: string) {
 				return chain;
 			},
 			limit(n: number) {
@@ -136,6 +167,23 @@ export function createMockDb() {
 		const tableName = resolveTable(table);
 		let setData: Record<string, unknown> = {};
 		let filterFn: ((row: Row) => boolean) | null = null;
+		function applyUpdate(): Row[] {
+			const rows = data.get(tableName) ?? [];
+			const changed: Row[] = [];
+			for (const row of rows) {
+				if (!filterFn || filterFn(row)) {
+					Object.assign(row, setData);
+					changed.push(row);
+				}
+			}
+			updates.push({
+				table: tableName,
+				set: setData,
+				where: filterFn ?? undefined,
+			});
+			calls.push({ type: "update", table: tableName, set: setData });
+			return changed;
+		}
 
 		const chain = {
 			set(values: Record<string, unknown>) {
@@ -143,23 +191,25 @@ export function createMockDb() {
 				return chain;
 			},
 			where(condition: unknown) {
-				if (condition && typeof condition === "object" && "_filter" in condition) {
+				if (
+					condition &&
+					typeof condition === "object" &&
+					"_filter" in condition
+				) {
 					filterFn = (condition as { _filter: (row: Row) => boolean })._filter;
 				}
 				return chain;
 			},
+			returning(_fields?: Record<string, unknown>) {
+				return Promise.resolve(applyUpdate());
+			},
 			// biome-ignore lint/suspicious/noThenProperty: intentional thenable to make the mock query builder awaitable
-			then(resolve: (value: undefined) => void, reject?: (err: unknown) => void) {
+			then(
+				resolve: (value: undefined) => void,
+				reject?: (err: unknown) => void,
+			) {
 				try {
-					// Apply updates to seeded data
-					const rows = data.get(tableName) ?? [];
-					for (const row of rows) {
-						if (!filterFn || filterFn(row)) {
-							Object.assign(row, setData);
-						}
-					}
-					updates.push({ table: tableName, set: setData, where: filterFn });
-					calls.push({ type: "update", table: tableName, set: setData });
+					applyUpdate();
 					resolve(undefined);
 				} catch (err) {
 					reject?.(err);
@@ -172,16 +222,22 @@ export function createMockDb() {
 	// Chainable insert builder
 	function insertChain(table: unknown) {
 		const tableName = resolveTable(table);
-		let insertValues: Record<string, unknown> = {};
+		let insertValues: Record<string, unknown> | Record<string, unknown>[] = {};
 		let shouldReturn = false;
+		let conflictUpdate: { set?: Record<string, unknown> } | null = null;
+		let conflictDoNothing = false;
 
 		const chain = {
-			values(vals: Record<string, unknown>) {
+			values(vals: Record<string, unknown> | Record<string, unknown>[]) {
 				insertValues = vals;
 				return chain;
 			},
-			onConflictDoUpdate(_opts: unknown) {
-				// For testing, just do the insert
+			onConflictDoUpdate(opts: { set?: Record<string, unknown> }) {
+				conflictUpdate = opts;
+				return chain;
+			},
+			onConflictDoNothing(_opts?: unknown) {
+				conflictDoNothing = true;
 				return chain;
 			},
 			returning() {
@@ -189,22 +245,53 @@ export function createMockDb() {
 				return chain;
 			},
 			// biome-ignore lint/suspicious/noThenProperty: intentional thenable to make the mock query builder awaitable
-			then(resolve: (value: Row[] | undefined) => void, reject?: (err: unknown) => void) {
+			then(
+				resolve: (value: Row[] | undefined) => void,
+				reject?: (err: unknown) => void,
+			) {
 				try {
 					const now = new Date();
-					const row = {
+					const valueRows = Array.isArray(insertValues)
+						? insertValues
+						: [insertValues];
+					const rows = data.get(tableName) ?? [];
+					const createdRows = valueRows.map((values) => ({
 						id: `acc_mock_${Math.random().toString(36).slice(2, 10)}`,
 						connectedAt: now,
+						createdAt: now,
 						updatedAt: now,
 						metadata: null,
-						...insertValues,
-					};
-					const rows = data.get(tableName) ?? [];
-					rows.push(row);
+						status: "pending",
+						attempts: 0,
+						nextAttemptAt: now,
+						...values,
+					}));
+					const returnedRows: Row[] = [];
+					for (const [index, created] of createdRows.entries()) {
+						const values = valueRows[index] ?? {};
+						const existing = rows.find(
+							(row) =>
+								(values.id !== undefined && row.id === values.id) ||
+								(values.stripeInvoiceId !== undefined &&
+									row.stripeInvoiceId === values.stripeInvoiceId),
+						);
+						if (existing && conflictUpdate) {
+							Object.assign(existing, conflictUpdate.set ?? {});
+							updates.push({
+								table: tableName,
+								set: conflictUpdate.set ?? {},
+							});
+							returnedRows.push(existing);
+							continue;
+						}
+						if (existing && conflictDoNothing) continue;
+						rows.push(created);
+						returnedRows.push(created);
+						inserts.push({ table: tableName, values });
+						calls.push({ type: "insert", table: tableName, values });
+					}
 					data.set(tableName, rows);
-					inserts.push({ table: tableName, values: insertValues });
-					calls.push({ type: "insert", table: tableName, values: insertValues });
-					resolve(shouldReturn ? [row] : undefined);
+					resolve(shouldReturn ? returnedRows : undefined);
 				} catch (err) {
 					reject?.(err);
 				}
@@ -213,7 +300,7 @@ export function createMockDb() {
 		return chain;
 	}
 
-	return {
+	const dbApi = {
 		select: (fields?: Record<string, unknown>) => selectChain(fields),
 		update: (table: unknown) => updateChain(table),
 		insert: (table: unknown) => insertChain(table),
@@ -235,6 +322,11 @@ export function createMockDb() {
 			inserts.length = 0;
 		},
 	};
+	return {
+		...dbApi,
+		transaction: async <T>(callback: (tx: typeof dbApi) => Promise<T>) =>
+			callback(dbApi),
+	};
 }
 
 /**
@@ -248,7 +340,10 @@ export function mockEq(column: unknown, value: unknown) {
 	if (value && typeof value === "object" && "name" in value) {
 		return {
 			_filter: () => false,
-			_joinCols: [colName, (value as { name: string }).name] as [string, string],
+			_joinCols: [colName, (value as { name: string }).name] as [
+				string,
+				string,
+			],
 		};
 	}
 	return {

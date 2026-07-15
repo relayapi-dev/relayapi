@@ -9,7 +9,11 @@ on:
       - "apps/app/**"
       - "packages/db/**"
       - "packages/auth/**"
+      - "packages/config/**"
       - "packages/sdk/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/ci-app.yml"
 
 jobs:
   typecheck:
@@ -20,6 +24,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run build:sdk
+      - name: Verify generated App Worker types
+        working-directory: apps/app
+        run: bun run types:check
       - run: cd apps/app && bun run tsc --noEmit
 
   test:

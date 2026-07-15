@@ -15,6 +15,9 @@ export class WsTicket extends APIResource {
 export interface WsTicketRetrieveResponse {
   ticket: string;
 
+  /** Pass as a WebSocket subprotocol; never append the ticket to a URL. */
+  protocol: string;
+
   expires_at: string;
 
   ws_url: string;

@@ -67,6 +67,10 @@ export const startAutomationHandler: NodeHandler<StartAutomationConfig> = {
 				channel: ctx.channel,
 				entrypointId: cfg.entrypoint_id ?? null,
 				bindingId: null,
+				triggerOccurrenceId:
+					ctx.effectIdempotencyKeyFor?.(
+						`start-automation:${cfg.target_automation_id}`,
+					) ?? null,
 				// Forward the parent's triggering account so the child's
 				// persisted `_triggering_social_account_id` is populated even
 				// when `pass_context: false`. Without this, a later resume of

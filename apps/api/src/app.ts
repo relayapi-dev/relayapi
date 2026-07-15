@@ -8,8 +8,8 @@ import { dbContextMiddleware } from "./middleware/db-context";
 import {
 	aiEnabledMiddleware,
 	proOnlyMiddleware,
-	workspaceRequiredMiddleware,
 } from "./middleware/feature-gate";
+import { idempotencyMiddleware } from "./middleware/idempotency";
 import {
 	readOnlyMiddleware,
 	workspaceScopeMiddleware,
@@ -54,6 +54,7 @@ import invite from "./routes/invite";
 import mediaRouter from "./routes/media";
 import oauthCallback from "./routes/oauth-callback";
 import orgSettings from "./routes/org-settings";
+import organizations from "./routes/organizations";
 import platformWebhooks from "./routes/platform-webhooks";
 import posts from "./routes/posts";
 import queue from "./routes/queue";
@@ -100,8 +101,8 @@ app.use(
 	cors({
 		origin: "*",
 		allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-		allowHeaders: ["Authorization", "Content-Type"],
-		exposeHeaders: ["X-Usage-Count", "X-Usage-Limit"],
+		allowHeaders: ["Authorization", "Content-Type", "Idempotency-Key"],
+		exposeHeaders: ["X-Usage-Count", "X-Usage-Limit", "Idempotency-Replayed"],
 		maxAge: 86400,
 	}),
 );
@@ -174,16 +175,6 @@ app.use("/v1/ads/*", proOnlyMiddleware);
 app.use("/v1/short-links/*", proOnlyMiddleware);
 app.use("/v1/auto-post-rules/*", proOnlyMiddleware);
 
-// Workspace enforcement — when enabled, rejects create requests without workspace_id
-app.use("/v1/posts/*", workspaceRequiredMiddleware);
-app.use("/v1/webhooks/*", workspaceRequiredMiddleware);
-app.use("/v1/broadcasts/*", workspaceRequiredMiddleware);
-app.use("/v1/custom-fields/*", workspaceRequiredMiddleware);
-app.use("/v1/ads/*", workspaceRequiredMiddleware);
-app.use("/v1/auto-post-rules/*", workspaceRequiredMiddleware);
-app.use("/v1/content-templates/*", workspaceRequiredMiddleware);
-app.use("/v1/threads/*", workspaceRequiredMiddleware);
-
 // Tool rate limiting — per-org daily quota for downloads + transcripts
 app.use("/v1/tools/*/download", toolRateLimitMiddleware);
 app.use("/v1/tools/youtube/transcript", toolRateLimitMiddleware);
@@ -193,6 +184,11 @@ app.use("/v1/inbox/classify", aiEnabledMiddleware);
 app.use("/v1/inbox/suggest-reply", aiEnabledMiddleware);
 app.use("/v1/inbox/summarize", aiEnabledMiddleware);
 app.use("/v1/inbox/priorities", aiEnabledMiddleware);
+
+// Replay only after current global authorization/entitlement checks have run.
+// The receipt itself also carries an authorization fingerprint for route-local
+// permission checks that execute downstream.
+app.use("/v1/*", timed("idempotency", idempotencyMiddleware));
 
 // Usage tracking (runs after auth + rate limit + feature gate)
 app.use("/v1/*", timed("usage", usageTrackingMiddleware));
@@ -243,10 +239,13 @@ app.route("/v1/ads", adsRouter);
 app.route("/v1/auto-post-rules", autoPostRulesRouter);
 app.route("/v1", crossPostActionsRouter);
 app.route("/v1/org-settings", orgSettings);
+app.route("/v1/organizations", organizations);
 app.route("/v1/invite/tokens", invite);
 
-// OpenAPI spec
-app.doc("/openapi.json", {
+// OpenAPI spec. Build it only when requested, then retain the compact serialized
+// form rather than regenerating a large object graph on every request. Keeping
+// this lazy avoids adding OpenAPI generation work to unrelated Worker cold starts.
+const openApiConfig: Parameters<typeof app.getOpenAPIDocument>[0] = {
 	openapi: "3.1.0",
 	info: {
 		title: "RelayAPI",
@@ -255,6 +254,14 @@ app.doc("/openapi.json", {
 			"Unified social media API — post to 21 platforms via a single API",
 	},
 	servers: [{ url: "https://api.relayapi.dev" }],
+};
+let openApiJson: string | undefined;
+app.get("/openapi.json", (c) => {
+	openApiJson ??= JSON.stringify(app.getOpenAPIDocument(openApiConfig));
+	return c.body(openApiJson, 200, {
+		"Content-Type": "application/json; charset=UTF-8",
+		"Cache-Control": "public, max-age=300, s-maxage=3600",
+	});
 });
 
 // Swagger UI

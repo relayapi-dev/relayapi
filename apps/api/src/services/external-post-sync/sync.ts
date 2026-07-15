@@ -4,24 +4,31 @@
 
 import {
 	createDb,
-	externalPosts,
-	socialAccounts,
-	socialAccountSyncState,
-	postTargets,
 	eq,
+	externalPosts,
+	postTargets,
+	socialAccountSyncState,
+	socialAccounts,
 } from "@relayapi/db";
 import { and, inArray, sql } from "drizzle-orm";
+import { PLATFORMS, type Platform } from "../../schemas/common";
 import type { Env } from "../../types";
-import type { SyncPostsMessage, RefreshMetricsMessage } from "./types";
-import { RateLimitError } from "./types";
-import { getExternalPostFetcher } from "./index";
-import { refreshTokenIfNeeded, fetchAvatarUrl } from "../token-refresh";
 import { rehostAvatar } from "../avatar-store";
-import type { Platform } from "../../schemas/common";
+import { fetchAvatarUrl } from "../token-refresh";
+import { refreshTokenIfNeeded } from "../token-refresh-coordinator";
+import { getExternalPostFetcher } from "./index";
+import type { RefreshMetricsMessage, SyncPostsMessage } from "./types";
+import { RateLimitError } from "./types";
 
 type Database = ReturnType<typeof createDb>;
 
 const MAX_PAGES_PER_RUN = 5;
+
+function parsePlatform(value: string): Platform | null {
+	return (PLATFORMS as readonly string[]).includes(value)
+		? (value as Platform)
+		: null;
+}
 
 // ---------------------------------------------------------------------------
 // Main sync: fetch posts from a platform and upsert into external_posts
@@ -32,6 +39,8 @@ export async function syncExternalPosts(
 	message: SyncPostsMessage,
 ): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
+	const platform = parsePlatform(message.platform);
+	if (!platform) return;
 
 	// 1. Load social account
 	const [account] = await db
@@ -47,7 +56,14 @@ export async function syncExternalPosts(
 			avatarUrl: socialAccounts.avatarUrl,
 		})
 		.from(socialAccounts)
-		.where(eq(socialAccounts.id, message.social_account_id))
+		.where(
+			and(
+				eq(socialAccounts.id, message.social_account_id),
+				eq(socialAccounts.organizationId, message.organization_id),
+				eq(socialAccounts.platform, platform),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		)
 		.limit(1);
 
 	if (!account) {
@@ -83,26 +99,29 @@ export async function syncExternalPosts(
 			})
 			.onConflictDoNothing()
 			.returning();
-		syncState = created ?? (await db
-			.select({
-				id: socialAccountSyncState.id,
-				enabled: socialAccountSyncState.enabled,
-				syncCursor: socialAccountSyncState.syncCursor,
-				lastPostFoundAt: socialAccountSyncState.lastPostFoundAt,
-				pollIntervalSec: socialAccountSyncState.pollIntervalSec,
-				consecutiveEmptyPolls: socialAccountSyncState.consecutiveEmptyPolls,
-			})
-			.from(socialAccountSyncState)
-			.where(eq(socialAccountSyncState.socialAccountId, account.id))
-			.limit(1)
-		)[0];
+		syncState =
+			created ??
+			(
+				await db
+					.select({
+						id: socialAccountSyncState.id,
+						enabled: socialAccountSyncState.enabled,
+						syncCursor: socialAccountSyncState.syncCursor,
+						lastPostFoundAt: socialAccountSyncState.lastPostFoundAt,
+						pollIntervalSec: socialAccountSyncState.pollIntervalSec,
+						consecutiveEmptyPolls: socialAccountSyncState.consecutiveEmptyPolls,
+					})
+					.from(socialAccountSyncState)
+					.where(eq(socialAccountSyncState.socialAccountId, account.id))
+					.limit(1)
+			)[0];
 		if (!syncState) return;
 	}
 
 	if (!syncState.enabled) return;
 
 	// 3. Get platform fetcher
-	const fetcher = getExternalPostFetcher(message.platform);
+	const fetcher = getExternalPostFetcher(platform);
 	if (!fetcher) {
 		console.warn(`[Sync] No fetcher for platform ${message.platform}`);
 		return;
@@ -235,7 +254,7 @@ export async function syncExternalPosts(
 				type: "sync_posts",
 				social_account_id: message.social_account_id,
 				organization_id: message.organization_id,
-				platform: message.platform,
+				platform,
 			} satisfies SyncPostsMessage);
 		}
 	} catch (err) {
@@ -271,17 +290,26 @@ export async function refreshExternalPostMetrics(
 	message: RefreshMetricsMessage,
 ): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
+	const platform = parsePlatform(message.platform);
+	if (!platform) return;
 
 	// Load account
 	const [account] = await db
 		.select()
 		.from(socialAccounts)
-		.where(eq(socialAccounts.id, message.social_account_id))
+		.where(
+			and(
+				eq(socialAccounts.id, message.social_account_id),
+				eq(socialAccounts.organizationId, message.organization_id),
+				eq(socialAccounts.platform, platform),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		)
 		.limit(1);
 
 	if (!account) return;
 
-	const fetcher = getExternalPostFetcher(message.platform);
+	const fetcher = getExternalPostFetcher(platform);
 	if (!fetcher) return;
 
 	let accessToken: string;
@@ -298,7 +326,14 @@ export async function refreshExternalPostMetrics(
 			platformPostId: externalPosts.platformPostId,
 		})
 		.from(externalPosts)
-		.where(inArray(externalPosts.id, message.external_post_ids));
+		.where(
+			and(
+				inArray(externalPosts.id, message.external_post_ids),
+				eq(externalPosts.organizationId, message.organization_id),
+				eq(externalPosts.socialAccountId, message.social_account_id),
+				eq(externalPosts.platform, platform),
+			),
+		);
 
 	if (posts.length === 0) return;
 
@@ -332,6 +367,9 @@ export async function refreshExternalPostMetrics(
 			updated_at = ${now}
 		FROM (VALUES ${valuesList}) AS v(id, metrics)
 		WHERE ep.id = v.id
+		  AND ep.organization_id = ${message.organization_id}
+		  AND ep.social_account_id = ${message.social_account_id}
+		  AND ep.platform = ${platform}
 	`);
 }
 

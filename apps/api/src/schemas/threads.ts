@@ -37,7 +37,9 @@ const ThreadItem = z.object({
 		.min(0)
 		.max(1440)
 		.default(0)
-		.describe("Minutes to wait after the previous item is published before publishing this item (0-1440)"),
+		.describe(
+			"Minutes to wait after the previous item is published before publishing this item (0-1440)",
+		),
 });
 
 // --- Create thread body ---
@@ -51,7 +53,7 @@ export const CreateThreadBody = z.object({
 	targets: z
 		.array(z.string())
 		.min(1)
-		.describe('Account IDs, platform names, or workspace IDs'),
+		.describe("Account IDs, platform names, or workspace IDs"),
 	scheduled_at: z
 		.string()
 		.refine(
@@ -65,20 +67,32 @@ export const CreateThreadBody = z.object({
 					'Must be "now", "draft", "auto", or a valid ISO 8601 timestamp',
 			},
 		)
-		.describe('Publish intent'),
+		.describe("Publish intent"),
 	target_options: z
 		.record(z.string(), z.record(z.string(), z.any()))
 		.optional()
 		.describe("Per-platform options applied to all items"),
 	timezone: z.string().default("UTC").describe("IANA timezone"),
-	workspace_id: z.string().optional().describe("Workspace ID"),
+	workspace_id: z
+		.string()
+		.optional()
+		.describe(
+			"Workspace ID. Omission inherits the sole target-account workspace in either policy mode; organization scope is available only when Require Workspace ID is disabled.",
+		),
 });
 
 // --- Thread item response ---
 
 const ThreadItemTargetResult = z.object({
 	platform: z.string(),
-	status: z.enum(["draft", "scheduled", "publishing", "published", "failed", "skipped"]),
+	status: z.enum([
+		"draft",
+		"scheduled",
+		"publishing",
+		"published",
+		"failed",
+		"skipped",
+	]),
 	platform_post_id: z.string().nullable(),
 	platform_url: z.string().nullable(),
 	error: z.string().nullable().optional(),
@@ -97,15 +111,31 @@ const ThreadItemResponse = z.object({
 		)
 		.nullable(),
 	delay_minutes: z.number().describe("Delay before this item in minutes"),
-	status: z.enum(["draft", "scheduled", "publishing", "published", "failed", "partial"]),
-	targets: z.record(z.string(), ThreadItemTargetResult).describe("Per-target results"),
+	status: z.enum([
+		"draft",
+		"scheduled",
+		"publishing",
+		"published",
+		"failed",
+		"partial",
+	]),
+	targets: z
+		.record(z.string(), ThreadItemTargetResult)
+		.describe("Per-target results"),
 });
 
 // --- Thread response ---
 
 export const ThreadResponse = z.object({
 	thread_group_id: z.string().describe("Thread group identifier"),
-	status: z.enum(["draft", "scheduled", "publishing", "published", "failed", "partial"]),
+	status: z.enum([
+		"draft",
+		"scheduled",
+		"publishing",
+		"published",
+		"failed",
+		"partial",
+	]),
 	items: z.array(ThreadItemResponse),
 	scheduled_at: z.string().nullable(),
 	timezone: z.string().nullable().optional(),
@@ -117,7 +147,14 @@ export const ThreadResponse = z.object({
 
 const ThreadListItem = z.object({
 	thread_group_id: z.string(),
-	status: z.enum(["draft", "scheduled", "publishing", "published", "failed", "partial"]),
+	status: z.enum([
+		"draft",
+		"scheduled",
+		"publishing",
+		"published",
+		"failed",
+		"partial",
+	]),
 	item_count: z.number(),
 	root_content: z.string().nullable().describe("Content of the first item"),
 	scheduled_at: z.string().nullable(),
@@ -139,7 +176,10 @@ export const UpdateThreadBody = z.object({
 	items: z
 		.array(
 			z.object({
-				id: z.string().optional().describe("Existing post ID (omit for new items)"),
+				id: z
+					.string()
+					.optional()
+					.describe("Existing post ID (omit for new items)"),
 				content: z.string().min(1),
 				media: z
 					.array(
@@ -166,8 +206,7 @@ export const UpdateThreadBody = z.object({
 				return !Number.isNaN(date.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(val);
 			},
 			{
-				message:
-					'Must be "draft", "auto", or a valid ISO 8601 timestamp',
+				message: 'Must be "draft", "auto", or a valid ISO 8601 timestamp',
 			},
 		)
 		.optional()
@@ -178,12 +217,16 @@ export const UpdateThreadBody = z.object({
 
 export const ThreadListQuery = z.object({
 	cursor: z.string().optional().describe("Pagination cursor"),
-	limit: z.coerce
-		.number()
-		.int()
-		.min(1)
-		.max(100)
-		.default(20),
+	limit: z.coerce.number().int().min(1).max(100).default(20),
 	workspace_id: z.string().optional(),
-	status: z.enum(["draft", "scheduled", "publishing", "published", "failed", "partial"]).optional(),
+	status: z
+		.enum([
+			"draft",
+			"scheduled",
+			"publishing",
+			"published",
+			"failed",
+			"partial",
+		])
+		.optional(),
 });

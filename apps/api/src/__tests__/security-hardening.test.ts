@@ -1,19 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Hono } from "hono";
+import { isAllowedCustomerRedirectUrl } from "../lib/customer-redirect";
+import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import { authMiddleware } from "../middleware/auth";
 import {
 	readOnlyMiddleware,
 	requireAllWorkspaceScopeMiddleware,
+	requireManageApiKeysMiddleware,
 } from "../middleware/permissions";
-import { isAllowedCustomerRedirectUrl } from "../lib/customer-redirect";
-import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
+import { TestFeedBody } from "../schemas/auto-post-rules";
 import { CreatePostBody } from "../schemas/posts";
 import { ShortenUrlBody } from "../schemas/short-links";
-import { TestFeedBody } from "../schemas/auto-post-rules";
 import { CreateThreadBody } from "../schemas/threads";
 import { ValidateMediaBody } from "../schemas/tools";
 import { UploadProfilePhotoBody } from "../schemas/whatsapp";
-import type { Env, Variables, KVKeyData } from "../types";
+import type { Env, KVKeyData, Variables } from "../types";
 import { createMockEnv, hashKey, seedApiKeyInKV } from "./__mocks__/env";
 
 const mockCtx = {
@@ -45,12 +46,17 @@ describe("API key admin hardening", () => {
 		app.use("*", authMiddleware);
 		app.use("*", readOnlyMiddleware);
 		app.use("*", requireAllWorkspaceScopeMiddleware);
+		app.use("*", requireManageApiKeysMiddleware);
 		app.post("/v1/api-keys", (c) => c.json({ ok: true }, 200));
 	});
 
 	async function seedKey(token: string, data: KVKeyData) {
 		const hashed = await hashKey(token);
-		await seedApiKeyInKV((env.KV as unknown) as ReturnType<typeof createMockEnv>["kv"], hashed, data);
+		await seedApiKeyInKV(
+			env.KV as unknown as ReturnType<typeof createMockEnv>["kv"],
+			hashed,
+			data,
+		);
 	}
 
 	it("blocks read-only keys from mutating /v1/api-keys", async () => {
@@ -91,7 +97,7 @@ describe("API key admin hardening", () => {
 		expect(body.error.code).toBe("ORG_LEVEL_ACCESS_REQUIRED");
 	});
 
-	it("allows org-wide write keys to mutate /v1/api-keys", async () => {
+	it("blocks ordinary org-wide write keys from mutating /v1/api-keys", async () => {
 		const token = "rlay_live_securityhardening_orgwide000000000000000000000";
 		await seedKey(token, {
 			org_id: "org_test",
@@ -103,10 +109,29 @@ describe("API key admin hardening", () => {
 			calls_included: 10_000,
 		});
 
-			const res = await app.fetch(makeApiKeyRequest(token), env, mockCtx);
+		const res = await app.fetch(makeApiKeyRequest(token), env, mockCtx);
+		const body = (await res.json()) as { error: { code: string } };
 
-			expect(res.status).toBe(200);
-			expect((await res.json()) as { ok: boolean }).toEqual({ ok: true });
+		expect(res.status).toBe(403);
+		expect(body.error.code).toBe("MANAGE_API_KEYS_REQUIRED");
+	});
+
+	it("allows org-wide keys with the dedicated management permission", async () => {
+		const token = "rlay_live_securityhardening_manager0000000000000000000000";
+		await seedKey(token, {
+			org_id: "org_test",
+			key_id: "key_org_manager",
+			permissions: ["read", "write", "manage_api_keys"],
+			workspace_scope: "all",
+			expires_at: null,
+			plan: "pro",
+			calls_included: 10_000,
+		});
+
+		const res = await app.fetch(makeApiKeyRequest(token), env, mockCtx);
+
+		expect(res.status).toBe(200);
+		expect((await res.json()) as { ok: boolean }).toEqual({ ok: true });
 	});
 });
 
@@ -123,7 +148,9 @@ describe("URL validation hardening", () => {
 
 	it("rejects data: short-link targets", () => {
 		expect(
-			ShortenUrlBody.safeParse({ url: "data:text/html,<script>alert(1)</script>" }).success,
+			ShortenUrlBody.safeParse({
+				url: "data:text/html,<script>alert(1)</script>",
+			}).success,
 		).toBe(false);
 	});
 
@@ -134,7 +161,9 @@ describe("URL validation hardening", () => {
 	});
 
 	it("rejects OAuth customer redirects to external domains", () => {
-		expect(isAllowedCustomerRedirectUrl("https://evil.example/callback")).toBe(false);
+		expect(isAllowedCustomerRedirectUrl("https://evil.example/callback")).toBe(
+			false,
+		);
 	});
 
 	it("allows OAuth customer redirects on relayapi.dev", () => {
@@ -158,7 +187,10 @@ describe("URL validation hardening", () => {
 		expect(
 			CreateThreadBody.safeParse({
 				items: [
-					{ content: "one", media: [{ url: "data:text/html,hi", type: "image" }] },
+					{
+						content: "one",
+						media: [{ url: "data:text/html,hi", type: "image" }],
+					},
 					{ content: "two" },
 				],
 				targets: ["twitter"],
@@ -194,19 +226,23 @@ describe("URL validation hardening", () => {
 		).toBe(true);
 	});
 
-		it("rejects hostnames whose DNS resolves to private IPs", async () => {
-			globalThis.fetch = mock(async () =>
-				Response.json({ Answer: [{ type: 1, data: "127.0.0.1" }] }),
-			) as unknown as typeof fetch;
+	it("rejects hostnames whose DNS resolves to private IPs", async () => {
+		globalThis.fetch = mock(async () =>
+			Response.json({ Answer: [{ type: 1, data: "127.0.0.1" }] }),
+		) as unknown as typeof fetch;
 
-		expect(await isBlockedUrlWithDns("https://ssrf-private.example")).toBe(true);
+		expect(await isBlockedUrlWithDns("https://ssrf-private.example")).toBe(
+			true,
+		);
 	});
 
-		it("allows hostnames whose DNS resolves only to public IPs", async () => {
-			globalThis.fetch = mock(async () =>
-				Response.json({ Answer: [{ type: 1, data: "93.184.216.34" }] }),
-			) as unknown as typeof fetch;
+	it("allows hostnames whose DNS resolves only to public IPs", async () => {
+		globalThis.fetch = mock(async () =>
+			Response.json({ Answer: [{ type: 1, data: "93.184.216.34" }] }),
+		) as unknown as typeof fetch;
 
-		expect(await isBlockedUrlWithDns("https://ssrf-public.example")).toBe(false);
+		expect(await isBlockedUrlWithDns("https://ssrf-public.example")).toBe(
+			false,
+		);
 	});
 });

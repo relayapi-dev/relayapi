@@ -74,7 +74,10 @@ export const FilterParams = PaginationParams.extend({
 		.describe(
 			"Filter by any of several account IDs (comma-separated). Takes precedence over account_id.",
 		),
-	status: z.enum(["draft", "scheduled", "publishing", "published", "failed"]).optional().describe("Filter by post status"),
+	status: z
+		.enum(["draft", "scheduled", "publishing", "published", "failed", "partial"])
+		.optional()
+		.describe("Filter by post status"),
 	include: z.string().optional().describe("Comma-separated list of fields to include in the response (e.g. 'targets,media')"),
 	include_external: z.enum(["true", "false"]).default("false").optional()
 		.describe("When true, also return external posts merged by published_at (works with status=published or no status filter)"),

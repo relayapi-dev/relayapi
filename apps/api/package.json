@@ -7,8 +7,16 @@
 		"dev": "dotenv -e .dev.vars -- wrangler dev --port 8789 --persist-to ../../.wrangler/state",
 		"build": "cd ../.. && bun install && cd apps/api",
 		"deploy": "wrangler deploy",
-		"types": "wrangler types --include-env=false",
+		"types": "wrangler types --env-file=/dev/null --env-interface=ApiWorkerEnv --strict-vars=false",
+		"types:check": "wrangler types --env-file=/dev/null --env-interface=ApiWorkerEnv --strict-vars=false --check",
+		"openapi:export": "bun scripts/export-openapi.ts",
+		"openapi:check": "bun scripts/export-openapi.ts --check",
+		"openapi:compare-production": "bun scripts/export-openapi.ts --compare-production",
+		"cloudflare:verify-prerequisites": "bun scripts/verify-cloudflare-production.ts --predeploy",
+		"cloudflare:verify-production": "bun scripts/verify-cloudflare-production.ts",
+		"cloudflare:smoke-production": "bun scripts/smoke-production.ts",
 		"test": "bun run scripts/run-tests-isolated.ts",
+		"test:workerd": "vitest run --config vitest.workerd.config.ts",
 		"test:single-process": "bun test",
 		"test:billing": "bun run scripts/run-tests-isolated.ts auth.test stripe-webhooks usage-tracking billing-flows"
 	},
@@ -18,6 +26,7 @@
 		"@hono/zod-openapi": "catalog:",
 		"@react-email/components": "catalog:",
 		"@react-email/render": "catalog:",
+		"@relayapi/config": "workspace:*",
 		"@relayapi/db": "workspace:*",
 		"aws4fetch": "catalog:",
 		"fast-xml-parser": "catalog:",
@@ -27,9 +36,11 @@
 		"zod": "catalog:"
 	},
 	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "catalog:",
 		"@types/node": "catalog:",
 		"dotenv-cli": "catalog:",
 		"typescript": "catalog:",
+		"vitest": "catalog:",
 		"wrangler": "catalog:"
 	}
 }

@@ -1,17 +1,6 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 import { APIResource } from '../../core/resource';
-import * as BroadcastsAPI from './broadcasts';
-import {
-  BroadcastCreateParams,
-  BroadcastCreateResponse,
-  BroadcastListParams,
-  BroadcastListResponse,
-  BroadcastRetrieveResponse,
-  BroadcastScheduleResponse,
-  BroadcastSendResponse,
-  Broadcasts,
-} from './broadcasts';
 import * as BusinessProfileAPI from './business-profile';
 import {
   BusinessProfile,
@@ -83,7 +72,6 @@ import { APIPromise } from '../../core/api-promise';
 import { RequestOptions } from '../../internal/request-options';
 
 export class Whatsapp extends APIResource {
-  broadcasts: BroadcastsAPI.Broadcasts = new BroadcastsAPI.Broadcasts(this._client);
   templates: TemplatesAPI.Templates = new TemplatesAPI.Templates(this._client);
   groups: GroupsAPI.Groups = new GroupsAPI.Groups(this._client);
   flows: FlowsAPI.Flows = new FlowsAPI.Flows(this._client);
@@ -136,7 +124,15 @@ export interface WhatsappBulkSendResponse {
 
   sent_count: number;
 
-  status: 'draft' | 'scheduled' | 'sending' | 'sent' | 'partially_failed' | 'failed' | 'cancelled';
+  status:
+    | 'draft'
+    | 'scheduled'
+    | 'sending'
+    | 'sent'
+    | 'partially_failed'
+    | 'requires_attention'
+    | 'failed'
+    | 'cancelled';
 
   template_language: string | null;
 
@@ -241,7 +237,6 @@ export interface WhatsappListPhoneNumbersParams {
   account_id: string;
 }
 
-Whatsapp.Broadcasts = Broadcasts;
 Whatsapp.Templates = Templates;
 Whatsapp.Groups = Groups;
 Whatsapp.BusinessProfile = BusinessProfile;
@@ -253,17 +248,6 @@ export declare namespace Whatsapp {
     type WhatsappListPhoneNumbersResponse as WhatsappListPhoneNumbersResponse,
     type WhatsappBulkSendParams as WhatsappBulkSendParams,
     type WhatsappListPhoneNumbersParams as WhatsappListPhoneNumbersParams,
-  };
-
-  export {
-    Broadcasts as Broadcasts,
-    type BroadcastCreateResponse as BroadcastCreateResponse,
-    type BroadcastRetrieveResponse as BroadcastRetrieveResponse,
-    type BroadcastListResponse as BroadcastListResponse,
-    type BroadcastScheduleResponse as BroadcastScheduleResponse,
-    type BroadcastSendResponse as BroadcastSendResponse,
-    type BroadcastCreateParams as BroadcastCreateParams,
-    type BroadcastListParams as BroadcastListParams,
   };
 
   export {

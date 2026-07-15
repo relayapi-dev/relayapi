@@ -2,9 +2,13 @@
 title: Organization Settings
 ---
 
+## Workspace requirement semantics
+
+`Require Workspace ID` controls independent operational-root creation. When it is disabled, an omitted `workspace_id` creates an organization-scoped row; any credential with at least one workspace grant may access those shared rows, while a zero-grant credential sees none. When it is enabled, independent roots require an explicit active, tenant-owned, authorized workspace. Parent-bound creates may inherit the authoritative parent workspace. Shared definitions remain organization-global in either mode.
+
 ## Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `PATCH` | [Update organization settings](/api-reference/organization-settings/updateOrgSettings) | Update organization settings |
 | `GET` | [Get organization settings](/api-reference/organization-settings/getOrgSettings) | Get organization settings |
+| `PATCH` | [Update organization settings](/api-reference/organization-settings/updateOrgSettings) | Update organization settings |

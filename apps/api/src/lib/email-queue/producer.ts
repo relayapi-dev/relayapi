@@ -4,10 +4,14 @@ import type { EmailQueueMessage } from "./types";
 const DEFAULT_FROM = "RelayAPI <notifications@relayapi.dev>";
 
 export interface SendEmailOptions {
+	/** Owning tenant for durable failure-ledger cleanup. */
+	organizationId: string;
 	to: string;
 	subject: string;
 	html: string;
 	from?: string;
+	/** Stable for one logical email occurrence. */
+	idempotencyKey: string;
 }
 
 /**
@@ -18,7 +22,8 @@ export async function enqueueEmail(
 	options: SendEmailOptions,
 ): Promise<void> {
 	const message: EmailQueueMessage = {
-		id: crypto.randomUUID(),
+		id: options.idempotencyKey,
+		organization_id: options.organizationId,
 		to: options.to,
 		subject: options.subject,
 		html: options.html,
@@ -26,9 +31,7 @@ export async function enqueueEmail(
 	};
 
 	await queue.send(message);
-	console.log(
-		`[EmailQueue] Enqueued email ${message.id} to ${message.to}: "${message.subject}"`,
-	);
+	console.log(`[EmailQueue] Enqueued email ${message.id}`);
 }
 
 /**
@@ -40,24 +43,24 @@ export async function sendEmailDirect(
 ): Promise<void> {
 	const resend = new Resend(resendApiKey);
 	const from = options.from || DEFAULT_FROM;
+	const idempotencyKey = options.idempotencyKey;
 
-	const { error } = await resend.emails.send({
-		from,
-		to: options.to,
-		subject: options.subject,
-		html: options.html,
-	});
+	const { error } = await resend.emails.send(
+		{
+			from,
+			to: options.to,
+			subject: options.subject,
+			html: options.html,
+		},
+		{ idempotencyKey },
+	);
 
 	if (error) {
-		console.error(
-			`[EmailQueue] Direct send failed: ${error.message}`,
-		);
+		console.error(`[EmailQueue] Direct send failed (${error.name})`);
 		throw new Error(`Failed to send email: ${error.message}`);
 	}
 
-	console.log(
-		`[EmailQueue] Direct sent email to ${options.to}: "${options.subject}"`,
-	);
+	console.log(`[EmailQueue] Direct sent email ${idempotencyKey}`);
 }
 
 /**

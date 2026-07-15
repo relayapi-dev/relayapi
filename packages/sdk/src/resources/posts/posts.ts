@@ -130,8 +130,25 @@ export class Posts extends APIResource {
   }
 
   /**
+   * Resolve an unknown provider publish outcome using the stable operation ID
+   * returned for the target. Unknown outcomes are never replayed automatically.
+   */
+  reconcileTarget(
+    id: string,
+    targetID: string,
+    body: PostReconcileTargetParams,
+    options?: RequestOptions,
+  ): APIPromise<PostReconcileTargetResponse> {
+    return this._client.post(path`/v1/posts/${id}/targets/${targetID}/reconcile`, {
+      body,
+      ...options,
+    });
+  }
+
+  /**
    * Attempt to delete the post from each platform and set the post status to
-   * cancelled.
+   * cancelled. Near-expiry account credentials are refreshed before platform
+   * deletion requests are sent.
    *
    * @example
    * ```ts
@@ -250,6 +267,49 @@ export interface RecyclingInput {
   content_variations?: Array<string>;
 }
 
+export type PostTargetPlatform =
+  | 'twitter'
+  | 'instagram'
+  | 'facebook'
+  | 'linkedin'
+  | 'tiktok'
+  | 'youtube'
+  | 'pinterest'
+  | 'reddit'
+  | 'bluesky'
+  | 'threads'
+  | 'telegram'
+  | 'snapchat'
+  | 'googlebusiness'
+  | 'whatsapp'
+  | 'mastodon'
+  | 'discord'
+  | 'sms'
+  | 'beehiiv'
+  | 'convertkit'
+  | 'mailchimp'
+  | 'listmonk';
+
+export type PostTargetStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'publishing'
+  | 'published'
+  | 'failed'
+  | 'partial';
+
+export interface PostMetrics {
+  impressions?: number;
+  reach?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  saves?: number;
+  clicks?: number;
+  views?: number;
+  engagement_rate?: number;
+}
+
 export interface PostSetRecyclingResponse {
   data: RecyclingConfig;
   warnings?: Array<string>;
@@ -271,6 +331,11 @@ export interface PostCreateResponse {
   created_at: string;
 
   media: Array<PostCreateResponse.Media> | null;
+
+  /**
+   * Aggregated engagement metrics
+   */
+  metrics?: PostMetrics;
 
   /**
    * Recycling configuration, if any
@@ -329,26 +394,9 @@ export namespace PostCreateResponse {
   }
 
   export interface Targets {
-    platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+    platform: PostTargetPlatform | null;
 
-    status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';
+    status: PostTargetStatus;
 
     accounts?: Array<Targets.Account>;
 
@@ -385,6 +433,12 @@ export namespace PostCreateResponse {
        * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
        */
       target_id: string | null;
+
+      /** Stable provider-operation fence for unknown-outcome reconciliation. */
+      publish_operation_id: string;
+
+      /** Durable provider delivery state. */
+      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
     }
 
     export interface Error {
@@ -413,6 +467,11 @@ export interface PostRetrieveResponse {
   created_at: string;
 
   media: Array<PostRetrieveResponse.Media> | null;
+
+  /**
+   * Aggregated engagement metrics
+   */
+  metrics?: PostMetrics;
 
   /**
    * Recycling configuration, if any
@@ -481,26 +540,9 @@ export namespace PostRetrieveResponse {
   }
 
   export interface Targets {
-    platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+    platform: PostTargetPlatform | null;
 
-    status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';
+    status: PostTargetStatus;
 
     accounts?: Array<Targets.Account>;
 
@@ -537,6 +579,12 @@ export namespace PostRetrieveResponse {
        * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
        */
       target_id: string | null;
+
+      /** Stable provider-operation fence for unknown-outcome reconciliation. */
+      publish_operation_id: string;
+
+      /** Durable provider delivery state. */
+      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
     }
 
     export interface Error {
@@ -565,6 +613,11 @@ export interface PostUpdateResponse {
   created_at: string;
 
   media: Array<PostUpdateResponse.Media> | null;
+
+  /**
+   * Aggregated engagement metrics
+   */
+  metrics?: PostMetrics;
 
   /**
    * Recycling configuration, if any
@@ -623,26 +676,9 @@ export namespace PostUpdateResponse {
   }
 
   export interface Targets {
-    platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+    platform: PostTargetPlatform | null;
 
-    status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';
+    status: PostTargetStatus;
 
     accounts?: Array<Targets.Account>;
 
@@ -679,6 +715,12 @@ export namespace PostUpdateResponse {
        * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
        */
       target_id: string | null;
+
+      /** Stable provider-operation fence for unknown-outcome reconciliation. */
+      publish_operation_id: string;
+
+      /** Durable provider delivery state. */
+      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
     }
 
     export interface Error {
@@ -724,6 +766,11 @@ export namespace PostListResponse {
     media: Array<Data.Media> | null;
 
     /**
+     * Aggregated engagement metrics
+     */
+    metrics?: PostMetrics;
+
+    /**
      * Recycling configuration, if any
      */
     recycling: RecyclingConfig | null;
@@ -770,26 +817,9 @@ export namespace PostListResponse {
     }
 
     export interface Targets {
-      platform:
-        | 'twitter'
-        | 'instagram'
-        | 'facebook'
-        | 'linkedin'
-        | 'tiktok'
-        | 'youtube'
-        | 'pinterest'
-        | 'reddit'
-        | 'bluesky'
-        | 'threads'
-        | 'telegram'
-        | 'snapchat'
-        | 'googlebusiness'
-        | 'whatsapp'
-        | 'mastodon'
-        | 'discord'
-        | 'sms';
+      platform: PostTargetPlatform | null;
 
-      status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';
+      status: PostTargetStatus;
 
       accounts?: Array<Targets.Account>;
 
@@ -826,6 +856,12 @@ export namespace PostListResponse {
          * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
          */
         target_id: string | null;
+
+        /** Stable provider-operation fence for unknown-outcome reconciliation. */
+        publish_operation_id: string;
+
+        /** Durable provider delivery state. */
+        delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
       }
 
       export interface Error {
@@ -859,6 +895,11 @@ export namespace PostBulkCreateResponse {
     media: Array<Data.Media> | null;
 
     /**
+     * Aggregated engagement metrics
+     */
+    metrics?: PostMetrics;
+
+    /**
      * Recycling configuration, if any
      */
     recycling: RecyclingConfig | null;
@@ -905,26 +946,9 @@ export namespace PostBulkCreateResponse {
     }
 
     export interface Targets {
-      platform:
-        | 'twitter'
-        | 'instagram'
-        | 'facebook'
-        | 'linkedin'
-        | 'tiktok'
-        | 'youtube'
-        | 'pinterest'
-        | 'reddit'
-        | 'bluesky'
-        | 'threads'
-        | 'telegram'
-        | 'snapchat'
-        | 'googlebusiness'
-        | 'whatsapp'
-        | 'mastodon'
-        | 'discord'
-        | 'sms';
+      platform: PostTargetPlatform | null;
 
-      status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';
+      status: PostTargetStatus;
 
       accounts?: Array<Targets.Account>;
 
@@ -961,6 +985,12 @@ export namespace PostBulkCreateResponse {
          * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
          */
         target_id: string | null;
+
+        /** Stable provider-operation fence for unknown-outcome reconciliation. */
+        publish_operation_id: string;
+
+        /** Durable provider delivery state. */
+        delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
       }
 
       export interface Error {
@@ -995,6 +1025,11 @@ export interface PostRetryResponse {
   media: Array<PostRetryResponse.Media> | null;
 
   /**
+   * Aggregated engagement metrics
+   */
+  metrics?: PostMetrics;
+
+  /**
    * Recycling configuration, if any
    */
   recycling: RecyclingConfig | null;
@@ -1021,6 +1056,20 @@ export interface PostRetryResponse {
   updated_at: string;
 }
 
+export interface PostReconcileTargetResponse {
+  post_id: string;
+
+  target_id: string;
+
+  publish_operation_id: string;
+
+  outcome: 'succeeded' | 'failed';
+
+  post_status: 'publishing' | 'published' | 'failed' | 'partial';
+
+  thread_status: 'queued' | 'completed' | 'failed' | 'unknown' | null;
+}
+
 export namespace PostRetryResponse {
   export interface Media {
     /**
@@ -1041,26 +1090,9 @@ export namespace PostRetryResponse {
   }
 
   export interface Targets {
-    platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+    platform: PostTargetPlatform | null;
 
-    status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';
+    status: PostTargetStatus;
 
     accounts?: Array<Targets.Account>;
 
@@ -1097,6 +1129,12 @@ export namespace PostRetryResponse {
        * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
        */
       target_id: string | null;
+
+      /** Stable provider-operation fence for unknown-outcome reconciliation. */
+      publish_operation_id: string;
+
+      /** Durable provider delivery state. */
+      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
     }
 
     export interface Error {
@@ -1120,6 +1158,11 @@ export interface PostUnpublishResponse {
   created_at: string;
 
   media: Array<PostUnpublishResponse.Media> | null;
+
+  /**
+   * Aggregated engagement metrics
+   */
+  metrics?: PostMetrics;
 
   /**
    * Recycling configuration, if any
@@ -1168,26 +1211,9 @@ export namespace PostUnpublishResponse {
   }
 
   export interface Targets {
-    platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+    platform: PostTargetPlatform | null;
 
-    status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';
+    status: PostTargetStatus;
 
     accounts?: Array<Targets.Account>;
 
@@ -1224,6 +1250,12 @@ export namespace PostUnpublishResponse {
        * Post target ID (pt_) — pass to /v1/ads/boost as post_target_id
        */
       target_id: string | null;
+
+      /** Stable provider-operation fence for unknown-outcome reconciliation. */
+      publish_operation_id: string;
+
+      /** Durable provider delivery state. */
+      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
     }
 
     export interface Error {
@@ -1242,6 +1274,26 @@ export interface PostUnpublishParams {
    */
   platforms?: Array<string>;
 }
+
+export type PostReconcileTargetParams =
+  | {
+      outcome: 'succeeded';
+
+      publish_operation_id: string;
+
+      provider_post_id: string;
+
+      provider_url?: string;
+    }
+  | {
+      outcome: 'failed';
+
+      publish_operation_id: string;
+
+      error_code: string;
+
+      error_message: string;
+    };
 
 export interface PostNotesResponse {
   /**
@@ -1324,6 +1376,13 @@ export interface PostBulkCsvUploadParams {
    * Set to "true" to validate without creating posts.
    */
   dry_run?: string;
+
+  /**
+   * Workspace ID applied to every created CSV row. When omitted, each row inherits
+   * its sole target-account workspace in either policy mode; organization scope is
+   * available only while Require Workspace ID is disabled.
+   */
+  workspace_id?: string;
 }
 
 export interface PostBulkCsvUploadResponse {
@@ -1389,7 +1448,10 @@ export interface PostCreateParams {
   targets: Array<string>;
 
   /**
-   * Workspace ID to scope this post to
+   * Workspace ID to scope this post to. When omitted, the post inherits its sole
+   * target-account workspace in either policy mode. Without a non-null parent
+   * scope, omission creates organization scope only when Require Workspace ID is
+   * disabled.
    */
   workspace_id?: string;
 
@@ -1435,6 +1497,21 @@ export interface PostCreateParams {
    * Create post from an idea. Pre-fills content from the idea.
    */
   idea_id?: string;
+
+  /**
+   * Content template ID. Explicit content takes precedence over the template.
+   */
+  template_id?: string;
+
+  /**
+   * Variables interpolated into the selected content template.
+   */
+  template_variables?: Record<string, string>;
+
+  /**
+   * Skip the workspace's default signature for this post.
+   */
+  skip_signature?: boolean;
 }
 
 export namespace PostCreateParams {
@@ -1556,7 +1633,7 @@ export interface PostListParams {
   /**
    * Filter by post status
    */
-  status?: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed';
+  status?: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'partial';
 
   /**
    * Filter: start date (ISO 8601)
@@ -1588,60 +1665,7 @@ export interface PostBulkCreateParams {
 }
 
 export namespace PostBulkCreateParams {
-  export interface Post {
-    /**
-     * Publish intent. Use "now" to publish immediately, "draft" to save as draft, or
-     * an ISO 8601 timestamp to schedule.
-     */
-    scheduled_at: string;
-
-    /**
-     * Account IDs or platform names to publish to
-     */
-    targets: Array<string>;
-
-    /**
-     * Post text. Optional if target_options provide per-target content.
-     */
-    content?: string;
-
-    /**
-     * Media attachments
-     */
-    media?: Array<Post.Media>;
-
-    /**
-     * Per-target customizations keyed by target value (account ID or platform name).
-     * Supports platform-specific features such as Twitter polls
-     * (`poll.options`, `poll.duration_minutes`), threads, `reply_to`, and `reply_settings`.
-     */
-    target_options?: { [key: string]: { [key: string]: unknown } };
-
-    /**
-     * IANA timezone for scheduling
-     */
-    timezone?: string;
-  }
-
-  export namespace Post {
-    export interface Media {
-      /**
-       * Public URL of the media file
-       */
-      url: string;
-
-      /**
-       * Media type. Inferred from URL extension if omitted.
-       */
-      type?: 'image' | 'video' | 'gif' | 'document';
-
-      /**
-       * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-       * original expires. Ignored on write.
-       */
-      thumbnail?: string;
-    }
-  }
+  export type Post = PostCreateParams;
 }
 
 /**
@@ -1679,6 +1703,9 @@ export declare namespace Posts {
   export {
     type RecyclingConfig as RecyclingConfig,
     type RecyclingInput as RecyclingInput,
+    type PostTargetPlatform as PostTargetPlatform,
+    type PostTargetStatus as PostTargetStatus,
+    type PostMetrics as PostMetrics,
     type PostSetRecyclingResponse as PostSetRecyclingResponse,
     type PostCreateResponse as PostCreateResponse,
     type PostRetrieveResponse as PostRetrieveResponse,
@@ -1687,8 +1714,10 @@ export declare namespace Posts {
     type PostBulkCreateResponse as PostBulkCreateResponse,
     type PostBulkCsvUploadResponse as PostBulkCsvUploadResponse,
     type PostRetryResponse as PostRetryResponse,
+    type PostReconcileTargetResponse as PostReconcileTargetResponse,
     type PostUnpublishResponse as PostUnpublishResponse,
     type PostUnpublishParams as PostUnpublishParams,
+    type PostReconcileTargetParams as PostReconcileTargetParams,
     type PostNotesResponse as PostNotesResponse,
     type PostUpdateNotesParams as PostUpdateNotesParams,
     type PostUpdateMetadataResponse as PostUpdateMetadataResponse,

@@ -13,6 +13,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+
+      - name: Verify hash-locked Python dependencies
+        working-directory: apps/downloader
+        run: |
+          cp requirements.lock /tmp/relayapi-downloader-requirements.lock
+          uv pip compile pyproject.toml \
+            --python 3.12 \
+            --generate-hashes \
+            --no-annotate \
+            --no-header \
+            --universal \
+            --output-file /tmp/relayapi-downloader-requirements.lock
+          cmp requirements.lock /tmp/relayapi-downloader-requirements.lock
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -22,23 +46,23 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract version from pyproject.toml
-        id: version
-        working-directory: apps/downloader
-        run: |
-          VERSION=$(grep -m1 'version' pyproject.toml | cut -d'"' -f2)
-          SHA_SHORT=$(git rev-parse --short HEAD)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA_SHORT" >> "$GITHUB_OUTPUT"
-
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: apps/downloader
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            zanhk/relayapi-downloader:latest
-            zanhk/relayapi-downloader:${{ steps.version.outputs.version }}
-            zanhk/relayapi-downloader:${{ steps.version.outputs.sha }}
+          tags: zanhk/relayapi-downloader:sha-${{ github.sha }}
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Record immutable promotion reference
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          test -n "$DIGEST"
+          printf 'Promote exactly: `%s@%s`\n' \
+            'zanhk/relayapi-downloader' "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

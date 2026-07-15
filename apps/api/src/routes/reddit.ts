@@ -1,7 +1,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
-import { maybeDecrypt } from "../lib/crypto";
+import { decryptAccountToken } from "../lib/account-token-crypto";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
 import { ErrorResponse, PaginationParams } from "../schemas/common";
 import type { Env, Variables } from "../types";
@@ -169,7 +169,11 @@ app.openapi(searchReddit, async (c) => {
 
 	const db = c.get("db");
 	const [row] = await db
-		.select({ accessToken: socialAccounts.accessToken, workspaceId: socialAccounts.workspaceId })
+		.select({
+			id: socialAccounts.id,
+			accessToken: socialAccounts.accessToken,
+			workspaceId: socialAccounts.workspaceId,
+		})
 		.from(socialAccounts)
 		.where(
 			and(
@@ -186,7 +190,12 @@ app.openapi(searchReddit, async (c) => {
 	const denied = assertWorkspaceScope(c, row.workspaceId);
 	if (denied) return denied;
 
-	const token = await maybeDecrypt(row.accessToken, c.env.ENCRYPTION_KEY);
+	const token = await decryptAccountToken(
+		row.accessToken,
+		c.env.ENCRYPTION_KEY,
+		row.id,
+		"access_token",
+	);
 	if (!token) {
 		return c.json(EMPTY_RESPONSE, 200);
 	}
@@ -242,7 +251,11 @@ app.openapi(getSubredditFeed, async (c) => {
 
 	const db = c.get("db");
 	const [row2] = await db
-		.select({ accessToken: socialAccounts.accessToken, workspaceId: socialAccounts.workspaceId })
+		.select({
+			id: socialAccounts.id,
+			accessToken: socialAccounts.accessToken,
+			workspaceId: socialAccounts.workspaceId,
+		})
 		.from(socialAccounts)
 		.where(
 			and(
@@ -259,7 +272,12 @@ app.openapi(getSubredditFeed, async (c) => {
 	const denied = assertWorkspaceScope(c, row2.workspaceId);
 	if (denied) return denied;
 
-	const token2 = await maybeDecrypt(row2.accessToken, c.env.ENCRYPTION_KEY);
+	const token2 = await decryptAccountToken(
+		row2.accessToken,
+		c.env.ENCRYPTION_KEY,
+		row2.id,
+		"access_token",
+	);
 	if (!token2) {
 		return c.json(EMPTY_RESPONSE, 200);
 	}

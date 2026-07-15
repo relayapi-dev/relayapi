@@ -12,25 +12,32 @@ export async function processEmailMessage(
 	const from = message.from || DEFAULT_FROM;
 
 	try {
-		const { error } = await resend.emails.send({
-			from,
-			to: message.to,
-			subject: message.subject,
-			html: message.html,
-		});
+		const { data, error } = await resend.emails.send(
+			{
+				from,
+				to: message.to,
+				subject: message.subject,
+				html: message.html,
+			},
+			{ idempotencyKey: message.id },
+		);
 
 		if (!error) {
-			console.log(
-				`[EmailQueue] Sent email ${message.id} to ${message.to}: "${message.subject}"`,
-			);
-			return { success: true, shouldRetry: false };
+			console.log(`[EmailQueue] Sent email ${message.id}`);
+			return {
+				success: true,
+				shouldRetry: false,
+				providerMessageId: data?.id,
+			};
 		}
 
 		const statusCode = (error as { statusCode?: number }).statusCode;
-		const shouldRetry = statusCode ? RETRYABLE_STATUS_CODES.has(statusCode) : false;
+		const shouldRetry = statusCode
+			? RETRYABLE_STATUS_CODES.has(statusCode)
+			: false;
 
 		console.error(
-			`[EmailQueue] Failed to send email ${message.id} (status ${statusCode ?? "unknown"}, retry=${shouldRetry}): ${error.message}`,
+			`[EmailQueue] Failed email ${message.id} (status ${statusCode ?? "unknown"}, code=${error.name}, retry=${shouldRetry})`,
 		);
 
 		return {
@@ -39,11 +46,8 @@ export async function processEmailMessage(
 			error: error.message,
 		};
 	} catch (error) {
-		const errorMessage =
-			error instanceof Error ? error.message : String(error);
-		console.error(
-			`[EmailQueue] Network error sending email ${message.id}: ${errorMessage}`,
-		);
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		console.error(`[EmailQueue] Network error sending email ${message.id}`);
 		return { success: false, shouldRetry: true, error: errorMessage };
 	}
 }
@@ -51,10 +55,5 @@ export async function processEmailMessage(
 export function handleDeadLetterMessage(message: EmailQueueMessage): void {
 	console.error(
 		`[EmailQueue DLQ] Email ${message.id} permanently failed after max retries`,
-		{
-			to: message.to,
-			subject: message.subject,
-			id: message.id,
-		},
 	);
 }

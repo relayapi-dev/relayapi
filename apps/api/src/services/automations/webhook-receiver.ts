@@ -7,15 +7,30 @@
 import {
 	automationEntrypoints,
 	automations,
-	contacts,
+	automationWebhookReceipts,
 	contactChannels,
+	contacts,
+	createDb,
 	customFieldDefinitions,
 	customFieldValues,
-	workspaces,
 	type Database,
+	generateId,
+	socialAccounts,
 } from "@relayapi/db";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { maybeDecrypt } from "../../lib/crypto";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	gt,
+	inArray,
+	isNull,
+	lte,
+	or,
+	sql,
+} from "drizzle-orm";
+import { maybeDecrypt, maybeEncrypt } from "../../lib/crypto";
+import type { Env } from "../../types";
 import { enrollContact } from "./runner";
 
 export type Db = Database;
@@ -24,6 +39,11 @@ export type WebhookReceptionResult =
 	| { status: "ok"; runId: string; automationId: string }
 	| { status: "bad_signature" }
 	| { status: "stale_timestamp" }
+	| {
+			status: "duplicate";
+			receiptStatus: string;
+			runId?: string;
+	  }
 	| { status: "unknown_slug" }
 	| { status: "bad_payload"; error: string }
 	| { status: "contact_lookup_failed"; reason?: string }
@@ -34,6 +54,18 @@ export type WebhookReceptionResult =
 // than this is rejected as a replay / stale request. Mirrors Stripe's 5-minute
 // tolerance.
 const MAX_TIMESTAMP_SKEW_SECONDS = 300;
+const WEBHOOK_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
+const WEBHOOK_RECEIPT_LEASE_MS = 15 * 60 * 1000;
+
+async function sha256Hex(value: string): Promise<string> {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(value),
+	);
+	return Array.from(new Uint8Array(digest))
+		.map((byte) => byte.toString(16).padStart(2, "0"))
+		.join("");
+}
 
 // ---------------------------------------------------------------------------
 // JSONPath extractor — minimal regex-based.
@@ -164,39 +196,33 @@ type ContactLookupConfig = {
 	default_workspace_id?: string;
 };
 
-/**
- * Resolves the default workspace for an organization — the oldest workspace
- * row. Used by `resolveContact` to populate `workspaceId` on auto-created
- * contacts. Returns null when the org has no workspaces (caller surfaces this
- * as `contact_lookup_failed` with reason `no_default_workspace` so operators
- * can debug a misconfigured org).
- */
-async function resolveDefaultWorkspaceId(
-	db: Db,
-	organizationId: string,
-): Promise<string | null> {
-	const ws = await db.query.workspaces.findFirst({
-		where: eq(workspaces.organizationId, organizationId),
-		orderBy: [asc(workspaces.createdAt)],
-	});
-	return ws?.id ?? null;
-}
-
 async function resolveContact(
 	db: Db,
 	organizationId: string,
 	body: unknown,
 	cfg: ContactLookupConfig,
+	scope: {
+		workspaceId: string | null;
+		socialAccountId: string | null;
+		channel: string;
+	},
 ): Promise<string | null> {
 	const extract = (path?: string) =>
 		path ? extractByPath(body, path) : undefined;
+	const contactWorkspace = scope.workspaceId
+		? eq(contacts.workspaceId, scope.workspaceId)
+		: isNull(contacts.workspaceId);
 
 	switch (cfg.by) {
 		case "contact_id": {
 			const id = extract(cfg.field_path);
 			if (typeof id !== "string") return null;
 			const row = await db.query.contacts.findFirst({
-				where: and(eq(contacts.id, id), eq(contacts.organizationId, organizationId)),
+				where: and(
+					eq(contacts.id, id),
+					eq(contacts.organizationId, organizationId),
+					contactWorkspace,
+				),
 			});
 			return row?.id ?? null;
 		}
@@ -205,17 +231,18 @@ async function resolveContact(
 			if (typeof email !== "string") return null;
 			const row = await db.query.contacts.findFirst({
 				where: and(
-					eq(contacts.email, email),
+					eq(contacts.emailCanonical, email.trim().toLowerCase()),
 					eq(contacts.organizationId, organizationId),
+					contactWorkspace,
 				),
 			});
 			if (row) return row.id;
-			if (cfg.auto_create_contact && cfg.default_workspace_id) {
+			if (cfg.auto_create_contact) {
 				const [created] = await db
 					.insert(contacts)
 					.values({
 						organizationId,
-						workspaceId: cfg.default_workspace_id,
+						workspaceId: scope.workspaceId,
 						email,
 					})
 					.returning();
@@ -230,15 +257,16 @@ async function resolveContact(
 				where: and(
 					eq(contacts.phone, phone),
 					eq(contacts.organizationId, organizationId),
+					contactWorkspace,
 				),
 			});
 			if (row) return row.id;
-			if (cfg.auto_create_contact && cfg.default_workspace_id) {
+			if (cfg.auto_create_contact) {
 				const [created] = await db
 					.insert(contacts)
 					.values({
 						organizationId,
-						workspaceId: cfg.default_workspace_id,
+						workspaceId: scope.workspaceId,
 						phone,
 					})
 					.returning();
@@ -249,7 +277,8 @@ async function resolveContact(
 		case "platform_id": {
 			const identifier = extract(cfg.field_path);
 			if (typeof identifier !== "string") return null;
-			const platform = cfg.platform;
+			if (!scope.socialAccountId) return null;
+			if (cfg.platform && cfg.platform !== scope.channel) return null;
 			// Scope the lookup through contacts.organizationId — otherwise a
 			// platform_id collision across orgs (same FB PSID / IG user, different
 			// tenants) could return another tenant's contact.
@@ -260,10 +289,13 @@ async function resolveContact(
 				.where(
 					and(
 						eq(contactChannels.identifier, identifier),
+						eq(contactChannels.socialAccountId, scope.socialAccountId),
 						eq(contacts.organizationId, organizationId),
-						platform
-							? eq(contactChannels.platform, platform)
-							: undefined,
+						contactWorkspace,
+						eq(
+							contactChannels.platform,
+							scope.channel as typeof contactChannels.$inferSelect.platform,
+						),
 					),
 				)
 				.limit(1);
@@ -278,13 +310,21 @@ async function resolveContact(
 			// Coerce to a string since `custom_field_values.value` is stored as
 			// text. Booleans, numbers, and other primitives are stringified the
 			// same way the dashboard / API writers do when persisting values.
-			const serialized =
-				typeof value === "string" ? value : String(value);
+			const serialized = typeof value === "string" ? value : String(value);
 			const def = await db.query.customFieldDefinitions.findFirst({
 				where: and(
 					eq(customFieldDefinitions.organizationId, organizationId),
 					eq(customFieldDefinitions.slug, cfg.custom_field_key),
+					scope.workspaceId
+						? or(
+								eq(customFieldDefinitions.workspaceId, scope.workspaceId),
+								isNull(customFieldDefinitions.workspaceId),
+							)
+						: isNull(customFieldDefinitions.workspaceId),
 				),
+				orderBy: scope.workspaceId
+					? [sql`${customFieldDefinitions.workspaceId} IS NULL`]
+					: undefined,
 			});
 			if (!def) return null;
 			// Filter by value in SQL. The (definition_id, contact_id) pair is
@@ -294,18 +334,143 @@ async function resolveContact(
 			// canonical contact. This is deterministic for v1; in practice the
 			// lookup field should be unique (e.g. `external_id`) so the
 			// "multiple matches" branch is rare and always resolves the same way.
-			const fv = await db.query.customFieldValues.findFirst({
-				where: and(
-					eq(customFieldValues.organizationId, organizationId),
-					eq(customFieldValues.definitionId, def.id),
-					eq(customFieldValues.value, serialized),
-				),
-				orderBy: [desc(customFieldValues.updatedAt)],
-			});
+			const [fv] = await db
+				.select({ contactId: customFieldValues.contactId })
+				.from(customFieldValues)
+				.innerJoin(
+					contacts,
+					and(
+						eq(customFieldValues.contactId, contacts.id),
+						eq(customFieldValues.organizationId, contacts.organizationId),
+					),
+				)
+				.where(
+					and(
+						eq(customFieldValues.organizationId, organizationId),
+						eq(customFieldValues.definitionId, def.id),
+						eq(customFieldValues.value, serialized),
+						contactWorkspace,
+					),
+				)
+				.orderBy(desc(customFieldValues.updatedAt))
+				.limit(1);
 			return fv?.contactId ?? null;
 		}
 		default:
 			return null;
+	}
+}
+
+type WebhookMatch = {
+	entrypoint: typeof automationEntrypoints.$inferSelect;
+	automation: typeof automations.$inferSelect;
+};
+
+async function processAcceptedWebhook(
+	db: Db,
+	match: WebhookMatch,
+	body: unknown,
+	env: Record<string, unknown>,
+	triggerOccurrenceId: string,
+): Promise<WebhookReceptionResult> {
+	const cfg = (match.entrypoint.config ?? {}) as Record<string, unknown>;
+	const lookup =
+		(cfg.contact_lookup as ContactLookupConfig | undefined) ?? null;
+	if (!lookup) return { status: "contact_lookup_failed" };
+	if (match.entrypoint.channel !== match.automation.channel) {
+		return {
+			status: "contact_lookup_failed",
+			reason: "entrypoint_channel_mismatch",
+		};
+	}
+	if (
+		lookup.default_workspace_id !== undefined &&
+		lookup.default_workspace_id !== match.automation.workspaceId
+	) {
+		return {
+			status: "contact_lookup_failed",
+			reason: "configured_workspace_mismatch",
+		};
+	}
+
+	if (match.entrypoint.socialAccountId) {
+		const [account] = await db
+			.select({
+				id: socialAccounts.id,
+				workspaceId: socialAccounts.workspaceId,
+				platform: socialAccounts.platform,
+				lifecycleStatus: socialAccounts.lifecycleStatus,
+			})
+			.from(socialAccounts)
+			.where(
+				and(
+					eq(socialAccounts.id, match.entrypoint.socialAccountId),
+					eq(socialAccounts.organizationId, match.automation.organizationId),
+				),
+			)
+			.limit(1);
+		if (
+			!account ||
+			account.workspaceId !== match.automation.workspaceId ||
+			account.platform !== match.automation.channel ||
+			account.lifecycleStatus !== "active"
+		) {
+			return {
+				status: "contact_lookup_failed",
+				reason: "entrypoint_account_scope_mismatch",
+			};
+		}
+	} else if (lookup.by === "platform_id") {
+		return {
+			status: "contact_lookup_failed",
+			reason: "platform_lookup_requires_entrypoint_account",
+		};
+	}
+
+	const contactId = await resolveContact(
+		db,
+		match.automation.organizationId,
+		body,
+		lookup,
+		{
+			workspaceId: match.automation.workspaceId,
+			socialAccountId: match.entrypoint.socialAccountId ?? null,
+			channel: match.automation.channel,
+		},
+	);
+	if (!contactId) return { status: "contact_lookup_failed" };
+
+	const payloadMapping = (cfg.payload_mapping ?? {}) as Record<string, string>;
+	const contextOverrides: Record<string, unknown> = { webhookBody: body };
+	for (const [key, jsonPath] of Object.entries(payloadMapping)) {
+		contextOverrides[key] = extractByPath(body, jsonPath);
+	}
+
+	try {
+		const { runId } = await enrollContact(db, {
+			automationId: match.automation.id,
+			organizationId: match.automation.organizationId,
+			contactId,
+			conversationId: null,
+			channel: match.automation.channel,
+			entrypointId: match.entrypoint.id,
+			bindingId: null,
+			socialAccountId: match.entrypoint.socialAccountId ?? null,
+			triggerOccurrenceId,
+			contextOverrides,
+			env,
+			deferRun: true,
+		});
+		return {
+			status: "ok",
+			runId,
+			automationId: match.automation.id,
+		};
+	} catch (err) {
+		return {
+			status: "enrollment_failed",
+			error: err instanceof Error ? err.message : String(err),
+		};
 	}
 }
 
@@ -319,26 +484,15 @@ export async function receiveAutomationWebhook(
 		slug: string;
 		rawBody: string;
 		signatureHeader: string | null;
-		/**
-		 * Optional caller-supplied `X-Relay-Timestamp` (unix seconds). When
-		 * present, the HMAC is computed over `"<timestamp>.<body>"` and the
-		 * timestamp must be within MAX_TIMESTAMP_SKEW_SECONDS of server time —
-		 * binding the signature to a time window so a captured request can't be
-		 * replayed indefinitely. When absent, the legacy body-only scheme is used
-		 * (backwards-compatible for existing integrations).
-		 */
+		/** Caller-supplied `X-Relay-Timestamp` in unix seconds. */
 		timestampHeader?: string | null;
 	},
 	env: Record<string, unknown>,
 ): Promise<WebhookReceptionResult> {
 	// 1. Look up entrypoint by slug. Push the slug predicate into SQL so we
 	//    fetch at most one row instead of every active webhook entrypoint
-	//    platform-wide (O(tenant count) transfer + JS scan). Order by
-	//    created_at ASC so that if two entrypoints somehow share a slug, the
-	//    OLDER one wins deterministically across requests/deploys rather than
-	//    flipping with the natural row order. Creation now rejects duplicate
-	//    slugs (see routes/automation-entrypoints.ts), so collisions should
-	//    not occur, but the ordering keeps resolution stable for legacy data.
+	//    platform-wide (O(tenant count) transfer + JS scan). The database unique
+	//    index on inbound webhook slugs guarantees that this lookup is singular.
 	const rows = await db
 		.select({ entrypoint: automationEntrypoints, automation: automations })
 		.from(automationEntrypoints)
@@ -354,7 +508,6 @@ export async function receiveAutomationWebhook(
 				sql`${automationEntrypoints.config}->>'webhook_slug' = ${params.slug}`,
 			),
 		)
-		.orderBy(asc(automationEntrypoints.createdAt))
 		.limit(1);
 
 	const match = rows[0];
@@ -367,37 +520,31 @@ export async function receiveAutomationWebhook(
 	if (!encSecret) return { status: "bad_signature" };
 	if (!params.signatureHeader) return { status: "bad_signature" };
 
-	let secret: string | null = encSecret;
-	// Only invoke the crypto helper when the value is actually encrypted.
-	// Plaintext secrets (test fixtures, legacy data) are used as-is.
-	if (encSecret.startsWith("enc:")) {
-		try {
-			secret = await maybeDecrypt(
-				encSecret,
-				(env as { ENCRYPTION_KEY?: string }).ENCRYPTION_KEY,
-			);
-		} catch {
-			return { status: "bad_signature" };
-		}
+	let secret: string | null;
+	try {
+		secret = await maybeDecrypt(
+			encSecret,
+			(env as { ENCRYPTION_KEY?: string }).ENCRYPTION_KEY,
+			{ recordId: match.entrypoint.id, field: "webhook_secret" },
+		);
+	} catch {
+		return { status: "bad_signature" };
 	}
 	if (!secret) return { status: "bad_signature" };
 
-	// Replay protection: when the caller supplies X-Relay-Timestamp, reject
-	// requests outside the skew window and bind the timestamp into the signed
-	// payload so a captured (signature, body) pair can't be replayed after the
-	// window elapses. Absent the header, fall back to the legacy body-only
-	// scheme for backwards compatibility.
+	// Timestamped signatures are mandatory so a captured request cannot remain
+	// valid forever.
 	const timestampHeader = params.timestampHeader?.trim();
-	let signedPayload = params.rawBody;
-	if (timestampHeader) {
-		const ts = Number(timestampHeader);
-		if (!Number.isFinite(ts)) return { status: "bad_signature" };
-		const nowSeconds = Date.now() / 1000;
-		if (Math.abs(nowSeconds - ts) > MAX_TIMESTAMP_SKEW_SECONDS) {
-			return { status: "stale_timestamp" };
-		}
-		signedPayload = `${timestampHeader}.${params.rawBody}`;
+	if (!timestampHeader || !/^\d{1,13}$/.test(timestampHeader)) {
+		return { status: "bad_signature" };
 	}
+	const ts = Number(timestampHeader);
+	if (!Number.isSafeInteger(ts)) return { status: "bad_signature" };
+	const nowSeconds = Date.now() / 1000;
+	if (Math.abs(nowSeconds - ts) > MAX_TIMESTAMP_SKEW_SECONDS) {
+		return { status: "stale_timestamp" };
+	}
+	const signedPayload = `${timestampHeader}.${params.rawBody}`;
 
 	const sigOk = await verifyHmacSha256(
 		secret,
@@ -417,75 +564,262 @@ export async function receiveAutomationWebhook(
 		};
 	}
 
-	// 4. Resolve contact. `auto_create_contact` requires a workspace to
-	// anchor the new row — resolve the org's default (oldest) workspace
-	// and inject it into the lookup config so the create path can insert.
-	// Plan 6 Unit RR11 / Task 6 (F3): previously `default_workspace_id`
-	// was never populated, so `auto_create_contact: true` silently failed.
-	const lookup =
-		(cfg.contact_lookup as ContactLookupConfig | undefined) ?? null;
-	if (!lookup) return { status: "contact_lookup_failed" };
+	// 4. Persist the accepted occurrence before any contact or enrollment side
+	// effect. The encrypted bounded payload lets the scheduled reconciler resume
+	// a crash even when the caller never retries the HTTP request.
+	const requestDigest = await sha256Hex(
+		`${match.entrypoint.id}\0${timestampHeader}\0${params.rawBody}`,
+	);
+	const receiptId = generateId("awhr_");
+	const payloadCiphertext = await maybeEncrypt(
+		params.rawBody,
+		(env as { ENCRYPTION_KEY?: string }).ENCRYPTION_KEY,
+		{ recordId: receiptId, field: "payload" },
+	);
+	if (!payloadCiphertext) throw new Error("Webhook payload encryption failed");
+	const inserted = await db
+		.insert(automationWebhookReceipts)
+		.values({
+			id: receiptId,
+			organizationId: match.automation.organizationId,
+			automationId: match.automation.id,
+			entrypointId: match.entrypoint.id,
+			requestDigest,
+			signatureTimestamp: timestampHeader,
+			payloadCiphertext,
+			expiresAt: new Date(Date.now() + WEBHOOK_RECEIPT_TTL_MS),
+		})
+		.onConflictDoNothing()
+		.returning();
+	let receipt = inserted[0];
+	if (!receipt) {
+		receipt = await db.query.automationWebhookReceipts.findFirst({
+			where: and(
+				eq(automationWebhookReceipts.entrypointId, match.entrypoint.id),
+				eq(automationWebhookReceipts.requestDigest, requestDigest),
+			),
+		});
+	}
+	if (!receipt) {
+		return { status: "duplicate", receiptStatus: "accepted" };
+	}
+	if (receipt.status === "succeeded" || receipt.status === "terminal_failed") {
+		return {
+			status: "duplicate",
+			receiptStatus: receipt.status,
+			...(receipt.runId ? { runId: receipt.runId } : {}),
+		};
+	}
 
-	let effectiveLookup = lookup;
-	if (lookup.auto_create_contact && !lookup.default_workspace_id) {
-		const defaultWorkspaceId = await resolveDefaultWorkspaceId(
-			db,
-			match.automation.organizationId,
+	const claimNow = new Date();
+	const [claimed] = await db
+		.update(automationWebhookReceipts)
+		.set({
+			status: "processing",
+			attempts: sql`${automationWebhookReceipts.attempts} + 1`,
+			leaseToken: sql`${automationWebhookReceipts.leaseToken} + 1`,
+			leaseExpiresAt: new Date(claimNow.getTime() + WEBHOOK_RECEIPT_LEASE_MS),
+			lastError: null,
+		})
+		.where(
+			and(
+				eq(automationWebhookReceipts.id, receipt.id),
+				or(
+					and(
+						inArray(automationWebhookReceipts.status, ["pending", "failed"]),
+						lte(automationWebhookReceipts.nextAttemptAt, claimNow),
+					),
+					and(
+						eq(automationWebhookReceipts.status, "processing"),
+						lte(automationWebhookReceipts.leaseExpiresAt, claimNow),
+					),
+				),
+			),
+		)
+		.returning();
+	if (!claimed) {
+		return {
+			status: "duplicate",
+			receiptStatus: receipt.status,
+			...(receipt.runId ? { runId: receipt.runId } : {}),
+		};
+	}
+
+	const result = await processAcceptedWebhook(db, match, body, env, claimed.id);
+	const retryable = result.status === "enrollment_failed";
+	await db
+		.update(automationWebhookReceipts)
+		.set({
+			status:
+				result.status === "ok"
+					? "succeeded"
+					: retryable
+						? "failed"
+						: "terminal_failed",
+			runId: result.status === "ok" ? result.runId : null,
+			lastError:
+				result.status === "enrollment_failed"
+					? result.error
+					: result.status === "contact_lookup_failed"
+						? (result.reason ?? "contact_lookup_failed")
+						: null,
+			nextAttemptAt: retryable
+				? new Date(Date.now() + Math.min(60_000, 2 ** claimed.attempts * 1_000))
+				: claimed.nextAttemptAt,
+			leaseExpiresAt: null,
+			completedAt: retryable ? null : new Date(),
+		})
+		.where(
+			and(
+				eq(automationWebhookReceipts.id, claimed.id),
+				eq(automationWebhookReceipts.status, "processing"),
+				eq(automationWebhookReceipts.leaseToken, claimed.leaseToken),
+			),
 		);
-		if (!defaultWorkspaceId) {
-			// Org has no workspaces — auto-create can't pick a parent, so we
-			// surface an explicit failure reason instead of silently dropping
-			// the webhook. Operators typically hit this on a brand-new org
-			// before the first workspace is provisioned.
-			return {
-				status: "contact_lookup_failed",
-				reason: "no_default_workspace",
+	return result;
+}
+
+/**
+ * Resume accepted automation webhooks whose request worker stopped after the
+ * durable receipt commit. The scan and lease are bounded so it adds no work to
+ * the HTTP hot path and competing cron invocations cannot execute one receipt.
+ */
+export async function reconcileAutomationWebhookReceipts(
+	env: Env,
+	limit = 25,
+): Promise<number> {
+	const db = createDb(env.HYPERDRIVE.connectionString);
+	const now = new Date();
+	const candidates = await db
+		.select()
+		.from(automationWebhookReceipts)
+		.where(
+			and(
+				gt(automationWebhookReceipts.expiresAt, now),
+				or(
+					and(
+						inArray(automationWebhookReceipts.status, ["pending", "failed"]),
+						lte(automationWebhookReceipts.nextAttemptAt, now),
+					),
+					and(
+						eq(automationWebhookReceipts.status, "processing"),
+						lte(automationWebhookReceipts.leaseExpiresAt, now),
+					),
+				),
+			),
+		)
+		.orderBy(asc(automationWebhookReceipts.nextAttemptAt))
+		.limit(Math.max(1, Math.min(limit, 100)));
+
+	let completed = 0;
+	for (const candidate of candidates) {
+		const claimNow = new Date();
+		const [claimed] = await db
+			.update(automationWebhookReceipts)
+			.set({
+				status: "processing",
+				attempts: sql`${automationWebhookReceipts.attempts} + 1`,
+				leaseToken: sql`${automationWebhookReceipts.leaseToken} + 1`,
+				leaseExpiresAt: new Date(claimNow.getTime() + WEBHOOK_RECEIPT_LEASE_MS),
+				lastError: null,
+			})
+			.where(
+				and(
+					eq(automationWebhookReceipts.id, candidate.id),
+					eq(automationWebhookReceipts.leaseToken, candidate.leaseToken),
+					or(
+						and(
+							inArray(automationWebhookReceipts.status, ["pending", "failed"]),
+							lte(automationWebhookReceipts.nextAttemptAt, claimNow),
+						),
+						and(
+							eq(automationWebhookReceipts.status, "processing"),
+							lte(automationWebhookReceipts.leaseExpiresAt, claimNow),
+						),
+					),
+				),
+			)
+			.returning();
+		if (!claimed) continue;
+
+		let result: WebhookReceptionResult;
+		try {
+			const [match] = await db
+				.select({
+					entrypoint: automationEntrypoints,
+					automation: automations,
+				})
+				.from(automationEntrypoints)
+				.innerJoin(
+					automations,
+					eq(automationEntrypoints.automationId, automations.id),
+				)
+				.where(
+					and(
+						eq(automationEntrypoints.id, claimed.entrypointId),
+						eq(automations.id, claimed.automationId),
+					),
+				)
+				.limit(1);
+			if (!match) throw new Error("accepted webhook source no longer exists");
+			const plaintext = await maybeDecrypt(
+				claimed.payloadCiphertext,
+				env.ENCRYPTION_KEY,
+				{ recordId: claimed.id, field: "payload" },
+			);
+			if (!plaintext)
+				throw new Error("accepted webhook payload is unavailable");
+			const body: unknown = JSON.parse(plaintext);
+			result = await processAcceptedWebhook(
+				db,
+				match,
+				body,
+				env as unknown as Record<string, unknown>,
+				claimed.id,
+			);
+		} catch (error) {
+			result = {
+				status: "enrollment_failed",
+				error: error instanceof Error ? error.message : "reconciliation failed",
 			};
 		}
-		effectiveLookup = { ...lookup, default_workspace_id: defaultWorkspaceId };
+
+		const retryable = result.status === "enrollment_failed";
+		const terminal = !retryable;
+		const updated = await db
+			.update(automationWebhookReceipts)
+			.set({
+				status:
+					result.status === "ok"
+						? "succeeded"
+						: retryable
+							? "failed"
+							: "terminal_failed",
+				runId: result.status === "ok" ? result.runId : null,
+				lastError:
+					result.status === "enrollment_failed"
+						? result.error
+						: result.status === "contact_lookup_failed"
+							? (result.reason ?? "contact_lookup_failed")
+							: null,
+				nextAttemptAt: retryable
+					? new Date(
+							Date.now() + Math.min(60_000, 2 ** claimed.attempts * 1_000),
+						)
+					: claimed.nextAttemptAt,
+				leaseExpiresAt: null,
+				completedAt: terminal ? new Date() : null,
+			})
+			.where(
+				and(
+					eq(automationWebhookReceipts.id, claimed.id),
+					eq(automationWebhookReceipts.status, "processing"),
+					eq(automationWebhookReceipts.leaseToken, claimed.leaseToken),
+				),
+			)
+			.returning({ id: automationWebhookReceipts.id });
+		if (updated.length > 0 && result.status === "ok") completed++;
 	}
 
-	const contactId = await resolveContact(
-		db,
-		match.automation.organizationId,
-		body,
-		effectiveLookup,
-	);
-	if (!contactId) return { status: "contact_lookup_failed" };
-
-	// 5. Apply payload_mapping into context overrides.
-	const payloadMapping = (cfg.payload_mapping ?? {}) as Record<string, string>;
-	const contextOverrides: Record<string, unknown> = { webhookBody: body };
-	for (const [key, jsonPath] of Object.entries(payloadMapping)) {
-		contextOverrides[key] = extractByPath(body, jsonPath);
-	}
-
-	// 6. Enroll. External webhook entrypoints are account-scoped when the
-	// operator pinned `social_account_id` on the row; otherwise the run
-	// is unpinned and the handler's default contact_channels lookup
-	// applies (single-account workspaces behave as before).
-	try {
-		const { runId } = await enrollContact(db, {
-			automationId: match.automation.id,
-			organizationId: match.automation.organizationId,
-			contactId,
-			conversationId: null,
-			channel: match.automation.channel,
-			entrypointId: match.entrypoint.id,
-			bindingId: null,
-			socialAccountId: match.entrypoint.socialAccountId ?? null,
-			contextOverrides,
-			env,
-		});
-		return {
-			status: "ok",
-			runId,
-			automationId: match.automation.id,
-		};
-	} catch (err) {
-		return {
-			status: "enrollment_failed",
-			error: err instanceof Error ? err.message : String(err),
-		};
-	}
+	return completed;
 }

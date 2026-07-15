@@ -35,10 +35,11 @@ import type {
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -77,9 +78,7 @@ async function teardownFixture() {
 	await db
 		.delete(automationRuns)
 		.where(eq(automationRuns.organizationId, orgId));
-	await db
-		.delete(automations)
-		.where(eq(automations.organizationId, orgId));
+	await db.delete(automations).where(eq(automations.organizationId, orgId));
 	await db
 		.delete(customFieldValues)
 		.where(eq(customFieldValues.organizationId, orgId));
@@ -147,6 +146,7 @@ async function makeEntrypoint(
 	const [ep] = await db
 		.insert(automationEntrypoints)
 		.values({
+			organizationId: orgId,
 			automationId,
 			channel: "instagram",
 			kind,
@@ -161,6 +161,7 @@ async function makeEntrypoint(
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;

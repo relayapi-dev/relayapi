@@ -1,13 +1,13 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { crossPostActions, posts } from "@relayapi/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { assertWorkspaceScope } from "../lib/workspace-scope";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
 	CrossPostActionListResponse,
 	CrossPostActionResponse,
 } from "../schemas/cross-post-actions";
 import type { Env, Variables } from "../types";
-import { assertWorkspaceScope } from "../lib/workspace-scope";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -98,7 +98,10 @@ app.openapi(listByPost, async (c) => {
 		.where(and(eq(posts.id, post_id), eq(posts.organizationId, orgId)))
 		.limit(1);
 	if (!post) {
-		return c.json({ error: { code: "NOT_FOUND", message: "Post not found" } }, 404);
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
 	}
 
 	const denied = assertWorkspaceScope(c, post.workspaceId);
@@ -135,7 +138,11 @@ app.openapi(listByPost, async (c) => {
 	const data = rows.slice(0, limit).map(serializeAction);
 
 	return c.json(
-		{ data, next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null, has_more: hasMore },
+		{
+			data,
+			next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
+			has_more: hasMore,
+		},
 		200,
 	);
 });
@@ -158,20 +165,36 @@ app.openapi(cancelAction, async (c) => {
 		.limit(1);
 
 	if (!action || action.postOrgId !== orgId) {
-		return c.json({ error: { code: "NOT_FOUND", message: "Cross-post action not found" } }, 404);
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Cross-post action not found" } },
+			404,
+		);
 	}
 
 	const denied = assertWorkspaceScope(c, action.postWorkspaceId);
 	if (denied) return denied as never;
 
-	if (action.action.status !== "pending") {
-		return c.json({ error: { code: "CONFLICT", message: "Only pending actions can be cancelled" } }, 409);
+	if (!["pending", "retry"].includes(action.action.status)) {
+		return c.json(
+			{
+				error: {
+					code: "CONFLICT",
+					message: "Only pending or retryable actions can be cancelled",
+				},
+			},
+			409,
+		);
 	}
 
 	const [updated] = await db
 		.update(crossPostActions)
 		.set({ status: "cancelled" })
-		.where(eq(crossPostActions.id, id))
+		.where(
+			and(
+				eq(crossPostActions.id, id),
+				inArray(crossPostActions.status, ["pending", "retry"]),
+			),
+		)
 		.returning();
 
 	if (!updated) throw new Error("Failed to update cross-post action");

@@ -4,6 +4,7 @@ import { APIResource } from '../../../core/resource';
 import * as OrganizationsAPI from './organizations';
 import {
   OrganizationListResponse,
+  OrganizationListParams,
   OrganizationSelectParams,
   OrganizationSelectResponse,
   Organizations,
@@ -19,6 +20,7 @@ export declare namespace Linkedin {
   export {
     Organizations as Organizations,
     type OrganizationListResponse as OrganizationListResponse,
+    type OrganizationListParams as OrganizationListParams,
     type OrganizationSelectResponse as OrganizationSelectResponse,
     type OrganizationSelectParams as OrganizationSelectParams,
   };

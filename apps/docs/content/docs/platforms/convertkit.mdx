@@ -19,7 +19,7 @@ By default, broadcasts are **sent immediately** when published. Set `send_at` in
 
 ## Before You Start
 
-You need a ConvertKit API key and API secret. Get these from your [ConvertKit account settings](https://app.convertkit.com/account_settings/advanced_settings).
+You need a Kit API v4 key. Create one from the **Developer** tab in your Kit account settings. Kit documents that v4 keys are different from and incompatible with v3 credentials; RelayAPI validates the key with `GET https://api.kit.com/v4/account` and the `X-Kit-Api-Key` header. See Kit's [API authentication guide](https://developers.kit.com/api-reference/authentication).
 
 ## Connect
 
@@ -28,8 +28,7 @@ curl -X POST https://api.relayapi.dev/v1/connect/convertkit \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "api_key": "your-convertkit-api-key",
-    "api_secret": "your-convertkit-api-secret"
+    "api_key": "your-kit-v4-api-key"
   }'
 ```
 
@@ -58,6 +57,8 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 |-------|------|----------|-------------|
 | `subject` | string | No | Email subject line. Falls back to first line of content. |
 | `preview_text` | string | No | Description/preview text. |
+| `public` | boolean | No | Publish the broadcast to the Kit web feed. |
+| `published_at` | string | No | ISO 8601 web publication timestamp. |
 | `content_html` | string | No | Full HTML body. If omitted, plain text is auto-wrapped. |
 | `send_at` | string | No | ISO 8601 timestamp to schedule delivery. If omitted, sends immediately. |
 

@@ -19,12 +19,19 @@ export class PhoneNumbers extends APIResource {
 
   /**
    * Purchase a US phone number
+   *
+   * `options.idempotencyKey` must identify one logical purchase and be reused
+   * when retrying that same purchase.
    */
   purchase(
     body: PhoneNumberPurchaseParams,
-    options?: RequestOptions,
+    options: RequestOptions & { idempotencyKey: string },
   ): APIPromise<PhoneNumberPurchaseResponse> {
-    return this._client.post('/v1/whatsapp/phone-numbers/purchase', { body, ...options });
+    return this._client.post('/v1/whatsapp/phone-numbers/purchase', {
+      body,
+      ...options,
+      idempotencyKey: options.idempotencyKey,
+    });
   }
 
   /**

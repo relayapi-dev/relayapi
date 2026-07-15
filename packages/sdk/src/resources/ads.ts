@@ -29,8 +29,16 @@ export class Ads extends APIResource {
 
   // --- Campaigns ---
 
-  createCampaign(body: AdCreateCampaignParams, options?: RequestOptions): APIPromise<AdCampaignResponse> {
-    return this._client.post('/v1/ads/campaigns', { body, ...options });
+  /** Create a paid campaign using a caller-supplied, retry-stable idempotency key. */
+  createCampaign(
+    body: AdCreateCampaignParams,
+    options: RequestOptions & { idempotencyKey: string },
+  ): APIPromise<AdCampaignResponse> {
+    return this._client.post('/v1/ads/campaigns', {
+      body,
+      ...options,
+      idempotencyKey: options.idempotencyKey,
+    });
   }
 
   retrieveCampaign(id: string, options?: RequestOptions): APIPromise<AdCampaignResponse> {
@@ -65,12 +73,28 @@ export class Ads extends APIResource {
 
   // --- Ads ---
 
-  create(body: AdCreateParams, options?: RequestOptions): APIPromise<AdResponse> {
-    return this._client.post('/v1/ads', { body, ...options });
+  /** Create a paid ad using a caller-supplied, retry-stable idempotency key. */
+  create(
+    body: AdCreateParams,
+    options: RequestOptions & { idempotencyKey: string },
+  ): APIPromise<AdResponse> {
+    return this._client.post('/v1/ads', {
+      body,
+      ...options,
+      idempotencyKey: options.idempotencyKey,
+    });
   }
 
-  boost(body: AdBoostParams, options?: RequestOptions): APIPromise<AdResponse> {
-    return this._client.post('/v1/ads/boost', { body, ...options });
+  /** Boost a post using a caller-supplied, retry-stable idempotency key. */
+  boost(
+    body: AdBoostParams,
+    options: RequestOptions & { idempotencyKey: string },
+  ): APIPromise<AdResponse> {
+    return this._client.post('/v1/ads/boost', {
+      body,
+      ...options,
+      idempotencyKey: options.idempotencyKey,
+    });
   }
 
   retrieve(id: string, options?: RequestOptions): APIPromise<AdResponse> {
@@ -320,17 +344,6 @@ export interface AdUpdateCampaignResponse {
 }
 
 /**
- * Legacy synchronous sync result. No longer returned by {@link Ads.syncAccount}
- * (which is now asynchronous — see {@link AdSyncQueuedResponse}); retained for
- * back-compat with callers that still reference the shape.
- */
-export interface AdSyncResponse {
-  ads_created: number;
-  ads_updated: number;
-  metrics_updated: number;
-}
-
-/**
  * 202 acknowledgement from {@link Ads.syncAccount}. The sync runs asynchronously
  * on the ads queue; poll the list/analytics endpoints for completion.
  */
@@ -489,7 +502,6 @@ export declare namespace Ads {
     type AdAudienceListResponse as AdAudienceListResponse,
     type AdAddAudienceUsersResponse as AdAddAudienceUsersResponse,
     type AdUpdateCampaignResponse as AdUpdateCampaignResponse,
-    type AdSyncResponse as AdSyncResponse,
     type AdSyncQueuedResponse as AdSyncQueuedResponse,
     type AdListAccountsParams as AdListAccountsParams,
     type AdCreateCampaignParams as AdCreateCampaignParams,

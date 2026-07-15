@@ -1,12 +1,11 @@
-import type { APIRoute } from "astro";
 import { env } from "cloudflare:workers";
-import { invitation, member, organization, user, eq } from "@relayapi/db";
-import { and } from "drizzle-orm";
 import { render } from "@react-email/render";
+import { eq, invitation, member, organization, user } from "@relayapi/db";
+import type { APIRoute } from "astro";
+import { and } from "drizzle-orm";
 import { Resend } from "resend";
+import { canManageOrganizationCredentials } from "../../../../lib/credential-authorization";
 import { InvitationEmail } from "../../../../lib/emails/invitation-email";
-
-const INVITE_MANAGER_ROLES = new Set(["owner", "admin"]);
 
 export const POST: APIRoute = async (context) => {
 	const currentUser = context.locals.user;
@@ -20,7 +19,7 @@ export const POST: APIRoute = async (context) => {
 	}
 
 	const db = context.locals.db;
-	const cfEnv = env as Record<string, unknown>;
+	const cfEnv: Cloudflare.Env = env;
 
 	try {
 		const [row] = await db
@@ -58,7 +57,7 @@ export const POST: APIRoute = async (context) => {
 			)
 			.limit(1);
 
-		if (!membership || !INVITE_MANAGER_ROLES.has(membership.role ?? "")) {
+		if (!canManageOrganizationCredentials(membership?.role)) {
 			return Response.json({ error: "Forbidden" }, { status: 403 });
 		}
 
@@ -69,7 +68,7 @@ export const POST: APIRoute = async (context) => {
 			);
 		}
 
-		const baseUrl = (cfEnv.BETTER_AUTH_URL as string | undefined) || context.url.origin;
+		const baseUrl = cfEnv.BETTER_AUTH_URL || context.url.origin;
 		const inviteUrl = `${baseUrl}/invite/${row.id}`;
 
 		const html = await render(
@@ -83,25 +82,32 @@ export const POST: APIRoute = async (context) => {
 
 		const emailMessage = {
 			id: crypto.randomUUID(),
+			organization_id: row.organizationId,
 			to: row.email,
 			subject: `You've been invited to join ${row.organizationName} on RelayAPI`,
 			html,
 			from: "RelayAPI <notifications@relayapi.dev>",
 		};
 
-		const queue = cfEnv.EMAIL_QUEUE as
-			| { send(message: unknown): Promise<void> }
-			| undefined;
+		const queue = cfEnv.EMAIL_QUEUE;
 		if (queue) {
 			await queue.send(emailMessage);
 		} else if (cfEnv.RESEND_API_KEY) {
-			const resend = new Resend(cfEnv.RESEND_API_KEY as string);
-			await resend.emails.send({
-				from: emailMessage.from,
-				to: emailMessage.to,
-				subject: emailMessage.subject,
-				html: emailMessage.html,
-			});
+			const resend = new Resend(cfEnv.RESEND_API_KEY);
+			const { error } = await resend.emails.send(
+				{
+					from: emailMessage.from,
+					to: emailMessage.to,
+					subject: emailMessage.subject,
+					html: emailMessage.html,
+				},
+				{ idempotencyKey: emailMessage.id },
+			);
+			if (error) {
+				throw new Error(
+					`Invitation email provider rejected request: ${error.name}`,
+				);
+			}
 		} else {
 			return Response.json(
 				{ error: "Email service not configured" },

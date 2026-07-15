@@ -1,19 +1,68 @@
-import { describe, expect, it, beforeAll } from "bun:test";
-import { PLATFORMS, } from "../schemas/common";
-import { CreatePostBody, UpdatePostBody } from "../schemas/posts";
+import { beforeAll, describe, expect, it, mock } from "bun:test";
+import { PRICING } from "@relayapi/config";
+import { countChars, PLATFORM_LIMITS } from "../config/platform-limits";
 import { CreateApiKeyBody } from "../schemas/api-keys";
+import { PLATFORMS } from "../schemas/common";
+import { CreatePostBody, UpdatePostBody } from "../schemas/posts";
 import {
-	ValidatePostBody,
-	PostLengthBody,
-	ValidateMediaBody,
 	HashtagCheckBody,
+	PostLengthBody,
 	SubredditCheckQuery,
+	ValidateMediaBody,
+	ValidatePostBody,
 } from "../schemas/tools";
-import { PLATFORM_LIMITS, countChars } from "../config/platform-limits";
-import { PRICING } from "../types";
 import type { Env } from "../types";
 import { createMockDb } from "./__mocks__/db";
 import { createMockEnv as createSharedMockEnv } from "./__mocks__/env";
+
+let performanceUsageSequence = 0;
+let performanceCommittedUnits = 0;
+
+// This suite benchmarks HTTP routing and middleware overhead, not PostgreSQL's
+// usage-ledger transactions. Keep the double aligned with the authoritative
+// usage bucket/reservation contract so endpoint timings do not depend on the
+// lightweight generic DB mock emulating row locks and SQL counter expressions.
+mock.module("../services/usage-meter", () => ({
+	reserveMutationUsage: async (
+		_db: unknown,
+		input: {
+			organizationId: string;
+			units: number;
+			includedUnits: number;
+			periodStart: Date;
+			periodEnd: Date;
+		},
+	) => {
+		performanceUsageSequence += 1;
+		return {
+			ok: true as const,
+			reservation: {
+				id: `ur_performance_${performanceUsageSequence}`,
+				bucketId: "ub_performance",
+				organizationId: input.organizationId,
+				units: input.units,
+				state: "reserved" as const,
+				includedUnits: input.includedUnits,
+				committedUnits: performanceCommittedUnits,
+				reservedUnits: input.units,
+				periodStart: input.periodStart,
+				periodEnd: input.periodEnd,
+			},
+		};
+	},
+	finalizeMutationUsage: async (
+		_db: unknown,
+		reservation: { units: number; includedUnits: number },
+		status: number,
+	) => {
+		if (status < 400) performanceCommittedUnits += reservation.units;
+		return {
+			includedUnits: reservation.includedUnits,
+			committedUnits: performanceCommittedUnits,
+			reservedUnits: 0,
+		};
+	},
+}));
 
 // ===========================================================================
 // Helpers
@@ -33,7 +82,11 @@ interface BenchResult {
 	opsPerSec: number;
 }
 
-function benchmark(name: string, fn: () => void, iterations = ITERATIONS): BenchResult {
+function benchmark(
+	name: string,
+	fn: () => void,
+	iterations = ITERATIONS,
+): BenchResult {
 	// Warm-up
 	for (let i = 0; i < WARM_UP; i++) fn();
 
@@ -125,18 +178,22 @@ class MockKV {
 		this.store.delete(key);
 	}
 
-	async list(_opts?: unknown): Promise<{ keys: Array<{ name: string }>; list_complete: boolean }> {
+	async list(
+		_opts?: unknown,
+	): Promise<{ keys: Array<{ name: string }>; list_complete: boolean }> {
 		return {
 			keys: Array.from(this.store.keys()).map((name) => ({ name })),
 			list_complete: true,
 		};
 	}
 
-	async getWithMetadata(key: string, _opts?: unknown): Promise<{ value: string | null; metadata: unknown }> {
+	async getWithMetadata(
+		key: string,
+		_opts?: unknown,
+	): Promise<{ value: string | null; metadata: unknown }> {
 		return { value: this.store.get(key) ?? null, metadata: null };
 	}
 }
-
 
 // ===========================================================================
 // Setup mock app
@@ -187,7 +244,10 @@ async function makeRequest(
 	const res = await appModule.fetch(
 		new Request(`http://localhost${path}`, init),
 		env,
-		{ waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext,
+		{
+			waitUntil: () => {},
+			passThroughOnException: () => {},
+		} as unknown as ExecutionContext,
 	);
 	const time = performance.now() - start;
 	return { status: res.status, time };
@@ -368,7 +428,8 @@ describe("Platform limits performance", () => {
 	});
 
 	it("full validation simulation (content + media for all platforms)", () => {
-		const content = "This is a test post with some content that is medium length";
+		const content =
+			"This is a test post with some content that is medium length";
 		const r = benchmark("full platform validation", () => {
 			for (const platform of PLATFORMS) {
 				const limits = PLATFORM_LIMITS[platform];
@@ -489,8 +550,12 @@ describe("HTTP endpoint performance", () => {
 		env = createMockEnv();
 		const mockDb = createMockDb();
 		const now = new Date();
-		const cycleStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-		const cycleEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+		const cycleStart = new Date(
+			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+		);
+		const cycleEnd = new Date(
+			Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1),
+		);
 		mockDb._seed("organizationSubscriptions", [
 			{
 				id: "sub_perftest",
@@ -501,14 +566,6 @@ describe("HTTP endpoint performance", () => {
 				monthlyPriceCents: PRICING.monthlyPriceCents,
 				aiEnabled: true,
 				dailyToolLimit: 500,
-			},
-		]);
-		mockDb._seed("usageRecords", [
-			{
-				organizationId: "org_perftest",
-				periodStart: cycleStart,
-				apiCallsCount: 0,
-				apiCallsIncluded: 100_000,
 			},
 		]);
 		mockDb._seed("connectionLogs", [
@@ -535,8 +592,6 @@ describe("HTTP endpoint performance", () => {
 			calls_included: 100_000,
 			ai_enabled: true,
 			daily_tool_limit: 500,
-			rate_limit_max: 100000,
-			rate_limit_window: 60,
 		};
 		await (env.KV as unknown as MockKV).put(
 			`apikey:${TEST_API_KEY_HASH}`,
@@ -581,7 +636,10 @@ describe("HTTP endpoint performance", () => {
 			const res = await appModule.fetch(
 				new Request("http://localhost/health"),
 				env,
-				{ waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext,
+				{
+					waitUntil: () => {},
+					passThroughOnException: () => {},
+				} as unknown as ExecutionContext,
 			);
 			times.push(performance.now() - start);
 			expect(res.status).toBe(200);
@@ -626,7 +684,10 @@ describe("HTTP endpoint performance", () => {
 					headers: { Authorization: "Bearer invalid-key" },
 				}),
 				env,
-				{ waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext,
+				{
+					waitUntil: () => {},
+					passThroughOnException: () => {},
+				} as unknown as ExecutionContext,
 			);
 			times.push(performance.now() - start);
 			expect(res.status).toBe(401);
@@ -645,7 +706,11 @@ describe("HTTP endpoint performance", () => {
 		const iterations = 200;
 
 		for (let i = 0; i < iterations; i++) {
-			const { status, time } = await makeRequest(env, "GET", "/v1/queue/next-slot");
+			const { status, time } = await makeRequest(
+				env,
+				"GET",
+				"/v1/queue/next-slot",
+			);
 			times.push(time);
 			expect(status).toBe(200);
 		}
@@ -670,7 +735,7 @@ describe("HTTP endpoint performance", () => {
 				{
 					name: `Perf Queue ${i}`,
 					timezone: "UTC",
-					slots: [{ day_of_week: (i % 7), time: "09:00", timezone: "UTC" }],
+					slots: [{ day_of_week: i % 7, time: "09:00", timezone: "UTC" }],
 				},
 			);
 			times.push(time);
@@ -735,7 +800,10 @@ describe("HTTP endpoint performance", () => {
 			const res = await appModule.fetch(
 				new Request("http://localhost/openapi.json"),
 				env,
-				{ waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext,
+				{
+					waitUntil: () => {},
+					passThroughOnException: () => {},
+				} as unknown as ExecutionContext,
 			);
 			times.push(performance.now() - start);
 			expect(res.status).toBe(200);
@@ -746,7 +814,7 @@ describe("HTTP endpoint performance", () => {
 		console.log(
 			`  GET /openapi.json: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
-		expect(avg).toBeLessThan(250);
+		expect(avg).toBeLessThan(50);
 	});
 });
 
@@ -793,9 +861,7 @@ describe("Target resolution performance", () => {
 			for (const target of targets) {
 				if (target.startsWith("acc_")) {
 					// account ID
-				} else if (
-					(PLATFORMS as readonly string[]).includes(target)
-				) {
+				} else if ((PLATFORMS as readonly string[]).includes(target)) {
 					// platform
 				} else {
 					// invalid
@@ -842,9 +908,7 @@ describe("JSON serialization performance", () => {
 					],
 				},
 			},
-			media: [
-				{ url: "https://cdn.example.com/image.jpg", type: "image" },
-			],
+			media: [{ url: "https://cdn.example.com/image.jpg", type: "image" }],
 			created_at: "2026-03-15T10:00:00Z",
 			updated_at: "2026-03-15T10:01:00Z",
 		};

@@ -64,35 +64,70 @@ export function thumbnailUrlFor(storageKey: string): string {
 	return `https://${RELAY_THUMBNAIL_HOST}/${encoded}`;
 }
 
+export type ThumbnailGenerationResult =
+	| {
+			status: "generated";
+			thumbnailKey: string;
+			thumbnailUrl: string;
+	  }
+	| { status: "unsupported"; reason: string }
+	| { status: "source_missing"; reason: string }
+	| { status: "transient_failure"; error: string };
+
+function transientFailure(error: unknown): ThumbnailGenerationResult {
+	return {
+		status: "transient_failure",
+		error: error instanceof Error ? error.message : String(error),
+	};
+}
+
 /**
  * Generate and store a tiny, aggressively-optimized AVIF preview for an uploaded
- * original, returning the thumbnail key + URL, or null when generation isn't
- * possible (unsupported type, missing binding, original absent, or oversized
- * input). Best-effort — callers treat null as "no thumbnail" and never fail the
- * upload over it.
+ * original. The typed result deliberately distinguishes terminal outcomes from
+ * retryable infrastructure/provider failures; callers persist that distinction
+ * instead of poisoning a media row with an empty-string sentinel.
  */
 export async function generateAndStoreThumbnail(
 	env: Env,
 	storageKey: string,
 	mimeType: string | null | undefined,
-): Promise<{ thumbnailKey: string; thumbnailUrl: string } | null> {
-	if (!isThumbnailable(mimeType)) return null;
-	if (!env.IMAGES) return null; // Encoding requires the Images binding.
-
-	const original = await env.MEDIA_BUCKET.get(storageKey);
-	if (!original) return null;
-
+): Promise<ThumbnailGenerationResult> {
+	if (!isThumbnailable(mimeType)) {
+		return {
+			status: "unsupported",
+			reason: `No thumbnail pipeline for MIME type ${mimeType ?? "unknown"}`,
+		};
+	}
+	if (!env.IMAGES) {
+		return transientFailure("Cloudflare Images binding is unavailable");
+	}
 	try {
+		const original = await env.MEDIA_BUCKET.get(storageKey);
+		if (!original) {
+			return {
+				status: "source_missing",
+				reason: "Original media object is missing from R2",
+			};
+		}
+
 		let thumbBody: ReadableStream<Uint8Array> | null;
 
 		if (isVideoMime(mimeType)) {
-			if (!env.MEDIA) return null; // Need Media Transformations for video frames.
+			if (!env.MEDIA) {
+				return transientFailure(
+					"Cloudflare Media Transformations binding is unavailable",
+				);
+			}
 			// 1) Extract a still poster frame from the video original.
 			const frame = await env.MEDIA.input(original.body)
 				.transform({ width: THUMBNAIL_WIDTH })
 				.output({ mode: "frame", time: "0s", format: "jpg" })
 				.response();
-			if (!frame.ok || !frame.body) return null;
+			if (!frame.ok || !frame.body) {
+				return transientFailure(
+					`Video frame extraction failed with HTTP ${frame.status}`,
+				);
+			}
 			// 2) Re-encode the frame into a hyper-optimized AVIF.
 			const thumb = await env.IMAGES.input(frame.body)
 				.transform({ width: THUMBNAIL_WIDTH })
@@ -103,8 +138,14 @@ export async function generateAndStoreThumbnail(
 				});
 			thumbBody = thumb.response().body;
 		} else {
-			// Images binding caps input size; skip oversized originals gracefully.
-			if (original.size > IMAGES_MAX_INPUT_BYTES) return null;
+			// The Images binding has a hard input ceiling. This source cannot become
+			// transformable through retries, so record a terminal unsupported result.
+			if (original.size > IMAGES_MAX_INPUT_BYTES) {
+				return {
+					status: "unsupported",
+					reason: `Original exceeds the ${IMAGES_MAX_INPUT_BYTES}-byte Images input limit`,
+				};
+			}
 			const thumb = await env.IMAGES.input(original.body)
 				.transform({ width: THUMBNAIL_WIDTH })
 				// anim:false flattens animated GIF/WebP to a single still frame.
@@ -116,16 +157,22 @@ export async function generateAndStoreThumbnail(
 			thumbBody = thumb.response().body;
 		}
 
-		if (!thumbBody) return null;
+		if (!thumbBody) {
+			return transientFailure("Thumbnail transform returned an empty body");
+		}
 
 		const thumbnailKey = thumbnailKeyFor(storageKey);
 		await env.THUMBNAIL_BUCKET.put(thumbnailKey, thumbBody, {
 			httpMetadata: { contentType: THUMBNAIL_FORMAT },
 		});
 
-		return { thumbnailKey, thumbnailUrl: thumbnailUrlFor(storageKey) };
+		return {
+			status: "generated",
+			thumbnailKey,
+			thumbnailUrl: thumbnailUrlFor(storageKey),
+		};
 	} catch (err) {
 		console.error(`[Thumbnail] Generation failed for ${storageKey}:`, err);
-		return null;
+		return transientFailure(err);
 	}
 }

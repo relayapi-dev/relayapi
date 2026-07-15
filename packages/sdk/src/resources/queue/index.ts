@@ -7,6 +7,9 @@ export {
   type QueuePreviewParams,
   type QueueFindSlotParams,
   type QueueFindSlotResponse,
+  type QueueListFailuresParams,
+  type QueueListFailuresResponse,
+  type QueueReplayFailureResponse,
 } from './queue';
 export {
   Slots,

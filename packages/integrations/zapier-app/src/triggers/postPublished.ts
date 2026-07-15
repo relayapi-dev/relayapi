@@ -1,4 +1,5 @@
 import type { Bundle, ZObject } from 'zapier-platform-core';
+import { unsubscribeWebhook } from '../lib/webhooks';
 
 const performSubscribe = async (z: ZObject, bundle: Bundle) => {
   const response = await z.request({
@@ -8,19 +9,6 @@ const performSubscribe = async (z: ZObject, bundle: Bundle) => {
     body: z.JSON.stringify({
       url: bundle.targetUrl,
       events: ['post.published'],
-    }),
-  });
-
-  return response.data;
-};
-
-const performUnsubscribe = async (z: ZObject, bundle: Bundle) => {
-  const response = await z.request({
-    url: 'https://api.relayapi.dev/v1/webhooks',
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: z.JSON.stringify({
-      id: bundle.subscribeData?.id,
     }),
   });
 
@@ -57,7 +45,7 @@ const postPublished = {
     type: 'hook' as const,
 
     performSubscribe,
-    performUnsubscribe,
+    performUnsubscribe: unsubscribeWebhook,
     perform,
     performList,
 

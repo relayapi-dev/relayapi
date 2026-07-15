@@ -1,4 +1,10 @@
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 /**
  * Beehiiv publisher.
@@ -8,7 +14,7 @@ import { classifyPublishError, PublishError, type Publisher, type PublishRequest
  * Beehiiv API v2:
  * - Create Post: https://developers.beehiiv.com/api-reference/posts/create
  *   POST /v2/publications/{publicationId}/posts
- *   Body: { title (required), body_content (raw HTML), subtitle, status: "confirmed"|"draft" }
+ *   Body: { title (required), body_content (raw HTML), status: "confirmed"|"draft" }
  *   Response: { data: { id } }
  * - Show Post: https://developers.beehiiv.com/api-reference/posts/show
  *   GET /v2/publications/{publicationId}/posts/{postId}
@@ -32,20 +38,24 @@ export const beehiivPublisher: Publisher = {
 			const apiKey = request.account.access_token;
 			const metadata = request.account.metadata ?? undefined;
 			const publicationId =
-				(metadata?.publication_id as string) ?? request.account.platform_account_id;
+				(metadata?.publication_id as string) ??
+				request.account.platform_account_id;
 
 			if (!apiKey || !publicationId) {
-				throw new Error("CONTENT_ERROR: Beehiiv API key and publication ID are required.");
+				throw new Error(
+					"CONTENT_ERROR: Beehiiv API key and publication ID are required.",
+				);
 			}
 
 			const opts = request.target_options;
 
 			// Newsletter-specific fields from target_options
-			const subject = (opts.subject as string) ??
+			const subject =
+				(opts.subject as string) ??
 				(request.content?.split("\n")[0]?.slice(0, 100) || "Newsletter Update");
 			const previewText = opts.preview_text as string | undefined;
-			const bodyContent = (opts.content_html as string) ??
-				wrapInHtml(request.content ?? "");
+			const bodyContent =
+				(opts.content_html as string) ?? wrapInHtml(request.content ?? "");
 
 			// Add images from media as inline HTML if not already in content_html
 			let finalContent = bodyContent;
@@ -57,25 +67,26 @@ export const beehiivPublisher: Publisher = {
 				finalContent = imgHtml + finalContent;
 			}
 
-			// Beehiiv Create Post API
-			// Docs: https://developers.beehiiv.com/api-reference/posts/create
-			// Field: body_content (NOT content_html) for raw HTML
-			// Field: subtitle is web subtitle (not email preview text)
+			// Beehiiv Create Post API.
+			// Official docs: https://developers.beehiiv.com/api-reference/posts/create
+			// Section "Request" -> body_content, email_settings, status, scheduled_at.
 			const body: Record<string, unknown> = {
 				title: subject,
 				body_content: finalContent,
 				status: "confirmed", // send immediately
 			};
 
-			if (previewText) {
-				body.subtitle = previewText;
-			}
+			// Section "Request" -> email_settings uses these exact field names;
+			// subtitle is a separate web-post field and is not email preview text.
+			body.email_settings = {
+				email_subject_line: subject,
+				...(previewText ? { email_preview_text: previewText } : {}),
+			};
 
-			// Scheduling: if scheduled_at is provided, use "draft" status and set scheduled_at
-			// Docs: https://developers.beehiiv.com/api-reference/posts/create
+			// Section "Request" -> status: confirmed publishes immediately or at
+			// scheduled_at; the docs explicitly state that a draft cannot be scheduled.
 			const scheduledAt = opts.scheduled_at as string | undefined;
 			if (scheduledAt) {
-				body.status = "draft";
 				body.scheduled_at = scheduledAt;
 			}
 
@@ -111,12 +122,21 @@ export const beehiivPublisher: Publisher = {
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 
 				if (res.status === 401) {
-					throw new PublishError(`TOKEN_EXPIRED: Beehiiv API key is invalid: ${detail}`, { statusCode: res.status, detail: raw });
+					throw new PublishError(
+						`TOKEN_EXPIRED: Beehiiv API key is invalid: ${detail}`,
+						{ statusCode: res.status, detail: raw },
+					);
 				}
 				if (res.status === 429) {
-					throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
+					throw new PublishError(`RATE_LIMITED: ${detail}`, {
+						statusCode: res.status,
+						detail: raw,
+					});
 				}
-				throw new PublishError(`Beehiiv publish failed (${res.status}): ${detail}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(
+					`Beehiiv publish failed (${res.status}): ${detail}`,
+					{ statusCode: res.status, detail: raw },
+				);
 			}
 
 			// Create Post response only returns { data: { id } }
@@ -152,7 +172,7 @@ export const beehiivPublisher: Publisher = {
 				platform_url: platformUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

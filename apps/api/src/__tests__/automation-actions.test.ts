@@ -8,7 +8,15 @@
 // and field_set (custom field upsert) — and let the unit-level action_group
 // test cover dispatcher shape.
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	it,
+	mock,
+} from "bun:test";
 import {
 	contacts,
 	createDb,
@@ -20,15 +28,19 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import { encryptAccountToken } from "../lib/account-token-crypto";
 import { dispatchAction } from "../services/automations/actions";
 import type { RunContext } from "../services/automations/types";
 
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 const originalFetch = globalThis.fetch;
 
 let dbAvailable = false;
@@ -61,7 +73,9 @@ async function teardownFixtureOrg() {
 	await db
 		.delete(customFieldDefinitions)
 		.where(eq(customFieldDefinitions.organizationId, orgId));
-	await db.delete(socialAccounts).where(eq(socialAccounts.organizationId, orgId));
+	await db
+		.delete(socialAccounts)
+		.where(eq(socialAccounts.organizationId, orgId));
 	await db.delete(contacts).where(eq(contacts.organizationId, orgId));
 	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
 	await db.delete(organization).where(eq(organization.id, orgId));
@@ -92,20 +106,27 @@ function makeCtx(contactId: string): RunContext {
 		context: { contact: { name: "alice" } },
 		now: new Date(),
 		db,
-		env: { db },
+		env: { db, ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 	};
 }
 
 async function createSocialAccount(platform: string, accessToken: string) {
+	const id = generateId("acc_");
 	const [acc] = await db
 		.insert(socialAccounts)
 		.values({
+			id,
 			organizationId: orgId,
 			workspaceId,
 			platform: platform as never,
 			platformAccountId: `platacc_${platform}_${Date.now()}`,
 			username: `actions_${platform}`,
-			accessToken,
+			accessToken: await encryptAccountToken(
+				accessToken,
+				TEST_ENCRYPTION_KEY,
+				id,
+				"access_token",
+			),
 		})
 		.returning();
 	if (!acc) throw new Error("social account insert failed");
@@ -113,6 +134,7 @@ async function createSocialAccount(platform: string, accessToken: string) {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixtureOrg();
 		dbAvailable = true;

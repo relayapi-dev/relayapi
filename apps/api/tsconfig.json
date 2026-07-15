@@ -9,6 +9,7 @@
     // tightened "rootDir must contain all source files" check (TS6059).
     "rootDir": "../..",
     "paths": {
+      "@relayapi/config": ["../../packages/config/src/index.ts"],
       "@relayapi/db": ["../../packages/db/src/index.ts"]
     }
   },

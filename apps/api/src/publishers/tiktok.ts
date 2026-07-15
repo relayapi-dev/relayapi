@@ -1,4 +1,10 @@
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 const TIKTOK_API = "https://open.tiktokapis.com/v2";
 
@@ -15,8 +21,19 @@ async function tiktokFetch(
 			...(options.headers ?? {}),
 		},
 	});
-	if (res.status === 401) throw new PublishError("TOKEN_EXPIRED: TikTok access token invalid or expired", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
-	if (res.status === 429) throw new PublishError("RATE_LIMITED: TikTok rate limit exceeded", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 401)
+		throw new PublishError(
+			"TOKEN_EXPIRED: TikTok access token invalid or expired",
+			{
+				statusCode: res.status,
+				detail: `HTTP ${res.status} ${res.statusText}`,
+			},
+		);
+	if (res.status === 429)
+		throw new PublishError("RATE_LIMITED: TikTok rate limit exceeded", {
+			statusCode: res.status,
+			detail: `HTTP ${res.status} ${res.statusText}`,
+		});
 	return res;
 }
 
@@ -42,6 +59,24 @@ interface TikTokStatusResponse {
 	};
 }
 
+export function parseTikTokStatusResponse(raw: string): TikTokStatusResponse {
+	const status = JSON.parse(raw) as TikTokStatusResponse;
+	// Official docs: https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status
+	// Section "Nested data struct" defines publicaly_available_post_id as
+	// list<int64>. JSON.parse converts an unquoted 19-digit id to an imprecise
+	// Number, so recover the original decimal tokens from the bounded JSON body.
+	const idList = /"publicaly_available_post_id"\s*:\s*\[([^\]]*)\]/u.exec(
+		raw,
+	)?.[1];
+	if (idList !== undefined && status.data) {
+		status.data.publicaly_available_post_id = Array.from(
+			idList.matchAll(/"(\d+)"|(\d+)/gu),
+			(match) => match[1] ?? match[2] ?? "",
+		).filter((id) => id.length > 0);
+	}
+	return status;
+}
+
 async function pollPublishStatus(
 	accessToken: string,
 	publishId: string,
@@ -56,21 +91,43 @@ async function pollPublishStatus(
 
 		// TikTok Content Posting API — Fetch publish status
 		// https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status
-		const res = await tiktokFetch(
-			`${TIKTOK_API}/post/publish/status/fetch/`,
-			accessToken,
-			{
-				method: "POST",
-				body: JSON.stringify({ publish_id: publishId }),
+		const res = await fetch(`${TIKTOK_API}/post/publish/status/fetch/`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${accessToken}`,
+				"Content-Type": "application/json; charset=UTF-8",
 			},
-		);
+			body: JSON.stringify({ publish_id: publishId }),
+		});
+		if (res.status === 401) {
+			void res.body?.cancel().catch(() => {});
+			throw new PublishError(
+				"TikTok access token expired after the publish job was accepted; its outcome must be reconciled instead of replayed",
+				{
+					code: "PUBLISH_OUTCOME_UNKNOWN",
+					statusCode: res.status,
+					detail: `HTTP ${res.status} ${res.statusText}`,
+				},
+			);
+		}
+		if (res.status === 429) {
+			void res.body?.cancel().catch(() => {});
+			throw new PublishError("RATE_LIMITED: TikTok rate limit exceeded", {
+				statusCode: res.status,
+				detail: `HTTP ${res.status} ${res.statusText}`,
+			});
+		}
 
 		if (!res.ok) {
+			await res.body?.cancel().catch(() => {});
 			httpFailures++;
 			if (httpFailures >= 5) {
 				throw new PublishError(
 					`TikTok publish status polling failed after ${httpFailures} consecutive HTTP errors (last status: ${res.status}).`,
-					{ statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` },
+					{
+						statusCode: res.status,
+						detail: `HTTP ${res.status} ${res.statusText}`,
+					},
 				);
 			}
 			continue;
@@ -78,10 +135,19 @@ async function pollPublishStatus(
 
 		httpFailures = 0;
 
-		const status = (await res.json()) as TikTokStatusResponse;
+		// Status responses are small provider JSON documents. Read the bounded body
+		// as text so documented int64 post ids can be preserved exactly.
+		const status = parseTikTokStatusResponse(await res.text());
 
 		if (status.error?.code && status.error.code !== "ok") {
-			return status;
+			throw new PublishError(
+				status.error.message ??
+					`TikTok publish status could not be determined (${status.error.code})`,
+				{
+					code: "PUBLISH_OUTCOME_UNKNOWN",
+					detail: `TikTok status API error: ${status.error.code}`,
+				},
+			);
 		}
 
 		const publishStatus = status.data?.status;
@@ -102,12 +168,10 @@ async function pollPublishStatus(
 		// PROCESSING_UPLOAD or PROCESSING_DOWNLOAD — keep polling
 	}
 
-	return {
-		error: {
-			code: "POLL_TIMEOUT",
-			message: "TikTok publish status polling timed out.",
-		},
-	};
+	throw new PublishError(
+		"TikTok publish status polling timed out after the publish job was accepted",
+		{ code: "PUBLISH_OUTCOME_UNKNOWN" },
+	);
 }
 
 export const tiktokPublisher: Publisher = {
@@ -137,6 +201,21 @@ export const tiktokPublisher: Publisher = {
 			// Determine if this is a video or photo post
 			const hasVideo = media.some((m) => m.type === "video");
 			const hasImages = media.some((m) => !m.type || m.type === "image");
+			const hasUnsupportedMedia = media.some(
+				(m) => m.type && m.type !== "image" && m.type !== "video",
+			);
+			if (hasUnsupportedMedia) {
+				// Official docs: https://developers.tiktok.com/doc/content-posting-api-reference-direct-post
+				// and https://developers.tiktok.com/doc/content-posting-api-reference-photo-post/
+				// Direct Post accepts VIDEO or PHOTO media; documents are unsupported.
+				return {
+					success: false,
+					error: {
+						code: "UNSUPPORTED_MEDIA_TYPE",
+						message: "TikTok Direct Post supports video or photo media only.",
+					},
+				};
+			}
 
 			// Cannot mix photos and videos
 			if (hasVideo && hasImages) {
@@ -291,14 +370,23 @@ async function publishVideo(
 
 	// TikTok Content Posting API — Initialize video publish
 	// https://developers.tiktok.com/doc/content-posting-api-reference-direct-post
-	const res = await tiktokFetch(
-		`${TIKTOK_API}/post/publish/video/init/`,
-		accessToken,
-		{
-			method: "POST",
-			body: JSON.stringify(body),
-		},
-	);
+	let res: Response;
+	try {
+		res = await tiktokFetch(
+			`${TIKTOK_API}/post/publish/video/init/`,
+			accessToken,
+			{
+				method: "POST",
+				body: JSON.stringify(body),
+			},
+		);
+	} catch (error) {
+		const result = classifyPublishError(error, {
+			safeToRetryRateLimit: true,
+		});
+		if (result.error?.code === "RATE_LIMITED") return result;
+		throw error;
+	}
 
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
@@ -306,7 +394,10 @@ async function publishVideo(
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
 			res.statusText;
-		throw new PublishError(`TikTok video init failed: ${detail}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`TikTok video init failed: ${detail}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	const initResult = (await res.json()) as TikTokPublishResponse;
@@ -315,12 +406,28 @@ async function publishVideo(
 		// Classify TikTok-specific error codes
 		const errCode = initResult.error.code;
 		if (errCode === "access_token_invalid" || errCode === "token_expired") {
-			throw new Error(`TOKEN_EXPIRED: ${initResult.error.message ?? "TikTok token invalid"}`);
+			throw new Error(
+				`TOKEN_EXPIRED: ${initResult.error.message ?? "TikTok token invalid"}`,
+			);
 		}
-		if (errCode === "rate_limit_exceeded" || errCode === "spam_risk_too_many_posts") {
+		if (errCode === "rate_limit_exceeded") {
 			return {
 				success: false,
-				error: { code: "RATE_LIMITED", message: initResult.error.message ?? "TikTok rate limit exceeded" },
+				retry: { disposition: "safe_to_retry" },
+				error: {
+					code: "RATE_LIMITED",
+					message: initResult.error.message ?? "TikTok rate limit exceeded",
+				},
+			};
+		}
+		if (errCode === "spam_risk_too_many_posts") {
+			return {
+				success: false,
+				error: {
+					code: errCode,
+					message:
+						initResult.error.message ?? "TikTok rejected the posting frequency",
+				},
 			};
 		}
 		return {
@@ -396,8 +503,9 @@ async function publishPhotos(
 	// Photo size limit: 20MB per image (validated server-side for PULL_FROM_URL)
 	// Docs: https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide
 
-	// Photo title: max 90 chars
-	const title = content.slice(0, 90);
+	// Photo title: max 90 characters. Slice Unicode code points so a supplementary
+	// character is never split into an invalid lone surrogate.
+	const title = Array.from(content).slice(0, 90).join("");
 
 	// Description for photo carousels
 	const description = (opts.description as string | undefined) ?? content;
@@ -423,8 +531,10 @@ async function publishPhotos(
 	}
 	// brand_content_toggle and brand_organic_toggle are optional for DIRECT_POST photo posts
 	// Docs: https://developers.tiktok.com/doc/content-posting-api-reference-photo-post
-	postInfo.brand_content_toggle = (opts.brand_content_toggle as boolean) ?? false;
-	postInfo.brand_organic_toggle = (opts.brand_organic_toggle as boolean) ?? false;
+	postInfo.brand_content_toggle =
+		(opts.brand_content_toggle as boolean) ?? false;
+	postInfo.brand_organic_toggle =
+		(opts.brand_organic_toggle as boolean) ?? false;
 
 	// photo_cover_index belongs in source_info, not post_info
 	const sourceInfo: Record<string, unknown> = {
@@ -442,14 +552,23 @@ async function publishPhotos(
 
 	// TikTok Content Posting API — Initialize photo publish
 	// https://developers.tiktok.com/doc/content-posting-api-reference-photo-post
-	const res = await tiktokFetch(
-		`${TIKTOK_API}/post/publish/content/init/`,
-		accessToken,
-		{
-			method: "POST",
-			body: JSON.stringify(body),
-		},
-	);
+	let res: Response;
+	try {
+		res = await tiktokFetch(
+			`${TIKTOK_API}/post/publish/content/init/`,
+			accessToken,
+			{
+				method: "POST",
+				body: JSON.stringify(body),
+			},
+		);
+	} catch (error) {
+		const result = classifyPublishError(error, {
+			safeToRetryRateLimit: true,
+		});
+		if (result.error?.code === "RATE_LIMITED") return result;
+		throw error;
+	}
 
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
@@ -457,12 +576,35 @@ async function publishPhotos(
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
 			res.statusText;
-		throw new PublishError(`TikTok photo init failed: ${detail}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`TikTok photo init failed: ${detail}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	const initResult = (await res.json()) as TikTokPublishResponse;
 
 	if (initResult.error?.code && initResult.error.code !== "ok") {
+		if (initResult.error.code === "rate_limit_exceeded") {
+			return {
+				success: false,
+				retry: { disposition: "safe_to_retry" },
+				error: {
+					code: "RATE_LIMITED",
+					message: initResult.error.message ?? "TikTok rate limit exceeded",
+				},
+			};
+		}
+		if (initResult.error.code === "spam_risk_too_many_posts") {
+			return {
+				success: false,
+				error: {
+					code: initResult.error.code,
+					message:
+						initResult.error.message ?? "TikTok rejected the posting frequency",
+				},
+			};
+		}
 		return {
 			success: false,
 			error: {

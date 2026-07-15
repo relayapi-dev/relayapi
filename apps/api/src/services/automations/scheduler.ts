@@ -15,7 +15,7 @@ import {
 	createDb,
 	type Database,
 } from "@relayapi/db";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Env } from "../../types";
 import { matchAndEnrollOrBinding } from "./binding-router";
 import { incrementCounter, runLoop, updateRunOptimistic } from "./runner";
@@ -33,6 +33,28 @@ const DEFAULT_STALE_TIMEOUT_MINUTES = 5;
 // After this many stale-reclaim cycles a job is marked 'failed' rather than
 // re-queued, so a job that repeatedly kills its worker can't retry forever.
 const MAX_JOB_ATTEMPTS = 5;
+
+export function automationScheduleOccurrenceBase(
+	entrypointId: string,
+	scheduledFor: Date,
+): string {
+	return `schedule:${entrypointId}:${scheduledFor.toISOString()}`;
+}
+
+export function automationScheduleOccurrenceId(
+	entrypointId: string,
+	scheduledFor: Date,
+	cursorOffset = 0,
+): string {
+	return `${automationScheduleOccurrenceBase(entrypointId, scheduledFor)}:page:${cursorOffset}`;
+}
+
+export function automationScheduleContactOccurrenceId(
+	rootOccurrenceId: string,
+	contactId: string,
+): string {
+	return `${rootOccurrenceId}:contact:${contactId}`;
+}
 
 export type ProcessScheduledJobsOptions = {
 	batchSize?: number;
@@ -56,25 +78,27 @@ export async function processScheduledJobs(
 	const batchSize = opts.batchSize ?? DEFAULT_BATCH_SIZE;
 	const staleMin = opts.staleTimeoutMinutes ?? DEFAULT_STALE_TIMEOUT_MINUTES;
 
-	// 1. Reclaim stale 'processing' rows. Cap retries: a job that consistently
-	//    kills its worker before the failed-mark (CPU/wall limit, OOM) would
-	//    otherwise be re-dispatched forever, re-executing side effects each time.
-	//    Once attempts reach the cap, mark it 'failed' instead of re-queuing.
+	// 1. Reclaim expired leases. Jobs that crossed their effect boundary become
+	//    explicit unknown outcomes and are never replayed automatically. Jobs that
+	//    died before that boundary remain safe to retry under the same occurrence.
 	await db.execute(sql`
 		UPDATE automation_scheduled_jobs
 		   SET status = CASE
-		                  WHEN attempts + 1 >= ${MAX_JOB_ATTEMPTS} THEN 'failed'
+		                  WHEN effect_started_at IS NOT NULL THEN 'unknown'
+		                  WHEN attempts >= ${MAX_JOB_ATTEMPTS} THEN 'failed'
 		                  ELSE 'pending'
 		                END,
-		       attempts = attempts + 1,
 		       claimed_at = NULL,
+		       lease_expires_at = NULL,
 		       error = CASE
-		                  WHEN attempts + 1 >= ${MAX_JOB_ATTEMPTS}
-		                    THEN 'max attempts exceeded after stale reclaim'
+		                  WHEN effect_started_at IS NOT NULL
+		                    THEN 'lease expired after scheduled effect processing began'
+		                  WHEN attempts >= ${MAX_JOB_ATTEMPTS}
+		                    THEN 'max attempts exceeded'
 		                  ELSE error
 		                END
 		 WHERE status = 'processing'
-		   AND claimed_at < NOW() - make_interval(mins => ${staleMin})
+		   AND COALESCE(lease_expires_at, claimed_at + make_interval(mins => ${staleMin})) < NOW()
 	`);
 
 	// 2. Batch-claim pending rows whose run_at is due.
@@ -85,22 +109,33 @@ export async function processScheduledJobs(
 			  FROM automation_scheduled_jobs
 			 WHERE status = 'pending'
 			   AND run_at <= NOW()
+			   AND attempts < ${MAX_JOB_ATTEMPTS}
 			 ORDER BY run_at ASC
 			 LIMIT ${batchSize}
 			 FOR UPDATE SKIP LOCKED
 		)
 		UPDATE automation_scheduled_jobs j
 		   SET status = 'processing',
-		       claimed_at = NOW()
+		       claimed_at = NOW(),
+		       lease_expires_at = NOW() + make_interval(mins => ${staleMin}),
+		       lease_token = lease_token + 1,
+		       attempts = attempts + 1,
+		       effect_started_at = NULL,
+		       error = NULL
 		  FROM claimed
 		 WHERE j.id = claimed.id
-		RETURNING j.id, j.run_id, j.job_type, j.automation_id, j.entrypoint_id, j.payload
+		RETURNING j.id, j.run_id, j.job_type, j.automation_id, j.entrypoint_id,
+		          j.run_at, j.occurrence_id, j.lease_token, j.attempts, j.payload
 	`)) as unknown as Array<{
 		id: string;
 		run_id: string | null;
 		job_type: string;
 		automation_id: string | null;
 		entrypoint_id: string | null;
+		run_at: Date;
+		occurrence_id: string;
+		lease_token: number;
+		attempts: number;
 		payload: unknown;
 	}>;
 
@@ -108,30 +143,80 @@ export async function processScheduledJobs(
 	let failed = 0;
 
 	for (const job of claimed) {
+		let effectStarted = false;
+		const markEffectStarted = async (): Promise<void> => {
+			if (effectStarted) return;
+			const [armed] = await db
+				.update(automationScheduledJobs)
+				.set({ effectStartedAt: new Date() })
+				.where(
+					and(
+						eq(automationScheduledJobs.id, job.id),
+						eq(automationScheduledJobs.status, "processing"),
+						eq(automationScheduledJobs.leaseToken, job.lease_token),
+					),
+				)
+				.returning({ id: automationScheduledJobs.id });
+			if (!armed) throw new Error("Scheduled job lease lost");
+			effectStarted = true;
+		};
 		try {
-			const outcome = await dispatchJob(db, env, job);
+			const outcome = await dispatchJob(db, env, job, markEffectStarted);
 			if (outcome === "done") {
-				processed++;
-				await db
+				const [completed] = await db
 					.update(automationScheduledJobs)
-					.set({ status: "done" })
-					.where(eq(automationScheduledJobs.id, job.id));
+					.set({ status: "done", leaseExpiresAt: null })
+					.where(
+						and(
+							eq(automationScheduledJobs.id, job.id),
+							eq(automationScheduledJobs.status, "processing"),
+							eq(automationScheduledJobs.leaseToken, job.lease_token),
+						),
+					)
+					.returning({ id: automationScheduledJobs.id });
+				if (completed) processed++;
 			} else {
-				failed++;
-				await db
+				const [terminal] = await db
 					.update(automationScheduledJobs)
-					.set({ status: "failed", error: outcome.error })
-					.where(eq(automationScheduledJobs.id, job.id));
+					.set({ status: "failed", error: outcome.error, leaseExpiresAt: null })
+					.where(
+						and(
+							eq(automationScheduledJobs.id, job.id),
+							eq(automationScheduledJobs.status, "processing"),
+							eq(automationScheduledJobs.leaseToken, job.lease_token),
+						),
+					)
+					.returning({ id: automationScheduledJobs.id });
+				if (terminal) failed++;
 			}
 		} catch (err) {
-			failed++;
-			await db
+			const terminal = job.attempts >= MAX_JOB_ATTEMPTS;
+			const unknown = effectStarted;
+			const [updated] = await db
 				.update(automationScheduledJobs)
 				.set({
-					status: "failed",
+					status: unknown ? "unknown" : terminal ? "failed" : "pending",
+					runAt:
+						unknown || terminal
+							? job.run_at
+							: new Date(
+									Date.now() +
+										Math.min(30 * 60_000, 30_000 * 2 ** job.attempts),
+								),
+					claimedAt: null,
+					leaseExpiresAt: null,
+					effectStartedAt: unknown ? new Date() : null,
 					error: err instanceof Error ? err.message : String(err),
 				})
-				.where(eq(automationScheduledJobs.id, job.id));
+				.where(
+					and(
+						eq(automationScheduledJobs.id, job.id),
+						eq(automationScheduledJobs.status, "processing"),
+						eq(automationScheduledJobs.leaseToken, job.lease_token),
+					),
+				)
+				.returning({ id: automationScheduledJobs.id });
+			if (updated && (unknown || terminal)) failed++;
 		}
 	}
 
@@ -149,18 +234,24 @@ async function dispatchJob(
 		job_type: string;
 		automation_id: string | null;
 		entrypoint_id: string | null;
+		run_at: Date;
+		occurrence_id: string;
+		lease_token: number;
+		attempts: number;
 		payload: unknown;
 	},
+	markEffectStarted: () => Promise<void>,
 ): Promise<DispatchOutcome> {
 	switch (job.job_type) {
 		case "resume_run": {
 			if (!job.run_id) return { failed: true, error: "missing run_id" };
+			await markEffectStarted();
 			// A delay node parks the run with waitingFor='delay' and leaves
 			// currentNodeKey pointing at the delay node itself. If we call runLoop
 			// directly it would re-dispatch the delay handler, which recomputes a
 			// fresh resume_at and re-parks the run forever. So advance the run
 			// through the delay node's outgoing edge BEFORE re-entering runLoop —
-			// mirroring the input_timeout path. Guard on updatedAt so a concurrent
+			// mirroring the input_timeout path. Guard on revision so a concurrent
 			// worker doesn't double-advance.
 			const delayRun = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, job.run_id),
@@ -193,7 +284,7 @@ async function dispatchJob(
 				const advanced = await updateRunOptimistic(
 					db,
 					delayRun.id,
-					delayRun.updatedAt,
+					delayRun.revision,
 					nextEdge
 						? {
 								status: "active",
@@ -235,6 +326,7 @@ async function dispatchJob(
 
 		case "input_timeout": {
 			if (!job.run_id) return { failed: true, error: "missing run_id" };
+			await markEffectStarted();
 			const run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, job.run_id),
 			});
@@ -285,7 +377,7 @@ async function dispatchJob(
 					)
 				: undefined;
 			if (timeoutEdge) {
-				const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+				const ok = await updateRunOptimistic(db, run.id, run.revision, {
 					status: "active",
 					currentNodeKey: timeoutEdge.to_node,
 					currentPortKey: timeoutEdge.to_port,
@@ -298,7 +390,7 @@ async function dispatchJob(
 				if (!ok) return "done";
 				await runLoop(db, run.id, env);
 			} else {
-				const ok = await updateRunOptimistic(db, run.id, run.updatedAt, {
+				const ok = await updateRunOptimistic(db, run.id, run.revision, {
 					status: "exited",
 					exitReason: "input_timeout",
 					completedAt: new Date(),
@@ -320,7 +412,10 @@ async function dispatchJob(
 				db,
 				env,
 				job.entrypoint_id,
+				job.occurrence_id,
+				job.run_at,
 				job.payload,
+				markEffectStarted,
 			);
 		}
 
@@ -400,7 +495,10 @@ async function dispatchScheduledTrigger(
 	db: Db,
 	env: Record<string, unknown>,
 	entrypointId: string,
+	occurrenceId: string,
+	scheduledFor: Date,
 	jobPayload: unknown,
+	markEffectStarted: () => Promise<void>,
 ): Promise<DispatchOutcome> {
 	const ep = await db.query.automationEntrypoints.findFirst({
 		where: eq(automationEntrypoints.id, entrypointId),
@@ -415,7 +513,7 @@ async function dispatchScheduledTrigger(
 	const auto = await db.query.automations.findFirst({
 		where: eq(automationsTable.id, ep.automationId),
 	});
-	if (!auto || auto.status !== "active") {
+	if (auto?.status !== "active") {
 		return "done";
 	}
 
@@ -423,11 +521,23 @@ async function dispatchScheduledTrigger(
 	// NOT re-enqueue the next cron occurrence (the originating tick already did),
 	// otherwise each continuation would double-arm the schedule.
 	const payload = (jobPayload ?? {}) as Record<string, unknown>;
+	const payloadScheduledFor =
+		typeof payload._scheduled_for === "string"
+			? new Date(payload._scheduled_for)
+			: null;
+	const occurrenceScheduledFor =
+		payloadScheduledFor && !Number.isNaN(payloadScheduledFor.getTime())
+			? payloadScheduledFor
+			: scheduledFor;
 	const cursorOffset =
 		typeof payload._cursor_offset === "number" && payload._cursor_offset > 0
 			? payload._cursor_offset
 			: 0;
 	const isContinuation = cursorOffset > 0;
+	const rootOccurrenceId =
+		typeof payload._root_occurrence_id === "string"
+			? payload._root_occurrence_id
+			: automationScheduleOccurrenceBase(ep.id, occurrenceScheduledFor);
 
 	// 1. Compute and enqueue the next firing BEFORE any other work. This keeps
 	//    the schedule alive across transient enrollment failures. Skip on
@@ -435,7 +545,13 @@ async function dispatchScheduledTrigger(
 	if (!isContinuation) {
 		const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
 		const nextRun = cfg.cron
-			? computeNextCronRun(cfg.cron, new Date(), cfg.timezone)
+			? computeNextCronRun(
+					cfg.cron,
+					occurrenceScheduledFor > new Date()
+						? occurrenceScheduledFor
+						: new Date(),
+					cfg.timezone,
+				)
 			: null;
 		if (!nextRun) {
 			return { failed: true, error: "unsupported cron pattern" };
@@ -450,13 +566,16 @@ async function dispatchScheduledTrigger(
 		candidateIds = await enumerateContactsForScheduleFilter(
 			db,
 			auto.organizationId,
+			auto.workspaceId,
 			filters,
 		);
 	} catch (err) {
-		return {
-			failed: true,
-			error: `schedule filter enumeration failed: ${err instanceof Error ? err.message : String(err)}`,
-		};
+		if (err instanceof InvalidScheduleFilterError) {
+			return { failed: true, error: err.message };
+		}
+		throw new Error(
+			`schedule filter enumeration failed: ${err instanceof Error ? err.message : String(err)}`,
+		);
 	}
 	if (candidateIds === null) {
 		return {
@@ -473,9 +592,36 @@ async function dispatchScheduledTrigger(
 		cursorOffset + SCHEDULE_ENROLL_BATCH,
 	);
 
-	// 3. Fire enroll-or-binding for each candidate in this batch. Individual
-	//    contact failures never block the rest; a catastrophic error (thrown out
-	//    of the loop itself) is caught here so the next-run job survives.
+	// Persist the next page before crossing this page's effect boundary. If any
+	// contact below has an ambiguous outcome, the current page becomes unknown,
+	// but the rest of this logical occurrence must still be allowed to proceed.
+	// The deterministic occurrence id makes this insert safe when a pre-boundary
+	// failure causes the current page to retry.
+	const nextOffset = cursorOffset + batch.length;
+	if (nextOffset < candidateIds.length && batch.length > 0) {
+		await db
+			.insert(automationScheduledJobs)
+			.values({
+				occurrenceId: `${rootOccurrenceId}:page:${nextOffset}`,
+				jobType: "scheduled_trigger",
+				automationId: auto.id,
+				entrypointId: ep.id,
+				runAt: new Date(),
+				status: "pending",
+				payload: {
+					_cursor_offset: nextOffset,
+					_root_occurrence_id: rootOccurrenceId,
+					_scheduled_for: occurrenceScheduledFor.toISOString(),
+				},
+			})
+			.onConflictDoNothing();
+	}
+	if (batch.length > 0) await markEffectStarted();
+
+	// 3. Fire enroll-or-binding for each candidate in this batch. Continue through
+	//    the page to maximize progress, but preserve any partial page as unknown so
+	//    it is never silently acknowledged or blindly replayed.
+	let enrollmentFailures = 0;
 	try {
 		for (const contactId of batch) {
 			const event: InboundEvent = {
@@ -485,15 +631,21 @@ async function dispatchScheduledTrigger(
 				socialAccountId: ep.socialAccountId ?? null,
 				contactId,
 				conversationId: null,
+				triggerOccurrenceId: automationScheduleContactOccurrenceId(
+					rootOccurrenceId,
+					contactId,
+				),
 				payload: {
 					source: "schedule",
 					entrypoint_id: ep.id,
-					scheduled_at: new Date().toISOString(),
+					scheduled_at: occurrenceScheduledFor.toISOString(),
+					occurrence_id: occurrenceId,
 				},
 			};
 			try {
 				await matchAndEnrollOrBinding(db, event, env);
 			} catch (err) {
+				enrollmentFailures++;
 				console.error(
 					`[scheduler] scheduled_trigger enroll failed for contact ${contactId}:`,
 					err,
@@ -501,37 +653,23 @@ async function dispatchScheduledTrigger(
 			}
 		}
 	} catch (err) {
-		// The enrollment loop itself blew up (rare — usually the inner catch
-		// absorbs per-contact errors). Mark THIS job failed, but the next-run
-		// row inserted above remains pending so the schedule continues.
-		return {
-			failed: true,
-			error: `scheduled_trigger enrollment loop failed: ${err instanceof Error ? err.message : String(err)}`,
-		};
+		throw new Error(
+			`scheduled_trigger enrollment loop failed: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+	if (enrollmentFailures > 0) {
+		throw new Error(
+			`${enrollmentFailures} scheduled contacts have an unknown enrollment outcome`,
+		);
 	}
 
-	// More candidates remain — re-enqueue a continuation job (due now) for the
-	// next slice so this tick stays bounded.
-	const nextOffset = cursorOffset + batch.length;
-	if (nextOffset < candidateIds.length && batch.length > 0) {
-		await db.insert(automationScheduledJobs).values({
-			jobType: "scheduled_trigger",
-			automationId: auto.id,
-			entrypointId: ep.id,
-			runAt: new Date(),
-			status: "pending",
-			payload: { _cursor_offset: nextOffset },
-		});
-	}
 	return "done";
 }
 
 /**
  * Idempotently inserts the next `scheduled_trigger` job for an entrypoint.
- * Skips the insert if a pending row already exists for the same entrypoint
- * within a 1-second window of `runAt` — handles the case where the same
- * scheduled_trigger job gets processed twice (e.g. after a stale-claim
- * reclaim) without double-queueing successors.
+ * The exact logical occurrence is a database uniqueness key, so retries and
+ * overlapping workers cannot create duplicate successors regardless of state.
  */
 async function insertNextScheduledJobIfNotExists(
 	db: Db,
@@ -539,28 +677,24 @@ async function insertNextScheduledJobIfNotExists(
 	runAt: Date,
 	automationId: string,
 ): Promise<void> {
-	const windowStartIso = new Date(runAt.getTime() - 1000).toISOString();
-	const windowEndIso = new Date(runAt.getTime() + 1000).toISOString();
-	// Use ISO strings so the postgres driver binds them as timestamptz — direct
-	// Date binding via drizzle's sql tag is unreliable across driver versions.
-	const existing = (await db.execute(sql`
-		SELECT id
-		  FROM automation_scheduled_jobs
-		 WHERE entrypoint_id = ${entrypointId}
-		   AND job_type = 'scheduled_trigger'
-		   AND status = 'pending'
-		   AND run_at >= ${windowStartIso}::timestamptz
-		   AND run_at <= ${windowEndIso}::timestamptz
-		 LIMIT 1
-	`)) as unknown as Array<{ id: string }>;
-	if (existing.length > 0) return;
-	await db.insert(automationScheduledJobs).values({
-		jobType: "scheduled_trigger",
-		automationId,
-		entrypointId,
-		runAt,
-		status: "pending",
-	});
+	await db
+		.insert(automationScheduledJobs)
+		.values({
+			occurrenceId: automationScheduleOccurrenceId(entrypointId, runAt),
+			jobType: "scheduled_trigger",
+			automationId,
+			entrypointId,
+			runAt,
+			status: "pending",
+			payload: {
+				_root_occurrence_id: automationScheduleOccurrenceBase(
+					entrypointId,
+					runAt,
+				),
+				_scheduled_for: runAt.toISOString(),
+			},
+		})
+		.onConflictDoNothing();
 }
 
 /**
@@ -573,79 +707,166 @@ async function insertNextScheduledJobIfNotExists(
  * Returns `null` if the filters block is missing or contains no actionable
  * predicate (signals "required filter not satisfied" upstream).
  */
+type ScheduleFilterPredicate = {
+	field: "tags" | "segment_ids";
+	op: "contains";
+	value: string | string[];
+};
+
+type ParsedScheduleFilter = {
+	all: ScheduleFilterPredicate[];
+	any: ScheduleFilterPredicate[];
+};
+
+class InvalidScheduleFilterError extends Error {}
+
+function parseScheduleFilter(
+	filters: Record<string, unknown>,
+): ParsedScheduleFilter | null {
+	const parseGroup = (name: "all" | "any"): ScheduleFilterPredicate[] => {
+		const rawGroup = filters[name];
+		if (rawGroup === undefined) return [];
+		if (!Array.isArray(rawGroup)) {
+			throw new InvalidScheduleFilterError(`${name} must be an array`);
+		}
+		return rawGroup.map((raw, index) => {
+			if (!raw || typeof raw !== "object") {
+				throw new InvalidScheduleFilterError(
+					`${name}[${index}] must be an object`,
+				);
+			}
+			const predicate = raw as {
+				field?: unknown;
+				op?: unknown;
+				value?: unknown;
+			};
+			const field =
+				predicate.field === "tag"
+					? "tags"
+					: predicate.field === "segment" || predicate.field === "segments"
+						? "segment_ids"
+						: predicate.field;
+			if (field !== "tags" && field !== "segment_ids") {
+				throw new InvalidScheduleFilterError(
+					`${name}[${index}] has unsupported field`,
+				);
+			}
+			if (predicate.op !== "contains") {
+				throw new InvalidScheduleFilterError(
+					`${name}[${index}] has unsupported operator`,
+				);
+			}
+			if (
+				typeof predicate.value !== "string" &&
+				!(
+					field === "segment_ids" &&
+					Array.isArray(predicate.value) &&
+					predicate.value.length > 0 &&
+					predicate.value.every((value) => typeof value === "string")
+				)
+			) {
+				throw new InvalidScheduleFilterError(
+					`${name}[${index}] has an invalid value`,
+				);
+			}
+			return {
+				field,
+				op: "contains",
+				value: predicate.value as string | string[],
+			};
+		});
+	};
+
+	const parsed = { all: parseGroup("all"), any: parseGroup("any") };
+	return parsed.all.length === 0 && parsed.any.length === 0 ? null : parsed;
+}
+
+export function combineSchedulePredicateSets(
+	allSets: ReadonlyArray<ReadonlySet<string>>,
+	anySets: ReadonlyArray<ReadonlySet<string>>,
+): string[] {
+	let result = new Set<string>();
+	if (allSets.length > 0) {
+		result = new Set(allSets[0]);
+		for (const predicateSet of allSets.slice(1)) {
+			result = new Set(Array.from(result).filter((id) => predicateSet.has(id)));
+		}
+	}
+	if (anySets.length > 0) {
+		const union = new Set<string>();
+		for (const predicateSet of anySets) {
+			for (const id of predicateSet) union.add(id);
+		}
+		result =
+			allSets.length === 0
+				? union
+				: new Set(Array.from(result).filter((id) => union.has(id)));
+	}
+	return Array.from(result);
+}
+
 async function enumerateContactsForScheduleFilter(
 	db: Db,
 	organizationId: string,
+	workspaceId: string | null,
 	filters: Record<string, unknown> | null,
 ): Promise<string[] | null> {
 	if (!filters) return null;
+	const parsed = parseScheduleFilter(filters);
+	if (!parsed) return null;
+	const contactScope = workspaceId
+		? eq(contacts.workspaceId, workspaceId)
+		: isNull(contacts.workspaceId);
 
-	const groups: Array<unknown> = [];
-	if (Array.isArray((filters as { all?: unknown[] }).all)) {
-		for (const p of (filters as { all: unknown[] }).all) groups.push(p);
-	}
-	if (Array.isArray((filters as { any?: unknown[] }).any)) {
-		for (const p of (filters as { any: unknown[] }).any) groups.push(p);
-	}
-	if (groups.length === 0) return null;
-
-	const ids = new Set<string>();
-	let matchedAnyPredicate = false;
-	for (const raw of groups) {
-		const predicate = raw as {
-			field?: string;
-			op?: string;
-			value?: unknown;
-		};
-		if (!predicate || typeof predicate !== "object") continue;
-
-		// Tag filter.
-		if (
-			(predicate.field === "tags" || predicate.field === "tag") &&
-			typeof predicate.value === "string"
-		) {
-			matchedAnyPredicate = true;
+	const queryPredicate = async (
+		predicate: ScheduleFilterPredicate,
+	): Promise<Set<string>> => {
+		if (predicate.field === "tags") {
 			const rows = await db
 				.select({ id: contacts.id })
 				.from(contacts)
 				.where(
 					and(
 						eq(contacts.organizationId, organizationId),
-						sql`${contacts.tags} @> ARRAY[${predicate.value}]::text[]`,
+						contactScope,
+						sql`${contacts.tags} @> ARRAY[${predicate.value as string}]::text[]`,
 					),
 				);
-			for (const r of rows) ids.add(r.id);
-			continue;
+			return new Set(rows.map((row) => row.id));
 		}
 
-		// Segment filter.
-		if (
-			(predicate.field === "segment_ids" ||
-				predicate.field === "segment" ||
-				predicate.field === "segments") &&
-			(typeof predicate.value === "string" ||
-				Array.isArray(predicate.value))
-		) {
-			matchedAnyPredicate = true;
-			const segmentIds = Array.isArray(predicate.value)
-				? (predicate.value as string[])
-				: [predicate.value as string];
-			if (segmentIds.length === 0) continue;
-			const rows = await db
-				.select({ id: contactSegmentMemberships.contactId })
-				.from(contactSegmentMemberships)
-				.where(
-					and(
-						eq(contactSegmentMemberships.organizationId, organizationId),
-						inArray(contactSegmentMemberships.segmentId, segmentIds),
-					),
-				);
-			for (const r of rows) ids.add(r.id);
-		}
+		const segmentIds = Array.isArray(predicate.value)
+			? predicate.value
+			: [predicate.value];
+		const rows = await db
+			.select({ id: contactSegmentMemberships.contactId })
+			.from(contactSegmentMemberships)
+			.innerJoin(
+				contacts,
+				and(
+					eq(contactSegmentMemberships.contactId, contacts.id),
+					eq(contactSegmentMemberships.organizationId, contacts.organizationId),
+				),
+			)
+			.where(
+				and(
+					eq(contactSegmentMemberships.organizationId, organizationId),
+					contactScope,
+					inArray(contactSegmentMemberships.segmentId, segmentIds),
+				),
+			);
+		return new Set(rows.map((row) => row.id));
+	};
+
+	const allSets: Set<string>[] = [];
+	for (const predicate of parsed.all) {
+		allSets.push(await queryPredicate(predicate));
 	}
-
-	if (!matchedAnyPredicate) return null;
-	return Array.from(ids);
+	const anySets: Set<string>[] = [];
+	for (const predicate of parsed.any) {
+		anySets.push(await queryPredicate(predicate));
+	}
+	return combineSchedulePredicateSets(allSets, anySets);
 }
 
 /**
@@ -922,7 +1143,7 @@ export async function armScheduleEntrypoint(
 	const automation = await db.query.automations.findFirst({
 		where: eq(automationsTable.id, ep.automationId),
 	});
-	if (!automation || automation.status !== "active") {
+	if (automation?.status !== "active") {
 		return { queued: false, reason: "automation_not_active" };
 	}
 
@@ -932,7 +1153,12 @@ export async function armScheduleEntrypoint(
 	const nextRun = computeNextCronRun(cfg.cron, new Date(), cfg.timezone);
 	if (!nextRun) return { queued: false, reason: "invalid_cron" };
 
-	await insertNextScheduledJobIfNotExists(db, entrypointId, nextRun, ep.automationId);
+	await insertNextScheduledJobIfNotExists(
+		db,
+		entrypointId,
+		nextRun,
+		ep.automationId,
+	);
 	return { queued: true, runAt: nextRun };
 }
 

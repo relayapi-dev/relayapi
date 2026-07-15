@@ -17,7 +17,7 @@ export class IdeaGroups extends APIResource {
    */
   update(
     id: string,
-    body: IdeaGroupUpdateParams | null | undefined = {},
+    body: IdeaGroupUpdateParams,
     options?: RequestOptions,
   ): APIPromise<IdeaGroupUpdateResponse> {
     return this._client.patch(path`/v1/idea-groups/${id}`, { body, ...options });
@@ -39,8 +39,9 @@ export class IdeaGroups extends APIResource {
    * Moves all ideas in the group to the default 'Unassigned' group before deleting.
    * Cannot delete the default group.
    */
-  delete(id: string, options?: RequestOptions): APIPromise<void> {
+  delete(id: string, params: IdeaGroupDeleteParams, options?: RequestOptions): APIPromise<void> {
     return this._client.delete(path`/v1/idea-groups/${id}`, {
+      query: params,
       ...options,
       headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
     });
@@ -60,6 +61,7 @@ export interface IdeaGroupResponse {
   position: number;
   color: string | null;
   is_default: boolean;
+  revision: number;
   workspace_id: string | null;
   created_at: string;
   updated_at: string;
@@ -75,13 +77,16 @@ export interface IdeaGroupListResponse {
 export interface IdeaGroupCreateParams {
   name: string;
   color?: string;
-  position?: number;
-  workspace_id?: string;
 }
 
 export interface IdeaGroupUpdateParams {
   name?: string;
   color?: string | null;
+  expected_revision: number;
+}
+
+export interface IdeaGroupDeleteParams {
+  expected_revision: number;
 }
 
 export interface IdeaGroupListParams {
@@ -92,6 +97,7 @@ export interface IdeaGroupReorderParams {
   groups: Array<{
     id: string;
     position: number;
+    expected_revision: number;
   }>;
 }
 
@@ -103,6 +109,7 @@ export declare namespace IdeaGroups {
     type IdeaGroupListResponse as IdeaGroupListResponse,
     type IdeaGroupCreateParams as IdeaGroupCreateParams,
     type IdeaGroupUpdateParams as IdeaGroupUpdateParams,
+    type IdeaGroupDeleteParams as IdeaGroupDeleteParams,
     type IdeaGroupListParams as IdeaGroupListParams,
     type IdeaGroupReorderParams as IdeaGroupReorderParams,
   };

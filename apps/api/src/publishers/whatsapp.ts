@@ -1,5 +1,11 @@
 import { GRAPH_BASE } from "../config/api-versions";
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 const WA_API_BASE = GRAPH_BASE.facebook;
 
@@ -33,10 +39,16 @@ async function waFetch(
 		const code = data.error?.code;
 		const raw = `HTTP ${res.status}\n${JSON.stringify(data)}`;
 		if (res.status === 401 || code === 190) {
-			throw new PublishError(`TOKEN_EXPIRED: ${msg}`, { statusCode: res.status, detail: raw });
+			throw new PublishError(`TOKEN_EXPIRED: ${msg}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
 		if (res.status === 429 || code === 4 || code === 80007) {
-			throw new PublishError(`RATE_LIMITED: ${msg}`, { statusCode: res.status, detail: raw });
+			throw new PublishError(`RATE_LIMITED: ${msg}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
 		throw new PublishError(msg, { statusCode: res.status, detail: raw });
 	}
@@ -70,7 +82,8 @@ export const whatsappPublisher: Publisher = {
 			const templateName = opts.template_name as string | undefined;
 			if (templateName) {
 				const templateLang = (opts.template_language as string) ?? "en_US";
-				const templateComponents = (opts.template_components as Array<Record<string, unknown>>) ?? [];
+				const templateComponents =
+					(opts.template_components as Array<Record<string, unknown>>) ?? [];
 
 				const body: Record<string, unknown> = {
 					messaging_product: "whatsapp",
@@ -154,7 +167,11 @@ export const whatsappPublisher: Publisher = {
 			// Contact card message
 			if (opts.contacts) {
 				const contacts = opts.contacts as Array<{
-					name: { formatted_name: string; first_name?: string; last_name?: string };
+					name: {
+						formatted_name: string;
+						first_name?: string;
+						last_name?: string;
+					};
 					phones?: Array<{ phone: string; type?: string }>;
 					emails?: Array<{ email: string; type?: string }>;
 				}>;
@@ -172,10 +189,40 @@ export const whatsappPublisher: Publisher = {
 			const content = (opts.content as string) ?? request.content ?? "";
 			const media =
 				(opts.media as Array<{ url: string; type?: string }>) ?? request.media;
+			if (media.length > 1) {
+				// Official Meta docs: https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-phone-number/message-api
+				// Section "Request Syntax" -> each POST creates one message with one
+				// selected type (image, video, document, audio, text, or template).
+				return {
+					success: false,
+					error: {
+						code: "TOO_MANY_MEDIA",
+						message:
+							"WhatsApp Cloud API sends one media message per request; provide at most one attachment.",
+					},
+				};
+			}
 
 			// Media message
 			const m = media?.[0];
 			if (m) {
+				if (
+					m.type &&
+					!["image", "video", "document", "audio"].some(
+						(type) => type === m.type,
+					)
+				) {
+					// This publisher intentionally supports image, video, document, and
+					// audio messages. WhatsApp also has a sticker message type, but RelayAPI
+					// does not map its generic `gif` attachment type to that API shape.
+					return {
+						success: false,
+						error: {
+							code: "UNSUPPORTED_MEDIA_TYPE",
+							message: `RelayAPI's WhatsApp publisher does not support ${m.type} media attachments.`,
+						},
+					};
+				}
 				const mediaType = (
 					["image", "video", "document", "audio"] as const
 				).includes(m.type as never)
@@ -187,11 +234,23 @@ export const whatsappPublisher: Publisher = {
 					link: m.url,
 				};
 				if (content && mediaType !== "audio") {
-					mediaPayload.caption = content.slice(0, 1024);
+					// Official docs: https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages#media-object
+					// Section "Media object" -> caption maximum length is 1,024.
+					if (content.length > 1024) {
+						return {
+							success: false,
+							error: {
+								code: "CONTENT_TOO_LONG",
+								message: `WhatsApp media caption is ${content.length} characters. Limit is 1,024.`,
+							},
+						};
+					}
+					mediaPayload.caption = content;
 				}
 				// WhatsApp requires filename for document messages
 				if (mediaType === "document") {
-					const urlFilename = m.url.split("/").pop()?.split("?")[0] ?? "document";
+					const urlFilename =
+						m.url.split("/").pop()?.split("?")[0] ?? "document";
 					mediaPayload.filename = urlFilename;
 				}
 
@@ -252,7 +311,7 @@ export const whatsappPublisher: Publisher = {
 				platform_post_id: messageId,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

@@ -59,6 +59,8 @@ export interface SendMessageRequest {
 	accessToken: string;
 	platformAccountId: string;
 	recipientId: string;
+	/** Stable caller key when the provider/transport offers idempotent sends. */
+	idempotencyKey?: string;
 	/**
 	 * Message body. Kept nominally required for backwards compatibility with
 	 * existing callers (broadcasts, inbox replies). Interactive-only sends
@@ -129,7 +131,9 @@ export async function sendMessage(
 	}
 }
 
-async function sendWhatsApp(req: SendMessageRequest): Promise<SendMessageResult> {
+async function sendWhatsApp(
+	req: SendMessageRequest,
+): Promise<SendMessageResult> {
 	const body = buildWhatsAppBody(req);
 
 	const res = await fetchWithTimeout(
@@ -149,7 +153,10 @@ async function sendWhatsApp(req: SendMessageRequest): Promise<SendMessageResult>
 		const err = (await res.json().catch(() => ({}))) as {
 			error?: { message?: string };
 		};
-		return { success: false, error: err.error?.message ?? `HTTP ${res.status}` };
+		return {
+			success: false,
+			error: err.error?.message ?? `HTTP ${res.status}`,
+		};
 	}
 
 	const data = (await res.json()) as { messages?: Array<{ id: string }> };
@@ -184,9 +191,7 @@ function buildWhatsAppBody(req: SendMessageRequest): Record<string, unknown> {
 	}
 
 	// Interactive reply buttons (up to 3).
-	const replyButtons = (req.buttons ?? []).filter(
-		(b) => b.type === "branch",
-	);
+	const replyButtons = (req.buttons ?? []).filter((b) => b.type === "branch");
 	if (replyButtons.length > 0) {
 		return {
 			messaging_product: "whatsapp",
@@ -216,7 +221,9 @@ function buildWhatsAppBody(req: SendMessageRequest): Record<string, unknown> {
 			type,
 			[type]: {
 				link: firstAttachment.url,
-				...(firstAttachment.caption ? { caption: firstAttachment.caption } : {}),
+				...(firstAttachment.caption
+					? { caption: firstAttachment.caption }
+					: {}),
 			},
 		};
 	}
@@ -229,7 +236,9 @@ function buildWhatsAppBody(req: SendMessageRequest): Record<string, unknown> {
 	};
 }
 
-async function sendTelegram(req: SendMessageRequest): Promise<SendMessageResult> {
+async function sendTelegram(
+	req: SendMessageRequest,
+): Promise<SendMessageResult> {
 	const { method, body } = buildTelegramRequest(req);
 
 	const res = await fetchWithTimeout(
@@ -399,7 +408,9 @@ function buildTelegramReplyMarkup(
 	return null;
 }
 
-async function sendTwitterDM(req: SendMessageRequest): Promise<SendMessageResult> {
+async function sendTwitterDM(
+	req: SendMessageRequest,
+): Promise<SendMessageResult> {
 	const res = await fetchWithTimeout(
 		`https://api.x.com/2/dm_conversations/with/${req.recipientId}/messages`,
 		{
@@ -428,7 +439,9 @@ async function sendTwitterDM(req: SendMessageRequest): Promise<SendMessageResult
 	return { success: true, messageId: data.data?.dm_event_id };
 }
 
-async function sendInstagramDM(req: SendMessageRequest): Promise<SendMessageResult> {
+async function sendInstagramDM(
+	req: SendMessageRequest,
+): Promise<SendMessageResult> {
 	const body = {
 		recipient: { id: req.recipientId },
 		message: buildMessengerMessage(req, "instagram"),
@@ -451,14 +464,19 @@ async function sendInstagramDM(req: SendMessageRequest): Promise<SendMessageResu
 		const err = (await res.json().catch(() => ({}))) as {
 			error?: { message?: string };
 		};
-		return { success: false, error: err.error?.message ?? `HTTP ${res.status}` };
+		return {
+			success: false,
+			error: err.error?.message ?? `HTTP ${res.status}`,
+		};
 	}
 
 	const data = (await res.json()) as { message_id?: string };
 	return { success: true, messageId: data.message_id };
 }
 
-async function sendFacebookMessage(req: SendMessageRequest): Promise<SendMessageResult> {
+async function sendFacebookMessage(
+	req: SendMessageRequest,
+): Promise<SendMessageResult> {
 	const body = {
 		recipient: { id: req.recipientId },
 		messaging_type: "UPDATE",
@@ -482,7 +500,10 @@ async function sendFacebookMessage(req: SendMessageRequest): Promise<SendMessage
 		const err = (await res.json().catch(() => ({}))) as {
 			error?: { message?: string };
 		};
-		return { success: false, error: err.error?.message ?? `HTTP ${res.status}` };
+		return {
+			success: false,
+			error: err.error?.message ?? `HTTP ${res.status}`,
+		};
 	}
 
 	const data = (await res.json()) as { message_id?: string };
@@ -519,7 +540,9 @@ function buildMessengerMessage(
 			type: "template",
 			payload: {
 				template_type: "generic",
-				elements: req.gallery.slice(0, 10).map((c) => buildGenericElement(c, channel)),
+				elements: req.gallery
+					.slice(0, 10)
+					.map((c) => buildGenericElement(c, channel)),
 			},
 		};
 	} else if (req.card) {
@@ -605,7 +628,9 @@ function encodeMessengerButton(
 	}
 }
 
-async function sendRedditMessage(req: SendMessageRequest): Promise<SendMessageResult> {
+async function sendRedditMessage(
+	req: SendMessageRequest,
+): Promise<SendMessageResult> {
 	const res = await fetchWithTimeout("https://oauth.reddit.com/api/compose", {
 		method: "POST",
 		headers: {
@@ -628,4 +653,3 @@ async function sendRedditMessage(req: SendMessageRequest): Promise<SendMessageRe
 
 	return { success: true };
 }
-

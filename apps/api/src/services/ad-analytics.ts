@@ -2,11 +2,19 @@
 // Ad Analytics Service — fetches, stores, and aggregates ad metrics
 // ---------------------------------------------------------------------------
 
-import { createDb, adMetrics, ads, adAccounts, socialAccounts, eq } from "@relayapi/db";
+import {
+	adAccounts,
+	adMetrics,
+	ads,
+	createDb,
+	eq,
+	socialAccounts,
+} from "@relayapi/db";
 import { and, gte, lte, sql } from "drizzle-orm";
+import { workspaceScopeSqlCondition } from "../lib/workspace-scope";
 import type { Env } from "../types";
-import { getAdPlatformAdapter } from "./ad-platforms";
 import { resolveAdsAccessToken } from "./ad-access-token";
+import { getAdPlatformAdapter } from "./ad-platforms";
 import type { AdMetricPoint } from "./ad-platforms/types";
 import { AdPlatformError } from "./ad-platforms/types";
 
@@ -46,11 +54,10 @@ export async function fetchAndStoreAdMetrics(
 	const adapter = getAdPlatformAdapter(ad.adAccount.platform);
 	if (!adapter) return [];
 
-	const result = await adapter.getAdMetrics(
-		accessToken,
-		ad.ad.platformAdId,
-		{ startDate, endDate },
-	);
+	const result = await adapter.getAdMetrics(accessToken, ad.ad.platformAdId, {
+		startDate,
+		endDate,
+	});
 
 	// Upsert daily metrics in a single multi-row statement (collapses ~30
 	// sequential round trips per ad into one).
@@ -101,9 +108,29 @@ export async function fetchAndStoreAdMetrics(
 export async function getAdAnalytics(
 	db: Database,
 	adId: string,
+	organizationId: string,
+	workspaceScope: "all" | string[],
 	startDate?: string,
 	endDate?: string,
 ) {
+	const accessConditions = [
+		eq(ads.id, adId),
+		eq(ads.organizationId, organizationId),
+	];
+	if (workspaceScope !== "all") {
+		accessConditions.push(
+			workspaceScopeSqlCondition(workspaceScope, ads.workspaceId),
+		);
+	}
+	const [authorized] = await db
+		.select({ id: ads.id })
+		.from(ads)
+		.where(and(...accessConditions))
+		.limit(1);
+	if (!authorized) {
+		throw new AdPlatformError("NOT_FOUND", "Ad not found");
+	}
+
 	// Default to last 30 days, cap at 365 days max
 	const now = new Date();
 	const effectiveEnd = endDate ? new Date(endDate) : now;
@@ -114,8 +141,7 @@ export async function getAdAnalytics(
 	// Cap max range at 365 days
 	const maxStart = new Date(effectiveEnd);
 	maxStart.setDate(maxStart.getDate() - 365);
-	const clampedStart =
-		effectiveStart < maxStart ? maxStart : effectiveStart;
+	const clampedStart = effectiveStart < maxStart ? maxStart : effectiveStart;
 
 	const conditions = [
 		eq(adMetrics.adId, adId),
@@ -184,11 +210,19 @@ export async function getAdAnalytics(
 export async function getAdAnalyticsLive(
 	env: Env,
 	adId: string,
+	organizationId: string,
+	workspaceScope: "all" | string[],
 	startDate: string,
 	endDate: string,
 	breakdowns?: string[],
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ) {
-	const db = createDb(env.HYPERDRIVE.connectionString);
+	const conditions = [eq(ads.id, adId), eq(ads.organizationId, organizationId)];
+	if (workspaceScope !== "all") {
+		conditions.push(
+			workspaceScopeSqlCondition(workspaceScope, ads.workspaceId),
+		);
+	}
 
 	const [ad] = await db
 		.select({
@@ -197,23 +231,38 @@ export async function getAdAnalyticsLive(
 			socialAccount: socialAccounts,
 		})
 		.from(ads)
-		.innerJoin(adAccounts, eq(ads.adAccountId, adAccounts.id))
+		.innerJoin(
+			adAccounts,
+			and(
+				eq(ads.adAccountId, adAccounts.id),
+				eq(adAccounts.organizationId, organizationId),
+			),
+		)
 		.innerJoin(
 			socialAccounts,
-			eq(adAccounts.socialAccountId, socialAccounts.id),
+			and(
+				eq(adAccounts.socialAccountId, socialAccounts.id),
+				eq(socialAccounts.organizationId, organizationId),
+			),
 		)
-		.where(eq(ads.id, adId))
+		.where(and(...conditions))
 		.limit(1);
 
 	if (!ad || !ad.ad.platformAdId) {
-		throw new AdPlatformError("NOT_FOUND", "Ad not found or has no platform ID");
+		throw new AdPlatformError(
+			"NOT_FOUND",
+			"Ad not found or has no platform ID",
+		);
 	}
 
 	const accessToken = await resolveAdsAccessToken(ad.socialAccount, env);
 
 	const adapter = getAdPlatformAdapter(ad.adAccount.platform);
 	if (!adapter) {
-		throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter for platform");
+		throw new AdPlatformError(
+			"UNSUPPORTED_PLATFORM",
+			"No adapter for platform",
+		);
 	}
 
 	const result = await adapter.getAdMetrics(

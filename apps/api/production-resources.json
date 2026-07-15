@@ -1,0 +1,224 @@
+{
+	"accountId": "3496f40fcd55a91da50ded8abea2cf7a",
+	"workerName": "relayapi",
+	"apiBaseUrl": "https://api.relayapi.dev",
+	"hyperdriveId": "11180e4939824902a75753084dc6a8e9",
+	"hyperdriveRuntimeUser": "relayapi_runtime",
+	"mediaBucket": "relayapi-media",
+	"thumbnailBucket": "relayapi-media-thumbnails",
+	"queueRescueBucket": "relayapi-queue-rescue-ledger",
+	"queueRescueRetentionSeconds": 2592000,
+	"mediaEventQueue": "relayapi-media-cleanup",
+	"mediaRetentionSeconds": 2592000,
+	"mediaEventActions": [
+		"PutObject",
+		"CopyObject",
+		"DeleteObject",
+		"CompleteMultipartUpload",
+		"LifecycleDeletion"
+	],
+	"requiredBindings": [
+		"AI",
+		"REALTIME",
+		"KV",
+		"MEDIA_BUCKET",
+		"THUMBNAIL_BUCKET",
+		"QUEUE_RESCUE_BUCKET",
+		"R2_EVENT_ACCOUNT_ID",
+		"R2_MEDIA_BUCKET_NAME",
+		"IMAGES",
+		"MEDIA",
+		"HYPERDRIVE",
+		"FREE_RATE_LIMITER",
+		"PRO_RATE_LIMITER",
+		"PUBLISH_QUEUE",
+		"EMAIL_QUEUE",
+		"REFRESH_QUEUE",
+		"INBOX_QUEUE",
+		"TOOLS_QUEUE",
+		"ADS_QUEUE",
+		"SYNC_QUEUE",
+		"CUSTOMER_WEBHOOK_QUEUE",
+		"QUEUE_RESCUE_QUEUE"
+	],
+	"requiredSecrets": [
+		"CF_ACCOUNT_ID",
+		"DOWNLOADER_SERVICE_KEY",
+		"DOWNLOADER_SERVICE_URL",
+		"ENCRYPTION_KEY",
+		"R2_ACCESS_KEY_ID",
+		"R2_SECRET_ACCESS_KEY",
+		"RESEND_API_KEY",
+		"STRIPE_SECRET_KEY",
+		"STRIPE_WEBHOOK_SECRET"
+	],
+	"secretGroups": [
+		["FACEBOOK_APP_ID", "FACEBOOK_APP_SECRET", "FACEBOOK_WEBHOOK_VERIFY_TOKEN"],
+		["INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET"],
+		["INSTAGRAM_LOGIN_APP_ID", "INSTAGRAM_LOGIN_APP_SECRET"],
+		["TWITTER_CLIENT_ID", "TWITTER_CLIENT_SECRET"],
+		["LINKEDIN_CLIENT_ID", "LINKEDIN_CLIENT_SECRET"],
+		["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"],
+		["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_HUB_SECRET"],
+		["PINTEREST_APP_ID", "PINTEREST_APP_SECRET"],
+		["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"],
+		["THREADS_APP_ID", "THREADS_APP_SECRET"],
+		["SNAPCHAT_CLIENT_ID", "SNAPCHAT_CLIENT_SECRET"],
+		["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
+		["MASTODON_CLIENT_ID", "MASTODON_CLIENT_SECRET"],
+		["TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"],
+		[
+			"WHATSAPP_APP_ID",
+			"WHATSAPP_APP_SECRET",
+			"WHATSAPP_CONFIG_ID",
+			"FACEBOOK_WEBHOOK_VERIFY_TOKEN"
+		],
+		["TELNYX_API_KEY", "STRIPE_WA_PHONE_PRICE_ID"]
+	],
+	"queueProducers": [
+		"relayapi-publish",
+		"relayapi-email",
+		"relayapi-refresh",
+		"relayapi-inbox",
+		"relayapi-tools",
+		"relayapi-ads",
+		"relayapi-sync",
+		"relayapi-customer-webhooks",
+		"relayapi-queue-rescue"
+	],
+	"queueConsumers": [
+		{
+			"queue": "relayapi-media-cleanup",
+			"batchSize": 10,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-media-cleanup-dlq"
+		},
+		{
+			"queue": "relayapi-publish",
+			"batchSize": 1,
+			"maxWaitTimeMs": 1000,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-publish-dlq"
+		},
+		{
+			"queue": "relayapi-email",
+			"batchSize": 1,
+			"maxWaitTimeMs": 1000,
+			"maxConcurrency": 1,
+			"maxRetries": 5,
+			"deadLetterQueue": "relayapi-email-dlq"
+		},
+		{
+			"queue": "relayapi-refresh",
+			"batchSize": 10,
+			"maxConcurrency": 5,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-refresh-dlq"
+		},
+		{
+			"queue": "relayapi-inbox",
+			"batchSize": 10,
+			"maxConcurrency": 5,
+			"maxRetries": 5,
+			"deadLetterQueue": "relayapi-inbox-dlq"
+		},
+		{
+			"queue": "relayapi-tools",
+			"batchSize": 5,
+			"maxConcurrency": 3,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-tools-dlq"
+		},
+		{
+			"queue": "relayapi-ads",
+			"batchSize": 5,
+			"maxConcurrency": 3,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-ads-dlq"
+		},
+		{
+			"queue": "relayapi-sync",
+			"batchSize": 5,
+			"maxConcurrency": 5,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-sync-dlq"
+		},
+		{
+			"queue": "relayapi-customer-webhooks",
+			"batchSize": 10,
+			"maxConcurrency": 5,
+			"maxRetries": 5,
+			"deadLetterQueue": "relayapi-customer-webhooks-dlq"
+		},
+		{
+			"queue": "relayapi-media-cleanup-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
+			"queue": "relayapi-publish-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
+			"queue": "relayapi-email-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
+			"queue": "relayapi-refresh-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
+			"queue": "relayapi-inbox-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
+			"queue": "relayapi-tools-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
+			"queue": "relayapi-ads-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
+			"queue": "relayapi-sync-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
+			"queue": "relayapi-customer-webhooks-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
+			"queue": "relayapi-queue-rescue",
+			"batchSize": 10,
+			"maxWaitTimeMs": 5000,
+			"maxConcurrency": 2,
+			"maxRetries": 100
+		}
+	]
+}

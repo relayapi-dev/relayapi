@@ -128,7 +128,13 @@ export async function presignViewUrlWithCache(
 		if (cached) return cached;
 	}
 
-	const presignedUrl = await presignR2Url(env, client, storageKey, "GET", expiresIn);
+	const presignedUrl = await presignR2Url(
+		env,
+		client,
+		storageKey,
+		"GET",
+		expiresIn,
+	);
 
 	if (kv) {
 		// Fire-and-forget cache write; don't block the response on KV put.
@@ -142,7 +148,7 @@ export async function presignViewUrlWithCache(
 	return presignedUrl;
 }
 
-export async function presignRelayMediaUrls<T extends { url: string }>(
+export async function presignRelayMediaUrls<T extends { url: string | null }>(
 	env: Env,
 	mediaArr: T[] | null,
 	expiresIn: number = 3600,
@@ -152,7 +158,8 @@ export async function presignRelayMediaUrls<T extends { url: string }>(
 
 	const client = getCachedR2Client(env);
 	if (!client) return mediaArr;
-	if (!mediaArr.some((item) => item.url.includes(RELAY_MEDIA_HOST))) return mediaArr;
+	if (!mediaArr.some((item) => item.url?.includes(RELAY_MEDIA_HOST)))
+		return mediaArr;
 
 	// Dedup presign work within this call — the same storage key appearing on
 	// multiple items only gets signed once even if the KV cache misses.
@@ -160,7 +167,7 @@ export async function presignRelayMediaUrls<T extends { url: string }>(
 
 	return Promise.all(
 		mediaArr.map(async (item) => {
-			if (!item.url.includes(RELAY_MEDIA_HOST)) return item;
+			if (!item.url?.includes(RELAY_MEDIA_HOST)) return item;
 
 			try {
 				const urlObj = new URL(item.url);
@@ -178,7 +185,12 @@ export async function presignRelayMediaUrls<T extends { url: string }>(
 
 				let presignedUrl = presignedByKey.get(storageKey);
 				if (!presignedUrl) {
-					presignedUrl = presignViewUrlWithCache(env, client, storageKey, expiresIn);
+					presignedUrl = presignViewUrlWithCache(
+						env,
+						client,
+						storageKey,
+						expiresIn,
+					);
 					presignedByKey.set(storageKey, presignedUrl);
 				}
 				return { ...item, url: await presignedUrl } as T;

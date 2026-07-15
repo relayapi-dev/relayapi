@@ -8,7 +8,17 @@ export const addAuthHeader = (
   _z: ZObject,
   bundle: Bundle,
 ): HttpRequestOptions => {
-  if (bundle.authData?.apiKey) {
+  // Zapier file fields and Relay's presigned R2 uploads also use z.request().
+  // Never forward the Relay API credential to those third-party URLs.
+  let isRelayApiRequest = false;
+  try {
+    isRelayApiRequest = new URL(request.url ?? '').origin === 'https://api.relayapi.dev';
+  } catch {
+    // All integration requests use absolute URLs. Leave malformed/relative URLs
+    // untouched so the request layer can report the appropriate error.
+  }
+
+  if (bundle.authData?.apiKey && isRelayApiRequest) {
     request.headers = {
       ...request.headers,
       Authorization: `Bearer ${bundle.authData.apiKey}`,

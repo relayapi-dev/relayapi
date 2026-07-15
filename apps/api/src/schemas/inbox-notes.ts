@@ -5,7 +5,9 @@ export const InboxNote = z
 		id: z.string().openapi({ example: "note_abc123" }),
 		conversation_id: z.string(),
 		organization_id: z.string(),
-		user_id: z.string(),
+		actor_type: z.enum(["dashboard_user", "service"]),
+		actor_id: z.string(),
+		user_id: z.string().nullable(),
 		author_name: z.string().nullable(),
 		author_email: z.string().nullable(),
 		text: z.string(),
@@ -23,20 +25,16 @@ export const ListInboxNotesResponse = z
 export const CreateInboxNoteBody = z
 	.object({
 		text: z.string().min(1).max(5000),
-		user_id: z.string().describe("Acting user id (must be an org member)"),
 	})
+	.strict()
 	.openapi("CreateInboxNoteBody");
 
 export const UpdateInboxNoteBody = z
 	.object({
 		text: z.string().min(1).max(5000),
-		user_id: z.string().describe("Acting user id (must match the note's author)"),
 	})
+	.strict()
 	.openapi("UpdateInboxNoteBody");
-
-export const DeleteInboxNoteQuery = z.object({
-	user_id: z.string().describe("Acting user id (must match the note's author)"),
-});
 
 export const InboxNoteResponse = z
 	.object({

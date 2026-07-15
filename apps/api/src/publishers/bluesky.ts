@@ -1,5 +1,19 @@
-import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	awaitResponseWithBodyCompletion,
+	ensureResponseContentLength,
+	fetchPublicUrl,
+	getFixedLengthResponseBody,
+	readResponseBytes,
+} from "../lib/fetch-public-url";
+import {
+	classifyPublishError,
+	type EngagementAccount,
+	type EngagementActionResult,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 interface BlueskySession {
 	did: string;
@@ -15,6 +29,39 @@ interface BlueskyFacet {
 
 const BSKY_API = "https://bsky.social/xrpc";
 const BSKY_VIDEO_API = "https://video.bsky.app/xrpc";
+const BSKY_IMAGE_MAX_BYTES = 2_000_000;
+const BSKY_VIDEO_MAX_BYTES = 100_000_000;
+
+type BlueskyMedia = { url: string; type?: string };
+
+function validateBlueskyMedia(media: BlueskyMedia[]): void {
+	if (media.length === 0) return;
+	const images = media.filter(
+		(item) =>
+			item.type === undefined || item.type === "image" || item.type === "gif",
+	);
+	const videos = media.filter((item) => item.type === "video");
+	if (images.length + videos.length !== media.length) {
+		throw new Error(
+			"CONTENT_ERROR: Bluesky posts support image/GIF or video attachments, not document attachments.",
+		);
+	}
+	if (videos.length > 0 && media.length !== 1) {
+		// Official docs: https://docs.bsky.app/docs/tutorials/video
+		// Section "Uploading Video" uses one app.bsky.embed.video blob; a post
+		// record has one embed, so video cannot be mixed with image embeds.
+		throw new Error(
+			"CONTENT_ERROR: Bluesky supports exactly one video and cannot mix it with images.",
+		);
+	}
+	if (images.length > 4) {
+		// Official docs: https://docs.bsky.app/docs/tutorials/creating-a-post
+		// Section "Images embeds" states that each post contains up to four images.
+		throw new Error(
+			`CONTENT_ERROR: Bluesky supports at most four images; received ${images.length}.`,
+		);
+	}
+}
 /** Resolve the user's PDS DID for service auth (required for video uploads) */
 async function resolvePdsDid(session: BlueskySession): Promise<string> {
 	const res = await fetch(
@@ -172,25 +219,26 @@ async function uploadBlob(
 	size: number;
 }> {
 	// Fetch the media
-	const mediaRes = await fetchPublicUrl(url, { timeout: 30_000 });
+	const mediaRes = await fetchPublicUrl(url, {
+		timeout: 30_000,
+		maxBytes: BSKY_IMAGE_MAX_BYTES,
+	});
 	if (!mediaRes.ok) {
 		throw new PublishError(
 			`Failed to fetch media from ${url}: ${mediaRes.statusText}`,
-			{ statusCode: mediaRes.status, detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}` },
+			{
+				statusCode: mediaRes.status,
+				detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}`,
+			},
 		);
 	}
-	const blob = await mediaRes.arrayBuffer();
+	const blob = await readResponseBytes(mediaRes, BSKY_IMAGE_MAX_BYTES);
 	const contentType =
 		mediaRes.headers.get("content-type") ?? "application/octet-stream";
 
-	// AT Protocol blob upload limit is 1,000,000 bytes per blob
-	// https://docs.bsky.app/docs/advanced-guides/posts#images-embeds
-	if (blob.byteLength > 1_000_000) {
-		throw new Error(
-			`Image exceeds Bluesky's 1 MB blob size limit (${(blob.byteLength / 1024 / 1024).toFixed(1)} MB). Resize the image before uploading.`,
-		);
-	}
-
+	// Official docs: https://docs.bsky.app/docs/tutorials/creating-a-post
+	// Section "Images Embeds": each image is limited to 2 megabytes. The
+	// canonical app.bsky.embed.images lexicon sets maxSize to 2,000,000 bytes.
 	// AT Protocol — Upload a blob (image/media) to Bluesky
 	// https://docs.bsky.app/docs/api/com-atproto-repo-upload-blob
 	const uploadRes = await fetch(`${BSKY_API}/com.atproto.repo.uploadBlob`, {
@@ -202,10 +250,13 @@ async function uploadBlob(
 		body: blob,
 	});
 	if (!uploadRes.ok) {
-		throw new PublishError(`Bluesky blob upload failed: ${uploadRes.statusText}`, {
-			statusCode: uploadRes.status,
-			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
-		});
+		throw new PublishError(
+			`Bluesky blob upload failed: ${uploadRes.statusText}`,
+			{
+				statusCode: uploadRes.status,
+				detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+			},
+		);
 	}
 	const result = (await uploadRes.json()) as {
 		blob: { ref: { $link: string }; mimeType: string; size: number };
@@ -257,20 +308,6 @@ async function uploadVideo(
 	mimeType: string;
 	size: number;
 }> {
-	// Fetch the video
-	const mediaRes = await fetchPublicUrl(url, { timeout: 30_000 });
-	if (!mediaRes.ok) {
-		throw new PublishError(
-			`Failed to fetch video from ${url}: ${mediaRes.statusText}`,
-			{ statusCode: mediaRes.status, detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}` },
-		);
-	}
-	const videoBytes = await mediaRes.arrayBuffer();
-
-	if (videoBytes.byteLength > 100_000_000) {
-		throw new Error("Video exceeds Bluesky's 100 MB size limit.");
-	}
-
 	// Get service auth token for video upload
 	// aud must be the user's PDS DID, not the video service DID
 	// https://docs.bsky.app/docs/tutorials/video
@@ -281,29 +318,61 @@ async function uploadVideo(
 		"com.atproto.repo.uploadBlob",
 	);
 
+	// Fetch after authentication setup so the source connection immediately
+	// streams into the provider rather than sitting open while API calls run.
+	const mediaRes = await fetchPublicUrl(url, { timeout: 30_000 });
+	if (!mediaRes.ok) {
+		throw new PublishError(
+			`Failed to fetch video from ${url}: ${mediaRes.statusText}`,
+			{
+				statusCode: mediaRes.status,
+				detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}`,
+			},
+		);
+	}
+	const preparedMediaRes = await ensureResponseContentLength(
+		mediaRes,
+		BSKY_VIDEO_MAX_BYTES,
+		() =>
+			fetchPublicUrl(url, {
+				timeout: 30_000,
+				maxBytes: BSKY_VIDEO_MAX_BYTES,
+			}),
+	);
+	const source = getFixedLengthResponseBody(
+		preparedMediaRes,
+		BSKY_VIDEO_MAX_BYTES,
+	);
+
 	// Upload to video.bsky.app
 	// https://docs.bsky.app/docs/api/app-bsky-video-upload-video
 	const filename = `video_${Date.now()}.mp4`;
-	const uploadRes = await fetch(
-		`${BSKY_VIDEO_API}/app.bsky.video.uploadVideo?did=${encodeURIComponent(session.did)}&name=${encodeURIComponent(filename)}`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${serviceToken}`,
-				"Content-Type": "video/mp4",
-				"Content-Length": String(videoBytes.byteLength),
+	const uploadRes = await awaitResponseWithBodyCompletion(
+		fetch(
+			`${BSKY_VIDEO_API}/app.bsky.video.uploadVideo?did=${encodeURIComponent(session.did)}&name=${encodeURIComponent(filename)}`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${serviceToken}`,
+					"Content-Type": "video/mp4",
+					"Content-Length": String(source.contentLength),
+				},
+				body: source.body,
 			},
-			body: videoBytes,
-		},
+		),
+		source.completion,
 	);
 
 	if (!uploadRes.ok && uploadRes.status !== 409) {
 		const err = await uploadRes.text();
 		const raw = `HTTP ${uploadRes.status}\n${err}`;
-		throw new PublishError(`Bluesky video upload failed: ${uploadRes.status} ${err}`, {
-			statusCode: uploadRes.status,
-			detail: raw,
-		});
+		throw new PublishError(
+			`Bluesky video upload failed: ${uploadRes.status} ${err}`,
+			{
+				statusCode: uploadRes.status,
+				detail: raw,
+			},
+		);
 	}
 
 	// Response wraps data in a jobStatus key
@@ -405,24 +474,36 @@ async function createPost(
 export const blueskyPublisher: Publisher = {
 	platform: "bluesky",
 
-	async repost(account: EngagementAccount, platformPostId: string): Promise<EngagementActionResult> {
+	async repost(
+		account: EngagementAccount,
+		platformPostId: string,
+	): Promise<EngagementActionResult> {
 		try {
-			const session = await createSession(account.platform_account_id, account.access_token);
+			const session = await createSession(
+				account.platform_account_id,
+				account.access_token,
+			);
 			// AT Protocol — Repost a record
 			// https://docs.bsky.app/docs/api/com-atproto-repo-create-record
 			// Need to resolve the CID of the post to repost
-			const getRes = await fetch(`${BSKY_API}/com.atproto.repo.getRecord?${new URLSearchParams({
-				repo: platformPostId.split("/")[2] ?? "",
-				collection: "app.bsky.feed.post",
-				rkey: platformPostId.split("/").pop() ?? "",
-			})}`, {
-				headers: { Authorization: `Bearer ${session.accessJwt}` },
-			});
+			const getRes = await fetch(
+				`${BSKY_API}/com.atproto.repo.getRecord?${new URLSearchParams({
+					repo: platformPostId.split("/")[2] ?? "",
+					collection: "app.bsky.feed.post",
+					rkey: platformPostId.split("/").pop() ?? "",
+				})}`,
+				{
+					headers: { Authorization: `Bearer ${session.accessJwt}` },
+				},
+			);
 			if (!getRes.ok) {
-				throw new PublishError(`Failed to fetch post for repost: ${getRes.statusText}`, {
-					statusCode: getRes.status,
-					detail: `HTTP ${getRes.status} ${getRes.statusText}`,
-				});
+				throw new PublishError(
+					`Failed to fetch post for repost: ${getRes.statusText}`,
+					{
+						statusCode: getRes.status,
+						detail: `HTTP ${getRes.status} ${getRes.statusText}`,
+					},
+				);
 			}
 			const postData = (await getRes.json()) as { uri: string; cid: string };
 
@@ -445,7 +526,10 @@ export const blueskyPublisher: Publisher = {
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-				throw new PublishError(`Bluesky repost failed: ${(err as Record<string, string>).message ?? res.statusText}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(
+					`Bluesky repost failed: ${(err as Record<string, string>).message ?? res.statusText}`,
+					{ statusCode: res.status, detail: raw },
+				);
 			}
 			const result = (await res.json()) as { uri: string };
 			return { success: true, platform_post_id: result.uri };
@@ -455,31 +539,55 @@ export const blueskyPublisher: Publisher = {
 		}
 	},
 
-	async comment(account: EngagementAccount, platformPostId: string, text: string): Promise<EngagementActionResult> {
+	async comment(
+		account: EngagementAccount,
+		platformPostId: string,
+		text: string,
+	): Promise<EngagementActionResult> {
 		try {
-			const session = await createSession(account.platform_account_id, account.access_token);
+			const session = await createSession(
+				account.platform_account_id,
+				account.access_token,
+			);
 			// Fetch the original post to build reply reference
-			const getRes = await fetch(`${BSKY_API}/com.atproto.repo.getRecord?${new URLSearchParams({
-				repo: platformPostId.split("/")[2] ?? "",
-				collection: "app.bsky.feed.post",
-				rkey: platformPostId.split("/").pop() ?? "",
-			})}`, {
-				headers: { Authorization: `Bearer ${session.accessJwt}` },
-			});
+			const getRes = await fetch(
+				`${BSKY_API}/com.atproto.repo.getRecord?${new URLSearchParams({
+					repo: platformPostId.split("/")[2] ?? "",
+					collection: "app.bsky.feed.post",
+					rkey: platformPostId.split("/").pop() ?? "",
+				})}`,
+				{
+					headers: { Authorization: `Bearer ${session.accessJwt}` },
+				},
+			);
 			if (!getRes.ok) {
-				throw new PublishError(`Failed to fetch post for reply: ${getRes.statusText}`, {
-					statusCode: getRes.status,
-					detail: `HTTP ${getRes.status} ${getRes.statusText}`,
-				});
+				throw new PublishError(
+					`Failed to fetch post for reply: ${getRes.statusText}`,
+					{
+						statusCode: getRes.status,
+						detail: `HTTP ${getRes.status} ${getRes.statusText}`,
+					},
+				);
 			}
-			const postData = (await getRes.json()) as { uri: string; cid: string };
+			const postData = (await getRes.json()) as {
+				uri: string;
+				cid: string;
+				value?: { reply?: { root?: { uri: string; cid: string } } };
+			};
+			// Canonical lexicon: https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/feed/post.json
+			// Record field `reply` references app.bsky.feed.defs#replyRef, whose
+			// `root` and `parent` strong references preserve the original thread root.
+			const rootRef = postData.value?.reply?.root ?? {
+				uri: postData.uri,
+				cid: postData.cid,
+			};
 
 			const record: Record<string, unknown> = {
 				$type: "app.bsky.feed.post",
 				text,
 				createdAt: new Date().toISOString(),
 				reply: {
-					root: { uri: postData.uri, cid: postData.cid },
+					root: rootRef,
 					parent: { uri: postData.uri, cid: postData.cid },
 				},
 			};
@@ -498,22 +606,30 @@ export const blueskyPublisher: Publisher = {
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
-			// Auth — access_token is the app password, platform_account_id is the handle
-			const session = await createSession(
-				request.account.platform_account_id,
-				request.account.access_token,
-			);
-
 			const opts = request.target_options;
-
-			// Check for thread
+			const media =
+				(opts.media as Array<{ url: string; type?: string }>) ?? request.media;
 			const threadItems = opts.thread as
 				| Array<{
 						content: string;
 						media?: Array<{ url: string; type?: string }>;
 				  }>
 				| undefined;
+			if (threadItems && threadItems.length > 0) {
+				for (const item of threadItems) {
+					if (item.media) validateBlueskyMedia(item.media);
+				}
+			} else {
+				validateBlueskyMedia(media);
+			}
 
+			// Auth — access_token is the app password, platform_account_id is the handle
+			const session = await createSession(
+				request.account.platform_account_id,
+				request.account.access_token,
+			);
+
+			// Check for thread
 			if (threadItems && threadItems.length > 0) {
 				return await publishThread(session, threadItems);
 			}
@@ -531,9 +647,6 @@ export const blueskyPublisher: Publisher = {
 					},
 				};
 			}
-
-			const media =
-				(opts.media as Array<{ url: string; type?: string }>) ?? request.media;
 
 			const record: Record<string, unknown> = {
 				$type: "app.bsky.feed.post",
@@ -573,7 +686,7 @@ export const blueskyPublisher: Publisher = {
 					};
 				} else if (imageMedia.length > 0) {
 					const images = await Promise.all(
-						imageMedia.slice(0, 4).map(async (m) => {
+						imageMedia.map(async (m) => {
 							const blob = await uploadBlob(session, m.url);
 							return {
 								alt: (m as { alt_text?: string }).alt_text ?? "",
@@ -590,7 +703,14 @@ export const blueskyPublisher: Publisher = {
 
 			// External link embed (website card preview)
 			// Docs: https://docs.bsky.app/docs/advanced-guides/posts#website-card-embeds
-			const linkPreview = opts.link_preview as { url: string; title: string; description: string; thumbnail_url?: string } | undefined;
+			const linkPreview = opts.link_preview as
+				| {
+						url: string;
+						title: string;
+						description: string;
+						thumbnail_url?: string;
+				  }
+				| undefined;
 			if (!record.embed && linkPreview) {
 				const external: Record<string, unknown> = {
 					uri: linkPreview.url,
@@ -598,7 +718,10 @@ export const blueskyPublisher: Publisher = {
 					description: linkPreview.description,
 				};
 				if (linkPreview.thumbnail_url) {
-					const thumbBlob = await uploadBlob(session, linkPreview.thumbnail_url);
+					const thumbBlob = await uploadBlob(
+						session,
+						linkPreview.thumbnail_url,
+					);
 					external.thumb = thumbBlob;
 				}
 				record.embed = {
@@ -657,7 +780,11 @@ export const blueskyPublisher: Publisher = {
 				platform_url: webUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			const threadItems = request.target_options.thread;
+			return classifyPublishError(err, {
+				definitiveHttpRejection:
+					!Array.isArray(threadItems) || threadItems.length === 0,
+			});
 		}
 	},
 };
@@ -708,6 +835,7 @@ async function publishThread(
 
 		// Media — handle video vs images (video requires service auth upload)
 		if (item.media && item.media.length > 0) {
+			validateBlueskyMedia(item.media);
 			const videoMedia = item.media.filter((m) => m.type === "video");
 			const imageMedia = item.media.filter(
 				(m) => !m.type || m.type === "image" || m.type === "gif",
@@ -723,7 +851,7 @@ async function publishThread(
 				};
 			} else if (imageMedia.length > 0) {
 				const images = await Promise.all(
-					imageMedia.slice(0, 4).map(async (m) => {
+					imageMedia.map(async (m) => {
 						const blob = await uploadBlob(session, m.url);
 						return {
 							alt: (m as { alt_text?: string }).alt_text ?? "",

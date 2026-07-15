@@ -2,7 +2,7 @@
 
 import { APIResource } from '../../../core/resource';
 import * as PagesAPI from './pages';
-import { PageListResponse, PageSelectParams, PageSelectResponse, Pages } from './pages';
+import { PageListParams, PageListResponse, PageSelectParams, PageSelectResponse, Pages } from './pages';
 
 export class Facebook extends APIResource {
   pages: PagesAPI.Pages = new PagesAPI.Pages(this._client);
@@ -14,6 +14,7 @@ export declare namespace Facebook {
   export {
     Pages as Pages,
     type PageListResponse as PageListResponse,
+    type PageListParams as PageListParams,
     type PageSelectResponse as PageSelectResponse,
     type PageSelectParams as PageSelectParams,
   };

@@ -1,6 +1,6 @@
-import { maybeDecrypt } from "../lib/crypto";
-import { AdPlatformError } from "./ad-platforms/types";
+import { decryptAccountToken } from "../lib/account-token-crypto";
 import type { Env } from "../types";
+import { AdPlatformError } from "./ad-platforms/types";
 
 const META_ADS_USER_ACCESS_TOKEN_KEY = "meta_ads_user_access_token";
 const META_ADS_USER_ACCESS_TOKEN_EXPIRES_AT_KEY =
@@ -123,8 +123,18 @@ export function withMetaAdsUserAccessToken(
 	return nextMetadata;
 }
 
+export function replaceMetaAdsUserAccessTokenCiphertext(
+	metadata: unknown,
+	ciphertext: string,
+): Record<string, unknown> {
+	const nextMetadata = getMetadataObject(metadata) ?? {};
+	nextMetadata[META_ADS_USER_ACCESS_TOKEN_KEY] = ciphertext;
+	return nextMetadata;
+}
+
 export async function resolveAdsAccessToken(
 	account: {
+		id: string;
 		platform: string;
 		accessToken: string | null;
 		metadata: unknown;
@@ -138,14 +148,26 @@ export async function resolveAdsAccessToken(
 
 	// Facebook page connections store a Page token as the primary access token,
 	// but Meta ads endpoints need the original user token captured during OAuth.
-	const encryptedToken =
-		(account.platform === "facebook"
+	const metadataToken =
+		account.platform === "facebook"
 			? getMetaAdsUserAccessToken(account.metadata)
-			: null) ?? account.accessToken;
+			: null;
+	const encryptedToken = metadataToken ?? account.accessToken;
+	if (!encryptedToken) return "";
 
-	if (encryptedToken && env.ENCRYPTION_KEY) {
-		return (await maybeDecrypt(encryptedToken, env.ENCRYPTION_KEY)) ?? "";
-	}
-
-	return encryptedToken ?? "";
+	return (
+		(metadataToken
+			? await decryptAccountToken(
+					metadataToken,
+					env.ENCRYPTION_KEY,
+					account.id,
+					"meta_ads_user_access_token",
+				)
+			: await decryptAccountToken(
+					account.accessToken,
+					env.ENCRYPTION_KEY,
+					account.id,
+					"access_token",
+				)) ?? ""
+	);
 }

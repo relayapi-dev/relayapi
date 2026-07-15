@@ -9,6 +9,8 @@ import {
 } from "@relayapi/db";
 import { getCookieCache } from "better-auth/cookies";
 import { and, eq } from "drizzle-orm";
+import { revokeDashboardPrincipal } from "../lib/dashboard-principal-revocation";
+import { prepareUserDeletion } from "../lib/user-deletion";
 
 const PROTECTED_PATHS = ["/app"];
 const AUTH_PAGES = new Set(["/login", "/signup"]);
@@ -49,20 +51,7 @@ interface OrganizationSummary {
 	[key: string]: unknown;
 }
 
-interface CfEnv {
-	EMAIL_QUEUE?: { send(message: unknown): Promise<void> };
-	RESEND_API_KEY?: string;
-	HYPERDRIVE?: { connectionString?: string };
-	// One of HYPERDRIVE.connectionString / DATABASE_URL is always provided by
-	// the Wrangler bindings; BETTER_AUTH_SECRET is a required Worker secret.
-	DATABASE_URL: string;
-	BETTER_AUTH_SECRET: string;
-	BETTER_AUTH_URL?: string;
-	GOOGLE_CLIENT_ID?: string;
-	GOOGLE_CLIENT_SECRET?: string;
-	KV?: KVNamespace;
-	[key: string]: unknown;
-}
+type CfEnv = Cloudflare.Env;
 
 function isStaticAssetPath(path: string): boolean {
 	const ext = path.split(".").pop();
@@ -139,37 +128,44 @@ function createInvitationEmailSender(
 		);
 
 		const emailMessage = {
-			id: crypto.randomUUID(),
+			id: `invitation:${data.id}`,
+			organization_id: data.organizationId,
 			to: data.email,
 			subject: `You've been invited to join ${data.organizationName} on RelayAPI`,
 			html,
 			from: "RelayAPI <notifications@relayapi.dev>",
 		};
 
-		const queue = cfEnv.EMAIL_QUEUE as
-			| { send(message: unknown): Promise<void> }
-			| undefined;
+		const queue = cfEnv.EMAIL_QUEUE;
 
 		if (queue) {
 			await queue.send(emailMessage);
-			console.log(`[Email] Enqueued invitation email to ${data.email}`);
+			console.info(JSON.stringify({ event: "invitation_email_enqueued" }));
 			return;
 		}
 
 		if (cfEnv.RESEND_API_KEY) {
 			const resend = new Resend(cfEnv.RESEND_API_KEY);
-			await resend.emails.send({
-				from: emailMessage.from,
-				to: emailMessage.to,
-				subject: emailMessage.subject,
-				html: emailMessage.html,
-			});
-			console.log(`[Email] Sent invitation email directly to ${data.email}`);
+			const { error } = await resend.emails.send(
+				{
+					from: emailMessage.from,
+					to: emailMessage.to,
+					subject: emailMessage.subject,
+					html: emailMessage.html,
+				},
+				{ idempotencyKey: emailMessage.id },
+			);
+			if (error) {
+				throw new Error(
+					`Invitation email provider rejected request: ${error.name}`,
+				);
+			}
+			console.info(JSON.stringify({ event: "invitation_email_sent_directly" }));
 			return;
 		}
 
 		console.warn(
-			`[Email] No EMAIL_QUEUE or RESEND_API_KEY — invitation email to ${data.email} skipped`,
+			JSON.stringify({ event: "invitation_email_delivery_unconfigured" }),
 		);
 	};
 }
@@ -255,23 +251,20 @@ async function userHasOrganizations(
  * every request that resolves an organization so removed members lose access
  * immediately instead of for the lifetime of their session.
  */
-async function userIsMemberOfOrganization(
+async function getOrganizationMembershipRole(
 	db: Database,
 	userId: string,
 	organizationId: string,
-): Promise<boolean> {
+): Promise<string | null> {
 	const rows = await db
-		.select({ id: member.id })
+		.select({ role: member.role })
 		.from(member)
 		.where(
-			and(
-				eq(member.userId, userId),
-				eq(member.organizationId, organizationId),
-			),
+			and(eq(member.userId, userId), eq(member.organizationId, organizationId)),
 		)
 		.limit(1);
 
-	return rows.length > 0;
+	return rows[0]?.role ?? null;
 }
 
 async function userHasPendingInvitations(
@@ -294,7 +287,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		return next();
 	}
 
-	const cfEnv = env as unknown as CfEnv;
+	const cfEnv: CfEnv = env;
 	let db: Database | undefined;
 	let auth: AuthInstance | undefined;
 	const cfContext = (
@@ -305,6 +298,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	let user: AuthUser | null = null;
 	let session: AuthSessionRecord | null = null;
 	let organization: OrganizationSummary | null = null;
+	let organizationMembershipRole: string | null = null;
 
 	const getDb = () => {
 		if (!db) {
@@ -326,6 +320,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 					cfEnv,
 					cfEnv.BETTER_AUTH_URL || context.url.origin,
 				),
+				beforeRemoveMember: ({ userId, organizationId }) =>
+					revokeDashboardPrincipal(getDb(), cfEnv.KV, organizationId, userId),
+				beforeDeleteUser: ({ userId }) =>
+					prepareUserDeletion(getDb(), cfEnv.KV, userId),
 			});
 		}
 		return auth;
@@ -398,13 +396,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				// The session (and the signed cookie cache for internal /api/* routes)
 				// can outlive a removeMember, so trusting activeOrganizationId blindly
 				// lets a removed member keep reading/writing the org's tenant data.
-				const isMember = await userIsMemberOfOrganization(
+				const membershipRole = await getOrganizationMembershipRole(
 					getDb(),
 					user.id,
 					activeOrganizationId,
 				);
 
-				if (isMember) {
+				if (membershipRole) {
+					organizationMembershipRole = membershipRole;
 					organization = {
 						id: activeOrganizationId,
 						name: null,
@@ -429,6 +428,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	context.locals.user = user;
 	context.locals.session = session;
 	context.locals.organization = organization;
+	context.locals.organizationMembershipRole = organizationMembershipRole;
 
 	const redirect = (location: string) => finalize(context.redirect(location));
 
@@ -444,7 +444,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		return redirect("/app");
 	}
 
-	if (user && shouldCheckOnboarding(path) && !session?.activeOrganizationId) {
+	// Use the authoritative membership result, not only the signed session's
+	// activeOrganizationId. Its five-minute cookie cache can still name an
+	// organization that was just deleted or that the user was removed from.
+	if (user && shouldCheckOnboarding(path) && !organization) {
 		const db = getDb();
 		const [hasOrganizations, hasPendingInvitations] = await Promise.all([
 			userHasOrganizations(db, user.id),

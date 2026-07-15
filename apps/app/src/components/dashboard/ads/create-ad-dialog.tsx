@@ -75,6 +75,7 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
   const [interestResults, setInterestResults] = useState<{ id: string; name: string; audience_size?: number }[]>([]);
   const [searchingInterests, setSearchingInterests] = useState(false);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const operationRef = useRef<{ requestBody: string; key: string } | null>(null);
 
   // Set default ad account
   useEffect(() => {
@@ -117,6 +118,7 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
     setAgeMin("18"); setAgeMax("65"); setGenders([]);
     setInterestQuery(""); setInterests([]); setInterestResults([]);
     setError(null);
+    operationRef.current = null;
   };
 
   const handleSubmit = async () => {
@@ -158,6 +160,12 @@ export function CreateAdDialog({ open, onOpenChange, adAccounts, onCreated, boos
         if (startDate) payload.start_date = new Date(startDate).toISOString();
         if (endDate) payload.end_date = new Date(endDate).toISOString();
       }
+
+      const requestBody = JSON.stringify(payload);
+      if (operationRef.current?.requestBody !== requestBody) {
+        operationRef.current = { requestBody, key: crypto.randomUUID() };
+      }
+      payload.operation_id = operationRef.current.key;
 
       const res = await fetch(endpoint, {
         method: "POST",

@@ -1,0 +1,25 @@
+name: OpenAPI — Production Drift
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Compare checkout with production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Validate pinned artifact
+        run: bun run openapi:check
+        working-directory: apps/api
+      - name: Compare production separately
+        run: bun run openapi:compare-production
+        working-directory: apps/api

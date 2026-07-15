@@ -60,8 +60,12 @@ export const AssignConversationAction = BaseAction.extend({
 export const UnassignConversationAction = BaseAction.extend({
   type: z.literal("unassign_conversation"),
 });
-export const ConversationOpenAction = BaseAction.extend({ type: z.literal("conversation_open") });
-export const ConversationCloseAction = BaseAction.extend({ type: z.literal("conversation_close") });
+export const ConversationOpenAction = BaseAction.extend({
+	type: z.literal("conversation_open"),
+});
+export const ConversationCloseAction = BaseAction.extend({
+	type: z.literal("conversation_close"),
+});
 export const ReplyToCommentAction = BaseAction.extend({
   type: z.literal("reply_to_comment"),
   text: z.string(),
@@ -81,17 +85,30 @@ export const NotifyAdminAction = BaseAction.extend({
 
 export const WebhookOutAction = BaseAction.extend({
   type: z.literal("webhook_out"),
-  url: z.string().url(),
+	url: z.string().max(8192).url(),
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("POST"),
-  headers: z.record(z.string(), z.string()).default({}),
-  body: z.string().optional(),
-  auth: z.object({
+	headers: z.record(z.string().max(256), z.string().max(8192)).default({}),
+	// Send an empty list with empty `headers` to explicitly clear stored headers.
+	configured_headers: z.array(z.string().max(256)).max(64).optional(),
+	body: z
+		.string()
+		.max(256 * 1024)
+		.optional(),
+	// Send false without `body` to explicitly clear the stored body.
+	body_configured: z.boolean().optional(),
+	/** Opaque server-owned reference returned after write-only credentials are sealed. */
+	secret_ref: z.string().optional(),
+	credentials_configured: z.boolean().optional(),
+	clear_credentials: z.boolean().optional(),
+	auth: z
+		.object({
     mode: z.enum(["none", "bearer", "basic", "hmac"]).default("none"),
-    token: z.string().optional(),
-    username: z.string().optional(),
-    password: z.string().optional(),
-    secret: z.string().optional(),
-  }).default({ mode: "none" }),
+			token: z.string().max(8192).optional(),
+			username: z.string().max(1024).optional(),
+			password: z.string().max(8192).optional(),
+			secret: z.string().max(8192).optional(),
+		})
+		.default({ mode: "none" }),
 });
 
 export const PauseContactAutomationsAction = BaseAction.extend({
@@ -123,16 +140,26 @@ export const ChangeMainMenuAction = BaseAction.extend({
 });
 
 export const ActionSchema = z.discriminatedUnion("type", [
-  TagAddAction, TagRemoveAction,
-  FieldSetAction, FieldClearAction,
-  SegmentAddAction, SegmentRemoveAction,
-  SubscribeListAction, UnsubscribeListAction,
-  OptInChannelAction, OptOutChannelAction,
-  AssignConversationAction, UnassignConversationAction,
-  ConversationOpenAction, ConversationCloseAction, ReplyToCommentAction, ConversationSnoozeAction,
+	TagAddAction,
+	TagRemoveAction,
+	FieldSetAction,
+	FieldClearAction,
+	SegmentAddAction,
+	SegmentRemoveAction,
+	SubscribeListAction,
+	UnsubscribeListAction,
+	OptInChannelAction,
+	OptOutChannelAction,
+	AssignConversationAction,
+	UnassignConversationAction,
+	ConversationOpenAction,
+	ConversationCloseAction,
+	ReplyToCommentAction,
+	ConversationSnoozeAction,
   NotifyAdminAction,
   WebhookOutAction,
-  PauseContactAutomationsAction, ResumeContactAutomationsAction,
+	PauseContactAutomationsAction,
+	ResumeContactAutomationsAction,
   DeleteContactAction,
   LogConversionEventAction,
   ChangeMainMenuAction,

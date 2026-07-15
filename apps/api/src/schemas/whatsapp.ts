@@ -46,69 +46,6 @@ export const BulkSendBody = z.object({
 });
 
 // =====================
-// Broadcasts
-// =====================
-
-export const BroadcastResponse = z.object({
-	id: z.string().describe("Broadcast ID"),
-	name: z.string().describe("Broadcast name"),
-	status: z
-		.enum(["draft", "scheduled", "sending", "sent", "partially_failed", "failed"])
-		.describe("Broadcast status"),
-	template: z.string().describe("Template name"),
-	recipient_count: z.number().describe("Total recipients"),
-	sent: z.number().optional().describe("Successfully sent"),
-	failed: z.number().optional().describe("Failed sends"),
-	scheduled_at: z
-		.string()
-		.datetime()
-		.nullable()
-		.optional()
-		.describe("Scheduled time"),
-	created_at: z.string().datetime().describe("Created timestamp"),
-});
-
-export const CreateBroadcastBody = z.object({
-	account_id: z.string().describe("WhatsApp account ID"),
-	name: z.string().describe("Broadcast name"),
-	template: z.object({
-		name: z.string().describe("Template name"),
-		language: z.string().describe("Template language code"),
-		components: z.array(TemplateComponent).optional(),
-	}),
-	recipients: z.array(BulkSendRecipient).min(1).describe("Recipient list"),
-	scheduled_at: z
-		.string()
-		.optional()
-		.describe("ISO 8601 timestamp to schedule send"),
-});
-
-export const BroadcastIdParams = z.object({
-	broadcast_id: z.string().describe("Broadcast ID"),
-});
-
-// Dedicated query for the deprecated GET /v1/whatsapp/broadcasts list so it can
-// paginate (keyset on createdAt,id) without changing the shared AccountIdQuery
-// used by the other WhatsApp routes.
-export const BroadcastListQuery = z.object({
-	account_id: z.string().describe("WhatsApp account ID"),
-	cursor: z.string().optional().describe("Pagination cursor"),
-	limit: z.coerce
-		.number()
-		.int()
-		.min(1)
-		.max(100)
-		.default(50)
-		.describe("Number of items per page"),
-});
-
-export const BroadcastListResponse = z.object({
-	data: z.array(BroadcastResponse),
-	next_cursor: z.string().nullable().optional().describe("Cursor for next page"),
-	has_more: z.boolean().optional().describe("Whether more items exist"),
-});
-
-// =====================
 // Templates
 // =====================
 
@@ -366,7 +303,10 @@ export const UploadProfilePhotoBody = z.object({
 
 export const UploadProfilePhotoResponse = z.object({
 	success: z.boolean(),
-	profile_picture_url: z.string().nullable().describe("Updated profile picture URL"),
+	profile_picture_url: z
+		.string()
+		.nullable()
+		.describe("Updated profile picture URL"),
 });
 
 // =====================
@@ -376,21 +316,32 @@ export const UploadProfilePhotoResponse = z.object({
 export const FlowResponse = z.object({
 	id: z.string().describe("Flow ID"),
 	name: z.string().describe("Flow name"),
-	status: z.enum(["DRAFT", "PUBLISHED", "DEPRECATED", "BLOCKED", "THROTTLED"]).describe("Flow status"),
+	status: z
+		.enum(["DRAFT", "PUBLISHED", "DEPRECATED", "BLOCKED", "THROTTLED"])
+		.describe("Flow status"),
 	categories: z.array(z.string()).describe("Flow categories"),
-	validation_errors: z.array(z.object({
-		error: z.string(),
-		error_type: z.string(),
-		message: z.string(),
-		line_start: z.number().optional(),
-		line_end: z.number().optional(),
-		column_start: z.number().optional(),
-		column_end: z.number().optional(),
-	})).optional().describe("Validation errors (DRAFT flows)"),
-	preview: z.object({
-		preview_url: z.string(),
-		expires_at: z.string(),
-	}).nullable().optional().describe("Preview URL and expiry"),
+	validation_errors: z
+		.array(
+			z.object({
+				error: z.string(),
+				error_type: z.string(),
+				message: z.string(),
+				line_start: z.number().optional(),
+				line_end: z.number().optional(),
+				column_start: z.number().optional(),
+				column_end: z.number().optional(),
+			}),
+		)
+		.optional()
+		.describe("Validation errors (DRAFT flows)"),
+	preview: z
+		.object({
+			preview_url: z.string(),
+			expires_at: z.string(),
+		})
+		.nullable()
+		.optional()
+		.describe("Preview URL and expiry"),
 	json_version: z.string().optional().describe("Flow JSON version"),
 	data_api_version: z.string().optional().describe("Data API version"),
 });
@@ -403,10 +354,18 @@ export const CreateFlowBody = z.object({
 	account_id: z.string().describe("WhatsApp account ID"),
 	name: z.string().describe("Flow name"),
 	categories: z
-		.array(z.enum([
-			"SIGN_UP", "SIGN_IN", "APPOINTMENT_BOOKING", "LEAD_GENERATION",
-			"CONTACT_US", "CUSTOMER_SUPPORT", "SURVEY", "OTHER",
-		]))
+		.array(
+			z.enum([
+				"SIGN_UP",
+				"SIGN_IN",
+				"APPOINTMENT_BOOKING",
+				"LEAD_GENERATION",
+				"CONTACT_US",
+				"CUSTOMER_SUPPORT",
+				"SURVEY",
+				"OTHER",
+			]),
+		)
 		.min(1)
 		.describe("Flow categories"),
 	clone_flow_id: z.string().optional().describe("Existing flow ID to clone"),
@@ -416,10 +375,18 @@ export const UpdateFlowBody = z.object({
 	account_id: z.string().describe("WhatsApp account ID"),
 	name: z.string().optional().describe("New flow name"),
 	categories: z
-		.array(z.enum([
-			"SIGN_UP", "SIGN_IN", "APPOINTMENT_BOOKING", "LEAD_GENERATION",
-			"CONTACT_US", "CUSTOMER_SUPPORT", "SURVEY", "OTHER",
-		]))
+		.array(
+			z.enum([
+				"SIGN_UP",
+				"SIGN_IN",
+				"APPOINTMENT_BOOKING",
+				"LEAD_GENERATION",
+				"CONTACT_US",
+				"CUSTOMER_SUPPORT",
+				"SURVEY",
+				"OTHER",
+			]),
+		)
 		.optional()
 		.describe("New categories"),
 });
@@ -430,7 +397,9 @@ export const FlowIdParams = z.object({
 
 export const UploadFlowJsonBody = z.object({
 	account_id: z.string().describe("WhatsApp account ID"),
-	flow_json: z.record(z.string(), z.any()).describe("Flow JSON definition (WhatsApp Flows schema)"),
+	flow_json: z
+		.record(z.string(), z.any())
+		.describe("Flow JSON definition (WhatsApp Flows schema)"),
 });
 
 export const FlowAccountIdBody = z.object({
@@ -439,7 +408,9 @@ export const FlowAccountIdBody = z.object({
 
 export const SendFlowBody = z.object({
 	account_id: z.string().describe("WhatsApp account ID"),
-	recipient_phone: z.string().describe("Recipient phone number in E.164 format"),
+	recipient_phone: z
+		.string()
+		.describe("Recipient phone number in E.164 format"),
 	flow_id: z.string().describe("Published flow ID"),
 	flow_token: z.string().describe("Unique token for this flow session"),
 	header_text: z.string().optional().describe("Message header text"),
@@ -447,5 +418,8 @@ export const SendFlowBody = z.object({
 	footer_text: z.string().optional().describe("Message footer text"),
 	cta_text: z.string().describe("CTA button text"),
 	screen_id: z.string().describe("Initial screen ID to display"),
-	flow_data: z.record(z.string(), z.any()).optional().describe("Initial data to pass to the flow"),
+	flow_data: z
+		.record(z.string(), z.any())
+		.optional()
+		.describe("Initial data to pass to the flow"),
 });

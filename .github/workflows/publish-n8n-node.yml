@@ -18,13 +18,23 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        working-directory: packages/integrations/n8n-node
-        run: npm install
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
 
       - name: Build
         working-directory: packages/integrations/n8n-node
-        run: npm run build
+        run: bun run build
+
+      - name: Test API contract
+        working-directory: packages/integrations/n8n-node
+        run: bun run test
+
+      - name: Require npm publishing token
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: test -n "$NODE_AUTH_TOKEN"
 
       - name: Publish to npm
         working-directory: packages/integrations/n8n-node

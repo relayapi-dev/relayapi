@@ -3,6 +3,7 @@ import createPost from './creates/createPost';
 import updatePost from './creates/updatePost';
 import deletePost from './creates/deletePost';
 import uploadMedia from './creates/uploadMedia';
+import accountOptions from './triggers/accountOptions';
 import postPublished from './triggers/postPublished';
 import postFailed from './triggers/postFailed';
 import postRecycled from './triggers/postRecycled';
@@ -23,6 +24,7 @@ const App = {
   afterResponse: [handleErrors],
 
   triggers: {
+    [accountOptions.key]: accountOptions,
     [postPublished.key]: postPublished,
     [postFailed.key]: postFailed,
     [postRecycled.key]: postRecycled,

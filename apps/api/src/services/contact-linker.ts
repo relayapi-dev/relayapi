@@ -1,6 +1,6 @@
-import { eq, and, ilike, sql } from "drizzle-orm";
 import type { Database } from "@relayapi/db";
-import { contacts, contactChannels, socialAccounts } from "@relayapi/db";
+import { contactChannels, contacts, socialAccounts } from "@relayapi/db";
+import { and, eq, ilike, sql } from "drizzle-orm";
 
 interface LinkResult {
 	contactId: string;
@@ -26,6 +26,15 @@ export async function findMatchingContact(
 	participantMetadata?: Record<string, unknown> | null,
 ): Promise<LinkResult | null> {
 	if (!participantPlatformId && !participantName) return null;
+	const account = await db.query.socialAccounts.findFirst({
+		where: and(
+			eq(socialAccounts.id, accountId),
+			eq(socialAccounts.organizationId, orgId),
+			eq(socialAccounts.lifecycleStatus, "active"),
+		),
+	});
+	if (!account) return null;
+	const sameAccountWorkspace = sql`${contacts.workspaceId} IS NOT DISTINCT FROM ${account.workspaceId}`;
 
 	// Priority 1: Exact channel match (identifier + social account)
 	if (participantPlatformId) {
@@ -36,6 +45,7 @@ export async function findMatchingContact(
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
+					sameAccountWorkspace,
 					eq(contactChannels.socialAccountId, accountId),
 					eq(contactChannels.identifier, participantPlatformId),
 				),
@@ -59,6 +69,7 @@ export async function findMatchingContact(
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
+					sameAccountWorkspace,
 					sql`regexp_replace(${contacts.phone}, '\\D', '', 'g') = ${normalizedPhone}`,
 				),
 			)
@@ -78,7 +89,8 @@ export async function findMatchingContact(
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
-					eq(contacts.email, email),
+					sameAccountWorkspace,
+					eq(contacts.emailCanonical, email.trim().toLowerCase()),
 				),
 			)
 			.limit(1);
@@ -96,6 +108,7 @@ export async function findMatchingContact(
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
+					sameAccountWorkspace,
 					ilike(contacts.name, participantName),
 				),
 			)
@@ -116,9 +129,9 @@ export async function findMatchingContact(
  * step, "reply to new DM" flows fail on the first send node because the
  * author is unknown to the contact graph.
  *
- * Skips creation when any of: no author id, social account missing, or the
- * social account has no workspace bound. Returns `null` in those cases so
- * callers can fall back to an anonymous enrollment.
+ * Skips creation when the author or social account is missing. An account with
+ * no workspace creates an organization-scoped contact when workspace IDs are
+ * optional; required-mode activation prevents active unscoped graphs.
  */
 export async function ensureContactForAuthor(
 	db: Database,
@@ -146,6 +159,7 @@ export async function ensureContactForAuthor(
 		if (existing.confidence !== "exact") {
 			await ensureChannelLink(
 				db,
+				orgId,
 				existing.contactId,
 				socialAccountId,
 				platform,
@@ -156,15 +170,12 @@ export async function ensureContactForAuthor(
 	}
 
 	const account = await db.query.socialAccounts.findFirst({
-		where: eq(socialAccounts.id, socialAccountId),
+		where: and(
+			eq(socialAccounts.id, socialAccountId),
+			eq(socialAccounts.organizationId, orgId),
+		),
 	});
-	if (!account?.workspaceId) {
-		// No workspace to scope the contact into — bail rather than create an
-		// orphan row. The automation will enroll anonymously; downstream nodes
-		// that require a contact will fail with a clear error instead of
-		// silently writing to a half-initialized contact.
-		return null;
-	}
+	if (!account) return null;
 
 	// Only treat the author id as a phone number for channels whose identifiers
 	// ARE phone numbers (WhatsApp wa_id, SMS E.164). Telegram/Instagram/Facebook
@@ -189,9 +200,10 @@ export async function ensureContactForAuthor(
 	if (!created) return null;
 
 	await db.insert(contactChannels).values({
+		organizationId: orgId,
 		contactId: created.id,
 		socialAccountId,
-		platform,
+		platform: platform as typeof contactChannels.$inferInsert.platform,
 		identifier: authorId,
 	});
 
@@ -200,11 +212,31 @@ export async function ensureContactForAuthor(
 
 async function ensureChannelLink(
 	db: Database,
+	organizationId: string,
 	contactId: string,
 	socialAccountId: string,
 	platform: string,
 	identifier: string,
 ): Promise<void> {
+	const [relationship] = await db
+		.select({ contactId: contacts.id })
+		.from(contacts)
+		.innerJoin(
+			socialAccounts,
+			and(
+				eq(socialAccounts.id, socialAccountId),
+				eq(socialAccounts.organizationId, organizationId),
+				sql`${socialAccounts.workspaceId} IS NOT DISTINCT FROM ${contacts.workspaceId}`,
+			),
+		)
+		.where(
+			and(
+				eq(contacts.id, contactId),
+				eq(contacts.organizationId, organizationId),
+			),
+		)
+		.limit(1);
+	if (!relationship) return;
 	const existing = await db.query.contactChannels.findFirst({
 		where: and(
 			eq(contactChannels.contactId, contactId),
@@ -215,9 +247,10 @@ async function ensureChannelLink(
 	if (existing) return;
 	try {
 		await db.insert(contactChannels).values({
+			organizationId,
 			contactId,
 			socialAccountId,
-			platform,
+			platform: platform as typeof contactChannels.$inferInsert.platform,
 			identifier,
 		});
 	} catch {

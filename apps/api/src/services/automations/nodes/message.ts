@@ -11,25 +11,29 @@
 //   §8.3 (runner)
 //   §11 (message composer)
 
-import { contacts, contactChannels, socialAccounts } from "@relayapi/db";
+import { contactChannels, contacts, socialAccounts } from "@relayapi/db";
 import { and, desc, eq } from "drizzle-orm";
+import { decryptAccountToken } from "../../../lib/account-token-crypto";
 import type {
 	MessageBlock,
 	QuickReply,
 } from "../../../schemas/automation-graph";
-import { maybeDecrypt } from "../../../lib/crypto";
 import {
-	CHANNEL_CAPABILITIES,
-	CHANNEL_SUPPORTS_BUTTONS,
-	CHANNEL_SUPPORTS_QUICK_REPLIES,
-	dispatchAutomationMessage,
-	type AutomationChannel,
-} from "../platforms";
-import { applyMergeTags } from "../merge-tags";
+	getAllowedRecipientHashes,
+	hashRecipientIdentifier,
+} from "../../contact-consent";
 import type {
 	SendMessageRequest,
 	SendMessageResult,
 } from "../../message-sender";
+import { applyMergeTags } from "../merge-tags";
+import {
+	type AutomationChannel,
+	CHANNEL_CAPABILITIES,
+	CHANNEL_SUPPORTS_BUTTONS,
+	CHANNEL_SUPPORTS_QUICK_REPLIES,
+	dispatchAutomationMessage,
+} from "../platforms";
 import type { NodeHandler, RunContext } from "../types";
 
 type SendTransport = (req: SendMessageRequest) => Promise<SendMessageResult>;
@@ -41,6 +45,21 @@ type MessageConfig = {
 	no_response_timeout_min?: number;
 	typing_indicator_seconds?: number;
 };
+
+export function automationMessageDeliveryError(result: {
+	sent: Array<{ skipped?: boolean }>;
+	errors: Array<unknown>;
+}): Error | null {
+	if (result.errors.length > 0) {
+		return new Error(
+			`automation message delivery failed for ${result.errors.length} block(s)`,
+		);
+	}
+	if (result.sent.every((item) => item.skipped)) {
+		return new Error("automation message delivered no blocks");
+	}
+	return null;
+}
 
 export const messageHandler: NodeHandler<MessageConfig> = {
 	kind: "message",
@@ -108,6 +127,7 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 				accessToken: recipient.accessToken,
 				platformAccountId: recipient.accountPlatformId,
 			},
+			idempotencyKey: ctx.effectIdempotencyKey,
 			sendTransport: ctx.env?.sendTransport as SendTransport | undefined,
 		});
 
@@ -116,6 +136,20 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 			skipped_count: sendResult.sent.filter((s) => s.skipped).length,
 			errors: sendResult.errors,
 		};
+
+		// A provider failure is not a successful automation step. In particular,
+		// never park on wait_input when the prompt/buttons were not fully delivered:
+		// the contact cannot answer UI they never received. Partial delivery is also
+		// failed explicitly; replay requires the durable per-block effect ledger
+		// rather than pretending the node advanced successfully.
+		const deliveryError = automationMessageDeliveryError(sendResult);
+		if (deliveryError) {
+			return {
+				result: "fail",
+				error: deliveryError,
+				payload,
+			};
+		}
 
 		// 4. Decide whether to wait ---------------------------------------------
 		// Only count interactive elements the CHANNEL can actually deliver. The
@@ -131,7 +165,8 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 			CHANNEL_SUPPORTS_BUTTONS[channel] &&
 			hasDeliverableBranchButton(renderedBlocks, channelCaps);
 		const deliverableQuickReply =
-			renderedQuickReplies.length > 0 && CHANNEL_SUPPORTS_QUICK_REPLIES[channel];
+			renderedQuickReplies.length > 0 &&
+			CHANNEL_SUPPORTS_QUICK_REPLIES[channel];
 		const hasInteractive = deliverableBranchButton || deliverableQuickReply;
 
 		// A plain `wait_for_reply` (no interactive elements) is only honored when
@@ -185,7 +220,10 @@ function resolveMergeTagsInBlocks(
 	return blocks.map((block) => renderBlock(block, mergeCtx));
 }
 
-function renderBlock(block: MessageBlock, mergeCtx: MergeContext): MessageBlock {
+function renderBlock(
+	block: MessageBlock,
+	mergeCtx: MergeContext,
+): MessageBlock {
 	switch (block.type) {
 		case "text":
 			return {
@@ -222,7 +260,9 @@ function renderBlock(block: MessageBlock, mergeCtx: MergeContext): MessageBlock 
 				cards: block.cards.map((c) => ({
 					...c,
 					title: applyMergeTags(c.title, mergeCtx),
-					subtitle: c.subtitle ? applyMergeTags(c.subtitle, mergeCtx) : c.subtitle,
+					subtitle: c.subtitle
+						? applyMergeTags(c.subtitle, mergeCtx)
+						: c.subtitle,
 					buttons: c.buttons?.map((b) => ({
 						...b,
 						label: applyMergeTags(b.label, mergeCtx),
@@ -288,7 +328,11 @@ async function resolveRecipient(
 
 	const conditions = [
 		eq(contactChannels.contactId, ctx.contactId),
-		eq(contactChannels.platform, ctx.channel),
+		eq(
+			contactChannels.platform,
+			ctx.channel as typeof contactChannels.$inferSelect.platform,
+		),
+		eq(contacts.organizationId, ctx.organizationId),
 	];
 	if (overrideAccountId) {
 		conditions.push(eq(contactChannels.socialAccountId, overrideAccountId));
@@ -307,6 +351,18 @@ async function resolveRecipient(
 		.limit(1);
 
 	if (!channelRow) return null;
+	const allowed = await getAllowedRecipientHashes(
+		db,
+		ctx.organizationId,
+		ctx.channel,
+		"automation",
+		[{ identifier: channelRow.identifier, contactId: ctx.contactId }],
+	);
+	const recipientHash = await hashRecipientIdentifier(
+		ctx.channel,
+		channelRow.identifier,
+	);
+	if (!allowed.has(recipientHash)) return null;
 
 	const [acc] = await db
 		.select({
@@ -315,23 +371,27 @@ async function resolveRecipient(
 			accessToken: socialAccounts.accessToken,
 		})
 		.from(socialAccounts)
-		.where(eq(socialAccounts.id, channelRow.socialAccountId))
+		.where(
+			and(
+				eq(socialAccounts.id, channelRow.socialAccountId),
+				eq(socialAccounts.organizationId, ctx.organizationId),
+				eq(socialAccounts.lifecycleStatus, "active"),
+				...(ctx.workspaceId
+					? [eq(socialAccounts.workspaceId, ctx.workspaceId)]
+					: []),
+			),
+		)
 		.limit(1);
 
-	if (!acc || !acc.accessToken) return null;
+	if (!acc?.accessToken) return null;
 
-	// Decrypt access token if the encryption key is available; fall back to
-	// plaintext so the dev tunnel path works without the production secret.
 	const encKey = ctx.env?.ENCRYPTION_KEY as string | undefined;
-	let token: string | null = acc.accessToken;
-	if (encKey) {
-		try {
-			token = await maybeDecrypt(acc.accessToken, encKey);
-		} catch {
-			// Fall through to treating the stored value as plaintext.
-			token = acc.accessToken;
-		}
-	}
+	const token = await decryptAccountToken(
+		acc.accessToken,
+		encKey,
+		acc.id,
+		"access_token",
+	);
 	if (!token) return null;
 
 	return {

@@ -2,6 +2,7 @@ import { APIResource } from '../core/resource';
 import { APIPromise } from '../core/api-promise';
 import { buildHeaders } from '../internal/headers';
 import { RequestOptions } from '../internal/request-options';
+import { multipartFormRequestOptions, type Uploadable } from '../internal/uploads';
 import { path } from '../internal/utils/path';
 import type { TagResponse } from './tags';
 
@@ -35,7 +36,7 @@ export class Ideas extends APIResource {
    */
   update(
     id: string,
-    body: IdeaUpdateParams | null | undefined = {},
+    body: IdeaUpdateParams,
     options?: RequestOptions,
   ): APIPromise<IdeaResponse> {
     return this._client.patch(path`/v1/ideas/${id}`, { body, ...options });
@@ -44,7 +45,8 @@ export class Ideas extends APIResource {
   /**
    * Delete an idea
    *
-   * FK cascades handle media, tags, comments, and activity.
+   * Durably deletes media still owned by the Idea. Media copied to a converted
+   * post is retained.
    */
   delete(id: string, options?: RequestOptions): APIPromise<void> {
     return this._client.delete(path`/v1/ideas/${id}`, {
@@ -65,7 +67,7 @@ export class Ideas extends APIResource {
   /**
    * Convert an idea to a post
    *
-   * Creates a draft post pre-filled from idea content and media.
+   * Idempotently creates one draft and copies ready original media.
    */
   convert(id: string, body: IdeaConvertParams, options?: RequestOptions): APIPromise<IdeaConvertResponse> {
     return this._client.post(path`/v1/ideas/${id}/convert`, { body, ...options });
@@ -75,11 +77,10 @@ export class Ideas extends APIResource {
    * Upload media to an idea (max 2MB)
    */
   uploadMedia(id: string, body: IdeaUploadMediaParams, options?: RequestOptions): APIPromise<IdeaMediaResponse> {
-    return this._client.post(path`/v1/ideas/${id}/media`, {
-      body,
-      ...options,
-      headers: buildHeaders([{ 'Content-Type': 'multipart/form-data' }, options?.headers]),
-    });
+    return this._client.post(
+      path`/v1/ideas/${id}/media`,
+      multipartFormRequestOptions({ body, ...options }, this._client),
+    );
   }
 
   /**
@@ -152,10 +153,14 @@ export class Ideas extends APIResource {
 
 export interface IdeaMediaResponse {
   id: string;
-  url: string;
+  media_id: string;
+  url: string | null;
+  thumbnail: string | null;
   type: 'image' | 'video' | 'gif' | 'document';
   alt: string | null;
   position: number;
+  status: 'pending' | 'uploading' | 'upload_failed' | 'ready' | 'deleting' | 'deletion_failed';
+  original_available: boolean;
 }
 
 export interface IdeaResponse {
@@ -166,6 +171,7 @@ export interface IdeaResponse {
   position: number;
   assigned_to: string | null;
   converted_to_post_id: string | null;
+  revision: number;
   tags: TagResponse[];
   media: IdeaMediaResponse[];
   workspace_id: string | null;
@@ -182,6 +188,7 @@ export interface IdeaListResponse {
 export interface IdeaConvertResponse {
   idea: IdeaResponse;
   post_id: string;
+  media_copied: number;
 }
 
 export interface IdeaCommentResponse {
@@ -254,15 +261,6 @@ export interface IdeaCreateParams {
   tag_ids?: string[];
   assigned_to?: string;
   workspace_id?: string;
-  /**
-   * Attach media by URL on create. Upload files to POST /v1/media/upload
-   * first, then pass the returned URLs here.
-   */
-  media?: Array<{
-    url: string;
-    type?: 'image' | 'video' | 'gif' | 'document';
-    alt?: string;
-  }>;
 }
 
 export interface IdeaUpdateParams {
@@ -270,23 +268,25 @@ export interface IdeaUpdateParams {
   content?: string | null;
   assigned_to?: string | null;
   tag_ids?: string[];
+  expected_revision: number;
 }
 
 export interface IdeaMoveParams {
   group_id?: string;
   position?: number;
-  after_idea_id?: string;
+  after_idea_id?: string | null;
+  expected_revision: number;
 }
 
 export interface IdeaConvertParams {
-  targets: Array<{ account_id: string }>;
-  scheduled_at?: string;
+  idempotency_key: string;
+  expected_revision: number;
   timezone?: string;
   content?: string;
 }
 
 export interface IdeaUploadMediaParams {
-  file: Blob | File;
+  file: Uploadable;
   alt?: string;
 }
 

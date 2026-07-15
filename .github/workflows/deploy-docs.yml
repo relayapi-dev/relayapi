@@ -1,15 +1,11 @@
 name: Deploy Docs
 
-# The API reference is regenerated fresh from the live OpenAPI spec at build
-# time — `build:next` runs `generate-docs` before `next build`, so generation
-# happens on every build path (this workflow, Cloudflare Workers Builds, local
-# `bun run build`). It is NOT committed to the repo — content/docs/api-reference/
-# is gitignored. generate-docs fails the build if the spec is unreachable/empty,
-# so broken or empty docs can never be published. A typecheck gates the deploy.
+# The API reference is generated from the pinned OpenAPI document produced by
+# this checkout. Production drift is checked separately and never mutates the
+# docs build input.
 #
 # Triggers:
 # - push to main touching apps/docs (code/content changes)
-# - every 6h, so changes to the live OpenAPI spec publish without a code push
 # - manual dispatch
 #
 # Required repository secrets:
@@ -21,11 +17,12 @@ on:
     branches: [main]
     paths:
       - "apps/docs/**"
+      - "apps/api/src/routes/**"
+      - "apps/api/src/schemas/**"
+      - "apps/api/scripts/export-openapi.ts"
       - "package.json"
       - "bun.lock"
       - ".github/workflows/deploy-docs.yml"
-  schedule:
-    - cron: "0 */6 * * *" # republish to pick up live OpenAPI spec changes
   workflow_dispatch:
 
 permissions:
@@ -50,6 +47,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Verify pinned OpenAPI is from this checkout
+        run: bun run openapi:check
+        working-directory: apps/api
+
+      - name: Verify generated API reference is current
+        run: bun run docs:check
+        working-directory: apps/docs
+
       - name: Typecheck apps/docs
         run: bun run tsc --noEmit
         working-directory: apps/docs
@@ -69,9 +74,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # `build` -> `build:next` regenerates the API reference from the live spec
-      # before `next build`. A failed/empty spec fails the build here, leaving the
-      # previous deployment live rather than publishing broken docs.
+      # `build` -> `build:next` regenerates the API reference from the pinned
+      # checkout artifact before `next build`.
       - name: Build Docs (OpenNext)
         run: bun run build
         working-directory: apps/docs

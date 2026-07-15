@@ -1,11 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	AlertCircle,
 	ArrowUpRight,
-	Check,
-	Copy,
-	Eye,
-	EyeOff,
 	Link2,
 	Loader2,
 	Plus,
@@ -233,62 +229,21 @@ function ConnectionsCard() {
 }
 
 // ---------------------------------------------------------------------------
-// API key (top-right) — Stripe-style reveal & copy of the working key
+// API access (top-right). The dashboard's own short-lived credential is
+// server-only; exportable keys are created explicitly on the API Keys page.
 // ---------------------------------------------------------------------------
-
-const MASKED_KEY = `rlay_live_${"•".repeat(24)}`;
-// Mobile shows an abbreviated mask so the key never crowds the narrow card.
-const MASKED_KEY_SHORT = `rlay_live_${"•".repeat(3)}`;
 
 function ApiKeyCard() {
 	const { data: status, loading, refetch } = useApi<{ has_api_key: boolean }>(
 		"dashboard-key-status",
 	);
-	const [key, setKey] = useState<string | null>(null);
-	const [revealed, setRevealed] = useState(false);
-	const [copied, setCopied] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const hasKey = status?.has_api_key ?? false;
-
-	const loadKey = useCallback(async (): Promise<string | null> => {
-		const res = await fetch("/api/reveal-key", {
-			headers: { "cache-control": "no-store" },
-		});
-		if (!res.ok) return null;
-		const json = await res.json().catch(() => null);
-		const k = (json?.key as string | null) ?? null;
-		if (k) setKey(k);
-		return k;
-	}, []);
-
-	const onReveal = async () => {
-		if (revealed) {
-			setRevealed(false);
-			return;
-		}
-		setBusy(true);
-		const k = key ?? (await loadKey());
-		setBusy(false);
-		if (k) setRevealed(true);
-	};
-
-	const onCopy = async () => {
-		setBusy(true);
-		const k = key ?? (await loadKey());
-		setBusy(false);
-		if (k) {
-			await navigator.clipboard.writeText(k);
-			setCopied(true);
-			setTimeout(() => setCopied(false), 2000);
-		}
-	};
 
 	const onCreate = async () => {
 		setBusy(true);
 		await fetch("/api/bootstrap-key", { method: "POST" });
-		const k = await loadKey();
 		setBusy(false);
-		if (k) setRevealed(true);
 		refetch();
 	};
 
@@ -320,7 +275,7 @@ function ApiKeyCard() {
 			) : !hasKey ? (
 				<>
 					<p className="mt-3 text-[14.5px] leading-normal text-muted-foreground">
-						Create a secret key to authenticate your requests to the RelayAPI.
+						Set up the private service credential used by this dashboard session.
 					</p>
 					<div className="mt-auto pt-[22px]">
 						<Button onClick={onCreate} disabled={busy}>
@@ -328,7 +283,7 @@ function ApiKeyCard() {
 								<Loader2 className="size-4 animate-spin" />
 							) : (
 								<>
-									<Plus className="size-4" /> Create API key
+									<Plus className="size-4" /> Set up dashboard access
 								</>
 							)}
 						</Button>
@@ -337,56 +292,23 @@ function ApiKeyCard() {
 			) : (
 				<>
 					<p className="mt-3 text-[14.5px] leading-normal text-muted-foreground">
-						Use this secret key to authenticate requests. Keep it private — treat
-						it like a password.
+						Dashboard access is ready. Its user-bound credential stays on the
+						server and rotates automatically.
 					</p>
 					<div className="mt-auto pt-[22px]">
-						<div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2">
-							<code className="min-w-0 flex-1 truncate font-mono text-[11px] sm:text-[13px]">
-								{revealed && key ? (
-									key
-								) : (
-									<>
-										<span className="sm:hidden">{MASKED_KEY_SHORT}</span>
-										<span className="hidden sm:inline">{MASKED_KEY}</span>
-									</>
-								)}
-							</code>
-							<button
-								type="button"
-								onClick={onReveal}
-								disabled={busy}
-								title={revealed ? "Hide" : "Reveal"}
-								className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-							>
-								{busy && !revealed ? (
-									<Loader2 className="size-4 animate-spin" />
-								) : revealed ? (
-									<EyeOff className="size-4" />
-								) : (
-									<Eye className="size-4" />
-								)}
-							</button>
-							<button
-								type="button"
-								onClick={onCopy}
-								disabled={busy}
-								title="Copy"
-								className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-							>
-								{copied ? (
-									<Check className="size-4 text-success" />
-								) : (
-									<Copy className="size-4" />
-								)}
-							</button>
-						</div>
+						<a
+							href="/app/api-keys"
+							className="inline-flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm font-medium transition-colors hover:bg-accent"
+						>
+							Create or manage exportable API keys
+							<ArrowUpRight className="size-4" />
+						</a>
 						<div className="mt-3 flex items-center gap-2 text-[12.5px] text-muted-foreground">
 							<span className="inline-flex items-center rounded-full bg-success/10 px-2 py-0.5 font-medium text-success">
 								Production
 							</span>
 							<span>·</span>
-							<span>read &amp; write</span>
+							<span>server-only · automatically rotated</span>
 						</div>
 					</div>
 				</>
@@ -681,7 +603,13 @@ function ApiCallsCard() {
 interface ActivityItem {
 	id: string;
 	kind: "post" | "connection";
-	event: "published" | "connected" | "disconnected" | "token_refreshed" | "error";
+	event:
+		| "published"
+		| "connected"
+		| "disconnecting"
+		| "disconnected"
+		| "token_refreshed"
+		| "error";
 	platforms: string[];
 	text: string | null;
 	timestamp: string;
@@ -698,6 +626,8 @@ function activityTitle(it: ActivityItem): string {
 			return `Connected ${label}`;
 		case "disconnected":
 			return `Disconnected ${label}`;
+		case "disconnecting":
+			return `Disconnecting ${label}`;
 		case "token_refreshed":
 			return `Refreshed ${label} access`;
 		case "error":
@@ -725,6 +655,7 @@ function ActivityIcon({ it }: { it: ActivityItem }) {
 				</div>
 			);
 		case "disconnected":
+		case "disconnecting":
 			return (
 				<div className={`${base} bg-muted text-muted-foreground`}>
 					<Unplug className="size-4" />

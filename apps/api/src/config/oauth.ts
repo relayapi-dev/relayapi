@@ -17,11 +17,10 @@
 
 import type { Platform } from "../schemas/common";
 import type { Env } from "../types";
-import { API_VERSIONS } from "./api-versions";
+import { API_VERSIONS, GRAPH_BASE } from "./api-versions";
 
 const FB_V = API_VERSIONS.meta_graph;
 const IG_V = API_VERSIONS.meta_graph;
-const THREADS_V = API_VERSIONS.threads_graph;
 
 export interface OAuthConfig {
 	authUrl: string;
@@ -34,15 +33,20 @@ export interface OAuthConfig {
 	requiresPkce?: boolean;
 	/** If true, use HTTP Basic Auth for token exchange — required by Twitter, Reddit */
 	tokenExchangeUsesBasicAuth?: boolean;
+	/** Provider-specific OAuth client identifier field (TikTok uses client_key). */
+	clientIdParam?: "client_id" | "client_key";
 	/** Extra query parameters to include in the authorization URL */
 	extraAuthParams?: Record<string, string>;
 }
 
 export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// X / Twitter — OAuth 2.0 Authorization Code Flow with PKCE
-	// https://developer.x.com/en/docs/authentication/oauth-2-0/authorization-code
-	// Section: "How to connect to endpoints using OAuth 2.0 Authorization Code Flow with PKCE"
-	// Auth: https://x.com/i/oauth2/authorize — Token: https://api.x.com/2/oauth2/token
+	// https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code
+	// Sections: "Authorize URL", "Parameters", "Refresh tokens" (verified 2026-07-15)
+	// Auth: GET https://x.com/i/oauth2/authorize with response_type, client_id,
+	// redirect_uri, scope, state, code_challenge, code_challenge_method.
+	// Token: POST https://api.x.com/2/oauth2/token with grant_type, code,
+	// redirect_uri, code_verifier (confidential clients authenticate with Basic Auth).
 	// Requires PKCE (code_challenge S256) and HTTP Basic Auth for token exchange.
 	// offline.access scope required for refresh tokens (access tokens expire in 2h without it).
 	twitter: {
@@ -68,9 +72,13 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// Facebook — Manual Login Flow (OAuth 2.0)
 	// https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow
 	// Section: "Manually Build a Login Flow"
-	// Auth: https://www.facebook.com/v{version}/dialog/oauth — Token: https://graph.facebook.com/v{version}/oauth/access_token
+	// Auth: GET https://www.facebook.com/v{version}/dialog/oauth with client_id,
+	// redirect_uri, state, scope, response_type=code.
+	// Token: GET https://graph.facebook.com/v{version}/oauth/access_token with
+	// client_id, redirect_uri, client_secret, code.
 	// Permissions reference: https://developers.facebook.com/docs/permissions
-	// Graph API versions: https://developers.facebook.com/docs/graph-api/changelog/versions/ (latest: v25.0, Feb 2026)
+	// Graph API versions: https://developers.facebook.com/docs/graph-api/changelog/versions/
+	// Current table verified 2026-07-15: v25.0 is the newest listed stable version.
 	// Long-lived token exchange: https://developers.facebook.com/docs/facebook-login/guides/access-tokens/get-long-lived
 	// Uses fb_exchange_token grant type. Tokens last 60 days.
 	// Note: read_insights requires App Review approval.
@@ -103,7 +111,8 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// Instagram (via Facebook Login) — Uses Facebook OAuth endpoints with Instagram permissions
 	// https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login
 	// Section: "Instagram API with Facebook Login"
-	// Same auth/token endpoints as Facebook. Scopes are Instagram-specific but requested via Facebook dialog.
+	// Same GET auth/token endpoints and fields as Facebook above. Instagram
+	// permissions are supplied in the Facebook dialog's scope field.
 	// Permissions reference: https://developers.facebook.com/docs/permissions
 	// Long-lived token exchange uses fb_exchange_token grant type (same as Facebook). Tokens last 60 days.
 	// Ads: Instagram ads are managed via the same Marketing API as Facebook.
@@ -129,7 +138,10 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// LinkedIn — 3-Legged OAuth Authorization Code Flow + organization selection
 	// Auth flow docs: https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow
 	// Sections: "Step 2: Request an Authorization Code" and "Step 3: Exchange Authorization Code for an Access Token"
-	// Auth: GET https://www.linkedin.com/oauth/v2/authorization — Token: POST https://www.linkedin.com/oauth/v2/accessToken
+	// Auth: GET https://www.linkedin.com/oauth/v2/authorization with response_type,
+	// client_id, redirect_uri, state, scope.
+	// Token: POST https://www.linkedin.com/oauth/v2/accessToken with grant_type,
+	// code, client_id, client_secret, redirect_uri (application/x-www-form-urlencoded).
 	// Profile: GET https://api.linkedin.com/v2/userinfo (OpenID Connect) or GET https://api.linkedin.com/v2/me
 	// Org ACL docs: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-access-control-by-role?tabs=http&view=li-lms-2025-04
 	// Section: "Find a Member's Organization Access Control Information"
@@ -156,13 +168,18 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	},
 	// TikTok — Login Kit OAuth v2
 	// https://developers.tiktok.com/doc/oauth-user-access-token-management
-	// Section: "Manage User Access Tokens"
-	// Auth: https://www.tiktok.com/v2/auth/authorize/ — Token: POST https://open.tiktokapis.com/v2/oauth/token/
+	// https://developers.tiktok.com/doc/login-kit-web
+	// Sections: "Initial redirect to TikTok's authorization page" and
+	// "1. Fetch an access token using an authorization code" (verified 2026-07-15)
+	// Auth: GET https://www.tiktok.com/v2/auth/authorize/ with client_key,
+	// response_type=code, scope, redirect_uri, state.
+	// Token: POST https://open.tiktokapis.com/v2/oauth/token/ with client_key,
+	// client_secret, code, grant_type=authorization_code, redirect_uri.
 	// Uses client_key (not client_id) as the parameter name.
 	// Scopes: https://developers.tiktok.com/doc/tiktok-api-scopes
 	// video.publish = direct post; video.upload = draft upload. Access tokens expire in 24h, refresh in 365 days.
 	tiktok: {
-		authUrl: "https://www.tiktok.com/v2/auth/authorize",
+		authUrl: "https://www.tiktok.com/v2/auth/authorize/",
 		tokenUrl: "https://open.tiktokapis.com/v2/oauth/token/",
 		profileUrl: "https://open.tiktokapis.com/v2/user/info/",
 		scopes: [
@@ -173,11 +190,15 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 		],
 		getClientId: (env) => env.TIKTOK_CLIENT_KEY,
 		getClientSecret: (env) => env.TIKTOK_CLIENT_SECRET,
+		clientIdParam: "client_key",
 	},
 	// YouTube — Google OAuth 2.0 for Server-side Web Apps
 	// https://developers.google.com/identity/protocols/oauth2/web-server
 	// Section: "Step 1: Set authorization parameters" and "Step 5: Exchange authorization code for refresh and access tokens"
-	// Auth: https://accounts.google.com/o/oauth2/v2/auth — Token: POST https://oauth2.googleapis.com/token
+	// Auth: GET https://accounts.google.com/o/oauth2/v2/auth with client_id,
+	// redirect_uri, response_type=code, scope, state, access_type, prompt.
+	// Token: POST https://oauth2.googleapis.com/token with code, client_id,
+	// client_secret, redirect_uri, grant_type=authorization_code.
 	// access_type=offline required for refresh tokens. prompt=consent forces consent screen.
 	// YouTube scopes: https://developers.google.com/youtube/v3/guides/auth/server-side-web-apps
 	youtube: {
@@ -198,7 +219,10 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// Pinterest — OAuth 2.0 (API v5)
 	// https://developers.pinterest.com/docs/getting-started/set-up-authentication-and-authorization/
 	// Section: "Set up authentication and authorization"
-	// Auth: https://www.pinterest.com/oauth/ — Token: POST https://api.pinterest.com/v5/oauth/token
+	// Auth: GET https://www.pinterest.com/oauth/ with client_id, redirect_uri,
+	// response_type=code, scope, state.
+	// Token: POST https://api.pinterest.com/v5/oauth/token with Basic Auth and
+	// grant_type=authorization_code, code, redirect_uri, continuous_refresh.
 	// Token exchange requires HTTP Basic Auth: base64(client_id:client_secret) in Authorization header.
 	// Scopes: https://developers.pinterest.com/docs/getting-started/authentication-and-scopes/#pinterest-scopes
 	// Available scopes: boards:read, boards:write, pins:read, pins:write, user_accounts:read, ads:read/write, etc.
@@ -214,7 +238,10 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// Reddit — OAuth2 Authorization Code Flow
 	// https://github.com/reddit-archive/reddit/wiki/OAuth2
 	// Section: "Authorization" and "Retrieving the access token"
-	// Auth: GET https://www.reddit.com/api/v1/authorize — Token: POST https://www.reddit.com/api/v1/access_token
+	// Auth: GET https://www.reddit.com/api/v1/authorize with client_id,
+	// response_type=code, state, redirect_uri, duration, scope.
+	// Token: POST https://www.reddit.com/api/v1/access_token with Basic Auth and
+	// grant_type=authorization_code, code, redirect_uri.
 	// Token exchange requires HTTP Basic Auth (username=client_id, password=client_secret).
 	// duration=permanent for refresh tokens. Scopes: https://www.reddit.com/api/v1/scopes
 	reddit: {
@@ -227,17 +254,22 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 		tokenExchangeUsesBasicAuth: true,
 		extraAuthParams: { duration: "permanent" },
 	},
-	// Threads — Threads API OAuth
+	// Threads — Threads API OAuth (verified 2026-07-15)
 	// https://developers.facebook.com/docs/threads/get-started/get-access-tokens-and-permissions
-	// Section: "Get Access Tokens and Permissions" → "Authorization Window" and "Short-Lived Token Exchange"
-	// Auth: https://threads.net/oauth/authorize — Token: POST https://graph.threads.net/oauth/access_token
+	// Sections: "Authorization Window" and "Short-Lived Token Exchange"
+	// Auth: GET https://threads.com/oauth/authorize with client_id, redirect_uri,
+	// scope, response_type=code, state.
+	// Token: POST https://graph.threads.com/oauth/access_token with client_id,
+	// client_secret, grant_type=authorization_code, redirect_uri, code.
 	// Long-lived token exchange: https://developers.facebook.com/docs/threads/get-started/long-lived-tokens
-	// Uses th_exchange_token grant type at https://graph.threads.net/access_token. Tokens last 60 days.
+	// Section "Get a Long-Lived Token" still documents GET
+	// https://graph.threads.net/access_token with grant_type=th_exchange_token,
+	// client_secret, and access_token. Tokens last 60 days.
 	// Scopes: threads_basic (required), threads_content_publish, threads_read_replies, threads_manage_replies, threads_manage_insights
 	threads: {
-		authUrl: "https://threads.net/oauth/authorize",
-		tokenUrl: "https://graph.threads.net/oauth/access_token",
-		profileUrl: `https://graph.threads.net/${THREADS_V}/me?fields=id,username,name,threads_profile_picture_url`,
+		authUrl: "https://threads.com/oauth/authorize",
+		tokenUrl: "https://graph.threads.com/oauth/access_token",
+		profileUrl: `${GRAPH_BASE.threads}/me?fields=id,username,name,threads_profile_picture_url`,
 		scopes: [
 			"threads_basic",
 			"threads_content_publish",
@@ -249,7 +281,10 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// Snapchat — Marketing API OAuth 2.0
 	// https://developers.snap.com/api/marketing-api/Ads-API/authentication
 	// Section: "Authentication"
-	// Auth: GET https://accounts.snapchat.com/login/oauth2/authorize — Token: POST https://accounts.snapchat.com/login/oauth2/access_token
+	// Auth: GET https://accounts.snapchat.com/login/oauth2/authorize with
+	// client_id, redirect_uri, response_type=code, scope, state.
+	// Token: POST https://accounts.snapchat.com/login/oauth2/access_token with
+	// grant_type, client_id, client_secret, code, redirect_uri.
 	// Access tokens expire in 3600s (60 min). Refresh tokens available.
 	// Scopes: snapchat-marketing-api, snapchat-offline-conversions-api, snapchat-profile-api
 	snapchat: {
@@ -263,7 +298,8 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// Google Business Profile — Google OAuth 2.0
 	// https://developers.google.com/identity/protocols/oauth2/web-server
 	// Section: "Step 1: Set authorization parameters" (same Google OAuth flow as YouTube)
-	// Auth: https://accounts.google.com/o/oauth2/v2/auth — Token: POST https://oauth2.googleapis.com/token
+	// Auth/token methods and fields are the exact Google web-server flow documented
+	// above; GBP scope is https://www.googleapis.com/auth/business.manage.
 	// Profile: https://developers.google.com/my-business/reference/accountmanagement/rest
 	// Base URL: https://mybusinessaccountmanagement.googleapis.com
 	googlebusiness: {
@@ -279,7 +315,9 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// Mastodon — Standard OAuth 2.0 (instance-specific endpoints)
 	// https://docs.joinmastodon.org/client/authorized/
 	// Section: "Logging in with an account" → "Authorize the user" and "Obtain the token"
-	// Auth: GET {instance}/oauth/authorize — Token: POST {instance}/oauth/token
+	// Auth: GET {instance}/oauth/authorize with client_id, scope, redirect_uri,
+	// response_type=code. Token: POST {instance}/oauth/token with grant_type,
+	// client_id, client_secret, redirect_uri, code (multipart form in official curl).
 	// The URLs below use mastodon.social as the default; the connect flow
 	// should replace the base URL with the user's chosen instance.
 	// Scopes: https://docs.joinmastodon.org/api/oauth-scopes/
@@ -298,15 +336,21 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 
 // Instagram API with Instagram Login — Direct Instagram OAuth (no Facebook required)
 // https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login
-// Section: "Instagram API with Instagram Login" → Overview
+// Sections: "Instagram API with Instagram Login" → "Business login settings",
+// "Exchange the Code For a Token", and reference "Access Token" (verified 2026-07-15)
 // Auth: https://developers.facebook.com/docs/instagram-platform/reference/oauth-authorize
-//   GET https://www.instagram.com/oauth/authorize
+//   GET https://www.instagram.com/oauth/authorize with client_id, redirect_uri,
+//   response_type=code, scope, state.
 // Token: POST https://api.instagram.com/oauth/access_token
 //   Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/business-login
-//   Returns: { access_token, user_id, permissions }
+//   Fields: client_id, client_secret, grant_type=authorization_code,
+//   redirect_uri, code. Returns: { access_token, user_id, permissions }.
 // Long-lived token exchange: GET https://graph.instagram.com/access_token
 //   Docs: https://developers.facebook.com/docs/instagram-platform/reference/access_token
-//   Uses ig_exchange_token grant type. Tokens last 60 days.
+//   Fields: grant_type=ig_exchange_token, client_secret, access_token.
+//   Official curl: curl -i -X GET "https://graph.instagram.com/access_token
+//   ?grant_type=ig_exchange_token&client_secret=...&access_token=..."
+//   Tokens last 60 days.
 // Profile: GET https://graph.instagram.com/{api-version}/me?fields=user_id,username,...
 //   Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/get-started
 //   IMPORTANT: graph.instagram.com endpoints require a version prefix (e.g. /v25.0/).
@@ -382,12 +426,12 @@ export function buildAuthUrl(
 	codeChallenge?: string,
 ): string {
 	const params = new URLSearchParams({
-		client_id: clientId,
 		redirect_uri: redirectUrl,
 		response_type: "code",
 		scope: config.scopes.join(" "),
 		state,
 	});
+	params.set(config.clientIdParam ?? "client_id", clientId);
 
 	// PKCE support (required by Twitter)
 	if (config.requiresPkce && codeChallenge) {
@@ -442,8 +486,9 @@ export async function exchangeCode(
 		const credentials = btoa(`${clientId}:${clientSecret}`);
 		headers.Authorization = `Basic ${credentials}`;
 	} else {
-		// Most platforms accept client_id/client_secret in the body
-		bodyParams.client_id = clientId;
+		// Most platforms use client_id; TikTok's official OAuth endpoints require
+		// client_key for both authorization and token exchange.
+		bodyParams[config.clientIdParam ?? "client_id"] = clientId;
 		bodyParams.client_secret = clientSecret;
 	}
 

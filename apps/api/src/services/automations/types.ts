@@ -5,11 +5,7 @@
 // §8 (Runtime Execution Model) for the full design.
 
 import type { Database } from "@relayapi/db";
-import type {
-	Graph,
-	GraphNode,
-	Port,
-} from "../../schemas/automation-graph";
+import type { Graph, GraphNode, Port } from "../../schemas/automation-graph";
 
 export type RunStatus =
 	| "active"
@@ -19,16 +15,13 @@ export type RunStatus =
 	| "failed";
 
 /** Direct-messaging channels supported by the automation dispatcher. */
-export type Channel =
-	| "instagram"
-	| "facebook"
-	| "whatsapp"
-	| "telegram";
+export type Channel = "instagram" | "facebook" | "whatsapp" | "telegram";
 
 export type RunContext = {
 	runId: string;
 	automationId: string;
 	organizationId: string;
+	workspaceId?: string | null;
 	contactId: string;
 	conversationId: string | null;
 	channel: string;
@@ -42,6 +35,14 @@ export type RunContext = {
 	 * be present).
 	 */
 	db: Database;
+	/**
+	 * Stable key for this exact run-revision/node execution. Provider-facing
+	 * handlers should pass it to APIs that support idempotency. It remains the
+	 * same when a completed HandlerResult is replayed after a runner crash.
+	 */
+	effectIdempotencyKey?: string;
+	/** Derive a stable child key for one action/block inside a composite node. */
+	effectIdempotencyKeyFor?: (component: string) => string;
 	// Remaining env bindings (KV, Queue, R2, encryption keys, etc.) flow here.
 	env: Record<string, unknown>;
 };

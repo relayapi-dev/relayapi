@@ -42,7 +42,7 @@ import {
   AdAudienceListResponse,
   AdAddAudienceUsersResponse,
   AdUpdateCampaignResponse,
-  AdSyncResponse,
+  AdSyncQueuedResponse,
   AdListAccountsParams,
   AdCreateCampaignParams,
   AdUpdateCampaignParams,
@@ -65,6 +65,7 @@ import {
   WorkspaceUpdateResponse,
   Workspaces,
 } from './resources/workspaces';
+import { Organizations, OrganizationDeletionResponse } from './resources/organizations';
 import {
   Broadcasts,
   BroadcastResponse,
@@ -193,6 +194,8 @@ import { ConnectionListLogsParams, ConnectionListLogsResponse, Connections } fro
 import {
   Contacts,
   ContactChannel,
+  ContactConsent,
+  ContactListConsentsResponse,
   ContactCreateResponse,
   ContactRetrieveResponse,
   ContactListResponse,
@@ -205,11 +208,13 @@ import {
   ContactSetFieldResponse,
   ContactCreateParams,
   ContactListParams,
+  ContactListConsentsParams,
   ContactUpdateParams,
   ContactBulkCreateParams,
   ContactBulkOperationsParams,
   ContactMergeParams,
   ContactAddChannelParams,
+  ContactRecordConsentParams,
   ContactSetFieldParams,
 } from './resources/contacts';
 import {
@@ -247,6 +252,7 @@ import {
   IdeaGroupListResponse,
   IdeaGroupCreateParams,
   IdeaGroupUpdateParams,
+  IdeaGroupDeleteParams,
   IdeaGroupListParams,
   IdeaGroupReorderParams,
 } from './resources/idea-groups';
@@ -380,12 +386,17 @@ import { Inbox } from './resources/inbox/inbox';
 import {
   PostBulkCreateParams,
   PostBulkCreateResponse,
+  PostMetrics,
   PostCreateParams,
   PostCreateResponse,
   PostListParams,
   PostListResponse,
   PostRetrieveResponse,
   PostRetryResponse,
+  PostReconcileTargetParams,
+  PostReconcileTargetResponse,
+  PostTargetPlatform,
+  PostTargetStatus,
   PostUnpublishResponse,
   PostUpdateParams,
   PostUpdateResponse,
@@ -398,6 +409,9 @@ import {
   QueuePreviewResponse,
   QueueFindSlotParams,
   QueueFindSlotResponse,
+  QueueListFailuresParams,
+  QueueListFailuresResponse,
+  QueueReplayFailureResponse,
 } from './resources/queue/queue';
 import {
   Threads,
@@ -480,6 +494,8 @@ export interface ClientOptions {
   /**
    * The maximum number of times that the client will retry a request in case of a
    * temporary failure, like a network error or a 5XX error from the server.
+   * Replayable mutations receive one idempotency key per SDK call and reuse it
+   * across retries. One-shot request streams are never retried.
    *
    * @default 2
    */
@@ -531,7 +547,6 @@ export class Relay {
 
   private fetch: Fetch;
   #encoder: Opts.RequestEncoder;
-  protected idempotencyHeader?: string;
   private _options: ClientOptions;
 
   /**
@@ -542,7 +557,7 @@ export class Relay {
    * @param {number} [opts.timeout=1 minute] - The maximum amount of time (in milliseconds) the client will wait for a response before timing out.
    * @param {MergedRequestInit} [opts.fetchOptions] - Additional `RequestInit` options to be passed to `fetch` calls.
    * @param {Fetch} [opts.fetch] - Specify a custom `fetch` function implementation.
-   * @param {number} [opts.maxRetries=2] - The maximum number of times the client will retry a request.
+   * @param {number} [opts.maxRetries=2] - The maximum number of times the client will retry a request. Replayable mutations use one generated idempotency key across retries; one-shot streams are not retried.
    * @param {HeadersLike} opts.defaultHeaders - Default headers to include with every request to the API.
    * @param {Record<string, string | undefined>} opts.defaultQuery - Default query parameters to include with every request to the API.
    */
@@ -730,8 +745,21 @@ export class Relay {
     retryOfRequestLogID: string | undefined,
   ): Promise<APIResponseProps> {
     const options = await optionsInput;
-    const maxRetries = options.maxRetries ?? this.maxRetries;
-    if (retriesRemaining == null) {
+    const hasNonReplayableBody = this.hasNonReplayableRequestBody(options);
+    if (
+      options.method !== 'get' &&
+      !hasNonReplayableBody &&
+      !this.hasExplicitIdempotencyKey(options)
+    ) {
+      options.idempotencyKey = this.defaultIdempotencyKey();
+    }
+    const retryable =
+      !hasNonReplayableBody &&
+      (options.method === 'get' || this.hasExplicitIdempotencyKey(options));
+    const maxRetries = retryable ? (options.maxRetries ?? this.maxRetries) : 0;
+    if (!retryable) {
+      retriesRemaining = 0;
+    } else if (retriesRemaining == null) {
       retriesRemaining = maxRetries;
     }
 
@@ -940,6 +968,29 @@ export class Relay {
     return false;
   }
 
+  /** Find either a generated key or one supplied through options/default headers. */
+  private hasExplicitIdempotencyKey(options: FinalRequestOptions): boolean {
+    const headers = buildHeaders([
+      options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
+      this._options.defaultHeaders,
+      options.headers,
+    ]).values;
+    return Boolean(headers.get('idempotency-key'));
+  }
+
+  /** Streamed request bodies are one-shot and cannot be retried safely. */
+  private hasNonReplayableRequestBody(options: FinalRequestOptions): boolean {
+    const bodies = [options.body, this.fetchOptions?.body, options.fetchOptions?.body];
+    return bodies.some((body) => {
+      if (!body || typeof body !== 'object') return false;
+      return (
+        ((globalThis as any).ReadableStream && body instanceof (globalThis as any).ReadableStream) ||
+        Symbol.asyncIterator in body ||
+        (Symbol.iterator in body && 'next' in body && typeof body.next === 'function')
+      );
+    });
+  }
+
   private async retryRequest(
     options: FinalRequestOptions,
     retriesRemaining: number,
@@ -1032,11 +1083,8 @@ export class Relay {
     bodyHeaders: HeadersLike;
     retryCount: number;
   }): Promise<Headers> {
-    let idempotencyHeaders: HeadersLike = {};
-    if (this.idempotencyHeader && method !== 'get') {
-      if (!options.idempotencyKey) options.idempotencyKey = this.defaultIdempotencyKey();
-      idempotencyHeaders[this.idempotencyHeader] = options.idempotencyKey;
-    }
+    const idempotencyHeaders: HeadersLike =
+      method !== 'get' && options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined;
 
     const headers = buildHeaders([
       idempotencyHeaders,
@@ -1154,6 +1202,7 @@ export class Relay {
   streaks: API.Streaks = new API.Streaks(this);
   usage: API.Usage = new API.Usage(this);
   orgSettings: API.OrgSettings = new API.OrgSettings(this);
+  organizations: API.Organizations = new API.Organizations(this);
   workspaces: API.Workspaces = new API.Workspaces(this);
   connect: API.Connect = new API.Connect(this);
   connections: API.Connections = new API.Connections(this);
@@ -1194,6 +1243,7 @@ Relay.APIKeys = APIKeys;
 Relay.InviteTokens = InviteTokens;
 Relay.Streaks = Streaks;
 Relay.Usage = Usage;
+Relay.Organizations = Organizations;
 Relay.Workspaces = Workspaces;
 Relay.Connect = Connect;
 Relay.Connections = Connections;
@@ -1228,7 +1278,7 @@ export declare namespace Relay {
     type AdAudienceListResponse as AdAudienceListResponse,
     type AdAddAudienceUsersResponse as AdAddAudienceUsersResponse,
     type AdUpdateCampaignResponse as AdUpdateCampaignResponse,
-    type AdSyncResponse as AdSyncResponse,
+    type AdSyncQueuedResponse as AdSyncQueuedResponse,
     type AdListAccountsParams as AdListAccountsParams,
     type AdCreateCampaignParams as AdCreateCampaignParams,
     type AdUpdateCampaignParams as AdUpdateCampaignParams,
@@ -1412,6 +1462,7 @@ export declare namespace Relay {
     type IdeaGroupListResponse as IdeaGroupListResponse,
     type IdeaGroupCreateParams as IdeaGroupCreateParams,
     type IdeaGroupUpdateParams as IdeaGroupUpdateParams,
+    type IdeaGroupDeleteParams as IdeaGroupDeleteParams,
     type IdeaGroupListParams as IdeaGroupListParams,
     type IdeaGroupReorderParams as IdeaGroupReorderParams,
   };
@@ -1440,17 +1491,22 @@ export declare namespace Relay {
 
   export {
     Posts as Posts,
+    type PostTargetPlatform as PostTargetPlatform,
+    type PostTargetStatus as PostTargetStatus,
+    type PostMetrics as PostMetrics,
     type PostCreateResponse as PostCreateResponse,
     type PostRetrieveResponse as PostRetrieveResponse,
     type PostUpdateResponse as PostUpdateResponse,
     type PostListResponse as PostListResponse,
     type PostBulkCreateResponse as PostBulkCreateResponse,
     type PostRetryResponse as PostRetryResponse,
+    type PostReconcileTargetResponse as PostReconcileTargetResponse,
     type PostUnpublishResponse as PostUnpublishResponse,
     type PostCreateParams as PostCreateParams,
     type PostUpdateParams as PostUpdateParams,
     type PostListParams as PostListParams,
     type PostBulkCreateParams as PostBulkCreateParams,
+    type PostReconcileTargetParams as PostReconcileTargetParams,
   };
 
   export {
@@ -1530,6 +1586,11 @@ export declare namespace Relay {
   };
 
   export {
+    Organizations as Organizations,
+    type OrganizationDeletionResponse as OrganizationDeletionResponse,
+  };
+
+  export {
     Workspaces as Workspaces,
     type WorkspaceCreateResponse as WorkspaceCreateResponse,
     type WorkspaceUpdateResponse as WorkspaceUpdateResponse,
@@ -1591,6 +1652,9 @@ export declare namespace Relay {
     type QueuePreviewParams as QueuePreviewParams,
     type QueueFindSlotParams as QueueFindSlotParams,
     type QueueFindSlotResponse as QueueFindSlotResponse,
+    type QueueListFailuresParams as QueueListFailuresParams,
+    type QueueListFailuresResponse as QueueListFailuresResponse,
+    type QueueReplayFailureResponse as QueueReplayFailureResponse,
   };
 
   export {
@@ -1643,6 +1707,8 @@ export declare namespace Relay {
   export {
     Contacts as Contacts,
     type ContactChannel as ContactChannel,
+    type ContactConsent as ContactConsent,
+    type ContactListConsentsResponse as ContactListConsentsResponse,
     type ContactCreateResponse as ContactCreateResponse,
     type ContactRetrieveResponse as ContactRetrieveResponse,
     type ContactListResponse as ContactListResponse,
@@ -1655,11 +1721,13 @@ export declare namespace Relay {
     type ContactSetFieldResponse as ContactSetFieldResponse,
     type ContactCreateParams as ContactCreateParams,
     type ContactListParams as ContactListParams,
+    type ContactListConsentsParams as ContactListConsentsParams,
     type ContactUpdateParams as ContactUpdateParams,
     type ContactBulkCreateParams as ContactBulkCreateParams,
     type ContactBulkOperationsParams as ContactBulkOperationsParams,
     type ContactMergeParams as ContactMergeParams,
     type ContactAddChannelParams as ContactAddChannelParams,
+    type ContactRecordConsentParams as ContactRecordConsentParams,
     type ContactSetFieldParams as ContactSetFieldParams,
   };
 

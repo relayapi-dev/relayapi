@@ -8,8 +8,8 @@ export class Boards extends APIResource {
   /**
    * List Pinterest boards after OAuth
    */
-  list(options?: RequestOptions): APIPromise<BoardListResponse> {
-    return this._client.get('/v1/connect/pinterest/boards', options);
+  list(query: BoardListParams, options?: RequestOptions): APIPromise<BoardListResponse> {
+    return this._client.get('/v1/connect/pinterest/boards', { query, ...options });
   }
 
   /**
@@ -106,9 +106,15 @@ export interface BoardSelectParams {
   connect_token: string;
 }
 
+export interface BoardListParams {
+  /** Operation-scoped token returned by the OAuth callback. */
+  connect_token: string;
+}
+
 export declare namespace Boards {
   export {
     type BoardListResponse as BoardListResponse,
+    type BoardListParams as BoardListParams,
     type BoardSelectResponse as BoardSelectResponse,
     type BoardSelectParams as BoardSelectParams,
   };

@@ -1,17 +1,36 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { socialAccounts, socialAccountSyncState, workspaces } from "@relayapi/db";
-import { and, count, desc, eq, isNull, gt, or, ilike, inArray, sql } from "drizzle-orm";
+import {
+	socialAccountSyncState,
+	socialAccounts,
+	workspaces,
+} from "@relayapi/db";
+import {
+	and,
+	count,
+	desc,
+	eq,
+	gt,
+	ilike,
+	inArray,
+	isNull,
+	or,
+	sql,
+} from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
+import { decryptAccountToken } from "../lib/account-token-crypto";
 import { getOwnedAccount } from "../lib/accounts";
 import {
 	deleteConnectedAccountGraph,
 	invalidateAccountCaches,
 } from "../lib/delete-account";
-import { maybeDecrypt } from "../lib/crypto";
 import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
+import { buildMailchimpApiUrl, getMailchimpDatacenter } from "../lib/mailchimp";
+import { assertAllWorkspaceScope } from "../lib/request-access";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
-import { dispatchWebhookEvent } from "../services/webhook-delivery";
-import { logConnectionEvent } from "./connections";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+} from "../lib/workspace-scope";
 import {
 	AccountHealthResponse,
 	AccountListResponse,
@@ -32,18 +51,26 @@ import {
 	UpdateAccountBody,
 	YouTubePlaylistsResponse,
 } from "../schemas/accounts";
-import { ErrorResponse, IdParam, PaginationParams, type Platform } from "../schemas/common";
-import type { Env, Variables } from "../types";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
-import { assertAllWorkspaceScope } from "../lib/request-access";
-import { getSupportedSyncPlatforms } from "../services/external-post-sync/index";
-import type { SyncPostsMessage } from "../services/external-post-sync/types";
+import {
+	ErrorResponse,
+	IdParam,
+	PaginationParams,
+	type Platform,
+} from "../schemas/common";
 import {
 	mergePublicSocialAccountMetadata,
 	sanitizeSocialAccountMetadata,
 } from "../services/ad-access-token";
+import { rehostAvatar } from "../services/avatar-store";
+import { getSupportedSyncPlatforms } from "../services/external-post-sync/index";
+import type { SyncPostsMessage } from "../services/external-post-sync/types";
 import { fetchAvatarUrl } from "../services/token-refresh";
-import { rehostAvatar, deleteStoredAvatar } from "../services/avatar-store";
+import {
+	enqueuePersistedWebhookEvent,
+	type PersistedWebhookEvent,
+	persistWebhookEventInTransaction,
+} from "../services/webhook-delivery";
+import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -51,9 +78,15 @@ const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
 const AccountListQuery = PaginationParams.extend({
 	workspace_id: z.string().optional().describe("Filter by workspace ID"),
-	ungrouped: z.coerce.boolean().optional().describe("Only show ungrouped accounts"),
+	ungrouped: z.coerce
+		.boolean()
+		.optional()
+		.describe("Only show ungrouped accounts"),
 	search: z.string().optional().describe("Search by name or username"),
-	platforms: z.string().optional().describe("Comma-separated platform filter (e.g. instagram,facebook)"),
+	platforms: z
+		.string()
+		.optional()
+		.describe("Comma-separated platform filter (e.g. instagram,facebook)"),
 });
 
 const listAccounts = createRoute({
@@ -259,12 +292,11 @@ app.openapi(singleHealthCheck, async (c) => {
 	if (denied) return denied;
 
 	const now = new Date();
-	const expired = row.tokenExpiresAt
-		? row.tokenExpiresAt < now
-		: false;
+	const expired = row.tokenExpiresAt ? row.tokenExpiresAt < now : false;
 	const isOnSyncPlatform = getSupportedSyncPlatforms().includes(row.platform);
 	const syncErrors = row.consecutiveErrors ?? 0;
-	const hasSyncFailure = isOnSyncPlatform && row.syncEnabled === true && syncErrors >= 3;
+	const hasSyncFailure =
+		isOnSyncPlatform && row.syncEnabled === true && syncErrors >= 3;
 
 	const sync =
 		isOnSyncPlatform && row.syncEnabled != null
@@ -317,7 +349,10 @@ app.openapi(healthCheck, async (c) => {
 	const { cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
 
-	const conditions = [eq(socialAccounts.organizationId, orgId)];
+	const conditions = [
+		eq(socialAccounts.organizationId, orgId),
+		eq(socialAccounts.lifecycleStatus, "active"),
+	];
 	applyWorkspaceScope(c, conditions, socialAccounts.workspaceId);
 
 	// Cursor pagination
@@ -366,7 +401,8 @@ app.openapi(healthCheck, async (c) => {
 		const expired = a.tokenExpiresAt ? a.tokenExpiresAt < now : false;
 		const isOnSyncPlatform = supportedPlatforms.includes(a.platform);
 		const syncErrors = a.consecutiveErrors ?? 0;
-		const hasSyncFailure = isOnSyncPlatform && a.syncEnabled === true && syncErrors >= 3;
+		const hasSyncFailure =
+			isOnSyncPlatform && a.syncEnabled === true && syncErrors >= 3;
 
 		const sync =
 			isOnSyncPlatform && a.syncEnabled != null
@@ -392,9 +428,10 @@ app.openapi(healthCheck, async (c) => {
 			healthy: !expired && !hasSyncFailure,
 			token_expires_at: a.tokenExpiresAt?.toISOString() ?? null,
 			scopes: a.scopes ?? [],
-			workspace: a.workspaceId && a.workspaceName
-				? { id: a.workspaceId, name: a.workspaceName }
-				: null,
+			workspace:
+				a.workspaceId && a.workspaceName
+					? { id: a.workspaceId, name: a.workspaceName }
+					: null,
 			sync,
 			...(expired
 				? {
@@ -427,12 +464,16 @@ app.openapi(healthCheck, async (c) => {
 // @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(listAccounts, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit, cursor, workspace_id, ungrouped, search, platforms } = c.req.valid("query");
+	const { limit, cursor, workspace_id, ungrouped, search, platforms } =
+		c.req.valid("query");
 	const db = c.get("db");
 
 	// Filters shared by the page query and the total count (everything except
 	// the keyset cursor, which only bounds the current page).
-	const baseConditions = [eq(socialAccounts.organizationId, orgId)];
+	const baseConditions = [
+		eq(socialAccounts.organizationId, orgId),
+		eq(socialAccounts.lifecycleStatus, "active"),
+	];
 	applyWorkspaceScope(c, baseConditions, socialAccounts.workspaceId);
 	if (workspace_id) {
 		baseConditions.push(eq(socialAccounts.workspaceId, workspace_id));
@@ -441,7 +482,10 @@ app.openapi(listAccounts, async (c) => {
 	}
 	if (search) {
 		const searchCondition = or(
-			ilike(socialAccounts.displayName, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
+			ilike(
+				socialAccounts.displayName,
+				`%${search.replace(/[%_\\]/g, "\\$&")}%`,
+			),
 			ilike(socialAccounts.username, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
 		);
 		if (searchCondition) {
@@ -449,7 +493,10 @@ app.openapi(listAccounts, async (c) => {
 		}
 	}
 	if (platforms) {
-		const platformList = platforms.split(",").map((p) => p.trim()).filter(Boolean) as (typeof socialAccounts.platform.enumValues)[number][];
+		const platformList = platforms
+			.split(",")
+			.map((p) => p.trim())
+			.filter(Boolean) as (typeof socialAccounts.platform.enumValues)[number][];
 		if (platformList.length > 0) {
 			baseConditions.push(inArray(socialAccounts.platform, platformList));
 		}
@@ -505,7 +552,9 @@ app.openapi(listAccounts, async (c) => {
 				display_name: a.displayName,
 				avatar_url: a.avatarUrl,
 				metadata: sanitizeSocialAccountMetadata(a.metadata),
-				workspace: a.workspaceId ? { id: a.workspaceId, name: a.workspaceName } : null,
+				workspace: a.workspaceId
+					? { id: a.workspaceId, name: a.workspaceName }
+					: null,
 				connected_at: a.connectedAt.toISOString(),
 				updated_at: a.updatedAt.toISOString(),
 			})),
@@ -563,9 +612,10 @@ app.openapi(getAccount, async (c) => {
 			display_name: account.displayName,
 			avatar_url: account.avatarUrl,
 			metadata: sanitizeSocialAccountMetadata(account.metadata),
-			workspace: account.workspaceId && account.workspaceName
-				? { id: account.workspaceId, name: account.workspaceName }
-				: null,
+			workspace:
+				account.workspaceId && account.workspaceName
+					? { id: account.workspaceId, name: account.workspaceName }
+					: null,
 			connected_at: account.connectedAt.toISOString(),
 			updated_at: account.updatedAt.toISOString(),
 		},
@@ -604,9 +654,29 @@ app.openapi(deleteAccount, async (c) => {
 	const denied = assertWorkspaceScope(c, account.workspaceId);
 	if (denied) return denied;
 
+	let persistedDisconnectEvent: PersistedWebhookEvent | undefined;
 	try {
-		await deleteConnectedAccountGraph(db, id);
-		console.log(`[accounts] Deleted account ${id} successfully`);
+		persistedDisconnectEvent = await deleteConnectedAccountGraph(
+			db,
+			id,
+			(tx, disconnectedAccount) =>
+				persistWebhookEventInTransaction(
+					tx,
+					orgId,
+					"account.disconnected",
+					{
+						account_id: disconnectedAccount.id,
+						platform: disconnectedAccount.platform,
+						username: disconnectedAccount.username,
+						display_name: disconnectedAccount.displayName,
+					},
+					{
+						workspaceId: disconnectedAccount.workspaceId,
+						occurrenceId: `account:${disconnectedAccount.id}:disconnected`,
+					},
+				),
+		);
+		console.log(`[accounts] Started lifecycle disconnect for ${id}`);
 	} catch (err) {
 		console.error(`[accounts] Failed to delete account ${id}:`, err);
 		return c.json(
@@ -626,26 +696,11 @@ app.openapi(deleteAccount, async (c) => {
 		}),
 	);
 
-	// Clean up the re-hosted avatar object in R2 (best-effort)
-	c.executionCtx.waitUntil(deleteStoredAvatar(c.env, id));
-
-	c.executionCtx.waitUntil(
-		dispatchWebhookEvent(c.env, db, orgId, "account.disconnected", {
-			account_id: account.id,
-			platform: account.platform,
-			username: account.username,
-			display_name: account.displayName,
-		}),
-	);
-	c.executionCtx.waitUntil(
-		logConnectionEvent(c.env, orgId, {
-			account_id: account.id,
-			platform: account.platform,
-			event: "disconnected",
-			message: `Disconnected ${account.displayName || account.username || account.platform} account`,
-		}),
-	);
-
+	if (persistedDisconnectEvent) {
+		c.executionCtx.waitUntil(
+			enqueuePersistedWebhookEvent(c.env, db, persistedDisconnectEvent),
+		);
+	}
 	return c.body(null, 204);
 });
 
@@ -677,6 +732,10 @@ const updateAccount = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		409: {
+			description: "Account workspace graph already exists",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -688,7 +747,11 @@ app.openapi(updateAccount, async (c) => {
 	const db = c.get("db");
 
 	const [account] = await db
-		.select({ id: socialAccounts.id, metadata: socialAccounts.metadata, workspaceId: socialAccounts.workspaceId })
+		.select({
+			id: socialAccounts.id,
+			metadata: socialAccounts.metadata,
+			workspaceId: socialAccounts.workspaceId,
+		})
 		.from(socialAccounts)
 		.where(
 			and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId)),
@@ -727,11 +790,18 @@ app.openapi(updateAccount, async (c) => {
 			const [ws] = await db
 				.select({ id: workspaces.id })
 				.from(workspaces)
-				.where(and(eq(workspaces.id, body.workspace_id), eq(workspaces.organizationId, orgId)))
+				.where(
+					and(
+						eq(workspaces.id, body.workspace_id),
+						eq(workspaces.organizationId, orgId),
+					),
+				)
 				.limit(1);
 			if (!ws) {
 				return c.json(
-					{ error: { code: "NOT_FOUND", message: "Workspace not found" } } as never,
+					{
+						error: { code: "NOT_FOUND", message: "Workspace not found" },
+					} as never,
 					404 as never,
 				);
 			}
@@ -739,27 +809,97 @@ app.openapi(updateAccount, async (c) => {
 		updates.workspaceId = body.workspace_id;
 	}
 
-	// Use .returning() to avoid a second SELECT, then fetch workspace name only if needed
-	const [updatedRow] = await db.update(socialAccounts).set(updates).where(eq(socialAccounts.id, id)).returning({
-		id: socialAccounts.id,
-		platform: socialAccounts.platform,
-		platformAccountId: socialAccounts.platformAccountId,
-		username: socialAccounts.username,
-		displayName: socialAccounts.displayName,
-		avatarUrl: socialAccounts.avatarUrl,
-		metadata: socialAccounts.metadata,
-		workspaceId: socialAccounts.workspaceId,
-		connectedAt: socialAccounts.connectedAt,
-		updatedAt: socialAccounts.updatedAt,
+	// Workspace is a graph identity, not ordinary mutable metadata. Lock the
+	// account and permit the initial assignment only while no dependent graph
+	// exists. Composite database FKs remain the final backstop for future tables.
+	const mutation = await db.transaction(async (tx) => {
+		const [locked] = await tx
+			.select({ workspaceId: socialAccounts.workspaceId })
+			.from(socialAccounts)
+			.where(
+				and(
+					eq(socialAccounts.id, id),
+					eq(socialAccounts.organizationId, orgId),
+				),
+			)
+			.for("update")
+			.limit(1);
+		if (!locked) return { kind: "missing" as const, row: null };
+
+		if (
+			body.workspace_id !== undefined &&
+			body.workspace_id !== locked.workspaceId
+		) {
+			const dependencies = (await tx.execute(sql`
+				SELECT EXISTS (
+					SELECT 1 FROM post_targets WHERE social_account_id = ${id}
+					UNION ALL SELECT 1 FROM inbox_conversations WHERE account_id = ${id}
+					UNION ALL SELECT 1 FROM contact_channels WHERE social_account_id = ${id}
+					UNION ALL SELECT 1 FROM broadcasts WHERE social_account_id = ${id}
+					UNION ALL SELECT 1 FROM ad_accounts WHERE social_account_id = ${id}
+					UNION ALL SELECT 1 FROM external_posts WHERE social_account_id = ${id}
+					UNION ALL SELECT 1 FROM social_account_sync_state WHERE social_account_id = ${id}
+					UNION ALL SELECT 1 FROM automation_entrypoints WHERE social_account_id = ${id}
+					UNION ALL SELECT 1 FROM automation_bindings WHERE social_account_id = ${id}
+					UNION ALL SELECT 1 FROM cross_post_actions WHERE target_account_id = ${id}
+				) AS has_dependencies
+			`)) as unknown as Array<{ has_dependencies: boolean }>;
+			if (dependencies[0]?.has_dependencies) {
+				return { kind: "has_dependencies" as const, row: null };
+			}
+		}
+
+		const [row] = await tx
+			.update(socialAccounts)
+			.set(updates)
+			.where(
+				and(
+					eq(socialAccounts.id, id),
+					eq(socialAccounts.organizationId, orgId),
+				),
+			)
+			.returning({
+				id: socialAccounts.id,
+				platform: socialAccounts.platform,
+				platformAccountId: socialAccounts.platformAccountId,
+				username: socialAccounts.username,
+				displayName: socialAccounts.displayName,
+				avatarUrl: socialAccounts.avatarUrl,
+				metadata: socialAccounts.metadata,
+				workspaceId: socialAccounts.workspaceId,
+				connectedAt: socialAccounts.connectedAt,
+				updatedAt: socialAccounts.updatedAt,
+			});
+		return { kind: row ? ("updated" as const) : ("missing" as const), row };
 	});
 
+	if (mutation.kind === "has_dependencies") {
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_WORKSPACE_GRAPH_EXISTS",
+					message:
+						"This account already owns workspace-scoped data. Disconnect and reconnect it in the intended workspace instead of splitting its graph.",
+				},
+			},
+			409,
+		);
+	}
+	const updatedRow = mutation.row;
 	if (!updatedRow) {
-		return c.json({ error: { code: "NOT_FOUND", message: "Account not found" } }, 404);
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Account not found" } },
+			404,
+		);
 	}
 
 	let workspaceName: string | null = null;
 	if (updatedRow.workspaceId) {
-		const [workspace] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, updatedRow.workspaceId)).limit(1);
+		const [workspace] = await db
+			.select({ name: workspaces.name })
+			.from(workspaces)
+			.where(eq(workspaces.id, updatedRow.workspaceId))
+			.limit(1);
 		workspaceName = workspace?.name ?? null;
 	}
 
@@ -772,7 +912,9 @@ app.openapi(updateAccount, async (c) => {
 			display_name: updatedRow.displayName,
 			avatar_url: updatedRow.avatarUrl,
 			metadata: sanitizeSocialAccountMetadata(updatedRow.metadata),
-			workspace: updatedRow.workspaceId ? { id: updatedRow.workspaceId, name: workspaceName } : null,
+			workspace: updatedRow.workspaceId
+				? { id: updatedRow.workspaceId, name: workspaceName }
+				: null,
 			connected_at: updatedRow.connectedAt.toISOString(),
 			updated_at: updatedRow.updatedAt.toISOString(),
 		},
@@ -783,7 +925,6 @@ app.openapi(updateAccount, async (c) => {
 // ---------------------------------------------------------------------------
 // Platform-specific endpoints
 // ---------------------------------------------------------------------------
-
 
 function formatAccountResult(account: {
 	id: string;
@@ -1025,8 +1166,9 @@ app.openapi(getLinkedInOrgs, async (c) => {
 	}
 
 	try {
-		const organizations =
-			await fetchLinkedInAccessibleOrganizations(account.accessToken);
+		const organizations = await fetchLinkedInAccessibleOrganizations(
+			account.accessToken,
+		);
 		return c.json(
 			{
 				data: organizations.map((organization) => ({
@@ -1743,13 +1885,9 @@ app.openapi(getYoutubePlaylists, async (c) => {
 					id: p.id,
 					title: p.snippet.title,
 					description: p.snippet.description || null,
-					privacy: p.status.privacyStatus as
-						| "public"
-						| "private"
-						| "unlisted",
+					privacy: p.status.privacyStatus as "public" | "private" | "unlisted",
 					item_count: p.contentDetails.itemCount,
-					thumbnail_url:
-						p.snippet.thumbnails?.default?.url ?? null,
+					thumbnail_url: p.snippet.thumbnails?.default?.url ?? null,
 				})),
 			},
 			200,
@@ -1804,7 +1942,8 @@ const getTikTokCreatorInfo = createRoute({
 	method: "get",
 	path: "/{id}/tiktok-creator-info",
 	tags: ["Accounts"],
-	summary: "Fetch TikTok creator info (available privacy levels, posting limits)",
+	summary:
+		"Fetch TikTok creator info (available privacy levels, posting limits)",
 	description:
 		"Returns TikTok creator details, available privacy levels, and default interaction settings. Use this before creating TikTok posts to ensure the privacy_level is valid for the account.",
 	security: [{ Bearer: [] }],
@@ -1844,14 +1983,24 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 
 	if (account.platform !== "tiktok") {
 		return c.json(
-			{ error: { code: "INVALID_PLATFORM", message: "This endpoint only works with TikTok accounts" } },
+			{
+				error: {
+					code: "INVALID_PLATFORM",
+					message: "This endpoint only works with TikTok accounts",
+				},
+			},
 			400,
 		);
 	}
 
 	if (!account.accessToken) {
 		return c.json(
-			{ error: { code: "NO_TOKEN", message: "No access token for this account. Please reconnect." } },
+			{
+				error: {
+					code: "NO_TOKEN",
+					message: "No access token for this account. Please reconnect.",
+				},
+			},
 			422,
 		);
 	}
@@ -1876,21 +2025,37 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 
 		if (res.status === 401) {
 			return c.json(
-				{ error: { code: "TOKEN_EXPIRED", message: "TikTok access token expired. Please reconnect." } },
+				{
+					error: {
+						code: "TOKEN_EXPIRED",
+						message: "TikTok access token expired. Please reconnect.",
+					},
+				},
 				401,
 			);
 		}
 
 		if (res.status === 429) {
 			return c.json(
-				{ error: { code: "RATE_LIMITED", message: "TikTok rate limit exceeded (20 req/min). Please try again later." } },
+				{
+					error: {
+						code: "RATE_LIMITED",
+						message:
+							"TikTok rate limit exceeded (20 req/min). Please try again later.",
+					},
+				},
 				429,
 			);
 		}
 
 		if (!res.ok) {
 			return c.json(
-				{ error: { code: "TIKTOK_ERROR", message: `TikTok API error: ${res.status}` } },
+				{
+					error: {
+						code: "TIKTOK_ERROR",
+						message: `TikTok API error: ${res.status}`,
+					},
+				},
 				502,
 			);
 		}
@@ -1910,16 +2075,28 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 		};
 
 		if (json.error?.code && json.error.code !== "ok") {
-			const logSuffix = json.error.log_id ? ` (log_id: ${json.error.log_id})` : "";
+			const logSuffix = json.error.log_id
+				? ` (log_id: ${json.error.log_id})`
+				: "";
 			return c.json(
-				{ error: { code: json.error.code, message: (json.error.message ?? "TikTok error") + logSuffix } },
+				{
+					error: {
+						code: json.error.code,
+						message: (json.error.message ?? "TikTok error") + logSuffix,
+					},
+				},
 				502,
 			);
 		}
 
 		if (!json.data) {
 			return c.json(
-				{ error: { code: "NO_DATA", message: "TikTok returned no creator data" } },
+				{
+					error: {
+						code: "NO_DATA",
+						message: "TikTok returned no creator data",
+					},
+				},
 				502,
 			);
 		}
@@ -1933,13 +2110,20 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 				comment_disabled: json.data.comment_disabled ?? false,
 				duet_disabled: json.data.duet_disabled ?? false,
 				stitch_disabled: json.data.stitch_disabled ?? false,
-				max_video_post_duration_sec: json.data.max_video_post_duration_sec ?? 600,
+				max_video_post_duration_sec:
+					json.data.max_video_post_duration_sec ?? 600,
 			},
 			200,
 		);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "TIKTOK_ERROR", message: e instanceof Error ? e.message : "Failed to connect to TikTok API" } },
+			{
+				error: {
+					code: "TIKTOK_ERROR",
+					message:
+						e instanceof Error ? e.message : "Failed to connect to TikTok API",
+				},
+			},
 			502,
 		);
 	}
@@ -1950,137 +2134,139 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 // ---------------------------------------------------------------------------
 
 const singleSync = createRoute({
-  operationId: "syncAccount",
-  method: "post",
-  path: "/{id}/sync",
-  tags: ["Accounts"],
-  summary: "Trigger post sync for a single account",
-  security: [{ Bearer: [] }],
-  request: { params: IdParam },
-  responses: {
-    200: {
-      description: "Sync enqueued",
-      content: {
-        "application/json": {
-          schema: z.object({ success: z.boolean() }),
-        },
-      },
-    },
-    404: {
-      description: "Account not found or not syncable",
-      content: { "application/json": { schema: ErrorResponse } },
-    },
-  },
+	operationId: "syncAccount",
+	method: "post",
+	path: "/{id}/sync",
+	tags: ["Accounts"],
+	summary: "Trigger post sync for a single account",
+	security: [{ Bearer: [] }],
+	request: { params: IdParam },
+	responses: {
+		200: {
+			description: "Sync enqueued",
+			content: {
+				"application/json": {
+					schema: z.object({ success: z.boolean() }),
+				},
+			},
+		},
+		404: {
+			description: "Account not found or not syncable",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
 });
 
 // @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(singleSync, async (c) => {
-  const orgId = c.get("orgId");
-  const { id } = c.req.valid("param");
-  const db = c.get("db");
+	const orgId = c.get("orgId");
+	const { id } = c.req.valid("param");
+	const db = c.get("db");
 
-  const [account] = await db
-    .select({
-      id: socialAccounts.id,
-      platform: socialAccounts.platform,
-      workspaceId: socialAccounts.workspaceId,
-      accessToken: socialAccounts.accessToken,
-      platformAccountId: socialAccounts.platformAccountId,
-    })
-    .from(socialAccounts)
-    .where(
-      and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId)),
-    )
-    .limit(1);
+	const [account] = await db
+		.select({
+			id: socialAccounts.id,
+			platform: socialAccounts.platform,
+			workspaceId: socialAccounts.workspaceId,
+			accessToken: socialAccounts.accessToken,
+			platformAccountId: socialAccounts.platformAccountId,
+		})
+		.from(socialAccounts)
+		.where(
+			and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId)),
+		)
+		.limit(1);
 
-  if (!account) {
-    return c.json(
-      { error: { code: "NOT_FOUND", message: "Account not found" } },
-      404,
-    );
-  }
+	if (!account) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Account not found" } },
+			404,
+		);
+	}
 
-  const denied = assertWorkspaceScope(c, account.workspaceId);
-  if (denied) return denied;
+	const denied = assertWorkspaceScope(c, account.workspaceId);
+	if (denied) return denied;
 
-  const supportedPlatforms = getSupportedSyncPlatforms();
-  if (!supportedPlatforms.includes(account.platform)) {
-    return c.json(
-      {
-        error: {
-          code: "NOT_SYNCABLE",
-          message: `${account.platform} does not support post sync`,
-        },
-      },
-      404,
-    );
-  }
+	const supportedPlatforms = getSupportedSyncPlatforms();
+	if (!supportedPlatforms.includes(account.platform)) {
+		return c.json(
+			{
+				error: {
+					code: "NOT_SYNCABLE",
+					message: `${account.platform} does not support post sync`,
+				},
+			},
+			404,
+		);
+	}
 
-  // Re-fetch avatar URL (CDN URLs expire over time) and re-host it to R2 so the
-  // stored URL is durable. Falls back to the raw CDN URL if re-hosting fails.
-  // The response does not include the avatar, so this external fetch + R2 write
-  // is deferred past the response via waitUntil to keep this a fast enqueue.
-  c.executionCtx.waitUntil(
-    (async () => {
-      try {
-        const token = await maybeDecrypt(
-          account.accessToken,
-          c.env.ENCRYPTION_KEY,
-        );
-        if (!token) return;
-        const newAvatarUrl = await fetchAvatarUrl(
-          account.platform as Platform,
-          token,
-          account.platformAccountId,
-        );
-        if (!newAvatarUrl) return;
-        const stable = await rehostAvatar(c.env, account.id, newAvatarUrl);
-        await db
-          .update(socialAccounts)
-          .set({ avatarUrl: stable ?? newAvatarUrl, updatedAt: new Date() })
-          .where(eq(socialAccounts.id, account.id));
-      } catch {
-        // Best-effort avatar refresh; never block or fail the sync enqueue.
-      }
-    })(),
-  );
+	// Re-fetch avatar URL (CDN URLs expire over time) and re-host it to R2 so the
+	// stored URL is durable. Falls back to the raw CDN URL if re-hosting fails.
+	// The response does not include the avatar, so this external fetch + R2 write
+	// is deferred past the response via waitUntil to keep this a fast enqueue.
+	c.executionCtx.waitUntil(
+		(async () => {
+			try {
+				const token = await decryptAccountToken(
+					account.accessToken,
+					c.env.ENCRYPTION_KEY,
+					account.id,
+					"access_token",
+				);
+				if (!token) return;
+				const newAvatarUrl = await fetchAvatarUrl(
+					account.platform as Platform,
+					token,
+					account.platformAccountId,
+				);
+				if (!newAvatarUrl) return;
+				const stable = await rehostAvatar(c.env, account.id, newAvatarUrl);
+				await db
+					.update(socialAccounts)
+					.set({ avatarUrl: stable ?? newAvatarUrl, updatedAt: new Date() })
+					.where(eq(socialAccounts.id, account.id));
+			} catch {
+				// Best-effort avatar refresh; never block or fail the sync enqueue.
+			}
+		})(),
+	);
 
-  // Upsert sync state: reset errors, schedule now
-  await db
-    .insert(socialAccountSyncState)
-    .values({
-      socialAccountId: account.id,
-      organizationId: orgId,
-      platform:
-        account.platform as typeof socialAccountSyncState.$inferInsert.platform,
-      enabled: true,
-      nextSyncAt: new Date(),
-      consecutiveErrors: 0,
-      lastError: null,
-      lastErrorAt: null,
-    })
-    .onConflictDoUpdate({
-      target: socialAccountSyncState.socialAccountId,
-      set: {
-        enabled: true,
-        nextSyncAt: new Date(),
-        consecutiveErrors: 0,
-        lastError: null,
-        lastErrorAt: null,
-        rateLimitResetAt: null,
-        updatedAt: new Date(),
-      },
-    });
+	// Upsert sync state: reset errors, schedule now
+	await db
+		.insert(socialAccountSyncState)
+		.values({
+			socialAccountId: account.id,
+			organizationId: orgId,
+			platform:
+				account.platform as typeof socialAccountSyncState.$inferInsert.platform,
+			enabled: true,
+			nextSyncAt: new Date(),
+			consecutiveErrors: 0,
+			lastError: null,
+			lastErrorAt: null,
+		})
+		.onConflictDoUpdate({
+			target: socialAccountSyncState.socialAccountId,
+			set: {
+				enabled: true,
+				nextSyncAt: new Date(),
+				consecutiveErrors: 0,
+				lastError: null,
+				lastErrorAt: null,
+				rateLimitResetAt: null,
+				updatedAt: new Date(),
+			},
+		});
 
-  // Enqueue sync job
-  await c.env.SYNC_QUEUE.send({
-    type: "sync_posts",
-    social_account_id: account.id,
-    organization_id: orgId,
-    platform: account.platform,
-  } satisfies SyncPostsMessage);
+	// Enqueue sync job
+	await c.env.SYNC_QUEUE.send({
+		type: "sync_posts",
+		social_account_id: account.id,
+		organization_id: orgId,
+		platform: account.platform,
+	} satisfies SyncPostsMessage);
 
-  return c.json({ success: true }, 200);
+	return c.json({ success: true }, 200);
 });
 
 // ---------------------------------------------------------------------------
@@ -2134,7 +2320,9 @@ app.openapi(forceSync, async (c) => {
 		.from(socialAccounts)
 		.where(and(...conditions));
 
-	const syncable = accounts.filter((a) => supportedPlatforms.includes(a.platform));
+	const syncable = accounts.filter((a) =>
+		supportedPlatforms.includes(a.platform),
+	);
 
 	if (syncable.length === 0) {
 		return c.json({ enqueued_count: 0 }, 200);
@@ -2185,7 +2373,12 @@ app.openapi(forceSync, async (c) => {
 // Newsletter discovery: Lists + Templates
 // ===========================================================================
 
-const NEWSLETTER_PLATFORMS = new Set(["beehiiv", "convertkit", "mailchimp", "listmonk"]);
+const NEWSLETTER_PLATFORMS = new Set([
+	"beehiiv",
+	"convertkit",
+	"mailchimp",
+	"listmonk",
+]);
 
 const NewsletterListItem = z.object({
 	id: z.string(),
@@ -2208,9 +2401,22 @@ const getNewsletterLists = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: z.object({ id: z.string() }) },
 	responses: {
-		200: { description: "Lists", content: { "application/json": { schema: z.object({ data: z.array(NewsletterListItem) }) } } },
-		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Lists",
+			content: {
+				"application/json": {
+					schema: z.object({ data: z.array(NewsletterListItem) }),
+				},
+			},
+		},
+		400: {
+			description: "Bad request",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -2223,9 +2429,22 @@ const getNewsletterTemplates = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: z.object({ id: z.string() }) },
 	responses: {
-		200: { description: "Templates", content: { "application/json": { schema: z.object({ data: z.array(NewsletterTemplateItem) }) } } },
-		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Templates",
+			content: {
+				"application/json": {
+					schema: z.object({ data: z.array(NewsletterTemplateItem) }),
+				},
+			},
+		},
+		400: {
+			description: "Bad request",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -2234,41 +2453,106 @@ app.openapi(getNewsletterLists, async (c) => {
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
 
-	const [account] = await db.select().from(socialAccounts).where(and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId))).limit(1);
-	if (!account) return c.json({ error: { code: "NOT_FOUND", message: "Account not found" } }, 404);
+	const [account] = await db
+		.select()
+		.from(socialAccounts)
+		.where(
+			and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId)),
+		)
+		.limit(1);
+	if (!account)
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Account not found" } },
+			404,
+		);
 	if (!NEWSLETTER_PLATFORMS.has(account.platform)) {
-		return c.json({ error: { code: "BAD_REQUEST", message: "This endpoint is only for newsletter platforms" } }, 400);
+		return c.json(
+			{
+				error: {
+					code: "BAD_REQUEST",
+					message: "This endpoint is only for newsletter platforms",
+				},
+			},
+			400,
+		);
 	}
 
-	const token = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY) ?? "";
+	const token =
+		(await decryptAccountToken(
+			account.accessToken,
+			c.env.ENCRYPTION_KEY,
+			account.id,
+			"access_token",
+		)) ?? "";
 	const meta = (account.metadata ?? {}) as Record<string, unknown>;
-	const lists: Array<{ id: string; name: string; subscriber_count: number | null }> = [];
+	const lists: Array<{
+		id: string;
+		name: string;
+		subscriber_count: number | null;
+	}> = [];
 
 	try {
 		if (account.platform === "beehiiv") {
 			// Not applicable for Beehiiv (publication-level, not list-level)
-			lists.push({ id: meta.publication_id as string ?? account.platformAccountId, name: meta.publication_name as string ?? "All Subscribers", subscriber_count: null });
+			lists.push({
+				id: (meta.publication_id as string) ?? account.platformAccountId,
+				name: (meta.publication_name as string) ?? "All Subscribers",
+				subscriber_count: null,
+			});
 		} else if (account.platform === "mailchimp") {
-			const dc = (meta.datacenter as string) ?? token.split("-").pop();
-			const res = await fetch(`https://${dc}.api.mailchimp.com/3.0/lists?count=100`, { headers: { Authorization: `Basic ${btoa(`relayapi:${token}`)}` } });
+			const dc = getMailchimpDatacenter(token);
+			if (!dc) return c.json({ data: [] }, 200);
+			const res = await fetch(
+				buildMailchimpApiUrl(dc, "/3.0/lists?count=100"),
+				{ headers: { Authorization: `Basic ${btoa(`relayapi:${token}`)}` } },
+			);
 			if (res.ok) {
-				const data = (await res.json()) as { lists?: Array<{ id: string; name: string; stats?: { member_count?: number } }> };
-				for (const l of data.lists ?? []) lists.push({ id: l.id, name: l.name, subscriber_count: l.stats?.member_count ?? null });
+				const data = (await res.json()) as {
+					lists?: Array<{
+						id: string;
+						name: string;
+						stats?: { member_count?: number };
+					}>;
+				};
+				for (const l of data.lists ?? [])
+					lists.push({
+						id: l.id,
+						name: l.name,
+						subscriber_count: l.stats?.member_count ?? null,
+					});
 			}
 		} else if (account.platform === "listmonk") {
 			const url = meta.instance_url as string;
-			if (!url || await isBlockedUrlWithDns(url)) return c.json({ data: [] }, 200);
+			if (!url || (await isBlockedUrlWithDns(url)))
+				return c.json({ data: [] }, 200);
 			const res = await fetch(`${url}/api/lists?per_page=100`, {
 				headers: { Authorization: `Basic ${token}` },
 				redirect: "error",
 			});
 			if (res.ok) {
-				const data = (await res.json()) as { data?: { results?: Array<{ id: number; name: string; subscriber_count?: number }> } };
-				for (const l of data.data?.results ?? []) lists.push({ id: String(l.id), name: l.name, subscriber_count: l.subscriber_count ?? null });
+				const data = (await res.json()) as {
+					data?: {
+						results?: Array<{
+							id: number;
+							name: string;
+							subscriber_count?: number;
+						}>;
+					};
+				};
+				for (const l of data.data?.results ?? [])
+					lists.push({
+						id: String(l.id),
+						name: l.name,
+						subscriber_count: l.subscriber_count ?? null,
+					});
 			}
 		} else if (account.platform === "convertkit") {
 			// ConvertKit uses tags, not lists, but we can show forms/sequences as "lists"
-			lists.push({ id: "all", name: "All Subscribers", subscriber_count: null });
+			lists.push({
+				id: "all",
+				name: "All Subscribers",
+				subscriber_count: null,
+			});
 		}
 	} catch {
 		// Non-fatal — return empty list
@@ -2282,34 +2566,77 @@ app.openapi(getNewsletterTemplates, async (c) => {
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
 
-	const [account] = await db.select().from(socialAccounts).where(and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId))).limit(1);
-	if (!account) return c.json({ error: { code: "NOT_FOUND", message: "Account not found" } }, 404);
+	const [account] = await db
+		.select()
+		.from(socialAccounts)
+		.where(
+			and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId)),
+		)
+		.limit(1);
+	if (!account)
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Account not found" } },
+			404,
+		);
 	if (!NEWSLETTER_PLATFORMS.has(account.platform)) {
-		return c.json({ error: { code: "BAD_REQUEST", message: "This endpoint is only for newsletter platforms" } }, 400);
+		return c.json(
+			{
+				error: {
+					code: "BAD_REQUEST",
+					message: "This endpoint is only for newsletter platforms",
+				},
+			},
+			400,
+		);
 	}
 
-	const token = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY) ?? "";
+	const token =
+		(await decryptAccountToken(
+			account.accessToken,
+			c.env.ENCRYPTION_KEY,
+			account.id,
+			"access_token",
+		)) ?? "";
 	const meta = (account.metadata ?? {}) as Record<string, unknown>;
-	const templates: Array<{ id: string; name: string; preview_url: string | null }> = [];
+	const templates: Array<{
+		id: string;
+		name: string;
+		preview_url: string | null;
+	}> = [];
 
 	try {
 		if (account.platform === "listmonk") {
 			const url = meta.instance_url as string;
-			if (!url || await isBlockedUrlWithDns(url)) return c.json({ data: [] }, 200);
+			if (!url || (await isBlockedUrlWithDns(url)))
+				return c.json({ data: [] }, 200);
 			const res = await fetch(`${url}/api/templates?per_page=100`, {
 				headers: { Authorization: `Basic ${token}` },
 				redirect: "error",
 			});
 			if (res.ok) {
-				const data = (await res.json()) as { data?: Array<{ id: number; name: string }> };
-				for (const t of data.data ?? []) templates.push({ id: String(t.id), name: t.name, preview_url: null });
+				const data = (await res.json()) as {
+					data?: Array<{ id: number; name: string }>;
+				};
+				for (const t of data.data ?? [])
+					templates.push({ id: String(t.id), name: t.name, preview_url: null });
 			}
 		} else if (account.platform === "mailchimp") {
-			const dc = (meta.datacenter as string) ?? token.split("-").pop();
-			const res = await fetch(`https://${dc}.api.mailchimp.com/3.0/templates?count=100`, { headers: { Authorization: `Basic ${btoa(`relayapi:${token}`)}` } });
+			const dc = getMailchimpDatacenter(token);
+			if (!dc) return c.json({ data: [] }, 200);
+			const res = await fetch(
+				buildMailchimpApiUrl(dc, "/3.0/templates?count=100"),
+				{ headers: { Authorization: `Basic ${btoa(`relayapi:${token}`)}` } },
+			);
 			if (res.ok) {
-				const data = (await res.json()) as { templates?: Array<{ id: number; name: string; thumbnail?: string }> };
-				for (const t of data.templates ?? []) templates.push({ id: String(t.id), name: t.name, preview_url: t.thumbnail ?? null });
+				const data = (await res.json()) as {
+					templates?: Array<{ id: number; name: string; thumbnail?: string }>;
+				};
+				for (const t of data.templates ?? [])
+					templates.push({
+						id: String(t.id),
+						name: t.name,
+						preview_url: t.thumbnail ?? null,
+					});
 			}
 		}
 		// Beehiiv and ConvertKit don't have a public template listing API

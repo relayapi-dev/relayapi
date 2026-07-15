@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { buildMailchimpApiUrl, getMailchimpDatacenter } from "../lib/mailchimp";
 import { AccountResponse } from "./accounts";
 import { PlatformEnum } from "./common";
 
@@ -23,6 +24,14 @@ export const OAUTH_PLATFORMS = [
 
 export const OAuthPlatformEnum = z.enum(OAUTH_PLATFORMS);
 
+const ConnectionWorkspaceId = z
+	.string()
+	.min(1)
+	.optional()
+	.describe(
+		"Workspace for the connected account. Required only when the organization has Require Workspace ID enabled. In optional mode, omission creates a new organization-scoped identity or preserves an existing identity's current scope on reconnect.",
+	);
+
 // ---------------------------------------------------------------------------
 // Start OAuth
 // ---------------------------------------------------------------------------
@@ -32,6 +41,7 @@ export const StartOAuthParams = z.object({
 });
 
 export const StartOAuthQuery = z.object({
+	workspace_id: ConnectionWorkspaceId,
 	redirect_url: z
 		.string()
 		.url()
@@ -74,16 +84,28 @@ export const CompleteOAuthParams = z.object({
 
 export const CompleteOAuthBody = z.object({
 	code: z.string().describe("OAuth authorization code"),
+	workspace_id: ConnectionWorkspaceId,
 	redirect_url: z
 		.string()
 		.url()
 		.optional()
 		.describe("Redirect URL used during the OAuth flow (must match)"),
-	state: z.string().optional().describe("OAuth state token for direct KV lookup"),
+	state: z
+		.string()
+		.optional()
+		.describe("OAuth state token for direct KV lookup"),
 });
 
 export const CompleteOAuthResponse = z.object({
 	account: AccountResponse,
+});
+
+export const PendingSelectionResponse = z.object({
+	status: z.literal("pending_selection"),
+	platform: OAuthPlatformEnum,
+	connect_token: z
+		.string()
+		.describe("Operation-scoped token required by the list/select endpoints"),
 });
 
 // ---------------------------------------------------------------------------
@@ -91,6 +113,7 @@ export const CompleteOAuthResponse = z.object({
 // ---------------------------------------------------------------------------
 
 export const ConnectBlueskyBody = z.object({
+	workspace_id: ConnectionWorkspaceId,
 	handle: z.string().describe("Bluesky handle (e.g. user.bsky.social)"),
 	app_password: z.string().describe("Bluesky app password"),
 });
@@ -100,21 +123,44 @@ export const ConnectBlueskyBody = z.object({
 // ---------------------------------------------------------------------------
 
 export const ConnectBeehiivBody = z.object({
+	workspace_id: ConnectionWorkspaceId,
 	api_key: z.string().describe("Beehiiv API key"),
 	publication_id: z.string().describe("Beehiiv publication ID"),
 });
 
 export const ConnectConvertKitBody = z.object({
-	api_key: z.string().describe("ConvertKit API key"),
-	api_secret: z.string().describe("ConvertKit API secret"),
+	workspace_id: ConnectionWorkspaceId,
+	api_key: z.string().describe("Kit API v4 key"),
 });
 
 export const ConnectMailchimpBody = z.object({
-	api_key: z.string().describe("Mailchimp API key (includes datacenter suffix, e.g. xxx-us21)"),
+	workspace_id: ConnectionWorkspaceId,
+	api_key: z
+		.string()
+		.superRefine((apiKey, ctx) => {
+			const datacenter = getMailchimpDatacenter(apiKey);
+			if (!datacenter) {
+				ctx.addIssue({
+					code: "custom",
+					message:
+						"Mailchimp API key must end with a valid datacenter suffix (for example, -us21)",
+				});
+				return;
+			}
+
+			// Resolve the same API root used by the connector and assert its final
+			// hostname before the request handler can receive this API key.
+			buildMailchimpApiUrl(datacenter);
+		})
+		.describe("Mailchimp API key (includes datacenter suffix, e.g. xxx-us21)"),
 });
 
 export const ConnectListMonkBody = z.object({
-	instance_url: z.string().url().describe("ListMonk instance URL (e.g. https://listmonk.example.com)"),
+	workspace_id: ConnectionWorkspaceId,
+	instance_url: z
+		.string()
+		.url()
+		.describe("ListMonk instance URL (e.g. https://listmonk.example.com)"),
 	username: z.string().describe("ListMonk admin username"),
 	password: z.string().describe("ListMonk admin password"),
 });
@@ -123,8 +169,16 @@ export const ConnectListMonkBody = z.object({
 // Telegram — initiate
 // ---------------------------------------------------------------------------
 
+export const InitTelegramQuery = z.object({
+	workspace_id: ConnectionWorkspaceId,
+});
+
 export const InitTelegramResponse = z.object({
-	code: z.string().describe("6-character access code"),
+	code: z
+		.string()
+		.describe(
+			"Organization-bound challenge code in the form RLAY-XXXXXXXXXXXX (12 uppercase hexadecimal characters)",
+		),
 	expires_at: z.string().datetime().describe("ISO 8601 expiry timestamp"),
 	expires_in: z.number().int().describe("Seconds until code expires"),
 	bot_username: z.string().describe("Telegram bot username to message"),
@@ -138,7 +192,11 @@ export const InitTelegramResponse = z.object({
 // ---------------------------------------------------------------------------
 
 export const TelegramStatusQuery = z.object({
-	code: z.string().describe("The 6-character access code to check"),
+	code: z
+		.string()
+		.describe(
+			"Organization-bound challenge code to check (RLAY- followed by 12 uppercase hexadecimal characters)",
+		),
 });
 
 export const TelegramStatusResponse = z.object({
@@ -160,14 +218,6 @@ export const TelegramStatusResponse = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Telegram — direct connect
-// ---------------------------------------------------------------------------
-
-export const ConnectTelegramDirectBody = z.object({
-	chat_id: z.string().describe("Telegram chat or channel ID"),
-});
-
-// ---------------------------------------------------------------------------
 // Pending data (headless OAuth)
 // ---------------------------------------------------------------------------
 
@@ -179,6 +229,10 @@ export const PendingDataQuery = z.object({
 // The server-side callback stores the outcome of the token exchange under this key.
 export const PendingDataResponse = z.object({
 	platform: PlatformEnum,
+	workspace_id: z
+		.string()
+		.nullable()
+		.describe("Authoritative workspace selected when the OAuth flow started"),
 	status: z
 		.enum(["success", "pending_selection", "error"])
 		.describe(
@@ -193,8 +247,27 @@ export const PendingDataResponse = z.object({
 		.nullable()
 		.optional()
 		.describe("Provider error description (status 'error')"),
-	error_code: z.string().optional().describe("RelayAPI error code (status 'error')"),
-	error_message: z.string().optional().describe("RelayAPI error message (status 'error')"),
+	error_code: z
+		.string()
+		.optional()
+		.describe("RelayAPI error code (status 'error')"),
+	error_message: z
+		.string()
+		.optional()
+		.describe("RelayAPI error message (status 'error')"),
+	connect_token: z
+		.string()
+		.optional()
+		.describe(
+			"Operation-scoped token required for a pending secondary account selection",
+		),
+});
+
+export const SecondarySelectionQuery = z.object({
+	connect_token: z
+		.string()
+		.min(1)
+		.describe("Operation-scoped token returned by the OAuth callback"),
 });
 
 // ---------------------------------------------------------------------------
@@ -347,6 +420,7 @@ export const WhatsAppSDKConfigResponse = z.object({
 // ---------------------------------------------------------------------------
 
 export const WhatsAppEmbeddedSignupBody = z.object({
+	workspace_id: ConnectionWorkspaceId,
 	code: z.string().describe("Code from WhatsApp embedded signup flow"),
 });
 
@@ -355,6 +429,7 @@ export const WhatsAppEmbeddedSignupBody = z.object({
 // ---------------------------------------------------------------------------
 
 export const WhatsAppCredentialsBody = z.object({
+	workspace_id: ConnectionWorkspaceId,
 	access_token: z.string().describe("WhatsApp Business API access token"),
 	waba_id: z.string().describe("WhatsApp Business Account ID"),
 	phone_number_id: z.string().describe("WhatsApp phone number ID"),

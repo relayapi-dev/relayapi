@@ -1,5 +1,11 @@
 import { API_VERSIONS } from "../config/api-versions";
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 const DEBUG = false;
 
@@ -37,26 +43,50 @@ async function graphPost(
 
 	if (!res.ok) {
 		const err = (await res.json().catch(() => ({}))) as {
-			error?: { message?: string; type?: string; code?: number; error_subcode?: number };
+			error?: {
+				message?: string;
+				type?: string;
+				code?: number;
+				error_subcode?: number;
+			};
 		};
 		const detail = err.error?.message ?? res.statusText;
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		const subcode = err.error?.error_subcode;
-		if (DEBUG) console.error(`[instagram-publisher] POST ${endpoint} failed: ${res.status} ${err.error?.message ?? "unknown"}`);
+		if (DEBUG)
+			console.error(
+				`[instagram-publisher] POST ${endpoint} failed: ${res.status} ${err.error?.message ?? "unknown"}`,
+			);
 
 		// Classify Instagram-specific errors
-		if (detail.includes("Error validating access token") || detail.includes("REVOKED_ACCESS_TOKEN") ||
-			detail.includes("session has been invalidated") || err.error?.code === 190) {
-			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
+		if (
+			detail.includes("Error validating access token") ||
+			detail.includes("REVOKED_ACCESS_TOKEN") ||
+			detail.includes("session has been invalidated") ||
+			err.error?.code === 190
+		) {
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
 		if (subcode === 2207042) {
-			throw new PublishError(`RATE_LIMITED: Daily post limit reached`, { statusCode: res.status, detail: raw });
+			throw new PublishError(`RATE_LIMITED: Daily post limit reached`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
-		throw new PublishError(`Instagram API error: ${detail}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`Instagram API error: ${detail}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
-	const result = await res.json() as Record<string, unknown>;
-	if (DEBUG) console.log(`[instagram-publisher] POST ${endpoint} success: id=${result.id ?? "unknown"}`);
+	const result = (await res.json()) as Record<string, unknown>;
+	if (DEBUG)
+		console.log(
+			`[instagram-publisher] POST ${endpoint} success: id=${result.id ?? "unknown"}`,
+		);
 	return result;
 }
 
@@ -79,7 +109,10 @@ async function graphGet(
 		};
 		const detail = err.error?.message ?? res.statusText;
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-		throw new PublishError(`Instagram API error: ${detail}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`Instagram API error: ${detail}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	return res.json() as Promise<Record<string, unknown>>;
@@ -120,7 +153,10 @@ async function pollContainerStatus(
 		});
 
 		const status = result.status_code as string;
-		if (DEBUG) console.log(`[instagram-publisher] Container ${containerId} status: ${status} (attempt ${i + 1}/${maxAttempts})`);
+		if (DEBUG)
+			console.log(
+				`[instagram-publisher] Container ${containerId} status: ${status} (attempt ${i + 1}/${maxAttempts})`,
+			);
 
 		if (status === "FINISHED") {
 			return;
@@ -235,18 +271,30 @@ async function publishCarousel(
 	caption?: string,
 	extraParams?: Record<string, unknown>,
 ): Promise<string> {
+	if (items.length < 2 || items.length > 10) {
+		// Official Meta docs: https://developers.facebook.com/docs/instagram-platform/content-publishing
+		// Section "Create a carousel container" > "Limitations" says carousels
+		// are limited to 10 items. The minimum of two is RelayAPI's defensive
+		// distinction between this path and the single-media publishing path.
+		throw new Error(
+			`CONTENT_ERROR: Instagram carousels require 2-10 media items; received ${items.length}.`,
+		);
+	}
+
 	// Step 1: Create child containers
 	const childIds: string[] = [];
 
-	for (const item of items.slice(0, 10)) {
+	for (const item of items) {
 		const isVideo = item.type === "video";
-		// Carousel children should NOT include media_type — the API infers it from the URL param
-		// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/content-publishing
 		const childParams: Record<string, unknown> = {
 			is_carousel_item: true,
 		};
 
 		if (isVideo) {
+			// Official Meta docs: https://developers.facebook.com/docs/instagram-api/reference/ig-user/media
+			// Example "Create carousel video container" uses `media_type=VIDEO`,
+			// `video_url`, and `is_carousel_item=true` are explicit parameters.
+			childParams.media_type = "VIDEO";
 			childParams.video_url = item.url;
 		} else {
 			childParams.image_url = item.url;
@@ -322,7 +370,9 @@ export const instagramPublisher: Publisher = {
 				user_id: request.account.platform_account_id,
 			};
 
-			console.log(`[instagram-publisher] Publishing for account ${request.account.platform_account_id}, username=${request.account.username}, has_token=${!!auth.access_token}`);
+			console.log(
+				`[instagram-publisher] Publishing for account ${request.account.platform_account_id}, username=${request.account.username}, has_token=${!!auth.access_token}`,
+			);
 
 			const content = (opts.content as string) ?? request.content ?? "";
 			const media =
@@ -353,6 +403,22 @@ export const instagramPublisher: Publisher = {
 				};
 			}
 
+			if (
+				(contentType === "story" || contentType === "reels") &&
+				media.length !== 1
+			) {
+				// Official Meta docs: https://developers.facebook.com/docs/instagram-api/reference/ig-user/media
+				// Sections "Create image container" / "Create video container"
+				// accept one image_url or video_url; multiple assets use CAROUSEL.
+				return {
+					success: false,
+					error: {
+						code: "TOO_MANY_MEDIA",
+						message: `Instagram ${contentType} posts require exactly one media attachment.`,
+					},
+				};
+			}
+
 			// Validate caption length
 			if (content.length > 2200) {
 				return {
@@ -376,8 +442,9 @@ export const instagramPublisher: Publisher = {
 			}
 			// Pass alt text from first media item
 			const firstMedia = media[0];
-			const firstMediaAltText = (firstMedia as { alt_text?: string } | undefined)
-				?.alt_text;
+			const firstMediaAltText = (
+				firstMedia as { alt_text?: string } | undefined
+			)?.alt_text;
 			if (firstMediaAltText) {
 				extraParams.alt_text = firstMediaAltText;
 			}
@@ -393,7 +460,9 @@ export const instagramPublisher: Publisher = {
 				return {
 					success: true,
 					platform_post_id: postId,
-					platform_url: storyPermalink ?? `https://www.instagram.com/stories/${request.account.username ?? auth.user_id}/`,
+					platform_url:
+						storyPermalink ??
+						`https://www.instagram.com/stories/${request.account.username ?? auth.user_id}/`,
 				};
 			}
 
@@ -438,7 +507,8 @@ export const instagramPublisher: Publisher = {
 				return {
 					success: true,
 					platform_post_id: postId,
-					platform_url: reelPermalink ?? `https://www.instagram.com/reel/${postId}/`,
+					platform_url:
+						reelPermalink ?? `https://www.instagram.com/reel/${postId}/`,
 				};
 			}
 
@@ -463,7 +533,8 @@ export const instagramPublisher: Publisher = {
 				return {
 					success: true,
 					platform_post_id: postId,
-					platform_url: carouselPermalink ?? `https://www.instagram.com/p/${postId}/`,
+					platform_url:
+						carouselPermalink ?? `https://www.instagram.com/p/${postId}/`,
 				};
 			}
 
@@ -500,7 +571,7 @@ export const instagramPublisher: Publisher = {
 				platform_url: mediaPermalink ?? fallbackUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

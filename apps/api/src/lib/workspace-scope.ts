@@ -1,12 +1,37 @@
-import type { Context } from "hono";
 import type { SQL } from "drizzle-orm";
-import { inArray } from "drizzle-orm";
+import { inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
+import type { Context } from "hono";
 import type { Env, Variables } from "../types";
 
+/** Pure form of the row-level workspace authorization rule. */
+export function canAccessWorkspaceScope(
+	scope: "all" | string[],
+	workspaceId: string | null,
+): boolean {
+	if (scope === "all") return true;
+	if (scope.length === 0) return false;
+	return workspaceId === null || scope.includes(workspaceId);
+}
+
+/** SQL equivalent of {@link canAccessWorkspaceScope}. */
+export function workspaceScopeSqlCondition(
+	scope: "all" | string[],
+	workspaceIdColumn: PgColumn,
+): SQL {
+	if (scope === "all") return sql`true`;
+	if (scope.length === 0) return sql`false`;
+	return (
+		or(isNull(workspaceIdColumn), inArray(workspaceIdColumn, scope)) ??
+		sql`false`
+	);
+}
+
 /**
- * Pushes a workspace filter into the conditions array when the API key
- * is scoped to specific workspaces. No-op for "all" scope.
+ * Pushes a workspace filter into the conditions array when the API key is
+ * scoped to specific workspaces. Organization-scoped rows (`workspace_id IS
+ * NULL`) are shared across every non-empty workspace grant. A zero-grant key
+ * sees nothing. No-op for "all" scope.
  */
 export function applyWorkspaceScope(
 	c: Context<{ Bindings: Env; Variables: Variables }>,
@@ -15,7 +40,7 @@ export function applyWorkspaceScope(
 ): void {
 	const scope = c.get("workspaceScope");
 	if (scope !== "all") {
-		conditions.push(inArray(workspaceIdColumn, scope));
+		conditions.push(workspaceScopeSqlCondition(scope, workspaceIdColumn));
 	}
 }
 
@@ -29,8 +54,7 @@ export function assertWorkspaceScope(
 	workspaceId: string | null,
 ): Response | undefined {
 	const scope = c.get("workspaceScope");
-	if (scope === "all") return undefined;
-	if (!workspaceId || !scope.includes(workspaceId)) {
+	if (!canAccessWorkspaceScope(scope, workspaceId)) {
 		return c.json(
 			{
 				error: {
@@ -57,10 +81,7 @@ export function isWorkspaceScopeDenied(
 	c: Context<{ Bindings: Env; Variables: Variables }>,
 	workspaceId: string | null,
 ): boolean {
-	const scope = c.get("workspaceScope");
-	if (scope === "all") return false;
-	if (!workspaceId || !scope.includes(workspaceId)) return true;
-	return false;
+	return !canAccessWorkspaceScope(c.get("workspaceScope"), workspaceId);
 }
 
 export const WORKSPACE_ACCESS_DENIED_BODY = {

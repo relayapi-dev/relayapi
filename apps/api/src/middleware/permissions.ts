@@ -1,10 +1,11 @@
 import { createMiddleware } from "hono/factory";
-import type { Env, Variables } from "../types";
 import {
 	assertAllWorkspaceScope,
 	assertWriteAccess,
 	hasWriteAccess,
 } from "../lib/request-access";
+import type { Env, Variables } from "../types";
+import { collectWorkspaceIds } from "./workspace-validation";
 
 /**
  * Blocks mutating requests (POST/PUT/PATCH/DELETE) for read-only API keys.
@@ -44,6 +45,23 @@ export const requireAllWorkspaceScopeMiddleware = createMiddleware<{
 	const denied = assertAllWorkspaceScope(c);
 	if (denied) return denied;
 	return next();
+});
+
+/** API-key administration is deliberately separate from ordinary write access. */
+export const requireManageApiKeysMiddleware = createMiddleware<{
+	Bindings: Env;
+	Variables: Variables;
+}>(async (c, next) => {
+	if (c.get("permissions").includes("manage_api_keys")) return next();
+	return c.json(
+		{
+			error: {
+				code: "MANAGE_API_KEYS_REQUIRED",
+				message: "This credential cannot manage organization API keys.",
+			},
+		},
+		403,
+	);
 });
 
 /**
@@ -96,9 +114,11 @@ export const workspaceScopeMiddleware = createMiddleware<{
 			);
 		}
 
-		// Also check JSON body if present (uses pre-parsed body from middleware)
-		const body = c.get("parsedBody");
-		if (body?.workspace_id && !scope.includes(body.workspace_id as string)) {
+		// Also check defined JSON workspace fields, including bulk post items.
+		const deniedWorkspace = collectWorkspaceIds(c.get("parsedBody")).find(
+			(workspaceId) => !scope.includes(workspaceId),
+		);
+		if (deniedWorkspace) {
 			return c.json(
 				{
 					error: {

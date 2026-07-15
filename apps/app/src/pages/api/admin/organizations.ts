@@ -9,16 +9,12 @@ import {
   eq,
 } from "@relayapi/db";
 import { sql, desc, count, and, lte, gte, inArray } from "drizzle-orm";
-import { PRICING } from "@relayapi/config";
-
-// Mirror the API's apikey:* KV TTL convention (apps/api/src/middleware/auth.ts
-// API_KEY_KV_TTL_SECONDS = 24h) so out-of-band-revoked keys stop authenticating
-// within a day instead of persisting for a year.
-const APIKEY_KV_TTL_SECONDS = 86400; // 24h
+import { API_KEY_CACHE_TTL_SECONDS, PRICING } from "@relayapi/config";
+import { handleSdkError, requireClient } from "@/lib/api-utils";
 
 function adminGuard(context: { locals: App.Locals }): Response | null {
   const user = context.locals.user;
-  if (!user || user.role !== "admin") {
+  if (user?.role !== "admin") {
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
       headers: { "Content-Type": "application/json" },
@@ -39,7 +35,7 @@ export const GET: APIRoute = async (context) => {
 
   try {
     // Get paginated organizations
-    const conditions = [];
+    const conditions = [eq(organization.lifecycleStatus, "active")];
     if (search) {
       conditions.push(sql`(${organization.name} ILIKE ${`%${search}%`} OR ${organization.slug} ILIKE ${`%${search}%`})`);
     }
@@ -47,7 +43,7 @@ export const GET: APIRoute = async (context) => {
     const [totalResult] = await db
       .select({ count: count() })
       .from(organization)
-      .where(conditions.length > 0 ? sql.join(conditions, sql` AND `) : undefined);
+      .where(sql.join(conditions, sql` AND `));
     const total = Number(totalResult?.count ?? 0);
 
     const orgs = await db
@@ -59,7 +55,7 @@ export const GET: APIRoute = async (context) => {
         createdAt: organization.createdAt,
       })
       .from(organization)
-      .where(conditions.length > 0 ? sql.join(conditions, sql` AND `) : undefined)
+      .where(sql.join(conditions, sql` AND `))
       .orderBy(desc(organization.createdAt))
       .limit(limit)
       .offset(offset);
@@ -257,10 +253,6 @@ export const PATCH: APIRoute = async (context) => {
           plan,
           calls_included:
             plan === "pro" ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded,
-          rate_limit_max:
-            plan === "pro" ? PRICING.proRateLimitMax : PRICING.freeRateLimitMax,
-          rate_limit_window:
-            plan === "pro" ? PRICING.proRateLimitWindow : PRICING.freeRateLimitWindow,
         };
 
         for (const k of keys) {
@@ -269,7 +261,7 @@ export const PATCH: APIRoute = async (context) => {
           const existing = raw ? JSON.parse(raw) as Record<string, unknown> : null;
           if (existing) {
             await kv.put(kvKey, JSON.stringify({ ...existing, ...newPlanData }), {
-              expirationTtl: APIKEY_KV_TTL_SECONDS,
+              expirationTtl: API_KEY_CACHE_TTL_SECONDS,
             });
           }
         }
@@ -305,7 +297,7 @@ export const PATCH: APIRoute = async (context) => {
           const existingKv = rawKv ? JSON.parse(rawKv) as Record<string, unknown> : null;
           if (existingKv) {
             await kv.put(kvKey, JSON.stringify({ ...existingKv, ai_enabled: aiEnabled }), {
-              expirationTtl: APIKEY_KV_TTL_SECONDS,
+              expirationTtl: API_KEY_CACHE_TTL_SECONDS,
             });
           }
         }
@@ -329,8 +321,6 @@ export const DELETE: APIRoute = async (context) => {
   const denied = adminGuard(context);
   if (denied) return denied;
 
-  const db = context.locals.db;
-
   try {
     const body = await context.request.json();
     const { organizationId } = body;
@@ -342,30 +332,11 @@ export const DELETE: APIRoute = async (context) => {
       );
     }
 
-    // Delete subscription first (FK constraint)
-    await db
-      .delete(organizationSubscriptions)
-      .where(eq(organizationSubscriptions.organizationId, organizationId));
-
-    // Delete members
-    await db
-      .delete(member)
-      .where(eq(member.organizationId, organizationId));
-
-    // Delete organization
-    await db
-      .delete(organization)
-      .where(eq(organization.id, organizationId));
-
-    return new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    const client = await requireClient(context);
+    if (client instanceof Response) return client;
+    const result = await client.organizations.delete(organizationId);
+    return Response.json(result, { status: 202 });
   } catch (e) {
-    console.error("Admin org delete error:", e);
-    return new Response(JSON.stringify({ error: "Internal server error" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    return handleSdkError(e);
   }
 };

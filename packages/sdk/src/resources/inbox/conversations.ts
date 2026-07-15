@@ -158,15 +158,8 @@ export class Conversations extends APIResource {
   /**
    * Delete an internal note
    */
-  deleteNote(
-    noteID: string,
-    params: NoteDeleteParams,
-    options?: RequestOptions,
-  ): APIPromise<NoteDeleteResponse> {
-    return this._client.delete(path`/v1/inbox/notes/${noteID}`, {
-      query: params,
-      ...options,
-    });
+  deleteNote(noteID: string, options?: RequestOptions): APIPromise<NoteDeleteResponse> {
+    return this._client.delete(path`/v1/inbox/notes/${noteID}`, options);
   }
 }
 
@@ -730,7 +723,14 @@ export interface InboxNote {
 
   organization_id: string;
 
-  user_id: string;
+  /** Authenticated principal type that created the note. */
+  actor_type: 'dashboard_user' | 'service';
+
+  /** Immutable dashboard-user or API-key identifier for the creating principal. */
+  actor_id: string;
+
+  /** Dashboard user when present; null for service credentials or deleted users. */
+  user_id: string | null;
 
   author_name: string | null;
 
@@ -753,18 +753,10 @@ export interface NoteResponse {
 
 export interface NoteCreateParams {
   text: string;
-
-  user_id: string;
 }
 
 export interface NoteUpdateParams {
   text: string;
-
-  user_id: string;
-}
-
-export interface NoteDeleteParams {
-  user_id: string;
 }
 
 export interface NoteDeleteResponse {
@@ -793,6 +785,5 @@ export declare namespace Conversations {
     type MessageDeleteParams as MessageDeleteParams,
     type NoteCreateParams as NoteCreateParams,
     type NoteUpdateParams as NoteUpdateParams,
-    type NoteDeleteParams as NoteDeleteParams,
   };
 }

@@ -8,8 +8,8 @@ export class Organizations extends APIResource {
   /**
    * List LinkedIn organizations after OAuth
    */
-  list(options?: RequestOptions): APIPromise<OrganizationListResponse> {
-    return this._client.get('/v1/connect/linkedin/organizations', options);
+  list(query: OrganizationListParams, options?: RequestOptions): APIPromise<OrganizationListResponse> {
+    return this._client.get('/v1/connect/linkedin/organizations', { query, ...options });
   }
 
   /**
@@ -125,9 +125,15 @@ export interface OrganizationSelectParams {
   organization_urn?: string;
 }
 
+export interface OrganizationListParams {
+  /** Operation-scoped token returned by the OAuth callback. */
+  connect_token: string;
+}
+
 export declare namespace Organizations {
   export {
     type OrganizationListResponse as OrganizationListResponse,
+    type OrganizationListParams as OrganizationListParams,
     type OrganizationSelectResponse as OrganizationSelectResponse,
     type OrganizationSelectParams as OrganizationSelectParams,
   };

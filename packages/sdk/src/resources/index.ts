@@ -25,7 +25,7 @@ export {
   type AdAudienceListResponse,
   type AdAddAudienceUsersResponse,
   type AdUpdateCampaignResponse,
-  type AdSyncResponse,
+  type AdSyncQueuedResponse,
   type AdListAccountsParams,
   type AdCreateCampaignParams,
   type AdUpdateCampaignParams,
@@ -58,10 +58,14 @@ export {
   Workspaces,
   type WorkspaceCreateResponse,
   type WorkspaceUpdateResponse,
+  type WorkspaceDeleteResponse,
   type WorkspaceListResponse,
   type WorkspaceCreateParams,
   type WorkspaceUpdateParams,
+  type WorkspaceLifecycleParams,
+  type WorkspaceDeleteParams,
 } from './workspaces';
+export { Organizations, type OrganizationDeletionResponse } from './organizations';
 export {
   Accounts,
   type AccountRetrieveResponse,
@@ -112,6 +116,8 @@ export {
 export {
   Contacts,
   type ContactChannel,
+  type ContactConsent,
+  type ContactListConsentsResponse,
   type ContactCreateResponse,
   type ContactRetrieveResponse,
   type ContactListResponse,
@@ -129,6 +135,7 @@ export {
   type ContactBulkOperationsParams,
   type ContactMergeParams,
   type ContactAddChannelParams,
+  type ContactRecordConsentParams,
   type ContactSetFieldParams,
 } from './contacts';
 export {
@@ -173,6 +180,9 @@ export {
   Posts,
   type RecyclingConfig,
   type RecyclingInput,
+  type PostTargetPlatform,
+  type PostTargetStatus,
+  type PostMetrics,
   type PostSetRecyclingResponse,
   type PostCreateResponse,
   type PostRetrieveResponse,
@@ -181,8 +191,10 @@ export {
   type PostBulkCreateResponse,
   type PostBulkCsvUploadResponse,
   type PostRetryResponse,
+  type PostReconcileTargetResponse,
   type PostUnpublishResponse,
   type PostUnpublishParams,
+  type PostReconcileTargetParams,
   type PostNotesResponse,
   type PostUpdateNotesParams,
   type PostUpdateMetadataResponse,
@@ -200,6 +212,8 @@ export {
   type QueuePreviewParams,
   type QueueFindSlotParams,
   type QueueFindSlotResponse,
+  type QueueListFailuresResponse,
+  type QueueReplayFailureResponse,
 } from './queue/queue';
 export {
   Threads,
@@ -360,6 +374,7 @@ export {
   type ShortLinkUpdateConfigParams,
   type ShortLinkListParams,
   type ShortLinkShortenParams,
+  type ShortLinkTestConfigParams,
 } from './short-links';
 export {
   Signatures,
@@ -411,6 +426,7 @@ export {
   type IdeaGroupListResponse,
   type IdeaGroupCreateParams,
   type IdeaGroupUpdateParams,
+  type IdeaGroupDeleteParams,
   type IdeaGroupListParams,
   type IdeaGroupReorderParams,
 } from './idea-groups';

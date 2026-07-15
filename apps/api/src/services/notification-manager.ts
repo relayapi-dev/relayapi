@@ -11,8 +11,8 @@ import {
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { sendEmail } from "../lib/email-queue/producer";
-import type { Env } from "../types";
 import { notifyRealtime } from "../lib/notify-post-update";
+import type { Env } from "../types";
 
 export type NotificationType =
 	| "post_failed"
@@ -66,6 +66,8 @@ export interface SendNotificationParams {
 	title: string;
 	body: string;
 	data?: Record<string, unknown>;
+	/** Stable logical occurrence used to dedupe retries and provider sends. */
+	occurrenceId: string;
 }
 
 /**
@@ -76,7 +78,7 @@ export async function sendNotification(
 	env: Env,
 	params: SendNotificationParams,
 ): Promise<void> {
-	const { type, userId, orgId, title, body, data } = params;
+	const { type, userId, orgId, title, body, data, occurrenceId } = params;
 
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
@@ -112,14 +114,18 @@ export async function sendNotification(
 
 	if (prefs.push) {
 		tasks.push(
-			db.insert(notifications).values({
-				userId,
-				organizationId: orgId,
-				type,
-				title,
-				body,
-				data: data ?? null,
-			}),
+			db
+				.insert(notifications)
+				.values({
+					userId,
+					organizationId: orgId,
+					type,
+					title,
+					body,
+					data: data ?? null,
+					occurrenceId,
+				})
+				.onConflictDoNothing(),
 		);
 	}
 
@@ -131,22 +137,17 @@ export async function sendNotification(
 					...data,
 					title,
 					body,
-				})
-					.then((html) => {
-						if (html) {
-							return sendEmail(env.EMAIL_QUEUE, env.RESEND_API_KEY, {
-								to: userRow.email,
-								subject: title,
-								html,
-							});
-						}
-					})
-					.catch((err) => {
-						console.error(
-							`[NotificationManager] Failed to send email for ${type}:`,
-							err,
-						);
-					}),
+				}).then((html) => {
+					if (html) {
+						return sendEmail(env.EMAIL_QUEUE, env.RESEND_API_KEY, {
+							organizationId: orgId,
+							to: userRow.email,
+							subject: title,
+							html,
+							idempotencyKey: `notification:${occurrenceId}:${userId}`,
+						});
+					}
+				}),
 			);
 		}
 	}
@@ -155,7 +156,9 @@ export async function sendNotification(
 
 	// Push real-time update so the dashboard badge updates instantly
 	if (prefs.push) {
-		await notifyRealtime(env, orgId, { type: "notification.created" }).catch(() => {});
+		await notifyRealtime(env, orgId, { type: "notification.created" }).catch(
+			() => {},
+		);
 	}
 }
 
@@ -169,7 +172,7 @@ export async function sendNotificationToOrg(
 	params: Omit<SendNotificationParams, "userId"> & { orgId: string },
 ): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const { type, orgId, title, body, data } = params;
+	const { type, orgId, title, body, data, occurrenceId } = params;
 
 	// Import member table inline to avoid circular deps
 	const { member } = await import("@relayapi/db");
@@ -211,9 +214,10 @@ export async function sendNotificationToOrg(
 		title: string;
 		body: string;
 		data: Record<string, unknown> | null;
+		occurrenceId: string | null;
 	}> = [];
 	const emailTasks: Promise<unknown>[] = [];
-	const emailRecipients: string[] = [];
+	const emailRecipients: Array<{ email: string; userId: string }> = [];
 
 	for (const { userId } of members) {
 		const prefRow = prefsMap.get(userId);
@@ -229,6 +233,7 @@ export async function sendNotificationToOrg(
 				title,
 				body,
 				data: data ?? null,
+				occurrenceId,
 			});
 		}
 
@@ -236,7 +241,7 @@ export async function sendNotificationToOrg(
 		if (shouldEmail) {
 			const userRow = userMap.get(userId);
 			if (userRow?.email) {
-				emailRecipients.push(userRow.email);
+				emailRecipients.push({ email: userRow.email, userId });
 			}
 		}
 	}
@@ -246,33 +251,47 @@ export async function sendNotificationToOrg(
 		try {
 			const html = await renderEmailForType(type, { ...data, title, body });
 			if (html) {
-				for (const email of emailRecipients) {
+				for (const recipient of emailRecipients) {
 					emailTasks.push(
 						sendEmail(env.EMAIL_QUEUE, env.RESEND_API_KEY, {
-							to: email,
+							organizationId: orgId,
+							to: recipient.email,
 							subject: title,
 							html,
-						}).catch((err) => {
-							console.error(`[NotificationManager] Org email failed for ${email}:`, err);
+							idempotencyKey: `notification:${occurrenceId}:${recipient.userId}`,
 						}),
 					);
 				}
 			}
 		} catch (err) {
 			console.error("[NotificationManager] Email render failed:", err);
+			throw err;
 		}
 	}
 
 	// Batch insert all notifications in one query + send all emails in parallel
 	const tasks: Promise<unknown>[] = [...emailTasks];
 	if (insertValues.length > 0) {
-		tasks.push(db.insert(notifications).values(insertValues));
+		tasks.push(
+			db.insert(notifications).values(insertValues).onConflictDoNothing(),
+		);
 	}
-	await Promise.allSettled(tasks);
+	const results = await Promise.allSettled(tasks);
+	const failures = results.filter(
+		(result): result is PromiseRejectedResult => result.status === "rejected",
+	);
+	if (failures.length > 0) {
+		throw new AggregateError(
+			failures.map((failure) => failure.reason),
+			`${failures.length} organization notification delivery task(s) failed`,
+		);
+	}
 
 	// Push real-time update so dashboard badges update instantly
 	if (insertValues.length > 0) {
-		await notifyRealtime(env, orgId, { type: "notification.created" }).catch(() => {});
+		await notifyRealtime(env, orgId, { type: "notification.created" }).catch(
+			() => {},
+		);
 	}
 }
 

@@ -3,19 +3,16 @@
 // Docs: https://developers.facebook.com/docs/threads/threads-media
 // ---------------------------------------------------------------------------
 
-import type {
-	ExternalPostFetcher,
-	ExternalPostData,
-} from "../types";
-import { RateLimitError } from "../types";
+import { GRAPH_BASE } from "../../../config/api-versions";
 import { parseRateLimitHeaders } from "../rate-limits";
+import type { ExternalPostData, ExternalPostFetcher } from "../types";
+import { RateLimitError } from "../types";
 
-const API_VERSION = "v1.0";
-const BASE = `https://graph.threads.net/${API_VERSION}`;
+const BASE = GRAPH_BASE.threads;
 const DEFAULT_LIMIT = 25;
 
 // Docs: https://developers.facebook.com/docs/threads/threads-media
-// Base: https://graph.threads.net/v1.0/me/threads
+// Base: https://graph.threads.com/v1.0/me/threads
 const THREAD_FIELDS = [
 	"id",
 	"text",

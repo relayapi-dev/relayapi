@@ -31,6 +31,7 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import { encryptToken } from "../lib/crypto";
 import { aggregateInsights } from "../routes/_automation-insights";
 import {
 	buildGraphFromTemplate,
@@ -45,10 +46,12 @@ import { receiveAutomationWebhook } from "../services/automations/webhook-receiv
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -116,6 +119,7 @@ async function teardownFixture() {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;
@@ -175,6 +179,7 @@ async function createCommentToDmAutomation() {
 
 	await db.insert(automationEntrypoints).values(
 		built.entrypoints.map((ep) => ({
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "instagram" as const,
 			kind: ep.kind,
@@ -210,7 +215,9 @@ describe("automation e2e", () => {
 		// Step 1-3 — create via template + activate + verify graph persisted.
 		const auto = await createCommentToDmAutomation();
 		expect(auto.status).toBe("active");
-		expect((auto.graph as { nodes: unknown[] }).nodes.length).toBeGreaterThan(0);
+		expect((auto.graph as { nodes: unknown[] }).nodes.length).toBeGreaterThan(
+			0,
+		);
 
 		// Confirm the entrypoint row is visible + asset-specificity is scored.
 		const eps = await db
@@ -338,16 +345,22 @@ describe("automation e2e", () => {
 			.returning();
 		if (!auto) throw new Error("automation insert failed");
 
-		// Create a webhook_inbound entrypoint with a known plaintext secret.
+		// Persist the webhook secret with entrypoint-bound AAD.
 		const slug = `e2e-${generateId("whk_").slice(-10)}`;
-		const secret = "testsecret0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+		const secret = `testsecret_${"0123456789abcdef".repeat(4)}`;
+		const entrypointId = generateId("aep_");
 		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "instagram",
 			kind: "webhook_inbound",
 			config: {
 				webhook_slug: slug,
-				webhook_secret: secret,
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
 				contact_lookup: {
 					by: "contact_id",
 					field_path: "$.contact_id",
@@ -361,7 +374,11 @@ describe("automation e2e", () => {
 			),
 		});
 
-		const body = JSON.stringify({ contact_id: contactId, data: { foo: "bar" } });
+		const body = JSON.stringify({
+			contact_id: contactId,
+			data: { foo: "bar" },
+		});
+		const timestamp = Math.floor(Date.now() / 1000).toString();
 
 		// Compute a valid HMAC-SHA256 signature using Web Crypto.
 		const key = await crypto.subtle.importKey(
@@ -374,7 +391,7 @@ describe("automation e2e", () => {
 		const sigBuf = await crypto.subtle.sign(
 			"HMAC",
 			key,
-			new TextEncoder().encode(body),
+			new TextEncoder().encode(`${timestamp}.${body}`),
 		);
 		const sigHex = Array.from(new Uint8Array(sigBuf))
 			.map((b) => b.toString(16).padStart(2, "0"))
@@ -387,8 +404,9 @@ describe("automation e2e", () => {
 				slug,
 				rawBody: body,
 				signatureHeader: `sha256=${sigHex}`,
+				timestampHeader: timestamp,
 			},
-			{},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(ok.status).toBe("ok");
 		if (ok.status !== "ok") throw new Error("expected ok");
@@ -401,8 +419,9 @@ describe("automation e2e", () => {
 				slug,
 				rawBody: body,
 				signatureHeader: "sha256=deadbeef",
+				timestampHeader: timestamp,
 			},
-			{},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(bad.status).toBe("bad_signature");
 

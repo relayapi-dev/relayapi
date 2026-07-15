@@ -1,16 +1,6 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 export {
-  Broadcasts,
-  type BroadcastCreateResponse,
-  type BroadcastRetrieveResponse,
-  type BroadcastListResponse,
-  type BroadcastScheduleResponse,
-  type BroadcastSendResponse,
-  type BroadcastCreateParams,
-  type BroadcastListParams,
-} from './broadcasts';
-export {
   BusinessProfile,
   type BusinessProfileRetrieveResponse,
   type BusinessProfileUpdateResponse,

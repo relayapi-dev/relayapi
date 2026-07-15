@@ -4,7 +4,7 @@ import {
 	contacts,
 	segments,
 } from "@relayapi/db";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 export interface ContactSegmentMembershipRow {
 	segment_id: string;
@@ -103,7 +103,10 @@ export async function ensureOrgContact(
 	contactId: string,
 ) {
 	const contact = await db.query.contacts.findFirst({
-		where: and(eq(contacts.id, contactId), eq(contacts.organizationId, organizationId)),
+		where: and(
+			eq(contacts.id, contactId),
+			eq(contacts.organizationId, organizationId),
+		),
 	});
 	if (!contact) {
 		return { error: `contact '${contactId}' not found` } as const;
@@ -133,21 +136,6 @@ export async function addContactToStaticSegment(
 		.onConflictDoNothing()
 		.returning({ segmentId: contactSegmentMemberships.segmentId });
 
-	if (inserted.length > 0) {
-		await db
-			.update(segments)
-			.set({
-				memberCount: sql`greatest(${segments.memberCount} + 1, 0)`,
-				updatedAt: new Date(),
-			})
-			.where(
-				and(
-					eq(segments.id, args.segmentId),
-					eq(segments.organizationId, args.organizationId),
-				),
-			);
-	}
-
 	return { added: inserted.length > 0 } as const;
 }
 
@@ -169,21 +157,6 @@ export async function removeContactFromStaticSegment(
 			),
 		)
 		.returning({ segmentId: contactSegmentMemberships.segmentId });
-
-	if (removed.length > 0) {
-		await db
-			.update(segments)
-			.set({
-				memberCount: sql`greatest(${segments.memberCount} - 1, 0)`,
-				updatedAt: new Date(),
-			})
-			.where(
-				and(
-					eq(segments.id, args.segmentId),
-					eq(segments.organizationId, args.organizationId),
-				),
-			);
-	}
 
 	return { removed: removed.length > 0 } as const;
 }

@@ -15,6 +15,10 @@ export const MediaUploadResponse = z.object({
 export const MediaPresignRequest = z.object({
 	filename: z.string().describe("Desired filename"),
 	content_type: z.string().describe("MIME type of the file to upload"),
+	workspace_id: z
+		.string()
+		.optional()
+		.describe("Workspace ID for the media record"),
 });
 
 export const MediaPresignResponse = z.object({
@@ -27,7 +31,13 @@ export const MediaPresignResponse = z.object({
 
 export const MediaResponse = z.object({
 	id: z.string().describe("Media ID"),
-	url: z.string().url().nullable().describe("Public URL"),
+	url: z
+		.string()
+		.url()
+		.nullable()
+		.describe(
+			"Original URL while retained, otherwise the durable thumbnail URL; null when neither is available",
+		),
 	filename: z.string().describe("Original filename"),
 	mime_type: z.string().describe("MIME type"),
 	size: z.number().int().describe("File size in bytes"),

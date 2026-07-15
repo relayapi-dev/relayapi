@@ -14,6 +14,7 @@ on:
       - "apps/app/**"
       - "packages/db/**"
       - "packages/auth/**"
+      - "packages/config/**"
       - "packages/sdk/**"
       - "package.json"
       - "bun.lock"
@@ -44,6 +45,10 @@ jobs:
 
       - name: Build SDK (typecheck:app depends on its dist)
         run: bun run build:sdk
+
+      - name: Verify generated App Worker types
+        working-directory: apps/app
+        run: bun run types:check
 
       - name: Typecheck apps/app
         run: bun run tsc --noEmit

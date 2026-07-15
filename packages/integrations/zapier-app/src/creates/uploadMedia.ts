@@ -1,19 +1,56 @@
 import type { Bundle, ZObject } from 'zapier-platform-core';
 
 const perform = async (z: ZObject, bundle: Bundle) => {
-  const { filename, content_type } = bundle.inputData;
+  const { file, filename, content_type } = bundle.inputData as {
+    file: string;
+    filename: string;
+    content_type: string;
+  };
+  const contentType = content_type || 'image/jpeg';
 
-  const response = await z.request({
+  const presignResponse = await z.request({
     url: 'https://api.relayapi.dev/v1/media/presign',
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: z.JSON.stringify({
       filename,
-      content_type: content_type || 'image/jpeg',
+      content_type: contentType,
     }),
   });
 
-  return response.data;
+  const presign = presignResponse.data as { upload_url: string; url: string };
+
+  // Zapier file fields contain a temporary, authenticated download URL. Stream
+  // that response into R2 so large files are not copied into an extra Buffer.
+  const fileResponse = await z.request({
+    url: file,
+    method: 'GET',
+    raw: true,
+  });
+  const contentLength = fileResponse.headers?.get('content-length');
+
+  await z.request({
+    url: presign.upload_url,
+    method: 'PUT',
+    headers: {
+      'Content-Type': contentType,
+      ...(contentLength && /^\d+$/.test(contentLength)
+        ? { 'Content-Length': contentLength }
+        : {}),
+    },
+    body: fileResponse.body,
+    raw: true,
+  });
+
+  const storageKey = decodeURIComponent(new URL(presign.url).pathname.slice(1));
+  const confirmResponse = await z.request({
+    url: 'https://api.relayapi.dev/v1/media/confirm',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: z.JSON.stringify({ storage_key: storageKey }),
+  });
+
+  return confirmResponse.data;
 };
 
 const uploadMedia = {
@@ -23,11 +60,18 @@ const uploadMedia = {
   display: {
     label: 'Upload Media',
     description:
-      'Get a presigned upload URL for a media file. Use the returned URL with the Create Post action.',
+      'Upload a media file to RelayAPI and return the confirmed media record.',
   },
 
   operation: {
     inputFields: [
+      {
+        key: 'file',
+        label: 'File',
+        type: 'file' as const,
+        required: true,
+        helpText: 'The image, video, audio file, or PDF to upload.',
+      },
       {
         key: 'filename',
         label: 'Filename',
@@ -49,8 +93,12 @@ const uploadMedia = {
     perform,
 
     sample: {
-      upload_url: 'https://storage.example.com/upload?token=abc',
+      id: 'med_abc123',
       url: 'https://media.relayapi.dev/ws_123/med_abc.jpg',
+      filename: 'photo.jpg',
+      mime_type: 'image/jpeg',
+      size: 123456,
+      created_at: '2025-01-01T00:00:00Z',
     },
   },
 };

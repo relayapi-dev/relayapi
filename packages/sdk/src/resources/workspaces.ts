@@ -2,7 +2,6 @@
 
 import { APIResource } from '../core/resource';
 import { APIPromise } from '../core/api-promise';
-import { buildHeaders } from '../internal/headers';
 import { RequestOptions } from '../internal/request-options';
 import { path } from '../internal/utils/path';
 
@@ -19,10 +18,32 @@ export class Workspaces extends APIResource {
    */
   update(
     id: string,
-    body: WorkspaceUpdateParams | null | undefined = {},
+    body: WorkspaceUpdateParams,
     options?: RequestOptions,
   ): APIPromise<WorkspaceUpdateResponse> {
     return this._client.patch(path`/v1/workspaces/${id}`, { body, ...options });
+  }
+
+  /**
+   * Archive a workspace without deleting its data.
+   */
+  archive(
+    id: string,
+    body: WorkspaceLifecycleParams,
+    options?: RequestOptions,
+  ): APIPromise<WorkspaceUpdateResponse> {
+    return this._client.post(path`/v1/workspaces/${id}/archive`, { body, ...options });
+  }
+
+  /**
+   * Restore an archived workspace.
+   */
+  restore(
+    id: string,
+    body: WorkspaceLifecycleParams,
+    options?: RequestOptions,
+  ): APIPromise<WorkspaceUpdateResponse> {
+    return this._client.post(path`/v1/workspaces/${id}/restore`, { body, ...options });
   }
 
   /**
@@ -33,13 +54,14 @@ export class Workspaces extends APIResource {
   }
 
   /**
-   * Delete a workspace
+   * Request irreversible erasure of an archived workspace.
    */
-  delete(id: string, options?: RequestOptions): APIPromise<void> {
-    return this._client.delete(path`/v1/workspaces/${id}`, {
-      ...options,
-      headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
-    });
+  delete(
+    id: string,
+    body: WorkspaceDeleteParams,
+    options?: RequestOptions,
+  ): APIPromise<WorkspaceDeleteResponse> {
+    return this._client.delete(path`/v1/workspaces/${id}`, { body, ...options });
   }
 }
 
@@ -47,6 +69,10 @@ export interface WorkspaceResponse {
   id: string;
   name: string;
   description: string | null;
+  lifecycle_status: 'active' | 'archived' | 'erasing';
+  revision: number;
+  archived_at: string | null;
+  erasure_requested_at: string | null;
   account_ids: string[];
   account_count: number;
   created_at: string;
@@ -55,6 +81,13 @@ export interface WorkspaceResponse {
 
 export type WorkspaceCreateResponse = WorkspaceResponse;
 export type WorkspaceUpdateResponse = WorkspaceResponse;
+
+export interface WorkspaceDeleteResponse {
+  workspace_id: string;
+  erasure_operation_id: string;
+  status: 'pending' | 'processing' | 'manual_review' | 'failed' | 'purged';
+  requested_at: string;
+}
 
 export interface WorkspaceListResponse {
   data: Array<WorkspaceResponse>;
@@ -68,12 +101,20 @@ export interface WorkspaceCreateParams {
 }
 
 export interface WorkspaceUpdateParams {
+  expected_revision: number;
   name?: string;
   description?: string | null;
 }
 
+export interface WorkspaceLifecycleParams {
+  expected_revision: number;
+}
+
+export type WorkspaceDeleteParams = WorkspaceLifecycleParams;
+
 export interface WorkspaceListParams {
   search?: string;
+  lifecycle_status?: 'active' | 'archived' | 'erasing' | 'all';
   limit?: number;
   cursor?: string;
 }
@@ -83,9 +124,12 @@ export declare namespace Workspaces {
     type WorkspaceResponse as WorkspaceResponse,
     type WorkspaceCreateResponse as WorkspaceCreateResponse,
     type WorkspaceUpdateResponse as WorkspaceUpdateResponse,
+    type WorkspaceDeleteResponse as WorkspaceDeleteResponse,
     type WorkspaceListResponse as WorkspaceListResponse,
     type WorkspaceCreateParams as WorkspaceCreateParams,
     type WorkspaceUpdateParams as WorkspaceUpdateParams,
+    type WorkspaceLifecycleParams as WorkspaceLifecycleParams,
+    type WorkspaceDeleteParams as WorkspaceDeleteParams,
     type WorkspaceListParams as WorkspaceListParams,
   };
 }

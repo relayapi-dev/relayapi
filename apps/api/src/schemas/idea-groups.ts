@@ -8,13 +8,8 @@ export const CreateIdeaGroupBody = z
 			.regex(/^#[0-9a-fA-F]{6}$/, "Must be a hex color like #FF0000")
 			.optional()
 			.describe("Hex color for column header"),
-		position: z.number().optional().describe("Position (float). Defaults to end."),
-		workspace_id: z
-			.string()
-			.optional()
-			.describe("Workspace ID to scope this group to"),
 	})
-	.describe("Create an idea group (kanban column)");
+	.describe("Create an organization-shared Idea group (kanban column)");
 
 export const UpdateIdeaGroupBody = z
 	.object({
@@ -25,8 +20,21 @@ export const UpdateIdeaGroupBody = z
 			.nullable()
 			.optional()
 			.describe("Hex color for column header"),
+		expected_revision: z
+			.number()
+			.int()
+			.nonnegative()
+			.describe("Revision returned by the last read"),
 	})
 	.describe("Update an idea group");
+
+export const DeleteIdeaGroupQuery = z.object({
+	expected_revision: z.coerce
+		.number()
+		.int()
+		.nonnegative()
+		.describe("Revision returned by the last read"),
+});
 
 export const ReorderIdeaGroupsBody = z
 	.object({
@@ -34,7 +42,16 @@ export const ReorderIdeaGroupsBody = z
 			.array(
 				z.object({
 					id: z.string().describe("Group ID"),
-					position: z.number().describe("New position (float)"),
+					position: z
+						.number()
+						.int()
+						.nonnegative()
+						.describe("New 0-based position"),
+					expected_revision: z
+						.number()
+						.int()
+						.nonnegative()
+						.describe("Revision returned by the last read"),
 				}),
 			)
 			.min(1)
@@ -48,6 +65,11 @@ export const IdeaGroupResponse = z.object({
 	position: z.number().describe("Position for ordering"),
 	color: z.string().nullable().describe("Hex color"),
 	is_default: z.boolean().describe("Whether this is the default group"),
+	revision: z
+		.number()
+		.int()
+		.nonnegative()
+		.describe("Optimistic concurrency revision"),
 	workspace_id: z.string().nullable().describe("Workspace ID"),
 	created_at: z.string().datetime().describe("Creation timestamp"),
 	updated_at: z.string().datetime().describe("Last update timestamp"),

@@ -4,6 +4,7 @@ import { AdPlatformError } from "../services/ad-platforms/types";
 import { boostPost, createAd } from "../services/ad-service";
 import { syncExternalAds } from "../services/ad-sync";
 import type { Env } from "../types";
+import { recordQueueFailure } from "./failures";
 
 interface AdsMessage {
 	type: string;
@@ -12,33 +13,72 @@ interface AdsMessage {
 	ad_id?: string;
 	audience_id?: string;
 	params?: Record<string, unknown>;
+	operation_id?: string;
 	/** Explicit metrics window for sync_external (manual full refresh = 30). */
 	window_days?: number;
 }
+
+function isAdsMessage(value: unknown): value is AdsMessage {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const body = value as Record<string, unknown>;
+	return (
+		typeof body.type === "string" &&
+		body.type.length > 0 &&
+		typeof body.org_id === "string" &&
+		body.org_id.length > 0
+	);
+}
+
+const PAID_OPERATION_TYPES = new Set(["create_ad", "boost_post"]);
+const AMBIGUOUS_PAID_OPERATION_CODES = new Set([
+	"UNKNOWN_EXTERNAL_OUTCOME",
+	"MANUAL_REVIEW_REQUIRED",
+]);
+const PERMANENT_PAID_OPERATION_CODES = new Set([
+	"IDEMPOTENCY_KEY_REQUIRED",
+	"IDEMPOTENCY_KEY_REUSED",
+	"INVALID_STATE",
+	"MISSING_CAMPAIGN",
+	"MISSING_OBJECTIVE",
+	"NOT_FOUND",
+	"OPERATION_RESULT_MISSING",
+	"UNSUPPORTED_PLATFORM",
+]);
 
 export async function consumeAdsQueue(
 	batch: MessageBatch<AdsMessage>,
 	env: Env,
 ): Promise<void> {
 	for (const message of batch.messages) {
+		if (!isAdsMessage(message.body)) {
+			await recordQueueFailure(
+				env,
+				batch.queue,
+				message,
+				"permanent_input",
+				"Invalid ads queue payload",
+			);
+			message.ack();
+			continue;
+		}
 		const body = message.body;
 
 		try {
 			switch (body.type) {
 				case "create_ad": {
-					await createAd(
-						env,
-						body.org_id,
-						body.params as Parameters<typeof createAd>[2],
-					);
+					await createAd(env, body.org_id, {
+						...(body.params as Parameters<typeof createAd>[2]),
+						// Cloudflare preserves the message id across redelivery. It is
+						// the stable durable-operation key that suppresses paid replay.
+						operationKey: body.operation_id ?? message.id,
+					});
 					break;
 				}
 				case "boost_post": {
-					await boostPost(
-						env,
-						body.org_id,
-						body.params as Parameters<typeof boostPost>[2],
-					);
+					await boostPost(env, body.org_id, {
+						...(body.params as Parameters<typeof boostPost>[2]),
+						operationKey: body.operation_id ?? message.id,
+					});
 					break;
 				}
 				case "sync_metrics": {
@@ -79,35 +119,67 @@ export async function consumeAdsQueue(
 				}
 				default:
 					console.warn(`[Ads] Unknown message type: ${body.type}`);
+					await recordQueueFailure(
+						env,
+						batch.queue,
+						message,
+						"permanent_input",
+						`Unknown ads message type: ${body.type}`,
+					);
 			}
 			message.ack();
 		} catch (err) {
 			console.error(`[Ads] Queue processing failed for ${body.type}:`, err);
-			// create_ad / boost_post are NOT idempotent: createAd/boostPost create a
-			// live campaign + ad on the platform (spending real budget) before the DB
-			// rows are written, with no idempotency key. A retry after a transient
-			// failure would create a SECOND active campaign that spends money while the
-			// first is orphaned. Until ad-service.ts adds a check-before-create /
-			// idempotency key (see coordination note), never auto-retry these — drop so
-			// the operation can be re-driven explicitly rather than duplicated silently.
-			const isNonIdempotent =
-				body.type === "create_ad" || body.type === "boost_post";
-			if (err instanceof AdPlatformError && err.code === "INVALID_STATE") {
+			// Paid creation is guarded by a durable operation keyed by message.id. A
+			// redelivery can safely reclaim a pre-provider `failed` operation; after a
+			// provider boundary, beginAdCreationOperation refuses the replay and surfaces
+			// UNKNOWN_EXTERNAL_OUTCOME instead of spending twice.
+			const isPaidOperation = PAID_OPERATION_TYPES.has(body.type);
+			if (
+				isPaidOperation &&
+				err instanceof AdPlatformError &&
+				PERMANENT_PAID_OPERATION_CODES.has(err.code)
+			) {
 				console.warn(
-					`[Ads] ${body.type} requires reconnect; dropping without retry`,
+					`[Ads] ${body.type} has permanent input/state error ${err.code}; not retrying`,
+				);
+				await recordQueueFailure(
+					env,
+					batch.queue,
+					message,
+					"permanent_input",
+					err,
 				);
 				message.ack();
-			} else if (isNonIdempotent) {
+			} else if (
+				isPaidOperation &&
+				err instanceof AdPlatformError &&
+				AMBIGUOUS_PAID_OPERATION_CODES.has(err.code)
+			) {
 				console.error(
-					`[Ads] ${body.type} failed and is not idempotent; dropping without retry to avoid duplicate paid campaigns`,
+					`[Ads] ${body.type} has an ambiguous paid-provider outcome; reconciliation is required`,
+				);
+				await recordQueueFailure(
+					env,
+					batch.queue,
+					message,
+					"unknown_external_outcome",
+					err,
 				);
 				message.ack();
+			} else if (isPaidOperation) {
+				// This includes raw provider errors from the first boundary-crossing
+				// attempt. The durable operation was already moved to `unknown`, so the
+				// redelivery performs no provider create and is ACKed by the branch above.
+				message.retry({ delaySeconds: 2 ** message.attempts });
 			} else if (message.attempts < 3) {
 				const delaySeconds = 2 ** message.attempts;
 				message.retry({ delaySeconds });
 			} else {
-				console.error(`[Ads] Max retries exceeded for ${body.type}, dropping`);
-				message.ack();
+				console.error(
+					`[Ads] Max retries exceeded for ${body.type}; sending to DLQ`,
+				);
+				message.retry({ delaySeconds: 60 });
 			}
 		}
 	}

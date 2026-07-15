@@ -76,7 +76,7 @@ export async function resumeWaitingRunOnInteractive(
 	// Interactive resume is message-only. Input nodes handle their own wait
 	// via the text-input resume path. Anything else (delay, condition, ...)
 	// shouldn't be waiting-for-input in the first place.
-	if (!node || node.kind !== "message") return "no_match";
+	if (node?.kind !== "message") return "no_match";
 
 	const buttonPortKey = `button.${interactivePayload}`;
 	const quickReplyPortKey = `quick_reply.${interactivePayload}`;
@@ -104,10 +104,10 @@ export async function resumeWaitingRunOnInteractive(
 
 	if (!edge) {
 		// Operator wired a button but no outgoing edge — mirror runLoop's
-		// graceful completion for unrouted ports. Guard on updatedAt so a
+		// graceful completion for unrouted ports. Guard on revision so a
 		// concurrent input_timeout fire (or a duplicate inbound payload) can't
 		// double-advance: the loser sees the CAS fail and bails.
-		const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+		const ok = await updateRunOptimistic(db, runId, run.revision, {
 			status: "completed",
 			exitReason: "completed",
 			completedAt: new Date(),
@@ -119,7 +119,7 @@ export async function resumeWaitingRunOnInteractive(
 		return ok ? "resumed" : "race";
 	}
 
-	const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+	const ok = await updateRunOptimistic(db, runId, run.revision, {
 		status: "active",
 		waitingFor: null,
 		waitingUntil: null,

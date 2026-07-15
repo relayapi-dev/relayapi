@@ -14,7 +14,7 @@ export class OrgSettings extends APIResource {
    * Update organization settings
    */
   update(
-    body: OrgSettingsUpdateParams | null | undefined = {},
+    body: OrgSettingsUpdateParams,
     options?: RequestOptions,
   ): APIPromise<OrgSettingsUpdateResponse> {
     return this._client.patch('/v1/org-settings', { body, ...options });
@@ -22,7 +22,10 @@ export class OrgSettings extends APIResource {
 }
 
 export interface OrgSettingsData {
+  /** When false, omitted workspace IDs remain valid and create organization-scoped roots. */
   require_workspace_id: boolean;
+  /** Compare-and-swap revision required when updating organization settings. */
+  revision: number;
 }
 
 export interface OrgSettingsRetrieveResponse {
@@ -34,7 +37,10 @@ export interface OrgSettingsUpdateResponse {
 }
 
 export interface OrgSettingsUpdateParams {
-  require_workspace_id?: boolean;
+  /** Enable only after all active operational roots have an explicit workspace. */
+  require_workspace_id: boolean;
+  /** Revision returned by the latest retrieve or update call. */
+  expected_revision: number;
 }
 
 export declare namespace OrgSettings {

@@ -3,19 +3,19 @@
 // ---------------------------------------------------------------------------
 
 import {
-	createDb,
-	ads,
 	adAccounts,
 	adCampaigns,
 	adSyncLogs,
-	socialAccounts,
+	ads,
+	createDb,
 	eq,
+	socialAccounts,
 } from "@relayapi/db";
 import { and, inArray, sql } from "drizzle-orm";
 import type { Env } from "../types";
-import { getAdPlatformAdapter } from "./ad-platforms";
 import { resolveAdsAccessToken } from "./ad-access-token";
 import { fetchAndStoreAdMetrics } from "./ad-analytics";
+import { getAdPlatformAdapter } from "./ad-platforms";
 
 type SyncedCampaignObjective = (typeof adCampaigns.$inferInsert)["objective"];
 type SyncedAdStatus = (typeof ads.$inferInsert)["status"];
@@ -59,10 +59,7 @@ export async function syncExternalAds(
 			eq(adAccounts.socialAccountId, socialAccounts.id),
 		)
 		.where(
-			and(
-				eq(adAccounts.id, adAccountId),
-				eq(adAccounts.organizationId, orgId),
-			),
+			and(eq(adAccounts.id, adAccountId), eq(adAccounts.organizationId, orgId)),
 		)
 		.limit(1);
 
@@ -90,17 +87,10 @@ export async function syncExternalAds(
 			adAccount.platformAdAccountId,
 		);
 
-		// Pre-fetch existing campaigns + ads for this account in two bulk SELECTs
-		// keyed by their platform ids, instead of one SELECT per external ad. The
-		// account-level pre-fetch is bounded by the size of the account and avoids
-		// 2 serial read round trips per external ad.
-		const platformCampaignIds = [
-			...new Set(
-				result.ads
-					.map((a) => a.platformCampaignId)
-					.filter((id): id is string => Boolean(id)),
-			),
-		];
+		// Pre-fetch this ad account's existing remote ad IDs once for reporting.
+		// Identity itself is enforced by composite unique indexes and atomic
+		// ON CONFLICT upserts below, so overlapping cron/manual syncs cannot race
+		// through a check-then-insert window.
 		const platformAdIds = [
 			...new Set(
 				result.ads
@@ -109,45 +99,22 @@ export async function syncExternalAds(
 			),
 		];
 
-		const [existingCampaignRows, existingAdRows] = await Promise.all([
-			platformCampaignIds.length > 0
-				? db
-						.select()
-						.from(adCampaigns)
-						.where(
-							and(
-								eq(adCampaigns.organizationId, orgId),
-								inArray(
-									adCampaigns.platformCampaignId,
-									platformCampaignIds,
-								),
-							),
-						)
-				: Promise.resolve([] as (typeof adCampaigns.$inferSelect)[]),
-			platformAdIds.length > 0
-				? db
-						.select({ id: ads.id, platformAdId: ads.platformAdId })
-						.from(ads)
-						.where(
-							and(
-								eq(ads.organizationId, orgId),
-								inArray(ads.platformAdId, platformAdIds),
-							),
-						)
-				: Promise.resolve(
-						[] as { id: string; platformAdId: string | null }[],
-					),
-		]);
+		const existingAdRows = await (platformAdIds.length > 0
+			? db
+					.select({ id: ads.id, platformAdId: ads.platformAdId })
+					.from(ads)
+					.where(
+						and(
+							eq(ads.adAccountId, adAccountId),
+							inArray(ads.platformAdId, platformAdIds),
+						),
+					)
+			: Promise.resolve([] as { id: string; platformAdId: string | null }[]));
 
-		const campaignByPlatformId = new Map(
-			existingCampaignRows
-				.filter((c) => c.platformCampaignId)
-				.map((c) => [c.platformCampaignId as string, c]),
-		);
-		const adIdByPlatformId = new Map(
+		const existingAdIds = new Set(
 			existingAdRows
 				.filter((a) => a.platformAdId)
-				.map((a) => [a.platformAdId as string, a.id]),
+				.map((a) => a.platformAdId as string),
 		);
 
 		// Resolve (upsert) the internal campaign id for a platform campaign id
@@ -164,53 +131,46 @@ export async function syncExternalAds(
 				return alreadyResolved;
 			}
 
-			const existing = campaignByPlatformId.get(platformCampaignId);
-			let campaign: typeof adCampaigns.$inferSelect | undefined;
-
-			if (!existing) {
-				[campaign] = await db
-					.insert(adCampaigns)
-					.values({
-						organizationId: orgId,
-						workspaceId: adAccount.workspaceId,
-						adAccountId,
-						platform: adAccount.platform,
-						platformCampaignId,
-						name: externalAd.campaignName,
-						objective: asCampaignObjective(externalAd.objective),
-						status: asAdStatus(externalAd.status),
-						dailyBudgetCents: externalAd.dailyBudgetCents,
-						lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
-						currency: adAccount.currency,
+			const campaignValues = {
+				organizationId: orgId,
+				workspaceId: adAccount.workspaceId,
+				adAccountId,
+				platform: adAccount.platform,
+				platformCampaignId,
+				name: externalAd.campaignName,
+				objective: asCampaignObjective(externalAd.objective),
+				status: asAdStatus(externalAd.status),
+				dailyBudgetCents: externalAd.dailyBudgetCents,
+				lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
+				currency: adAccount.currency,
+				isExternal: true,
+				metadata: { platformAdSetId: externalAd.platformAdSetId },
+				updatedAt: new Date(),
+			};
+			const [campaign] = await db
+				.insert(adCampaigns)
+				.values(campaignValues)
+				.onConflictDoUpdate({
+					target: [adCampaigns.adAccountId, adCampaigns.platformCampaignId],
+					set: {
+						workspaceId: campaignValues.workspaceId,
+						name: campaignValues.name,
+						// Some provider sync payloads omit objective. Preserve the
+						// existing campaign value instead of silently resetting it.
+						objective:
+							externalAd.objective === undefined
+								? sql`${adCampaigns.objective}`
+								: campaignValues.objective,
+						status: campaignValues.status,
+						dailyBudgetCents: campaignValues.dailyBudgetCents,
+						lifetimeBudgetCents: campaignValues.lifetimeBudgetCents,
+						currency: campaignValues.currency,
+						metadata: campaignValues.metadata,
 						isExternal: true,
-						metadata: {
-							platformAdSetId: externalAd.platformAdSetId,
-						},
-					})
-					.returning();
-			} else {
-				[campaign] = await db
-					.update(adCampaigns)
-					.set({
-						workspaceId: adAccount.workspaceId,
-						adAccountId,
-						name: externalAd.campaignName,
-						objective: asCampaignObjective(
-							externalAd.objective,
-							existing.objective,
-						),
-						status: asAdStatus(externalAd.status),
-						dailyBudgetCents: externalAd.dailyBudgetCents,
-						lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
-						currency: adAccount.currency,
-						metadata: {
-							platformAdSetId: externalAd.platformAdSetId,
-						},
-						updatedAt: new Date(),
-					})
-					.where(eq(adCampaigns.id, existing.id))
-					.returning();
-			}
+						updatedAt: campaignValues.updatedAt,
+					},
+				})
+				.returning();
 
 			if (!campaign) return null;
 			resolvedCampaignId.set(platformCampaignId, campaign.id);
@@ -227,71 +187,59 @@ export async function syncExternalAds(
 				continue;
 			}
 
-			// Upsert ad using the pre-fetched id map (no per-ad SELECT).
-			const existingAdId = adIdByPlatformId.get(externalAd.platformAdId);
-
-			if (existingAdId) {
-				await db
-					.update(ads)
-					.set({
-						workspaceId: adAccount.workspaceId,
-						campaignId,
-						adAccountId,
-						status: asAdStatus(externalAd.status),
-						name: externalAd.adName,
-						headline: externalAd.creative?.headline,
-						body: externalAd.creative?.body,
-						imageUrl: externalAd.creative?.imageUrl,
-						videoUrl: externalAd.creative?.videoUrl,
-						linkUrl: externalAd.creative?.linkUrl,
-						callToAction: externalAd.creative?.callToAction,
-						targeting: asAdTargeting(externalAd.targeting),
-						dailyBudgetCents: externalAd.dailyBudgetCents,
-						lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
-						startDate: externalAd.startDate
-							? new Date(externalAd.startDate)
-							: null,
-						endDate: externalAd.endDate
-							? new Date(externalAd.endDate)
-							: null,
-						updatedAt: new Date(),
-					})
-					.where(eq(ads.id, existingAdId));
-				adsUpdated++;
-			} else {
-				const [inserted] = await db
-					.insert(ads)
-					.values({
-						organizationId: orgId,
-						workspaceId: adAccount.workspaceId,
-						campaignId,
-						adAccountId,
-						platform: adAccount.platform,
-						platformAdId: externalAd.platformAdId,
-						name: externalAd.adName,
-						status: asAdStatus(externalAd.status),
-						headline: externalAd.creative?.headline,
-						body: externalAd.creative?.body,
-						imageUrl: externalAd.creative?.imageUrl,
-						videoUrl: externalAd.creative?.videoUrl,
-						linkUrl: externalAd.creative?.linkUrl,
-						callToAction: externalAd.creative?.callToAction,
-						targeting: asAdTargeting(externalAd.targeting),
-						dailyBudgetCents: externalAd.dailyBudgetCents,
-						lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
-						startDate: externalAd.startDate
-							? new Date(externalAd.startDate)
-							: null,
-						endDate: externalAd.endDate
-							? new Date(externalAd.endDate)
-							: null,
+			const adValues = {
+				organizationId: orgId,
+				workspaceId: adAccount.workspaceId,
+				campaignId,
+				adAccountId,
+				platform: adAccount.platform,
+				platformAdId: externalAd.platformAdId,
+				name: externalAd.adName,
+				status: asAdStatus(externalAd.status),
+				headline: externalAd.creative?.headline,
+				body: externalAd.creative?.body,
+				imageUrl: externalAd.creative?.imageUrl,
+				videoUrl: externalAd.creative?.videoUrl,
+				linkUrl: externalAd.creative?.linkUrl,
+				callToAction: externalAd.creative?.callToAction,
+				targeting: asAdTargeting(externalAd.targeting),
+				dailyBudgetCents: externalAd.dailyBudgetCents,
+				lifetimeBudgetCents: externalAd.lifetimeBudgetCents,
+				startDate: externalAd.startDate ? new Date(externalAd.startDate) : null,
+				endDate: externalAd.endDate ? new Date(externalAd.endDate) : null,
+				isExternal: true,
+				updatedAt: new Date(),
+			};
+			await db
+				.insert(ads)
+				.values(adValues)
+				.onConflictDoUpdate({
+					target: [ads.adAccountId, ads.platformAdId],
+					set: {
+						workspaceId: adValues.workspaceId,
+						campaignId: adValues.campaignId,
+						name: adValues.name,
+						status: adValues.status,
+						headline: adValues.headline,
+						body: adValues.body,
+						imageUrl: adValues.imageUrl,
+						videoUrl: adValues.videoUrl,
+						linkUrl: adValues.linkUrl,
+						callToAction: adValues.callToAction,
+						targeting: adValues.targeting,
+						dailyBudgetCents: adValues.dailyBudgetCents,
+						lifetimeBudgetCents: adValues.lifetimeBudgetCents,
+						startDate: adValues.startDate,
+						endDate: adValues.endDate,
 						isExternal: true,
-					})
-					.returning({ id: ads.id });
-				// Cache the new ad id so a duplicate platformAdId in the same batch
-				// updates rather than inserting twice.
-				if (inserted) adIdByPlatformId.set(externalAd.platformAdId, inserted.id);
+						updatedAt: adValues.updatedAt,
+					},
+				});
+
+			if (existingAdIds.has(externalAd.platformAdId)) adsUpdated++;
+			else {
 				adsCreated++;
+				existingAdIds.add(externalAd.platformAdId);
 			}
 		}
 
@@ -340,10 +288,7 @@ export async function syncExternalAds(
 		}
 	} catch (err) {
 		error = err instanceof Error ? err.message : String(err);
-		console.error(
-			`[Ad Sync] Failed for ad account ${adAccountId}:`,
-			error,
-		);
+		console.error(`[Ad Sync] Failed for ad account ${adAccountId}:`, error);
 	}
 
 	// Log the sync

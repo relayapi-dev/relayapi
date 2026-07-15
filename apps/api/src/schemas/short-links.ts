@@ -4,7 +4,9 @@ import { paginatedResponse } from "./common";
 // --- Short link config ---
 
 export const ShortLinkConfigBody = z.object({
-	mode: z.enum(["always", "ask", "never"]).describe("When to shorten URLs in posts"),
+	mode: z
+		.enum(["always", "ask", "never"])
+		.describe("When to shorten URLs in posts"),
 	provider: z
 		.enum(["relayapi", "dub", "short_io", "bitly"])
 		.optional()
@@ -43,10 +45,23 @@ export const ShortLinkTestResponse = z.object({
 	error: z.string().nullable().describe("Error message (if failed)"),
 });
 
+export const ShortLinkTestQuery = z.object({
+	workspace_id: z
+		.string()
+		.optional()
+		.describe(
+			"Workspace for the test allocation. Omit for organization scope when workspace IDs are optional.",
+		),
+});
+
 // --- Short link ---
 
 export const ShortLinkResponse = z.object({
 	id: z.string().describe("Short link ID"),
+	workspace_id: z
+		.string()
+		.nullable()
+		.describe("Workspace ID, or null for organization scope"),
 	original_url: z.string().describe("Original URL"),
 	short_url: z.string().describe("Shortened URL"),
 	post_id: z.string().nullable().describe("Associated post ID"),
@@ -59,6 +74,12 @@ export const ShortLinkListResponse = paginatedResponse(ShortLinkResponse);
 // --- Shorten request ---
 
 export const ShortenUrlBody = z.object({
+	workspace_id: z
+		.string()
+		.optional()
+		.describe(
+			"Workspace for the short link. Omit for organization scope when workspace IDs are optional.",
+		),
 	url: z
 		.string()
 		.url()
@@ -85,5 +106,9 @@ export const ShortLinkStatsResponse = z.object({
 	short_url: z.string().describe("Shortened URL"),
 	original_url: z.string().describe("Original URL"),
 	click_count: z.number().describe("Total click count"),
-	last_synced_at: z.string().datetime().nullable().describe("Last time click data was synced"),
+	last_synced_at: z
+		.string()
+		.datetime()
+		.nullable()
+		.describe("Last time click data was synced"),
 });

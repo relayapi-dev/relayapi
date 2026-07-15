@@ -1,21 +1,22 @@
-import { createRoute, OpenAPIHono, } from "@hono/zod-openapi";
-import { type createDb, ideaGroups, } from "@relayapi/db";
-import { and, asc, eq, max, sql } from "drizzle-orm";
+import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
+import { type Database, ideaGroups, ideas } from "@relayapi/db";
+import { and, asc, eq, sql } from "drizzle-orm";
+import {
+	assertAllWorkspaceScope,
+	workspaceScopeKey,
+} from "../lib/request-access";
+import { applyWorkspaceScope } from "../lib/workspace-scope";
 import { ErrorResponse, IdParam } from "../schemas/common";
 import {
 	CreateIdeaGroupBody,
-	UpdateIdeaGroupBody,
-	ReorderIdeaGroupsBody,
-	IdeaGroupResponse,
+	DeleteIdeaGroupQuery,
 	IdeaGroupListQuery,
 	IdeaGroupListResponse,
+	IdeaGroupResponse,
+	ReorderIdeaGroupsBody,
+	UpdateIdeaGroupBody,
 } from "../schemas/idea-groups";
 import type { Env, Variables } from "../types";
-import {
-	applyWorkspaceScope,
-	assertWorkspaceScope,
-} from "../lib/workspace-scope";
-import { assertScopedCreateWorkspace } from "../lib/request-access";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -26,51 +27,96 @@ function serialize(row: typeof ideaGroups.$inferSelect) {
 		position: row.position,
 		color: row.color ?? null,
 		is_default: row.isDefault,
+		revision: row.revision,
 		workspace_id: row.workspaceId ?? null,
 		created_at: row.createdAt.toISOString(),
 		updated_at: row.updatedAt.toISOString(),
 	};
 }
 
+function groupOrderLockKey(orgId: string, workspaceId: string | null): string {
+	return `idea-groups:${orgId}:${workspaceScopeKey(workspaceId)}`;
+}
+
+function ideaOrderLockKey(
+	orgId: string,
+	scopeKey: string,
+	groupId: string,
+): string {
+	return `idea-order:${orgId}:${scopeKey}:${groupId}`;
+}
+
+async function acquireAdvisoryLocks(
+	db: Pick<Database, "execute">,
+	keys: Iterable<string>,
+): Promise<void> {
+	for (const key of [...new Set(keys)].sort()) {
+		await db.execute(
+			sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`,
+		);
+	}
+}
+
+/**
+ * Return the single default group for an exact scope, creating it only from a
+ * write transaction that already holds groupOrderLockKey(). The partial unique
+ * index is the final race fence; ON CONFLICT makes replay harmless.
+ */
 async function ensureDefaultGroup(
-	db: ReturnType<typeof createDb>,
+	db: Pick<Database, "select" | "insert">,
 	orgId: string,
 	workspaceId: string | null,
 ): Promise<string> {
-	const conditions = [
-		eq(ideaGroups.organizationId, orgId),
-		eq(ideaGroups.isDefault, true),
-	];
-	if (workspaceId) {
-		conditions.push(eq(ideaGroups.workspaceId, workspaceId));
-	} else {
-		conditions.push(sql`${ideaGroups.workspaceId} IS NULL`);
-	}
-
+	const scopeCondition = workspaceId
+		? eq(ideaGroups.workspaceId, workspaceId)
+		: sql`${ideaGroups.workspaceId} IS NULL`;
 	const [existing] = await db
 		.select({ id: ideaGroups.id })
 		.from(ideaGroups)
-		.where(and(...conditions))
+		.where(
+			and(
+				eq(ideaGroups.organizationId, orgId),
+				scopeCondition,
+				eq(ideaGroups.isDefault, true),
+			),
+		)
 		.limit(1);
-
 	if (existing) return existing.id;
 
 	const [created] = await db
 		.insert(ideaGroups)
 		.values({
 			organizationId: orgId,
-			workspaceId: workspaceId,
+			workspaceId,
 			name: "Unassigned",
-			position: 0,
+			position: sql`COALESCE((
+				SELECT MAX(position) + 1
+				FROM idea_groups
+				WHERE organization_id = ${orgId}
+					AND workspace_id IS NOT DISTINCT FROM ${workspaceId}
+			), 0)`,
 			isDefault: true,
 		})
+		.onConflictDoNothing()
 		.returning({ id: ideaGroups.id });
+	if (created) return created.id;
 
-	if (!created) throw new Error("Failed to create default idea group");
-	return created.id;
+	// A concurrent writer may have won the partial unique constraint. This
+	// statement gets a fresh READ COMMITTED snapshot after that conflict wait.
+	const [winner] = await db
+		.select({ id: ideaGroups.id })
+		.from(ideaGroups)
+		.where(
+			and(
+				eq(ideaGroups.organizationId, orgId),
+				scopeCondition,
+				eq(ideaGroups.isDefault, true),
+			),
+		)
+		.limit(1);
+	if (!winner) throw new Error("Failed to establish the default Idea group");
+	return winner.id;
 }
-
-// ── List idea groups ──────────────────────────────────────────────────────────
 
 const listIdeaGroups = createRoute({
 	operationId: "listIdeaGroups",
@@ -78,6 +124,8 @@ const listIdeaGroups = createRoute({
 	path: "/",
 	tags: ["Idea Groups"],
 	summary: "List idea groups",
+	description:
+		"Lists shared organization groups without mutating state. Every organization receives its default group during provisioning.",
 	security: [{ Bearer: [] }],
 	request: { query: IdeaGroupListQuery },
 	responses: {
@@ -95,39 +143,33 @@ const listIdeaGroups = createRoute({
 app.openapi(listIdeaGroups, async (c) => {
 	const orgId = c.get("orgId");
 	const { workspace_id } = c.req.valid("query");
-	const db = c.get("db");
-
-	const scopedWorkspaceId = workspace_id ?? null;
-	await ensureDefaultGroup(db, orgId, scopedWorkspaceId);
-
 	const conditions = [eq(ideaGroups.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, ideaGroups.workspaceId);
 	if (workspace_id) {
-		conditions.push(eq(ideaGroups.workspaceId, workspace_id));
+		conditions.push(
+			sql`(${ideaGroups.workspaceId} IS NULL OR ${ideaGroups.workspaceId} = ${workspace_id})`,
+		);
 	}
-
-	const rows = await db
+	const rows = await c
+		.get("db")
 		.select()
 		.from(ideaGroups)
 		.where(and(...conditions))
-		.orderBy(asc(ideaGroups.position));
-
+		.orderBy(asc(ideaGroups.position), asc(ideaGroups.id));
 	return c.json({ data: rows.map(serialize) }, 200);
 });
-
-// ── Create idea group ─────────────────────────────────────────────────────────
 
 const createIdeaGroup = createRoute({
 	operationId: "createIdeaGroup",
 	method: "post",
 	path: "/",
 	tags: ["Idea Groups"],
-	summary: "Create an idea group",
+	summary: "Create a shared idea group",
+	description:
+		"Idea groups are organization-shared definitions, so only an all-workspace API key can create them.",
 	security: [{ Bearer: [] }],
 	request: {
-		body: {
-			content: { "application/json": { schema: CreateIdeaGroupBody } },
-		},
+		body: { content: { "application/json": { schema: CreateIdeaGroupBody } } },
 	},
 	responses: {
 		201: {
@@ -141,59 +183,36 @@ const createIdeaGroup = createRoute({
 	},
 });
 
-// @ts-expect-error — handler may return 400/403 from scoped workspace checks
 app.openapi(createIdeaGroup, async (c) => {
+	const denied = assertAllWorkspaceScope(
+		c,
+		"Only an all-workspace API key can create organization-shared Idea groups.",
+	);
+	if (denied) return denied as never;
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = c.get("db");
-
-	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "idea group");
-	if (denied) return denied;
-
-	let position = body.position;
-	if (position === undefined) {
-		const [result] = await db
-			.select({ maxPos: max(ideaGroups.position) })
-			.from(ideaGroups)
-			.where(
-				and(
-					eq(ideaGroups.organizationId, orgId),
-					body.workspace_id
-						? eq(ideaGroups.workspaceId, body.workspace_id)
-						: sql`${ideaGroups.workspaceId} IS NULL`,
-				),
-			);
-		position = (result?.maxPos ?? 0) + 1;
-	}
-
-	const [row] = await db
-		.insert(ideaGroups)
-		.values({
-			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
-			name: body.name,
-			color: body.color ?? null,
-			position,
-			isDefault: false,
-		})
-		.returning();
-
-	if (!row) {
-		return c.json(
-			{
-				error: {
-					code: "INTERNAL_ERROR",
-					message: "Failed to create idea group",
-				},
-			} as never,
-			500 as never,
-		);
-	}
-
+	const row = await c.get("db").transaction(async (tx) => {
+		await acquireAdvisoryLocks(tx, [groupOrderLockKey(orgId, null)]);
+		const [created] = await tx
+			.insert(ideaGroups)
+			.values({
+				organizationId: orgId,
+				workspaceId: null,
+				name: body.name,
+				color: body.color ?? null,
+				position: sql`COALESCE((
+					SELECT MAX(position) + 1
+					FROM idea_groups
+					WHERE organization_id = ${orgId} AND workspace_id IS NULL
+				), 0)`,
+				isDefault: false,
+			})
+			.returning();
+		if (!created) throw new Error("Failed to create Idea group");
+		return created;
+	});
 	return c.json(serialize(row), 201);
 });
-
-// ── Update idea group ─────────────────────────────────────────────────────────
 
 const updateIdeaGroup = createRoute({
 	operationId: "updateIdeaGroup",
@@ -204,9 +223,7 @@ const updateIdeaGroup = createRoute({
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParam,
-		body: {
-			content: { "application/json": { schema: UpdateIdeaGroupBody } },
-		},
+		body: { content: { "application/json": { schema: UpdateIdeaGroupBody } } },
 	},
 	responses: {
 		200: {
@@ -217,51 +234,77 @@ const updateIdeaGroup = createRoute({
 			description: "Idea group not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		409: {
+			description: "Revision conflict",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
 app.openapi(updateIdeaGroup, async (c) => {
+	const denied = assertAllWorkspaceScope(c);
+	if (denied) return denied as never;
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = c.get("db");
-
-	const [existing] = await db
-		.select()
-		.from(ideaGroups)
-		.where(and(eq(ideaGroups.id, id), eq(ideaGroups.organizationId, orgId)))
-		.limit(1);
-
-	if (!existing) {
+	const result = await c.get("db").transaction(async (tx) => {
+		const [current] = await tx
+			.select()
+			.from(ideaGroups)
+			.where(and(eq(ideaGroups.id, id), eq(ideaGroups.organizationId, orgId)))
+			.for("update")
+			.limit(1);
+		if (!current) return { kind: "missing" } as const;
+		if (current.revision !== body.expected_revision) {
+			return { kind: "conflict" } as const;
+		}
+		if (body.name === undefined && body.color === undefined) {
+			return { kind: "ok", row: current } as const;
+		}
+		const [updated] = await tx
+			.update(ideaGroups)
+			.set({
+				...(body.name !== undefined ? { name: body.name } : {}),
+				...(body.color !== undefined ? { color: body.color } : {}),
+				revision: sql`${ideaGroups.revision} + 1`,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(ideaGroups.id, id),
+					eq(ideaGroups.organizationId, orgId),
+					eq(ideaGroups.revision, body.expected_revision),
+				),
+			)
+			.returning();
+		return updated
+			? ({ kind: "ok", row: updated } as const)
+			: ({ kind: "conflict" } as const);
+	});
+	if (result.kind === "missing") {
 		return c.json(
-			{ error: { code: "idea_group_not_found", message: "Idea group not found" } },
+			{
+				error: {
+					code: "idea_group_not_found",
+					message: "Idea group not found",
+				},
+			},
 			404,
 		);
 	}
-
-	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied as never;
-
-	const updates: Record<string, unknown> = {};
-	if (body.name !== undefined) updates.name = body.name;
-	if (body.color !== undefined) updates.color = body.color;
-	updates.updatedAt = new Date();
-
-	if (Object.keys(updates).length === 1) {
-		// Only updatedAt was set — nothing meaningful to update
-		return c.json(serialize(existing), 200);
+	if (result.kind === "conflict") {
+		return c.json(
+			{
+				error: {
+					code: "REVISION_CONFLICT",
+					message: "The Idea group changed; reload it and retry.",
+				},
+			},
+			409 as never,
+		);
 	}
-
-	const [updated] = await db
-		.update(ideaGroups)
-		.set(updates)
-		.where(eq(ideaGroups.id, id))
-		.returning();
-
-	return c.json(serialize(updated ?? existing), 200);
+	return c.json(serialize(result.row), 200);
 });
-
-// ── Delete idea group ─────────────────────────────────────────────────────────
 
 const deleteIdeaGroup = createRoute({
 	operationId: "deleteIdeaGroup",
@@ -270,9 +313,9 @@ const deleteIdeaGroup = createRoute({
 	tags: ["Idea Groups"],
 	summary: "Delete an idea group",
 	description:
-		"Deletes an idea group and moves all ideas in that group to the default 'Unassigned' group. Cannot delete the default group.",
+		"Atomically moves every affected Idea to the exact-scope default group, then deletes the group. The default group cannot be deleted.",
 	security: [{ Bearer: [] }],
-	request: { params: IdParam },
+	request: { params: IdParam, query: DeleteIdeaGroupQuery },
 	responses: {
 		204: { description: "Idea group deleted" },
 		400: {
@@ -283,31 +326,131 @@ const deleteIdeaGroup = createRoute({
 			description: "Idea group not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		409: {
+			description: "Revision conflict",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
 app.openapi(deleteIdeaGroup, async (c) => {
+	const denied = assertAllWorkspaceScope(c);
+	if (denied) return denied as never;
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = c.get("db");
+	const { expected_revision } = c.req.valid("query");
+	const result = await c.get("db").transaction(async (tx) => {
+		const [observed] = await tx
+			.select({ workspaceId: ideaGroups.workspaceId })
+			.from(ideaGroups)
+			.where(and(eq(ideaGroups.id, id), eq(ideaGroups.organizationId, orgId)))
+			.limit(1);
+		if (!observed) return { kind: "missing" } as const;
 
-	const [existing] = await db
-		.select()
-		.from(ideaGroups)
-		.where(and(eq(ideaGroups.id, id), eq(ideaGroups.organizationId, orgId)))
-		.limit(1);
+		// Group creation/reorder/delete all acquire the order lock before row
+		// locks. Keeping that order prevents a delete/reorder lock cycle.
+		await acquireAdvisoryLocks(tx, [
+			groupOrderLockKey(orgId, observed.workspaceId),
+		]);
+		const [current] = await tx
+			.select()
+			.from(ideaGroups)
+			.where(and(eq(ideaGroups.id, id), eq(ideaGroups.organizationId, orgId)))
+			.for("update")
+			.limit(1);
+		if (!current) return { kind: "missing" } as const;
+		if (
+			current.workspaceId !== observed.workspaceId ||
+			current.revision !== expected_revision
+		) {
+			return { kind: "conflict" } as const;
+		}
+		if (current.isDefault) return { kind: "default" } as const;
+		const defaultGroupId = await ensureDefaultGroup(
+			tx,
+			orgId,
+			current.workspaceId,
+		);
+		const [defaultGroup] = await tx
+			.select({ scopeKey: ideaGroups.scopeKey })
+			.from(ideaGroups)
+			.where(
+				and(
+					eq(ideaGroups.id, defaultGroupId),
+					eq(ideaGroups.organizationId, orgId),
+				),
+			)
+			.limit(1);
+		if (!defaultGroup) throw new Error("Default Idea group disappeared");
 
-	if (!existing) {
+		const affectedScopes = await tx
+			.selectDistinct({ scopeKey: ideas.scopeKey })
+			.from(ideas)
+			.where(and(eq(ideas.organizationId, orgId), eq(ideas.groupId, id)));
+		await acquireAdvisoryLocks(
+			tx,
+			affectedScopes.flatMap(({ scopeKey }) => [
+				ideaOrderLockKey(orgId, scopeKey, id),
+				ideaOrderLockKey(orgId, scopeKey, defaultGroupId),
+			]),
+		);
+
+		await tx.execute(sql`
+			WITH ranked AS (
+				SELECT source.id,
+					source.scope_key,
+					row_number() OVER (
+						PARTITION BY source.scope_key
+						ORDER BY source.position, source.id
+					) AS ordinal
+				FROM ideas AS source
+				WHERE source.organization_id = ${orgId}
+					AND source.group_id = ${id}
+			), bases AS (
+				SELECT target.scope_key, COALESCE(MAX(target.position), -1) AS base
+				FROM ideas AS target
+				WHERE target.organization_id = ${orgId}
+					AND target.group_id = ${defaultGroupId}
+				GROUP BY target.scope_key
+			)
+			UPDATE ideas AS target
+			SET group_id = ${defaultGroupId},
+				group_scope_key = ${defaultGroup.scopeKey},
+				position = COALESCE(bases.base, -1) + ranked.ordinal,
+				revision = target.revision + 1,
+				updated_at = now()
+			FROM ranked
+			LEFT JOIN bases ON bases.scope_key = ranked.scope_key
+			WHERE target.id = ranked.id
+				AND target.organization_id = ${orgId}
+		`);
+		const deleted = await tx
+			.delete(ideaGroups)
+			.where(
+				and(
+					eq(ideaGroups.id, id),
+					eq(ideaGroups.organizationId, orgId),
+					eq(ideaGroups.revision, expected_revision),
+				),
+			)
+			.returning({ id: ideaGroups.id });
+		return deleted.length === 1
+			? ({ kind: "deleted" } as const)
+			: ({ kind: "conflict" } as const);
+	});
+
+	if (result.kind === "missing") {
 		return c.json(
-			{ error: { code: "idea_group_not_found", message: "Idea group not found" } },
+			{
+				error: {
+					code: "idea_group_not_found",
+					message: "Idea group not found",
+				},
+			},
 			404,
 		);
 	}
-
-	const denied = assertWorkspaceScope(c, existing.workspaceId);
-	if (denied) return denied;
-
-	if (existing.isDefault) {
+	if (result.kind === "default") {
 		return c.json(
 			{
 				error: {
@@ -318,43 +461,28 @@ app.openapi(deleteIdeaGroup, async (c) => {
 			400,
 		);
 	}
-
-	// Move all ideas in this group to the default group in one set-based statement
-	// (a window function appends them after the default group's current max
-	// position) instead of one UPDATE per idea.
-	const defaultGroupId = await ensureDefaultGroup(db, orgId, existing.workspaceId);
-	await db.execute(sql`
-		WITH ranked AS (
-			SELECT id, row_number() OVER (ORDER BY position ASC) AS rn
-			FROM ideas
-			WHERE group_id = ${id}
-		),
-		base AS (
-			SELECT COALESCE(MAX(position), -1) AS max_pos
-			FROM ideas
-			WHERE group_id = ${defaultGroupId}
-		)
-		UPDATE ideas
-		SET group_id = ${defaultGroupId},
-			position = (SELECT max_pos FROM base) + ranked.rn,
-			updated_at = now()
-		FROM ranked
-		WHERE ideas.id = ranked.id
-	`);
-
-	await db.delete(ideaGroups).where(eq(ideaGroups.id, id));
-
+	if (result.kind === "conflict") {
+		return c.json(
+			{
+				error: {
+					code: "REVISION_CONFLICT",
+					message: "The Idea group changed; reload it and retry.",
+				},
+			},
+			409 as never,
+		);
+	}
 	return c.body(null, 204);
 });
-
-// ── Reorder idea groups ───────────────────────────────────────────────────────
 
 const reorderIdeaGroups = createRoute({
 	operationId: "reorderIdeaGroups",
 	method: "post",
 	path: "/reorder",
 	tags: ["Idea Groups"],
-	summary: "Reorder idea groups",
+	summary: "Reorder shared idea groups",
+	description:
+		"Atomically replaces the complete organization-shared group order using per-group revision fences.",
 	security: [{ Bearer: [] }],
 	request: {
 		body: {
@@ -366,47 +494,122 @@ const reorderIdeaGroups = createRoute({
 			description: "Idea groups reordered",
 			content: { "application/json": { schema: IdeaGroupListResponse } },
 		},
-		401: {
-			description: "Unauthorized",
+		409: {
+			description: "Revision or complete-set conflict",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
 
 app.openapi(reorderIdeaGroups, async (c) => {
+	const denied = assertAllWorkspaceScope(c);
+	if (denied) return denied as never;
 	const orgId = c.get("orgId");
 	const { groups } = c.req.valid("json");
-	const db = c.get("db");
+	const result = await c.get("db").transaction(async (tx) => {
+		await acquireAdvisoryLocks(tx, [groupOrderLockKey(orgId, null)]);
+		const current = await tx
+			.select()
+			.from(ideaGroups)
+			.where(
+				and(
+					eq(ideaGroups.organizationId, orgId),
+					sql`${ideaGroups.workspaceId} IS NULL`,
+				),
+			)
+			.orderBy(asc(ideaGroups.position), asc(ideaGroups.id))
+			.for("update");
+		const requested = new Map(groups.map((group) => [group.id, group]));
+		const expectedPositions = new Set(groups.map((group) => group.position));
+		if (
+			requested.size !== groups.length ||
+			expectedPositions.size !== groups.length ||
+			current.length !== groups.length ||
+			groups.some((group) =>
+				current.every(
+					(row) =>
+						row.id !== group.id || row.revision !== group.expected_revision,
+				),
+			) ||
+			![...expectedPositions].every(
+				(position) => position >= 0 && position < groups.length,
+			)
+		) {
+			return { kind: "conflict" } as const;
+		}
 
-	// Bulk update positions in a single set-based statement (joined to a VALUES
-	// list) instead of one UPDATE per group — only update groups in this org.
-	if (groups.length > 0) {
-		const valuesList = sql.join(
-			groups.map(
-				({ id, position }) => sql`(${id}::text, ${position}::real)`,
+		const temporaryBase =
+			Math.max(-1, ...current.map((group) => group.position)) +
+			current.length +
+			1;
+		const temporaryValues = sql.join(
+			current.map(
+				(group, index) =>
+					sql`(${group.id}::text, ${temporaryBase + index}::integer)`,
 			),
 			sql`, `,
 		);
-		await db.execute(sql`
-			UPDATE idea_groups AS g
-			SET position = v.position, updated_at = now()
-			FROM (VALUES ${valuesList}) AS v(id, position)
-			WHERE g.id = v.id AND g.organization_id = ${orgId}
+		await tx.execute(sql`
+			UPDATE idea_groups AS target
+			SET position = value.position
+			FROM (VALUES ${temporaryValues}) AS value(id, position)
+			WHERE target.id = value.id
+				AND target.organization_id = ${orgId}
+				AND target.workspace_id IS NULL
 		`);
+
+		const finalValues = sql.join(
+			groups.map(
+				(group) =>
+					sql`(${group.id}::text, ${group.position}::integer, ${group.expected_revision}::integer)`,
+			),
+			sql`, `,
+		);
+		const updated = await tx.execute<{ id: string }>(sql`
+			UPDATE idea_groups AS target
+			SET position = value.position,
+				revision = target.revision + 1,
+				updated_at = now()
+			FROM (VALUES ${finalValues}) AS value(id, position, expected_revision)
+			WHERE target.id = value.id
+				AND target.organization_id = ${orgId}
+				AND target.workspace_id IS NULL
+				AND target.revision = value.expected_revision
+			RETURNING target.id
+		`);
+		if (updated.length !== groups.length)
+			throw new Error("Lost group reorder fence");
+		const rows = await tx
+			.select()
+			.from(ideaGroups)
+			.where(
+				and(
+					eq(ideaGroups.organizationId, orgId),
+					sql`${ideaGroups.workspaceId} IS NULL`,
+				),
+			)
+			.orderBy(asc(ideaGroups.position), asc(ideaGroups.id));
+		return { kind: "ok", rows } as const;
+	});
+	if (result.kind === "conflict") {
+		return c.json(
+			{
+				error: {
+					code: "REVISION_CONFLICT",
+					message:
+						"The group set or one of its revisions changed; reload and retry the complete order.",
+				},
+			},
+			409 as never,
+		);
 	}
-
-	// Return the full list ordered by position
-	const conditions = [eq(ideaGroups.organizationId, orgId)];
-	applyWorkspaceScope(c, conditions, ideaGroups.workspaceId);
-
-	const rows = await db
-		.select()
-		.from(ideaGroups)
-		.where(and(...conditions))
-		.orderBy(asc(ideaGroups.position));
-
-	return c.json({ data: rows.map(serialize) }, 200);
+	return c.json({ data: result.rows.map(serialize) }, 200);
 });
 
-export { ensureDefaultGroup };
+export {
+	acquireAdvisoryLocks,
+	ensureDefaultGroup,
+	groupOrderLockKey,
+	ideaOrderLockKey,
+};
 export default app;

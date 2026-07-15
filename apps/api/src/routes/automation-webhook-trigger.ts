@@ -6,17 +6,38 @@
 
 import { createDb } from "@relayapi/db";
 import { Hono } from "hono";
+import {
+	readRequestText,
+	ResponseTooLargeError,
+} from "../lib/fetch-public-url";
 import type { Env } from "../types";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
 
 const app = new Hono<{ Bindings: Env }>();
+const MAX_AUTOMATION_WEBHOOK_BYTES = 256 * 1024;
 
 app.post("/:slug", async (c) => {
 	const slug = c.req.param("slug");
-	const rawBody = await c.req.text();
+	let rawBody: string;
+	try {
+		rawBody = await readRequestText(c.req.raw, MAX_AUTOMATION_WEBHOOK_BYTES);
+	} catch (error) {
+		if (error instanceof ResponseTooLargeError) {
+			return c.json(
+				{
+					error: {
+						code: "payload_too_large",
+						message: "webhook payload exceeds the 256 KiB limit",
+					},
+				},
+				413,
+			);
+		}
+		throw error;
+	}
 	const signatureHeader = c.req.header("x-relay-signature") ?? null;
-	// Optional replay-protection timestamp; when present the receiver requires
-	// the signature to cover `${timestamp}.${body}` and rejects stale timestamps.
+	// Required replay-protection timestamp. The signature covers
+	// `${timestamp}.${body}` and stale timestamps are rejected.
 	const timestampHeader = c.req.header("x-relay-timestamp") ?? null;
 
 	const db = createDb(c.env.HYPERDRIVE.connectionString);
@@ -55,6 +76,16 @@ app.post("/:slug", async (c) => {
 					},
 				},
 				401,
+			);
+		case "duplicate":
+			return c.json(
+				{
+					accepted: true,
+					duplicate: true,
+					status: result.receiptStatus,
+					...(result.runId ? { run_id: result.runId } : {}),
+				},
+				202,
 			);
 		case "unknown_slug":
 			return c.json(

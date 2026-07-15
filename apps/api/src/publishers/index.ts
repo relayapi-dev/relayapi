@@ -54,5 +54,12 @@ export function isSupportedPlatform(platform: Platform): boolean {
 	return publishers.has(platform);
 }
 
+export type {
+	EngagementAccount,
+	EngagementActionResult,
+	PublishErrorCode,
+	Publisher,
+	PublishRequest,
+	PublishResult,
+} from "./types";
 export { classifyPublishError } from "./types";
-export type { Publisher, PublishRequest, PublishResult, PublishErrorCode, EngagementAccount, EngagementActionResult } from "./types";

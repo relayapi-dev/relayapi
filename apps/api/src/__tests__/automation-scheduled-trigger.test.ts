@@ -30,10 +30,11 @@ import {
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -59,16 +60,12 @@ async function teardownFixture() {
 	await db
 		.delete(automationRuns)
 		.where(eq(automationRuns.organizationId, orgId));
-	await db
-		.delete(automationScheduledJobs)
-		.where(
+	await db.delete(automationScheduledJobs).where(
 			sql`${automationScheduledJobs.automationId} IN (
 				SELECT id FROM automations WHERE organization_id = ${orgId}
 			)`,
 		);
-	await db
-		.delete(automations)
-		.where(eq(automations.organizationId, orgId));
+	await db.delete(automations).where(eq(automations.organizationId, orgId));
 	await db
 		.delete(contactSegmentMemberships)
 		.where(eq(contactSegmentMemberships.organizationId, orgId));
@@ -119,6 +116,7 @@ async function makeEntrypoint(
 	const [ep] = await db
 		.insert(automationEntrypoints)
 		.values({
+			organizationId: orgId,
 			automationId,
 			channel: "instagram",
 			kind: "schedule",
@@ -148,6 +146,7 @@ async function makeTaggedContact(tag: string) {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;
@@ -241,9 +240,7 @@ describe("computeNextCronRun", () => {
 
 	it("returns null for an unknown IANA timezone", () => {
 		const from = new Date("2026-04-22T12:00:00.000Z");
-		expect(
-			computeNextCronRun("0 9 * * *", from, "Not/A_Real_Zone"),
-		).toBeNull();
+		expect(computeNextCronRun("0 9 * * *", from, "Not/A_Real_Zone")).toBeNull();
 	});
 });
 
@@ -374,9 +371,7 @@ describe("scheduled_trigger dispatch", () => {
 		expect(row?.error ?? "").toMatch(/unsupported cron/i);
 	});
 
-	it(
-		"queues the next run BEFORE enrollment, so the schedule survives a failure (§B4)",
-		async () => {
+	it("queues the next run BEFORE enrollment, so the schedule survives a failure (§B4)", async () => {
 			if (!dbAvailable) return;
 
 			// A valid tag filter — enumeration will succeed (0 contacts) and the
@@ -414,12 +409,9 @@ describe("scheduled_trigger dispatch", () => {
 			const pending0 = pending[0];
 			if (!pending0) throw new Error("expected a pending job");
 			expect(pending0.runAt.getTime()).toBeGreaterThan(Date.now());
-		},
-	);
+	});
 
-	it(
-		"is idempotent — running the same scheduled_trigger twice doesn't double-queue the next run (§B4)",
-		async () => {
+	it("is idempotent — running the same scheduled_trigger twice doesn't double-queue the next run (§B4)", async () => {
 			if (!dbAvailable) return;
 
 			const auto = await makeAutomation("sched-idempotent");
@@ -462,8 +454,7 @@ describe("scheduled_trigger dispatch", () => {
 				);
 			// Exactly one pending successor — not two.
 			expect(pending.length).toBe(1);
-		},
-	);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -581,10 +572,7 @@ describe("armAllScheduleEntrypointsForAutomation (F1)", () => {
 			{ all: [{ field: "tags", op: "contains", value: "vip" }] },
 		);
 
-		const result = await armAllScheduleEntrypointsForAutomation(
-			db,
-			auto.id,
-		);
+		const result = await armAllScheduleEntrypointsForAutomation(db, auto.id);
 		expect(result.armed).toBe(2);
 
 		const pending = await db

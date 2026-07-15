@@ -5,30 +5,50 @@ import {
 	crossPostActions,
 	type Database,
 	externalPosts,
+	generateId,
 	ideaActivity,
 	ideas,
 	media as mediaTable,
 	postRecyclingConfigs,
 	posts,
 	postTargets,
+	publishAttempts,
+	publishOutbox,
 	shortLinkConfigs,
 	shortLinks,
 	signatures,
 	socialAccounts,
-	usageRecords,
+	threadExecutions,
 } from "@relayapi/db";
 import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
+import type { Context } from "hono";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
+import { decryptAccountToken } from "../lib/account-token-crypto";
 import { maybeDecrypt } from "../lib/crypto";
 import { parseCsv } from "../lib/csv-parser";
-import { getLinkedInRestHeaders, LINKEDIN_REST_BASE } from "../lib/linkedin-rest";
+import {
+	getLinkedInRestHeaders,
+	LINKEDIN_REST_BASE,
+} from "../lib/linkedin-rest";
 import { notifyRealtime } from "../lib/notify-post-update";
+import {
+	decodeTimestampIdCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	type TimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { presignRelayMediaUrls, RELAY_MEDIA_HOST } from "../lib/r2-presign";
+import {
+	inheritOperationalCreateScope,
+	workspaceScopeKey,
+} from "../lib/request-access";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+	workspaceScopeSqlCondition,
 } from "../lib/workspace-scope";
-import { incrementUsage } from "../middleware/usage-tracking";
 import { addToPlaylist } from "../publishers/youtube";
 import {
 	ErrorResponse,
@@ -47,6 +67,11 @@ import {
 	UpdateMetadataResponse,
 	UpdatePostBody,
 } from "../schemas/posts";
+import { chooseCrossPostSourceTarget } from "../services/cross-post-processor";
+import {
+	dispatchPublishOutbox,
+	publishOutboxRow,
+} from "../services/publish-outbox";
 import {
 	computeNextRecycleAt,
 	validateRecyclingConfig,
@@ -57,12 +82,13 @@ import {
 } from "../services/short-link-providers";
 import { shortenUrlsInContent } from "../services/short-link-service";
 import { resolveTargets } from "../services/target-resolver";
-import { refreshTokenIfNeeded } from "../services/token-refresh";
-import { dispatchWebhookEvent } from "../services/webhook-delivery";
+import { refreshTokenIfNeeded } from "../services/token-refresh-coordinator";
+import {
+	enqueuePersistedWebhookEvent,
+	type PersistedWebhookEvent,
+	persistWebhookEventInTransaction,
+} from "../services/webhook-delivery";
 import type { Env, Variables } from "../types";
-import { PRICING } from "../types";
-import { resolveBillingPeriod } from "../middleware/usage-tracking";
-import type { Context } from "hono";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -70,13 +96,31 @@ type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 const PRESIGN_GET_EXPIRES = 3600;
 
-type MediaItem = { url: string; type?: string; thumbnail?: string };
+type MediaItem = {
+	url: string;
+	type?: "image" | "video" | "gif" | "document";
+	thumbnail?: string;
+};
+type PostResponseBody = z.infer<typeof PostResponse>;
+type PostTargetAccount = NonNullable<
+	PostResponseBody["targets"][string]["accounts"]
+>[number];
+
+function responseMediaType(value: string | null): MediaItem["type"] {
+	return value === "image" ||
+		value === "video" ||
+		value === "gif" ||
+		value === "document"
+		? value
+		: undefined;
+}
 
 async function presignMediaUrls(
 	env: Env,
 	mediaArr: MediaItem[] | null,
+	orgId: string,
 ): Promise<MediaItem[] | null> {
-	return presignRelayMediaUrls(env, mediaArr, PRESIGN_GET_EXPIRES);
+	return presignRelayMediaUrls(env, mediaArr, PRESIGN_GET_EXPIRES, orgId);
 }
 
 /**
@@ -259,6 +303,10 @@ const listPosts = createRoute({
 		200: {
 			description: "List of posts",
 			content: { "application/json": { schema: PostListResponse } },
+		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -448,6 +496,76 @@ const retryPost = createRoute({
 	},
 });
 
+const ReconcilePublishTargetParams = z.object({
+	id: z.string(),
+	target_id: z.string(),
+});
+
+const ReconcilePublishTargetBody = z.discriminatedUnion("outcome", [
+	z.object({
+		outcome: z.literal("succeeded"),
+		publish_operation_id: z.string().min(1).max(256),
+		provider_post_id: z.string().min(1).max(2048),
+		provider_url: z.string().url().max(8192).optional(),
+	}),
+	z.object({
+		outcome: z.literal("failed"),
+		publish_operation_id: z.string().min(1).max(256),
+		error_code: z.string().min(1).max(128),
+		error_message: z.string().min(1).max(2048),
+	}),
+]);
+
+const ReconcilePublishTargetResponse = z.object({
+	post_id: z.string(),
+	target_id: z.string(),
+	publish_operation_id: z.string(),
+	outcome: z.enum(["succeeded", "failed"]),
+	post_status: z.enum(["publishing", "published", "failed", "partial"]),
+	thread_status: z
+		.enum(["queued", "completed", "failed", "unknown"])
+		.nullable(),
+});
+
+const reconcilePublishTarget = createRoute({
+	operationId: "reconcilePostTarget",
+	method: "post",
+	path: "/{id}/targets/{target_id}/reconcile",
+	tags: ["Posts"],
+	summary: "Resolve an unknown provider publish outcome",
+	description:
+		"Manually reconcile a target using its stable publish_operation_id. Unknown outcomes are never replayed automatically.",
+	security: [{ Bearer: [] }],
+	request: {
+		params: ReconcilePublishTargetParams,
+		body: {
+			content: {
+				"application/json": { schema: ReconcilePublishTargetBody },
+			},
+		},
+	},
+	responses: {
+		200: {
+			description: "Unknown outcome reconciled",
+			content: {
+				"application/json": { schema: ReconcilePublishTargetResponse },
+			},
+		},
+		404: {
+			description: "Post not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Target is not unknown or the operation fence changed",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
 const bulkCreatePosts = createRoute({
 	operationId: "bulkCreatePosts",
 	method: "post",
@@ -490,6 +608,14 @@ const bulkCreatePosts = createRoute({
 		},
 		401: {
 			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Workspace not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -697,16 +823,20 @@ function buildTargetResponse(
 		error: string | null;
 		errorCode?: string | null;
 		errorDetail?: string | null;
+		publishOperationId: string;
+		deliveryState: string;
 		username?: string | null;
 		displayName?: string | null;
 		avatarUrl?: string | null;
 	}>,
-) {
-	const result: Record<string, unknown> = {};
+): PostResponseBody["targets"] {
+	const result: PostResponseBody["targets"] = {};
 	for (const t of targets) {
 		result[t.socialAccountId] = {
-			status: t.status,
-			platform: t.platform,
+			status: t.status as PostResponseBody["targets"][string]["status"],
+			platform: t.platform as NonNullable<
+				PostResponseBody["targets"][string]["platform"]
+			>,
 			accounts: [
 				{
 					id: t.socialAccountId,
@@ -716,10 +846,19 @@ function buildTargetResponse(
 					url: t.platformUrl,
 					platform_post_id: t.platformPostId ?? null,
 					target_id: t.id ?? null,
+					publish_operation_id: t.publishOperationId,
+					delivery_state:
+						t.deliveryState as PostTargetAccount["delivery_state"],
 				},
 			],
 			...(t.error
-				? { error: { code: t.errorCode ?? "PUBLISH_FAILED", message: t.error, ...(t.errorDetail ? { detail: t.errorDetail } : {}) } }
+				? {
+						error: {
+							code: t.errorCode ?? "PUBLISH_FAILED",
+							message: t.error,
+							...(t.errorDetail ? { detail: t.errorDetail } : {}),
+						},
+					}
 				: {}),
 		};
 	}
@@ -743,6 +882,14 @@ app.openapi(listPosts, async (c) => {
 		include_external,
 	} = c.req.valid("query");
 	const db = c.get("db");
+	let decodedCursor: TimestampIdCursor | null = null;
+	if (cursor) {
+		try {
+			decodedCursor = decodeTimestampIdCursor(cursor);
+		} catch {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+	}
 
 	const accountIdList = account_ids
 		? account_ids
@@ -772,25 +919,17 @@ app.openapi(listPosts, async (c) => {
 					from,
 					to,
 					limit,
-					cursor,
+					cursor: decodedCursor,
 				})
 			: null;
 
 	const conditions = [eq(posts.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, posts.workspaceId);
 
-	if (cursor) {
-		// Bind the cursor with an explicit ::timestamptz cast rather than passing a
-		// JS Date to lt(): the left operand is a raw coalesce() expression (not a
-		// column), so Drizzle can't infer the param type, and under Hyperdrive's
-		// prepare:true + fetch_types:false Postgres rejects `timestamptz < $untyped`
-		// (HTTP 500 on every page-2 request). Guard against an unparseable cursor.
-		const cursorDate = new Date(cursor);
-		if (!Number.isNaN(cursorDate.getTime())) {
-			conditions.push(
-				sql`coalesce(${posts.publishedAt}, ${posts.createdAt}) < ${cursor}::timestamptz`,
-			);
-		}
+	if (decodedCursor) {
+		conditions.push(
+			sql`(coalesce(${posts.publishedAt}, ${posts.createdAt}), ${posts.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
 	}
 
 	if (status) {
@@ -849,10 +988,14 @@ app.openapi(listPosts, async (c) => {
 			recycledFromId: posts.recycledFromId,
 			createdAt: posts.createdAt,
 			updatedAt: posts.updatedAt,
+			cursorTimestamp: sql<string>`to_char(coalesce(${posts.publishedAt}, ${posts.createdAt}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(posts)
 		.where(and(...conditions))
-		.orderBy(desc(sql`coalesce(${posts.publishedAt}, ${posts.createdAt})`))
+		.orderBy(
+			desc(sql`coalesce(${posts.publishedAt}, ${posts.createdAt})`),
+			desc(posts.id),
+		)
 		.limit(limit + 1);
 
 	const hasMore = allPosts.length > limit;
@@ -874,6 +1017,8 @@ app.openapi(listPosts, async (c) => {
 				error: postTargets.error,
 				errorCode: postTargets.errorCode,
 				errorDetail: postTargets.errorDetail,
+				publishOperationId: postTargets.publishOperationId,
+				deliveryState: postTargets.deliveryState,
 				publishedAt: postTargets.publishedAt,
 				username: socialAccounts.username,
 				displayName: socialAccounts.displayName,
@@ -931,7 +1076,7 @@ app.openapi(listPosts, async (c) => {
 					for (const url of urls) {
 						items.push({
 							url,
-							type: row.mediaType ?? undefined,
+							type: responseMediaType(row.mediaType),
 							thumbnail: row.thumbnailUrl ?? undefined,
 						});
 					}
@@ -939,7 +1084,7 @@ app.openapi(listPosts, async (c) => {
 					// Fallback to thumbnail only when no full media URLs exist (e.g. video poster)
 					items.push({
 						url: row.thumbnailUrl,
-						type: row.mediaType ?? undefined,
+						type: responseMediaType(row.mediaType),
 						thumbnail: row.thumbnailUrl,
 					});
 				}
@@ -979,7 +1124,11 @@ app.openapi(listPosts, async (c) => {
 						if (t.status === "published" && t.platformPostId) {
 							const extMedia = extMediaByPlatformPostId.get(t.platformPostId);
 							if (extMedia) {
-								mediaArr = preferDurableThumbnails(extMedia, rawMedia, thumbMap);
+								mediaArr = preferDurableThumbnails(
+									extMedia,
+									rawMedia,
+									thumbMap,
+								);
 								break;
 							}
 						}
@@ -988,7 +1137,11 @@ app.openapi(listPosts, async (c) => {
 				// Fall back to presigned R2 URLs, attaching durable thumbnails first.
 				if (!mediaArr) {
 					mediaArr = includeMedia
-						? await presignMediaUrls(c.env, attachThumbnails(rawMedia, thumbMap))
+						? await presignMediaUrls(
+								c.env,
+								attachThumbnails(rawMedia, thumbMap),
+								orgId,
+							)
 						: rawMedia;
 				}
 
@@ -1000,13 +1153,15 @@ app.openapi(listPosts, async (c) => {
 					notes: p.notes ?? null,
 					platforms: platformsByPost.get(p.id) ?? [],
 					scheduled_at: p.scheduledAt?.toISOString() ?? null,
-					published_at: p.publishedAt?.toISOString() ?? null,
+					published_at: p.publishedAt ? p.cursorTimestamp : null,
 					targets: buildTargetResponse(pTargets),
 					media: mediaArr,
 					metrics: (p.metricsSnapshot as Record<string, number>) ?? {},
 					recycling: null,
 					recycled_from_id: p.recycledFromId ?? null,
-					created_at: p.createdAt.toISOString(),
+					created_at: p.publishedAt
+						? p.createdAt.toISOString()
+						: p.cursorTimestamp,
 					updated_at: p.updatedAt.toISOString(),
 				};
 			}),
@@ -1027,7 +1182,12 @@ app.openapi(listPosts, async (c) => {
 				{
 					data: merged as unknown as z.infer<typeof PostListResponse>["data"],
 					next_cursor:
-						more && last ? (last.published_at ?? last.created_at ?? null) : null,
+						more && last
+							? encodeTimestampIdCursor(
+									last.published_at ?? last.created_at ?? "",
+									last.id,
+								)
+							: null,
 					has_more: more,
 				},
 				200,
@@ -1041,8 +1201,12 @@ app.openapi(listPosts, async (c) => {
 					typeof PostListResponse
 				>["data"],
 				next_cursor: hasMore
-					? ((lastInternal?.publishedAt ?? lastInternal?.createdAt)?.toISOString() ??
-						null)
+					? lastInternal
+						? encodeTimestampIdCursor(
+								lastInternal.cursorTimestamp,
+								lastInternal.id,
+							)
+						: null
 					: null,
 				has_more: hasMore,
 			},
@@ -1091,6 +1255,7 @@ app.openapi(listPosts, async (c) => {
 				mediaArr = await presignMediaUrls(
 					c.env,
 					attachThumbnails(rawMedia, leanThumbMap),
+					orgId,
 				);
 			}
 			return {
@@ -1100,13 +1265,15 @@ app.openapi(listPosts, async (c) => {
 				content: p.content,
 				platforms: platformsByPost.get(p.id) ?? [],
 				scheduled_at: p.scheduledAt?.toISOString() ?? null,
-				published_at: p.publishedAt?.toISOString() ?? null,
+				published_at: p.publishedAt ? p.cursorTimestamp : null,
 				targets: {},
 				media: mediaArr,
 				metrics: (p.metricsSnapshot as Record<string, number>) ?? {},
 				recycling: null,
 				recycled_from_id: p.recycledFromId ?? null,
-				created_at: p.createdAt.toISOString(),
+				created_at: p.publishedAt
+					? p.createdAt.toISOString()
+					: p.cursorTimestamp,
 				updated_at: p.updatedAt.toISOString(),
 			};
 		}),
@@ -1127,7 +1294,12 @@ app.openapi(listPosts, async (c) => {
 			{
 				data: merged as unknown as z.infer<typeof PostListResponse>["data"],
 				next_cursor:
-						more && last ? (last.published_at ?? last.created_at ?? null) : null,
+					more && last
+						? encodeTimestampIdCursor(
+								last.published_at ?? last.created_at ?? "",
+								last.id,
+							)
+						: null,
 				has_more: more,
 			},
 			200,
@@ -1139,8 +1311,12 @@ app.openapi(listPosts, async (c) => {
 		{
 			data: leanItems as unknown as z.infer<typeof PostListResponse>["data"],
 			next_cursor: hasMore
-				? ((lastInternal?.publishedAt ?? lastInternal?.createdAt)?.toISOString() ??
-					null)
+				? lastInternal
+					? encodeTimestampIdCursor(
+							lastInternal.cursorTimestamp,
+							lastInternal.id,
+						)
+					: null
 				: null,
 			has_more: hasMore,
 		},
@@ -1163,7 +1339,7 @@ async function fetchExternalPostItems(
 		from?: string;
 		to?: string;
 		limit: number;
-		cursor?: string;
+		cursor?: TimestampIdCursor | null;
 	},
 ) {
 	const conditions = [eq(externalPosts.organizationId, orgId)];
@@ -1195,7 +1371,9 @@ async function fetchExternalPostItems(
 		conditions.push(lte(externalPosts.publishedAt, new Date(filters.to)));
 	}
 	if (filters.cursor) {
-		conditions.push(lt(externalPosts.publishedAt, new Date(filters.cursor)));
+		conditions.push(
+			sql`(${externalPosts.publishedAt}, ${externalPosts.id}) < (${filters.cursor.timestamp}::timestamptz, ${filters.cursor.id})`,
+		);
 	}
 
 	const rows = await db
@@ -1212,6 +1390,7 @@ async function fetchExternalPostItems(
 			metrics: externalPosts.metrics,
 			publishedAt: externalPosts.publishedAt,
 			createdAt: externalPosts.createdAt,
+			cursorTimestamp: sql<string>`to_char(${externalPosts.publishedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 			accountUsername: socialAccounts.username,
 			accountDisplayName: socialAccounts.displayName,
 			accountAvatarUrl: socialAccounts.avatarUrl,
@@ -1222,7 +1401,7 @@ async function fetchExternalPostItems(
 			eq(externalPosts.socialAccountId, socialAccounts.id),
 		)
 		.where(and(...conditions))
-		.orderBy(desc(externalPosts.publishedAt))
+		.orderBy(desc(externalPosts.publishedAt), desc(externalPosts.id))
 		.limit(filters.limit + 1);
 
 	return rows.map((ep) => ({
@@ -1239,15 +1418,27 @@ async function fetchExternalPostItems(
 		account_name: ep.accountDisplayName || ep.accountUsername || null,
 		account_avatar_url: ep.accountAvatarUrl || null,
 		metrics: (ep.metrics as Record<string, number>) ?? {},
-		published_at: ep.publishedAt.toISOString(),
+		published_at: ep.cursorTimestamp,
 		created_at: ep.createdAt.toISOString(),
 	}));
 }
 
 type MergeableItem = {
+	id: string;
 	published_at?: string | null;
 	created_at?: string | null;
 };
+
+function timestampToEpochMicros(value: string | null | undefined): number {
+	if (!value) return -Infinity;
+	const epochMs = new Date(value).getTime();
+	if (Number.isNaN(epochMs)) return -Infinity;
+	const fractional = value.match(/\.(\d{1,6})/)?.[1] ?? "";
+	const microsecondsAfterMillisecond = Number(
+		fractional.padEnd(6, "0").slice(3, 6),
+	);
+	return epochMs * 1000 + microsecondsAfterMillisecond;
+}
 
 export function mergeByPublishedAt<
 	TInternal extends MergeableItem,
@@ -1268,13 +1459,21 @@ export function mergeByPublishedAt<
 		const internalItem = internal[i];
 		const externalItem = external[e];
 		const iDate = internalItem
-			? new Date(internalItem.published_at ?? internalItem.created_at ?? 0).getTime()
+			? timestampToEpochMicros(
+					internalItem.published_at ?? internalItem.created_at,
+				)
 			: -Infinity;
 		const eDate = externalItem
-			? new Date(externalItem.published_at ?? 0).getTime()
+			? timestampToEpochMicros(externalItem.published_at)
 			: -Infinity;
 
-		if (iDate >= eDate && internalItem) {
+		const internalFirst =
+			iDate > eDate ||
+			(iDate === eDate &&
+				!!internalItem &&
+				(!externalItem || internalItem.id > externalItem.id));
+
+		if (internalFirst && internalItem) {
 			merged.push(internalItem);
 			i++;
 		} else if (externalItem) {
@@ -1349,6 +1548,8 @@ app.openapi(listAllPostLogs, async (c) => {
 			error: postTargets.error,
 			errorCode: postTargets.errorCode,
 			errorDetail: postTargets.errorDetail,
+			publishOperationId: postTargets.publishOperationId,
+			deliveryState: postTargets.deliveryState,
 			publishedAt: postTargets.publishedAt,
 			updatedAt: postTargets.updatedAt,
 		})
@@ -1375,7 +1576,6 @@ app.openapi(listAllPostLogs, async (c) => {
 	);
 });
 
-// @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(createPostRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
@@ -1385,12 +1585,23 @@ app.openapi(createPostRoute, async (c) => {
 	const isAuto = body.scheduled_at === "auto";
 
 	// Resolve targets
-	const { resolved, failed } = await resolveTargets(
+	const targetResolution = await resolveTargets(
 		db,
 		orgId,
 		body.targets,
 		c.get("workspaceScope"),
+		undefined,
+		body.workspace_id ?? null,
 	);
+	const scope = await inheritOperationalCreateScope(
+		c,
+		body.workspace_id,
+		targetResolution.workspaceIds,
+		"post",
+	);
+	if (!scope.ok) return scope.response as never;
+	const workspaceId = scope.workspaceId;
+	const { resolved, failed } = targetResolution;
 	const noResolved = resolved.length === 0;
 
 	// Determine intent
@@ -1520,7 +1731,11 @@ app.openapi(createPostRoute, async (c) => {
 	}
 
 	// --- URL shortening (Pro plan only) ---
-	let shortenedUrls: Array<{ original: string; short: string }> = [];
+	let shortenedUrls: Array<{
+		original: string;
+		short: string;
+		provider: string;
+	}> = [];
 
 	if (finalContent && !isDraft && c.get("plan") === "pro") {
 		try {
@@ -1544,7 +1759,13 @@ app.openapi(createPostRoute, async (c) => {
 						"../services/short-link-providers/relayapi"
 					);
 					const baseUrl = c.env.API_BASE_URL || "https://api.relayapi.dev";
-					provider = createRelayApiProvider(c.env.KV, baseUrl);
+					provider = createRelayApiProvider({
+						db,
+						kv: c.env.KV,
+						baseUrl,
+						organizationId: orgId,
+						workspaceId,
+					});
 					apiKey = "builtin"; // not used by relayapi provider
 				} else if (slConfig.apiKey) {
 					provider = getProvider(
@@ -1561,7 +1782,10 @@ app.openapi(createPostRoute, async (c) => {
 						finalContent,
 					);
 					finalContent = result.content;
-					shortenedUrls = result.shortenedUrls;
+					shortenedUrls = result.shortenedUrls.map((url) => ({
+						...url,
+						provider: slConfig.provider ?? "relayapi",
+					}));
 				}
 			}
 		} catch (err) {
@@ -1582,6 +1806,10 @@ app.openapi(createPostRoute, async (c) => {
 
 	let post: typeof posts.$inferSelect;
 	let recyclingResponse: ReturnType<typeof formatRecyclingConfig> | null = null;
+	let scheduledWebhook: PersistedWebhookEvent | null = null;
+	let responseTargets: PostResponseBody["targets"] = {};
+	const scheduleOccurrenceId =
+		postStatus === "scheduled" ? generateId("pso_") : null;
 
 	try {
 		const txResult = await db.transaction(async (tx) => {
@@ -1589,7 +1817,7 @@ app.openapi(createPostRoute, async (c) => {
 				.insert(posts)
 				.values({
 					organizationId: orgId,
-					workspaceId: body.workspace_id ?? null,
+					workspaceId,
 					content: finalContent,
 					status: postStatus,
 					scheduledAt,
@@ -1613,50 +1841,53 @@ app.openapi(createPostRoute, async (c) => {
 
 			// Track shortened URLs
 			if (shortenedUrls.length > 0) {
-				await tx.insert(shortLinks).values(
-					shortenedUrls.map((sl) => ({
-						organizationId: orgId,
-						originalUrl: sl.original,
-						shortUrl: sl.short,
-						postId: txPost.id,
-					})),
+				const relayApiCodes = shortenedUrls
+					.filter((link) => link.provider === "relayapi")
+					.map(
+						(link) =>
+							new URL(link.short).pathname.split("/").filter(Boolean).at(-1) ??
+							link.short,
+					);
+				const externalLinks = shortenedUrls.filter(
+					(link) => link.provider !== "relayapi",
 				);
-			}
 
-			// Atomically increment usage counter (skip for drafts). Use the same
-			// billing-period resolution as the usage-tracking middleware so the
-			// postsCount and apiCallsCount writes land on one usage_records row
-			// (the upsert target is organizationId + periodStart) instead of
-			// splitting into a calendar-month row and a Stripe-period row.
-			if (!isDraft) {
-				const { periodStart: cycleStart, periodEnd: cycleEnd } =
-					resolveBillingPeriod(c.get("periodStart"), c.get("periodEnd"));
+				if (relayApiCodes.length > 0) {
+					await tx
+						.update(shortLinks)
+						.set({ postId: txPost.id })
+						.where(
+							and(
+								eq(shortLinks.organizationId, orgId),
+								eq(shortLinks.scopeKey, workspaceScopeKey(txPost.workspaceId)),
+								eq(shortLinks.provider, "relayapi"),
+								inArray(shortLinks.shortCode, relayApiCodes),
+							),
+						);
+				}
 
-				await tx
-					.insert(usageRecords)
-					.values({
-						organizationId: orgId,
-						periodStart: cycleStart,
-						periodEnd: cycleEnd,
-						postsCount: 1,
-						postsIncluded: PRICING.proCallsIncluded,
-					})
-					.onConflictDoUpdate({
-						target: [usageRecords.organizationId, usageRecords.periodStart],
-						set: {
-							postsCount: sql`${usageRecords.postsCount} + 1`,
-							overagePosts: sql`GREATEST(0, ${usageRecords.postsCount} + 1 - ${usageRecords.postsIncluded})`,
-							// pricePerThousandCallsCents is per 1000 calls — divide by 1000 so each
-							// overage post records its actual cost (~0.1c) instead of 100c (1000x).
-							overageCostCents: sql`GREATEST(0, ${usageRecords.postsCount} + 1 - ${usageRecords.postsIncluded}) * ${PRICING.pricePerThousandCallsCents} / 1000.0`,
-							updatedAt: new Date(),
-						},
-					});
+				if (externalLinks.length > 0) {
+					await tx.insert(shortLinks).values(
+						externalLinks.map((sl) => ({
+							organizationId: orgId,
+							workspaceId: txPost.workspaceId,
+							originalUrl: sl.original,
+							provider: sl.provider,
+							shortCode:
+								new URL(sl.short).pathname.split("/").filter(Boolean).at(-1) ??
+								sl.short,
+							shortUrl: sl.short,
+							postId: txPost.id,
+						})),
+					);
+				}
 			}
 
 			// Insert post_targets for resolved accounts (bulk insert)
 			const targetValues = resolved.flatMap((target) =>
 				target.accounts.map((account) => ({
+					organizationId: orgId,
+					scopeKey: workspaceScopeKey(txPost.workspaceId),
 					postId: txPost.id,
 					socialAccountId: account.id,
 					platform: target.platform,
@@ -1666,8 +1897,40 @@ app.openapi(createPostRoute, async (c) => {
 						| "scheduled",
 				})),
 			);
-			if (targetValues.length > 0) {
-				await tx.insert(postTargets).values(targetValues);
+			const insertedTargets =
+				targetValues.length > 0
+					? await tx.insert(postTargets).values(targetValues).returning()
+					: [];
+			const accountDetails = new Map(
+				resolved.flatMap((target) =>
+					target.accounts.map((account) => [account.id, account] as const),
+				),
+			);
+			const txResponseTargets = buildTargetResponse(
+				insertedTargets.map((target) => {
+					const account = accountDetails.get(target.socialAccountId);
+					return {
+						...target,
+						username: account?.username ?? null,
+						displayName: account?.display_name ?? null,
+						avatarUrl: null,
+					};
+				}),
+			);
+			for (const target of failed) {
+				txResponseTargets[target.key] = {
+					status: "failed",
+					platform: null,
+					error: target.error,
+				};
+			}
+			if (isNow && targetValues.length > 0) {
+				await tx.insert(publishOutbox).values(
+					publishOutboxRow({
+						organizationId: orgId,
+						postId: txPost.id,
+					}),
+				);
 			}
 
 			// Handle recycling config if provided
@@ -1697,6 +1960,10 @@ app.openapi(createPostRoute, async (c) => {
 						txPost.id,
 						postStatus,
 						body.recycling,
+						undefined,
+						resolved.flatMap((target) =>
+							target.accounts.map(() => target.platform),
+						),
 					);
 					if (!validation.valid) {
 						throw {
@@ -1741,22 +2008,31 @@ app.openapi(createPostRoute, async (c) => {
 				body.cross_post_actions.length > 0 &&
 				!isDraft
 			) {
-				// SECURITY: Validate all target_account_id values belong to this org to prevent cross-org IDOR
+				// Resolve each acting account and an explicit same-platform source
+				// target. Persisting the source removes the processor's former
+				// arbitrary `.limit(1)` choice and binds the complete scope tuple.
 				const targetIds = body.cross_post_actions.map(
 					(a) => a.target_account_id,
 				);
 				const ownedAccounts = await tx
-					.select({ id: socialAccounts.id })
+					.select({
+						id: socialAccounts.id,
+						platform: socialAccounts.platform,
+					})
 					.from(socialAccounts)
 					.where(
 						and(
 							inArray(socialAccounts.id, targetIds),
 							eq(socialAccounts.organizationId, orgId),
+							eq(socialAccounts.scopeKey, txPost.scopeKey),
+							eq(socialAccounts.lifecycleStatus, "active"),
 						),
 					);
-				const ownedSet = new Set(ownedAccounts.map((a) => a.id));
+				const ownedById = new Map(
+					ownedAccounts.map((account) => [account.id, account]),
+				);
 				for (const action of body.cross_post_actions) {
-					if (!ownedSet.has(action.target_account_id)) {
+					if (!ownedById.has(action.target_account_id)) {
 						throw {
 							__earlyReturn: true,
 							body: {
@@ -1771,24 +2047,79 @@ app.openapi(createPostRoute, async (c) => {
 				}
 
 				const publishDate = scheduledAt ?? new Date();
-				const actionValues = body.cross_post_actions.map((action) => ({
-					postId: txPost.id,
-					actionType: action.action_type,
-					targetAccountId: action.target_account_id,
-					content: action.content ?? null,
-					delayMinutes: action.delay_minutes,
-					executeAt: new Date(
-						publishDate.getTime() + action.delay_minutes * 60 * 1000,
-					),
-				}));
+				const actionValues = body.cross_post_actions.map((action) => {
+					const targetAccount = ownedById.get(action.target_account_id);
+					if (!targetAccount) {
+						throw new Error("Validated target account disappeared");
+					}
+					const sourceTarget = chooseCrossPostSourceTarget(
+						insertedTargets,
+						targetAccount.platform,
+					);
+					if (!sourceTarget) {
+						throw {
+							__earlyReturn: true,
+							body: {
+								error: {
+									code: "INVALID_REQUEST",
+									message: `Cross-post target account ${action.target_account_id} has no same-platform post target`,
+								},
+							},
+							status: 400,
+						} as TxEarlyReturn;
+					}
+					const id = generateId("cpa_");
+					return {
+						id,
+						operationId: `cross-post:${id}`,
+						organizationId: orgId,
+						scopeKey: txPost.scopeKey,
+						postId: txPost.id,
+						sourceTargetId: sourceTarget.id,
+						sourcePlatform: sourceTarget.platform,
+						actionType: action.action_type,
+						targetAccountId: action.target_account_id,
+						targetPlatform: targetAccount.platform,
+						content: action.content ?? null,
+						delayMinutes: action.delay_minutes,
+						executeAt: new Date(
+							publishDate.getTime() + action.delay_minutes * 60 * 1000,
+						),
+					};
+				});
 				await tx.insert(crossPostActions).values(actionValues);
 			}
 
-			return { post: txPost, recyclingResponse: txRecyclingResponse };
+			const webhook = scheduleOccurrenceId
+				? await persistWebhookEventInTransaction(
+						tx,
+						orgId,
+						"post.scheduled",
+						{
+							post_id: txPost.id,
+							status: "scheduled",
+							scheduled_at: txPost.scheduledAt?.toISOString() ?? null,
+							targets: txResponseTargets,
+						},
+						{
+							workspaceId: txPost.workspaceId,
+							occurrenceId: `post:${txPost.id}:schedule:${scheduleOccurrenceId}`,
+						},
+					)
+				: null;
+
+			return {
+				post: txPost,
+				recyclingResponse: txRecyclingResponse,
+				webhook,
+				responseTargets: txResponseTargets,
+			};
 		});
 
 		post = txResult.post;
 		recyclingResponse = txResult.recyclingResponse;
+		scheduledWebhook = txResult.webhook;
+		responseTargets = txResult.responseTargets;
 	} catch (err: unknown) {
 		const earlyErr = err as {
 			__earlyReturn?: boolean;
@@ -1820,42 +2151,13 @@ app.openapi(createPostRoute, async (c) => {
 		);
 	}
 
-	// Build response targets
-	const responseTargets: Record<string, unknown> = {};
-
-	for (const target of resolved) {
-		responseTargets[target.key] = {
-			status: isDraft ? "draft" : isNow ? "publishing" : "scheduled",
-			platform: target.platform,
-			accounts: target.accounts.map((a) => ({
-				id: a.id,
-				username: a.username,
-				url: null,
-			})),
-		};
-	}
-	for (const f of failed) {
-		responseTargets[f.key] = {
-			status: "failed",
-			platform: null,
-			error: f.error,
-		};
-	}
-
 	// Publish now — fire-and-forget via waitUntil so the response returns immediately.
 	// Publishing can take 8-30+ seconds (Instagram needs to download and process media).
 	// Blocking the response causes frontend timeouts and duplicate retries.
 	if (isNow && resolved.length > 0) {
 		// Enqueue to PUBLISH_QUEUE — queue consumers have 15min timeout vs 30s for waitUntil,
 		// which is required for video publishing (Threads/Instagram poll for minutes).
-		c.executionCtx.waitUntil(
-			c.env.PUBLISH_QUEUE.send({
-				type: "publish",
-				post_id: post.id,
-				org_id: orgId,
-				usage_tracked: true, // middleware already incremented usage
-			}),
-		);
+		c.executionCtx.waitUntil(dispatchPublishOutbox(c.env));
 		c.executionCtx.waitUntil(
 			notifyRealtime(c.env, orgId, {
 				type: "post.created",
@@ -1864,32 +2166,30 @@ app.openapi(createPostRoute, async (c) => {
 			}),
 		);
 
-		const presignedMedia = await presignMediaUrls(c.env, body.media ?? null);
-		return c.json(
-			{
-				id: post.id,
-				status: "publishing",
-				content: post.content,
-				scheduled_at: body.scheduled_at,
-				targets: responseTargets,
-				media: presignedMedia,
-				recycling: recyclingResponse,
-				recycled_from_id: null,
-				created_at: post.createdAt.toISOString(),
-				updated_at: new Date().toISOString(),
-			},
-			201,
+		const presignedMedia = await presignMediaUrls(
+			c.env,
+			body.media ?? null,
+			orgId,
 		);
+		const response: PostResponseBody = {
+			id: post.id,
+			status: "publishing" as const,
+			content: post.content,
+			scheduled_at: body.scheduled_at,
+			published_at: null,
+			targets: responseTargets,
+			media: presignedMedia,
+			recycling: recyclingResponse,
+			recycled_from_id: null,
+			created_at: post.createdAt.toISOString(),
+			updated_at: new Date().toISOString(),
+		};
+		return c.json(response, 201);
 	}
 
-	if (postStatus === "scheduled") {
+	if (scheduledWebhook) {
 		c.executionCtx.waitUntil(
-			dispatchWebhookEvent(c.env, db, orgId, "post.scheduled", {
-				post_id: post.id,
-				status: "scheduled",
-				scheduled_at: body.scheduled_at,
-				targets: responseTargets,
-			}),
+			enqueuePersistedWebhookEvent(c.env, db, scheduledWebhook),
 		);
 	}
 
@@ -1901,22 +2201,25 @@ app.openapi(createPostRoute, async (c) => {
 		}),
 	);
 
-	const presignedMedia = await presignMediaUrls(c.env, body.media ?? null);
-	return c.json(
-		{
-			id: post.id,
-			status: postStatus,
-			content: post.content,
-			scheduled_at: body.scheduled_at,
-			targets: responseTargets,
-			media: presignedMedia,
-			recycling: recyclingResponse,
-			recycled_from_id: null,
-			created_at: post.createdAt.toISOString(),
-			updated_at: post.updatedAt.toISOString(),
-		},
-		201,
+	const presignedMedia = await presignMediaUrls(
+		c.env,
+		body.media ?? null,
+		orgId,
 	);
+	const response: PostResponseBody = {
+		id: post.id,
+		status: postStatus,
+		content: post.content,
+		scheduled_at: body.scheduled_at,
+		published_at: post.publishedAt?.toISOString() ?? null,
+		targets: responseTargets,
+		media: presignedMedia,
+		recycling: recyclingResponse,
+		recycled_from_id: null,
+		created_at: post.createdAt.toISOString(),
+		updated_at: post.updatedAt.toISOString(),
+	};
+	return c.json(response, 201);
 });
 
 // @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
@@ -1957,6 +2260,8 @@ app.openapi(getPost, async (c) => {
 				error: postTargets.error,
 				errorCode: postTargets.errorCode,
 				errorDetail: postTargets.errorDetail,
+				publishOperationId: postTargets.publishOperationId,
+				deliveryState: postTargets.deliveryState,
 				username: socialAccounts.username,
 				displayName: socialAccounts.displayName,
 				avatarUrl: socialAccounts.avatarUrl,
@@ -1985,9 +2290,7 @@ app.openapi(getPost, async (c) => {
 	if (denied) return denied as never;
 
 	const overrides = post.platformOverrides as Record<string, unknown> | null;
-	const rawMedia = overrides?._media
-		? (overrides._media as MediaItem[])
-		: null;
+	const rawMedia = overrides?._media ? (overrides._media as MediaItem[]) : null;
 	const thumbMap = await buildThumbnailMap(db, orgId, [rawMedia]);
 
 	// Prefer platform CDN media from external posts for published posts (parity
@@ -2020,14 +2323,14 @@ app.openapi(getPost, async (c) => {
 					for (const url of urls) {
 						items.push({
 							url,
-							type: row.mediaType ?? undefined,
+							type: responseMediaType(row.mediaType),
 							thumbnail: row.thumbnailUrl ?? undefined,
 						});
 					}
 				} else if (row.thumbnailUrl) {
 					items.push({
 						url: row.thumbnailUrl,
-						type: row.mediaType ?? undefined,
+						type: responseMediaType(row.mediaType),
 						thumbnail: row.thumbnailUrl,
 					});
 				}
@@ -2040,7 +2343,11 @@ app.openapi(getPost, async (c) => {
 	}
 	// Fall back to presigned R2 URLs, attaching durable thumbnails first.
 	if (!mediaArr) {
-		mediaArr = await presignMediaUrls(c.env, attachThumbnails(rawMedia, thumbMap));
+		mediaArr = await presignMediaUrls(
+			c.env,
+			attachThumbnails(rawMedia, thumbMap),
+			orgId,
+		);
 	}
 	const targetOpts = overrides
 		? Object.fromEntries(
@@ -2178,20 +2485,21 @@ app.openapi(updatePostRoute, async (c) => {
 		}
 	}
 
-	const updatedRows = await db
-		.update(posts)
-		.set(updates)
-		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
-		.returning();
-	const updated = updatedRows[0] ?? post;
+	const projectedStatus =
+		(updates.status as typeof posts.$inferSelect.status | undefined) ??
+		post.status;
+	let replacementTargets: Array<typeof postTargets.$inferInsert> | null = null;
 
-	// Handle targets update
+	// Resolve every related ID before mutating the parent. A validation failure now
+	// leaves the original post and targets untouched.
 	if (body.targets !== undefined && body.targets.length > 0) {
 		const { resolved, failed } = await resolveTargets(
 			db,
 			orgId,
 			body.targets,
 			c.get("workspaceScope"),
+			undefined,
+			post.workspaceId,
 		);
 
 		// If NOTHING resolved, do NOT delete the existing targets — wiping them would
@@ -2213,29 +2521,112 @@ app.openapi(updatePostRoute, async (c) => {
 		}
 
 		const targetStatus =
-			updated.status === "draft"
+			projectedStatus === "draft"
 				? "draft"
-				: updated.status === "publishing"
+				: projectedStatus === "publishing"
 					? "publishing"
 					: "scheduled";
 
-		const targetValues = resolved.flatMap((target) =>
+		replacementTargets = resolved.flatMap((target) =>
 			target.accounts.map((account) => ({
+				organizationId: orgId,
+				scopeKey: workspaceScopeKey(post.workspaceId),
 				postId: id,
 				socialAccountId: account.id,
 				platform: target.platform as typeof postTargets.$inferInsert.platform,
 				status: targetStatus as typeof postTargets.$inferInsert.status,
 			})),
 		);
+	}
 
-		// Delete + re-insert in one transaction so a failure between the two statements
-		// cannot leave the post target-less.
-		await db.transaction(async (tx) => {
+	const scheduleOccurrenceId =
+		updates.status === "scheduled" ? generateId("pso_") : null;
+	const mutation = await db.transaction(async (tx) => {
+		const updatedRows = await tx
+			.update(posts)
+			.set({
+				...updates,
+				revision: sql`${posts.revision} + 1`,
+			})
+			.where(
+				and(
+					eq(posts.id, id),
+					eq(posts.organizationId, orgId),
+					eq(posts.status, post.status),
+					eq(posts.revision, post.revision),
+				),
+			)
+			.returning();
+		const txUpdated = updatedRows[0];
+		if (!txUpdated) return { post: null, webhook: null };
+
+		if (replacementTargets) {
 			await tx.delete(postTargets).where(eq(postTargets.postId, id));
-			if (targetValues.length > 0) {
-				await tx.insert(postTargets).values(targetValues);
-			}
-		});
+			await tx.insert(postTargets).values(replacementTargets);
+		} else if (projectedStatus === "publishing") {
+			await tx
+				.update(postTargets)
+				.set({
+					status: "publishing",
+					deliveryState: "queued",
+					attemptId: null,
+					claimedAt: null,
+					leaseExpiresAt: null,
+					requestMayHaveBeenSentAt: null,
+					error: null,
+					errorCode: null,
+					errorDetail: null,
+					updatedAt: new Date(),
+				})
+				.where(eq(postTargets.postId, id));
+		}
+
+		if (projectedStatus === "publishing") {
+			await tx.insert(publishOutbox).values(
+				publishOutboxRow({
+					organizationId: orgId,
+					postId: id,
+					operationId: `publish:${id}:${crypto.randomUUID()}`,
+				}),
+			);
+		}
+		const webhook = scheduleOccurrenceId
+			? await persistWebhookEventInTransaction(
+					tx,
+					orgId,
+					"post.scheduled",
+					{
+						post_id: id,
+						status: "scheduled",
+						scheduled_at: txUpdated.scheduledAt?.toISOString() ?? null,
+						targets: {},
+					},
+					{
+						workspaceId: txUpdated.workspaceId,
+						occurrenceId: `post:${id}:schedule:${scheduleOccurrenceId}`,
+					},
+				)
+			: null;
+		return { post: txUpdated, webhook };
+	});
+	const updated = mutation.post;
+	const updatedScheduledWebhook = mutation.webhook;
+	if (!updated) {
+		return c.json(
+			{
+				error: {
+					code: "CONFLICT",
+					message:
+						"The post changed or publishing started while this update was being applied. Reload and try again.",
+				},
+			},
+			409,
+		);
+	}
+	if (updatedScheduledWebhook) {
+		c.executionCtx.waitUntil(
+			enqueuePersistedWebhookEvent(c.env, db, updatedScheduledWebhook),
+		);
 	}
 
 	// Re-anchor pending cross-post actions when the schedule moves. Their executeAt is
@@ -2247,7 +2638,7 @@ app.openapi(updatePostRoute, async (c) => {
 		const anchor =
 			updates.status === "publishing"
 				? new Date()
-				: (updates.scheduledAt as Date | null | undefined) ?? null;
+				: ((updates.scheduledAt as Date | null | undefined) ?? null);
 		if (anchor) {
 			c.executionCtx.waitUntil(
 				db
@@ -2265,31 +2656,10 @@ app.openapi(updatePostRoute, async (c) => {
 		}
 	}
 
-	// Enqueue for publishing if status changed to "publishing".
-	// usage_tracked:true — usageTrackingMiddleware already bills this mutating PATCH
-	// request 1 unit, so the queue consumer must NOT increment again. The old
-	// usage_tracked:false caused double-billing on success and re-billing on every
-	// retry, matching the POST create path which sets usage_tracked:true.
+	// Enqueue for publishing if status changed to "publishing". Usage is billed by
+	// the mutating-request middleware, never by the retryable Queue consumer.
 	if (updates.status === "publishing") {
-		c.executionCtx.waitUntil(
-			c.env.PUBLISH_QUEUE.send({
-				type: "publish",
-				post_id: id,
-				org_id: orgId,
-				usage_tracked: true,
-			}),
-		);
-	}
-
-	if (updates.status === "scheduled") {
-		c.executionCtx.waitUntil(
-			dispatchWebhookEvent(c.env, db, orgId, "post.scheduled", {
-				post_id: id,
-				status: "scheduled",
-				scheduled_at: body.scheduled_at,
-				targets: {},
-			}),
-		);
+		c.executionCtx.waitUntil(dispatchPublishOutbox(c.env));
 	}
 
 	// Fetch updated targets and recycling config for response
@@ -2305,6 +2675,8 @@ app.openapi(updatePostRoute, async (c) => {
 				error: postTargets.error,
 				errorCode: postTargets.errorCode,
 				errorDetail: postTargets.errorDetail,
+				publishOperationId: postTargets.publishOperationId,
+				deliveryState: postTargets.deliveryState,
 				username: socialAccounts.username,
 				displayName: socialAccounts.displayName,
 				avatarUrl: socialAccounts.avatarUrl,
@@ -2326,9 +2698,8 @@ app.openapi(updatePostRoute, async (c) => {
 		(updated.platformOverrides as Record<string, unknown>) ?? {};
 	const responseMedia = await presignMediaUrls(
 		c.env,
-		finalOverrides._media
-			? (finalOverrides._media as Array<{ url: string; type?: string }>)
-			: null,
+		finalOverrides._media ? (finalOverrides._media as MediaItem[]) : null,
+		orgId,
 	);
 	const responseOpts = Object.fromEntries(
 		Object.entries(finalOverrides).filter(([k]) => k !== "_media"),
@@ -2371,7 +2742,13 @@ app.openapi(deletePost, async (c) => {
 	const db = c.get("db");
 
 	const [post] = await db
-		.select({ id: posts.id, status: posts.status, workspaceId: posts.workspaceId })
+		.select({
+			id: posts.id,
+			status: posts.status,
+			workspaceId: posts.workspaceId,
+			publishAttempts: posts.publishAttempts,
+			revision: posts.revision,
+		})
 		.from(posts)
 		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
 		.limit(1);
@@ -2386,15 +2763,48 @@ app.openapi(deletePost, async (c) => {
 	const denied = assertWorkspaceScope(c, post.workspaceId);
 	if (denied) return denied;
 
-	// Delete children first (FK constraints) — the two child deletes are
-	// independent of each other, only the parent delete must come last.
-	await Promise.all([
-		db
-			.delete(postRecyclingConfigs)
-			.where(eq(postRecyclingConfigs.sourcePostId, id)),
-		db.delete(postTargets).where(eq(postTargets.postId, id)),
-	]);
-	await db.delete(posts).where(eq(posts.id, id));
+	// Once provider execution has started, retain the durable attempts and result
+	// graph for reconciliation/audit. A draft or never-attempted schedule can be
+	// deleted safely; the CAS elects either this delete or a concurrent scheduler.
+	if (
+		!(["draft", "scheduled"] as string[]).includes(post.status) ||
+		post.publishAttempts > 0
+	) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_STATE",
+					message:
+						"Posts are immutable after publishing starts so provider history can be reconciled.",
+				},
+			},
+			409,
+		);
+	}
+	const deleted = await db
+		.delete(posts)
+		.where(
+			and(
+				eq(posts.id, id),
+				eq(posts.organizationId, orgId),
+				eq(posts.status, post.status),
+				eq(posts.publishAttempts, 0),
+				eq(posts.revision, post.revision),
+			),
+		)
+		.returning({ id: posts.id });
+	if (deleted.length === 0) {
+		return c.json(
+			{
+				error: {
+					code: "CONFLICT",
+					message:
+						"The post changed or publishing started while deletion was being applied.",
+				},
+			},
+			409,
+		);
+	}
 
 	c.executionCtx.waitUntil(
 		notifyRealtime(c.env, orgId, { type: "post.deleted", post_id: id }),
@@ -2474,7 +2884,9 @@ app.openapi(retryPost, async (c) => {
 	const wsScope = c.get("workspaceScope");
 	const retryAccountConditions = [inArray(socialAccounts.id, accountIds)];
 	if (wsScope !== "all") {
-		retryAccountConditions.push(inArray(socialAccounts.workspaceId, wsScope));
+		retryAccountConditions.push(
+			workspaceScopeSqlCondition(wsScope, socialAccounts.workspaceId),
+		);
 	}
 	const accounts = await db
 		.select({ id: socialAccounts.id })
@@ -2517,31 +2929,37 @@ app.openapi(retryPost, async (c) => {
 	// (publishPostById) re-extracts media from platformOverrides._media (fixing the bug
 	// where retry published without attachments) and only acts on actionable targets.
 	const retryableTargetIds = retryableTargets.map((t) => t.id);
-	await db
-		.update(postTargets)
-		.set({ status: "publishing", error: null })
-		.where(inArray(postTargets.id, retryableTargetIds));
-	await db
-		.update(posts)
-		.set({ status: "publishing", updatedAt: new Date() })
-		.where(eq(posts.id, id));
+	await db.transaction(async (tx) => {
+		await tx
+			.update(postTargets)
+			.set({
+				status: "publishing",
+				deliveryState: "queued",
+				attemptId: null,
+				claimedAt: null,
+				leaseExpiresAt: null,
+				requestMayHaveBeenSentAt: null,
+				error: null,
+			})
+			.where(inArray(postTargets.id, retryableTargetIds));
+		await tx
+			.update(posts)
+			.set({
+				status: "publishing",
+				revision: sql`${posts.revision} + 1`,
+				updatedAt: new Date(),
+			})
+			.where(eq(posts.id, id));
+		await tx.insert(publishOutbox).values(
+			publishOutboxRow({
+				organizationId: orgId,
+				postId: id,
+				operationId: `publish:${id}:retry:${crypto.randomUUID()}`,
+			}),
+		);
+	});
 
-	// Charge usage only for the targets actually being retried. The result is unused and
-	// the KV counter was never atomic, so defer via waitUntil rather than blocking.
-	c.executionCtx.waitUntil(
-		incrementUsage(c.env.KV, orgId, retryableTargets.length),
-	);
-
-	// usage_tracked:true — the mutating-request middleware already billed this request,
-	// and we billed the retried targets above, so the consumer must not re-bill.
-	c.executionCtx.waitUntil(
-		c.env.PUBLISH_QUEUE.send({
-			type: "publish",
-			post_id: id,
-			org_id: orgId,
-			usage_tracked: true,
-		}),
-	);
+	c.executionCtx.waitUntil(dispatchPublishOutbox(c.env));
 
 	const allTargets = await db
 		.select()
@@ -2572,6 +2990,414 @@ app.openapi(retryPost, async (c) => {
 	);
 });
 
+app.openapi(reconcilePublishTarget, async (c) => {
+	const orgId = c.get("orgId");
+	const { id, target_id: targetId } = c.req.valid("param");
+	const body = c.req.valid("json");
+	const db = c.get("db");
+	const [post] = await db
+		.select()
+		.from(posts)
+		.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)))
+		.limit(1);
+	if (!post) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
+	}
+	if (isWorkspaceScopeDenied(c, post.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
+
+	const now = new Date();
+	const result = await db.transaction(async (tx) => {
+		const threadLeaseId = `reconcile:${crypto.randomUUID()}`;
+		if (post.threadGroupId) {
+			// Serialize reconciliation for every unknown target in a thread. Two
+			// operators may resolve different targets concurrently; without a row
+			// fence both transactions can observe the other target as unresolved and
+			// leave a thread permanently asleep. This same fence also prevents a
+			// reconciliation from racing the worker before it has terminalized the
+			// execution as unknown.
+			const [claimedThread] = await tx
+				.update(threadExecutions)
+				.set({
+					leaseId: threadLeaseId,
+					leaseExpiresAt: new Date(now.getTime() + 5 * 60 * 1000),
+					updatedAt: now,
+				})
+				.where(
+					and(
+						eq(threadExecutions.threadGroupId, post.threadGroupId),
+						eq(threadExecutions.organizationId, orgId),
+						eq(threadExecutions.status, "unknown"),
+					),
+				)
+				.returning({ threadGroupId: threadExecutions.threadGroupId });
+			if (!claimedThread) return { conflict: "thread" as const };
+		}
+
+		const succeeded = body.outcome === "succeeded";
+		const standaloneExecutionFence = post.threadGroupId
+			? sql`TRUE`
+			: sql`EXISTS (
+				SELECT 1 FROM posts AS reconcile_parent
+				WHERE reconcile_parent.id = ${id}
+					AND reconcile_parent.organization_id = ${orgId}
+					AND reconcile_parent.publish_lease_id IS NULL
+			)`;
+		const [target] = await tx
+			.update(postTargets)
+			.set({
+				status: succeeded ? "published" : "failed",
+				deliveryState: succeeded ? "succeeded" : "failed",
+				platformPostId: succeeded ? body.provider_post_id : null,
+				platformUrl: succeeded ? (body.provider_url ?? null) : null,
+				publishedAt: succeeded ? now : null,
+				error: succeeded ? null : body.error_message,
+				errorCode: succeeded ? null : body.error_code,
+				errorDetail: null,
+				leaseExpiresAt: null,
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(postTargets.id, targetId),
+					eq(postTargets.postId, id),
+					eq(postTargets.publishOperationId, body.publish_operation_id),
+					eq(postTargets.deliveryState, "unknown"),
+					standaloneExecutionFence,
+				),
+			)
+			.returning({ id: postTargets.id });
+		if (!target) {
+			if (post.threadGroupId) {
+				await tx
+					.update(threadExecutions)
+					.set({ leaseId: null, leaseExpiresAt: null, updatedAt: now })
+					.where(
+						and(
+							eq(threadExecutions.threadGroupId, post.threadGroupId),
+							eq(threadExecutions.organizationId, orgId),
+							eq(threadExecutions.status, "unknown"),
+							eq(threadExecutions.leaseId, threadLeaseId),
+						),
+					);
+			}
+			return { conflict: "target" as const };
+		}
+
+		await tx
+			.update(publishAttempts)
+			.set({
+				state: succeeded ? "succeeded" : "failed",
+				providerPostId: succeeded ? body.provider_post_id : null,
+				error: succeeded ? null : body.error_message,
+				completedAt: now,
+				leaseExpiresAt: now,
+			})
+			.where(
+				and(
+					eq(publishAttempts.postTargetId, targetId),
+					eq(publishAttempts.publishOperationId, body.publish_operation_id),
+					eq(publishAttempts.state, "unknown"),
+				),
+			);
+
+		const targetStates = await tx
+			.select({
+				status: postTargets.status,
+				deliveryState: postTargets.deliveryState,
+			})
+			.from(postTargets)
+			.where(eq(postTargets.postId, id));
+		const hasNonterminal = targetStates.some((item) =>
+			["queued", "in_flight", "unknown"].includes(item.deliveryState),
+		);
+		const postStatus: "publishing" | "published" | "failed" | "partial" =
+			hasNonterminal
+				? "publishing"
+				: targetStates.every((item) => item.status === "published")
+					? "published"
+					: targetStates.every((item) => item.status === "failed")
+						? "failed"
+						: "partial";
+		const hasPublishedTarget = targetStates.some(
+			(item) => item.status === "published",
+		);
+		await tx
+			.update(posts)
+			.set({
+				status: postStatus,
+				publishedAt:
+					postStatus === "published" ||
+					(postStatus === "partial" && hasPublishedTarget)
+						? (post.publishedAt ?? now)
+						: postStatus === "failed"
+							? null
+							: post.publishedAt,
+				terminalReason: hasNonterminal ? post.terminalReason : null,
+				revision: sql`${posts.revision} + 1`,
+				updatedAt: now,
+			})
+			.where(and(eq(posts.id, id), eq(posts.organizationId, orgId)));
+
+		let threadStatus: "queued" | "completed" | "failed" | "unknown" | null =
+			null;
+		let threadCompleted = false;
+		if (post.threadGroupId) {
+			const groupPosts = await tx
+				.select({
+					id: posts.id,
+					position: posts.threadPosition,
+				})
+				.from(posts)
+				.where(
+					and(
+						eq(posts.threadGroupId, post.threadGroupId),
+						eq(posts.organizationId, orgId),
+					),
+				);
+			const groupPostIds = groupPosts.map((item) => item.id);
+			const unresolved =
+				groupPostIds.length === 0
+					? []
+					: await tx
+							.select({ id: postTargets.id })
+							.from(postTargets)
+							.where(
+								and(
+									inArray(postTargets.postId, groupPostIds),
+									eq(postTargets.deliveryState, "unknown"),
+								),
+							)
+							.limit(1);
+			if (unresolved.length > 0) {
+				await tx
+					.update(threadExecutions)
+					.set({ leaseId: null, leaseExpiresAt: null, updatedAt: now })
+					.where(
+						and(
+							eq(threadExecutions.threadGroupId, post.threadGroupId),
+							eq(threadExecutions.organizationId, orgId),
+							eq(threadExecutions.status, "unknown"),
+							eq(threadExecutions.leaseId, threadLeaseId),
+						),
+					);
+				threadStatus = "unknown";
+			} else if (postStatus === "failed") {
+				const downstreamIds = groupPosts
+					.filter((item) => (item.position ?? 0) > (post.threadPosition ?? 0))
+					.map((item) => item.id);
+				if (downstreamIds.length > 0) {
+					const failure = {
+						code: "THREAD_ANCESTOR_FAILED",
+						message: `Thread position ${post.threadPosition ?? 0} was reconciled as failed`,
+					};
+					await tx
+						.update(posts)
+						.set({
+							status: "failed",
+							terminalReason: failure,
+							revision: sql`${posts.revision} + 1`,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								inArray(posts.id, downstreamIds),
+								inArray(posts.status, ["draft", "scheduled", "publishing"]),
+							),
+						);
+					await tx
+						.update(postTargets)
+						.set({
+							status: "failed",
+							deliveryState: "failed",
+							error: failure.message,
+							errorCode: failure.code,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								inArray(postTargets.postId, downstreamIds),
+								inArray(postTargets.deliveryState, ["queued", "in_flight"]),
+							),
+						);
+				}
+				await tx
+					.update(threadExecutions)
+					.set({
+						status: "failed",
+						failedPosition: post.threadPosition ?? 0,
+						failure: {
+							code: "THREAD_ANCESTOR_FAILED",
+							message: "Reconciled provider outcome was failed",
+						},
+						leaseId: null,
+						leaseExpiresAt: null,
+						updatedAt: now,
+					})
+					.where(
+						and(
+							eq(threadExecutions.threadGroupId, post.threadGroupId),
+							eq(threadExecutions.organizationId, orgId),
+							eq(threadExecutions.status, "unknown"),
+							eq(threadExecutions.leaseId, threadLeaseId),
+						),
+					);
+				threadStatus = "failed";
+			} else {
+				const nextPosition = groupPosts
+					.map((item) => item.position ?? 0)
+					.filter((position) => position > (post.threadPosition ?? 0))
+					.sort((a, b) => a - b)[0];
+				if (nextPosition === undefined) {
+					await tx
+						.update(threadExecutions)
+						.set({
+							status: "completed",
+							failedPosition: null,
+							failure: null,
+							leaseId: null,
+							leaseExpiresAt: null,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								eq(threadExecutions.threadGroupId, post.threadGroupId),
+								eq(threadExecutions.organizationId, orgId),
+								eq(threadExecutions.status, "unknown"),
+								eq(threadExecutions.leaseId, threadLeaseId),
+							),
+						);
+					threadStatus = "completed";
+					threadCompleted = true;
+				} else {
+					await tx
+						.update(threadExecutions)
+						.set({
+							status: "queued",
+							currentPosition: nextPosition,
+							failedPosition: null,
+							failure: null,
+							leaseId: null,
+							leaseExpiresAt: null,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								eq(threadExecutions.threadGroupId, post.threadGroupId),
+								eq(threadExecutions.organizationId, orgId),
+								eq(threadExecutions.status, "unknown"),
+								eq(threadExecutions.leaseId, threadLeaseId),
+							),
+						);
+					await tx
+						.insert(publishOutbox)
+						.values(
+							publishOutboxRow({
+								organizationId: orgId,
+								threadGroupId: post.threadGroupId,
+								threadPosition: nextPosition,
+								operationId: `thread:${post.threadGroupId}:reconcile:${body.publish_operation_id}:${nextPosition}`,
+							}),
+						)
+						.onConflictDoNothing();
+					threadStatus = "queued";
+				}
+			}
+		}
+
+		const persistedEvents = [];
+		if (postStatus !== "publishing") {
+			const eventName =
+				postStatus === "published"
+					? "post.published"
+					: postStatus === "failed"
+						? "post.failed"
+						: "post.partial";
+			persistedEvents.push(
+				await persistWebhookEventInTransaction(
+					tx,
+					orgId,
+					eventName,
+					{ post_id: id, status: postStatus },
+					{
+						occurrenceId: `post:${id}:reconcile:${body.publish_operation_id}:${postStatus}`,
+					},
+				),
+			);
+		}
+		if (threadCompleted && post.threadGroupId) {
+			persistedEvents.push(
+				await persistWebhookEventInTransaction(
+					tx,
+					orgId,
+					"thread.published",
+					{ thread_group_id: post.threadGroupId },
+					{
+						workspaceId: post.workspaceId,
+						occurrenceId: `thread:${post.threadGroupId}:published`,
+					},
+				),
+			);
+		}
+
+		return {
+			conflict: null,
+			postStatus,
+			threadStatus,
+			threadCompleted,
+			persistedEvents,
+		};
+	});
+
+	if (result.conflict) {
+		return c.json(
+			{
+				error: {
+					code:
+						result.conflict === "thread"
+							? "THREAD_NOT_RECONCILABLE"
+							: "OUTCOME_ALREADY_RESOLVED",
+					message:
+						result.conflict === "thread"
+							? "The thread has not reached an unknown terminal state or is being reconciled by another request."
+							: "Target is not unknown or the publish operation fence no longer matches.",
+				},
+			},
+			409,
+		);
+	}
+
+	await Promise.all(
+		result.persistedEvents.map((persisted) =>
+			enqueuePersistedWebhookEvent(c.env, db, persisted),
+		),
+	);
+	if (result.threadStatus === "queued") {
+		c.executionCtx.waitUntil(dispatchPublishOutbox(c.env));
+	}
+	await notifyRealtime(c.env, orgId, {
+		type: "post.updated",
+		post_id: id,
+		status: result.postStatus,
+	});
+
+	return c.json(
+		{
+			post_id: id,
+			target_id: targetId,
+			publish_operation_id: body.publish_operation_id,
+			outcome: body.outcome,
+			post_status: result.postStatus,
+			thread_status: result.threadStatus,
+		},
+		200,
+	);
+});
+
 // ---------------------------------------------------------------------------
 // Bulk create
 // ---------------------------------------------------------------------------
@@ -2581,13 +3407,14 @@ app.openapi(bulkCreatePosts, async (c) => {
 	const orgId = c.get("orgId");
 	const { posts: postItems } = c.req.valid("json");
 	const db = c.get("db");
+	const wsScope = c.get("workspaceScope");
 
 	// Pre-fetch org accounts once for all items (resolveTargets fetches them each time)
-	const wsScope = c.get("workspaceScope");
-	const prefetchConditions = [eq(socialAccounts.organizationId, orgId)];
-	if (wsScope !== "all") {
-		prefetchConditions.push(inArray(socialAccounts.workspaceId, wsScope));
-	}
+	const prefetchConditions = [
+		eq(socialAccounts.organizationId, orgId),
+		eq(socialAccounts.lifecycleStatus, "active"),
+	];
+	applyWorkspaceScope(c, prefetchConditions, socialAccounts.workspaceId);
 	const orgAccounts = await db
 		.select({
 			id: socialAccounts.id,
@@ -2606,13 +3433,23 @@ app.openapi(bulkCreatePosts, async (c) => {
 	const autoScheduledTimes: Date[] = []; // Accumulate auto-scheduled times to avoid collisions within batch
 	for (const item of postItems) {
 		try {
-			const { resolved, failed: _failedTargets } = await resolveTargets(
+			const targetResolution = await resolveTargets(
 				db,
 				orgId,
 				item.targets,
 				wsScope,
 				orgAccounts,
+				item.workspace_id ?? null,
 			);
+			const itemScope = await inheritOperationalCreateScope(
+				c,
+				item.workspace_id,
+				targetResolution.workspaceIds,
+				"post",
+			);
+			if (!itemScope.ok) return itemScope.response as never;
+			const workspaceId = itemScope.workspaceId;
+			const { resolved, failed: _failedTargets } = targetResolution;
 
 			const isDraft = item.scheduled_at === "draft";
 			const isNow = item.scheduled_at === "now";
@@ -2665,41 +3502,51 @@ app.openapi(bulkCreatePosts, async (c) => {
 				...(item.media && item.media.length > 0 ? { _media: item.media } : {}),
 			};
 
-			const rows = await db
-				.insert(posts)
-				.values({
-					organizationId: orgId,
-					workspaceId: item.workspace_id ?? null,
-					content: item.content ?? null,
-					status: postStatus,
-					scheduledAt,
-					timezone: item.timezone,
-					platformOverrides:
-						Object.keys(bulkPlatformOverrides).length > 0
-							? bulkPlatformOverrides
-							: null,
-				})
-				.returning();
-			const post = rows[0];
-			if (!post) {
-				failed++;
-				continue;
-			}
+			const post = await db.transaction(async (tx) => {
+				const rows = await tx
+					.insert(posts)
+					.values({
+						organizationId: orgId,
+						workspaceId,
+						content: item.content ?? null,
+						status: postStatus,
+						scheduledAt,
+						timezone: item.timezone,
+						platformOverrides:
+							Object.keys(bulkPlatformOverrides).length > 0
+								? bulkPlatformOverrides
+								: null,
+					})
+					.returning();
+				const txPost = rows[0];
+				if (!txPost) throw new Error("Failed to insert bulk post");
 
-			const bulkTargetValues = resolved.flatMap((target) =>
-				target.accounts.map((account) => ({
-					postId: post.id,
-					socialAccountId: account.id,
-					platform: target.platform,
-					status: (isDraft ? "draft" : isNow ? "publishing" : "scheduled") as
-						| "draft"
-						| "publishing"
-						| "scheduled",
-				})),
-			);
-			if (bulkTargetValues.length > 0) {
-				await db.insert(postTargets).values(bulkTargetValues);
-			}
+				const bulkTargetValues = resolved.flatMap((target) =>
+					target.accounts.map((account) => ({
+						organizationId: orgId,
+						scopeKey: workspaceScopeKey(txPost.workspaceId),
+						postId: txPost.id,
+						socialAccountId: account.id,
+						platform: target.platform,
+						status: (isDraft ? "draft" : isNow ? "publishing" : "scheduled") as
+							| "draft"
+							| "publishing"
+							| "scheduled",
+					})),
+				);
+				if (bulkTargetValues.length > 0) {
+					await tx.insert(postTargets).values(bulkTargetValues);
+				}
+				if (isNow && bulkTargetValues.length > 0) {
+					await tx.insert(publishOutbox).values(
+						publishOutboxRow({
+							organizationId: orgId,
+							postId: txPost.id,
+						}),
+					);
+				}
+				return txPost;
+			});
 
 			// Publish now if requested: enqueue to PUBLISH_QUEUE rather than publishing
 			// inline. Inline publishing awaited every platform's API (8-30s+, minutes for
@@ -2708,16 +3555,7 @@ app.openapi(bulkCreatePosts, async (c) => {
 			// "publishing"; the consumer (publishPostById) performs the publish and
 			// re-extracts media from platformOverrides._media.
 			if (isNow && resolved.length > 0) {
-				// usage_tracked:true — the mutating bulk request was already billed by the
-				// usage middleware (1 unit); avoid the consumer re-billing per item.
-				c.executionCtx.waitUntil(
-					c.env.PUBLISH_QUEUE.send({
-						type: "publish",
-						post_id: post.id,
-						org_id: orgId,
-						usage_tracked: true,
-					}),
-				);
+				c.executionCtx.waitUntil(dispatchPublishOutbox(c.env));
 				results.push({
 					id: post.id,
 					status: "publishing",
@@ -2832,14 +3670,25 @@ app.openapi(unpublishPost, async (c) => {
 						tokenExpiresAt: socialAccounts.tokenExpiresAt,
 					})
 					.from(socialAccounts)
-					.where(inArray(socialAccounts.id, accountIds))
+					.where(
+						and(
+							inArray(socialAccounts.id, accountIds),
+							eq(socialAccounts.organizationId, orgId),
+							eq(socialAccounts.lifecycleStatus, "active"),
+						),
+					)
 			: [];
 	// Decrypt and refresh tokens before platform deletion calls
 	const accounts = await Promise.all(
 		rawAccounts.map(async (a) => {
 			const token =
 				a.platform === "telegram"
-					? await maybeDecrypt(a.accessToken, c.env.ENCRYPTION_KEY)
+					? await decryptAccountToken(
+							a.accessToken,
+							c.env.ENCRYPTION_KEY,
+							a.id,
+							"access_token",
+						)
 					: await refreshTokenIfNeeded(c.env, {
 							id: a.id,
 							platform: a.platform,
@@ -2885,14 +3734,11 @@ app.openapi(unpublishPost, async (c) => {
 						// Docs: https://developers.facebook.com/docs/graph-api/reference/post/#deleting
 						case "facebook":
 							deleteSuccess = (
-								await fetch(
-									`${GRAPH_BASE.facebook}/${target.platformPostId}`,
-									{
-										method: "DELETE",
-										headers: { Authorization: `Bearer ${account.accessToken}` },
-										signal,
-									},
-								)
+								await fetch(`${GRAPH_BASE.facebook}/${target.platformPostId}`, {
+									method: "DELETE",
+									headers: { Authorization: `Bearer ${account.accessToken}` },
+									signal,
+								})
 							).ok;
 							break;
 						// Instagram Graph API: DELETE an IG Media object
@@ -3030,7 +3876,11 @@ app.openapi(unpublishPost, async (c) => {
 
 	await db
 		.update(posts)
-		.set({ status: finalPostStatus as "draft", updatedAt: new Date() })
+		.set({
+			status: finalPostStatus as "draft",
+			revision: sql`${posts.revision} + 1`,
+			updatedAt: new Date(),
+		})
 		.where(eq(posts.id, id));
 
 	c.executionCtx.waitUntil(
@@ -3235,6 +4085,7 @@ app.openapi(updateMetadata, async (c) => {
 	// Get YouTube account access token
 	const [account] = await db
 		.select({
+			id: socialAccounts.id,
 			accessToken: socialAccounts.accessToken,
 			workspaceId: socialAccounts.workspaceId,
 		})
@@ -3263,7 +4114,12 @@ app.openapi(updateMetadata, async (c) => {
 	const denied = assertWorkspaceScope(c, account.workspaceId);
 	if (denied) return denied;
 
-	const token = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY);
+	const token = await decryptAccountToken(
+		account.accessToken,
+		c.env.ENCRYPTION_KEY,
+		account.id,
+		"access_token",
+	);
 	if (!token) {
 		return c.json(
 			{
@@ -3442,6 +4298,12 @@ const bulkCsvUpload = createRoute({
 				.string()
 				.optional()
 				.describe('Set to "true" to validate without creating posts'),
+			workspace_id: z
+				.string()
+				.optional()
+				.describe(
+					"Workspace ID for every CSV row. Omission lets each row inherit its sole target-account workspace in either policy mode.",
+				),
 		}),
 	},
 	responses: {
@@ -3461,12 +4323,23 @@ const bulkCsvUpload = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Workspace not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
 app.openapi(bulkCsvUpload, async (c) => {
 	const orgId = c.get("orgId");
-	const dryRun = c.req.query("dry_run") === "true";
+	const { dry_run, workspace_id } = c.req.valid("query");
+	const dryRun = dry_run === "true";
+	const db = c.get("db");
+	const wsScope = c.get("workspaceScope");
 
 	// --- Parse multipart form ---
 	let formData: FormData;
@@ -3564,14 +4437,9 @@ app.openapi(bulkCsvUpload, async (c) => {
 		);
 	}
 
-	const db = c.get("db");
-
 	// Pre-fetch org accounts once, filtered by workspace scope
-	const wsScope = c.get("workspaceScope");
 	const csvPrefetchConditions = [eq(socialAccounts.organizationId, orgId)];
-	if (wsScope !== "all") {
-		csvPrefetchConditions.push(inArray(socialAccounts.workspaceId, wsScope));
-	}
+	applyWorkspaceScope(c, csvPrefetchConditions, socialAccounts.workspaceId);
 	const orgAccounts = await db
 		.select({
 			id: socialAccounts.id,
@@ -3695,13 +4563,23 @@ app.openapi(bulkCsvUpload, async (c) => {
 			const item = parsed.data;
 
 			// Resolve targets
-			const { resolved, failed: failedTargets } = await resolveTargets(
+			const targetResolution = await resolveTargets(
 				db,
 				orgId,
 				item.targets,
 				wsScope,
 				orgAccounts,
+				workspace_id ?? null,
 			);
+			const rowScope = await inheritOperationalCreateScope(
+				c,
+				workspace_id,
+				targetResolution.workspaceIds,
+				"post",
+			);
+			if (!rowScope.ok) return rowScope.response as never;
+			const resolvedWorkspaceId = rowScope.workspaceId;
+			const { resolved, failed: failedTargets } = targetResolution;
 
 			if (resolved.length === 0) {
 				const errMsg =
@@ -3778,51 +4656,51 @@ app.openapi(bulkCsvUpload, async (c) => {
 				...(item.media && item.media.length > 0 ? { _media: item.media } : {}),
 			};
 
-			const insertedRows = await db
-				.insert(posts)
-				.values({
-					organizationId: orgId,
-					workspaceId: null,
-					content: item.content ?? null,
-					status: postStatus,
-					scheduledAt: parsedScheduledAt,
-					timezone: item.timezone,
-					platformOverrides:
-						Object.keys(platformOverrides).length > 0
-							? platformOverrides
-							: null,
-				})
-				.returning();
+			const post = await db.transaction(async (tx) => {
+				const insertedRows = await tx
+					.insert(posts)
+					.values({
+						organizationId: orgId,
+						workspaceId: resolvedWorkspaceId,
+						content: item.content ?? null,
+						status: postStatus,
+						scheduledAt: parsedScheduledAt,
+						timezone: item.timezone,
+						platformOverrides:
+							Object.keys(platformOverrides).length > 0
+								? platformOverrides
+								: null,
+					})
+					.returning();
+				const txPost = insertedRows[0];
+				if (!txPost) throw new Error("Failed to insert CSV post");
 
-			const post = insertedRows[0];
-			if (!post) {
-				results.push({
-					row: rowNum,
-					status: "error",
-					error: {
-						code: "DB_ERROR",
-						message: "Failed to insert post.",
-					},
-				});
-				failed++;
-				continue;
-			}
-
-			// Create targets
-			const targetValues = resolved.flatMap((target) =>
-				target.accounts.map((account) => ({
-					postId: post.id,
-					socialAccountId: account.id,
-					platform: target.platform,
-					status: (isDraft ? "draft" : isNow ? "publishing" : "scheduled") as
-						| "draft"
-						| "publishing"
-						| "scheduled",
-				})),
-			);
-			if (targetValues.length > 0) {
-				await db.insert(postTargets).values(targetValues);
-			}
+				const targetValues = resolved.flatMap((target) =>
+					target.accounts.map((account) => ({
+						organizationId: orgId,
+						scopeKey: workspaceScopeKey(txPost.workspaceId),
+						postId: txPost.id,
+						socialAccountId: account.id,
+						platform: target.platform,
+						status: (isDraft ? "draft" : isNow ? "publishing" : "scheduled") as
+							| "draft"
+							| "publishing"
+							| "scheduled",
+					})),
+				);
+				if (targetValues.length > 0) {
+					await tx.insert(postTargets).values(targetValues);
+				}
+				if (isNow && targetValues.length > 0) {
+					await tx.insert(publishOutbox).values(
+						publishOutboxRow({
+							organizationId: orgId,
+							postId: txPost.id,
+						}),
+					);
+				}
+				return txPost;
+			});
 
 			// Publish immediately if requested: enqueue to PUBLISH_QUEUE instead of
 			// publishing inline. The CSV endpoint accepts up to 500 rows; inline serial
@@ -3830,14 +4708,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 			// The post + targets are persisted as "publishing"; the consumer publishes and
 			// re-extracts media from platformOverrides._media.
 			if (isNow && resolved.length > 0) {
-				c.executionCtx.waitUntil(
-					c.env.PUBLISH_QUEUE.send({
-						type: "publish",
-						post_id: post.id,
-						org_id: orgId,
-						usage_tracked: true,
-					}),
-				);
+				c.executionCtx.waitUntil(dispatchPublishOutbox(c.env));
 			}
 
 			postsCreated++;
@@ -4219,7 +5090,10 @@ app.openapi(getPostNotes, async (c) => {
 
 	// Fall back to external posts
 	const [ext] = await db
-		.select({ notes: externalPosts.notes, workspaceId: externalPosts.workspaceId })
+		.select({
+			notes: externalPosts.notes,
+			workspaceId: externalPosts.workspaceId,
+		})
 		.from(externalPosts)
 		.where(
 			and(eq(externalPosts.id, id), eq(externalPosts.organizationId, orgId)),
@@ -4257,7 +5131,11 @@ app.openapi(updatePostNotes, async (c) => {
 		if (denied) return denied;
 		await db
 			.update(posts)
-			.set({ notes, updatedAt: new Date() })
+			.set({
+				notes,
+				revision: sql`${posts.revision} + 1`,
+				updatedAt: new Date(),
+			})
 			.where(eq(posts.id, id));
 		return c.json({ notes }, 200);
 	}

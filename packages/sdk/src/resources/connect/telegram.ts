@@ -6,20 +6,14 @@ import { RequestOptions } from '../../internal/request-options';
 
 export class Telegram extends APIResource {
   /**
-   * Connect Telegram directly with chat ID
+   * Generates an organization- and workspace-bound bot challenge code (valid 15
+   * minutes).
    */
-  connectDirectly(
-    body: TelegramConnectDirectlyParams,
+  initiateConnection(
+    query: TelegramInitiateConnectionParams | null | undefined = {},
     options?: RequestOptions,
-  ): APIPromise<TelegramConnectDirectlyResponse> {
-    return this._client.post('/v1/connect/telegram/direct', { body, ...options });
-  }
-
-  /**
-   * Generates a 6-character access code (valid 15 minutes).
-   */
-  initiateConnection(options?: RequestOptions): APIPromise<TelegramInitiateConnectionResponse> {
-    return this._client.post('/v1/connect/telegram', options);
+  ): APIPromise<TelegramInitiateConnectionResponse> {
+    return this._client.post('/v1/connect/telegram', { query, ...options });
   }
 
   /**
@@ -33,52 +27,6 @@ export class Telegram extends APIResource {
   }
 }
 
-export interface TelegramConnectDirectlyResponse {
-  account: TelegramConnectDirectlyResponse.Account;
-}
-
-export namespace TelegramConnectDirectlyResponse {
-  export interface Account {
-    /**
-     * Account ID
-     */
-    id: string;
-
-    avatar_url: string | null;
-
-    connected_at: string;
-
-    display_name: string | null;
-
-    metadata: { [key: string]: unknown } | null;
-
-    platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
-
-    platform_account_id: string;
-
-    updated_at: string;
-
-    username: string | null;
-  }
-}
-
 export interface TelegramInitiateConnectionResponse {
   /**
    * Telegram bot username to message
@@ -86,7 +34,8 @@ export interface TelegramInitiateConnectionResponse {
   bot_username: string;
 
   /**
-   * 6-character access code
+   * Organization-bound challenge code in the form RLAY-XXXXXXXXXXXX (12 uppercase
+   * hexadecimal characters)
    */
   code: string;
 
@@ -183,26 +132,27 @@ export namespace TelegramPollConnectionStatusResponse {
   }
 }
 
-export interface TelegramConnectDirectlyParams {
-  /**
-   * Telegram chat or channel ID
-   */
-  chat_id: string;
-}
-
 export interface TelegramPollConnectionStatusParams {
   /**
-   * The 6-character access code to check
+   * Organization-bound challenge code to check (RLAY- followed by 12 uppercase
+   * hexadecimal characters)
    */
   code: string;
 }
 
+export interface TelegramInitiateConnectionParams {
+  /**
+   * Workspace for the connected account. Required only when Require Workspace ID
+   * is enabled.
+   */
+  workspace_id?: string;
+}
+
 export declare namespace Telegram {
   export {
-    type TelegramConnectDirectlyResponse as TelegramConnectDirectlyResponse,
     type TelegramInitiateConnectionResponse as TelegramInitiateConnectionResponse,
+    type TelegramInitiateConnectionParams as TelegramInitiateConnectionParams,
     type TelegramPollConnectionStatusResponse as TelegramPollConnectionStatusResponse,
-    type TelegramConnectDirectlyParams as TelegramConnectDirectlyParams,
     type TelegramPollConnectionStatusParams as TelegramPollConnectionStatusParams,
   };
 }

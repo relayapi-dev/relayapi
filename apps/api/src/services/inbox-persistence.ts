@@ -12,8 +12,26 @@ import {
 	inboxConversations,
 	inboxMessages,
 } from "@relayapi/db";
+import {
+	and,
+	asc,
+	count,
+	desc,
+	eq,
+	getTableColumns,
+	gte,
+	ilike,
+	lte,
+	or,
+	type SQL,
+	sql,
+} from "drizzle-orm";
+import {
+	decodeTimestampIdCursor,
+	encodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
+import { workspaceScopeSqlCondition } from "../lib/workspace-scope";
 import { findMatchingContact } from "./contact-linker";
-import { and, desc, eq, gte, ilike, inArray, isNull, lt, lte, or, sql, asc, count, type SQL } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,7 +42,8 @@ type Message = typeof inboxMessages.$inferSelect;
 
 export interface UpsertConversationData {
 	organizationId: string;
-	workspaceId?: string | null;
+	/** Authoritative scope copied from the source social account. */
+	workspaceId: string | null;
 	accountId: string;
 	platform: Conversation["platform"];
 	type: Conversation["type"];
@@ -112,7 +131,7 @@ export async function upsertConversation(
 		.values({
 			id: generateId("conv_"),
 			organizationId: data.organizationId,
-			workspaceId: data.workspaceId ?? null,
+			workspaceId: data.workspaceId,
 			accountId: data.accountId,
 			platform: data.platform,
 			type: data.type,
@@ -195,73 +214,153 @@ export async function insertMessage(
 ): Promise<Message | null> {
 	const now = data.createdAt ?? new Date();
 
-	const rows = await db
-		.insert(inboxMessages)
-		.values({
-			id: generateId("msg_"),
-			conversationId: data.conversationId,
-			organizationId: data.organizationId,
-			platformMessageId: data.platformMessageId,
-			authorName: data.authorName ?? null,
-			authorPlatformId: data.authorPlatformId ?? null,
-			authorAvatarUrl: data.authorAvatarUrl ?? null,
-			text: data.text ?? null,
-			direction: data.direction,
-			attachments: data.attachments ?? [],
-			sentimentScore: data.sentimentScore ?? null,
-			classification: data.classification ?? null,
-			platformData: data.platformData ?? {},
-			isHidden: data.isHidden ?? false,
-			isLiked: data.isLiked ?? false,
-			createdAt: now,
-		})
-		.onConflictDoNothing({
-			target: [inboxMessages.conversationId, inboxMessages.platformMessageId],
-		})
-		.returning();
+	return db.transaction(async (tx) => {
+		const [conversationScope] = await tx
+			.select({
+				scopeKey: inboxConversations.scopeKey,
+				accountId: inboxConversations.accountId,
+				platform: inboxConversations.platform,
+			})
+			.from(inboxConversations)
+			.where(
+				and(
+					eq(inboxConversations.id, data.conversationId),
+					eq(inboxConversations.organizationId, data.organizationId),
+				),
+			)
+			.limit(1)
+			.for("update");
+		if (!conversationScope) {
+			throw new Error("insertMessage: conversation not found in organization");
+		}
 
-	const message = rows[0];
+		const rows = await tx
+			.insert(inboxMessages)
+			.values({
+				id: generateId("msg_"),
+				conversationId: data.conversationId,
+				organizationId: data.organizationId,
+				scopeKey: conversationScope.scopeKey,
+				accountId: conversationScope.accountId,
+				platform: conversationScope.platform,
+				platformMessageId: data.platformMessageId,
+				authorName: data.authorName ?? null,
+				authorPlatformId: data.authorPlatformId ?? null,
+				authorAvatarUrl: data.authorAvatarUrl ?? null,
+				text: data.text ?? null,
+				direction: data.direction,
+				attachments: data.attachments ?? [],
+				sentimentScore: data.sentimentScore ?? null,
+				classification: data.classification ?? null,
+				platformData: data.platformData ?? {},
+				isHidden: data.isHidden ?? false,
+				isLiked: data.isLiked ?? false,
+				createdAt: now,
+			})
+			.onConflictDoNothing({
+				target: [
+					inboxMessages.platform,
+					inboxMessages.accountId,
+					inboxMessages.platformMessageId,
+				],
+			})
+			.returning();
 
-	// If the insert was a no-op (conflict / duplicate), skip the conversation update
-	if (!message) {
-		return null;
-	}
+		const message = rows[0];
+		const previewText = data.previewText ?? data.text ?? null;
 
-	// Update parent conversation preview + counts.
-	//
-	// The preview fields (lastMessageText/At/Direction) must be MONOTONIC: backfill
-	// and out-of-order live deliveries call this with historical platform
-	// timestamps in raw API order, so an older message inserted after a newer one
-	// must NOT rewind the preview to stale content. We only overwrite the preview
-	// when the new message is at least as new as the stored lastMessageAt.
-	//
-	// `updatedAt` is set to actual wall-clock insertion time (new Date()) rather
-	// than the message's createdAt so that backfilling historical rows does not
-	// regress conversation list ordering (listConversations orders by updatedAt
-	// desc). The unreadCount increment is likewise gated on the message being
-	// newer, so backfilling months-old inbound messages can't inflate unread.
-	const nowTs = sql`${now.toISOString()}::timestamptz`;
-	const insertedAt = new Date();
-	const isNewer = sql`(${inboxConversations.lastMessageAt} IS NULL OR ${inboxConversations.lastMessageAt} <= ${nowTs})`;
-	// Empty-body messages (story mentions, media-only DMs) supply a synthesized
-	// preview so the conversation list never shows a blank/"No messages yet" row.
-	const previewText = data.previewText ?? data.text ?? null;
-	await db
-		.update(inboxConversations)
-		.set({
-			lastMessageText: sql`CASE WHEN ${isNewer} THEN ${previewText} ELSE ${inboxConversations.lastMessageText} END`,
-			lastMessageAt: sql`GREATEST(COALESCE(${inboxConversations.lastMessageAt}, ${nowTs}), ${nowTs})`,
-			lastMessageDirection: sql`CASE WHEN ${isNewer} THEN ${data.direction} ELSE ${inboxConversations.lastMessageDirection} END`,
-			messageCount: sql`${inboxConversations.messageCount} + 1`,
-			unreadCount:
-				data.direction === "inbound"
-					? sql`${inboxConversations.unreadCount} + CASE WHEN ${isNewer} THEN 1 ELSE 0 END`
-					: inboxConversations.unreadCount,
-			updatedAt: insertedAt,
-		})
-		.where(eq(inboxConversations.id, data.conversationId));
+		if (!message) {
+			// A duplicate can be a retry of the old two-statement implementation
+			// after it committed the message but crashed before updating the parent.
+			// Repair the durable count and latest-message projection before returning.
+			// `unread_count` has no per-message read ledger, so it can only be safely
+			// incremented when this duplicate is demonstrably the missing latest row.
+			const [existing] = await tx
+				.select()
+				.from(inboxMessages)
+				.where(
+					and(
+						eq(inboxMessages.organizationId, data.organizationId),
+						eq(inboxMessages.accountId, conversationScope.accountId),
+						eq(inboxMessages.platform, conversationScope.platform),
+						eq(inboxMessages.platformMessageId, data.platformMessageId),
+					),
+				)
+				.limit(1);
+			if (existing) {
+				const repairConversationId = existing.conversationId;
+				const repairPreviewText =
+					repairConversationId === data.conversationId
+						? previewText
+						: existing.text;
+				await tx.execute(sql`
+					WITH stats AS (
+						SELECT COUNT(*)::integer AS message_count
+						  FROM inbox_messages
+						 WHERE conversation_id = ${repairConversationId}
+						   AND organization_id = ${data.organizationId}
+					), latest AS (
+						SELECT id, text, direction, created_at
+						  FROM inbox_messages
+						 WHERE conversation_id = ${repairConversationId}
+						   AND organization_id = ${data.organizationId}
+						 ORDER BY created_at DESC, id DESC
+						 LIMIT 1
+					)
+					UPDATE inbox_conversations AS conversation
+					   SET message_count = stats.message_count,
+					       last_message_text = CASE
+					         WHEN latest.id = ${existing.id} THEN ${repairPreviewText}
+					         ELSE latest.text
+					       END,
+					       last_message_at = latest.created_at,
+					       last_message_direction = latest.direction,
+					       unread_count = conversation.unread_count + CASE
+					         WHEN conversation.message_count < stats.message_count
+					          AND latest.id = ${existing.id}
+					          AND latest.direction = 'inbound'
+					          AND (
+					            conversation.last_message_at IS NULL
+					            OR conversation.last_message_at <= latest.created_at
+					          )
+					         THEN 1 ELSE 0
+					       END,
+					       updated_at = NOW()
+					  FROM stats, latest
+					 WHERE conversation.id = ${repairConversationId}
+					   AND conversation.organization_id = ${data.organizationId}
+				`);
+			}
+			return null;
+		}
 
-	return message;
+		// Insert and parent projection now commit atomically. The preview fields
+		// remain monotonic so historical backfill cannot rewind a live thread.
+		const nowTs = sql`${now.toISOString()}::timestamptz`;
+		const insertedAt = new Date();
+		const isNewer = sql`(${inboxConversations.lastMessageAt} IS NULL OR ${inboxConversations.lastMessageAt} <= ${nowTs})`;
+		await tx
+			.update(inboxConversations)
+			.set({
+				lastMessageText: sql`CASE WHEN ${isNewer} THEN ${previewText} ELSE ${inboxConversations.lastMessageText} END`,
+				lastMessageAt: sql`GREATEST(COALESCE(${inboxConversations.lastMessageAt}, ${nowTs}), ${nowTs})`,
+				lastMessageDirection: sql`CASE WHEN ${isNewer} THEN ${data.direction} ELSE ${inboxConversations.lastMessageDirection} END`,
+				messageCount: sql`${inboxConversations.messageCount} + 1`,
+				unreadCount:
+					data.direction === "inbound"
+						? sql`${inboxConversations.unreadCount} + CASE WHEN ${isNewer} THEN 1 ELSE 0 END`
+						: inboxConversations.unreadCount,
+				updatedAt: insertedAt,
+			})
+			.where(
+				and(
+					eq(inboxConversations.id, data.conversationId),
+					eq(inboxConversations.organizationId, data.organizationId),
+				),
+			);
+
+		return message;
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +377,9 @@ export async function listConversations(
 	has_more: boolean;
 }> {
 	const limit = Math.min(Math.max(filters?.limit ?? 20, 1), 100);
+	const decodedCursor = filters?.cursor
+		? decodeTimestampIdCursor(filters.cursor)
+		: null;
 
 	const conditions: (SQL | undefined)[] = [
 		eq(inboxConversations.organizationId, orgId),
@@ -286,9 +388,9 @@ export async function listConversations(
 	// Workspace scope enforcement — include org-level (NULL workspace) resources
 	if (filters?.workspaceScope && filters.workspaceScope !== "all") {
 		conditions.push(
-			or(
-				inArray(inboxConversations.workspaceId, filters.workspaceScope),
-				isNull(inboxConversations.workspaceId),
+			workspaceScopeSqlCondition(
+				filters.workspaceScope,
+				inboxConversations.workspaceId,
 			),
 		);
 	}
@@ -301,7 +403,10 @@ export async function listConversations(
 
 	if (filters?.platform) {
 		conditions.push(
-			eq(inboxConversations.platform, filters.platform as Conversation["platform"]),
+			eq(
+				inboxConversations.platform,
+				filters.platform as Conversation["platform"],
+			),
 		);
 	}
 
@@ -317,30 +422,36 @@ export async function listConversations(
 
 	if (filters?.labels && filters.labels.length > 0) {
 		// Match conversations that contain ANY of the requested labels
-		const labelConditions = filters.labels.map((label) =>
-			sql`${label} = ANY(${inboxConversations.labels})`,
+		const labelConditions = filters.labels.map(
+			(label) => sql`${label} = ANY(${inboxConversations.labels})`,
 		);
 		conditions.push(or(...labelConditions));
 	}
 
-	if (filters?.cursor) {
-		// Cursor is an ISO timestamp — fetch rows strictly older than the cursor
-		conditions.push(lt(inboxConversations.updatedAt, new Date(filters.cursor)));
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${inboxConversations.updatedAt}, ${inboxConversations.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
 	}
 
 	// Fetch limit+1 to check if there are more rows
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(inboxConversations),
+			cursorTimestamp: sql<string>`to_char(${inboxConversations.updatedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(inboxConversations)
 		.where(and(...conditions))
-		.orderBy(desc(inboxConversations.updatedAt))
+		.orderBy(desc(inboxConversations.updatedAt), desc(inboxConversations.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
 	const data = hasMore ? rows.slice(0, limit) : rows;
 	const lastRow = data[data.length - 1];
 	const nextCursor =
-		hasMore && lastRow ? lastRow.updatedAt.toISOString() : null;
+		hasMore && lastRow
+			? encodeTimestampIdCursor(lastRow.cursorTimestamp, lastRow.id)
+			: null;
 
 	return { data, next_cursor: nextCursor, has_more: hasMore };
 }
@@ -361,9 +472,9 @@ export async function getConversationWithMessages(
 	];
 	if (workspaceScope && workspaceScope !== "all") {
 		conditions.push(
-			or(
-				inArray(inboxConversations.workspaceId, workspaceScope),
-				isNull(inboxConversations.workspaceId),
+			workspaceScopeSqlCondition(
+				workspaceScope,
+				inboxConversations.workspaceId,
 			),
 		);
 	}
@@ -407,6 +518,9 @@ export async function searchMessages(
 	has_more: boolean;
 }> {
 	const limit = Math.min(Math.max(filters?.limit ?? 20, 1), 100);
+	const decodedCursor = filters?.cursor
+		? decodeTimestampIdCursor(filters.cursor)
+		: null;
 
 	// A leading-wildcard ILIKE is served by the pg_trgm GIN index
 	// (inbox_msg_text_trgm_idx, see packages/db/src/schema.ts). Trigram indexes
@@ -424,12 +538,15 @@ export async function searchMessages(
 
 	// Workspace scope enforcement — filter messages by their conversation's workspace
 	if (filters?.workspaceScope && filters.workspaceScope !== "all") {
-		const wsScope = filters.workspaceScope;
+		const scopeCondition = workspaceScopeSqlCondition(
+			filters.workspaceScope,
+			inboxConversations.workspaceId,
+		);
 		conditions.push(
 			sql`${inboxMessages.conversationId} IN (
 				SELECT ${inboxConversations.id} FROM ${inboxConversations}
 				WHERE ${inboxConversations.organizationId} = ${orgId}
-				AND ${inboxConversations.workspaceId} IN (${sql.join(wsScope.map(w => sql`${w}`), sql`, `)})
+				AND ${scopeCondition}
 			)`,
 		);
 	}
@@ -454,22 +571,29 @@ export async function searchMessages(
 		conditions.push(lte(inboxMessages.createdAt, new Date(filters.until)));
 	}
 
-	if (filters?.cursor) {
-		conditions.push(lt(inboxMessages.createdAt, new Date(filters.cursor)));
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${inboxMessages.createdAt}, ${inboxMessages.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(inboxMessages),
+			cursorTimestamp: sql<string>`to_char(${inboxMessages.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(inboxMessages)
 		.where(and(...conditions))
-		.orderBy(desc(inboxMessages.createdAt))
+		.orderBy(desc(inboxMessages.createdAt), desc(inboxMessages.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
 	const data = hasMore ? rows.slice(0, limit) : rows;
 	const lastRow = data[data.length - 1];
 	const nextCursor =
-		hasMore && lastRow ? lastRow.createdAt.toISOString() : null;
+		hasMore && lastRow
+			? encodeTimestampIdCursor(lastRow.cursorTimestamp, lastRow.id)
+			: null;
 
 	return { data, next_cursor: nextCursor, has_more: hasMore };
 }
@@ -495,16 +619,19 @@ export async function getInboxStats(
 	// Workspace scope enforcement — include org-level (NULL workspace) resources
 	if (filters?.workspaceScope && filters.workspaceScope !== "all") {
 		conditions.push(
-			or(
-				inArray(inboxConversations.workspaceId, filters.workspaceScope),
-				isNull(inboxConversations.workspaceId),
+			workspaceScopeSqlCondition(
+				filters.workspaceScope,
+				inboxConversations.workspaceId,
 			),
 		);
 	}
 
 	if (filters?.platform) {
 		conditions.push(
-			eq(inboxConversations.platform, filters.platform as Conversation["platform"]),
+			eq(
+				inboxConversations.platform,
+				filters.platform as Conversation["platform"],
+			),
 		);
 	}
 
@@ -520,7 +647,10 @@ export async function getInboxStats(
 			platform: inboxConversations.platform,
 			status: inboxConversations.status,
 			conversations: count(),
-			unread: sql<number>`COALESCE(SUM(${inboxConversations.unreadCount}), 0)`.mapWith(Number),
+			unread:
+				sql<number>`COALESCE(SUM(${inboxConversations.unreadCount}), 0)`.mapWith(
+					Number,
+				),
 		})
 		.from(inboxConversations)
 		.where(whereClause)
@@ -596,9 +726,9 @@ export async function updateConversation(
 	];
 	if (workspaceScope && workspaceScope !== "all") {
 		updateConditions.push(
-			or(
-				inArray(inboxConversations.workspaceId, workspaceScope),
-				isNull(inboxConversations.workspaceId),
+			workspaceScopeSqlCondition(
+				workspaceScope,
+				inboxConversations.workspaceId,
 			),
 		);
 	}

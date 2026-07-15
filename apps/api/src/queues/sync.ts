@@ -12,6 +12,7 @@ import {
 	type SyncQueueMessage,
 } from "../services/external-post-sync/types";
 import type { Env } from "../types";
+import { recordQueueFailure } from "./failures";
 
 type SyncMessage = SyncQueueMessage | AnalyticsQueueMessage;
 
@@ -20,10 +21,10 @@ export async function consumeSyncQueue(
 	env: Env,
 ): Promise<void> {
 	for (const message of batch.messages) {
-		const body = message.body;
+		const body = message.body as SyncMessage | null;
 
 		try {
-			switch (body.type) {
+			switch (body?.type) {
 				case "sync_posts":
 					await syncExternalPosts(env, body);
 					break;
@@ -38,19 +39,28 @@ export async function consumeSyncQueue(
 					break;
 				default:
 					console.warn(
-						`[Sync] Unknown message type: ${(body as { type: string }).type}`,
+						`[Sync] Unknown message type: ${String(
+							(message.body as { type?: unknown } | null)?.type,
+						)}`,
+					);
+					await recordQueueFailure(
+						env,
+						batch.queue,
+						message,
+						"permanent_input",
+						"Malformed or unsupported sync queue message",
 					);
 			}
 			message.ack();
 		} catch (err) {
 			console.error(
-				`[Sync] Error processing ${body.type} (attempt ${message.attempts}):`,
+				`[Sync] Error processing ${String(body?.type)} (attempt ${message.attempts}):`,
 				err instanceof Error ? err.message : err,
 			);
 			if (err instanceof Error && err.stack) {
 				console.error(`[Sync] Stack:`, err.stack);
 			}
-			console.error(`[Sync] Message body:`, JSON.stringify(body));
+			console.error("[Sync] Message failed", { messageId: message.id });
 
 			if (err instanceof RateLimitError) {
 				const delaySec = Math.max(
@@ -62,8 +72,10 @@ export async function consumeSyncQueue(
 				const delaySeconds = 2 ** message.attempts;
 				message.retry({ delaySeconds });
 			} else {
-				console.error(`[Sync] Max retries exceeded for ${body.type}, dropping`);
-				message.ack();
+				console.error(
+					`[Sync] Max retries exceeded for ${String(body?.type)}; sending to DLQ`,
+				);
+				message.retry({ delaySeconds: 60 });
 			}
 		}
 	}

@@ -1,4 +1,9 @@
-import { classifyPublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	classifyPublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 /**
  * SMS publisher via Twilio.
@@ -39,13 +44,31 @@ export const smsPublisher: Publisher = {
 			}
 
 			const body = (opts.content as string) ?? request.content ?? "";
+			// Official docs: https://www.twilio.com/docs/messaging/api/message-resource#create-a-message-resource
+			// Request body field `Body` has a maximum of 1,600 characters.
+			if (body.length > 1600) {
+				return {
+					success: false,
+					error: {
+						code: "CONTENT_TOO_LONG",
+						message: `SMS body is ${body.length} characters. Twilio limit is 1,600.`,
+					},
+				};
+			}
 
 			// Handle media (MMS) — Twilio supports up to 10 MediaUrl per message
-			const media =
-				(opts.media as Array<{ url: string }>) ?? request.media;
-			const mediaUrls = media
-				.slice(0, 10)
-				.map((m) => m.url);
+			const media = (opts.media as Array<{ url: string }>) ?? request.media;
+			// Same official section, request field `MediaUrl`: up to 10 values.
+			if (media.length > 10) {
+				return {
+					success: false,
+					error: {
+						code: "TOO_MANY_MEDIA",
+						message: `Twilio MMS supports at most 10 media URLs; received ${media.length}.`,
+					},
+				};
+			}
+			const mediaUrls = media.map((m) => m.url);
 
 			// Twilio requires either a Body or at least one MediaUrl
 			if (!body && mediaUrls.length === 0) {
@@ -57,7 +80,11 @@ export const smsPublisher: Publisher = {
 			// Basic auth: Account SID : Auth Token
 			const credentials = btoa(`${accountSid}:${authToken}`);
 
-			const results: Array<{ phone: string; sid: string | null; error: string | null }> = [];
+			const results: Array<{
+				phone: string;
+				sid: string | null;
+				error: string | null;
+			}> = [];
 			let lastSid: string | null = null;
 
 			for (const phone of phoneNumbers) {
@@ -67,7 +94,7 @@ export const smsPublisher: Publisher = {
 				});
 				// Body is optional for MMS (media-only messages)
 				if (body) {
-					params.set("Body", body.slice(0, 1600)); // Twilio SMS limit: 1600 chars (auto-segments)
+					params.set("Body", body);
 				}
 
 				// Add media URLs for MMS
@@ -101,7 +128,9 @@ export const smsPublisher: Publisher = {
 					results.push({
 						phone,
 						sid: null,
-						error: err.code ? `[${err.code}] ${err.message ?? "Unknown error"}` : err.message ?? `HTTP ${res.status}`,
+						error: err.code
+							? `[${err.code}] ${err.message ?? "Unknown error"}`
+							: (err.message ?? `HTTP ${res.status}`),
 					});
 				}
 			}
@@ -109,9 +138,13 @@ export const smsPublisher: Publisher = {
 			const sent = results.filter((r) => r.sid !== null).length;
 
 			if (sent === 0) {
-				throw new Error(
-					`All SMS failed. First error: ${results[0]?.error ?? "Unknown"}`,
-				);
+				return {
+					success: false,
+					error: {
+						code: "SMS_DELIVERY_REJECTED",
+						message: `All SMS failed. First error: ${results[0]?.error ?? "Unknown"}`,
+					},
+				};
 			}
 
 			return {

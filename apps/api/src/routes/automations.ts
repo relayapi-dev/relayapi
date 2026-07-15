@@ -4,17 +4,19 @@
 // Manychat-parity engine. See spec §9.1 + §7 for the endpoint surface.
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import {
-	automationEntrypoints,
-	automations,
-} from "@relayapi/db";
+import { automationEntrypoints, automations } from "@relayapi/db";
 import { and, desc, eq, ilike, sql } from "drizzle-orm";
+import type { Context } from "hono";
+import {
+	resolveOperationalCreateScope,
+	workspaceScopeKey,
+} from "../lib/request-access";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
 	isWorkspaceScopeDenied,
 } from "../lib/workspace-scope";
-import { ErrorResponse, PaginationParams } from "../schemas/common";
+import type { Graph } from "../schemas/automation-graph";
 import { GraphSchema } from "../schemas/automation-graph";
 import {
 	AutomationChannelSchema,
@@ -28,6 +30,12 @@ import {
 	AutomationUpdateSchema,
 	AutomationValidationSchema,
 } from "../schemas/automations";
+import { ErrorResponse, PaginationParams } from "../schemas/common";
+import {
+	AutomationSecretInputError,
+	redactAutomationGraphSecrets,
+	sealAutomationGraphSecrets,
+} from "../services/automations/graph-secrets";
 import { enrollContact } from "../services/automations/runner";
 import { armAllScheduleEntrypointsForAutomation } from "../services/automations/scheduler";
 import { simulate } from "../services/automations/simulator";
@@ -38,16 +46,14 @@ import {
 } from "../services/automations/templates";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
 import { validateGraph } from "../services/automations/validator";
-import type { Graph } from "../schemas/automation-graph";
-import type { Context } from "hono";
 import type { Env, Variables } from "../types";
 import {
 	AUTOMATION_CATALOG,
 	AUTOMATION_CATALOG_ETAG,
 } from "./_automation-catalog";
 import {
-	aggregateInsights,
 	AutomationInsightsQuery,
+	aggregateInsights,
 	GlobalInsightsQuery,
 	InsightsResponseSchema,
 } from "./_automation-insights";
@@ -72,12 +78,14 @@ function serializeAutomation(row: AutomationRow): AutomationResponse {
 		description: row.description,
 		channel: row.channel as AutomationResponse["channel"],
 		status: row.status as AutomationResponse["status"],
-		graph: (row.graph ?? {
-			schema_version: 1,
-			root_node_key: null,
-			nodes: [],
-			edges: [],
-		}) as AutomationResponse["graph"],
+		graph: redactAutomationGraphSecrets(
+			(row.graph ?? {
+				schema_version: 1,
+				root_node_key: null,
+				nodes: [],
+				edges: [],
+			}) as Graph,
+		) as AutomationResponse["graph"],
 		created_from_template: row.createdFromTemplate,
 		template_config:
 			(row.templateConfig as Record<string, unknown> | null) ?? null,
@@ -103,7 +111,10 @@ type AutomationListItem = z.infer<typeof AutomationListItemSchema>;
  * Pairs with the column projection in listAutomations that never fetches them.
  */
 function serializeAutomationListItem(
-	row: Omit<AutomationRow, "graph" | "templateConfig" | "validationErrors">,
+	row: Omit<
+		AutomationRow,
+		"graph" | "scopeKey" | "templateConfig" | "validationErrors"
+	>,
 ): AutomationListItem {
 	return {
 		id: row.id,
@@ -315,6 +326,12 @@ app.openapi(createAutomation, async (c) => {
 	const orgId = c.get("orgId");
 	const db = c.get("db");
 	const body = c.req.valid("json");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		body.workspace_id,
+		"automation",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	let name = body.name;
 	const description = body.description ?? null;
@@ -386,7 +403,7 @@ app.openapi(createAutomation, async (c) => {
 		.insert(automations)
 		.values({
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: scope.workspaceId,
 			name,
 			description,
 			channel: body.channel,
@@ -403,7 +420,10 @@ app.openapi(createAutomation, async (c) => {
 	if (!inserted) {
 		return c.json(
 			{
-				error: { code: "INTERNAL_ERROR", message: "failed to create automation" },
+				error: {
+					code: "INTERNAL_ERROR",
+					message: "failed to create automation",
+				},
 			},
 			400,
 		);
@@ -412,6 +432,8 @@ app.openapi(createAutomation, async (c) => {
 	if (entrypoints.length > 0) {
 		await db.insert(automationEntrypoints).values(
 			entrypoints.map((ep) => ({
+				organizationId: orgId,
+				scopeKey: workspaceScopeKey(inserted.workspaceId),
 				automationId: inserted.id,
 				channel: body.channel,
 				kind: ep.kind,
@@ -460,7 +482,8 @@ const catalogRoute = createRoute({
 	method: "get",
 	path: "/catalog",
 	tags: ["Automations"],
-	summary: "Return the static catalog of node kinds, entrypoints, bindings, actions, and channel capabilities",
+	summary:
+		"Return the static catalog of node kinds, entrypoints, bindings, actions, and channel capabilities",
 	security: [{ Bearer: [] }],
 	responses: {
 		200: {
@@ -482,7 +505,10 @@ app.openapi(catalogRoute, async (c) => {
 	c.header("Cache-Control", "public, max-age=300");
 	// The catalog is pre-stringified for cheap serving; but returning the
 	// parsed object keeps the response type aligned with the OpenAPI schema.
-	return c.json(AUTOMATION_CATALOG as unknown as z.infer<typeof CatalogResponseSchema>, 200);
+	return c.json(
+		AUTOMATION_CATALOG as unknown as z.infer<typeof CatalogResponseSchema>,
+		200,
+	);
 });
 
 // Global (org-wide, optionally rolled up by template kind) insights.
@@ -491,7 +517,8 @@ const globalInsightsRoute = createRoute({
 	method: "get",
 	path: "/insights",
 	tags: ["Automations"],
-	summary: "Aggregate run metrics across the org, optionally rolled up by created_from_template",
+	summary:
+		"Aggregate run metrics across the org, optionally rolled up by created_from_template",
 	security: [{ Bearer: [] }],
 	request: { query: GlobalInsightsQuery },
 	responses: {
@@ -609,7 +636,8 @@ const deleteAutomation = createRoute({
 	method: "delete",
 	path: "/{id}",
 	tags: ["Automations"],
-	summary: "Delete an automation (hard delete — cascades to entrypoints and runs)",
+	summary:
+		"Delete an automation (hard delete — cascades to entrypoints and runs)",
 	security: [{ Bearer: [] }],
 	request: { params: IdParams },
 	responses: {
@@ -915,6 +943,10 @@ const replaceGraph = createRoute({
 			description: "Graph has fatal validation errors",
 			content: { "application/json": { schema: GraphUpdateResponse } },
 		},
+		400: {
+			description: "Invalid write-only credential configuration",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -928,25 +960,56 @@ app.openapi(replaceGraph, async (c) => {
 	const validation = validateGraph(body.graph as Graph);
 
 	// Force-pause if the current row is active and we've introduced fatal errors.
-	const forcePause =
-		validation.errors.length > 0 && row.status === "active";
+	const forcePause = validation.errors.length > 0 && row.status === "active";
 	const nextStatus = forcePause ? "paused" : row.status;
 
-	const [updated] = await db
-		.update(automations)
-		.set({
-			graph: validation.canonicalGraph as never,
-			validationErrors: validation.errors.length ? validation.errors : null,
-			lastValidatedAt: new Date(),
-			status: nextStatus,
-			updatedAt: new Date(),
-		})
-		.where(eq(automations.id, id))
-		.returning();
+	let sealedGraph: Graph;
+	let updated: AutomationRow | undefined;
+	try {
+		const result = await db.transaction(async (tx) => {
+			const graph = await sealAutomationGraphSecrets(
+				tx as unknown as Parameters<typeof sealAutomationGraphSecrets>[0],
+				c.env.ENCRYPTION_KEY,
+				row.organizationId,
+				id,
+				validation.canonicalGraph,
+			);
+			const [saved] = await tx
+				.update(automations)
+				.set({
+					graph: graph as never,
+					validationErrors: validation.errors.length ? validation.errors : null,
+					lastValidatedAt: new Date(),
+					status: nextStatus,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(automations.id, id),
+						eq(automations.organizationId, row.organizationId),
+					),
+				)
+				.returning();
+			return { graph, saved };
+		});
+		sealedGraph = result.graph;
+		updated = result.saved;
+	} catch (error) {
+		if (!(error instanceof AutomationSecretInputError)) throw error;
+		return c.json(
+			{
+				error: {
+					code: "INVALID_AUTOMATION_CREDENTIALS",
+					message: error.message,
+				},
+			},
+			400,
+		);
+	}
 	if (!updated) return notFound(c);
 
 	const responseBody = {
-		graph: validation.canonicalGraph,
+		graph: redactAutomationGraphSecrets(sealedGraph),
 		validation: {
 			valid: validation.valid,
 			errors: validation.errors,
@@ -1076,7 +1139,7 @@ app.openapi(simulateAutomationRoute, async (c) => {
 	if (!row) return notFound(c);
 
 	const result = await simulate({
-		graph: row.graph as Graph,
+		graph: redactAutomationGraphSecrets(row.graph as Graph),
 		startNodeKey: body.start_node_key,
 		testContext: body.test_context,
 		branchChoices: body.branch_choices,

@@ -2,7 +2,7 @@
 
 import { APIResource } from '../../../core/resource';
 import * as BoardsAPI from './boards';
-import { BoardListResponse, BoardSelectParams, BoardSelectResponse, Boards } from './boards';
+import { BoardListParams, BoardListResponse, BoardSelectParams, BoardSelectResponse, Boards } from './boards';
 
 export class Pinterest extends APIResource {
   boards: BoardsAPI.Boards = new BoardsAPI.Boards(this._client);
@@ -14,6 +14,7 @@ export declare namespace Pinterest {
   export {
     Boards as Boards,
     type BoardListResponse as BoardListResponse,
+    type BoardListParams as BoardListParams,
     type BoardSelectResponse as BoardSelectResponse,
     type BoardSelectParams as BoardSelectParams,
   };

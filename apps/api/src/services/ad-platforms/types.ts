@@ -61,15 +61,20 @@ export interface CreateCampaignParams {
 	metadata?: Record<string, unknown>;
 }
 
-export interface PlatformCampaignResult {
-	platformCampaignId: string;
-	platformAdSetId?: string;
-	status: string;
+export interface CreateAdSetParams {
+	campaignId: string;
+	name: string;
+	mode: "standard" | "boost";
+	targeting?: AdTargeting;
+	dailyBudgetCents?: number;
+	lifetimeBudgetCents?: number;
+	startDate?: string;
+	endDate?: string;
+	bidAmount?: number;
+	pixelId?: string;
 }
 
-export interface CreateAdParams {
-	campaignId: string;
-	adSetId?: string;
+export interface CreateCreativeParams {
 	name: string;
 	headline?: string;
 	body?: string;
@@ -77,36 +82,70 @@ export interface CreateAdParams {
 	linkUrl?: string;
 	imageUrl?: string;
 	videoUrl?: string;
-	targeting?: AdTargeting;
-	dailyBudgetCents?: number;
-	lifetimeBudgetCents?: number;
-	startDate?: string;
-	endDate?: string;
-	durationDays?: number;
-	metadata?: Record<string, unknown>;
+	platformPostId?: string;
+	urlTags?: string;
 }
 
-export interface BoostPostParams {
-	platformPostId: string;
+export interface CreatePlatformAdParams {
+	adSetId: string;
+	creativeId: string;
 	name: string;
-	objective: string;
-	targeting?: AdTargeting;
-	dailyBudgetCents: number;
-	lifetimeBudgetCents?: number;
-	currency?: string;
-	durationDays: number;
-	startDate?: string;
-	endDate?: string;
-	bidAmount?: number;
-	tracking?: { pixelId?: string; urlTags?: string };
-	specialAdCategories?: string[];
+	active: boolean;
 }
 
-export interface PlatformAdResult {
-	platformCampaignId: string;
+export type AdProviderObjectPhase = "campaign" | "ad_set" | "creative" | "ad";
+
+export interface FindCreatedAdObjectParams {
+	phase: AdProviderObjectPhase;
+	marker: string;
+	platformCampaignId?: string;
 	platformAdSetId?: string;
-	platformAdId: string;
-	status: string;
+}
+
+/** Atomic provider calls used by the durable paid-object state machine. */
+export interface AdProviderCreationAdapter {
+	createCampaign(
+		accessToken: string,
+		adAccountId: string,
+		params: CreateCampaignParams,
+	): Promise<string>;
+
+	createAdSet(
+		accessToken: string,
+		adAccountId: string,
+		params: CreateAdSetParams,
+	): Promise<string>;
+
+	createCreative(
+		accessToken: string,
+		adAccountId: string,
+		params: CreateCreativeParams,
+	): Promise<string>;
+
+	createAd(
+		accessToken: string,
+		adAccountId: string,
+		params: CreatePlatformAdParams,
+	): Promise<string>;
+
+	findCreatedObject(
+		accessToken: string,
+		adAccountId: string,
+		params: FindCreatedAdObjectParams,
+	): Promise<string | null>;
+
+	/** Setting these absolute states is safe to repeat after an ambiguous response. */
+	activateBoost(
+		accessToken: string,
+		platformCampaignId: string,
+		platformAdSetId: string,
+	): Promise<void>;
+
+	isBoostActivated(
+		accessToken: string,
+		platformCampaignId: string,
+		platformAdSetId: string,
+	): Promise<boolean>;
 }
 
 export interface UpdateAdParams {
@@ -238,6 +277,7 @@ export interface ExternalAdSyncResult {
 
 export interface AdPlatformAdapter {
 	readonly platform: AdPlatform;
+	readonly creation: AdProviderCreationAdapter;
 
 	/** List ad accounts associated with a social account */
 	listAdAccounts(
@@ -254,27 +294,6 @@ export interface AdPlatformAdapter {
 		accessToken: string,
 		platformAdAccountId: string,
 	): Promise<PromotablePage[]>;
-
-	/** Create a campaign on the platform */
-	createCampaign(
-		accessToken: string,
-		adAccountId: string,
-		params: CreateCampaignParams,
-	): Promise<PlatformCampaignResult>;
-
-	/** Create an ad within a campaign */
-	createAd(
-		accessToken: string,
-		adAccountId: string,
-		params: CreateAdParams,
-	): Promise<PlatformAdResult>;
-
-	/** Boost an existing published post as a paid ad */
-	boostPost(
-		accessToken: string,
-		adAccountId: string,
-		params: BoostPostParams,
-	): Promise<PlatformAdResult>;
 
 	/** Update an ad (name, budget, targeting, status) */
 	updateAd(

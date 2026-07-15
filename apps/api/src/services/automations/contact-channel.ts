@@ -13,7 +13,10 @@ export async function findScopedContactChannel(
 	return db.query.contactChannels.findFirst({
 		where: and(
 			eq(contactChannels.contactId, input.contactId),
-			eq(contactChannels.platform, input.platform),
+			eq(
+				contactChannels.platform,
+				input.platform as typeof contactChannels.$inferSelect.platform,
+			),
 			eq(contactChannels.socialAccountId, input.socialAccountId),
 		),
 	});

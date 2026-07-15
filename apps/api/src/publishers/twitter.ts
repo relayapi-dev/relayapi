@@ -1,8 +1,22 @@
-import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import { API_VERSIONS } from "../config/api-versions";
+import {
+	ensureResponseContentLength,
+	fetchPublicUrl,
+	getChunkedResponseBody,
+	parseContentLength,
+} from "../lib/fetch-public-url";
+import {
+	classifyPublishError,
+	type EngagementAccount,
+	type EngagementActionResult,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
-const TWITTER_API = "https://api.x.com/2";
-const TWITTER_UPLOAD_BASE = "https://api.x.com/2/media/upload";
+const TWITTER_API = `https://api.x.com/${API_VERSIONS.twitter}`;
+const TWITTER_UPLOAD_BASE = `${TWITTER_API}/media/upload`;
 
 interface TwitterAuth {
 	access_token: string;
@@ -11,6 +25,28 @@ interface TwitterAuth {
 interface TwitterPoll {
 	options: string[];
 	duration_minutes: number;
+}
+
+type TwitterMedia = { url: string; type?: string };
+
+function validateTwitterMedia(media: TwitterMedia[]): void {
+	if (media.length === 0) return;
+	// Official docs: https://docs.x.com/x-api/media/quickstart/best-practices
+	// Section "Media combinations" -> up to four photos, or exactly one
+	// animated GIF, or exactly one video can be attached to a Post.
+	const allImages = media.every(
+		(item) => item.type === undefined || item.type === "image",
+	);
+	if (allImages && media.length <= 4) return;
+	if (
+		media.length === 1 &&
+		(media[0]?.type === "video" || media[0]?.type === "gif")
+	) {
+		return;
+	}
+	throw new Error(
+		"CONTENT_ERROR: X supports up to four images, or one GIF, or one video per Post; those media types cannot be mixed.",
+	);
 }
 
 async function twitterFetch(
@@ -38,12 +74,28 @@ async function createTweet(
 	extraParams?: Record<string, unknown>,
 ): Promise<{ id: string }> {
 	const body: Record<string, unknown> = { text };
+	const taggedUsers = extraParams?.tagged_user_ids as string[] | undefined;
+	if (
+		taggedUsers &&
+		taggedUsers.length > 0 &&
+		(!mediaIds || mediaIds.length === 0)
+	) {
+		throw new Error(
+			"CONTENT_ERROR: X tagged_user_ids require at least one media attachment.",
+		);
+	}
+	if (taggedUsers && taggedUsers.length > 10) {
+		// Official docs: https://docs.x.com/x-api/posts/create-or-edit-post
+		// Section "media.tagged_user_ids" -> optional array with max length 10.
+		throw new Error(
+			"CONTENT_ERROR: X supports at most 10 tagged users on attached media.",
+		);
+	}
 
 	if (mediaIds && mediaIds.length > 0) {
 		const mediaBody: Record<string, unknown> = { media_ids: mediaIds };
-		const taggedUsers = extraParams?.tagged_user_ids as string[] | undefined;
 		if (taggedUsers && taggedUsers.length > 0) {
-			mediaBody.tagged_user_ids = taggedUsers.slice(0, 10);
+			mediaBody.tagged_user_ids = taggedUsers;
 		}
 		body.media = mediaBody;
 	}
@@ -69,7 +121,8 @@ async function createTweet(
 
 	if (extraParams) {
 		for (const [key, value] of Object.entries(extraParams)) {
-			if (value !== undefined) {
+			// `tagged_user_ids` is valid only inside the media object above.
+			if (key !== "tagged_user_ids" && value !== undefined) {
 				body[key] = value;
 			}
 		}
@@ -85,24 +138,54 @@ async function createTweet(
 
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
-		const detail = (err as { detail?: string }).detail
-			?? (err as { message?: string }).message
-			?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
-			?? res.statusText;
+		const detail =
+			(err as { detail?: string }).detail ??
+			(err as { message?: string }).message ??
+			(err as { errors?: Array<{ message?: string }> }).errors?.[0]?.message ??
+			res.statusText;
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-		if (res.status === 401 || detail.includes("Unsupported Authentication") || detail.includes("unauthorized")) {
-			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
+		if (
+			res.status === 401 ||
+			detail.includes("Unsupported Authentication") ||
+			detail.includes("unauthorized")
+		) {
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
-		if (res.status === 429 || detail.includes("usage-capped") || detail.includes("Rate limit")) {
-			throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
+		if (
+			res.status === 429 ||
+			detail.includes("usage-capped") ||
+			detail.includes("Rate limit")
+		) {
+			const resetHeader = res.headers.get("x-rate-limit-reset")?.trim();
+			const resetAtMs = resetHeader ? Number(resetHeader) * 1000 : Number.NaN;
+			throw new PublishError(`RATE_LIMITED: ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+				retryAfterMs:
+					Number.isFinite(resetAtMs) && resetAtMs > Date.now()
+						? resetAtMs - Date.now()
+						: undefined,
+			});
 		}
 		if (res.status === 403) {
-			throw new PublishError(`CONTENT_ERROR: Forbidden — ${detail}`, { statusCode: res.status, detail: raw });
+			throw new PublishError(`CONTENT_ERROR: Forbidden — ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
 		if (res.status >= 500) {
-			throw new PublishError(`PLATFORM_ERROR: ${detail}`, { statusCode: res.status, detail: raw });
+			throw new PublishError(`PLATFORM_ERROR: ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
-		throw new PublishError(`Twitter tweet creation failed: ${detail}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`Twitter tweet creation failed: ${detail}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	const result = (await res.json()) as { data: { id: string } };
@@ -120,32 +203,29 @@ async function uploadMedia(
 	altText?: string,
 ): Promise<string> {
 	// Fetch the media file
-	const mediaRes = await fetchPublicUrl(mediaUrl, { timeout: 30_000 });
+	let mediaRes = await fetchPublicUrl(mediaUrl, { timeout: 30_000 });
 	if (!mediaRes.ok) {
 		throw new PublishError(
 			`Failed to fetch media from ${mediaUrl}: ${mediaRes.statusText}`,
-			{ statusCode: mediaRes.status, detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}` },
+			{
+				statusCode: mediaRes.status,
+				detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}`,
+			},
 		);
 	}
-	const mediaBytes = await mediaRes.arrayBuffer();
-	const totalBytes = mediaBytes.byteLength;
-
 	// Validate size limits per X API docs
-	const mimeFromHeader = mediaRes.headers.get("content-type") ?? "";
-	const maxBytes = mimeFromHeader.startsWith("video/")
-		? 512 * 1024 * 1024  // 512 MB for video
-		: mimeFromHeader === "image/gif"
-			? 15 * 1024 * 1024  // 15 MB for GIF
-			: 5 * 1024 * 1024;  // 5 MB for images
-	if (totalBytes > maxBytes) {
-		throw new Error(
-			`CONTENT_ERROR: Media file too large (${(totalBytes / 1024 / 1024).toFixed(1)}MB). X allows max ${(maxBytes / 1024 / 1024).toFixed(0)}MB for ${mimeFromHeader || mediaType}.`,
-		);
-	}
-
-	// Determine MIME type
 	const mimeType =
 		mediaRes.headers.get("content-type") ?? guessMimeType(mediaType);
+	const maxBytes = mimeType.startsWith("video/")
+		? 512 * 1024 * 1024 // 512 MB for video
+		: mimeType === "image/gif"
+			? 15 * 1024 * 1024 // 15 MB for GIF
+			: 5 * 1024 * 1024; // 5 MB for images
+	const chunkSize = 5 * 1024 * 1024;
+	mediaRes = await ensureResponseContentLength(mediaRes, maxBytes, () =>
+		fetchPublicUrl(mediaUrl, { timeout: 30_000, maxBytes }),
+	);
+	const totalBytes = parseContentLength(mediaRes.headers) as number;
 
 	// Determine media_category (required for video/GIF async processing)
 	const mediaCategory = mimeType.startsWith("video/")
@@ -169,30 +249,39 @@ async function uploadMedia(
 		}),
 	});
 	if (!initRes.ok) {
+		void mediaRes.body?.cancel().catch(() => {});
 		const err = await initRes.json().catch(() => ({}));
-		const detail = (err as { detail?: string }).detail
-			?? (err as { message?: string }).message
-			?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
-			?? initRes.statusText;
+		const detail =
+			(err as { detail?: string }).detail ??
+			(err as { message?: string }).message ??
+			(err as { errors?: Array<{ message?: string }> }).errors?.[0]?.message ??
+			initRes.statusText;
 		const raw = `HTTP ${initRes.status}\n${JSON.stringify(err)}`;
-		if (initRes.status === 401) throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: initRes.status, detail: raw });
-		if (initRes.status === 429) throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: initRes.status, detail: raw });
-		throw new PublishError(`Twitter media INIT failed: ${detail}`, { statusCode: initRes.status, detail: raw });
+		if (initRes.status === 401)
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+				statusCode: initRes.status,
+				detail: raw,
+			});
+		if (initRes.status === 429)
+			throw new PublishError(`RATE_LIMITED: ${detail}`, {
+				statusCode: initRes.status,
+				detail: raw,
+			});
+		throw new PublishError(`Twitter media INIT failed: ${detail}`, {
+			statusCode: initRes.status,
+			detail: raw,
+		});
 	}
 	const initData = (await initRes.json()) as {
 		data: { id: string; media_key: string };
 	};
 	const mediaId = initData.data.id;
+	const source = getChunkedResponseBody(mediaRes, maxBytes, chunkSize);
 
 	// APPEND — upload in 5MB chunks using dedicated endpoint
-	const chunkSize = 5 * 1024 * 1024;
 	let segmentIndex = 0;
-	let offset = 0;
 
-	while (offset < totalBytes) {
-		const end = Math.min(offset + chunkSize, totalBytes);
-		const chunk = mediaBytes.slice(offset, end);
-
+	for await (const chunk of source.chunks) {
 		const formData = new FormData();
 		formData.append("segment_index", segmentIndex.toString());
 		// Use Blob for binary upload — avoids btoa crash on large buffers
@@ -207,10 +296,12 @@ async function uploadMedia(
 		});
 		if (!appendRes.ok) {
 			const err = await appendRes.json().catch(() => ({}));
-			const detail = (err as { detail?: string }).detail
-				?? (err as { message?: string }).message
-				?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
-				?? appendRes.statusText;
+			const detail =
+				(err as { detail?: string }).detail ??
+				(err as { message?: string }).message ??
+				(err as { errors?: Array<{ message?: string }> }).errors?.[0]
+					?.message ??
+				appendRes.statusText;
 			const raw = `HTTP ${appendRes.status}\n${JSON.stringify(err)}`;
 			throw new PublishError(
 				`Twitter media APPEND failed at segment ${segmentIndex}: ${detail}`,
@@ -218,26 +309,32 @@ async function uploadMedia(
 			);
 		}
 
-		offset = end;
 		segmentIndex++;
 	}
 
 	// X API v2: Finalize media upload (dedicated endpoint)
 	// Docs: https://docs.x.com/x-api/media/finalize-media-upload
-	const finalizeRes = await fetch(`${TWITTER_UPLOAD_BASE}/${mediaId}/finalize`, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${auth.access_token}`,
+	const finalizeRes = await fetch(
+		`${TWITTER_UPLOAD_BASE}/${mediaId}/finalize`,
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${auth.access_token}`,
+			},
 		},
-	});
+	);
 	if (!finalizeRes.ok) {
 		const err = await finalizeRes.json().catch(() => ({}));
-		const detail = (err as { detail?: string }).detail
-			?? (err as { message?: string }).message
-			?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
-			?? finalizeRes.statusText;
+		const detail =
+			(err as { detail?: string }).detail ??
+			(err as { message?: string }).message ??
+			(err as { errors?: Array<{ message?: string }> }).errors?.[0]?.message ??
+			finalizeRes.statusText;
 		const raw = `HTTP ${finalizeRes.status}\n${JSON.stringify(err)}`;
-		throw new PublishError(`Twitter media FINALIZE failed: ${detail}`, { statusCode: finalizeRes.status, detail: raw });
+		throw new PublishError(`Twitter media FINALIZE failed: ${detail}`, {
+			statusCode: finalizeRes.status,
+			detail: raw,
+		});
 	}
 
 	const finalizeData = (await finalizeRes.json()) as {
@@ -284,21 +381,25 @@ async function pollMediaStatus(
 
 		// X API v2: Media Upload STATUS
 		// Docs: https://docs.x.com/x-api/media/quickstart/media-upload-chunked
-		const res = await fetch(
-			`${TWITTER_UPLOAD_BASE}/${mediaId}`,
-			{
-				headers: { Authorization: `Bearer ${auth.access_token}` },
-			},
-		);
+		// Section "Step 4: Check status (STATUS)" documents:
+		// GET https://api.x.com/2/media/upload?command=STATUS&media_id={media_id}
+		const res = await fetch(getTwitterMediaStatusUrl(mediaId), {
+			headers: { Authorization: `Bearer ${auth.access_token}` },
+		});
 
 		if (!res.ok) {
 			const err = await res.json().catch(() => ({}));
-			const detail = (err as { detail?: string }).detail
-				?? (err as { message?: string }).message
-				?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
-				?? res.statusText;
+			const detail =
+				(err as { detail?: string }).detail ??
+				(err as { message?: string }).message ??
+				(err as { errors?: Array<{ message?: string }> }).errors?.[0]
+					?.message ??
+				res.statusText;
 			const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-			throw new PublishError(`Twitter media STATUS check failed: ${detail}`, { statusCode: res.status, detail: raw });
+			throw new PublishError(`Twitter media STATUS check failed: ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
 
 		// v2 response wraps under { data: { processing_info } }
@@ -329,6 +430,13 @@ async function pollMediaStatus(
 	throw new Error("Twitter media processing timed out");
 }
 
+export function getTwitterMediaStatusUrl(mediaId: string): URL {
+	const statusUrl = new URL(TWITTER_UPLOAD_BASE);
+	statusUrl.searchParams.set("command", "STATUS");
+	statusUrl.searchParams.set("media_id", mediaId);
+	return statusUrl;
+}
+
 function guessMimeType(type: string): string {
 	switch (type) {
 		case "image":
@@ -345,25 +453,45 @@ function guessMimeType(type: string): string {
 export const twitterPublisher: Publisher = {
 	platform: "twitter",
 
-	async repost(account: EngagementAccount, platformPostId: string): Promise<EngagementActionResult> {
+	async repost(
+		account: EngagementAccount,
+		platformPostId: string,
+	): Promise<EngagementActionResult> {
 		try {
 			const auth: TwitterAuth = { access_token: account.access_token };
 			// X API v2: Retweet a tweet
 			// https://docs.x.com/x-api/posts/repost-a-post
-			const res = await twitterFetch(`${TWITTER_API}/users/${account.platform_account_id}/retweets`, auth, {
-				method: "POST",
-				body: JSON.stringify({ tweet_id: platformPostId }),
-			});
+			const res = await twitterFetch(
+				`${TWITTER_API}/users/${account.platform_account_id}/retweets`,
+				auth,
+				{
+					method: "POST",
+					body: JSON.stringify({ tweet_id: platformPostId }),
+				},
+			);
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
-				const detail = (err as { detail?: string }).detail
-					?? (err as { message?: string }).message
-					?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
-					?? res.statusText;
+				const detail =
+					(err as { detail?: string }).detail ??
+					(err as { message?: string }).message ??
+					(err as { errors?: Array<{ message?: string }> }).errors?.[0]
+						?.message ??
+					res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-				if (res.status === 401) throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
-				if (res.status === 429) throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
-				throw new PublishError(`Twitter retweet failed: ${detail}`, { statusCode: res.status, detail: raw });
+				if (res.status === 401)
+					throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+						statusCode: res.status,
+						detail: raw,
+					});
+				if (res.status === 429)
+					throw new PublishError(`RATE_LIMITED: ${detail}`, {
+						statusCode: res.status,
+						detail: raw,
+					});
+				throw new PublishError(`Twitter retweet failed: ${detail}`, {
+					statusCode: res.status,
+					detail: raw,
+				});
 			}
 			return { success: true, platform_post_id: platformPostId };
 		} catch (err) {
@@ -372,7 +500,11 @@ export const twitterPublisher: Publisher = {
 		}
 	},
 
-	async comment(account: EngagementAccount, platformPostId: string, text: string): Promise<EngagementActionResult> {
+	async comment(
+		account: EngagementAccount,
+		platformPostId: string,
+		text: string,
+	): Promise<EngagementActionResult> {
 		try {
 			const auth: TwitterAuth = { access_token: account.access_token };
 			const result = await createTweet(auth, text, undefined, platformPostId);
@@ -383,7 +515,11 @@ export const twitterPublisher: Publisher = {
 		}
 	},
 
-	async quote(account: EngagementAccount, platformPostId: string, text: string): Promise<EngagementActionResult> {
+	async quote(
+		account: EngagementAccount,
+		platformPostId: string,
+		text: string,
+	): Promise<EngagementActionResult> {
 		try {
 			const auth: TwitterAuth = { access_token: account.access_token };
 			// X API v2: Quote tweet
@@ -394,14 +530,27 @@ export const twitterPublisher: Publisher = {
 			});
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
-				const detail = (err as { detail?: string }).detail
-					?? (err as { message?: string }).message
-					?? (err as { errors?: Array<{message?: string}> }).errors?.[0]?.message
-					?? res.statusText;
+				const detail =
+					(err as { detail?: string }).detail ??
+					(err as { message?: string }).message ??
+					(err as { errors?: Array<{ message?: string }> }).errors?.[0]
+						?.message ??
+					res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-				if (res.status === 401) throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
-				if (res.status === 429) throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
-				throw new PublishError(`Twitter quote tweet failed: ${detail}`, { statusCode: res.status, detail: raw });
+				if (res.status === 401)
+					throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+						statusCode: res.status,
+						detail: raw,
+					});
+				if (res.status === 429)
+					throw new PublishError(`RATE_LIMITED: ${detail}`, {
+						statusCode: res.status,
+						detail: raw,
+					});
+				throw new PublishError(`Twitter quote tweet failed: ${detail}`, {
+					statusCode: res.status,
+					detail: raw,
+				});
 			}
 			const result = (await res.json()) as { data: { id: string } };
 			return { success: true, platform_post_id: result.data.id };
@@ -412,6 +561,7 @@ export const twitterPublisher: Publisher = {
 	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
+		let threadHasPublished = false;
 		try {
 			const auth: TwitterAuth = { access_token: request.account.access_token };
 			const opts = request.target_options;
@@ -439,6 +589,9 @@ export const twitterPublisher: Publisher = {
 					threadItems,
 					request.account.username,
 					opts.reply_to as string | undefined,
+					() => {
+						threadHasPublished = true;
+					},
 				);
 			}
 
@@ -496,7 +649,9 @@ export const twitterPublisher: Publisher = {
 					};
 				}
 
-				const twitterMedia = opts.media as Array<{ url: string; type?: string }> | undefined;
+				const twitterMedia = opts.media as
+					| Array<{ url: string; type?: string }>
+					| undefined;
 				const topLevelMedia = request.media;
 				if (
 					(twitterMedia && twitterMedia.length > 0) ||
@@ -521,6 +676,7 @@ export const twitterPublisher: Publisher = {
 			let mediaIds: string[] | undefined;
 
 			if (media && media.length > 0) {
+				validateTwitterMedia(media);
 				mediaIds = await Promise.all(
 					media.map((m) =>
 						uploadMedia(
@@ -535,7 +691,10 @@ export const twitterPublisher: Publisher = {
 
 			const replyTo = opts.reply_to as string | undefined;
 			const replySettings = opts.reply_settings as
-				| "following" | "mentionedUsers" | "subscribers" | "verified"
+				| "following"
+				| "mentionedUsers"
+				| "subscribers"
+				| "verified"
 				| undefined;
 			const validatedPoll = poll
 				? {
@@ -545,11 +704,15 @@ export const twitterPublisher: Publisher = {
 				: undefined;
 
 			const extraParams: Record<string, unknown> = {};
-			if (opts.made_with_ai !== undefined) extraParams.made_with_ai = opts.made_with_ai;
-			if (opts.paid_partnership !== undefined) extraParams.paid_partnership = opts.paid_partnership;
+			if (opts.made_with_ai !== undefined)
+				extraParams.made_with_ai = opts.made_with_ai;
+			if (opts.paid_partnership !== undefined)
+				extraParams.paid_partnership = opts.paid_partnership;
 			if (opts.community_id) extraParams.community_id = opts.community_id;
-			if (opts.share_with_followers !== undefined) extraParams.share_with_followers = opts.share_with_followers;
-			if (opts.tagged_user_ids) extraParams.tagged_user_ids = opts.tagged_user_ids;
+			if (opts.share_with_followers !== undefined)
+				extraParams.share_with_followers = opts.share_with_followers;
+			if (opts.tagged_user_ids)
+				extraParams.tagged_user_ids = opts.tagged_user_ids;
 
 			const result = await createTweet(
 				auth,
@@ -570,7 +733,12 @@ export const twitterPublisher: Publisher = {
 				platform_url: tweetUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			const threadItems = request.target_options.thread;
+			const isThread = Array.isArray(threadItems) && threadItems.length > 0;
+			return classifyPublishError(err, {
+				safeToRetryRateLimit: !isThread || !threadHasPublished,
+				definitiveHttpRejection: isThread && !threadHasPublished,
+			});
 		}
 	},
 };
@@ -583,6 +751,7 @@ async function publishThread(
 	}>,
 	username: string | null,
 	replyToId?: string,
+	onFirstPublished?: () => void,
 ): Promise<PublishResult> {
 	let firstTweetId: string | undefined;
 	let parentId: string | undefined = replyToId;
@@ -590,6 +759,7 @@ async function publishThread(
 	for (const [i, item] of items.entries()) {
 		let mediaIds: string[] | undefined;
 		if (item.media && item.media.length > 0) {
+			validateTwitterMedia(item.media);
 			mediaIds = await Promise.all(
 				item.media.map((m) =>
 					uploadMedia(
@@ -606,6 +776,7 @@ async function publishThread(
 
 		if (i === 0) {
 			firstTweetId = result.id;
+			onFirstPublished?.();
 		}
 		parentId = result.id;
 	}

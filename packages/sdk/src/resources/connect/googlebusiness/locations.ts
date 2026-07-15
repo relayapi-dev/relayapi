@@ -8,8 +8,8 @@ export class Locations extends APIResource {
   /**
    * List Google Business locations after OAuth
    */
-  list(options?: RequestOptions): APIPromise<LocationListResponse> {
-    return this._client.get('/v1/connect/googlebusiness/locations', options);
+  list(query: LocationListParams, options?: RequestOptions): APIPromise<LocationListResponse> {
+    return this._client.get('/v1/connect/googlebusiness/locations', { query, ...options });
   }
 
   /**
@@ -106,9 +106,15 @@ export interface LocationSelectParams {
   location_id: string;
 }
 
+export interface LocationListParams {
+  /** Operation-scoped token returned by the OAuth callback. */
+  connect_token: string;
+}
+
 export declare namespace Locations {
   export {
     type LocationListResponse as LocationListResponse,
+    type LocationListParams as LocationListParams,
     type LocationSelectResponse as LocationSelectResponse,
     type LocationSelectParams as LocationSelectParams,
   };

@@ -24,11 +24,13 @@ export async function sendPaymentFailedReminder(
 	queue: Queue | undefined,
 	resendApiKey: string,
 	params: {
+		organizationId: string;
 		to: string;
 		orgName: string;
 		invoiceUrl: string | null;
 		portalUrl: string;
 		isSecondReminder: boolean;
+		idempotencyKey: string;
 	},
 ): Promise<void> {
 	const subject = params.isSecondReminder
@@ -46,9 +48,11 @@ export async function sendPaymentFailedReminder(
 	);
 
 	await sendEmail(queue, resendApiKey, {
+		organizationId: params.organizationId,
 		to: params.to,
 		subject,
 		html,
+		idempotencyKey: params.idempotencyKey,
 	});
 }
 
@@ -56,8 +60,10 @@ export async function sendPlanDeactivatedEmail(
 	queue: Queue | undefined,
 	resendApiKey: string,
 	params: {
+		organizationId: string;
 		to: string;
 		orgName: string;
+		idempotencyKey: string;
 	},
 ): Promise<void> {
 	const { render, PlanDeactivated } = await loadRenderStack();
@@ -68,8 +74,10 @@ export async function sendPlanDeactivatedEmail(
 	);
 
 	await sendEmail(queue, resendApiKey, {
+		organizationId: params.organizationId,
 		to: params.to,
 		subject: "Your RelayAPI Pro plan has been deactivated",
 		html,
+		idempotencyKey: params.idempotencyKey,
 	});
 }

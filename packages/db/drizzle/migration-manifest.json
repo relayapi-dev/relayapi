@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 2,
+  "journal": {
+    "version": "7",
+    "dialect": "postgresql"
+  },
+  "migrations": [
+    {
+      "idx": 0,
+      "tag": "0000_baseline",
+      "folderMillis": 1783987200000,
+      "sha256": "e51b5011b87fd41a5bbd936ad4b2efe864b02a9448db841d453c6042fe5890db",
+      "snapshotSha256": "31a36a47d8c78d2c13c3db567a271f42c0d2c41edb5ba51475073210f4d602e2",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    }
+  ]
+}

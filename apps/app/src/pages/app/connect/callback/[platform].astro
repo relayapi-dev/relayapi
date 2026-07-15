@@ -1,6 +1,6 @@
 ---
-import DashboardLayout from "../../../../layouts/DashboardLayout.astro";
 import { ConnectCallback } from "../../../../components/dashboard/connect/connect-callback";
+import DashboardLayout from "../../../../layouts/DashboardLayout.astro";
 
 const platform = Astro.params.platform || "";
 const code = Astro.url.searchParams.get("code") || "";
@@ -12,6 +12,8 @@ const accountId = Astro.url.searchParams.get("account_id") || "";
 const errorCode = Astro.url.searchParams.get("error_code") || "";
 const errorMessage = Astro.url.searchParams.get("error_message") || "";
 const errorDescription = Astro.url.searchParams.get("error_description") || "";
+const connectToken = Astro.url.searchParams.get("connect_token") || "";
+const workspaceId = Astro.url.searchParams.get("workspace_id") || "";
 ---
 
 <DashboardLayout>
@@ -27,6 +29,8 @@ const errorDescription = Astro.url.searchParams.get("error_description") || "";
       serverErrorCode={errorCode}
       serverErrorMessage={errorMessage}
       serverErrorDescription={errorDescription}
+      serverConnectToken={connectToken}
+      serverWorkspaceId={workspaceId}
     />
   </div>
 </DashboardLayout>

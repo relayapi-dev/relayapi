@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "migrations": {
+    "0000_baseline": {
+      "phase": "baseline",
+      "summary": "Pre-launch virgin PostgreSQL 18 baseline; old development ledgers are unsupported"
+    }
+  }
+}

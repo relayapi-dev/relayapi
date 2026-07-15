@@ -4,8 +4,7 @@ import { APIResource } from '../../core/resource';
 import * as TelegramAPI from './telegram';
 import {
   Telegram,
-  TelegramConnectDirectlyParams,
-  TelegramConnectDirectlyResponse,
+  TelegramInitiateConnectionParams,
   TelegramInitiateConnectionResponse,
   TelegramPollConnectionStatusParams,
   TelegramPollConnectionStatusResponse,
@@ -149,9 +148,13 @@ export class Connect extends APIResource {
   }
 }
 
-export interface ConnectCompleteOAuthCallbackResponse {
-  account: ConnectCompleteOAuthCallbackResponse.Account;
-}
+export type ConnectCompleteOAuthCallbackResponse =
+  | { account: ConnectCompleteOAuthCallbackResponse.Account }
+  | {
+      status: 'pending_selection';
+      connect_token: string;
+      platform: string;
+    };
 
 export namespace ConnectCompleteOAuthCallbackResponse {
   export interface Account {
@@ -267,6 +270,11 @@ export interface ConnectFetchPendingDataResponse {
     | 'sms';
 
   /**
+   * Authoritative workspace selected when the OAuth flow started
+   */
+  workspace_id: string | null;
+
+  /**
    * Outcome of the headless OAuth exchange. 'pending_selection' means a secondary
    * selection step (e.g. Facebook page) is required.
    */
@@ -296,6 +304,11 @@ export interface ConnectFetchPendingDataResponse {
    * RelayAPI error message (status 'error')
    */
   error_message?: string;
+
+  /**
+   * Operation-scoped token required for a pending secondary account selection
+   */
+  connect_token?: string;
 }
 
 export namespace ConnectFetchPendingDataResponse {
@@ -360,6 +373,17 @@ export interface ConnectCompleteOAuthCallbackParams {
    * Redirect URL used during the OAuth flow (must match)
    */
   redirect_url?: string;
+
+  /**
+   * OAuth state token returned when the flow was started
+   */
+  state?: string;
+
+  /**
+   * Workspace for the connected account. Required only when Require Workspace ID
+   * is enabled. Omission otherwise uses organization scope for new identities.
+   */
+  workspace_id?: string;
 }
 
 export interface ConnectCreateBlueskyConnectionParams {
@@ -372,6 +396,12 @@ export interface ConnectCreateBlueskyConnectionParams {
    * Bluesky handle (e.g. user.bsky.social)
    */
   handle: string;
+
+  /**
+   * Workspace for the connected account. Required only when Require Workspace ID
+   * is enabled.
+   */
+  workspace_id?: string;
 }
 
 export interface ConnectFetchPendingDataParams {
@@ -396,6 +426,12 @@ export interface ConnectStartOAuthFlowParams {
    * URL to redirect after OAuth completes
    */
   redirect_url?: string;
+
+  /**
+   * Workspace for the connected account. Required only when Require Workspace ID
+   * is enabled.
+   */
+  workspace_id?: string;
 }
 
 export interface ConnectNewsletterResponse {
@@ -408,21 +444,24 @@ export interface ConnectNewsletterResponse {
 export interface ConnectBeehiivParams {
   api_key: string;
   publication_id: string;
+  workspace_id?: string;
 }
 
 export interface ConnectConvertKitParams {
   api_key: string;
-  api_secret: string;
+  workspace_id?: string;
 }
 
 export interface ConnectMailchimpParams {
   api_key: string;
+  workspace_id?: string;
 }
 
 export interface ConnectListMonkParams {
   instance_url: string;
   username: string;
   password: string;
+  workspace_id?: string;
 }
 
 Connect.Telegram = Telegram;
@@ -447,10 +486,9 @@ export declare namespace Connect {
 
   export {
     Telegram as Telegram,
-    type TelegramConnectDirectlyResponse as TelegramConnectDirectlyResponse,
+    type TelegramInitiateConnectionParams as TelegramInitiateConnectionParams,
     type TelegramInitiateConnectionResponse as TelegramInitiateConnectionResponse,
     type TelegramPollConnectionStatusResponse as TelegramPollConnectionStatusResponse,
-    type TelegramConnectDirectlyParams as TelegramConnectDirectlyParams,
     type TelegramPollConnectionStatusParams as TelegramPollConnectionStatusParams,
   };
 

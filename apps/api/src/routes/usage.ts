@@ -1,10 +1,12 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
+import { PRICING } from "@relayapi/config";
 import {
-	organizationSubscriptions,
-	usageRecords,
 	apiRequestLogs,
+	organizationSubscriptions,
+	usageBuckets,
 } from "@relayapi/db";
 import { and, count, desc, eq, gte, lt, lte, sql } from "drizzle-orm";
+import { resolveBillingPeriod } from "../middleware/usage-tracking";
 import {
 	ErrorResponse,
 	OffsetPaginationParams,
@@ -12,8 +14,6 @@ import {
 } from "../schemas/common";
 import { UsageResponse } from "../schemas/usage";
 import type { Env, Variables } from "../types";
-import { PRICING } from "../types";
-import { resolveBillingPeriod } from "../middleware/usage-tracking";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -49,22 +49,17 @@ app.openapi(getUsage, async (c) => {
 	const db = c.get("db");
 
 	const now = new Date();
-	const month = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-
 	// Resolve the org's current billing window exactly as the write path does
 	// (resolveBillingPeriod): the Stripe period for pro orgs, calendar month
-	// otherwise. usage_records.periodStart is keyed on this same window, so the
-	// current record is fetched directly by periodStart (no JS scan / no risk of
-	// the row falling outside a "most recent N" window).
+	// otherwise. PostgreSQL usage buckets are authoritative; KV is only a display
+	// hint written after commit and is never consulted for quota or billing.
 	const { periodStart: cycleStart, periodEnd: cycleEnd } = resolveBillingPeriod(
 		c.get("periodStart"),
 		c.get("periodEnd"),
 		now,
 	);
 
-	// Query subscription, the current period's usage record, and the KV counter
-	// in parallel — all independent (cycleStart derives from auth context, no DB).
-	const [subResult, currentUsageRows, kvRaw] = await Promise.all([
+	const [subResult, currentUsageRows] = await Promise.all([
 		db
 			.select()
 			.from(organizationSubscriptions)
@@ -72,37 +67,20 @@ app.openapi(getUsage, async (c) => {
 			.limit(1),
 		db
 			.select()
-			.from(usageRecords)
+			.from(usageBuckets)
 			.where(
 				and(
-					eq(usageRecords.organizationId, orgId),
-					eq(usageRecords.periodStart, cycleStart),
+					eq(usageBuckets.organizationId, orgId),
+					eq(usageBuckets.metric, "successful_mutation"),
+					eq(usageBuckets.periodStart, cycleStart),
 				),
 			)
 			.limit(1),
-		c.env.KV.get(`usage:${orgId}:${month}`, "text"),
 	]);
 
 	const sub = subResult[0];
-	const kvCount = parseInt(kvRaw ?? "0", 10);
-
 	const dbUsage = currentUsageRows[0];
-	const dbCallsCount = dbUsage?.apiCallsCount ?? 0;
-
-	// The KV counter is calendar-month-keyed and written from contexts without
-	// the Stripe period (cron/queue), so it only aligns with the billing window
-	// for calendar-aligned (free) orgs. When the cycle is calendar-aligned, take
-	// the max of KV and DB; for a Stripe period the DB record is authoritative
-	// (an explicit null check honors a legitimate count of 0 at cycle start
-	// rather than leaking the calendar-month KV total into a fresh period).
-	const calendarMonthStart = new Date(
-		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
-	);
-	const periodIsCalendarAligned =
-		cycleStart.getTime() === calendarMonthStart.getTime();
-	const apiCallsUsed = periodIsCalendarAligned
-		? Math.max(kvCount, dbCallsCount)
-		: dbCallsCount;
+	const apiCallsUsed = dbUsage?.committedUnits ?? 0;
 	const overageCalls = Math.max(0, apiCallsUsed - callsIncluded);
 	// Pro-rated to the cent, matching the amount actually charged via Stripe
 	// in invoice-generator.ts and the "$1 per 1,000 extra calls" pricing copy.
@@ -112,12 +90,14 @@ app.openapi(getUsage, async (c) => {
 	);
 
 	// Free plan: remaining is hard-capped; Pro plan: can go negative (overage billed)
-	const apiCallsRemaining = plan === "free"
-		? Math.max(0, callsIncluded - apiCallsUsed)
-		: callsIncluded - apiCallsUsed; // Pro: can go negative (overage billed)
+	const apiCallsRemaining =
+		plan === "free"
+			? Math.max(0, callsIncluded - apiCallsUsed)
+			: callsIncluded - apiCallsUsed; // Pro: can go negative (overage billed)
 
 	// Rate limit info from plan config (counters managed by CF Rate Limiting binding)
-	const rateLimitMax = plan === "pro" ? PRICING.proRateLimitMax : PRICING.freeRateLimitMax;
+	const rateLimitMax =
+		plan === "pro" ? PRICING.proRateLimitMax : PRICING.freeRateLimitMax;
 
 	return c.json(
 		{
@@ -131,8 +111,10 @@ app.openapi(getUsage, async (c) => {
 				},
 			},
 			subscription: {
-				status: sub?.status ?? (plan === "free" ? "trialing" : "active"),
-				monthly_price_cents: sub?.monthlyPriceCents ?? (plan === "pro" ? PRICING.monthlyPriceCents : 0),
+				status: sub?.status ?? (plan === "free" ? "cancelled" : "active"),
+				monthly_price_cents:
+					sub?.monthlyPriceCents ??
+					(plan === "pro" ? PRICING.monthlyPriceCents : 0),
 				price_per_thousand_calls_cents: PRICING.pricePerThousandCallsCents,
 			},
 			usage: {
@@ -179,8 +161,8 @@ const listRequestLogs = createRoute({
 			content: {
 				"application/json": {
 					schema: paginatedResponse(RequestLogEntry).extend({
-							total: z.number(),
-						}),
+						total: z.number(),
+					}),
 				},
 			},
 		},

@@ -1,13 +1,16 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { automations as automationsTable, contacts, refUrls } from "@relayapi/db";
+import {
+	automations as automationsTable,
+	contacts,
+	refUrls,
+} from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
+import { inheritOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
 	isWorkspaceScopeDenied,
 	WORKSPACE_ACCESS_DENIED_BODY,
 } from "../lib/workspace-scope";
-import { emitInternalEvent } from "../services/automations/internal-events";
-import type { InboundEvent } from "../services/automations/trigger-matcher";
 import { ErrorResponse, PaginationParams } from "../schemas/common";
 import {
 	RefUrlCreateSpec,
@@ -15,6 +18,8 @@ import {
 	RefUrlResponse,
 	RefUrlUpdateSpec,
 } from "../schemas/ref-urls";
+import { emitInternalEvent } from "../services/automations/internal-events";
+import type { InboundEvent } from "../services/automations/trigger-matcher";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -55,6 +60,18 @@ const createRefUrl = createRoute({
 			description: "Created",
 			content: { "application/json": { schema: RefUrlResponse } },
 		},
+		400: {
+			description: "Invalid automation workspace",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Automation not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		409: {
 			description: "Slug already taken",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -66,6 +83,40 @@ app.openapi(createRefUrl, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 	const orgId = c.get("orgId");
+	const parentWorkspaceIds: Array<string | null> = [];
+
+	if (body.automation_id) {
+		const [automation] = await db
+			.select({
+				id: automationsTable.id,
+				workspaceId: automationsTable.workspaceId,
+			})
+			.from(automationsTable)
+			.where(
+				and(
+					eq(automationsTable.id, body.automation_id),
+					eq(automationsTable.organizationId, orgId),
+				),
+			)
+			.limit(1);
+		if (!automation) {
+			return c.json(
+				{ error: { code: "NOT_FOUND", message: "Automation not found" } },
+				404,
+			);
+		}
+		if (isWorkspaceScopeDenied(c, automation.workspaceId)) {
+			return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+		}
+		parentWorkspaceIds.push(automation.workspaceId);
+	}
+	const scope = await inheritOperationalCreateScope(
+		c,
+		body.workspace_id,
+		parentWorkspaceIds,
+		"reference URL",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	const existing = await db.query.refUrls.findFirst({
 		where: and(eq(refUrls.organizationId, orgId), eq(refUrls.slug, body.slug)),
@@ -86,7 +137,7 @@ app.openapi(createRefUrl, async (c) => {
 		.insert(refUrls)
 		.values({
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: scope.workspaceId,
 			slug: body.slug,
 			automationId: body.automation_id ?? null,
 			enabled: body.enabled,
@@ -190,7 +241,10 @@ app.openapi(getRefUrl, async (c) => {
 		where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
 	});
 	if (!row)
-		return c.json({ error: { code: "not_found", message: "Ref URL not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Ref URL not found" } },
+			404,
+		);
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
@@ -238,14 +292,20 @@ app.openapi(updateRefUrl, async (c) => {
 		where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
 	});
 	if (!row)
-		return c.json({ error: { code: "not_found", message: "Ref URL not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Ref URL not found" } },
+			404,
+		);
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
 	if (body.slug && body.slug !== row.slug) {
 		const conflict = await db.query.refUrls.findFirst({
-			where: and(eq(refUrls.organizationId, orgId), eq(refUrls.slug, body.slug)),
+			where: and(
+				eq(refUrls.organizationId, orgId),
+				eq(refUrls.slug, body.slug),
+			),
 		});
 		if (conflict) {
 			return c.json(
@@ -304,7 +364,10 @@ app.openapi(deleteRefUrl, async (c) => {
 		where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
 	});
 	if (!row)
-		return c.json({ error: { code: "not_found", message: "Ref URL not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Ref URL not found" } },
+			404,
+		);
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
@@ -345,6 +408,10 @@ const recordRefUrlClick = createRoute({
 			description: "Click recorded",
 			content: { "application/json": { schema: RefUrlResponse } },
 		},
+		400: {
+			description: "Contact workspace does not match",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		403: {
 			description: "Forbidden",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -362,8 +429,38 @@ app.openapi(recordRefUrlClick, async (c) => {
 	const db = c.get("db");
 	const orgId = c.get("orgId");
 
-	// Collapse the fetch + increment into a single round trip: UPDATE ... RETURNING
-	// scoped to the org, then run the workspace-scope check on the returned row.
+	const [existing, contact] = await Promise.all([
+		db.query.refUrls.findFirst({
+			where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
+		}),
+		db.query.contacts.findFirst({
+			where: and(
+				eq(contacts.id, body.contact_id),
+				eq(contacts.organizationId, orgId),
+			),
+		}),
+	]);
+	if (!existing || !contact) {
+		return c.json(
+			{ error: { code: "not_found", message: "Ref URL or contact not found" } },
+			404,
+		);
+	}
+	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
+	if (existing.workspaceId !== contact.workspaceId) {
+		return c.json(
+			{
+				error: {
+					code: "WORKSPACE_SCOPE_CONFLICT",
+					message: "Contact and reference URL must share a workspace.",
+				},
+			},
+			400,
+		);
+	}
+
 	const [updated] = await db
 		.update(refUrls)
 		.set({ uses: sql`${refUrls.uses} + 1` })
@@ -375,56 +472,43 @@ app.openapi(recordRefUrlClick, async (c) => {
 			{ error: { code: "not_found", message: "Ref URL not found" } },
 			404,
 		);
-	if (isWorkspaceScopeDenied(c, updated.workspaceId)) {
-		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-	}
 
-	// The automation-channel lookup, contact validation, and event emit are all
-	// best-effort and the HTTP response depends only on the updated row, so defer
-	// them past the response. The request-scoped Drizzle client survives the
-	// response (same pattern as the KV write-back in middleware/auth.ts).
+	// The already-authorized click is durable. Channel lookup and event dispatch
+	// are best-effort and can run after the response.
 	c.executionCtx.waitUntil(
 		(async () => {
 			try {
 				// Look up the bound automation's channel (if any) so `ref_link_click`
 				// entrypoints for that channel match; fall back to "instagram".
 				let channel: InboundEvent["channel"] = "instagram";
-				const [auto, contact] = await Promise.all([
-					updated.automationId
-						? db.query.automations.findFirst({
-								where: eq(automationsTable.id, updated.automationId),
-							})
-						: Promise.resolve(undefined),
-					db.query.contacts.findFirst({
-						where: and(
-							eq(contacts.id, body.contact_id),
-							eq(contacts.organizationId, orgId),
-						),
-					}),
-				]);
+				const auto = updated.automationId
+					? await db.query.automations.findFirst({
+							where: and(
+								eq(automationsTable.id, updated.automationId),
+								eq(automationsTable.organizationId, orgId),
+							),
+						})
+					: undefined;
 				if (auto?.channel) channel = auto.channel as InboundEvent["channel"];
 
-				// Validate the contact belongs to the same org before emitting.
-				if (contact) {
-					await emitInternalEvent(
-						db,
-						{
-							kind: "ref_link_click",
-							channel,
-							organizationId: orgId,
-							socialAccountId: null,
-							contactId: body.contact_id,
-							conversationId: null,
-							refUrlId: updated.id,
-							payload: {
-								source: "ref_url_click",
-								slug: updated.slug,
-								ref_url_id: updated.id,
-							},
+				await emitInternalEvent(
+					db,
+					{
+						kind: "ref_link_click",
+						channel,
+						organizationId: orgId,
+						socialAccountId: null,
+						contactId: body.contact_id,
+						conversationId: null,
+						refUrlId: updated.id,
+						payload: {
+							source: "ref_url_click",
+							slug: updated.slug,
+							ref_url_id: updated.id,
 						},
-						c.env as unknown as Record<string, unknown>,
-					);
-				}
+					},
+					c.env as unknown as Record<string, unknown>,
+				);
 			} catch (err) {
 				console.error("[ref-urls] deferred click emit failed:", err);
 			}

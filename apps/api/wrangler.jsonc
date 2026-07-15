@@ -3,9 +3,11 @@
 	"name": "relayapi",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-03-13",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
+	// Route same-zone global fetches through Cloudflare's public front door so
+	// they cannot bypass Worker routes or zone security controls by reaching the
+	// origin directly. This also prevents the same-zone origin bypass.
+	// Docs: https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
 	"vars": {
 		// Emit Server-Timing headers + structured per-request timing logs (lib/perf.ts).
 		// Disabled by default in production now that the performance audit is complete —
@@ -13,7 +15,10 @@
 		// SQL prefixes to every client, and 100%-sampled per-request logs scaled Workers
 		// Logs billing with traffic. Re-enable ad hoc when profiling, e.g.
 		// `wrangler deploy --var PERF_LOGS:1`.
-		"PERF_LOGS": "0"
+		"PERF_LOGS": "0",
+		// Non-secret source identity used to reject spoofed/misrouted R2 events.
+		"R2_EVENT_ACCOUNT_ID": "3496f40fcd55a91da50ded8abea2cf7a",
+		"R2_MEDIA_BUCKET_NAME": "relayapi-media"
 	},
 	// Minify the bundle — without this the worker ships ~8 MB unminified JS,
 	// which inflates cold-start parse time.
@@ -25,17 +30,17 @@
 	"placement": { "mode": "smart" },
 	"observability": {
 		"enabled": true,
-		"head_sampling_rate": 1,
+		"head_sampling_rate": 0.1,
 		"logs": {
 			"enabled": true,
-			"head_sampling_rate": 1,
+			"head_sampling_rate": 0.1,
 			"persist": true,
 			"invocation_logs": true
 		},
 		"traces": {
 			"enabled": false,
-			"persist": true,
-			"head_sampling_rate": 1
+			"persist": false,
+			"head_sampling_rate": 0.01
 		}
 	},
 	"ai": {
@@ -73,6 +78,12 @@
 			// permanently CDN-cacheable preview URLs.
 			"binding": "THUMBNAIL_BUCKET",
 			"bucket_name": "relayapi-media-thumbnails"
+		},
+		{
+			// Private terminal queue ledger with a required 30-day lifecycle. Tenant-
+			// scoped objects are also removed immediately by organization deletion.
+			"binding": "QUEUE_RESCUE_BUCKET",
+			"bucket_name": "relayapi-queue-rescue-ledger"
 		}
 	],
 	// Resize/encode tiny image thumbnails directly from R2 bytes (no public URL needed).
@@ -150,20 +161,27 @@
 				"queue": "relayapi-sync"
 			},
 			{
-				"binding": "AUTOMATION_QUEUE",
-				"queue": "relayapi-automation"
+				"binding": "CUSTOMER_WEBHOOK_QUEUE",
+				"queue": "relayapi-customer-webhooks"
+			},
+			{
+				"binding": "QUEUE_RESCUE_QUEUE",
+				"queue": "relayapi-queue-rescue"
 			}
 		],
 		"consumers": [
 			{
 				"queue": "relayapi-media-cleanup",
 				"max_batch_size": 10,
-				"max_retries": 3
+				"max_retries": 3,
+				"dead_letter_queue": "relayapi-media-cleanup-dlq"
 			},
 			{
 				"queue": "relayapi-publish",
-				"max_batch_size": 10,
-				"max_retries": 3
+				"max_batch_size": 1,
+				"max_batch_timeout": 1,
+				"max_retries": 3,
+				"dead_letter_queue": "relayapi-publish-dlq"
 			},
 			{
 				"queue": "relayapi-email",
@@ -177,38 +195,113 @@
 				"queue": "relayapi-refresh",
 				"max_batch_size": 10,
 				"max_retries": 3,
-				"max_concurrency": 5
+				"max_concurrency": 5,
+				"dead_letter_queue": "relayapi-refresh-dlq"
 			},
 			{
 				"queue": "relayapi-inbox",
 				"max_batch_size": 10,
 				"max_retries": 5,
-				"max_concurrency": 5
+				"max_concurrency": 5,
+				"dead_letter_queue": "relayapi-inbox-dlq"
 			},
 			{
 				"queue": "relayapi-tools",
 				"max_batch_size": 5,
 				"max_retries": 3,
-				"max_concurrency": 3
+				"max_concurrency": 3,
+				"dead_letter_queue": "relayapi-tools-dlq"
 			},
 			{
 				"queue": "relayapi-ads",
 				"max_batch_size": 5,
 				"max_retries": 3,
-				"max_concurrency": 3
+				"max_concurrency": 3,
+				"dead_letter_queue": "relayapi-ads-dlq"
 			},
 			{
 				"queue": "relayapi-sync",
 				"max_batch_size": 5,
 				"max_retries": 3,
-				"max_concurrency": 5
+				"max_concurrency": 5,
+				"dead_letter_queue": "relayapi-sync-dlq"
 			},
 			{
-				"queue": "relayapi-automation",
+				"queue": "relayapi-customer-webhooks",
+				"max_batch_size": 10,
+				"max_retries": 5,
+				"max_concurrency": 5,
+				"dead_letter_queue": "relayapi-customer-webhooks-dlq"
+			},
+			{
+				"queue": "relayapi-media-cleanup-dlq",
 				"max_batch_size": 10,
 				"max_retries": 3,
-				"max_concurrency": 5,
-				"dead_letter_queue": "relayapi-automation-dlq"
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
+				"queue": "relayapi-publish-dlq",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
+				"queue": "relayapi-email-dlq",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
+				"queue": "relayapi-refresh-dlq",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
+				"queue": "relayapi-inbox-dlq",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
+				"queue": "relayapi-tools-dlq",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
+				"queue": "relayapi-ads-dlq",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
+				"queue": "relayapi-sync-dlq",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
+				"queue": "relayapi-customer-webhooks-dlq",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
+				"queue": "relayapi-queue-rescue",
+				"max_batch_size": 10,
+				"max_batch_timeout": 5,
+				"max_retries": 100,
+				"max_concurrency": 2
 			}
 		]
 	}

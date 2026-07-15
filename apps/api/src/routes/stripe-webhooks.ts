@@ -1,490 +1,782 @@
 import {
-	apikey,
+	billingOperations,
+	billingOutbox,
 	createDb,
 	type Database,
 	invoices,
 	organizationSubscriptions,
+	stripeEvents,
+	subscriptionCheckoutOperations,
+	usageBucketSettlements,
+	usageBuckets,
 	whatsappPhoneNumbers,
 } from "@relayapi/db";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type Stripe from "stripe";
-import { sendNotificationToOrg } from "../services/notification-manager";
+import {
+	ResponseTooLargeError,
+	readRequestText,
+} from "../lib/fetch-public-url";
 import { createStripeClient } from "../services/stripe";
-import { kvTtlForKey } from "../middleware/auth";
-import type { Env, KVKeyData } from "../types";
-import { PRICING } from "../types";
+import type { Env } from "../types";
 
 const app = new Hono<{ Bindings: Env }>();
+const EVENT_LEASE_MS = 5 * 60 * 1000;
+export const MAX_STRIPE_WEBHOOK_BYTES = 1024 * 1024;
 
-/** Extract subscription ID from an invoice's parent field */
-function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
-	const details = invoice.parent?.subscription_details;
-	if (!details) return null;
-	return typeof details.subscription === "string"
-		? details.subscription
-		: (details.subscription?.id ?? null);
+class UnresolvedStripeEventError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "UnresolvedStripeEventError";
+	}
 }
 
-/** Get current_period_start/end from the first subscription item */
+type LocalSubscriptionStatus = "trialing" | "active" | "past_due" | "cancelled";
+
+export function mapStripeSubscriptionStatus(
+	status: Stripe.Subscription.Status,
+): LocalSubscriptionStatus {
+	switch (status) {
+		case "active":
+			return "active";
+		case "trialing":
+			return "trialing";
+		case "past_due":
+		case "unpaid":
+			return "past_due";
+		default:
+			return "cancelled";
+	}
+}
+
+function stripeId(
+	value: string | { id: string } | null | undefined,
+): string | null {
+	if (!value) return null;
+	return typeof value === "string" ? value : value.id;
+}
+
+/** Extract subscription ID from an invoice's current parent shape. */
+function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+	const details = invoice.parent?.subscription_details;
+	return stripeId(details?.subscription);
+}
+
 function getSubscriptionPeriod(subscription: Stripe.Subscription): {
-	start: Date;
-	end: Date;
+	start: Date | null;
+	end: Date | null;
 } {
 	const firstItem = subscription.items?.data?.[0];
-	const now = new Date();
 	return {
-		start: firstItem ? new Date(firstItem.current_period_start * 1000) : now,
-		end: firstItem ? new Date(firstItem.current_period_end * 1000) : now,
+		start: firstItem ? new Date(firstItem.current_period_start * 1000) : null,
+		end: firstItem ? new Date(firstItem.current_period_end * 1000) : null,
 	};
 }
 
-app.post("/", async (c) => {
-	const stripe = await createStripeClient(c.env.STRIPE_SECRET_KEY);
-	const body = await c.req.text();
-	const sig = c.req.header("stripe-signature");
+function subscriptionValues(subscription: Stripe.Subscription) {
+	const period = getSubscriptionPeriod(subscription);
+	return {
+		status: mapStripeSubscriptionStatus(subscription.status),
+		stripeCustomerId: stripeId(subscription.customer),
+		stripeSubscriptionId: subscription.id,
+		trialEndsAt: subscription.trial_end
+			? new Date(subscription.trial_end * 1000)
+			: null,
+		cancelAtPeriodEnd:
+			subscription.cancel_at_period_end || Boolean(subscription.cancel_at),
+		...(period.start ? { currentPeriodStart: period.start } : {}),
+		...(period.end ? { currentPeriodEnd: period.end } : {}),
+		updatedAt: new Date(),
+	};
+}
 
-	if (!sig) return c.json({ error: "Missing signature" }, 400);
+function eventSubscriptionId(event: Stripe.Event): string | null {
+	const object = event.data.object;
+	if (event.type.startsWith("customer.subscription.")) {
+		return (object as Stripe.Subscription).id;
+	}
+	if (event.type.startsWith("invoice.")) {
+		return getInvoiceSubscriptionId(object as Stripe.Invoice);
+	}
+	if (event.type === "checkout.session.completed") {
+		return stripeId((object as Stripe.Checkout.Session).subscription);
+	}
+	return null;
+}
+
+function eventCustomerId(event: Stripe.Event): string | null {
+	const object = event.data.object as {
+		customer?: string | { id: string } | null;
+	};
+	return stripeId(object.customer);
+}
+
+async function enqueueBillingEffects(
+	tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+	eventId: string,
+	organizationId: string,
+	opts?: { paymentFailedInvoiceId?: string },
+): Promise<void> {
+	const rows: Array<typeof billingOutbox.$inferInsert> = [
+		{
+			id: `stripe:${eventId}:auth:${organizationId}`,
+			organizationId,
+			kind: "auth_cache.refresh",
+			payload: { eventId },
+		},
+	];
+	if (opts?.paymentFailedInvoiceId) {
+		rows.push({
+			id: `stripe:${eventId}:payment-failed:${organizationId}`,
+			organizationId,
+			kind: "payment_failed.notify",
+			payload: { invoiceId: opts.paymentFailedInvoiceId },
+		});
+	}
+	await tx.insert(billingOutbox).values(rows).onConflictDoNothing();
+}
+
+function canonicalInvoiceStatus(invoice: Stripe.Invoice): {
+	status: "draft" | "finalized" | "paid" | "void";
+	paidAt: Date | null;
+} {
+	if (invoice.status === "paid") {
+		return {
+			status: "paid",
+			paidAt: new Date(
+				(invoice.status_transitions?.paid_at ?? invoice.created) * 1000,
+			),
+		};
+	}
+	if (invoice.status === "void" || invoice.status === "uncollectible") {
+		return { status: "void", paidAt: null };
+	}
+	if (invoice.status === "draft") return { status: "draft", paidAt: null };
+	return { status: "finalized", paidAt: null };
+}
+
+type InvoiceBillingEvidence = {
+	operationId: string | null;
+	invoiceItemId: string | null;
+};
+
+async function collectInvoiceBillingEvidence(
+	stripe: Stripe,
+	invoice: Stripe.Invoice,
+): Promise<InvoiceBillingEvidence[]> {
+	let lines = invoice.lines?.data ?? [];
+	if (invoice.lines?.has_more) {
+		lines = [];
+		for await (const line of stripe.invoices.listLineItems(invoice.id, {
+			limit: 100,
+		})) {
+			lines.push(line);
+		}
+	}
+	return lines.flatMap((line) => {
+		const operationId = line.metadata?.relayapi_operation_id ?? null;
+		const invoiceItemId =
+			line.parent?.invoice_item_details?.invoice_item ?? null;
+		return operationId || invoiceItemId ? [{ operationId, invoiceItemId }] : [];
+	});
+}
+
+type BillingTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+async function reconcileInvoiceUsageSettlements(
+	tx: BillingTransaction,
+	input: {
+		invoiceId: string;
+		organizationId: string;
+		evidence: InvoiceBillingEvidence[];
+		occurredAt: Date;
+	},
+): Promise<void> {
+	const operationIds = [
+		...new Set(
+			input.evidence.flatMap((item) =>
+				item.operationId ? [item.operationId] : [],
+			),
+		),
+	];
+	const invoiceItemIds = [
+		...new Set(
+			input.evidence.flatMap((item) =>
+				item.invoiceItemId ? [item.invoiceItemId] : [],
+			),
+		),
+	];
+	const matched = new Map<string, typeof billingOperations.$inferSelect>();
+	if (operationIds.length > 0) {
+		const rows = await tx
+			.select()
+			.from(billingOperations)
+			.where(
+				and(
+					eq(billingOperations.organizationId, input.organizationId),
+					inArray(billingOperations.id, operationIds),
+				),
+			)
+			.for("update")
+			.limit(250);
+		for (const row of rows) matched.set(row.id, row);
+	}
+	if (invoiceItemIds.length > 0) {
+		const rows = await tx
+			.select()
+			.from(billingOperations)
+			.where(
+				and(
+					eq(billingOperations.organizationId, input.organizationId),
+					inArray(billingOperations.stripeInvoiceItemId, invoiceItemIds),
+				),
+			)
+			.for("update")
+			.limit(250);
+		for (const row of rows) matched.set(row.id, row);
+	}
+
+	for (const operation of matched.values()) {
+		const providerEvidence = input.evidence.find(
+			(item) =>
+				item.operationId === operation.id ||
+				item.invoiceItemId === operation.stripeInvoiceItemId,
+		);
+		await tx
+			.update(billingOperations)
+			.set({
+				status: "succeeded",
+				stripeInvoiceItemId:
+					providerEvidence?.invoiceItemId ?? operation.stripeInvoiceItemId,
+				leaseExpiresAt: null,
+				lastError: null,
+				completedAt: sql`COALESCE(${billingOperations.completedAt}, ${input.occurredAt})`,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(billingOperations.id, operation.id),
+					eq(billingOperations.organizationId, input.organizationId),
+				),
+			);
+		await tx
+			.update(usageBucketSettlements)
+			.set({
+				state: "settled",
+				invoiceId: input.invoiceId,
+				settledAt: input.occurredAt,
+				revision: sql`${usageBucketSettlements.revision} + 1`,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(usageBucketSettlements.id, operation.usageBucketSettlementId),
+					eq(usageBucketSettlements.organizationId, input.organizationId),
+					eq(usageBucketSettlements.state, "claimed"),
+				),
+			);
+	}
+
+	const [usageSummary] = await tx
+		.select({
+			committedUnits: sql<number>`COALESCE(SUM(${usageBucketSettlements.committedUnitsSnapshot}), 0)::integer`,
+			includedUnits: sql<number>`COALESCE(SUM(${usageBuckets.includedUnits}), 0)::integer`,
+			amountCents: sql<number>`COALESCE(SUM(${usageBucketSettlements.amountCents}), 0)::integer`,
+		})
+		.from(usageBucketSettlements)
+		.innerJoin(
+			usageBuckets,
+			and(
+				eq(usageBuckets.id, usageBucketSettlements.bucketId),
+				eq(usageBuckets.organizationId, usageBucketSettlements.organizationId),
+			),
+		)
+		.where(
+			and(
+				eq(usageBucketSettlements.invoiceId, input.invoiceId),
+				eq(usageBucketSettlements.organizationId, input.organizationId),
+			),
+		);
+	if (!usageSummary) return;
+	await tx
+		.update(invoices)
+		.set({
+			apiCallsCount: usageSummary.committedUnits,
+			apiCallsIncluded: usageSummary.includedUnits,
+			overageCalls: Math.max(
+				0,
+				usageSummary.committedUnits - usageSummary.includedUnits,
+			),
+			overageCostCents: usageSummary.amountCents,
+			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(invoices.id, input.invoiceId),
+				eq(invoices.organizationId, input.organizationId),
+			),
+		);
+}
+
+/**
+ * Apply a verified Stripe event using canonical Stripe object state. External
+ * reads happen before the short DB transaction, so delayed events cannot
+ * regress newer subscription/invoice state and no transaction spans HTTP/KV.
+ */
+export async function handleEvent(
+	event: Stripe.Event,
+	env: Env,
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
+): Promise<void> {
+	const stripe = await createStripeClient(env.STRIPE_SECRET_KEY);
+
+	if (event.type === "checkout.session.completed") {
+		const session = event.data.object as Stripe.Checkout.Session;
+		if (session.mode !== "subscription" || !session.subscription) return;
+		const subscription = await stripe.subscriptions.retrieve(
+			stripeId(session.subscription) as string,
+		);
+
+		if (session.metadata?.type === "wa_phone_number") {
+			const phoneNumberId = session.metadata.phoneNumberId;
+			const firstItem = subscription.items?.data?.[0];
+			if (phoneNumberId && firstItem) {
+				await db
+					.update(whatsappPhoneNumbers)
+					.set({
+						stripeSubscriptionItemId: firstItem.id,
+						updatedAt: new Date(),
+					})
+					.where(eq(whatsappPhoneNumbers.id, phoneNumberId));
+			}
+			return;
+		}
+
+		let organizationId =
+			session.metadata?.organizationId ||
+			subscription.metadata?.organizationId ||
+			null;
+		if (!organizationId) {
+			const customerId = stripeId(session.customer);
+			if (customerId) {
+				const [existing] = await db
+					.select({ organizationId: organizationSubscriptions.organizationId })
+					.from(organizationSubscriptions)
+					.where(eq(organizationSubscriptions.stripeCustomerId, customerId))
+					.limit(1);
+				organizationId = existing?.organizationId ?? null;
+			}
+		}
+		if (!organizationId) {
+			console.error("checkout.session.completed: cannot resolve organization", {
+				eventId: event.id,
+				sessionId: session.id,
+			});
+			throw new UnresolvedStripeEventError(
+				"checkout session could not be mapped to an organization",
+			);
+		}
+
+		await db.transaction(async (tx) => {
+			await tx
+				.update(organizationSubscriptions)
+				.set({
+					...subscriptionValues(subscription),
+					stripeCustomerId:
+						stripeId(session.customer) ?? stripeId(subscription.customer),
+				})
+				.where(eq(organizationSubscriptions.organizationId, organizationId));
+			await tx
+				.update(subscriptionCheckoutOperations)
+				.set({
+					status: "completed",
+					completedAt: new Date(),
+					leaseExpiresAt: null,
+					lastError: null,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(subscriptionCheckoutOperations.organizationId, organizationId),
+						eq(
+							subscriptionCheckoutOperations.stripeCheckoutSessionId,
+							session.id,
+						),
+					),
+				);
+			await enqueueBillingEffects(tx, event.id, organizationId);
+		});
+		return;
+	}
+
+	if (event.type === "customer.subscription.updated") {
+		const snapshot = event.data.object as Stripe.Subscription;
+		const canonical = await stripe.subscriptions.retrieve(snapshot.id);
+		await db.transaction(async (tx) => {
+			const [local] = await tx
+				.select({
+					id: organizationSubscriptions.id,
+					organizationId: organizationSubscriptions.organizationId,
+				})
+				.from(organizationSubscriptions)
+				.where(eq(organizationSubscriptions.stripeSubscriptionId, canonical.id))
+				.limit(1);
+			if (!local) return;
+			await tx
+				.update(organizationSubscriptions)
+				.set(subscriptionValues(canonical))
+				.where(eq(organizationSubscriptions.id, local.id));
+			await enqueueBillingEffects(tx, event.id, local.organizationId);
+		});
+		return;
+	}
+
+	if (event.type === "customer.subscription.deleted") {
+		const subscription = event.data.object as Stripe.Subscription;
+		await db.transaction(async (tx) => {
+			const [local] = await tx
+				.select({
+					id: organizationSubscriptions.id,
+					organizationId: organizationSubscriptions.organizationId,
+				})
+				.from(organizationSubscriptions)
+				.where(
+					eq(organizationSubscriptions.stripeSubscriptionId, subscription.id),
+				)
+				.limit(1);
+			if (!local) return;
+			await tx
+				.update(organizationSubscriptions)
+				.set({
+					status: "cancelled",
+					stripeSubscriptionId: null,
+					trialEndsAt: null,
+					cancelAtPeriodEnd: false,
+					updatedAt: new Date(),
+				})
+				.where(eq(organizationSubscriptions.id, local.id));
+			await enqueueBillingEffects(tx, event.id, local.organizationId);
+		});
+		return;
+	}
+
+	if (
+		event.type === "invoice.finalized" ||
+		event.type === "invoice.paid" ||
+		event.type === "invoice.payment_failed"
+	) {
+		const snapshot = event.data.object as Stripe.Invoice;
+		const canonicalInvoice = await stripe.invoices.retrieve(snapshot.id);
+		const billingEvidence = await collectInvoiceBillingEvidence(
+			stripe,
+			canonicalInvoice,
+		);
+		const subscriptionId = getInvoiceSubscriptionId(canonicalInvoice);
+		if (!subscriptionId) return;
+		let canonicalSubscription: Stripe.Subscription | null = null;
+		try {
+			canonicalSubscription =
+				await stripe.subscriptions.retrieve(subscriptionId);
+		} catch (error) {
+			const statusCode =
+				error && typeof error === "object" && "statusCode" in error
+					? (error as { statusCode?: number }).statusCode
+					: undefined;
+			if (statusCode !== 404) throw error;
+		}
+
+		await db.transaction(async (tx) => {
+			const [local] = await tx
+				.select()
+				.from(organizationSubscriptions)
+				.where(
+					eq(organizationSubscriptions.stripeSubscriptionId, subscriptionId),
+				)
+				.limit(1);
+			if (!local) return;
+
+			const invoiceState = canonicalInvoiceStatus(canonicalInvoice);
+			const finalizedAt =
+				canonicalInvoice.status === "draft"
+					? null
+					: new Date(
+							(canonicalInvoice.status_transitions?.finalized_at ??
+								event.created) * 1000,
+						);
+			const firstPaymentFailedAt =
+				event.type === "invoice.payment_failed"
+					? new Date(event.created * 1000)
+					: null;
+			const [localInvoice] = await tx
+				.insert(invoices)
+				.values({
+					organizationId: local.organizationId,
+					status: invoiceState.status,
+					periodStart: new Date(canonicalInvoice.period_start * 1000),
+					periodEnd: new Date(canonicalInvoice.period_end * 1000),
+					basePriceCents: local.monthlyPriceCents,
+					totalCents: canonicalInvoice.amount_due,
+					stripeInvoiceId: canonicalInvoice.id,
+					stripeHostedUrl: canonicalInvoice.hosted_invoice_url ?? null,
+					finalizedAt,
+					firstPaymentFailedAt,
+					paidAt: invoiceState.paidAt,
+					updatedAt: new Date(),
+				})
+				.onConflictDoUpdate({
+					target: invoices.stripeInvoiceId,
+					set: {
+						status: invoiceState.status,
+						totalCents: canonicalInvoice.amount_due,
+						stripeHostedUrl: canonicalInvoice.hosted_invoice_url ?? null,
+						finalizedAt: sql`COALESCE(${invoices.finalizedAt}, ${finalizedAt})`,
+						firstPaymentFailedAt: sql`COALESCE(${invoices.firstPaymentFailedAt}, ${firstPaymentFailedAt})`,
+						paidAt: invoiceState.paidAt,
+						updatedAt: new Date(),
+					},
+				})
+				.returning({ id: invoices.id });
+
+			if (localInvoice && billingEvidence.length > 0) {
+				await reconcileInvoiceUsageSettlements(tx, {
+					invoiceId: localInvoice.id,
+					organizationId: local.organizationId,
+					evidence: billingEvidence,
+					occurredAt: new Date(event.created * 1000),
+				});
+			}
+
+			if (canonicalSubscription) {
+				await tx
+					.update(organizationSubscriptions)
+					.set(subscriptionValues(canonicalSubscription))
+					.where(eq(organizationSubscriptions.id, local.id));
+			} else {
+				await tx
+					.update(organizationSubscriptions)
+					.set({
+						status: "cancelled",
+						stripeSubscriptionId: null,
+						trialEndsAt: null,
+						updatedAt: new Date(),
+					})
+					.where(eq(organizationSubscriptions.id, local.id));
+			}
+
+			const canonicalStatus = canonicalSubscription
+				? mapStripeSubscriptionStatus(canonicalSubscription.status)
+				: "cancelled";
+			await enqueueBillingEffects(tx, event.id, local.organizationId, {
+				paymentFailedInvoiceId:
+					event.type === "invoice.payment_failed" &&
+					canonicalStatus === "past_due"
+						? canonicalInvoice.id
+						: undefined,
+			});
+		});
+	}
+}
+
+async function claimStripeEvent(
+	db: Database,
+	eventId: string,
+): Promise<number | null> {
+	const now = new Date();
+	const [claimed] = await db
+		.update(stripeEvents)
+		.set({
+			status: "processing",
+			attempts: sql`${stripeEvents.attempts} + 1`,
+			leaseToken: sql`${stripeEvents.leaseToken} + 1`,
+			leaseExpiresAt: new Date(Date.now() + EVENT_LEASE_MS),
+			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(stripeEvents.id, eventId),
+				or(
+					inArray(stripeEvents.status, ["pending", "failed"]),
+					and(
+						eq(stripeEvents.status, "processing"),
+						lte(stripeEvents.leaseExpiresAt, now),
+					),
+				),
+			),
+		)
+		.returning({ leaseToken: stripeEvents.leaseToken });
+	return claimed?.leaseToken ?? null;
+}
+
+export async function processStripeEvent(
+	event: Stripe.Event,
+	env: Env,
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
+): Promise<"processed" | "already_claimed" | "manual_review"> {
+	const leaseToken = await claimStripeEvent(db, event.id);
+	if (leaseToken === null) return "already_claimed";
+	try {
+		await handleEvent(event, env, db);
+		await db
+			.update(stripeEvents)
+			.set({
+				status: "succeeded",
+				// The typed receipt columns are sufficient after successful processing;
+				// avoid retaining a second, indefinite copy of the Stripe payload.
+				payload: {},
+				processedAt: new Date(),
+				leaseExpiresAt: null,
+				lastError: null,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(stripeEvents.id, event.id),
+					eq(stripeEvents.status, "processing"),
+					eq(stripeEvents.leaseToken, leaseToken),
+				),
+			);
+		return "processed";
+	} catch (error) {
+		if (error instanceof UnresolvedStripeEventError) {
+			await db
+				.update(stripeEvents)
+				.set({
+					status: "manual_review",
+					leaseExpiresAt: null,
+					lastError: error.message,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(stripeEvents.id, event.id),
+						eq(stripeEvents.status, "processing"),
+						eq(stripeEvents.leaseToken, leaseToken),
+					),
+				);
+			return "manual_review";
+		}
+		await db
+			.update(stripeEvents)
+			.set({
+				status: "failed",
+				leaseExpiresAt: null,
+				lastError: error instanceof Error ? error.message : String(error),
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(stripeEvents.id, event.id),
+					eq(stripeEvents.status, "processing"),
+					eq(stripeEvents.leaseToken, leaseToken),
+				),
+			);
+		throw error;
+	}
+}
+
+/** Cron recovery for receipts whose request worker died after durable accept. */
+export async function processPendingStripeEvents(env: Env): Promise<number> {
+	const db = createDb(env.HYPERDRIVE.connectionString);
+	const now = new Date();
+	const rows = await db
+		.select({ payload: stripeEvents.payload })
+		.from(stripeEvents)
+		.where(
+			or(
+				inArray(stripeEvents.status, ["pending", "failed"]),
+				and(
+					eq(stripeEvents.status, "processing"),
+					lte(stripeEvents.leaseExpiresAt, now),
+				),
+			),
+		)
+		.limit(25);
+	let processed = 0;
+	for (const row of rows) {
+		try {
+			const result = await processStripeEvent(
+				row.payload as unknown as Stripe.Event,
+				env,
+				db,
+			);
+			if (result === "processed") processed++;
+		} catch (error) {
+			console.error("Stripe receipt recovery failed", error);
+		}
+	}
+	return processed;
+}
+
+app.post("/", async (c) => {
+	const signature = c.req.header("stripe-signature");
+	if (!signature) return c.json({ error: "Missing signature" }, 400);
+	let body: string;
+	try {
+		body = await readRequestText(c.req.raw, MAX_STRIPE_WEBHOOK_BYTES);
+	} catch (error) {
+		if (error instanceof ResponseTooLargeError) {
+			return c.json({ error: "Payload too large" }, 413);
+		}
+		throw error;
+	}
+	const stripe = await createStripeClient(c.env.STRIPE_SECRET_KEY);
 
 	let event: Stripe.Event;
 	try {
 		event = await stripe.webhooks.constructEventAsync(
 			body,
-			sig,
+			signature,
 			c.env.STRIPE_WEBHOOK_SECRET,
 		);
-	} catch (err) {
-		console.error("Stripe webhook signature verification failed:", err);
+	} catch (error) {
+		console.error("Stripe webhook signature verification failed", error);
 		return c.json({ error: "Invalid signature" }, 400);
 	}
 
-	// Idempotency — Stripe retries failed webhooks for 3 days. Skip events
-	// we've already seen. The mark is written only after the handler succeeds
-	// below, so a transient failure leaves the event un-marked and Stripe's
-	// retry will reprocess it.
-	const dedupKey = `stripe-evt:${event.id}`;
-	const alreadySeen = await c.env.KV.get(dedupKey);
-	if (alreadySeen) return c.json({ received: true, duplicate: true });
+	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const object = event.data.object as { id?: string };
+	const inserted = await db
+		.insert(stripeEvents)
+		.values({
+			id: event.id,
+			type: event.type,
+			objectId: object.id ?? null,
+			customerId: eventCustomerId(event),
+			subscriptionId: eventSubscriptionId(event),
+			payload: event as unknown as Record<string, unknown>,
+			stripeCreatedAt: new Date(event.created * 1000),
+		})
+		.onConflictDoNothing()
+		.returning({ id: stripeEvents.id });
 
-	// Process the event synchronously before ACKing. Stripe does NOT retry
-	// 2xx-acknowledged events, so fire-and-forget via waitUntil would
-	// permanently drop the event on any transient failure (Hyperdrive blip,
-	// Stripe API error). handleEvent is a handful of DB queries plus at most
-	// one Stripe API call, comfortably within Stripe's webhook timeout.
+	if (inserted.length === 0) {
+		const [existing] = await db
+			.select({ status: stripeEvents.status })
+			.from(stripeEvents)
+			.where(eq(stripeEvents.id, event.id))
+			.limit(1);
+		if (existing?.status === "succeeded") {
+			return c.json({ received: true, duplicate: true });
+		}
+	}
+
 	try {
-		await handleEvent(event, c.env);
-		await c.env.KV.put(dedupKey, "1", { expirationTtl: 60 * 60 * 24 * 7 });
-	} catch (err) {
+		const result = await processStripeEvent(event, c.env, db);
+		return c.json({
+			received: true,
+			processing: result === "already_claimed",
+			manual_review: result === "manual_review",
+		});
+	} catch (error) {
 		console.error(
-			"Stripe webhook handler failed:",
+			"Stripe webhook processing failed",
 			event.type,
 			event.id,
-			err,
+			error,
 		);
-		// Return non-2xx so Stripe's built-in 3-day retry loop recovers the
-		// event. The dedup key is intentionally not written on failure.
 		return c.json({ error: "Webhook handler failed" }, 500);
 	}
-
-	return c.json({ received: true });
 });
 
-async function handleEvent(event: Stripe.Event, env: Env): Promise<void> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
-	switch (event.type) {
-		case "checkout.session.completed": {
-			const session = event.data.object as Stripe.Checkout.Session;
-			if (session.mode !== "subscription" || !session.subscription) break;
-
-			// Handle WhatsApp phone number checkout
-			if (session.metadata?.type === "wa_phone_number") {
-				const phoneNumberId = session.metadata.phoneNumberId;
-				if (phoneNumberId) {
-					const stripe = await createStripeClient(env.STRIPE_SECRET_KEY);
-					const subscription = await stripe.subscriptions.retrieve(
-						session.subscription as string,
-					);
-					const firstItem = subscription.items?.data?.[0];
-					if (firstItem) {
-						await db
-							.update(whatsappPhoneNumbers)
-							.set({
-								stripeSubscriptionItemId: firstItem.id,
-								updatedAt: new Date(),
-							})
-							.where(eq(whatsappPhoneNumbers.id, phoneNumberId));
-					}
-				}
-				break;
-			}
-
-			const stripe = await createStripeClient(env.STRIPE_SECRET_KEY);
-			const subscription = await stripe.subscriptions.retrieve(
-				session.subscription as string,
-			);
-
-			// Try session metadata first, fall back to subscription metadata, then customer metadata
-			const orgId =
-				session.metadata?.organizationId ||
-				subscription.metadata?.organizationId ||
-				null;
-
-			if (!orgId) {
-				// Last resort: look up by stripeCustomerId
-				const customerId = session.customer as string;
-				const [existingSub] = await db
-					.select({ organizationId: organizationSubscriptions.organizationId })
-					.from(organizationSubscriptions)
-					.where(eq(organizationSubscriptions.stripeCustomerId, customerId))
-					.limit(1);
-
-				if (!existingSub) {
-					console.error(
-						"checkout.session.completed: cannot resolve organizationId",
-						{
-							sessionId: session.id,
-							customerId,
-						},
-					);
-					break;
-				}
-
-				const period = getSubscriptionPeriod(subscription);
-				await db
-					.update(organizationSubscriptions)
-					.set({
-						status: "active",
-						stripeSubscriptionId: subscription.id,
-						currentPeriodStart: period.start,
-						currentPeriodEnd: period.end,
-						updatedAt: new Date(),
-					})
-					.where(
-						eq(
-							organizationSubscriptions.organizationId,
-							existingSub.organizationId,
-						),
-					);
-
-				await syncOrgKeysToKV(
-					env,
-					db,
-					existingSub.organizationId,
-					"pro",
-					PRICING.proCallsIncluded,
-					{ period },
-				);
-				break;
-			}
-
-			const period = getSubscriptionPeriod(subscription);
-
-			await db
-				.update(organizationSubscriptions)
-				.set({
-					status: "active",
-					stripeCustomerId: session.customer as string,
-					stripeSubscriptionId: subscription.id,
-					currentPeriodStart: period.start,
-					currentPeriodEnd: period.end,
-					updatedAt: new Date(),
-				})
-				.where(eq(organizationSubscriptions.organizationId, orgId));
-
-			// Sync KV keys to pro, stamping the new billing period so the first
-			// post-upgrade calls already key on the Stripe window.
-			await syncOrgKeysToKV(env, db, orgId, "pro", PRICING.proCallsIncluded, {
-				period,
-			});
-			break;
-		}
-
-		case "customer.subscription.updated": {
-			const subscription = event.data.object as Stripe.Subscription;
-			const [sub] = await db
-				.select()
-				.from(organizationSubscriptions)
-				.where(
-					eq(organizationSubscriptions.stripeSubscriptionId, subscription.id),
-				)
-				.limit(1);
-
-			if (!sub) break;
-
-			const statusMap: Record<string, string> = {
-				active: "active",
-				past_due: "past_due",
-				canceled: "cancelled",
-				unpaid: "past_due",
-				trialing: "trialing",
-			};
-
-			const newStatus = statusMap[subscription.status] || sub.status;
-			const period = getSubscriptionPeriod(subscription);
-
-			// The Stripe Customer Portal uses `cancel_at` (specific timestamp) rather than
-			// `cancel_at_period_end` (boolean). Check BOTH to detect scheduled cancellation.
-			const isCancelling =
-				subscription.cancel_at_period_end || !!subscription.cancel_at;
-
-			await db
-				.update(organizationSubscriptions)
-				.set({
-					status: newStatus as typeof sub.status,
-					cancelAtPeriodEnd: isCancelling,
-					currentPeriodStart: period.start,
-					currentPeriodEnd: period.end,
-					updatedAt: new Date(),
-				})
-				.where(eq(organizationSubscriptions.id, sub.id));
-
-			// Always re-stamp KV (plan + billing period) on every update, not just
-			// on status transitions: a normal period roll keeps status "active"
-			// but moves currentPeriodStart, and the cached period must follow so
-			// usage records key on the new window immediately.
-			const kvPlan = newStatus === "active" ? "pro" : "free";
-			await syncOrgKeysToKV(
-				env,
-				db,
-				sub.organizationId,
-				kvPlan,
-				kvPlan === "pro"
-					? PRICING.proCallsIncluded
-					: PRICING.freeCallsIncluded,
-				{ period },
-			);
-			break;
-		}
-
-		case "customer.subscription.deleted": {
-			const subscription = event.data.object as Stripe.Subscription;
-			const [sub] = await db
-				.select()
-				.from(organizationSubscriptions)
-				.where(
-					eq(organizationSubscriptions.stripeSubscriptionId, subscription.id),
-				)
-				.limit(1);
-
-			if (!sub) break;
-
-			await db
-				.update(organizationSubscriptions)
-				.set({
-					status: "cancelled",
-					stripeSubscriptionId: null,
-					cancelAtPeriodEnd: false,
-					updatedAt: new Date(),
-				})
-				.where(eq(organizationSubscriptions.id, sub.id));
-
-			await syncOrgKeysToKV(
-				env,
-				db,
-				sub.organizationId,
-				"free",
-				PRICING.freeCallsIncluded,
-			);
-			break;
-		}
-
-		case "invoice.finalized": {
-			const invoice = event.data.object as Stripe.Invoice;
-			const subscriptionId = getInvoiceSubscriptionId(invoice);
-			if (!subscriptionId) break;
-
-			const [sub] = await db
-				.select()
-				.from(organizationSubscriptions)
-				.where(
-					eq(organizationSubscriptions.stripeSubscriptionId, subscriptionId),
-				)
-				.limit(1);
-
-			if (!sub) break;
-
-			const periodStart = new Date(invoice.period_start * 1000);
-			const periodEnd = new Date(invoice.period_end * 1000);
-
-			// Upsert local invoice mirror
-			const [existing] = await db
-				.select({ id: invoices.id })
-				.from(invoices)
-				.where(eq(invoices.stripeInvoiceId, invoice.id))
-				.limit(1);
-
-			if (existing) {
-				await db
-					.update(invoices)
-					.set({
-						status: "finalized",
-						totalCents: invoice.amount_due,
-						stripeHostedUrl: invoice.hosted_invoice_url ?? null,
-						finalizedAt: new Date(),
-						updatedAt: new Date(),
-					})
-					.where(eq(invoices.id, existing.id));
-			} else {
-				await db.insert(invoices).values({
-					organizationId: sub.organizationId,
-					status: "finalized",
-					periodStart,
-					periodEnd,
-					basePriceCents: sub.monthlyPriceCents,
-					totalCents: invoice.amount_due,
-					stripeInvoiceId: invoice.id,
-					stripeHostedUrl: invoice.hosted_invoice_url ?? null,
-					finalizedAt: new Date(),
-				});
-			}
-			break;
-		}
-
-		case "invoice.paid": {
-			const invoice = event.data.object as Stripe.Invoice;
-
-			// Update local invoice to paid
-			const [localInvoice] = await db
-				.select({ id: invoices.id })
-				.from(invoices)
-				.where(eq(invoices.stripeInvoiceId, invoice.id))
-				.limit(1);
-
-			if (localInvoice) {
-				await db
-					.update(invoices)
-					.set({
-						status: "paid",
-						paidAt: new Date(),
-						updatedAt: new Date(),
-					})
-					.where(eq(invoices.id, localInvoice.id));
-			}
-
-			// Clear dunning state if subscription was past_due
-			const subscriptionId = getInvoiceSubscriptionId(invoice);
-			if (subscriptionId) {
-				const [sub] = await db
-					.select()
-					.from(organizationSubscriptions)
-					.where(
-						eq(organizationSubscriptions.stripeSubscriptionId, subscriptionId),
-					)
-					.limit(1);
-
-				if (sub && sub.status === "past_due") {
-					await db
-						.update(organizationSubscriptions)
-						.set({ status: "active", updatedAt: new Date() })
-						.where(eq(organizationSubscriptions.id, sub.id));
-
-					await syncOrgKeysToKV(
-						env,
-						db,
-						sub.organizationId,
-						"pro",
-						PRICING.proCallsIncluded,
-					);
-				}
-			}
-			break;
-		}
-
-		case "invoice.payment_failed": {
-			const invoice = event.data.object as Stripe.Invoice;
-			const subscriptionId = getInvoiceSubscriptionId(invoice);
-			if (!subscriptionId) break;
-
-			const [sub] = await db
-				.select()
-				.from(organizationSubscriptions)
-				.where(
-					eq(organizationSubscriptions.stripeSubscriptionId, subscriptionId),
-				)
-				.limit(1);
-
-			if (!sub) break;
-
-			// Set subscription to past_due
-			await db
-				.update(organizationSubscriptions)
-				.set({ status: "past_due", updatedAt: new Date() })
-				.where(eq(organizationSubscriptions.id, sub.id));
-
-			await syncOrgKeysToKV(
-				env,
-				db,
-				sub.organizationId,
-				"free",
-				PRICING.freeCallsIncluded,
-			);
-
-			// Notify org members about payment failure
-			sendNotificationToOrg(env, {
-				type: "payment_failed",
-				orgId: sub.organizationId,
-				title: "Payment failed",
-				body: "Your subscription payment failed. Please update your payment method to avoid losing Pro features.",
-				data: { invoiceId: invoice.id },
-			}).catch((err) =>
-				console.error(
-					"[Notification] Failed to send payment notification:",
-					err,
-				),
-			);
-			break;
-		}
-
-		default:
-			break;
-	}
-}
-
-async function syncOrgKeysToKV(
-	env: Env,
-	db: Database,
-	orgId: string,
-	plan: "free" | "pro",
-	callsIncluded: number,
-	opts?: {
-		aiEnabled?: boolean;
-		dailyToolLimit?: number;
-		period?: { start: Date | null; end: Date | null };
-	},
-): Promise<void> {
-	const orgKeys = (await db
-		.select({ key: apikey.key })
-		.from(apikey)
-		.where(eq(apikey.organizationId, orgId))) as Array<{ key: string }>;
-
-	// Stamp the Stripe billing period onto every cached key so the usage-record
-	// write path keys on the CURRENT window immediately after a plan change or
-	// period roll, instead of waiting up to the 10-min KV TTL to re-hydrate (a
-	// stale period splits a month's usage across two records, each granting a
-	// full included allowance and under-billing overage). Free plans carry no
-	// period and fall back to calendar month.
-	const periodStartDate = plan === "pro" ? (opts?.period?.start ?? null) : null;
-	const periodEndDate = plan === "pro" ? (opts?.period?.end ?? null) : null;
-	const hasPeriod = periodStartDate !== null && periodEndDate !== null;
-	const periodStart = hasPeriod ? periodStartDate.toISOString() : null;
-	const periodEnd = hasPeriod ? periodEndDate.toISOString() : null;
-
-	for (const k of orgKeys) {
-		const existing = await env.KV.get<KVKeyData>(`apikey:${k.key}`, "json");
-		if (existing) {
-			existing.plan = plan;
-			existing.calls_included = callsIncluded;
-			existing.period_start = periodStart;
-			existing.period_end = periodEnd;
-			if (opts?.aiEnabled !== undefined) existing.ai_enabled = opts.aiEnabled;
-			if (opts?.dailyToolLimit !== undefined) existing.daily_tool_limit = opts.dailyToolLimit;
-			await env.KV.put(`apikey:${k.key}`, JSON.stringify(existing), {
-				expirationTtl: kvTtlForKey(existing.expires_at),
-			});
-		}
-	}
-}
-
-export { handleEvent, syncOrgKeysToKV };
 export default app;

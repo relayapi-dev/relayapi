@@ -1,7 +1,7 @@
 import { socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../../../config/api-versions";
-import { maybeDecrypt } from "../../../lib/crypto";
+import { decryptAccountToken } from "../../../lib/account-token-crypto";
 import type { Action } from "../../../schemas/automation-actions";
 import { applyMergeTags } from "../merge-tags";
 import type { RunContext } from "../types";
@@ -112,13 +112,16 @@ async function loadSocialAccount(
 		accessToken: await resolveAccessToken(
 			account.accessToken,
 			ctx.env.ENCRYPTION_KEY as string | undefined,
+			account.id,
 		),
 	};
 }
 
 function resolveTriggeringSocialAccountId(ctx: RunContext): string | null {
 	const fromEnv =
-		typeof ctx.env.socialAccountId === "string" ? ctx.env.socialAccountId : null;
+		typeof ctx.env.socialAccountId === "string"
+			? ctx.env.socialAccountId
+			: null;
 	if (fromEnv) return fromEnv;
 
 	const persisted =
@@ -143,13 +146,16 @@ function resolveCommentId(ctx: RunContext): string | null {
 	if (typeof payloadCommentId === "string" && payloadCommentId.length > 0) {
 		return payloadCommentId;
 	}
-	return typeof ctx.context.comment_id === "string" && ctx.context.comment_id.length > 0
+	return typeof ctx.context.comment_id === "string" &&
+		ctx.context.comment_id.length > 0
 		? ctx.context.comment_id
 		: null;
 }
 
 function igGraphHost(token: string): string {
-	return token.startsWith("IGAA") ? "graph.instagram.com" : "graph.facebook.com";
+	return token.startsWith("IGAA")
+		? "graph.instagram.com"
+		: "graph.facebook.com";
 }
 
 async function summarizeErrorResponse(res: Response): Promise<string> {
@@ -166,14 +172,10 @@ async function summarizeErrorResponse(res: Response): Promise<string> {
 async function resolveAccessToken(
 	stored: string | null,
 	encryptionKey: string | undefined,
+	accountId: string,
 ): Promise<string | null> {
 	if (!stored) return null;
-	if (!encryptionKey) return stored;
-	try {
-		return await maybeDecrypt(stored, encryptionKey);
-	} catch {
-		return stored;
-	}
+	return decryptAccountToken(stored, encryptionKey, accountId, "access_token");
 }
 
 export const commentHandlers = {

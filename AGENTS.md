@@ -80,7 +80,7 @@ The API uses these Cloudflare bindings defined in `wrangler.jsonc`:
 
 ### Key Patterns
 
-- **Multi-tenancy**: All resources scoped by `workspace_id`. The `workspace_id` parameter is optional on list and create endpoints for posts, webhooks, inbox conversations, automation rules, comment automations, sequences, broadcasts, custom field definitions, and WhatsApp contacts. If omitted, operates across all workspaces.
+- **Multi-tenancy**: Every resource is organization-owned; operational resources may additionally carry a nullable `workspace_id`. `Require Workspace ID` controls only independent operational-root creation: when disabled, an omitted `workspace_id` creates an organization-scoped row; when enabled, independent roots require an explicit active, tenant-owned, authorized workspace. Parent-bound creates may inherit their authoritative parent's workspace in either mode. Organization-scoped rows are visible to credentials with at least one workspace grant, while zero-grant credentials see none. On list endpoints, an omitted workspace filter means all rows authorized by the credential, not an authorization bypass. Explicit workspace IDs are always grant-checked. Shared definitions remain organization-global.
 - **API keys**: Bearer tokens prefixed `rlay_live_*` (production) or `rlay_test_*` (test). SHA-256 hashed before DB lookup. Cached in KV.
 - **Resource IDs**: Nanoid with prefixes — `ws_`, `acc_`, `post_`, `med_`, `wh_`.
 - **Pagination**: Cursor-based with `next_cursor` and `has_more`. Limit 1–100, default 20.
@@ -107,7 +107,7 @@ Other prefixes (`chore:`, `docs:`, `refactor:`, etc.) are included in the next r
 
 ## Dev Credentials
 
-- **Dashboard login**: provide `SEED_USER_EMAIL` and `SEED_USER_PASSWORD` before running `scripts/seed.ts`
+- **Dashboard login**: with the localhost SSH tunnel running, provide `NODE_ENV=development`, `SEED_USER_EMAIL`, `SEED_USER_PASSWORD`, and `RELAYAPI_ALLOW_LOCAL_SEED=I_UNDERSTAND_THIS_MODIFIES_MY_LOCAL_DATABASE` before running `scripts/seed.ts`; the idempotent seed rejects production/non-loopback databases and creates no active paid entitlement
 - **Dashboard URL**: `http://localhost:4321/app` (requires `bun run dev:app`)
 - **API URL**: `http://localhost:8789` (requires `bun run dev:api`)
 

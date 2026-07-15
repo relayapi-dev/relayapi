@@ -10,13 +10,21 @@ name: CI — Lint
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Biome Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - name: Test dependency audit policy
+        run: bun test scripts/dependency-audit.test.ts
+      - name: Dependency vulnerability audit
+        run: bun scripts/dependency-audit.ts
       - name: Biome lint
         run: bunx biome lint .

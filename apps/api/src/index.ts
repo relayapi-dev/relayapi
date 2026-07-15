@@ -11,7 +11,7 @@ export default {
 		return handleQueueBatch(batch, env);
 	},
 
-	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+	async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
 		return handleScheduled(event, env, ctx);
 	},
 };

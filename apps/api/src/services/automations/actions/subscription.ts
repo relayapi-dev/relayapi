@@ -3,23 +3,21 @@
 // subscribe_list / unsubscribe_list — upsert rows in `contact_subscriptions`,
 // setting `unsubscribedAt` to null on subscribe and to NOW on unsubscribe.
 //
-// opt_in_channel / opt_out_channel — the current schema has no per-channel
-// opt-out column on contacts (contacts.opted_in is a global flag, and
-// contact_channels only tracks channel membership, not opt-out). To avoid a
-// new migration in this unit we persist the opt-out state as a custom field
-// with a well-known key `__channel_opt_out_<channel>` = "1" (set) or delete
-// the row (cleared). A follow-up migration should introduce a dedicated
-// `contact_channels.opted_out` column.
+// opt_in_channel / opt_out_channel — record immutable evidence through the
+// canonical consent ledger used by send-time enforcement.
 
 import {
 	contactSubscriptions,
-	customFieldDefinitions,
-	customFieldValues,
-	type Database,
-	generateId,
+	contactChannels,
+	contacts,
+	subscriptionLists,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
+import {
+	normalizeRecipientIdentifier,
+	recordContactConsent,
+} from "../../contact-consent";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type SubscribeListAction = Extract<Action, { type: "subscribe_list" }>;
@@ -27,12 +25,30 @@ type UnsubscribeListAction = Extract<Action, { type: "unsubscribe_list" }>;
 type OptInChannelAction = Extract<Action, { type: "opt_in_channel" }>;
 type OptOutChannelAction = Extract<Action, { type: "opt_out_channel" }>;
 
+async function assertListScope(
+	action: SubscribeListAction | UnsubscribeListAction,
+	ctx: Parameters<ActionHandler>[1],
+) {
+	const list = await ctx.db.query.subscriptionLists.findFirst({
+		where: and(
+			eq(subscriptionLists.id, action.list_id),
+			eq(subscriptionLists.organizationId, ctx.organizationId),
+			...(ctx.workspaceId
+				? [eq(subscriptionLists.workspaceId, ctx.workspaceId)]
+				: []),
+		),
+	});
+	if (!list)
+		throw new Error("subscription list does not belong to automation tenant");
+}
+
 const subscribeList: ActionHandler<SubscribeListAction> = async (
 	action,
 	ctx,
 ) => {
 	const db = ctx.db;
 	if (!db) throw new Error("subscribe_list: db binding missing");
+	await assertListScope(action, ctx);
 	const existing = await db.query.contactSubscriptions.findFirst({
 		where: and(
 			eq(contactSubscriptions.contactId, ctx.contactId),
@@ -51,6 +67,7 @@ const subscribeList: ActionHandler<SubscribeListAction> = async (
 			);
 	} else {
 		await db.insert(contactSubscriptions).values({
+			organizationId: ctx.organizationId,
 			contactId: ctx.contactId,
 			listId: action.list_id,
 			source: "automation",
@@ -64,6 +81,7 @@ const unsubscribeList: ActionHandler<UnsubscribeListAction> = async (
 ) => {
 	const db = ctx.db;
 	if (!db) throw new Error("unsubscribe_list: db binding missing");
+	await assertListScope(action, ctx);
 	await db
 		.update(contactSubscriptions)
 		.set({ unsubscribedAt: new Date(), source: "automation" })
@@ -76,84 +94,74 @@ const unsubscribeList: ActionHandler<UnsubscribeListAction> = async (
 };
 
 // ---------------------------------------------------------------------------
-// Channel opt-in / opt-out via custom-field convention.
+// Channel opt-in / opt-out through the canonical consent ledger.
 // ---------------------------------------------------------------------------
 
-async function ensureOptOutDefinition(
-	db: Database,
-	organizationId: string,
-	channel: string,
-): Promise<string> {
-	const slug = `__channel_opt_out_${channel}`;
-	const existing = await db.query.customFieldDefinitions.findFirst({
-		where: and(
-			eq(customFieldDefinitions.organizationId, organizationId),
-			eq(customFieldDefinitions.slug, slug),
+async function recordAutomationConsent(
+	action: OptInChannelAction | OptOutChannelAction,
+	ctx: Parameters<ActionHandler>[1],
+	status: "granted" | "denied",
+) {
+	const db = ctx.db;
+	const conditions = [
+		eq(contactChannels.contactId, ctx.contactId),
+		eq(contactChannels.platform, action.channel),
+		eq(contacts.organizationId, ctx.organizationId),
+		...(ctx.workspaceId ? [eq(contacts.workspaceId, ctx.workspaceId)] : []),
+	];
+	const overrideAccountId = ctx.env?.socialAccountId as string | undefined;
+	if (overrideAccountId) {
+		conditions.push(eq(contactChannels.socialAccountId, overrideAccountId));
+	}
+	const matchingRecipients = await db
+		.select({
+			identifier: contactChannels.identifier,
+			workspaceId: contacts.workspaceId,
+		})
+		.from(contactChannels)
+		.innerJoin(contacts, eq(contacts.id, contactChannels.contactId))
+		.where(and(...conditions));
+	const recipients = [
+		...new Map(
+			matchingRecipients.map((recipient) => [
+				normalizeRecipientIdentifier(action.channel, recipient.identifier),
+				recipient,
+			]),
+		).values(),
+	];
+	if (recipients.length === 0) {
+		throw new Error(
+			`${action.type}: contact has no ${action.channel} identifier`,
+		);
+	}
+
+	await Promise.all(
+		recipients.map((recipient) =>
+			recordContactConsent(db, {
+				organizationId: ctx.organizationId,
+				workspaceId: recipient.workspaceId,
+				contactId: ctx.contactId,
+				channel: action.channel,
+				purpose: "automation",
+				identifier: recipient.identifier,
+				status,
+				source: "automation_action",
+				occurredAt: ctx.now,
+				evidence: {
+					automation_id: ctx.automationId,
+					run_id: ctx.runId,
+					action_id: action.id,
+				},
+			}),
 		),
-	});
-	if (existing) return existing.id;
-	const id = generateId("cfd_");
-	await db.insert(customFieldDefinitions).values({
-		id,
-		organizationId,
-		name: `Channel opt-out (${channel})`,
-		slug,
-		type: "boolean",
-	});
-	return id;
+	);
 }
 
-const optInChannel: ActionHandler<OptInChannelAction> = async (action, ctx) => {
-	const db = ctx.db;
-	if (!db) throw new Error("opt_in_channel: db binding missing");
-	const definitionId = await ensureOptOutDefinition(
-		db,
-		ctx.organizationId,
-		action.channel,
-	);
-	// Opt-in = clear any existing opt-out flag.
-	await db
-		.delete(customFieldValues)
-		.where(
-			and(
-				eq(customFieldValues.definitionId, definitionId),
-				eq(customFieldValues.contactId, ctx.contactId),
-			),
-		);
-};
+const optInChannel: ActionHandler<OptInChannelAction> = (action, ctx) =>
+	recordAutomationConsent(action, ctx, "granted");
 
-const optOutChannel: ActionHandler<OptOutChannelAction> = async (
-	action,
-	ctx,
-) => {
-	const db = ctx.db;
-	if (!db) throw new Error("opt_out_channel: db binding missing");
-	const definitionId = await ensureOptOutDefinition(
-		db,
-		ctx.organizationId,
-		action.channel,
-	);
-	const existing = await db.query.customFieldValues.findFirst({
-		where: and(
-			eq(customFieldValues.definitionId, definitionId),
-			eq(customFieldValues.contactId, ctx.contactId),
-		),
-	});
-	if (existing) {
-		await db
-			.update(customFieldValues)
-			.set({ value: "1", updatedAt: new Date() })
-			.where(eq(customFieldValues.id, existing.id));
-	} else {
-		await db.insert(customFieldValues).values({
-			id: generateId("cfv_"),
-			definitionId,
-			contactId: ctx.contactId,
-			organizationId: ctx.organizationId,
-			value: "1",
-		});
-	}
-};
+const optOutChannel: ActionHandler<OptOutChannelAction> = (action, ctx) =>
+	recordAutomationConsent(action, ctx, "denied");
 
 export const subscriptionHandlers: ActionRegistry = {
 	subscribe_list: subscribeList,

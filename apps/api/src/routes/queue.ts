@@ -1,5 +1,12 @@
-import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { generateId } from "@relayapi/db";
+import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
+import { generateId, queueFailures } from "@relayapi/db";
+import { and, desc, inArray, sql } from "drizzle-orm";
+import {
+	decodeTimestampIdCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+} from "../lib/pagination-cursor";
+import { assertAllWorkspaceScope } from "../lib/request-access";
 import { ErrorResponse } from "../schemas/common";
 import {
 	CreateQueueBody,
@@ -12,6 +19,7 @@ import {
 	QueueSchedule,
 	UpdateQueueBody,
 } from "../schemas/queue";
+import { replayQueueFailure } from "../services/queue-replay";
 import { findBestSlots } from "../services/slot-finder";
 import type { Env, Variables } from "../types";
 
@@ -92,7 +100,15 @@ function calculateUpcomingSlots(
 		} catch {
 			continue;
 		}
-		const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+		const dayMap: Record<string, number> = {
+			Sun: 0,
+			Mon: 1,
+			Tue: 2,
+			Wed: 3,
+			Thu: 4,
+			Fri: 5,
+			Sat: 6,
+		};
 
 		for (let weekOffset = 0; weekOffset < weeksToCheck; weekOffset++) {
 			// Calculate the target date for this slot's day_of_week
@@ -127,8 +143,12 @@ function calculateUpcomingSlots(
 				minute: "2-digit",
 				hour12: false,
 			}).formatToParts(tempUtc);
-			const tzHour = Number(tzOffsetParts.find((p) => p.type === "hour")?.value ?? "0");
-			const tzMinute = Number(tzOffsetParts.find((p) => p.type === "minute")?.value ?? "0");
+			const tzHour = Number(
+				tzOffsetParts.find((p) => p.type === "hour")?.value ?? "0",
+			);
+			const tzMinute = Number(
+				tzOffsetParts.find((p) => p.type === "minute")?.value ?? "0",
+			);
 			const localMinutes = tzHour * 60 + tzMinute;
 			const utcMinutes = tempUtc.getUTCHours() * 60 + tempUtc.getUTCMinutes();
 			let offsetMinutes = localMinutes - utcMinutes;
@@ -281,6 +301,99 @@ const previewSlots = createRoute({
 	},
 });
 
+const QueueFailureResponse = z.object({
+	id: z.string(),
+	queue_name: z.string(),
+	operation_id: z.string().nullable(),
+	failure_kind: z.enum([
+		"permanent_input",
+		"unknown_external_outcome",
+		"dead_letter",
+	]),
+	status: z.enum([
+		"unresolved",
+		"replay_claimed",
+		"replay_unknown",
+		"replayed",
+		"dismissed",
+	]),
+	attempts: z.number().int(),
+	error: z.string().nullable(),
+	replay_error: z.string().nullable(),
+	created_at: z.string().datetime(),
+	replay_requested_at: z.string().datetime().nullable(),
+	replay_claim_expires_at: z.string().datetime().nullable(),
+});
+
+const ListQueueFailuresQuery = z.object({
+	limit: z.coerce.number().int().min(1).max(100).default(20),
+	cursor: z.string().optional(),
+});
+
+const listQueueFailures = createRoute({
+	operationId: "listQueueFailures",
+	method: "get",
+	path: "/failures",
+	tags: ["Queue"],
+	summary: "List durable queue failures for controlled recovery",
+	security: [{ Bearer: [] }],
+	request: { query: ListQueueFailuresQuery },
+	responses: {
+		200: {
+			description: "Unresolved queue failures",
+			content: {
+				"application/json": {
+					schema: z.object({
+						data: z.array(QueueFailureResponse),
+						next_cursor: z.string().nullable(),
+						has_more: z.boolean(),
+					}),
+				},
+			},
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Organization-wide scope required",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+const replayQueueFailureRoute = createRoute({
+	operationId: "replayQueueFailure",
+	method: "post",
+	path: "/failures/{id}/replay",
+	tags: ["Queue"],
+	summary: "Replay a reconciled queue failure",
+	description: "Refuses replay while an external outcome is unknown.",
+	security: [{ Bearer: [] }],
+	request: { params: z.object({ id: z.string() }) },
+	responses: {
+		200: {
+			description: "Replay result",
+			content: {
+				"application/json": {
+					schema: z.object({
+						replayed: z.boolean(),
+						reason: z.string().optional(),
+					}),
+				},
+			},
+		},
+		409: {
+			description: "Reconciliation required",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Organization-wide scope required",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
 // --- Route handlers ---
 
 app.openapi(listSlots, async (c) => {
@@ -373,7 +486,8 @@ app.openapi(getNextSlot, async (c) => {
 
 	// Use the default schedule, or fall back to the first one
 	const schedule =
-		schedules.find((s) => s.is_default) ?? (schedules[0] as StoredSchedule | undefined);
+		schedules.find((s) => s.is_default) ??
+		(schedules[0] as StoredSchedule | undefined);
 
 	if (!schedule || schedule.slots.length === 0) {
 		return c.json(
@@ -418,7 +532,8 @@ app.openapi(previewSlots, async (c) => {
 
 	// Use the default schedule, or fall back to the first one
 	const schedule =
-		schedules.find((s) => s.is_default) ?? (schedules[0] as StoredSchedule | undefined);
+		schedules.find((s) => s.is_default) ??
+		(schedules[0] as StoredSchedule | undefined);
 
 	if (!schedule || schedule.slots.length === 0) {
 		return c.json({ slots: [] }, 200);
@@ -428,6 +543,90 @@ app.openapi(previewSlots, async (c) => {
 	const upcoming = calculateUpcomingSlots(schedule.slots, count, now);
 
 	return c.json({ slots: upcoming }, 200);
+});
+
+app.openapi(listQueueFailures, async (c) => {
+	const denied = assertAllWorkspaceScope(c);
+	if (denied) return denied as never;
+	const orgId = c.get("orgId");
+	const { limit, cursor } = c.req.valid("query");
+	let decodedCursor: ReturnType<typeof decodeTimestampIdCursor> | null = null;
+	if (cursor) {
+		try {
+			decodedCursor = decodeTimestampIdCursor(cursor);
+		} catch {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+	}
+	const conditions = [
+		sql`${queueFailures.organizationIds} @> ARRAY[${orgId}]::text[]`,
+		inArray(queueFailures.status, [
+			"unresolved",
+			"replay_claimed",
+			"replay_unknown",
+		]),
+	];
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${queueFailures.createdAt}, ${queueFailures.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
+	}
+	const rows = await c
+		.get("db")
+		.select()
+		.from(queueFailures)
+		.where(and(...conditions))
+		.orderBy(desc(queueFailures.createdAt), desc(queueFailures.id))
+		.limit(limit + 1);
+	const hasMore = rows.length > limit;
+	const page = rows.slice(0, limit);
+	const last = page.at(-1);
+	return c.json(
+		{
+			data: page.map((row) => ({
+				id: row.id,
+				queue_name: row.queueName,
+				operation_id: row.operationId,
+				failure_kind: row.failureKind,
+				status: row.status,
+				attempts: row.attempts,
+				error: row.error,
+				replay_error: row.replayError,
+				created_at: row.createdAt.toISOString(),
+				replay_requested_at: row.replayRequestedAt?.toISOString() ?? null,
+				replay_claim_expires_at:
+					row.replayClaimExpiresAt?.toISOString() ?? null,
+			})),
+			next_cursor:
+				hasMore && last
+					? encodeTimestampIdCursor(last.createdAt, last.id)
+					: null,
+			has_more: hasMore,
+		},
+		200,
+	);
+});
+
+app.openapi(replayQueueFailureRoute, async (c) => {
+	const denied = assertAllWorkspaceScope(c);
+	if (denied) return denied as never;
+	const result = await replayQueueFailure(
+		c.env,
+		c.req.valid("param").id,
+		c.get("orgId"),
+	);
+	if (!result.replayed) {
+		return c.json(
+			{
+				error: {
+					code: "RECONCILIATION_REQUIRED",
+					message: result.reason ?? "Replay refused",
+				},
+			},
+			409,
+		);
+	}
+	return c.json({ replayed: true }, 200);
 });
 
 // --- Find slot (smart scheduling) ---

@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ArrowRightLeft,
 	ChevronDown,
@@ -13,6 +12,7 @@ import {
 	Upload,
 	X,
 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -46,18 +46,17 @@ interface IdeaDetailDialogProps {
 	allTags: IdeaTag[];
 	onSave: (
 		id: string,
-		data: { title?: string | null; content?: string | null; tag_ids?: string[] },
+		data: {
+			title?: string | null;
+			content?: string | null;
+			tag_ids?: string[];
+		},
 	) => Promise<void>;
 	onCreate: (data: {
 		title?: string;
 		content?: string;
 		group_id?: string;
 		tag_ids?: string[];
-		media?: Array<{
-			url: string;
-			type?: "image" | "video" | "gif" | "document";
-			alt?: string;
-		}>;
 	}) => Promise<Idea>;
 	onMove: (id: string, groupId: string) => Promise<void>;
 	onConvert: (id: string) => void;
@@ -120,8 +119,7 @@ function MediaTile({
 		type === "gif" ||
 		/\.(jpg|jpeg|png|webp|avif|gif|svg)(\?|$)/i.test(url);
 	const isVideo =
-		type === "video" ||
-		/\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(url);
+		type === "video" || /\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(url);
 
 	return (
 		<div className="group relative rounded-xl overflow-hidden border border-border bg-accent/5">
@@ -546,44 +544,31 @@ export function IdeaDetailDialog({
 					tag_ids: selectedTagIds,
 				});
 			} else {
-				let uploadedMedia:
-					| Array<{
-							url: string;
-							type?: "image" | "video" | "gif" | "document";
-							alt?: string;
-					  }>
-					| undefined;
-
-				if (pendingFiles.length > 0) {
-					uploadedMedia = [];
-					for (const pending of pendingFiles) {
-						const qs = new URLSearchParams({ filename: pending.file.name });
-						const res = await fetch(`/api/media/upload?${qs.toString()}`, {
-							method: "POST",
-							headers: {
-								"Content-Type":
-									pending.file.type || "application/octet-stream",
-							},
-							body: pending.file,
-						});
-						if (!res.ok) {
-							const errorBody = await res.json().catch(() => null);
-							throw new Error(
-								errorBody?.error?.message || `Upload failed (${res.status})`,
-							);
-						}
-						const uploaded = (await res.json()) as { url: string };
-						uploadedMedia.push({ url: uploaded.url, type: pending.kind });
-					}
-				}
-
-				await onCreate({
+				const created = await onCreate({
 					title: title.trim() || undefined,
 					content: content.trim() || undefined,
 					group_id: groupId || undefined,
 					tag_ids: selectedTagIds,
-					media: uploadedMedia,
 				});
+				if (pendingFiles.length > 0) {
+					const uploadedMedia: IdeaMedia[] = [];
+					for (const pending of pendingFiles) {
+						const formData = new FormData();
+						formData.append("file", pending.file);
+						const response = await fetch(`/api/ideas/${created.id}/media`, {
+							method: "POST",
+							body: formData,
+						});
+						if (!response.ok) {
+							const body = await response.json().catch(() => null);
+							throw new Error(
+								body?.error?.message || `Upload failed (${response.status})`,
+							);
+						}
+						uploadedMedia.push((await response.json()) as IdeaMedia);
+					}
+					onMediaChange(created.id, uploadedMedia);
+				}
 			}
 
 			onOpenChange(false);
@@ -648,468 +633,483 @@ export function IdeaDetailDialog({
 					sidePanel ? "sm:max-w-2xl md:max-w-4xl" : "sm:max-w-2xl",
 				)}
 			>
-			<div className="flex flex-col md:flex-row max-h-[90vh]">
-			<div className="flex-1 flex flex-col min-w-0">
-				<DialogHeader className="flex-row flex-wrap items-center justify-between px-5 py-3 border-b border-border gap-3 space-y-0">
-					<DialogTitle className="text-sm font-medium shrink-0">
-						{dialogTitle}
-					</DialogTitle>
+				<div className="flex flex-col md:flex-row max-h-[90vh]">
+					<div className="flex-1 flex flex-col min-w-0">
+						<DialogHeader className="flex-row flex-wrap items-center justify-between px-5 py-3 border-b border-border gap-3 space-y-0">
+							<DialogTitle className="text-sm font-medium shrink-0">
+								{dialogTitle}
+							</DialogTitle>
 
-					<div className="flex items-center gap-2 ml-auto">
-						{groups.length > 0 && (() => {
-							const selectedGroup = groups.find((g) => g.id === groupId);
-							return (
-								<Popover open={groupPopoverOpen} onOpenChange={setGroupPopoverOpen}>
+							<div className="flex items-center gap-2 ml-auto">
+								{groups.length > 0 &&
+									(() => {
+										const selectedGroup = groups.find((g) => g.id === groupId);
+										return (
+											<Popover
+												open={groupPopoverOpen}
+												onOpenChange={setGroupPopoverOpen}
+											>
+												<PopoverTrigger asChild>
+													<Button
+														type="button"
+														variant="outline"
+														size="sm"
+														className="h-7 max-w-[10rem] text-xs gap-1 px-2"
+													>
+														{selectedGroup?.color && (
+															<span
+																className="size-2 rounded-full shrink-0"
+																style={{ backgroundColor: selectedGroup.color }}
+															/>
+														)}
+														<span className="min-w-0 truncate">
+															{selectedGroup?.name ?? "Group"}
+														</span>
+														<ChevronDown className="size-3 opacity-50 shrink-0" />
+													</Button>
+												</PopoverTrigger>
+												<PopoverContent align="end" className="w-52 p-2">
+													<div className="space-y-1">
+														{groups.map((group) => {
+															const checked = groupId === group.id;
+															return (
+																<button
+																	key={group.id}
+																	type="button"
+																	onClick={() => {
+																		void handleGroupChange(group.id);
+																		setGroupPopoverOpen(false);
+																	}}
+																	className={cn(
+																		"flex items-center gap-2 w-full rounded px-1.5 py-1 text-sm hover:bg-accent/40 transition-colors",
+																		checked && "bg-accent/40",
+																	)}
+																>
+																	{group.color && (
+																		<span
+																			className="size-2 rounded-full shrink-0"
+																			style={{ backgroundColor: group.color }}
+																		/>
+																	)}
+																	<span className="flex-1 text-left truncate">
+																		{group.name}
+																	</span>
+																</button>
+															);
+														})}
+													</div>
+												</PopoverContent>
+											</Popover>
+										);
+									})()}
+
+								<Popover open={tagPopoverOpen} onOpenChange={setTagPopoverOpen}>
 									<PopoverTrigger asChild>
 										<Button
 											type="button"
 											variant="outline"
 											size="sm"
-											className="h-7 max-w-[10rem] text-xs gap-1 px-2"
+											className="h-7 text-xs gap-1 px-2"
 										>
-											{selectedGroup?.color && (
-												<span
-													className="size-2 rounded-full shrink-0"
-													style={{ backgroundColor: selectedGroup.color }}
-												/>
+											<Tag className="size-3" />
+											Tags
+											{selectedTagIds.length > 0 && (
+												<span className="ml-0.5 rounded-full bg-primary text-primary-foreground px-1 text-[10px] leading-4">
+													{selectedTagIds.length}
+												</span>
 											)}
-											<span className="min-w-0 truncate">
-												{selectedGroup?.name ?? "Group"}
-											</span>
-											<ChevronDown className="size-3 opacity-50 shrink-0" />
+											<ChevronDown className="size-3 opacity-50" />
 										</Button>
 									</PopoverTrigger>
 									<PopoverContent align="end" className="w-52 p-2">
-										<div className="space-y-1">
-											{groups.map((group) => {
-												const checked = groupId === group.id;
-												return (
-													<button
-														key={group.id}
-														type="button"
-														onClick={() => {
-															void handleGroupChange(group.id);
-															setGroupPopoverOpen(false);
-														}}
-														className={cn(
-															"flex items-center gap-2 w-full rounded px-1.5 py-1 text-sm hover:bg-accent/40 transition-colors",
-															checked && "bg-accent/40",
-														)}
-													>
-														{group.color && (
+										{allTags.length === 0 ? (
+											<p className="text-xs text-muted-foreground text-center py-2">
+												No tags yet
+											</p>
+										) : (
+											<div className="space-y-1">
+												{allTags.map((tag) => {
+													const checked = selectedTagIds.includes(tag.id);
+													return (
+														<label
+															key={tag.id}
+															htmlFor={`idea-tag-${tag.id}`}
+															className="flex items-center gap-2 rounded px-1.5 py-1 cursor-pointer hover:bg-accent/40 text-sm"
+														>
+															<Checkbox
+																id={`idea-tag-${tag.id}`}
+																checked={checked}
+																onCheckedChange={(value) => {
+																	setSelectedTagIds((prev) =>
+																		value
+																			? [...prev, tag.id]
+																			: prev.filter((id) => id !== tag.id),
+																	);
+																}}
+															/>
 															<span
 																className="size-2 rounded-full shrink-0"
-																style={{ backgroundColor: group.color }}
+																style={{ backgroundColor: tag.color }}
 															/>
-														)}
-														<span className="flex-1 text-left truncate">{group.name}</span>
-													</button>
-												);
-											})}
-										</div>
+															{tag.name}
+														</label>
+													);
+												})}
+											</div>
+										)}
 									</PopoverContent>
 								</Popover>
-							);
-						})()}
 
-						<Popover open={tagPopoverOpen} onOpenChange={setTagPopoverOpen}>
-							<PopoverTrigger asChild>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									className="h-7 text-xs gap-1 px-2"
-								>
-									<Tag className="size-3" />
-									Tags
-									{selectedTagIds.length > 0 && (
-										<span className="ml-0.5 rounded-full bg-primary text-primary-foreground px-1 text-[10px] leading-4">
-											{selectedTagIds.length}
-										</span>
-									)}
-									<ChevronDown className="size-3 opacity-50" />
-								</Button>
-							</PopoverTrigger>
-							<PopoverContent align="end" className="w-52 p-2">
-								{allTags.length === 0 ? (
-									<p className="text-xs text-muted-foreground text-center py-2">
-										No tags yet
-									</p>
-								) : (
-									<div className="space-y-1">
-										{allTags.map((tag) => {
-											const checked = selectedTagIds.includes(tag.id);
-											return (
-												<label
-													key={tag.id}
-													htmlFor={`idea-tag-${tag.id}`}
-													className="flex items-center gap-2 rounded px-1.5 py-1 cursor-pointer hover:bg-accent/40 text-sm"
-												>
-													<Checkbox
-														id={`idea-tag-${tag.id}`}
-														checked={checked}
-														onCheckedChange={(value) => {
-															setSelectedTagIds((prev) =>
-																value
-																	? [...prev, tag.id]
-																	: prev.filter((id) => id !== tag.id),
-															);
-														}}
-													/>
-													<span
-														className="size-2 rounded-full shrink-0"
-														style={{ backgroundColor: tag.color }}
-													/>
-													{tag.name}
-												</label>
-											);
-										})}
-									</div>
-								)}
-							</PopoverContent>
-						</Popover>
-
-						<button
-							type="button"
-							onClick={() => onOpenChange(false)}
-							className="rounded-xs opacity-70 hover:opacity-100 transition-opacity p-0.5"
-							aria-label="Close"
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								width="16"
-								height="16"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-								aria-hidden="true"
-							>
-								<path d="M18 6 6 18" />
-								<path d="m6 6 12 12" />
-							</svg>
-						</button>
-					</div>
-				</DialogHeader>
-
-				<div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 min-h-0">
-					<input
-						type="text"
-						value={title}
-						onChange={(event) => setTitle(event.target.value)}
-						placeholder="Add a title..."
-						className="w-full bg-transparent text-base font-medium placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0"
-					/>
-
-					<textarea
-						ref={contentRef}
-						value={content}
-						onChange={(event) => setContent(event.target.value)}
-						placeholder="Write your idea..."
-						rows={3}
-						className="w-full bg-transparent text-sm placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0 resize-none overflow-hidden"
-					/>
-
-					<input
-						ref={fileInputRef}
-						type="file"
-						multiple
-						className="hidden"
-						accept="image/*,video/*,.gif,.pdf"
-						onChange={(event) => handleFileInputChange(event.target.files)}
-					/>
-
-					<div className="space-y-2">
-						<p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-							<Paperclip className="size-3" />
-							Media
-							{uploadingMedia && (
-								<Loader2 className="size-3 animate-spin ml-1" />
-							)}
-						</p>
-
-						{mediaError && (
-							<p className="text-xs text-destructive">{mediaError}</p>
-						)}
-
-						{(() => {
-							const tiles: Array<{
-								key: string;
-								url: string;
-								type?: "image" | "video" | "gif" | "document";
-								onRemove: () => void;
-							}> =
-								isEditMode && idea
-									? media.map((item) => ({
-											key: item.id,
-											url: item.url,
-											type: item.type,
-											onRemove: () => void handleDeleteMedia(item.id),
-										}))
-									: pendingFiles.map((item) => ({
-											key: item.id,
-											url: item.previewUrl,
-											type: item.kind,
-											onRemove: () => handleRemovePendingFile(item.id),
-										}));
-
-							if (tiles.length > 0) {
-								return (
-									<div
-										className="grid gap-2"
-										style={{
-											gridTemplateColumns:
-												tiles.length === 1
-													? "max-content"
-													: "repeat(auto-fill, minmax(120px, 1fr))",
-										}}
-									>
-										{tiles.map((tile) => (
-											<MediaTile
-												key={tile.key}
-												url={tile.url}
-												type={tile.type}
-												onRemove={tile.onRemove}
-											/>
-										))}
-									</div>
-								);
-							}
-
-							return (
 								<button
 									type="button"
-									onClick={() => fileInputRef.current?.click()}
-									className="w-32 h-28 rounded-lg border-2 border-dashed border-border hover:border-primary/40 flex flex-col items-center justify-center gap-1.5 transition-colors cursor-pointer"
+									onClick={() => onOpenChange(false)}
+									className="rounded-xs opacity-70 hover:opacity-100 transition-opacity p-0.5"
+									aria-label="Close"
 								>
-									<Upload className="size-5 text-muted-foreground" />
-									<span className="text-[11px] text-muted-foreground leading-tight text-center px-2">
-										Click to attach media
-									</span>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										width="16"
+										height="16"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2"
+										strokeLinecap="round"
+										strokeLinejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M18 6 6 18" />
+										<path d="m6 6 12 12" />
+									</svg>
 								</button>
-							);
-						})()}
-					</div>
+							</div>
+						</DialogHeader>
 
-				</div>
+						<div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 min-h-0">
+							<input
+								type="text"
+								value={title}
+								onChange={(event) => setTitle(event.target.value)}
+								placeholder="Add a title..."
+								className="w-full bg-transparent text-base font-medium placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0"
+							/>
 
-				<div className="flex flex-wrap items-center px-5 py-3 border-t border-border gap-x-3 gap-y-2">
-					<div className="flex items-center gap-1">
-						{isEditMode && (
-							<>
-								<Button
-									type="button"
-									variant={sidePanel === "comments" ? "secondary" : "ghost"}
-									size="sm"
-									className="h-7 text-xs gap-1"
-									onClick={() => handleTogglePanel("comments")}
-									aria-pressed={sidePanel === "comments"}
-								>
-									<MessageCircle className="size-3" />
-									Comments
-									{comments.length > 0 && (
-										<span className="ml-0.5 rounded-full bg-muted text-muted-foreground px-1 text-[10px] leading-4">
-											{comments.length}
-										</span>
+							<textarea
+								ref={contentRef}
+								value={content}
+								onChange={(event) => setContent(event.target.value)}
+								placeholder="Write your idea..."
+								rows={3}
+								className="w-full bg-transparent text-sm placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0 resize-none overflow-hidden"
+							/>
+
+							<input
+								ref={fileInputRef}
+								type="file"
+								multiple
+								className="hidden"
+								accept="image/*,video/*,.gif,.pdf"
+								onChange={(event) => handleFileInputChange(event.target.files)}
+							/>
+
+							<div className="space-y-2">
+								<p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+									<Paperclip className="size-3" />
+									Media
+									{uploadingMedia && (
+										<Loader2 className="size-3 animate-spin ml-1" />
 									)}
-								</Button>
+								</p>
+
+								{mediaError && (
+									<p className="text-xs text-destructive">{mediaError}</p>
+								)}
+
+								{(() => {
+									const tiles: Array<{
+										key: string;
+										url: string;
+										type?: "image" | "video" | "gif" | "document";
+										onRemove: () => void;
+									}> =
+										isEditMode && idea
+											? media.flatMap((item) => {
+													const url = item.url ?? item.thumbnail;
+													return url
+														? [
+																{
+																	key: item.id,
+																	url,
+																	type: item.type,
+																	onRemove: () =>
+																		void handleDeleteMedia(item.id),
+																},
+															]
+														: [];
+												})
+											: pendingFiles.map((item) => ({
+													key: item.id,
+													url: item.previewUrl,
+													type: item.kind,
+													onRemove: () => handleRemovePendingFile(item.id),
+												}));
+
+									if (tiles.length > 0) {
+										return (
+											<div
+												className="grid gap-2"
+												style={{
+													gridTemplateColumns:
+														tiles.length === 1
+															? "max-content"
+															: "repeat(auto-fill, minmax(120px, 1fr))",
+												}}
+											>
+												{tiles.map((tile) => (
+													<MediaTile
+														key={tile.key}
+														url={tile.url}
+														type={tile.type}
+														onRemove={tile.onRemove}
+													/>
+												))}
+											</div>
+										);
+									}
+
+									return (
+										<button
+											type="button"
+											onClick={() => fileInputRef.current?.click()}
+											className="w-32 h-28 rounded-lg border-2 border-dashed border-border hover:border-primary/40 flex flex-col items-center justify-center gap-1.5 transition-colors cursor-pointer"
+										>
+											<Upload className="size-5 text-muted-foreground" />
+											<span className="text-[11px] text-muted-foreground leading-tight text-center px-2">
+												Click to attach media
+											</span>
+										</button>
+									);
+								})()}
+							</div>
+						</div>
+
+						<div className="flex flex-wrap items-center px-5 py-3 border-t border-border gap-x-3 gap-y-2">
+							<div className="flex items-center gap-1">
+								{isEditMode && (
+									<>
+										<Button
+											type="button"
+											variant={sidePanel === "comments" ? "secondary" : "ghost"}
+											size="sm"
+											className="h-7 text-xs gap-1"
+											onClick={() => handleTogglePanel("comments")}
+											aria-pressed={sidePanel === "comments"}
+										>
+											<MessageCircle className="size-3" />
+											Comments
+											{comments.length > 0 && (
+												<span className="ml-0.5 rounded-full bg-muted text-muted-foreground px-1 text-[10px] leading-4">
+													{comments.length}
+												</span>
+											)}
+										</Button>
+										<Button
+											type="button"
+											variant={sidePanel === "activity" ? "secondary" : "ghost"}
+											size="sm"
+											className="h-7 text-xs gap-1"
+											onClick={() => handleTogglePanel("activity")}
+											aria-pressed={sidePanel === "activity"}
+										>
+											Activity
+										</Button>
+									</>
+								)}
+								{isEditMode && idea && onDelete && (
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										className="h-7 text-xs gap-1 text-muted-foreground hover:text-destructive"
+										onClick={() => void handleDelete()}
+										disabled={deleting}
+										aria-label="Delete idea"
+									>
+										{deleting ? (
+											<Loader2 className="size-3 animate-spin" />
+										) : (
+											<Trash2 className="size-3" />
+										)}
+										Delete
+									</Button>
+								)}
+							</div>
+
+							<div className="flex items-center gap-2 ml-auto">
+								{isEditMode && idea && (
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										className="h-7 text-xs gap-1"
+										onClick={() => onConvert(idea.id)}
+										disabled={!!idea.converted_to_post_id}
+										title={
+											idea.converted_to_post_id
+												? "Already converted to a post"
+												: "Convert to Post"
+										}
+									>
+										<ArrowRightLeft className="size-3" />
+										Convert to Post
+									</Button>
+								)}
+
 								<Button
 									type="button"
-									variant={sidePanel === "activity" ? "secondary" : "ghost"}
 									size="sm"
-									className="h-7 text-xs gap-1"
-									onClick={() => handleTogglePanel("activity")}
-									aria-pressed={sidePanel === "activity"}
+									className="h-7 text-xs"
+									onClick={() => void handleSubmit()}
+									disabled={saving}
 								>
-									Activity
+									{saving ? (
+										<Loader2 className="size-3 animate-spin mr-1" />
+									) : null}
+									{isEditMode ? "Save" : "Create"}
 								</Button>
-							</>
-						)}
-						{isEditMode && idea && onDelete && (
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								className="h-7 text-xs gap-1 text-muted-foreground hover:text-destructive"
-								onClick={() => void handleDelete()}
-								disabled={deleting}
-								aria-label="Delete idea"
-							>
-								{deleting ? (
-									<Loader2 className="size-3 animate-spin" />
-								) : (
-									<Trash2 className="size-3" />
-								)}
-								Delete
-							</Button>
-						)}
+							</div>
+						</div>
 					</div>
 
-					<div className="flex items-center gap-2 ml-auto">
-						{isEditMode && idea && (
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								className="h-7 text-xs gap-1"
-								onClick={() => onConvert(idea.id)}
-								disabled={!!idea.converted_to_post_id}
-								title={
-									idea.converted_to_post_id
-										? "Already converted to a post"
-										: "Convert to Post"
-								}
-							>
-								<ArrowRightLeft className="size-3" />
-								Convert to Post
-							</Button>
-						)}
+					{isEditMode && sidePanel && (
+						<div className="w-full md:w-80 shrink-0 border-t md:border-t-0 md:border-l border-border flex flex-col bg-background min-h-0">
+							<div className="flex items-center justify-between px-4 py-3 border-b border-border">
+								<p className="text-sm font-medium flex h-7 items-center gap-1.5">
+									{sidePanel === "comments" ? (
+										<>
+											<MessageCircle className="size-3.5" />
+											Comments
+										</>
+									) : (
+										"Activity"
+									)}
+								</p>
+								<button
+									type="button"
+									onClick={() => setSidePanel(null)}
+									className="h-7 flex items-center justify-center rounded-xs opacity-70 hover:opacity-100 transition-opacity px-0.5"
+									aria-label="Close panel"
+								>
+									<X className="size-4" />
+								</button>
+							</div>
 
-						<Button
-							type="button"
-							size="sm"
-							className="h-7 text-xs"
-							onClick={() => void handleSubmit()}
-							disabled={saving}
-						>
-							{saving ? (
-								<Loader2 className="size-3 animate-spin mr-1" />
-							) : null}
-							{isEditMode ? "Save" : "Create"}
-						</Button>
-					</div>
-				</div>
-			</div>
-
-			{isEditMode && sidePanel && (
-				<div className="w-full md:w-80 shrink-0 border-t md:border-t-0 md:border-l border-border flex flex-col bg-background min-h-0">
-					<div className="flex items-center justify-between px-4 py-3 border-b border-border">
-						<p className="text-sm font-medium flex h-7 items-center gap-1.5">
 							{sidePanel === "comments" ? (
 								<>
-									<MessageCircle className="size-3.5" />
-									Comments
+									<div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+										{commentsLoading ? (
+											<div className="flex items-center justify-center py-4">
+												<Loader2 className="size-4 animate-spin text-muted-foreground" />
+											</div>
+										) : topLevelComments.length === 0 ? (
+											<p className="text-xs text-muted-foreground py-2">
+												No comments yet.
+											</p>
+										) : (
+											<div className="space-y-4">
+												{topLevelComments.map((comment) => (
+													<CommentItem
+														key={comment.id}
+														comment={comment}
+														replies={repliesMap[comment.id] ?? []}
+													/>
+												))}
+											</div>
+										)}
+									</div>
+
+									<div className="shrink-0 border-t border-border px-4 py-3">
+										<div className="flex h-7 items-center gap-2 border border-border rounded-md px-3">
+											<input
+												type="text"
+												value={newComment}
+												onChange={(event) => setNewComment(event.target.value)}
+												onKeyDown={(event) => {
+													if (event.key === "Enter" && !event.shiftKey) {
+														event.preventDefault();
+														void handleSubmitComment();
+													}
+												}}
+												placeholder="Add a comment..."
+												className="flex-1 bg-transparent text-sm placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0 min-w-0"
+											/>
+											<button
+												type="button"
+												onClick={() => void handleSubmitComment()}
+												disabled={!newComment.trim() || submittingComment}
+												className={cn(
+													"text-muted-foreground transition-colors shrink-0",
+													newComment.trim() && !submittingComment
+														? "hover:text-foreground"
+														: "opacity-40 cursor-not-allowed",
+												)}
+											>
+												{submittingComment ? (
+													<Loader2 className="size-4 animate-spin" />
+												) : (
+													<Send className="size-4" />
+												)}
+											</button>
+										</div>
+									</div>
 								</>
 							) : (
-								"Activity"
-							)}
-						</p>
-						<button
-							type="button"
-							onClick={() => setSidePanel(null)}
-							className="h-7 flex items-center justify-center rounded-xs opacity-70 hover:opacity-100 transition-opacity px-0.5"
-							aria-label="Close panel"
-						>
-							<X className="size-4" />
-						</button>
-					</div>
-
-					{sidePanel === "comments" ? (
-						<>
-							<div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
-								{commentsLoading ? (
-									<div className="flex items-center justify-center py-4">
-										<Loader2 className="size-4 animate-spin text-muted-foreground" />
-									</div>
-								) : topLevelComments.length === 0 ? (
-									<p className="text-xs text-muted-foreground py-2">
-										No comments yet.
-									</p>
-								) : (
-									<div className="space-y-4">
-										{topLevelComments.map((comment) => (
-											<CommentItem
-												key={comment.id}
-												comment={comment}
-												replies={repliesMap[comment.id] ?? []}
-											/>
-										))}
-									</div>
-								)}
-							</div>
-
-							<div className="shrink-0 border-t border-border px-4 py-3">
-								<div className="flex h-7 items-center gap-2 border border-border rounded-md px-3">
-									<input
-										type="text"
-										value={newComment}
-										onChange={(event) => setNewComment(event.target.value)}
-										onKeyDown={(event) => {
-											if (event.key === "Enter" && !event.shiftKey) {
-												event.preventDefault();
-												void handleSubmitComment();
-											}
-										}}
-										placeholder="Add a comment..."
-										className="flex-1 bg-transparent text-sm placeholder:text-muted-foreground/50 outline-none border-none focus:ring-0 p-0 min-w-0"
-									/>
-									<button
-										type="button"
-										onClick={() => void handleSubmitComment()}
-										disabled={!newComment.trim() || submittingComment}
-										className={cn(
-											"text-muted-foreground transition-colors shrink-0",
-											newComment.trim() && !submittingComment
-												? "hover:text-foreground"
-												: "opacity-40 cursor-not-allowed",
-										)}
-									>
-										{submittingComment ? (
-											<Loader2 className="size-4 animate-spin" />
-										) : (
-											<Send className="size-4" />
-										)}
-									</button>
-								</div>
-							</div>
-						</>
-					) : (
-						<div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
-							{activityLoading ? (
-								<div className="flex items-center justify-center py-4">
-									<Loader2 className="size-4 animate-spin text-muted-foreground" />
-								</div>
-							) : activity.length === 0 ? (
-								<p className="text-xs text-muted-foreground py-2">
-									No activity yet.
-								</p>
-							) : (
-								<div className="space-y-2">
-									{activity.map((entry) => (
-										<div
-											key={entry.id}
-											className="flex items-start gap-2 text-xs"
-										>
-											<div className="size-5 rounded-full bg-muted flex items-center justify-center text-[9px] font-medium text-muted-foreground shrink-0 mt-0.5">
-												{entry.actor_id
-													? entry.actor_id.slice(0, 2).toUpperCase()
-													: "–"}
-											</div>
-											<div className="flex-1">
-												<span className="text-foreground">{entry.action}</span>
-												<span className="ml-2 text-muted-foreground">
-													{new Date(entry.created_at).toLocaleDateString(
-														undefined,
-														{
-															month: "short",
-															day: "numeric",
-															hour: "2-digit",
-															minute: "2-digit",
-														},
-													)}
-												</span>
-											</div>
+								<div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+									{activityLoading ? (
+										<div className="flex items-center justify-center py-4">
+											<Loader2 className="size-4 animate-spin text-muted-foreground" />
 										</div>
-									))}
+									) : activity.length === 0 ? (
+										<p className="text-xs text-muted-foreground py-2">
+											No activity yet.
+										</p>
+									) : (
+										<div className="space-y-2">
+											{activity.map((entry) => (
+												<div
+													key={entry.id}
+													className="flex items-start gap-2 text-xs"
+												>
+													<div className="size-5 rounded-full bg-muted flex items-center justify-center text-[9px] font-medium text-muted-foreground shrink-0 mt-0.5">
+														{entry.actor_id
+															? entry.actor_id.slice(0, 2).toUpperCase()
+															: "–"}
+													</div>
+													<div className="flex-1">
+														<span className="text-foreground">
+															{entry.action}
+														</span>
+														<span className="ml-2 text-muted-foreground">
+															{new Date(entry.created_at).toLocaleDateString(
+																undefined,
+																{
+																	month: "short",
+																	day: "numeric",
+																	hour: "2-digit",
+																	minute: "2-digit",
+																},
+															)}
+														</span>
+													</div>
+												</div>
+											))}
+										</div>
+									)}
 								</div>
 							)}
 						</div>
 					)}
 				</div>
-			)}
-			</div>
 			</DialogContent>
 		</Dialog>
 	);

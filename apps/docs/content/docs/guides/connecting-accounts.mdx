@@ -1,31 +1,65 @@
 ---
 title: Connecting Accounts
-description: Learn how to connect social media accounts to your workspace.
+description: Connect social accounts at organization or workspace scope.
 icon: Link
 ---
 
 ## Overview
 
-Before you can post to a social media platform, you need to connect at least one account. RelayAPI supports OAuth-based connections for most platforms.
+Before you can post to a social media platform, you need to connect at least one account. RelayAPI supports OAuth-based connections for most platforms, credential-based connections for services such as Bluesky and newsletter providers, and a challenge flow for Telegram.
+
+## Workspace behavior
+
+`workspace_id` is optional on every connection initiation flow unless your organization has **Require Workspace ID** enabled.
+
+- With **Require Workspace ID** disabled, omit `workspace_id` to create an organization-scoped connection. A key with at least one workspace grant can still create and use organization-scoped connections.
+- With **Require Workspace ID** enabled, every new connection must include `workspace_id`; omission returns `WORKSPACE_ID_REQUIRED`.
+- When supplied, `workspace_id` must identify an active workspace in the same organization and be allowed by the API key.
+- Reconnecting an existing provider identity never moves it silently. If `workspace_id` is omitted in optional mode, the existing connection keeps its current workspace. Supplying a different workspace returns `ACCOUNT_WORKSPACE_CONFLICT`; move or disconnect the existing account explicitly first.
+
+The authorization captured when a flow starts and the initiating API key's current authorization must both allow the final scope. Disabling or expiring the key, removing write permission, changing its workspace grants, archiving the workspace, enabling **Require Workspace ID** during an organization-scoped flow, or removing a dashboard user's membership causes completion to fail without rotating stored credentials.
 
 ## Connecting via Dashboard
 
 1. Navigate to **Connections** in your dashboard
-2. Click **Connect Account**
-3. Select the platform you want to connect
-4. Authorize RelayAPI in the platform's OAuth flow
-5. Your account will appear in the connected accounts list
+2. Select a workspace, or leave the account unassigned when workspace IDs are optional
+3. Click **Connect Account**
+4. Select the platform you want to connect
+5. Authorize RelayAPI in the platform's OAuth flow
+6. Your account will appear in the connected accounts list
 
 ## Connecting via API
 
-You can also initiate account connections programmatically using the [Connect Account](/api-reference/accounts/connect-account) endpoint:
+Start an OAuth connection with `GET /v1/connect/{platform}`. Include `workspace_id` only when you want a workspace-bound account or the organization requires it:
 
 ```bash
-curl https://api.relayapi.dev/v1/connect/{platform} \
+curl "https://api.relayapi.dev/v1/connect/twitter?workspace_id=ws_example" \
   -H "Authorization: Bearer rlay_live_your_api_key"
 ```
 
-This returns an OAuth URL. Redirect the user to complete authorization.
+The response contains `auth_url`. Redirect the user to that URL; RelayAPI binds the organization, initiating key, initial workspace grant, selected workspace, and callback configuration into a one-time OAuth state. Do not construct or reuse state values yourself.
+
+To start an organization-scoped flow while **Require Workspace ID** is disabled, omit the query parameter:
+
+```bash
+curl "https://api.relayapi.dev/v1/connect/twitter" \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+Credential-based connection request bodies and `POST /v1/connect/telegram` use the same optional `workspace_id` contract.
+
+### Headless and secondary-selection flows
+
+Set `headless=true` to receive a temporary polling token. Only the API key that started the flow can poll its result. The returned `workspace_id` is authoritative and may be `null` in optional mode.
+
+Facebook, LinkedIn, Pinterest, Google Business, and Snapchat require a secondary page, organization, board, location, or profile selection. A pending response includes `connect_token`. Pass that token to both the matching list endpoint as the `connect_token` query parameter and the select endpoint in the JSON body. Each token belongs to one connection operation and initiating API key; it cannot read or consume another concurrent operation.
+
+```bash
+curl "https://api.relayapi.dev/v1/connect/facebook/pages?connect_token=OPERATION_TOKEN" \
+  -H "Authorization: Bearer rlay_live_your_api_key"
+```
+
+Pending OAuth data and Telegram challenge codes are short-lived and one-time. If authorization changes before completion, start a new connection flow after correcting the key or workspace policy.
 
 ## Managing Connected Accounts
 

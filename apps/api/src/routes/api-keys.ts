@@ -1,6 +1,18 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
+import { PRICING } from "@relayapi/config";
 import { apikey, generateId, workspaces } from "@relayapi/db";
-import { and, desc, eq, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import {
+	decodeTimestampIdCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+} from "../lib/pagination-cursor";
+import { hashKey, kvTtlForKey } from "../middleware/auth";
+import {
+	requireAllWorkspaceScopeMiddleware,
+	requireManageApiKeysMiddleware,
+	requireWriteAccessMiddleware,
+} from "../middleware/permissions";
 import {
 	ApiKeyCreatedResponse,
 	ApiKeyListResponse,
@@ -8,17 +20,12 @@ import {
 } from "../schemas/api-keys";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import type { Env, KVKeyData, Variables } from "../types";
-import { PRICING } from "../types";
-import { hashKey, kvTtlForKey } from "../middleware/auth";
-import {
-	requireAllWorkspaceScopeMiddleware,
-	requireWriteAccessMiddleware,
-} from "../middleware/permissions";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
 app.use("*", requireWriteAccessMiddleware);
 app.use("*", requireAllWorkspaceScopeMiddleware);
+app.use("*", requireManageApiKeysMiddleware);
 
 function generateRawKey(): string {
 	const bytes = new Uint8Array(29);
@@ -43,6 +50,10 @@ const listApiKeys = createRoute({
 		200: {
 			description: "List of API keys",
 			content: { "application/json": { schema: ApiKeyListResponse } },
+		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -108,15 +119,23 @@ app.openapi(listApiKeys, async (c) => {
 	const orgId = c.get("orgId");
 	const { limit, cursor } = c.req.valid("query");
 	const db = c.get("db");
-
-	// Keyset pagination on createdAt (the sort key). The cursor is the
-	// created_at of the last item from the previous page.
-	const conditions = [eq(apikey.organizationId, orgId)];
+	let decodedCursor: ReturnType<typeof decodeTimestampIdCursor> | null = null;
 	if (cursor) {
-		const cursorDate = new Date(cursor);
-		if (!Number.isNaN(cursorDate.getTime())) {
-			conditions.push(lt(apikey.createdAt, cursorDate));
+		try {
+			decodedCursor = decodeTimestampIdCursor(cursor);
+		} catch {
+			return c.json(INVALID_CURSOR_BODY, 400);
 		}
+	}
+
+	const conditions = [
+		eq(apikey.organizationId, orgId),
+		sql`${apikey.metadata}->>'principal_type' IS DISTINCT FROM 'dashboard_user'`,
+	];
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${apikey.createdAt}, ${apikey.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
 	}
 
 	const keys = await db
@@ -130,10 +149,11 @@ app.openapi(listApiKeys, async (c) => {
 			createdAt: apikey.createdAt,
 			permissions: apikey.permissions,
 			metadata: apikey.metadata,
+			cursorTimestamp: sql<string>`to_char(${apikey.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(apikey)
 		.where(and(...conditions))
-		.orderBy(desc(apikey.createdAt))
+		.orderBy(desc(apikey.createdAt), desc(apikey.id))
 		.limit(limit + 1);
 
 	const hasMore = keys.length > limit;
@@ -155,9 +175,16 @@ app.openapi(listApiKeys, async (c) => {
 				workspace_scope:
 					(k.metadata as Record<string, unknown>)?.workspace_scope ??
 					("all" as "all" | string[]),
+				can_manage_api_keys:
+					k.permissions?.includes("manage_api_keys") ?? false,
 			})),
 			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},
@@ -186,7 +213,8 @@ app.openapi(createApiKey, async (c) => {
 				{
 					error: {
 						code: "INVALID_WORKSPACE",
-						message: "One or more workspace IDs are invalid or do not belong to this organization.",
+						message:
+							"One or more workspace IDs are invalid or do not belong to this organization.",
 					},
 				},
 				400,
@@ -206,10 +234,17 @@ app.openapi(createApiKey, async (c) => {
 
 	// Use plan from auth context (already resolved by auth middleware)
 	const plan: "free" | "pro" = (c.get("plan") as "free" | "pro") ?? "free";
-	const callsIncluded = plan === "pro" ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded;
+	const callsIncluded =
+		plan === "pro" ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded;
 
 	const permissionsArray =
-		body.permission === "read_write" ? ["read", "write"] : ["read"];
+		body.permission === "read_write"
+			? [
+					"read",
+					"write",
+					...(body.can_manage_api_keys ? ["manage_api_keys"] : []),
+				]
+			: ["read"];
 
 	await db.insert(apikey).values({
 		id: keyId,
@@ -221,7 +256,11 @@ app.openapi(createApiKey, async (c) => {
 		enabled: true,
 		expiresAt,
 		permissions: permissionsArray.join(","),
-		metadata: { workspace_scope: body.workspace_scope },
+		metadata: {
+			workspace_scope: body.workspace_scope,
+			principal_type: "service",
+			created_by_principal_id: c.get("principalId"),
+		},
 	});
 
 	// Write to KV for fast auth lookup
@@ -230,9 +269,9 @@ app.openapi(createApiKey, async (c) => {
 		key_id: keyId,
 		permissions: permissionsArray,
 		workspace_scope: body.workspace_scope,
+		principal_type: "service",
+		principal_id: null,
 		expires_at: expiresAt?.toISOString() ?? null,
-		rate_limit_max: plan === "pro" ? PRICING.proRateLimitMax : PRICING.freeRateLimitMax,
-		rate_limit_window: plan === "pro" ? PRICING.proRateLimitWindow : PRICING.freeRateLimitWindow,
 		plan,
 		calls_included: callsIncluded,
 		ai_enabled: c.get("aiEnabled"),
@@ -257,6 +296,7 @@ app.openapi(createApiKey, async (c) => {
 			expires_at: expiresAt?.toISOString() ?? null,
 			permission: body.permission,
 			workspace_scope: body.workspace_scope,
+			can_manage_api_keys: body.can_manage_api_keys,
 		},
 		201,
 	);
@@ -268,7 +308,7 @@ app.openapi(deleteApiKey, async (c) => {
 	const db = c.get("db");
 
 	const [key] = await db
-		.select({ id: apikey.id, key: apikey.key })
+		.select({ id: apikey.id, key: apikey.key, metadata: apikey.metadata })
 		.from(apikey)
 		.where(and(eq(apikey.id, id), eq(apikey.organizationId, orgId)))
 		.limit(1);
@@ -277,6 +317,20 @@ app.openapi(deleteApiKey, async (c) => {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "API key not found" } },
 			404,
+		);
+	}
+	if (
+		(key.metadata as Record<string, unknown> | null)?.principal_type ===
+		"dashboard_user"
+	) {
+		return c.json(
+			{
+				error: {
+					code: "DASHBOARD_KEY_MANAGED_AUTOMATICALLY",
+					message: "Dashboard session credentials cannot be deleted manually.",
+				},
+			},
+			403,
 		);
 	}
 

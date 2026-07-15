@@ -7,8 +7,16 @@ on:
   pull_request:
     paths:
       - "apps/api/**"
+      - "apps/docs/openapi.json"
       - "packages/db/**"
       - "packages/auth/**"
+      - "packages/config/**"
+      - "packages/sdk/**"
+      - "packages/integrations/n8n-node/**"
+      - "packages/integrations/zapier-app/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/ci-api.yml"
 
 jobs:
   typecheck:
@@ -20,6 +28,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: cd packages/db && bun run tsc --noEmit
       - run: cd packages/auth && bun run tsc --noEmit
+      - name: Verify generated API Worker types
+        working-directory: apps/api
+        run: bun run types:check
       - run: cd apps/api && bun run tsc --noEmit
 
   test:
@@ -32,3 +43,35 @@ jobs:
       - name: Run API tests (isolated per-file)
         working-directory: apps/api
         run: bun run test
+      - name: Run workerd platform integration tests
+        working-directory: apps/api
+        run: bun run test:workerd
+
+  contracts:
+    name: API, SDK, and integrations contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Verify pinned OpenAPI is from this checkout
+        working-directory: apps/api
+        run: bun run openapi:check
+      - name: Verify generated API reference is current
+        working-directory: apps/docs
+        run: bun run docs:check
+      - name: Build TypeScript SDK
+        working-directory: packages/sdk
+        run: bun run build
+      - name: Test n8n contract
+        working-directory: packages/integrations/n8n-node
+        run: bun run test
+      - name: Build n8n node
+        working-directory: packages/integrations/n8n-node
+        run: bun run build
+      - name: Test Zapier workflows
+        working-directory: packages/integrations/zapier-app
+        run: bun run test
+      - name: Build Zapier app
+        working-directory: packages/integrations/zapier-app
+        run: bun run build

@@ -37,10 +37,16 @@ jobs:
           node-version: "22"
 
       - name: Install ClawHub CLI
-        run: npm install -g clawhub
+        run: npm install -g clawhub@0.23.1
 
       - name: Authenticate with ClawHub
-        run: clawhub login --token "${{ secrets.CLAWHUB_TOKEN }}"
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLAWHUB_TOKEN"
+          clawhub --no-input login --token "$CLAWHUB_TOKEN"
+          clawhub whoami
 
       - name: Publish OpenClaw skill
         working-directory: packages/integrations/openclaw

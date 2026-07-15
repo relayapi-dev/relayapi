@@ -8,7 +8,11 @@ icon: Rss
 
 Auto-post rules let you connect an RSS or Atom feed URL to your social accounts. The system checks the feed at a configurable interval and automatically creates scheduled posts from new items.
 
-This is a **Pro** feature and requires workspace scoping when workspaces are enabled.
+This is a **Pro** feature. `workspace_id` follows the organization's **Require
+Workspace ID** policy: when the setting is disabled, omit it to create an
+organization-scoped rule; when the setting is enabled, an independent rule
+must include an active, authorized workspace. Merely having workspaces does not
+make the field mandatory.
 
 ## How It Works
 

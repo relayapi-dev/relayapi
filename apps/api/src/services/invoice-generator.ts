@@ -1,39 +1,52 @@
+import { getBillingPolicy, PRICING } from "@relayapi/config";
 import {
-	createDb,
-	organizationSubscriptions,
-	usageRecords,
-	apiRequestLogs,
 	apikey,
+	apiRequestLogs,
+	billingOperations,
+	createDb,
+	type Database,
+	generateId,
+	organizationSubscriptions,
+	usageBucketSettlements,
+	usageBuckets,
+	usageReservations,
 } from "@relayapi/db";
-import { and, eq, inArray, isNotNull, isNull, gt, lt } from "drizzle-orm";
-import { createStripeClient } from "./stripe";
-import { kvTtlForKey } from "../middleware/auth";
-import { PRICING } from "../types";
-import type { Env, KVKeyData } from "../types";
+import {
+	and,
+	asc,
+	eq,
+	gt,
+	inArray,
+	isNotNull,
+	lt,
+	notExists,
+	sql,
+} from "drizzle-orm";
+import { mapConcurrently } from "../lib/concurrency";
+import type { Env } from "../types";
+import { processOverageBillingOperations } from "./billing-operations";
 
 /**
- * Report metered usage to Stripe for active subscriptions, and downgrade
- * cancelled/expired subscriptions to free. Runs DAILY (index.ts), not only on
- * the 1st: usage_records are keyed on each org's actual Stripe billing period
- * (see resolveBillingPeriod in usage-tracking.ts), which closes on arbitrary
- * calendar days, so the overage item must be added shortly after the period
- * ends — before Stripe finalizes the next invoice.
+ * Report committed successful-mutation buckets to Stripe for active
+ * subscriptions, and downgrade cancelled/expired subscriptions to free. Runs
+ * daily because each organization can have a different Stripe period boundary.
  *
  * Overage is added as an invoice item on the customer's upcoming invoice;
  * Stripe rolls it into the single unified invoice with the $5 base charge.
  *
- * Idempotency is twofold: each usage_records row is marked `billedAt` after a
- * successful invoice-item create (so no run re-bills it), and a deterministic
- * Stripe idempotency key (org + periodStart) guards against a duplicate item if
- * a run crashes between the Stripe call and the DB mark.
+ * A unique usage_bucket_settlements row claims each closed bucket exactly once.
+ * The durable billing operation owns the Stripe side effect and the invoice
+ * webhook later links that settlement to Stripe's canonical invoice.
  */
 export async function generateInvoices(env: Env): Promise<void> {
 	const now = new Date();
 
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const stripe = await createStripeClient(env.STRIPE_SECRET_KEY);
+	// Recover durable operations first, including unknown outcomes from a prior
+	// invocation, before discovering new closed usage windows.
+	await processOverageBillingOperations(env, db);
 
-	// --- 1. Report overage to Stripe for every closed, unbilled usage period ---
+	// --- 1. Claim every closed, unsettled paid-tier usage bucket ---
 	// Process active Stripe-backed subs in batches. For each, bill any usage
 	// record whose period has CLOSED (periodEnd <= now) and is not yet billed —
 	// this naturally covers both Stripe-anniversary periods and the calendar
@@ -65,78 +78,62 @@ export async function generateInvoices(env: Env): Promise<void> {
 
 		for (const sub of dueSubs) {
 			try {
-				// All closed, not-yet-billed usage windows for this org. Usually
-				// one; more only if a prior run was skipped. The settle buffer keeps
-				// us from billing-and-locking a period while a late write could
-				// still target it: after a period roll the cached billing period
-				// refreshes within the 10-min KV TTL (or immediately via the
-				// subscription.updated webhook), so a period closed > 30 min ago has
-				// no remaining writers and billedAt can safely become permanent.
+				const billing = getBillingPolicy({
+					status: sub.status,
+					stripeSubscriptionId: sub.stripeSubscriptionId,
+					trialEndsAt: sub.trialEndsAt,
+					currentPeriodStart: sub.currentPeriodStart,
+					currentPeriodEnd: sub.currentPeriodEnd,
+				});
+				if (!billing.billable || !sub.stripeCustomerId) continue;
+				// The settle buffer exceeds the reservation expiry. A bucket is still
+				// row-locked and stale reservations are released transactionally before
+				// its committed counter is snapshotted.
 				const SETTLE_BUFFER_MS = 30 * 60 * 1000;
 				const settleCutoff = new Date(now.getTime() - SETTLE_BUFFER_MS);
-				const closedRecords = await db
+				const closedBuckets = await db
 					.select()
-					.from(usageRecords)
+					.from(usageBuckets)
 					.where(
 						and(
-							eq(usageRecords.organizationId, sub.organizationId),
-							lt(usageRecords.periodEnd, settleCutoff),
-							isNull(usageRecords.billedAt),
-							// Only bill paid-tier rows. apiCallsIncluded records the
-							// plan allowance at write time, so a leftover calendar-month
-							// FREE row (included = freeCallsIncluded) — accrued before
-							// this org upgraded — is never converted into a pro overage
-							// invoice. Pro rows carry proCallsIncluded (> free).
-							gt(usageRecords.apiCallsIncluded, PRICING.freeCallsIncluded),
+							eq(usageBuckets.organizationId, sub.organizationId),
+							eq(usageBuckets.metric, "successful_mutation"),
+							lt(usageBuckets.periodEnd, settleCutoff),
+							gt(usageBuckets.includedUnits, PRICING.freeCallsIncluded),
+							notExists(
+								db
+									.select({ id: usageBucketSettlements.id })
+									.from(usageBucketSettlements)
+									.where(eq(usageBucketSettlements.bucketId, usageBuckets.id)),
+							),
 						),
 					)
-					.orderBy(usageRecords.periodStart)
+					.orderBy(usageBuckets.periodStart)
 					.limit(24);
 
-				for (const usage of closedRecords) {
-					const apiCallsCount = usage.apiCallsCount ?? 0;
-					// Use the allowance stored on the record (refreshed on every
-					// write) rather than a constant, so a mid-period plan change is
-					// honored.
-					const apiCallsIncluded =
-						usage.apiCallsIncluded ?? PRICING.proCallsIncluded;
-					const overageCalls = Math.max(0, apiCallsCount - apiCallsIncluded);
-
-					if (overageCalls > 0 && sub.stripeCustomerId) {
-						const overageCostCents = Math.ceil(
-							(overageCalls * PRICING.pricePerThousandCallsCents) / 1000,
-						);
-
-						// Skip (but still mark billed) if cost rounds below 1 cent.
-						if (overageCostCents >= 1) {
-							await stripe.invoiceItems.create(
-								{
-									customer: sub.stripeCustomerId,
-									amount: overageCostCents,
-									currency: "usd",
-									description: `API call overage: ${overageCalls.toLocaleString()} calls beyond ${apiCallsIncluded.toLocaleString()} included`,
-								},
-								{
-									idempotencyKey: `overage:${sub.organizationId}:${usage.periodStart.toISOString()}`,
-								},
-							);
-						}
-					}
-
-					// Mark billed so no future run re-invoices this period.
-					await db
-						.update(usageRecords)
-						.set({ billedAt: new Date(), updatedAt: new Date() })
-						.where(eq(usageRecords.id, usage.id));
+				for (const bucket of closedBuckets) {
+					await claimUsageBucketSettlement(
+						db,
+						bucket,
+						sub.stripeCustomerId,
+						now,
+					);
 				}
 			} catch (err) {
-				console.error(`Usage reporting failed for org ${sub.organizationId}:`, err);
+				console.error(
+					`Usage reporting failed for org ${sub.organizationId}:`,
+					err,
+				);
 			}
 		}
 
 		// If we got fewer than BATCH_SIZE, we've processed all
 		if (dueSubs.length < BATCH_SIZE) break;
 	}
+
+	// Process newly-created operations immediately; any unknown/failure remains
+	// durable for the next daily reconciliation pass.
+	await processOverageBillingOperations(env, db);
 
 	// --- 2. Downgrade cancelled/past_due subscriptions ---
 	// Ensure KV entries reflect free plan for inactive subscriptions
@@ -153,7 +150,10 @@ export async function generateInvoices(env: Env): Promise<void> {
 		}
 
 		const inactiveSubs = await db
-			.select({ id: organizationSubscriptions.id, organizationId: organizationSubscriptions.organizationId })
+			.select({
+				id: organizationSubscriptions.id,
+				organizationId: organizationSubscriptions.organizationId,
+			})
 			.from(organizationSubscriptions)
 			.where(and(...conditions))
 			.orderBy(organizationSubscriptions.id)
@@ -166,9 +166,12 @@ export async function generateInvoices(env: Env): Promise<void> {
 
 		for (const sub of inactiveSubs) {
 			try {
-				await syncOrgKeysToKV(env, db, sub.organizationId, "free", PRICING.freeCallsIncluded);
+				await invalidateOrgKeysInKV(env, db, sub.organizationId);
 			} catch (err) {
-				console.error(`Plan downgrade failed for org ${sub.organizationId}:`, err);
+				console.error(
+					`Plan downgrade failed for org ${sub.organizationId}:`,
+					err,
+				);
 			}
 		}
 
@@ -212,33 +215,112 @@ export async function generateInvoices(env: Env): Promise<void> {
 	}
 }
 
+async function claimUsageBucketSettlement(
+	db: Database,
+	bucketCandidate: typeof usageBuckets.$inferSelect,
+	stripeCustomerId: string,
+	now: Date,
+): Promise<void> {
+	await db.transaction(async (tx) => {
+		const [locked] = await tx
+			.select()
+			.from(usageBuckets)
+			.where(
+				and(
+					eq(usageBuckets.id, bucketCandidate.id),
+					eq(usageBuckets.organizationId, bucketCandidate.organizationId),
+				),
+			)
+			.for("update")
+			.limit(1);
+		if (!locked) return;
+
+		const staleBefore = new Date(now.getTime() - 15 * 60 * 1000);
+		await tx.execute(sql`
+			WITH released AS (
+				UPDATE ${usageReservations}
+				   SET state = 'released', finalized_at = ${now}, response_status = NULL
+				 WHERE bucket_id = ${locked.id}
+				   AND state = 'reserved'
+				   AND reserved_at < ${staleBefore}
+				 RETURNING units
+			)
+			UPDATE ${usageBuckets}
+			   SET reserved_units = GREATEST(
+					0,
+					reserved_units - COALESCE((SELECT SUM(units) FROM released), 0)
+				),
+				   revision = revision + CASE WHEN EXISTS (SELECT 1 FROM released) THEN 1 ELSE 0 END,
+				   updated_at = ${now}
+			 WHERE id = ${locked.id}
+		`);
+		const [bucket] = await tx
+			.select()
+			.from(usageBuckets)
+			.where(eq(usageBuckets.id, locked.id))
+			.limit(1);
+		if (!bucket || bucket.reservedUnits > 0) return;
+
+		const overageUnits = Math.max(
+			0,
+			bucket.committedUnits - bucket.includedUnits,
+		);
+		const amountCents = Math.ceil(
+			(overageUnits * PRICING.pricePerThousandCallsCents) / 1000,
+		);
+		const settlementId = generateId("ubs_");
+		const [settlement] = await tx
+			.insert(usageBucketSettlements)
+			.values({
+				id: settlementId,
+				organizationId: bucket.organizationId,
+				bucketId: bucket.id,
+				settlementKey: `usage-bucket:${bucket.id}`,
+				state: amountCents > 0 ? "claimed" : "released",
+				committedUnitsSnapshot: bucket.committedUnits,
+				amountCents,
+				releasedAt: amountCents > 0 ? null : now,
+				updatedAt: now,
+			})
+			.onConflictDoNothing()
+			.returning();
+		if (!settlement || amountCents === 0) return;
+
+		await tx.insert(billingOperations).values({
+			id: `bop_${settlement.id}`,
+			organizationId: bucket.organizationId,
+			usageBucketSettlementId: settlement.id,
+			stripeCustomerId,
+			idempotencyKey: `relayapi:overage:${settlement.settlementKey}`,
+			amountCents,
+			description: `API mutation overage: ${overageUnits.toLocaleString()} mutations beyond ${bucket.includedUnits.toLocaleString()} included`,
+		});
+	});
+}
+
 /**
- * Update all KV-cached API keys for an org with the given plan.
+ * Delete cached API-key authorization in bounded pages. Rehydration reads the
+ * authoritative subscription row, and delete-only invalidation cannot resurrect
+ * a key concurrently revoked by its owner.
  */
-async function syncOrgKeysToKV(
+async function invalidateOrgKeysInKV(
 	env: Env,
 	db: ReturnType<typeof createDb>,
 	orgId: string,
-	plan: "free" | "pro",
-	callsIncluded: number,
 ): Promise<void> {
-	const orgKeys = await db
-		.select({ key: apikey.key })
-		.from(apikey)
-		.where(eq(apikey.organizationId, orgId));
-
-	for (const k of orgKeys) {
-		const existing = await env.KV.get<KVKeyData>(`apikey:${k.key}`, "json");
-		if (existing) {
-			existing.plan = plan;
-			existing.calls_included = callsIncluded;
-			// This path only downgrades to free; clear the Stripe billing period so
-			// usage falls back to calendar month (free orgs have no Stripe window).
-			existing.period_start = null;
-			existing.period_end = null;
-			await env.KV.put(`apikey:${k.key}`, JSON.stringify(existing), {
-				expirationTtl: kvTtlForKey(existing.expires_at),
-			});
-		}
+	let cursor: string | null = null;
+	for (;;) {
+		const conditions = [eq(apikey.organizationId, orgId)];
+		if (cursor) conditions.push(gt(apikey.key, cursor));
+		const keys = await db
+			.select({ key: apikey.key })
+			.from(apikey)
+			.where(and(...conditions))
+			.orderBy(asc(apikey.key))
+			.limit(100);
+		await mapConcurrently(keys, 4, ({ key }) => env.KV.delete(`apikey:${key}`));
+		if (keys.length < 100) return;
+		cursor = keys.at(-1)?.key ?? null;
+		if (!cursor) return;
 	}
 }

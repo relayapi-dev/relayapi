@@ -54,6 +54,7 @@ export class RefUrls extends APIResource {
 
 export interface RefUrlCreateParams {
   slug: string;
+  /** Omission inherits the automation workspace in either policy mode. Without an automation parent, strict mode requires an explicit value. */
   workspace_id?: string;
   automation_id?: string | null;
   enabled?: boolean;

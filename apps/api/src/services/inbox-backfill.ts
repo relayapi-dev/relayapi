@@ -5,9 +5,10 @@
  * Called by inbox-event-processor when a `type: "backfill"` queue message arrives.
  */
 
-import { createDb, socialAccounts, eq } from "@relayapi/db";
+import { createDb, socialAccounts } from "@relayapi/db";
+import { and, eq } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
-import { maybeDecrypt } from "../lib/crypto";
+import { decryptAccountToken } from "../lib/account-token-crypto";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
 import { upsertConversation, insertMessage } from "./inbox-persistence";
@@ -28,7 +29,13 @@ export async function processBackfill(
 	const [account] = await db
 		.select()
 		.from(socialAccounts)
-		.where(eq(socialAccounts.id, message.account_id))
+		.where(
+			and(
+				eq(socialAccounts.id, message.account_id),
+				eq(socialAccounts.organizationId, message.organization_id),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		)
 		.limit(1);
 
 	if (!account || !account.accessToken) {
@@ -39,7 +46,12 @@ export async function processBackfill(
 	}
 
 	const platform = account.platform;
-	const token = await maybeDecrypt(account.accessToken, env.ENCRYPTION_KEY);
+	const token = await decryptAccountToken(
+		account.accessToken,
+		env.ENCRYPTION_KEY,
+		account.id,
+		"access_token",
+	);
 	if (!token) {
 		console.log(
 			`[backfill] Account ${message.account_id} token failed to decrypt, skipping`,
@@ -102,9 +114,7 @@ async function backfillFacebook(
 	const postsUrl = `${GRAPH_BASE.facebook}/me/feed?access_token=${encodeURIComponent(token)}&limit=25&fields=id,message,created_time`;
 	const postsRes = await fetch(postsUrl);
 	if (!postsRes.ok) {
-		console.log(
-			`[backfill] Facebook posts fetch failed: ${postsRes.status}`,
-		);
+		console.log(`[backfill] Facebook posts fetch failed: ${postsRes.status}`);
 		return;
 	}
 
@@ -161,7 +171,11 @@ async function fetchAndStoreFacebookComments(
 		const json = (await res.json()) as {
 			data: Array<{
 				id: string;
-				from?: { id?: string; name: string; picture?: { data?: { url?: string } } };
+				from?: {
+					id?: string;
+					name: string;
+					picture?: { data?: { url?: string } };
+				};
 				message: string;
 				created_time: string;
 			}>;
@@ -175,6 +189,7 @@ async function fetchAndStoreFacebookComments(
 			try {
 				const conversation = await upsertConversation(db, {
 					organizationId,
+					workspaceId: account.workspaceId,
 					accountId: account.id,
 					platform: "facebook",
 					type: "comment_thread",
@@ -182,8 +197,7 @@ async function fetchAndStoreFacebookComments(
 					postPlatformId: postId,
 					participantName: comment.from?.name ?? null,
 					participantPlatformId: comment.from?.id ?? null,
-					participantAvatar:
-						comment.from?.picture?.data?.url ?? null,
+					participantAvatar: comment.from?.picture?.data?.url ?? null,
 					lastMessageText: comment.message,
 					lastMessageAt: new Date(comment.created_time),
 					lastMessageDirection: "inbound",
@@ -195,8 +209,7 @@ async function fetchAndStoreFacebookComments(
 					platformMessageId: comment.id,
 					authorName: comment.from?.name ?? null,
 					authorPlatformId: comment.from?.id ?? null,
-					authorAvatarUrl:
-						comment.from?.picture?.data?.url ?? null,
+					authorAvatarUrl: comment.from?.picture?.data?.url ?? null,
 					text: comment.message,
 					direction: "inbound",
 					createdAt: new Date(comment.created_time),
@@ -239,9 +252,7 @@ async function backfillInstagram(
 	const mediaUrl = `https://${host}/v25.0/me/media?access_token=${encodeURIComponent(token)}&limit=25&fields=id,caption,timestamp`;
 	const mediaRes = await fetch(mediaUrl);
 	if (!mediaRes.ok) {
-		console.log(
-			`[backfill] Instagram media fetch failed: ${mediaRes.status}`,
-		);
+		console.log(`[backfill] Instagram media fetch failed: ${mediaRes.status}`);
 		return;
 	}
 
@@ -314,6 +325,7 @@ async function fetchAndStoreInstagramComments(
 			try {
 				const conversation = await upsertConversation(db, {
 					organizationId,
+					workspaceId: account.workspaceId,
 					accountId: account.id,
 					platform: "instagram",
 					type: "comment_thread",
@@ -429,16 +441,15 @@ async function backfillYouTube(
 				// Upsert conversation for this video's comment thread
 				const conversation = await upsertConversation(db, {
 					organizationId,
+					workspaceId: account.workspaceId,
 					accountId: account.id,
 					platform: "youtube",
 					type: "comment_thread",
 					platformConversationId: videoId,
 					postPlatformId: videoId,
 					participantName: topComment.authorDisplayName,
-					participantPlatformId:
-						topComment.authorChannelId?.value ?? null,
-					participantAvatar:
-						topComment.authorProfileImageUrl ?? null,
+					participantPlatformId: topComment.authorChannelId?.value ?? null,
+					participantAvatar: topComment.authorProfileImageUrl ?? null,
 					lastMessageText: topComment.textOriginal,
 					lastMessageAt: new Date(topComment.publishedAt),
 					lastMessageDirection: "inbound",
@@ -450,10 +461,8 @@ async function backfillYouTube(
 					organizationId,
 					platformMessageId: item.snippet.topLevelComment.id,
 					authorName: topComment.authorDisplayName,
-					authorPlatformId:
-						topComment.authorChannelId?.value ?? null,
-					authorAvatarUrl:
-						topComment.authorProfileImageUrl ?? null,
+					authorPlatformId: topComment.authorChannelId?.value ?? null,
+					authorAvatarUrl: topComment.authorProfileImageUrl ?? null,
 					text: topComment.textOriginal,
 					direction: "inbound",
 					createdAt: new Date(topComment.publishedAt),
@@ -468,10 +477,8 @@ async function backfillYouTube(
 							organizationId,
 							platformMessageId: reply.id,
 							authorName: reply.snippet.authorDisplayName,
-							authorPlatformId:
-								reply.snippet.authorChannelId?.value ?? null,
-							authorAvatarUrl:
-								reply.snippet.authorProfileImageUrl ?? null,
+							authorPlatformId: reply.snippet.authorChannelId?.value ?? null,
+							authorAvatarUrl: reply.snippet.authorProfileImageUrl ?? null,
 							text: reply.snippet.textOriginal,
 							direction: "inbound",
 							createdAt: new Date(reply.snippet.publishedAt),
@@ -599,6 +606,7 @@ async function backfillGoogleBusiness(
 			try {
 				const conversation = await upsertConversation(db, {
 					organizationId,
+					workspaceId: account.workspaceId,
 					accountId: account.id,
 					platform: "googlebusiness",
 					type: "review",

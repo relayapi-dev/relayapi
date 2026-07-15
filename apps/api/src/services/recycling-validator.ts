@@ -19,11 +19,12 @@ export async function validateRecyclingConfig(
 		content_variations?: string[];
 	},
 	existingConfigId?: string,
+	targetPlatforms?: string[],
 ): Promise<RecyclingValidationResult> {
 	const warnings: string[] = [];
 
 	// 1. Post status must be published or scheduled
-	if (!["published", "scheduled"].includes(postStatus)) {
+	if (!["published", "scheduled", "publishing"].includes(postStatus)) {
 		return {
 			valid: false,
 			error: {
@@ -35,12 +36,24 @@ export async function validateRecyclingConfig(
 	}
 
 	// 2. Reject if any target is youtube or tiktok
-	const targets = await db
-		.select({ platform: postTargets.platform })
-		.from(postTargets)
-		.where(eq(postTargets.postId, postId));
-
-	const platforms = targets.map((t) => t.platform);
+	const platforms =
+		targetPlatforms ??
+		(
+			await db
+				.select({ platform: postTargets.platform })
+				.from(postTargets)
+				.where(eq(postTargets.postId, postId))
+		).map((target) => target.platform);
+	if (platforms.length === 0) {
+		return {
+			valid: false,
+			error: {
+				code: "NO_ELIGIBLE_RECYCLE_TARGETS",
+				message:
+					"At least one eligible target is required before enabling recycling.",
+			},
+		};
+	}
 	if (platforms.includes("youtube") || platforms.includes("tiktok")) {
 		return {
 			valid: false,

@@ -1,6 +1,6 @@
-import type { Command } from "commander";
 import { basename } from "node:path";
 import * as prompts from "@clack/prompts";
+import type { Command } from "commander";
 import { createClient } from "../client.js";
 import {
 	isTableMode,
@@ -77,7 +77,10 @@ export function registerMediaCommands(program: Command): void {
 				const buffer = await file.arrayBuffer();
 				const filename = basename(filepath);
 				const client = createClient();
-				const result = await client.media.upload(buffer, { filename });
+				const result = await client.media.upload(buffer, {
+					filename,
+					content_type: file.type,
+				});
 				outputJson(result);
 				outputSuccess(`Uploaded ${filename} (${formatBytes(result.size)})`);
 			});

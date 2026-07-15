@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { createDb, connectionLogs } from "@relayapi/db";
+import { connectionLogs, createDb } from "@relayapi/db";
 import { and, count, desc, eq, gte, lt, lte } from "drizzle-orm";
 import { ErrorResponse, OffsetPaginationParams } from "../schemas/common";
 import type { Env, Variables } from "../types";
@@ -13,9 +13,19 @@ const ConnectionLogEntry = z.object({
 	account_id: z.string().nullable().describe("Social account ID"),
 	platform: z.string().describe("Platform name"),
 	event: z
-		.enum(["connected", "disconnected", "token_refreshed", "error"])
+		.enum([
+			"connected",
+			"disconnecting",
+			"disconnected",
+			"token_refreshed",
+			"error",
+		])
 		.describe("Event type"),
 	message: z.string().nullable().describe("Event details"),
+	snapshot: z
+		.record(z.string(), z.unknown())
+		.nullable()
+		.describe("Immutable lifecycle snapshot"),
 	created_at: z.string().datetime().describe("Timestamp"),
 });
 
@@ -132,11 +142,19 @@ app.openapi(listConnectionLogs, async (c) => {
 				id: l.id,
 				account_id: l.socialAccountId,
 				platform: l.platform,
-				event: l.event as "connected" | "disconnected" | "token_refreshed" | "error",
+				event: l.event as
+					| "connected"
+					| "disconnecting"
+					| "disconnected"
+					| "token_refreshed"
+					| "error",
 				message: l.message,
+				snapshot: (l.snapshot as Record<string, unknown> | null) ?? null,
 				created_at: l.createdAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.createdAt.toISOString() ?? null) : null,
+			next_cursor: hasMore
+				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				: null,
 			has_more: hasMore,
 			total,
 		},

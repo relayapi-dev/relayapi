@@ -2,10 +2,22 @@ import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import {
 	type createDb,
 	generateId,
+	postThreads,
 	posts,
 	postTargets,
+	publishOutbox,
+	threadExecutions,
 } from "@relayapi/db";
 import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import {
+	inheritOperationalCreateScope,
+	workspaceScopeKey,
+} from "../lib/request-access";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+} from "../lib/workspace-scope";
+import type { MediaAttachment } from "../publishers/types";
 import { ErrorResponse } from "../schemas/common";
 import {
 	CreateThreadBody,
@@ -14,11 +26,12 @@ import {
 	ThreadListResponse,
 	ThreadResponse,
 } from "../schemas/threads";
+import {
+	dispatchPublishOutbox,
+	publishOutboxRow,
+} from "../services/publish-outbox";
 import { resolveTargets } from "../services/target-resolver";
-import { assertScopedCreateWorkspace } from "../lib/request-access";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
 import type { Env, Variables } from "../types";
-import type { MediaAttachment } from "../publishers/types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -70,7 +83,8 @@ const createThread = createRoute({
 	path: "/",
 	tags: ["Threads"],
 	summary: "Create a thread",
-	description: "Create a multi-item thread for publishing as a reply chain on supported platforms.",
+	description:
+		"Create a multi-item thread for publishing as a reply chain on supported platforms.",
 	security: [{ Bearer: [] }],
 	request: {
 		body: { content: { "application/json": { schema: CreateThreadBody } } },
@@ -80,9 +94,18 @@ const createThread = createRoute({
 			description: "Thread created",
 			content: { "application/json": { schema: ThreadResponse } },
 		},
-		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		409: { description: "Conflict", content: { "application/json": { schema: ErrorResponse } } },
+		400: {
+			description: "Bad request",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Conflict",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -92,7 +115,8 @@ const getThread = createRoute({
 	path: "/{thread_group_id}",
 	tags: ["Threads"],
 	summary: "Get a thread",
-	description: "Retrieve a full thread with all items and their per-target results.",
+	description:
+		"Retrieve a full thread with all items and their per-target results.",
 	security: [{ Bearer: [] }],
 	request: { params: ThreadIdParam },
 	responses: {
@@ -100,8 +124,14 @@ const getThread = createRoute({
 			description: "Thread details",
 			content: { "application/json": { schema: ThreadResponse } },
 		},
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -118,7 +148,10 @@ const listThreads = createRoute({
 			description: "Threads list",
 			content: { "application/json": { schema: ThreadListResponse } },
 		},
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -133,8 +166,14 @@ const deleteThread = createRoute({
 	request: { params: ThreadIdParam },
 	responses: {
 		204: { description: "Thread deleted" },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -225,7 +264,8 @@ async function buildThreadResponse(
 	else if (statuses.every((s) => s === "failed")) threadStatus = "failed";
 	else if (statuses.every((s) => s === "draft")) threadStatus = "draft";
 	else if (statuses.every((s) => s === "scheduled")) threadStatus = "scheduled";
-	else if (statuses.some((s) => s === "publishing")) threadStatus = "publishing";
+	else if (statuses.some((s) => s === "publishing"))
+		threadStatus = "publishing";
 	else threadStatus = "partial";
 
 	const root = threadPosts[0];
@@ -248,19 +288,34 @@ app.openapi(createThread, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
-	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "thread");
-	if (denied) return denied;
 
 	// Resolve targets
-	const { resolved, failed } = await resolveTargets(db, orgId, body.targets, c.get("workspaceScope"));
+	const targetResolution = await resolveTargets(
+		db,
+		orgId,
+		body.targets,
+		c.get("workspaceScope"),
+		undefined,
+		body.workspace_id ?? null,
+	);
+	const scope = await inheritOperationalCreateScope(
+		c,
+		body.workspace_id,
+		targetResolution.workspaceIds,
+		"thread",
+	);
+	if (!scope.ok) return scope.response as never;
+	const workspaceId = scope.workspaceId;
+	const { resolved, failed } = targetResolution;
 	if (resolved.length === 0) {
 		return c.json(
 			{
 				error: {
 					code: "NO_VALID_TARGETS",
-					message: failed.length > 0
-						? failed.map((f) => `${f.key}: ${f.error.message}`).join("; ")
-						: "No valid targets resolved.",
+					message:
+						failed.length > 0
+							? failed.map((f) => `${f.key}: ${f.error.message}`).join("; ")
+							: "No valid targets resolved.",
 				},
 			},
 			400,
@@ -304,8 +359,12 @@ app.openapi(createThread, async (c) => {
 	const postStatus = isDraft ? "draft" : isNow ? "publishing" : "scheduled";
 
 	// Flatten all accounts from resolved targets
-	const allAccounts = resolved.flatMap((r) => r.accounts.map((a) => ({ ...a, platform: r.platform })));
-	const uniqueAccounts = [...new Map(allAccounts.map((a) => [a.id, a])).values()];
+	const allAccounts = resolved.flatMap((r) =>
+		r.accounts.map((a) => ({ ...a, platform: r.platform })),
+	);
+	const uniqueAccounts = [
+		...new Map(allAccounts.map((a) => [a.id, a])).values(),
+	];
 
 	// Build all post + target rows in memory, then persist them in a single transaction
 	// with two multi-row inserts. The old code awaited one INSERT per item and one INSERT
@@ -325,7 +384,7 @@ app.openapi(createThread, async (c) => {
 		postRows.push({
 			id: postId,
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId,
 			content: item.content,
 			status: postStatus as typeof posts.$inferInsert.status,
 			scheduledAt,
@@ -339,6 +398,8 @@ app.openapi(createThread, async (c) => {
 		for (const account of uniqueAccounts) {
 			targetRows.push({
 				id: generateId(""),
+				organizationId: orgId,
+				scopeKey: workspaceScopeKey(workspaceId),
 				postId,
 				socialAccountId: account.id,
 				platform: account.platform as typeof postTargets.$inferInsert.platform,
@@ -348,21 +409,32 @@ app.openapi(createThread, async (c) => {
 	}
 
 	await db.transaction(async (tx) => {
+		await tx.insert(postThreads).values({
+			id: threadGroupId,
+			organizationId: orgId,
+			workspaceId,
+		});
+		await tx.insert(threadExecutions).values({
+			threadGroupId,
+			organizationId: orgId,
+			workspaceId,
+			status: "queued",
+		});
 		await tx.insert(posts).values(postRows);
 		if (targetRows.length > 0) {
 			await tx.insert(postTargets).values(targetRows);
+		}
+		if (isNow && targetRows.length > 0) {
+			await tx
+				.insert(publishOutbox)
+				.values(publishOutboxRow({ organizationId: orgId, threadGroupId }));
 		}
 	});
 
 	// Enqueue for publishing if immediate (only after the transaction commits, so a
 	// rollback never enqueues a publish for non-persisted posts).
 	if (isNow) {
-		await c.env.PUBLISH_QUEUE.send({
-			type: "publish_thread",
-			thread_group_id: threadGroupId,
-			org_id: orgId,
-			position: 0,
-		});
+		c.executionCtx.waitUntil(dispatchPublishOutbox(c.env));
 	}
 
 	// Build response
@@ -457,9 +529,7 @@ app.openapi(listThreads, async (c) => {
 			.groupBy(posts.threadGroupId);
 		itemCounts = new Map(
 			counts.flatMap((c) =>
-				c.threadGroupId !== null
-					? ([[c.threadGroupId, c.count]] as const)
-					: [],
+				c.threadGroupId !== null ? ([[c.threadGroupId, c.count]] as const) : [],
 			),
 		);
 	}
@@ -528,6 +598,14 @@ app.openapi(deleteThread, async (c) => {
 		await db.delete(postTargets).where(inArray(postTargets.postId, ids));
 		await db.delete(posts).where(inArray(posts.id, ids));
 	}
+	await db
+		.delete(postThreads)
+		.where(
+			and(
+				eq(postThreads.id, thread_group_id),
+				eq(postThreads.organizationId, orgId),
+			),
+		);
 
 	return c.body(null, 204);
 });

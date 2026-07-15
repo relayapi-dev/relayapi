@@ -1,7 +1,7 @@
 import {
 	classifyPublishError,
-	PublishError,
 	type MediaAttachment,
+	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
@@ -12,6 +12,7 @@ const TELEGRAM_API = "https://api.telegram.org";
 interface TelegramResponse {
 	ok: boolean;
 	description?: string;
+	parameters?: { retry_after?: number };
 	result?: TelegramMessage | TelegramMessage[];
 }
 
@@ -57,10 +58,23 @@ async function callTelegramApi(
 		const desc = data.description ?? `Telegram API error: ${method}`;
 		const raw = `HTTP ${res.status}\n${JSON.stringify(data)}`;
 		if (data.description?.includes("Too Many Requests")) {
-			throw new PublishError(`RATE_LIMITED: ${desc}`, { statusCode: res.status, detail: raw });
+			throw new PublishError(`RATE_LIMITED: ${desc}`, {
+				statusCode: res.status,
+				detail: raw,
+				retryAfterMs:
+					typeof data.parameters?.retry_after === "number"
+						? data.parameters.retry_after * 1000
+						: undefined,
+			});
 		}
-		if (data.description?.includes("Unauthorized") || data.description?.includes("bot was blocked")) {
-			throw new PublishError(`TOKEN_EXPIRED: ${desc}`, { statusCode: res.status, detail: raw });
+		if (
+			data.description?.includes("Unauthorized") ||
+			data.description?.includes("bot was blocked")
+		) {
+			throw new PublishError(`TOKEN_EXPIRED: ${desc}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
 		throw new PublishError(desc, { statusCode: res.status, detail: raw });
 	}
@@ -86,7 +100,7 @@ function buildMessageUrl(
 
 function resolveMediaType(
 	m: MediaAttachment,
-): "photo" | "video" | "document" | "animation" | "audio" {
+): "photo" | "video" | "document" | "animation" {
 	switch (m.type) {
 		case "image":
 			return "photo";
@@ -174,10 +188,6 @@ async function sendSingleMedia(
 			method = "sendAnimation";
 			params.animation = media.url;
 			break;
-		case "audio":
-			method = "sendAudio";
-			params.audio = media.url;
-			break;
 		case "document":
 			method = "sendDocument";
 			params.document = media.url;
@@ -226,6 +236,17 @@ async function sendMediaGroup(
 		}
 		return sendSingleMedia(token, chatId, single, caption, opts);
 	}
+	if (mediaItems.length > 10) {
+		// Official docs: https://core.telegram.org/bots/api#sendmediagroup
+		// Field `media` must contain 2-10 InputMedia items.
+		return {
+			success: false,
+			error: {
+				code: "TOO_MANY_MEDIA",
+				message: `Telegram media groups support at most 10 items; received ${mediaItems.length}.`,
+			},
+		};
+	}
 
 	if (caption && caption.length > 1024) {
 		return {
@@ -237,50 +258,45 @@ async function sendMediaGroup(
 		};
 	}
 
-	// sendMediaGroup does not support animation/GIF — Telegram infers type from URL
-	// and rejects animations even when labeled as "document"
-	const hasAnimation = mediaItems.some((m) => resolveMediaType(m) === "animation");
-	const filteredItems = hasAnimation
-		? mediaItems.filter((m) => resolveMediaType(m) !== "animation")
-		: mediaItems;
-
-	// After filtering animations, check if we still have enough items for a group
-	if (filteredItems.length < 2) {
-		// Fall back to sending the first item as a single media message
-		const firstItem = mediaItems[0];
-		if (!firstItem) {
-			throw new Error("No media items to send");
-		}
-		return sendSingleMedia(token, chatId, firstItem, caption, opts);
+	// Official docs: https://core.telegram.org/bots/api#sendmediagroup
+	// Field `media` permits InputMediaAudio, Document, Photo, Video, or LivePhoto;
+	// it does not permit InputMediaAnimation. RelayAPI's shared attachment type
+	// currently maps document/photo/video only; reject GIFs instead of dropping them.
+	const hasAnimation = mediaItems.some(
+		(m) => resolveMediaType(m) === "animation",
+	);
+	if (hasAnimation) {
+		return {
+			success: false,
+			error: {
+				code: "UNSUPPORTED_MEDIA_TYPE",
+				message:
+					"Telegram animations/GIFs cannot be included in a media group; send one animation separately.",
+			},
+		};
 	}
 
-	// Telegram requires consistent types: photos+videos can mix, documents only with documents, audio only with audio
+	// Telegram requires consistent types: photos+videos can mix, while documents
+	// must be grouped only with documents.
 	// Docs: https://core.telegram.org/bots/api#sendmediagroup
-	const hasPhoto = filteredItems.some((m) => resolveMediaType(m) === "photo");
-	const hasVideo = filteredItems.some((m) => resolveMediaType(m) === "video");
-	const hasDocument = filteredItems.some((m) => resolveMediaType(m) === "document");
-	const hasAudio = filteredItems.some((m) => resolveMediaType(m) === "audio");
+	const hasPhoto = mediaItems.some((m) => resolveMediaType(m) === "photo");
+	const hasVideo = mediaItems.some((m) => resolveMediaType(m) === "video");
+	const hasDocument = mediaItems.some(
+		(m) => resolveMediaType(m) === "document",
+	);
 
-	if (hasDocument && (hasPhoto || hasVideo || hasAudio)) {
+	if (hasDocument && (hasPhoto || hasVideo)) {
 		return {
 			success: false,
 			error: {
 				code: "INVALID_MEDIA_MIX",
-				message: "Telegram does not allow mixing documents with photos, videos, or audio in a media group.",
-			},
-		};
-	}
-	if (hasAudio && (hasPhoto || hasVideo || hasDocument)) {
-		return {
-			success: false,
-			error: {
-				code: "INVALID_MEDIA_MIX",
-				message: "Telegram does not allow mixing audio with photos, videos, or documents in a media group.",
+				message:
+					"Telegram does not allow mixing documents with photos or videos in a media group.",
 			},
 		};
 	}
 
-	const inputMedia = filteredItems.slice(0, 10).map((m, i) => {
+	const inputMedia = mediaItems.map((m, i) => {
 		const mediaType = resolveMediaType(m);
 		const type = mediaType;
 
@@ -343,12 +359,12 @@ export const telegramPublisher: Publisher = {
 						},
 					};
 				}
-				return sendTextMessage(token, chatId, content, opts);
+				return await sendTextMessage(token, chatId, content, opts);
 			}
 
 			// Single media item
 			if (media.length === 1) {
-				return sendSingleMedia(
+				return await sendSingleMedia(
 					token,
 					chatId,
 					media[0] as MediaAttachment,
@@ -358,7 +374,7 @@ export const telegramPublisher: Publisher = {
 			}
 
 			// Multiple media → album
-			return sendMediaGroup(
+			return await sendMediaGroup(
 				token,
 				chatId,
 				media as MediaAttachment[],
@@ -366,7 +382,7 @@ export const telegramPublisher: Publisher = {
 				opts,
 			);
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

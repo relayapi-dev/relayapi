@@ -1,7 +1,8 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { type createDb, socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
-import { maybeDecrypt } from "../lib/crypto";
+import { decryptAccountToken } from "../lib/account-token-crypto";
+import { canAccessWorkspaceScope } from "../lib/workspace-scope";
 import {
 	BookmarkBody,
 	EngagementResponse,
@@ -147,14 +148,16 @@ async function getTwitterAccount(
 		)
 		.limit(1);
 	if (!account) return null;
-	if (workspaceScope !== "all") {
-		if (!account.workspaceId || !workspaceScope.includes(account.workspaceId)) {
-			return null;
-		}
-	}
+	if (!canAccessWorkspaceScope(workspaceScope, account.workspaceId))
+		return null;
 	return {
 		...account,
-		accessToken: await maybeDecrypt(account.accessToken, encryptionKey),
+		accessToken: await decryptAccountToken(
+			account.accessToken,
+			encryptionKey,
+			account.id,
+			"access_token",
+		),
 	};
 }
 
@@ -184,19 +187,46 @@ app.openapi(retweet, async (c) => {
 	const { account_id, tweet_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getTwitterAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account) {
-		return c.json({ success: false, error: { code: "ACCOUNT_NOT_FOUND", message: "Twitter account not found" } }, 404);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "Twitter account not found",
+				},
+			},
+			404,
+		);
 	}
 	if (!account.accessToken) {
-		return c.json({ success: false, error: { code: "TOKEN_MISSING", message: "Twitter account has no access token" } }, 401);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "TOKEN_MISSING",
+					message: "Twitter account has no access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const res = await fetch(
 		`https://api.twitter.com/2/users/${account.platformAccountId}/retweets`,
 		{
 			method: "POST",
-			headers: { Authorization: `Bearer ${account.accessToken}`, "Content-Type": "application/json" },
+			headers: {
+				Authorization: `Bearer ${account.accessToken}`,
+				"Content-Type": "application/json",
+			},
 			body: JSON.stringify({ tweet_id }),
 		},
 	);
@@ -204,7 +234,13 @@ app.openapi(retweet, async (c) => {
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
-		return c.json({ success: false, error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code } }, 502);
+		return c.json(
+			{
+				success: false,
+				error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code },
+			},
+			502,
+		);
 	}
 	return c.json({ success: true, data: { retweeted: true } }, 200);
 });
@@ -214,23 +250,56 @@ app.openapi(undoRetweet, async (c) => {
 	const { account_id, tweet_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getTwitterAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account) {
-		return c.json({ success: false, error: { code: "ACCOUNT_NOT_FOUND", message: "Twitter account not found" } }, 404);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "Twitter account not found",
+				},
+			},
+			404,
+		);
 	}
 	if (!account.accessToken) {
-		return c.json({ success: false, error: { code: "TOKEN_MISSING", message: "Twitter account has no access token" } }, 401);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "TOKEN_MISSING",
+					message: "Twitter account has no access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const res = await fetch(
 		`https://api.twitter.com/2/users/${account.platformAccountId}/retweets/${tweet_id}`,
-		{ method: "DELETE", headers: { Authorization: `Bearer ${account.accessToken}` } },
+		{
+			method: "DELETE",
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		},
 	);
 
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
-		return c.json({ success: false, error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code } }, 502);
+		return c.json(
+			{
+				success: false,
+				error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code },
+			},
+			502,
+		);
 	}
 	return c.json({ success: true, data: { retweeted: false } }, 200);
 });
@@ -240,19 +309,46 @@ app.openapi(bookmark, async (c) => {
 	const { account_id, tweet_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getTwitterAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account) {
-		return c.json({ success: false, error: { code: "ACCOUNT_NOT_FOUND", message: "Twitter account not found" } }, 404);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "Twitter account not found",
+				},
+			},
+			404,
+		);
 	}
 	if (!account.accessToken) {
-		return c.json({ success: false, error: { code: "TOKEN_MISSING", message: "Twitter account has no access token" } }, 401);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "TOKEN_MISSING",
+					message: "Twitter account has no access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const res = await fetch(
 		`https://api.twitter.com/2/users/${account.platformAccountId}/bookmarks`,
 		{
 			method: "POST",
-			headers: { Authorization: `Bearer ${account.accessToken}`, "Content-Type": "application/json" },
+			headers: {
+				Authorization: `Bearer ${account.accessToken}`,
+				"Content-Type": "application/json",
+			},
 			body: JSON.stringify({ tweet_id }),
 		},
 	);
@@ -260,7 +356,13 @@ app.openapi(bookmark, async (c) => {
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
-		return c.json({ success: false, error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code } }, 502);
+		return c.json(
+			{
+				success: false,
+				error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code },
+			},
+			502,
+		);
 	}
 	return c.json({ success: true, data: { bookmarked: true } }, 200);
 });
@@ -270,23 +372,56 @@ app.openapi(removeBookmark, async (c) => {
 	const { account_id, tweet_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getTwitterAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account) {
-		return c.json({ success: false, error: { code: "ACCOUNT_NOT_FOUND", message: "Twitter account not found" } }, 404);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "Twitter account not found",
+				},
+			},
+			404,
+		);
 	}
 	if (!account.accessToken) {
-		return c.json({ success: false, error: { code: "TOKEN_MISSING", message: "Twitter account has no access token" } }, 401);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "TOKEN_MISSING",
+					message: "Twitter account has no access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const res = await fetch(
 		`https://api.twitter.com/2/users/${account.platformAccountId}/bookmarks/${tweet_id}`,
-		{ method: "DELETE", headers: { Authorization: `Bearer ${account.accessToken}` } },
+		{
+			method: "DELETE",
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		},
 	);
 
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
-		return c.json({ success: false, error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code } }, 502);
+		return c.json(
+			{
+				success: false,
+				error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code },
+			},
+			502,
+		);
 	}
 	return c.json({ success: true, data: { bookmarked: false } }, 200);
 });
@@ -296,19 +431,46 @@ app.openapi(follow, async (c) => {
 	const { account_id, target_user_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getTwitterAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account) {
-		return c.json({ success: false, error: { code: "ACCOUNT_NOT_FOUND", message: "Twitter account not found" } }, 404);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "Twitter account not found",
+				},
+			},
+			404,
+		);
 	}
 	if (!account.accessToken) {
-		return c.json({ success: false, error: { code: "TOKEN_MISSING", message: "Twitter account has no access token" } }, 401);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "TOKEN_MISSING",
+					message: "Twitter account has no access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const res = await fetch(
 		`https://api.twitter.com/2/users/${account.platformAccountId}/following`,
 		{
 			method: "POST",
-			headers: { Authorization: `Bearer ${account.accessToken}`, "Content-Type": "application/json" },
+			headers: {
+				Authorization: `Bearer ${account.accessToken}`,
+				"Content-Type": "application/json",
+			},
 			body: JSON.stringify({ target_user_id }),
 		},
 	);
@@ -316,16 +478,27 @@ app.openapi(follow, async (c) => {
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
-		return c.json({ success: false, error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code } }, 502);
+		return c.json(
+			{
+				success: false,
+				error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code },
+			},
+			502,
+		);
 	}
-	const data = (await res.json().catch(() => ({}))) as { data?: { following?: boolean; pending_follow?: boolean } };
-	return c.json({
-		success: true,
-		data: {
-			following: data?.data?.following ?? true,
-			pending_follow: data?.data?.pending_follow ?? false,
+	const data = (await res.json().catch(() => ({}))) as {
+		data?: { following?: boolean; pending_follow?: boolean };
+	};
+	return c.json(
+		{
+			success: true,
+			data: {
+				following: data?.data?.following ?? true,
+				pending_follow: data?.data?.pending_follow ?? false,
+			},
 		},
-	}, 200);
+		200,
+	);
 });
 
 app.openapi(unfollow, async (c) => {
@@ -333,23 +506,56 @@ app.openapi(unfollow, async (c) => {
 	const { account_id, target_user_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getTwitterAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getTwitterAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account) {
-		return c.json({ success: false, error: { code: "ACCOUNT_NOT_FOUND", message: "Twitter account not found" } }, 404);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "Twitter account not found",
+				},
+			},
+			404,
+		);
 	}
 	if (!account.accessToken) {
-		return c.json({ success: false, error: { code: "TOKEN_MISSING", message: "Twitter account has no access token" } }, 401);
+		return c.json(
+			{
+				success: false,
+				error: {
+					code: "TOKEN_MISSING",
+					message: "Twitter account has no access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const res = await fetch(
 		`https://api.twitter.com/2/users/${account.platformAccountId}/following/${target_user_id}`,
-		{ method: "DELETE", headers: { Authorization: `Bearer ${account.accessToken}` } },
+		{
+			method: "DELETE",
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		},
 	);
 
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
-		return c.json({ success: false, error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code } }, 502);
+		return c.json(
+			{
+				success: false,
+				error: { code: "TWITTER_API_ERROR", message, twitter_error_code: code },
+			},
+			502,
+		);
 	}
 	return c.json({ success: true, data: { following: false } }, 200);
 });

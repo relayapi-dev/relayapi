@@ -11,12 +11,23 @@
 //   - basic: Authorization: Basic base64(username:password)
 //   - hmac: X-Signature: sha256=<hex hmac of body using secret>
 
+import { fetchPublicUrl } from "../../../lib/fetch-public-url";
 import type { Action } from "../../../schemas/automation-actions";
+import {
+	loadAutomationWebhookSecret,
+	type WebhookSecretBundle,
+} from "../graph-secrets";
 import { applyMergeTags } from "../merge-tags";
 import type { RunContext } from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type WebhookOutAction = Extract<Action, { type: "webhook_out" }>;
+
+const MAX_WEBHOOK_BODY_BYTES = 256 * 1024;
+
+function bodyByteLength(value: string): number {
+	return new TextEncoder().encode(value).byteLength;
+}
 
 function buildMergeCtx(ctx: RunContext) {
 	return {
@@ -55,19 +66,73 @@ async function hmacSha256Hex(secret: string, body: string): Promise<string> {
 		.join("");
 }
 
+function hasInlineCredentials(action: WebhookOutAction): boolean {
+	if (Object.keys(action.headers ?? {}).length > 0) return true;
+	if (action.body) return true;
+	if (
+		action.auth.token ||
+		action.auth.username ||
+		action.auth.password ||
+		action.auth.secret
+	) {
+		return true;
+	}
+	// Full destinations are write-only because provider tokens commonly appear in
+	// path segments or subdomains. Only the persisted placeholder may execute
+	// without a secret reference (and it will fail closed as an invalid destination).
+	return action.url !== "https://redacted.invalid/";
+}
+
+async function resolveSecretBundle(
+	action: WebhookOutAction,
+	ctx: RunContext,
+): Promise<WebhookSecretBundle> {
+	if (!action.secret_ref) {
+		if (hasInlineCredentials(action) || action.credentials_configured) {
+			throw new Error(
+				"webhook_out: inline credentials must be sealed before execution",
+			);
+		}
+		return {};
+	}
+	const encryptionKey = ctx.env.ENCRYPTION_KEY;
+	if (typeof encryptionKey !== "string" || encryptionKey === "") {
+		throw new Error("webhook_out: credential encryption is unavailable");
+	}
+	return loadAutomationWebhookSecret(ctx.db, encryptionKey, {
+		id: action.secret_ref,
+		organizationId: ctx.organizationId,
+		automationId: ctx.automationId,
+		actionId: action.id,
+	});
+}
+
 const webhookOut: ActionHandler<WebhookOutAction> = async (action, ctx) => {
+	const secret = await resolveSecretBundle(action, ctx);
 	const mergeCtx = buildMergeCtx(ctx);
-	const url = applyMergeTags(action.url, mergeCtx);
+	const url = applyMergeTags(secret.url ?? action.url, mergeCtx);
 	const method = action.method ?? "POST";
 	const headers: Record<string, string> = {};
-	for (const [k, v] of Object.entries(
-		(action.headers ?? {}) as Record<string, string>,
-	)) {
+	for (const [k, v] of Object.entries(secret.headers ?? {})) {
 		headers[k] = applyMergeTags(v, mergeCtx);
 	}
-	const body = action.body ? applyMergeTags(action.body, mergeCtx) : undefined;
+	if (
+		ctx.effectIdempotencyKey &&
+		!Object.keys(headers).some((key) => key.toLowerCase() === "idempotency-key")
+	) {
+		headers["Idempotency-Key"] =
+			ctx.effectIdempotencyKeyFor?.(`action:${action.id}`) ??
+			`${ctx.effectIdempotencyKey}:action:${encodeURIComponent(action.id)}`;
+	}
+	const body = secret.body ? applyMergeTags(secret.body, mergeCtx) : undefined;
+	if (body && bodyByteLength(body) > MAX_WEBHOOK_BODY_BYTES) {
+		throw new Error("webhook_out: request body exceeds 256 KiB");
+	}
 
-	const auth = action.auth ?? { mode: "none" as const };
+	const auth = {
+		...(action.auth ?? { mode: "none" as const }),
+		...(secret.auth ?? {}),
+	};
 	if (auth.mode === "bearer" && auth.token) {
 		headers.Authorization = `Bearer ${auth.token}`;
 	} else if (auth.mode === "basic" && auth.username != null) {
@@ -85,16 +150,28 @@ const webhookOut: ActionHandler<WebhookOutAction> = async (action, ctx) => {
 		headers["X-Signature"] = `sha256=${sig}`;
 	}
 
-	// Fire-and-forget: swallow errors so a bad webhook URL doesn't fail the
-	// enclosing action_group run. The step_run payload will still mark the
-	// action_group step as `ok` since webhookOut resolved.
 	try {
-		await fetch(url, { method, headers, body });
+		const response = await fetchPublicUrl(url, {
+			method,
+			headers,
+			body,
+			timeout: 15_000,
+		});
+		await response.body?.cancel();
+		if (!response.ok) {
+			const retryable = response.status === 429 || response.status >= 500;
+			throw new Error(
+				`webhook_out: ${retryable ? "retryable" : "terminal"} HTTP ${response.status}`,
+			);
+		}
 	} catch (err) {
-		console.warn(
-			`[automation webhook_out] fetch failed for ${url}:`,
-			err instanceof Error ? err.message : err,
-		);
+		if (err instanceof Error && err.message.startsWith("webhook_out:")) {
+			throw err;
+		}
+		// The request may have crossed the provider boundary. Surface an unknown
+		// outcome so action_group persists the failure instead of acknowledging it
+		// as a successful side effect.
+		throw new Error("webhook_out: unknown external outcome");
 	}
 };
 

@@ -26,15 +26,18 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
+import { encryptToken } from "../lib/crypto";
 import type { Graph } from "../schemas/automation-graph";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -124,7 +127,7 @@ async function makeContact(name: string) {
 	return ct;
 }
 
-async function hmacHex(secret: string, body: string): Promise<string> {
+async function hmacHex(secret: string, signedPayload: string): Promise<string> {
 	const key = await crypto.subtle.importKey(
 		"raw",
 		new TextEncoder().encode(secret),
@@ -135,7 +138,7 @@ async function hmacHex(secret: string, body: string): Promise<string> {
 	const sig = await crypto.subtle.sign(
 		"HMAC",
 		key,
-		new TextEncoder().encode(body),
+		new TextEncoder().encode(signedPayload),
 	);
 	return Array.from(new Uint8Array(sig))
 		.map((b) => b.toString(16).padStart(2, "0"))
@@ -143,6 +146,7 @@ async function hmacHex(secret: string, body: string): Promise<string> {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;
@@ -206,7 +210,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 		const auto = await makeAutomation("webhook-cf-lookup");
 		const slug = `slug-${generateId("").slice(-10)}`;
 		const secret = "cf-lookup-secret";
+		const entrypointId = generateId("aep_");
 		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "telegram",
 			kind: "webhook_inbound",
@@ -214,7 +221,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			socialAccountId: null,
 			config: {
 				webhook_slug: slug,
-				webhook_secret: secret,
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
 				contact_lookup: {
 					by: "custom_field",
 					custom_field_key: "external_id",
@@ -226,11 +236,17 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 
 		// 4. Fire a webhook carrying user_id=xyz — contact B should be enrolled.
 		const body = JSON.stringify({ user_id: "xyz" });
-		const sig = await hmacHex(secret, body);
+		const timestamp = Math.floor(Date.now() / 1000).toString();
+		const sig = await hmacHex(secret, `${timestamp}.${body}`);
 		const result = await receiveAutomationWebhook(
 			db,
-			{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
-			{},
+			{
+				slug,
+				rawBody: body,
+				signatureHeader: `sha256=${sig}`,
+				timestampHeader: timestamp,
+			},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 
 		expect(result.status).toBe("ok");
@@ -301,12 +317,14 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			// their respective org-scoped social accounts.
 			await db.insert(contactChannels).values([
 				{
+					organizationId: orgId,
 					contactId: primaryContact.id,
 					socialAccountId: primarySa.id,
 					platform: "telegram",
 					identifier: "abc123",
 				},
 				{
+					organizationId: otherOrgId,
 					contactId: otherContact.id,
 					socialAccountId: otherSa.id,
 					platform: "telegram",
@@ -317,7 +335,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			const auto = await makeAutomation("webhook-platform-id-scope");
 			const slug = `slug-${generateId("").slice(-10)}`;
 			const secret = "platform-id-scope-secret";
+			const entrypointId = generateId("aep_");
 			await db.insert(automationEntrypoints).values({
+				id: entrypointId,
+				organizationId: orgId,
 				automationId: auto.id,
 				channel: "telegram",
 				kind: "webhook_inbound",
@@ -325,7 +346,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				socialAccountId: null,
 				config: {
 					webhook_slug: slug,
-					webhook_secret: secret,
+					webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+						recordId: entrypointId,
+						field: "webhook_secret",
+					}),
 					contact_lookup: {
 						by: "platform_id",
 						field_path: "$.user_id",
@@ -336,11 +360,17 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			});
 
 			const body = JSON.stringify({ user_id: "abc123" });
-			const sig = await hmacHex(secret, body);
+			const timestamp = Math.floor(Date.now() / 1000).toString();
+			const sig = await hmacHex(secret, `${timestamp}.${body}`);
 			const result = await receiveAutomationWebhook(
 				db,
-				{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
-				{},
+				{
+					slug,
+					rawBody: body,
+					signatureHeader: `sha256=${sig}`,
+					timestampHeader: timestamp,
+				},
+				{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 			);
 
 			expect(result.status).toBe("ok");
@@ -358,9 +388,7 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			await db
 				.delete(automationRuns)
 				.where(eq(automationRuns.organizationId, otherOrgId));
-			await db
-				.delete(contacts)
-				.where(eq(contacts.organizationId, otherOrgId));
+			await db.delete(contacts).where(eq(contacts.organizationId, otherOrgId));
 			await db
 				.delete(socialAccounts)
 				.where(eq(socialAccounts.organizationId, otherOrgId));
@@ -381,7 +409,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 		const auto = await makeAutomation("webhook-auto-create");
 		const slug = `slug-${generateId("").slice(-10)}`;
 		const secret = "auto-create-secret";
+		const entrypointId = generateId("aep_");
 		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "telegram",
 			kind: "webhook_inbound",
@@ -389,7 +420,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			socialAccountId: null,
 			config: {
 				webhook_slug: slug,
-				webhook_secret: secret,
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
 				contact_lookup: {
 					by: "email",
 					field_path: "$.email",
@@ -401,11 +435,17 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 
 		const email = `brand-new-${generateId("").slice(-8)}@example.com`;
 		const body = JSON.stringify({ email });
-		const sig = await hmacHex(secret, body);
+		const timestamp = Math.floor(Date.now() / 1000).toString();
+		const sig = await hmacHex(secret, `${timestamp}.${body}`);
 		const result = await receiveAutomationWebhook(
 			db,
-			{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
-			{},
+			{
+				slug,
+				rawBody: body,
+				signatureHeader: `sha256=${sig}`,
+				timestampHeader: timestamp,
+			},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 
 		expect(result.status).toBe("ok");
@@ -469,7 +509,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 
 			const slug = `slug-${generateId("").slice(-10)}`;
 			const secret = "no-ws-secret";
+			const entrypointId = generateId("aep_");
 			await db.insert(automationEntrypoints).values({
+				id: entrypointId,
+				organizationId: emptyOrgId,
 				automationId: auto.id,
 				channel: "telegram",
 				kind: "webhook_inbound",
@@ -477,7 +520,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				socialAccountId: null,
 				config: {
 					webhook_slug: slug,
-					webhook_secret: secret,
+					webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+						recordId: entrypointId,
+						field: "webhook_secret",
+					}),
 					contact_lookup: {
 						by: "email",
 						field_path: "$.email",
@@ -488,11 +534,17 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			});
 
 			const body = JSON.stringify({ email: "nobody@example.com" });
-			const sig = await hmacHex(secret, body);
+			const timestamp = Math.floor(Date.now() / 1000).toString();
+			const sig = await hmacHex(secret, `${timestamp}.${body}`);
 			const result = await receiveAutomationWebhook(
 				db,
-				{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
-				{},
+				{
+					slug,
+					rawBody: body,
+					signatureHeader: `sha256=${sig}`,
+					timestampHeader: timestamp,
+				},
+				{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 			);
 
 			expect(result.status).toBe("contact_lookup_failed");
@@ -500,18 +552,16 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				expect(result.reason).toBe("no_default_workspace");
 			}
 		} finally {
-			await db
-				.delete(automationEntrypoints)
-				.where(
-					eq(
-						automationEntrypoints.automationId,
-						(
-							await db.query.automations.findFirst({
-								where: eq(automations.organizationId, emptyOrgId),
-							})
-						)?.id ?? "",
-					),
-				);
+			await db.delete(automationEntrypoints).where(
+				eq(
+					automationEntrypoints.automationId,
+					(
+						await db.query.automations.findFirst({
+							where: eq(automations.organizationId, emptyOrgId),
+						})
+					)?.id ?? "",
+				),
+			);
 			await db
 				.delete(automations)
 				.where(eq(automations.organizationId, emptyOrgId));
@@ -545,7 +595,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 		const auto = await makeAutomation("webhook-cf-miss");
 		const slug = `slug-${generateId("").slice(-10)}`;
 		const secret = "cf-miss-secret";
+		const entrypointId = generateId("aep_");
 		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "telegram",
 			kind: "webhook_inbound",
@@ -553,7 +606,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			socialAccountId: null,
 			config: {
 				webhook_slug: slug,
-				webhook_secret: secret,
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
 				contact_lookup: {
 					by: "custom_field",
 					custom_field_key: "other_id",
@@ -564,11 +620,17 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 		});
 
 		const body = JSON.stringify({ user_id: "not-present" });
-		const sig = await hmacHex(secret, body);
+		const timestamp = Math.floor(Date.now() / 1000).toString();
+		const sig = await hmacHex(secret, `${timestamp}.${body}`);
 		const result = await receiveAutomationWebhook(
 			db,
-			{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
-			{},
+			{
+				slug,
+				rawBody: body,
+				signatureHeader: `sha256=${sig}`,
+				timestampHeader: timestamp,
+			},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 
 		expect(result.status).toBe("contact_lookup_failed");

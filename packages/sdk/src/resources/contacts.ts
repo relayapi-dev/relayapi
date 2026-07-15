@@ -56,6 +56,28 @@ export class Contacts extends APIResource {
   }
 
   /**
+   * List immutable channel/purpose consent evidence for a contact.
+   */
+  listConsents(
+    contactId: string,
+    query: ContactListConsentsParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<ContactListConsentsResponse> {
+    return this._client.get(path`/v1/contacts/${contactId}/consents`, { query, ...options });
+  }
+
+  /**
+   * Record consent or withdrawal evidence.
+   */
+  recordConsent(
+    contactId: string,
+    body: ContactRecordConsentParams,
+    options?: RequestOptions,
+  ): APIPromise<ContactConsent> {
+    return this._client.post(path`/v1/contacts/${contactId}/consents`, { body, ...options });
+  }
+
+  /**
    * Bulk create up to 1000 contacts
    */
   bulkCreate(body: ContactBulkCreateParams, options?: RequestOptions): APIPromise<ContactBulkCreateResponse> {
@@ -236,11 +258,52 @@ export interface ContactSegmentMembership {
   created_at: string;
 }
 
+export interface ContactConsent {
+  /** Immutable consent event ID. */
+  id: string;
+
+  /** Contact ID; null after the operational contact is deleted. */
+  contact_id: string | null;
+
+  channel: string;
+
+  purpose: string;
+
+  status: 'granted' | 'denied';
+
+  identifier_hash: string;
+
+  identifier_masked: string | null;
+
+  source: string;
+
+  occurred_at: string;
+
+  evidence: Record<string, unknown> | null;
+
+  policy_version: string | null;
+
+  jurisdiction: string | null;
+
+  created_at: string;
+}
+
+export interface ContactListConsentsResponse {
+  data: Array<ContactConsent>;
+
+  next_cursor: string | null;
+
+  has_more: boolean;
+}
+
 export interface ContactCreateResponse {
   /**
    * Contact ID
    */
   id: string;
+
+  /** Workspace ID, or null for organization scope. */
+  workspace_id: string | null;
 
   /**
    * Created timestamp
@@ -288,6 +351,9 @@ export interface ContactRetrieveResponse {
    * Contact ID
    */
   id: string;
+
+  /** Workspace ID, or null for organization scope. */
+  workspace_id: string | null;
 
   /**
    * Created timestamp
@@ -351,6 +417,9 @@ export namespace ContactListResponse {
      */
     id: string;
 
+    /** Workspace ID, or null for organization scope. */
+    workspace_id: string | null;
+
     /**
      * Created timestamp
      */
@@ -398,6 +467,9 @@ export interface ContactUpdateResponse {
    * Contact ID
    */
   id: string;
+
+  /** Workspace ID, or null for organization scope. */
+  workspace_id: string | null;
 
   /**
    * Created timestamp
@@ -572,9 +644,10 @@ export interface ContactSetFieldResponse {
 
 export interface ContactCreateParams {
   /**
-   * Workspace ID
+   * Workspace ID. An initial channel supplies its account workspace in either
+   * policy mode; without that parent, strict mode requires an explicit value.
    */
-  workspace_id: string;
+  workspace_id?: string;
 
   /**
    * Contact name
@@ -597,7 +670,7 @@ export interface ContactCreateParams {
   tags?: Array<string>;
 
   /**
-   * Opt-in status
+   * Marketing preference. An explicit value is recorded for every known channel.
    */
   opted_in?: boolean;
 
@@ -664,6 +737,14 @@ export interface ContactListParams {
   limit?: number;
 }
 
+export interface ContactListConsentsParams {
+  /** Pagination cursor. */
+  cursor?: string;
+
+  /** Number of consent events. */
+  limit?: number;
+}
+
 export interface ContactUpdateParams {
   /**
    * Contact name
@@ -686,7 +767,7 @@ export interface ContactUpdateParams {
   tags?: Array<string>;
 
   /**
-   * Opt-in status
+   * Marketing preference. An explicit value updates every known contact channel.
    */
   opted_in?: boolean;
 
@@ -696,11 +777,35 @@ export interface ContactUpdateParams {
   metadata?: Record<string, unknown>;
 }
 
+export interface ContactRecordConsentParams {
+  channel: string;
+
+  purpose: string;
+
+  status: 'granted' | 'denied';
+
+  /** Recipient identifier; inferred from the contact when unambiguous. */
+  identifier?: string;
+
+  /** Evidence source, for example form, provider, import, or api. */
+  source: string;
+
+  /** Actual time the consent decision occurred; at most five minutes in the future. */
+  occurred_at: string;
+
+  evidence?: Record<string, unknown>;
+
+  policy_version?: string;
+
+  jurisdiction?: string;
+}
+
 export interface ContactBulkCreateParams {
   /**
-   * Workspace ID
+   * Workspace ID. Channel accounts supply their shared workspace in either
+   * policy mode; without those parents, strict mode requires an explicit value.
    */
-  workspace_id: string;
+  workspace_id?: string;
 
   /**
    * Contacts to create
@@ -780,6 +885,8 @@ export declare namespace Contacts {
   export {
     type ContactChannel as ContactChannel,
     type ContactSegmentMembership as ContactSegmentMembership,
+    type ContactConsent as ContactConsent,
+    type ContactListConsentsResponse as ContactListConsentsResponse,
     type ContactCreateResponse as ContactCreateResponse,
     type ContactRetrieveResponse as ContactRetrieveResponse,
     type ContactListResponse as ContactListResponse,
@@ -794,11 +901,13 @@ export declare namespace Contacts {
     type ContactSetFieldResponse as ContactSetFieldResponse,
     type ContactCreateParams as ContactCreateParams,
     type ContactListParams as ContactListParams,
+    type ContactListConsentsParams as ContactListConsentsParams,
     type ContactUpdateParams as ContactUpdateParams,
     type ContactBulkCreateParams as ContactBulkCreateParams,
     type ContactBulkOperationsParams as ContactBulkOperationsParams,
     type ContactMergeParams as ContactMergeParams,
     type ContactAddChannelParams as ContactAddChannelParams,
+    type ContactRecordConsentParams as ContactRecordConsentParams,
     type ContactSetFieldParams as ContactSetFieldParams,
   };
 }

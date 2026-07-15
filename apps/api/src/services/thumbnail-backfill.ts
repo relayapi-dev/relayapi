@@ -1,69 +1,179 @@
-import { createDb, media } from "@relayapi/db";
-import { and, desc, isNull, like, or } from "drizzle-orm";
-import { eq } from "drizzle-orm";
-import { generateAndStoreThumbnail } from "../lib/thumbnails";
+import { createDb, media, queueFailures } from "@relayapi/db";
+import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../types";
+import {
+	isMediaEventMessage,
+	processMediaEvent,
+	processThumbnailForMedia,
+	RetryableMediaError,
+} from "./media-reliability";
+
+const RECONCILE_BATCH = 25;
+const ABANDONED_DIRECT_UPLOAD_MS = 15 * 60 * 1000;
+const MEDIA_DLQ = "relayapi-media-cleanup-dlq";
 
 /**
- * One-time, self-terminating backfill: generate durable preview thumbnails for
- * existing image/video media uploaded before the thumbnail pipeline existed,
- * whose full-res original is still present in R2 (i.e. not yet lifecycle-deleted).
- * This pre-populates thumbnails so previews survive the upcoming expiry.
- *
- * Runs a small batch per cron tick and becomes a cheap no-op once every row has
- * been handled. To avoid reprocessing rows whose original is already gone (or
- * that genuinely fail to transform), we mark them with an empty-string
- * thumbnailUrl — distinct from NULL ("not yet attempted") — which the read path
- * treats as "no thumbnail".
- *
- * Note: media rows whose original was already lifecycle-deleted under the OLD
- * behavior (row hard-deleted) are gone and unrecoverable here. Converting
- * already-expired platform CDN thumbnails for synced external posts into durable
- * R2 copies is a separate follow-up requiring per-platform token handling.
+ * Scheduled media reconciliation. In order, it replays durably recorded R2
+ * events, repairs direct uploads interrupted between R2 and Postgres, then
+ * retries only pending/transient thumbnail work that is due.
  */
-const BACKFILL_BATCH = 25;
-
 export async function backfillMissingThumbnails(
 	env: Env,
-	limit: number = BACKFILL_BATCH,
+	limit: number = RECONCILE_BATCH,
 ): Promise<void> {
-	// Without the Images binding every generation would fail; bail rather than
-	// poisoning rows with the "attempted, unavailable" sentinel.
-	if (!env.IMAGES) return;
-
 	const db = createDb(env.HYPERDRIVE.connectionString);
+	await replayMediaDeadLetters(db, env, limit);
+	await reconcileDirectUploads(db, env, limit);
+	await retryDueThumbnails(db, env, limit);
+}
 
+async function replayMediaDeadLetters(
+	db: ReturnType<typeof createDb>,
+	env: Env,
+	limit: number,
+): Promise<void> {
+	const failures = await db
+		.select({
+			id: queueFailures.id,
+			payload: queueFailures.payload,
+			attempts: queueFailures.attempts,
+		})
+		.from(queueFailures)
+		.where(
+			and(
+				eq(queueFailures.queueName, MEDIA_DLQ),
+				eq(queueFailures.status, "unresolved"),
+			),
+		)
+		.orderBy(asc(queueFailures.createdAt))
+		.limit(limit);
+
+	for (const failure of failures) {
+		if (!isMediaEventMessage(failure.payload)) {
+			await db
+				.update(queueFailures)
+				.set({
+					status: "dismissed",
+					error: "Invalid media event payload in durable DLQ record",
+					resolvedAt: new Date(),
+				})
+				.where(eq(queueFailures.id, failure.id));
+			continue;
+		}
+
+		try {
+			await processMediaEvent(db, env, failure.payload);
+			await db
+				.update(queueFailures)
+				.set({ status: "replayed", error: null, resolvedAt: new Date() })
+				.where(eq(queueFailures.id, failure.id));
+		} catch (error) {
+			await db
+				.update(queueFailures)
+				.set({
+					attempts: sql`${queueFailures.attempts} + 1`,
+					error: error instanceof Error ? error.message : String(error),
+				})
+				.where(eq(queueFailures.id, failure.id));
+		}
+	}
+}
+
+async function reconcileDirectUploads(
+	db: ReturnType<typeof createDb>,
+	env: Env,
+	limit: number,
+): Promise<void> {
+	const rows = await db
+		.select({
+			id: media.id,
+			storageKey: media.storageKey,
+			status: media.status,
+			createdAt: media.createdAt,
+		})
+		.from(media)
+		.where(inArray(media.status, ["uploading", "upload_failed"]))
+		.orderBy(asc(media.createdAt))
+		.limit(limit);
+
+	const now = new Date();
+	for (const row of rows) {
+		try {
+			const object = await env.MEDIA_BUCKET.head(row.storageKey);
+			if (object) {
+				await db
+					.update(media)
+					.set({ status: "ready", size: object.size })
+					.where(
+						and(
+							eq(media.id, row.id),
+							inArray(media.status, ["uploading", "upload_failed"]),
+						),
+					);
+				continue;
+			}
+
+			if (
+				row.status === "uploading" &&
+				now.getTime() - row.createdAt.getTime() >= ABANDONED_DIRECT_UPLOAD_MS
+			) {
+				await db
+					.update(media)
+					.set({ status: "upload_failed" })
+					.where(and(eq(media.id, row.id), eq(media.status, "uploading")));
+			}
+		} catch (error) {
+			console.error(
+				`[Media Reconcile] Failed to inspect direct upload ${row.id}:`,
+				error,
+			);
+		}
+	}
+}
+
+async function retryDueThumbnails(
+	db: ReturnType<typeof createDb>,
+	env: Env,
+	limit: number,
+): Promise<void> {
+	const now = new Date();
 	const rows = await db
 		.select({
 			id: media.id,
 			storageKey: media.storageKey,
 			mimeType: media.mimeType,
+			thumbnailUrl: media.thumbnailUrl,
+			thumbnailStatus: media.thumbnailStatus,
+			thumbnailAttempts: media.thumbnailAttempts,
+			thumbnailNextRetryAt: media.thumbnailNextRetryAt,
+			originalDeletedAt: media.originalDeletedAt,
 		})
 		.from(media)
 		.where(
 			and(
+				eq(media.status, "ready"),
+				isNull(media.originalDeletedAt),
 				isNull(media.thumbnailUrl),
-				or(like(media.mimeType, "image/%"), like(media.mimeType, "video/%")),
+				inArray(media.thumbnailStatus, ["pending", "transient_failure"]),
+				or(
+					isNull(media.thumbnailNextRetryAt),
+					lte(media.thumbnailNextRetryAt, now),
+				),
 			),
 		)
-		// Newest first: most likely to still have a live R2 original.
-		.orderBy(desc(media.createdAt))
+		.orderBy(asc(media.thumbnailNextRetryAt), asc(media.createdAt))
 		.limit(limit);
 
 	for (const row of rows) {
-		const result = await generateAndStoreThumbnail(
-			env,
-			row.storageKey,
-			row.mimeType,
-		);
-		// Persist either the generated thumbnail or the "" sentinel so the row is
-		// not retried indefinitely when the original is gone / unsupported.
-		await db
-			.update(media)
-			.set({
-				thumbnailKey: result?.thumbnailKey ?? null,
-				thumbnailUrl: result?.thumbnailUrl ?? "",
-			})
-			.where(eq(media.id, row.id));
+		try {
+			await processThumbnailForMedia(db, env, row, now);
+		} catch (error) {
+			if (!(error instanceof RetryableMediaError)) {
+				console.error(
+					`[Media Reconcile] Thumbnail retry failed for ${row.id}:`,
+					error,
+				);
+			}
+		}
 	}
 }

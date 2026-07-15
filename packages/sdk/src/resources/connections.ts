@@ -49,12 +49,15 @@ export namespace ConnectionListLogsResponse {
     /**
      * Event type
      */
-    event: 'connected' | 'disconnected' | 'token_refreshed' | 'error';
+    event: 'connected' | 'disconnecting' | 'disconnected' | 'token_refreshed' | 'error';
 
     /**
      * Event details
      */
     message: string | null;
+
+    /** Immutable lifecycle snapshot. */
+    snapshot: Record<string, unknown> | null;
 
     /**
      * Platform name

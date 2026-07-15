@@ -71,9 +71,7 @@ const Target = z
 export const RecyclingInput = z.object({
 	enabled: z.boolean().default(true).describe("Whether recycling is active"),
 	gap: z.number().int().min(1).max(365).describe("Interval value"),
-	gap_freq: z
-		.enum(["day", "week", "month"])
-		.describe("Interval unit"),
+	gap_freq: z.enum(["day", "week", "month"]).describe("Interval unit"),
 	start_date: z
 		.string()
 		.datetime({ offset: true })
@@ -136,21 +134,62 @@ export const CreatePostBody = z.object({
 			"Per-target customizations keyed by target value (account ID or platform name). Supports platform-specific features such as Twitter polls (poll.options, poll.duration_minutes), threads, reply_to, and reply_settings.",
 		),
 	timezone: z.string().default("UTC").describe("IANA timezone for scheduling"),
-	workspace_id: z.string().optional().describe("Workspace ID to scope this post to"),
-	recycling: RecyclingInput.optional().describe("Recycling configuration for evergreen content (Pro plan only)"),
-	shorten_urls: z.boolean().optional().describe("Shorten URLs in post content. Only relevant when short link mode is 'ask'. Ignored when mode is 'always' or 'never'. (Pro plan only)"),
-	cross_post_actions: z.array(CrossPostActionInput).optional().describe("Cross-post actions to execute after publishing (e.g., repost from another account, comment from another account)"),
-	template_id: z.string().optional().describe("Content template ID. When provided, the template content is used as the base for the post. Explicit 'content' field takes precedence."),
-	idea_id: z.string().optional().describe("Create post from an idea. Pre-fills content from the idea. Explicit 'content' field takes precedence."),
-	template_variables: z.record(z.string(), z.string()).optional().describe("Variables to interpolate in the template (e.g., { \"promo_code\": \"SUMMER25\" }). Built-in variables: {{date}}, {{account_name}}."),
-	skip_signature: z.boolean().optional().describe("When true, the default signature is not auto-appended even if one is configured."),
+	workspace_id: z
+		.string()
+		.optional()
+		.describe(
+			"Workspace ID. Omission inherits the sole target-account workspace in either policy mode; organization scope is available only when Require Workspace ID is disabled.",
+		),
+	recycling: RecyclingInput.optional().describe(
+		"Recycling configuration for evergreen content (Pro plan only)",
+	),
+	shorten_urls: z
+		.boolean()
+		.optional()
+		.describe(
+			"Shorten URLs in post content. Only relevant when short link mode is 'ask'. Ignored when mode is 'always' or 'never'. (Pro plan only)",
+		),
+	cross_post_actions: z
+		.array(CrossPostActionInput)
+		.optional()
+		.describe(
+			"Cross-post actions to execute after publishing (e.g., repost from another account, comment from another account)",
+		),
+	template_id: z
+		.string()
+		.optional()
+		.describe(
+			"Content template ID. When provided, the template content is used as the base for the post. Explicit 'content' field takes precedence.",
+		),
+	idea_id: z
+		.string()
+		.optional()
+		.describe(
+			"Create post from an idea. Pre-fills content from the idea. Explicit 'content' field takes precedence.",
+		),
+	template_variables: z
+		.record(z.string(), z.string())
+		.optional()
+		.describe(
+			'Variables to interpolate in the template (e.g., { "promo_code": "SUMMER25" }). Built-in variables: {{date}}, {{account_name}}.',
+		),
+	skip_signature: z
+		.boolean()
+		.optional()
+		.describe(
+			"When true, the default signature is not auto-appended even if one is configured.",
+		),
 });
 
 // --- Update post ---
 
 export const UpdatePostBody = z.object({
 	content: z.string().optional().describe("Post text"),
-	notes: z.string().nullable().optional().describe("Internal notes for this post"),
+	notes: z
+		.string()
+		.nullable()
+		.optional()
+		.describe("Internal notes for this post"),
 	targets: z.array(Target).min(1).optional().describe("Updated targets"),
 	scheduled_at: ScheduledAt.optional(),
 	media: z.array(MediaItem).optional().describe("Updated media"),
@@ -158,7 +197,9 @@ export const UpdatePostBody = z.object({
 		.record(z.string(), z.record(z.string(), z.any()))
 		.optional(),
 	timezone: z.string().optional(),
-	recycling: RecyclingInput.optional().describe("Recycling configuration (Pro plan only)"),
+	recycling: RecyclingInput.optional().describe(
+		"Recycling configuration (Pro plan only)",
+	),
 });
 
 // --- Per-target status in response ---
@@ -174,11 +215,28 @@ const TargetAccountResult = z.object({
 		.string()
 		.nullable()
 		.describe("Post target ID (pt_) — pass to /v1/ads/boost as post_target_id"),
+	publish_operation_id: z
+		.string()
+		.describe(
+			"Stable provider-operation fence used to reconcile an unknown publish outcome",
+		),
+	delivery_state: z
+		.enum(["queued", "in_flight", "unknown", "succeeded", "failed"])
+		.describe(
+			"Durable delivery state. An unknown outcome requires reconciliation and is never replayed automatically.",
+		),
 });
 
 const TargetResult = z.object({
-	status: z.enum(["draft", "scheduled", "publishing", "published", "failed", "partial"]),
-	platform: PlatformEnum,
+	status: z.enum([
+		"draft",
+		"scheduled",
+		"publishing",
+		"published",
+		"failed",
+		"partial",
+	]),
+	platform: PlatformEnum.nullable(),
 	accounts: z.array(TargetAccountResult).optional(),
 	error: z
 		.object({
@@ -187,24 +245,28 @@ const TargetResult = z.object({
 			detail: z
 				.string()
 				.optional()
-				.describe("Raw platform error (HTTP status + response body), sanitized and truncated"),
+				.describe(
+					"Raw platform error (HTTP status + response body), sanitized and truncated",
+				),
 		})
 		.optional(),
 });
 
 // --- Post response ---
 
-export const MetricsSnapshot = z.object({
-	impressions: z.number().optional(),
-	reach: z.number().optional(),
-	likes: z.number().optional(),
-	comments: z.number().optional(),
-	shares: z.number().optional(),
-	saves: z.number().optional(),
-	clicks: z.number().optional(),
-	views: z.number().optional(),
-	engagement_rate: z.number().optional(),
-}).describe("Aggregated engagement metrics");
+export const MetricsSnapshot = z
+	.object({
+		impressions: z.number().optional(),
+		reach: z.number().optional(),
+		likes: z.number().optional(),
+		comments: z.number().optional(),
+		shares: z.number().optional(),
+		saves: z.number().optional(),
+		clicks: z.number().optional(),
+		views: z.number().optional(),
+		engagement_rate: z.number().optional(),
+	})
+	.describe("Aggregated engagement metrics");
 
 export const PostResponse = z.object({
 	id: z.string().describe("Post ID"),
@@ -221,13 +283,32 @@ export const PostResponse = z.object({
 	published_at: z.string().nullable().describe("When the post was published"),
 	targets: z.record(z.string(), TargetResult).describe("Per-target results"),
 	media: z.array(MediaItem).nullable(),
-	target_options: z.record(z.string(), z.record(z.string(), z.any())).nullable().optional().describe("Per-target customizations"),
+	target_options: z
+		.record(z.string(), z.record(z.string(), z.any()))
+		.nullable()
+		.optional()
+		.describe("Per-target customizations"),
 	timezone: z.string().nullable().optional().describe("IANA timezone"),
-	metrics: MetricsSnapshot.optional().describe("Engagement metrics (reactions, comments, views, etc.)"),
-	recycling: RecyclingConfigResponse.nullable().describe("Recycling configuration, if any"),
-	recycled_from_id: z.string().nullable().describe("Source post ID if this is a recycled copy"),
-	thread_group_id: z.string().nullable().optional().describe("Thread group ID (non-null if part of a thread)"),
-	thread_position: z.number().nullable().optional().describe("Position within thread (0 = root)"),
+	metrics: MetricsSnapshot.optional().describe(
+		"Engagement metrics (reactions, comments, views, etc.)",
+	),
+	recycling: RecyclingConfigResponse.nullable().describe(
+		"Recycling configuration, if any",
+	),
+	recycled_from_id: z
+		.string()
+		.nullable()
+		.describe("Source post ID if this is a recycled copy"),
+	thread_group_id: z
+		.string()
+		.nullable()
+		.optional()
+		.describe("Thread group ID (non-null if part of a thread)"),
+	thread_position: z
+		.number()
+		.nullable()
+		.optional()
+		.describe("Position within thread (0 = root)"),
 	created_at: z.string().datetime(),
 	updated_at: z.string().datetime(),
 });
@@ -270,11 +351,15 @@ export const UpdateMetadataBody = z.object({
 	account_id: z
 		.string()
 		.optional()
-		.describe("Account ID (required when post ID is '_' for direct video ID mode)"),
+		.describe(
+			"Account ID (required when post ID is '_' for direct video ID mode)",
+		),
 	video_id: z
 		.string()
 		.optional()
-		.describe("YouTube video ID (required when post ID is '_' for direct mode)"),
+		.describe(
+			"YouTube video ID (required when post ID is '_' for direct mode)",
+		),
 	title: z.string().max(100).optional().describe("Video title (max 100 chars)"),
 	description: z.string().max(5000).optional().describe("Video description"),
 	tags: z.array(z.string().max(100)).optional().describe("Video tags"),
@@ -302,10 +387,7 @@ export const UpdateMetadataResponse = z.object({
 export const BulkCsvRowResult = z.object({
 	row: z.number().describe("1-based row number"),
 	status: z.enum(["success", "error", "skipped"]),
-	post_id: z
-		.string()
-		.optional()
-		.describe("Created post ID (only on success)"),
+	post_id: z.string().optional().describe("Created post ID (only on success)"),
 	error: z
 		.object({
 			code: z.string(),

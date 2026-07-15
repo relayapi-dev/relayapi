@@ -1,0 +1,25 @@
+# Exact current-tree fingerprints for verified documentation placeholders and
+# a synthetic unit-test key. Do not add path- or rule-wide exclusions.
+apps/api/src/__tests__/unit.test.ts:generic-api-key:189
+apps/app/src/components/animations/sections/terminal-browser-preview.tsx:curl-auth-header:113
+apps/docs/content/docs/guides/auto-post-rules.mdx:curl-auth-header:22
+apps/docs/content/docs/guides/auto-post-rules.mdx:curl-auth-header:35
+apps/docs/content/docs/guides/auto-post-rules.mdx:curl-auth-header:87
+apps/docs/content/docs/guides/automations/index.mdx:curl-auth-header:50
+apps/docs/content/docs/guides/connecting-accounts.mdx:curl-auth-header:24
+apps/docs/content/docs/guides/content-templates.mdx:curl-auth-header:19
+apps/docs/content/docs/guides/content-templates.mdx:curl-auth-header:66
+apps/docs/content/docs/guides/cross-post-actions.mdx:curl-auth-header:22
+apps/docs/content/docs/guides/cross-post-actions.mdx:curl-auth-header:82
+apps/docs/content/docs/guides/media-uploads.mdx:curl-auth-header:19
+apps/docs/content/docs/guides/posting-streaks.mdx:curl-auth-header:27
+apps/docs/content/docs/guides/short-links.mdx:curl-auth-header:22
+apps/docs/content/docs/guides/short-links.mdx:curl-auth-header:32
+apps/docs/content/docs/guides/short-links.mdx:curl-auth-header:63
+apps/docs/content/docs/guides/short-links.mdx:curl-auth-header:76
+apps/docs/content/docs/guides/short-links.mdx:curl-auth-header:93
+apps/docs/content/docs/guides/short-links.mdx:curl-auth-header:115
+apps/docs/content/docs/guides/short-links.mdx:curl-auth-header:135
+apps/docs/content/docs/guides/short-links.mdx:curl-auth-header:155
+apps/docs/content/docs/guides/signatures.mdx:curl-auth-header:21
+apps/docs/content/docs/guides/signatures.mdx:curl-auth-header:49

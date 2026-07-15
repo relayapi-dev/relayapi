@@ -209,7 +209,7 @@ The API is fully documented with OpenAPI. When running the dev server, Swagger U
 - **Resource IDs**: Nanoid with prefixes — `ws_`, `acc_`, `post_`, `med_`, `wh_`
 - **Pagination**: Cursor-based with `next_cursor` and `has_more` (limit 1–100, default 20)
 - **Errors**: `{ error: { code, message, details? } }`
-- **Multi-tenancy**: Resources scoped by `workspace_id` (optional on list/create endpoints)
+- **Multi-tenancy**: Every resource is organization-owned; operational resources may also have nullable `workspace_id` ownership. Omitted create scope is organization-wide unless **Require Workspace ID** is enabled, while explicit IDs are always authorization-checked and parent-bound creates may inherit their parent scope.
 
 ## Contributing
 
@@ -249,10 +249,14 @@ Then start the app(s) you are working on:
 
 ### 3. Seeding a dev user
 
-Set `SEED_USER_EMAIL` and `SEED_USER_PASSWORD` in your environment, then:
+The seed is local-only, idempotent, and creates no active paid entitlement. It
+refuses production and non-loopback database URLs. With the SSH tunnel running,
+set `SEED_USER_EMAIL`, `SEED_USER_PASSWORD`, and the explicit safety confirmation:
 
 ```bash
-bun run scripts/seed.ts
+NODE_ENV=development \
+  RELAYAPI_ALLOW_LOCAL_SEED=I_UNDERSTAND_THIS_MODIFIES_MY_LOCAL_DATABASE \
+  bun run scripts/seed.ts
 ```
 
 Sign in at `http://localhost:4321/app` with those credentials.
@@ -329,7 +333,7 @@ Before touching `apps/api/src/config/oauth.ts`, `apps/api/src/routes/connect.ts`
 
 ### Data model
 
-- All resources are scoped by `workspace_id`. Always filter by it.
+- Always enforce organization ownership. Apply the shared workspace-scope helpers as well: nullable workspace ownership is intentional, explicit IDs are grant-checked, and **Require Workspace ID** is the only setting that forbids omitted scope on independent operational-root creates.
 - Sensitive columns (tokens, secrets) are encrypted with AES-256-GCM — use the existing helpers, don't store plaintext.
 - Business tables live in the `public` schema; auth tables in `auth` are owned by Better Auth — don't modify the auth schema manually.
 

@@ -3,17 +3,44 @@ import { paginatedResponse } from "./common";
 
 export const CrossPostActionTypeEnum = z.enum(["repost", "comment", "quote"]);
 
-export const CrossPostActionStatusEnum = z.enum(["pending", "executed", "failed", "cancelled"]);
+export const CrossPostActionStatusEnum = z.enum([
+	"pending",
+	"processing",
+	"executing",
+	"retry",
+	"executed",
+	"failed",
+	"unknown",
+	"cancelled",
+]);
 
-export const CrossPostActionInput = z.object({
-	action_type: CrossPostActionTypeEnum.describe("Type of cross-post action"),
-	target_account_id: z.string().describe("Account to perform the action from"),
-	content: z.string().optional().describe("Text content for comment/quote actions (required for comment and quote)"),
-	delay_minutes: z.number().int().min(0).max(1440).default(0).describe("Delay in minutes after publishing"),
-}).refine(
-	(v) => v.action_type === "repost" || (v.content && v.content.length > 0),
-	{ message: "content is required for comment and quote actions", path: ["content"] },
-);
+export const CrossPostActionInput = z
+	.object({
+		action_type: CrossPostActionTypeEnum.describe("Type of cross-post action"),
+		target_account_id: z
+			.string()
+			.describe("Account to perform the action from"),
+		content: z
+			.string()
+			.optional()
+			.describe(
+				"Text content for comment/quote actions (required for comment and quote)",
+			),
+		delay_minutes: z
+			.number()
+			.int()
+			.min(0)
+			.max(1440)
+			.default(0)
+			.describe("Delay in minutes after publishing"),
+	})
+	.refine(
+		(v) => v.action_type === "repost" || (v.content && v.content.length > 0),
+		{
+			message: "content is required for comment and quote actions",
+			path: ["content"],
+		},
+	);
 
 export const CrossPostActionResponse = z.object({
 	id: z.string().describe("Action ID"),
@@ -30,4 +57,6 @@ export const CrossPostActionResponse = z.object({
 	created_at: z.string().datetime(),
 });
 
-export const CrossPostActionListResponse = paginatedResponse(CrossPostActionResponse);
+export const CrossPostActionListResponse = paginatedResponse(
+	CrossPostActionResponse,
+);

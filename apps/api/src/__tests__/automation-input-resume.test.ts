@@ -311,14 +311,14 @@ describe("resolveInputResume", () => {
 		expect(bad.port).toBe("invalid");
 	});
 
-	it("silently ignores malformed validation regex", () => {
+	it("rejects malformed validation regex", () => {
 		const cfg = {
 			field: "zip",
 			input_type: "text" as const,
 			validation: { pattern: "[" /* invalid */ },
 		};
 		const out = resolveInputResume(cfg, "whatever", null, 0);
-		expect(out.port).toBe("captured");
+		expect(out.port).toBe("invalid");
 	});
 });
 
@@ -328,10 +328,11 @@ describe("resolveInputResume", () => {
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -393,6 +394,7 @@ async function createContact() {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixtureOrg();
 		dbAvailable = true;

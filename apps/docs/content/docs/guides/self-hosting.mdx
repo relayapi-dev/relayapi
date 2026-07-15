@@ -12,7 +12,7 @@ RelayAPI runs entirely on Cloudflare's developer platform. This guide walks you 
 
 - [Node.js](https://nodejs.org) v20+ or [Bun](https://bun.sh) v1.0+
 - [Git](https://git-scm.com)
-- A PostgreSQL 15+ database (any provider — Neon, Supabase, Railway, self-hosted, etc.)
+- A PostgreSQL 18 database with TLS hostname and CA verification
 
 ## 1. Create a Cloudflare Account
 
@@ -118,17 +118,38 @@ wrangler queues create relayapi-media-cleanup
 
 ### Hyperdrive
 
-Hyperdrive provides connection pooling for your PostgreSQL database. You need a running PostgreSQL instance first.
+Hyperdrive provides connection pooling for PostgreSQL. For a private origin, the supported production path is Workers VPC; do not publish PostgreSQL directly.
+
+The repository's `packages/db/setup-postgres.sh` provisions PostgreSQL 18 with separate owner, migration, and no-DDL runtime roles. It requires a trusted server certificate and installs a Cloudflare Tunnel connector, but it deliberately does not create a public TCP route or install a backup system.
+
+Create a TCP VPC Service that resolves the certificate hostname inside the origin network:
 
 ```bash
-wrangler hyperdrive create relayapi-db \
-  --connection-string="postgresql://user:password@host:5432/relayapi"
+npx wrangler vpc service create relayapi-postgres \
+  --type tcp \
+  --tcp-port 5432 \
+  --app-protocol postgresql \
+  --tunnel-id <TUNNEL_ID> \
+  --hostname <DATABASE_TLS_HOSTNAME> \
+  --cert-verification-mode verify_full
 ```
 
-Save the Hyperdrive ID from the output.
+Then create Hyperdrive with the no-DDL runtime role:
 
-<Callout type="info">
-Replace the connection string with your actual PostgreSQL credentials. The database must be accessible from Cloudflare's network — use a cloud-hosted provider like Neon, Supabase, or Railway for the easiest setup.
+```bash
+npx wrangler hyperdrive create relayapi-db \
+  --service-id <VPC_SERVICE_ID> \
+  --database relayapi \
+  --user relayapi_runtime \
+  --password '<runtime-password>' \
+  --scheme postgresql \
+  --caching-disabled
+```
+
+Save both the VPC Service ID and Hyperdrive ID from the output.
+
+<Callout type="warn">
+Workers VPC must remain in `verify_full` mode in production. The certificate chain must be publicly trusted or use Cloudflare Origin CA, and its SAN must match the VPC Service hostname. Self-signed certificates are not the production configuration.
 </Callout>
 
 ## 5. Update Wrangler Configuration
@@ -192,10 +213,7 @@ Do the same for `apps/app/wrangler.jsonc`:
 Secrets are environment variables that are encrypted and not visible in your config files. Set them for the API worker:
 
 ```bash
-# Database connection (used by Drizzle for migrations, not Hyperdrive)
-wrangler secret put DATABASE_URL --name relayapi
-
-# Encryption key for sensitive fields (generate a random 32-byte hex string)
+# Encryption key for sensitive fields (enter active=<generated 32-byte hex string>)
 wrangler secret put ENCRYPTION_KEY --name relayapi
 
 # Better Auth secret (generate a random string)
@@ -205,6 +223,8 @@ wrangler secret put BETTER_AUTH_SECRET --name relayapi
 wrangler secret put GOOGLE_CLIENT_ID --name relayapi
 wrangler secret put GOOGLE_CLIENT_SECRET --name relayapi
 ```
+
+`ENCRYPTION_KEY` is a key ring, so even a single key must include an explicit key ID in the form `key-id=64hex`. For example, generate a 32-byte hex value and enter it at the Wrangler prompt as `active=<generated-hex>`.
 
 For each social media platform you want to support, set the corresponding OAuth credentials:
 
@@ -226,17 +246,27 @@ You only need to configure OAuth credentials for platforms you plan to support. 
 
 ## 7. Set Up the Database
 
-Generate and apply the Drizzle ORM migrations:
+The Worker uses the no-DDL runtime role. Migrations use the separate migration role through an Access-protected TCP application or another trusted private runner. Never put the migration credential in Worker secrets.
+
+For a local or otherwise trusted migration connection, verify the reviewed manifest and apply the baseline:
 
 ```bash
-# Generate migration files from the schema
-bun run db:generate
+# Refuses a non-empty database without the exact supported migration ledger
+bun run db:migration-history
 
-# Apply migrations to your PostgreSQL database
+# Apply reviewed migrations
 bun run db:migrate
+
+# Verify the exact catalog and applied hashes
+bun run db:verify
+bun run db:migration-history:current
 ```
 
 This creates all required tables in both the `auth` schema (managed by Better Auth) and the `public` schema (business data).
+
+<Callout type="warn">
+The current pre-launch baseline supports a virgin PostgreSQL 18 database only. It is not an upgrade path from the removed 42-migration development ledger. Recreate disposable environments instead of forging or rewriting migration history.
+</Callout>
 
 ## 8. Local Development
 
@@ -245,7 +275,7 @@ For local development, you need to tell Wrangler how to reach your database with
 Set the local connection string as an environment variable:
 
 ```bash
-export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgresql://user:password@localhost:5432/relayapi"
+export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgresql://relayapi_runtime:password@localhost:5433/relayapi?sslmode=verify-full"
 ```
 
 Then start the dev servers:
@@ -262,7 +292,7 @@ bun run dev:docs
 ```
 
 <Callout type="info">
-If your database is remote, set up an SSH tunnel to forward a local port to the remote PostgreSQL port, then point the connection string at `localhost`.
+The repository's VS Code task forwards local port `5433` to the remote PostgreSQL port. For hostname verification, connect using a hostname present in the server certificate and resolve that hostname to the local listener, or use the documented local development certificate setup. Do not weaken a production connection to `sslmode=require`.
 </Callout>
 
 ## 9. Deploy to Cloudflare
@@ -294,8 +324,17 @@ To use a custom domain, go to your worker in the Cloudflare dashboard:
 The repository includes GitHub Actions workflows that deploy each app independently on push to `main` when relevant paths change. To enable:
 
 1. In your GitHub repository, go to **Settings > Secrets and variables > Actions**
-2. Add the following secret:
+2. Add the following repository secrets:
    - `CLOUDFLARE_API_TOKEN` — create an API token in the Cloudflare dashboard with **Workers** edit permissions
+   - `CLOUDFLARE_ACCOUNT_ID`
+3. Create a protected `production` environment with:
+   - `PRODUCTION_DATABASE_URL` — migration-role DSN using the protected hostname, local listener port `5433`, and `sslmode=verify-full`
+   - `PRODUCTION_DATABASE_HOSTNAME`
+   - `PRODUCTION_DATABASE_CA_CERT`
+   - `PRODUCTION_DATABASE_ACCESS_CLIENT_ID`
+   - `PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET`
+
+The database hostname must be a Cloudflare Access TCP application with a Service Auth policy. The workflow runs `cloudflared access tcp` in an isolated container, verifies TLS, checks migration history/catalog, and only applies pending migrations on a manual workflow run.
 
 Pushes to `main` will automatically deploy changed apps.
 

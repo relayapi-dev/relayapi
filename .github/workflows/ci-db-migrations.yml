@@ -1,0 +1,72 @@
+name: CI — Database migrations
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ci-db-migrations.yml"
+      - ".github/workflows/deploy-api.yml"
+      - "bun.lock"
+      - "package.json"
+      - "packages/db/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ci-db-migrations.yml"
+      - ".github/workflows/deploy-api.yml"
+      - "bun.lock"
+      - "package.json"
+      - "packages/db/**"
+
+permissions:
+  contents: read
+
+jobs:
+  clean-database:
+    name: Clean database and catalog
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: relayapi_migration_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d relayapi_migration_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: postgresql://postgres:postgres@127.0.0.1:5432/relayapi_migration_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Test baseline rebuild safety controls
+        run: bun run --cwd packages/db test:baseline-builder
+      - name: Test migration history and policy rejection controls
+        run: bun run --cwd packages/db test:migration-contracts
+      - name: Verify immutable migration manifest
+        run: bun run db:migration-manifest
+      - name: Verify migration history is append-only
+        run: bun run db:migration-append-only
+        env:
+          MIGRATION_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      - name: Verify expand-contract migration policy
+        run: bun run db:migration-policy
+      - name: Verify schema contract registry
+        run: bun run db:verify-schema-contracts
+      - name: Apply migrations to a clean database
+        run: bun run db:migrate
+      - name: Verify migration replay is idempotent
+        run: bun run db:migrate
+      - name: Verify migrated database catalog
+        run: bun run db:verify
+      - name: Verify exact applied migration hashes
+        run: bun run db:migration-history:current

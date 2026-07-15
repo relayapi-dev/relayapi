@@ -1,26 +1,27 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import type { createDb } from "@relayapi/db";
+import type { Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { getOwnedAccount } from "../lib/accounts";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
 import { isBlockedUrl } from "../lib/ssrf-guard";
-import { IdParam, ErrorResponse } from "../schemas/common";
+import { canAccessWorkspaceScope } from "../lib/workspace-scope";
+import { ErrorResponse, IdParam } from "../schemas/common";
 import {
-	GmbFoodMenuBody,
-	GmbFoodMenuResponse,
-	GmbLocationDetailsQuery,
-	GmbLocationDetailsBody,
-	GmbLocationDetailsResponse,
-	GmbUploadMediaBody,
-	GmbMediaDeleteQuery,
-	GmbMediaResponse,
 	GmbAttributeBody,
 	GmbAttributesResponse,
+	GmbFoodMenuBody,
+	GmbFoodMenuResponse,
+	GmbLocationDetailsBody,
+	GmbLocationDetailsQuery,
+	GmbLocationDetailsResponse,
+	GmbMediaDeleteQuery,
+	GmbMediaResponse,
 	GmbPlaceActionBody,
 	GmbPlaceActionDeleteQuery,
 	GmbPlaceActionsResponse,
+	GmbUploadMediaBody,
 } from "../schemas/gmb";
-import type { Context } from "hono";
-import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -40,18 +41,20 @@ async function getGmbContext(
 ) {
 	const account = await getOwnedAccount(db, accountId, orgId, encryptionKey);
 	if (!account || account.platform !== "googlebusiness") return null;
-	if (workspaceScope !== "all") {
-		if (!account.workspaceId || !workspaceScope.includes(account.workspaceId)) {
-			return null;
-		}
-	}
+	if (!canAccessWorkspaceScope(workspaceScope, account.workspaceId))
+		return null;
 	if (!account.accessToken) return null;
 
 	const metadata = account.metadata as Record<string, string> | null;
 	const locationName = metadata?.location_id ?? account.platformAccountId;
 	const googleAccountName = metadata?.google_account_name ?? null;
 
-	return { account, locationName, googleAccountName, accessToken: account.accessToken };
+	return {
+		account,
+		locationName,
+		googleAccountName,
+		accessToken: account.accessToken,
+	};
 }
 
 async function gmbFetch(
@@ -59,7 +62,10 @@ async function gmbFetch(
 	url: string,
 	method: string,
 	body?: unknown,
-): Promise<{ ok: true; data: unknown } | { ok: false; status: number; code: string; message: string }> {
+): Promise<
+	| { ok: true; data: unknown }
+	| { ok: false; status: number; code: string; message: string }
+> {
 	const res = await fetchWithTimeout(url, {
 		method,
 		headers: {
@@ -110,10 +116,22 @@ const getFoodMenus = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: IdParam },
 	responses: {
-		200: { description: "Food menus", content: { "application/json": { schema: GmbFoodMenuResponse } } },
-		400: { description: "Google account name unavailable", content: { "application/json": { schema: ErrorResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Food menus",
+			content: { "application/json": { schema: GmbFoodMenuResponse } },
+		},
+		400: {
+			description: "Google account name unavailable",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -129,10 +147,22 @@ const putFoodMenus = createRoute({
 		body: { content: { "application/json": { schema: GmbFoodMenuBody } } },
 	},
 	responses: {
-		200: { description: "Updated food menus", content: { "application/json": { schema: GmbFoodMenuResponse } } },
-		400: { description: "Google account name unavailable", content: { "application/json": { schema: ErrorResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Updated food menus",
+			content: { "application/json": { schema: GmbFoodMenuResponse } },
+		},
+		400: {
+			description: "Google account name unavailable",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -147,9 +177,18 @@ const getLocationDetails = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: IdParam, query: GmbLocationDetailsQuery },
 	responses: {
-		200: { description: "Location details", content: { "application/json": { schema: GmbLocationDetailsResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Location details",
+			content: { "application/json": { schema: GmbLocationDetailsResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -162,12 +201,23 @@ const putLocationDetails = createRoute({
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParam,
-		body: { content: { "application/json": { schema: GmbLocationDetailsBody } } },
+		body: {
+			content: { "application/json": { schema: GmbLocationDetailsBody } },
+		},
 	},
 	responses: {
-		200: { description: "Updated location details", content: { "application/json": { schema: GmbLocationDetailsResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Updated location details",
+			content: { "application/json": { schema: GmbLocationDetailsResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -182,10 +232,22 @@ const getMedia = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: IdParam },
 	responses: {
-		200: { description: "Media list", content: { "application/json": { schema: GmbMediaResponse } } },
-		400: { description: "Google account name unavailable", content: { "application/json": { schema: ErrorResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Media list",
+			content: { "application/json": { schema: GmbMediaResponse } },
+		},
+		400: {
+			description: "Google account name unavailable",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -201,10 +263,22 @@ const postMedia = createRoute({
 		body: { content: { "application/json": { schema: GmbUploadMediaBody } } },
 	},
 	responses: {
-		200: { description: "Uploaded media", content: { "application/json": { schema: GmbMediaResponse } } },
-		400: { description: "Google account name unavailable", content: { "application/json": { schema: ErrorResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Uploaded media",
+			content: { "application/json": { schema: GmbMediaResponse } },
+		},
+		400: {
+			description: "Google account name unavailable",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -217,10 +291,22 @@ const deleteMedia = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: IdParam, query: GmbMediaDeleteQuery },
 	responses: {
-		200: { description: "Media deleted", content: { "application/json": { schema: GmbMediaResponse } } },
-		400: { description: "Google account name unavailable", content: { "application/json": { schema: ErrorResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Media deleted",
+			content: { "application/json": { schema: GmbMediaResponse } },
+		},
+		400: {
+			description: "Google account name unavailable",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -235,9 +321,18 @@ const getAttributes = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: IdParam },
 	responses: {
-		200: { description: "Attributes", content: { "application/json": { schema: GmbAttributesResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Attributes",
+			content: { "application/json": { schema: GmbAttributesResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -253,9 +348,18 @@ const putAttributes = createRoute({
 		body: { content: { "application/json": { schema: GmbAttributeBody } } },
 	},
 	responses: {
-		200: { description: "Updated attributes", content: { "application/json": { schema: GmbAttributesResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Updated attributes",
+			content: { "application/json": { schema: GmbAttributesResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -270,9 +374,18 @@ const getPlaceActions = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: IdParam },
 	responses: {
-		200: { description: "Place action links", content: { "application/json": { schema: GmbPlaceActionsResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Place action links",
+			content: { "application/json": { schema: GmbPlaceActionsResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -288,9 +401,18 @@ const postPlaceAction = createRoute({
 		body: { content: { "application/json": { schema: GmbPlaceActionBody } } },
 	},
 	responses: {
-		200: { description: "Created place action", content: { "application/json": { schema: GmbPlaceActionsResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Created place action",
+			content: { "application/json": { schema: GmbPlaceActionsResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -303,9 +425,18 @@ const deletePlaceAction = createRoute({
 	security: [{ Bearer: [] }],
 	request: { params: IdParam, query: GmbPlaceActionDeleteQuery },
 	responses: {
-		200: { description: "Place action deleted", content: { "application/json": { schema: GmbPlaceActionsResponse } } },
-		401: { description: "Unauthorized", content: { "application/json": { schema: ErrorResponse } } },
-		404: { description: "Not found", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Place action deleted",
+			content: { "application/json": { schema: GmbPlaceActionsResponse } },
+		},
+		401: {
+			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -314,11 +445,28 @@ const deletePlaceAction = createRoute({
 // ---------------------------------------------------------------------------
 
 function notFound(c: AppContext) {
-	return c.json({ error: { code: "NOT_FOUND", message: "Account not found or not a Google Business account" } }, 404) as never;
+	return c.json(
+		{
+			error: {
+				code: "NOT_FOUND",
+				message: "Account not found or not a Google Business account",
+			},
+		},
+		404,
+	) as never;
 }
 
 function missingGoogleAccount(c: AppContext) {
-	return c.json({ error: { code: "MISSING_GOOGLE_ACCOUNT", message: "Google Account ID not available. Please reconnect the account." } }, 400) as never;
+	return c.json(
+		{
+			error: {
+				code: "MISSING_GOOGLE_ACCOUNT",
+				message:
+					"Google Account ID not available. Please reconnect the account.",
+			},
+		},
+		400,
+	) as never;
 }
 
 function googleError(
@@ -338,7 +486,13 @@ app.openapi(getFoodMenus, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
 
@@ -355,14 +509,22 @@ app.openapi(putFoodMenus, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
 
 	// Google Business Profile — Update food menus
 	// https://developers.google.com/my-business/reference/rest/v4/accounts.locations.foodMenus/patch
 	const { update_mask, ...menuData } = body;
-	const maskParam = update_mask ? `?updateMask=${encodeURIComponent(update_mask)}` : "";
+	const maskParam = update_mask
+		? `?updateMask=${encodeURIComponent(update_mask)}`
+		: "";
 	const url = `https://mybusiness.googleapis.com/v4/${ctx.googleAccountName}/${ctx.locationName}/foodMenus${maskParam}`;
 	const result = await gmbFetch(ctx.accessToken, url, "PATCH", menuData);
 	if (!result.ok) return googleError(c, result);
@@ -376,12 +538,20 @@ app.openapi(getLocationDetails, async (c) => {
 	const { id } = c.req.valid("param");
 	const query = c.req.valid("query");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 
 	// Google Business Information — Get location
 	// https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations/get
-	const maskParam = query.read_mask ? `?readMask=${encodeURIComponent(query.read_mask)}` : "";
+	const maskParam = query.read_mask
+		? `?readMask=${encodeURIComponent(query.read_mask)}`
+		: "";
 	const url = `https://mybusinessbusinessinformation.googleapis.com/v1/${ctx.locationName}${maskParam}`;
 	const result = await gmbFetch(ctx.accessToken, url, "GET");
 	if (!result.ok) return googleError(c, result);
@@ -393,7 +563,13 @@ app.openapi(putLocationDetails, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 
 	// Google Business Information — Patch location
@@ -411,7 +587,13 @@ app.openapi(getMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
 
@@ -428,14 +610,25 @@ app.openapi(postMedia, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
 
 	// SECURITY: Block private/internal URLs
 	if (isBlockedUrl(body.source_url)) {
 		return c.json(
-			{ error: { code: "INVALID_URL", message: "source_url targets a blocked address" } } as never,
+			{
+				error: {
+					code: "INVALID_URL",
+					message: "source_url targets a blocked address",
+				},
+			} as never,
 			400 as never,
 		);
 	}
@@ -458,7 +651,13 @@ app.openapi(deleteMedia, async (c) => {
 	const { id } = c.req.valid("param");
 	const { media_id } = c.req.valid("query");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 	if (!ctx.googleAccountName) return missingGoogleAccount(c);
 
@@ -476,7 +675,13 @@ app.openapi(getAttributes, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 
 	// Google Business Information — Get attributes
@@ -492,13 +697,21 @@ app.openapi(putAttributes, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 
 	// Google Business Information — Patch attributes
 	// https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations.attributes
 	const url = `https://mybusinessbusinessinformation.googleapis.com/v1/${ctx.locationName}/attributes?attributeMask=${encodeURIComponent(body.attribute_mask)}`;
-	const result = await gmbFetch(ctx.accessToken, url, "PATCH", { attributes: body.attributes });
+	const result = await gmbFetch(ctx.accessToken, url, "PATCH", {
+		attributes: body.attributes,
+	});
 	if (!result.ok) return googleError(c, result);
 	return c.json({ data: result.data }, 200);
 });
@@ -509,7 +722,13 @@ app.openapi(getPlaceActions, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 
 	// Google Business Place Actions — List place action links
@@ -525,7 +744,13 @@ app.openapi(postPlaceAction, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 
 	// Google Business Place Actions — Create place action link
@@ -545,7 +770,13 @@ app.openapi(deletePlaceAction, async (c) => {
 	const { id } = c.req.valid("param");
 	const { action_id } = c.req.valid("query");
 	const db = c.get("db");
-	const ctx = await getGmbContext(db, id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const ctx = await getGmbContext(
+		db,
+		id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!ctx) return notFound(c);
 
 	// Google Business Place Actions — Delete place action link

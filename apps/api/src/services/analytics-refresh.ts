@@ -13,22 +13,16 @@ import {
 	createDb,
 	externalPosts,
 	postAnalytics,
-	postTargets,
 	posts,
+	postTargets,
 	socialAccounts,
 } from "@relayapi/db";
-import {
-	and,
-	eq,
-	gt,
-	inArray,
-	sql,
-} from "drizzle-orm";
-import type { Platform } from "../schemas/common";
+import { and, eq, gt, inArray, sql } from "drizzle-orm";
+import { PLATFORMS, type Platform } from "../schemas/common";
 import type { Env } from "../types";
 import { getPlatformFetcher } from "./platform-analytics";
 import type { PlatformPostMetrics } from "./platform-analytics/types";
-import { refreshTokenIfNeeded } from "./token-refresh";
+import { refreshTokenIfNeeded } from "./token-refresh-coordinator";
 
 type Database = ReturnType<typeof createDb>;
 
@@ -94,6 +88,12 @@ const BATCH_SIZE = 100;
 const MAX_INTERNAL_PER_RUN = 200;
 const MAX_EXTERNAL_PER_RUN = 500;
 const EXTERNAL_BATCH_SIZE = 50;
+
+function parsePlatform(value: string): Platform | null {
+	return (PLATFORMS as readonly string[]).includes(value)
+		? (value as Platform)
+		: null;
+}
 
 export async function enqueueAnalyticsRefresh(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
@@ -220,10 +220,7 @@ async function enqueueExternalPostRefresh(
 					organization_id: data.organizationId,
 					social_account_id: accountId,
 					platform: data.platform,
-					external_post_ids: data.postIds.slice(
-						i,
-						i + EXTERNAL_BATCH_SIZE,
-					),
+					external_post_ids: data.postIds.slice(i, i + EXTERNAL_BATCH_SIZE),
 				},
 			});
 		}
@@ -272,7 +269,10 @@ export async function refreshInternalPostMetrics(
 		.where(
 			and(
 				eq(postTargets.postId, message.post_id),
+				eq(postTargets.organizationId, message.organization_id),
 				eq(postTargets.status, "published"),
+				eq(socialAccounts.organizationId, message.organization_id),
+				eq(socialAccounts.lifecycleStatus, "active"),
 				sql`${postTargets.platformPostId} IS NOT NULL`,
 			),
 		);
@@ -324,9 +324,7 @@ export async function refreshInternalPostMetrics(
 			const from = new Date(publishDate.getTime() - 86400_000)
 				.toISOString()
 				.slice(0, 10);
-			const to = new Date(now.getTime() + 86400_000)
-				.toISOString()
-				.slice(0, 10);
+			const to = new Date(now.getTime() + 86400_000).toISOString().slice(0, 10);
 
 			// Prefer a direct single-post lookup when the platform fetcher
 			// exposes one (e.g. Instagram /{media-id}/insights) — this avoids
@@ -363,7 +361,8 @@ export async function refreshInternalPostMetrics(
 				// Write to postAnalytics (time-series)
 				await db.insert(postAnalytics).values({
 					postTargetId: target.targetId,
-					platform: target.platform as typeof postAnalytics.$inferInsert.platform,
+					platform:
+						target.platform as typeof postAnalytics.$inferInsert.platform,
 					impressions: match.impressions,
 					reach: match.reach,
 					likes: match.likes,
@@ -403,9 +402,7 @@ export async function refreshInternalPostMetrics(
 	// Calculate engagement rate if we have data
 	const engagementRate =
 		aggregated.impressions > 0
-			? Number(
-					((totalEngagement / aggregated.impressions) * 100).toFixed(2),
-				)
+			? Number(((totalEngagement / aggregated.impressions) * 100).toFixed(2))
 			: 0;
 
 	// Update the post's metricsSnapshot for fast Sent tab display
@@ -414,9 +411,15 @@ export async function refreshInternalPostMetrics(
 		.set({
 			metricsSnapshot: { ...aggregated, engagement_rate: engagementRate },
 			metricsCollectedAt: now,
+			revision: sql`${posts.revision} + 1`,
 			updatedAt: now,
 		})
-		.where(eq(posts.id, message.post_id));
+		.where(
+			and(
+				eq(posts.id, message.post_id),
+				eq(posts.organizationId, message.organization_id),
+			),
+		);
 }
 
 // ---------------------------------------------------------------------------
@@ -428,21 +431,28 @@ export async function refreshExternalPostMetricsBatch(
 	message: RefreshExternalMetricsBatchMessage,
 ): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
+	const platform = parsePlatform(message.platform);
+	if (!platform) return;
 
 	// Load social account
 	const [account] = await db
 		.select()
 		.from(socialAccounts)
-		.where(eq(socialAccounts.id, message.social_account_id))
+		.where(
+			and(
+				eq(socialAccounts.id, message.social_account_id),
+				eq(socialAccounts.organizationId, message.organization_id),
+				eq(socialAccounts.platform, platform),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		)
 		.limit(1);
 
 	if (!account) return;
 
 	// Get the external post fetcher
-	const { getExternalPostFetcher } = await import(
-		"./external-post-sync/index"
-	);
-	const fetcher = getExternalPostFetcher(message.platform);
+	const { getExternalPostFetcher } = await import("./external-post-sync/index");
+	const fetcher = getExternalPostFetcher(platform);
 	if (!fetcher) return;
 
 	let accessToken: string;
@@ -459,7 +469,14 @@ export async function refreshExternalPostMetricsBatch(
 			platformPostId: externalPosts.platformPostId,
 		})
 		.from(externalPosts)
-		.where(inArray(externalPosts.id, message.external_post_ids));
+		.where(
+			and(
+				inArray(externalPosts.id, message.external_post_ids),
+				eq(externalPosts.organizationId, message.organization_id),
+				eq(externalPosts.socialAccountId, message.social_account_id),
+				eq(externalPosts.platform, platform),
+			),
+		);
 
 	if (extPosts.length === 0) return;
 
@@ -483,7 +500,13 @@ export async function refreshExternalPostMetricsBatch(
 					metricsUpdatedAt: now,
 					updatedAt: now,
 				})
-				.where(eq(externalPosts.id, post.id));
+				.where(
+					and(
+						eq(externalPosts.id, post.id),
+						eq(externalPosts.organizationId, message.organization_id),
+						eq(externalPosts.socialAccountId, message.social_account_id),
+					),
+				);
 		}),
 	);
 }

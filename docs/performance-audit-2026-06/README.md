@@ -336,8 +336,8 @@ isolate blast radius. Only worth it if cold starts still matter after §5.
 - **Automation list payloads** — `GET /v1/automations` returns the full graph
   JSONB per row; `GET /v1/automations/{id}/runs` returns full run context
   JSONB (V16). Slimming is a response-shape change.
-- **Deprecated `GET /v1/whatsapp/broadcasts` is unbounded** and still used by
-  dashboard + SDK (V64) — needs a paginated replacement + client migration.
+- **Resolved:** the duplicate WhatsApp-specific broadcast surface was retired;
+  dashboard and SDK consumers use the generic broadcast resource.
 
 ---
 

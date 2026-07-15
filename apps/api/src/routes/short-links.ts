@@ -1,39 +1,69 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { shortLinkConfigs, shortLinks } from "@relayapi/db";
+import {
+	type Database,
+	posts,
+	shortLinkConfigs,
+	shortLinks,
+} from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
+import { encryptToken, maybeDecrypt } from "../lib/crypto";
+import {
+	assertAllWorkspaceScope,
+	resolveOperationalCreateScope,
+} from "../lib/request-access";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+} from "../lib/workspace-scope";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
+	ShortenUrlBody,
+	ShortenUrlResponse,
 	ShortLinkConfigBody,
 	ShortLinkConfigResponse,
 	ShortLinkListResponse,
 	ShortLinkResponse,
 	ShortLinkStatsResponse,
+	ShortLinkTestQuery,
 	ShortLinkTestResponse,
-	ShortenUrlBody,
-	ShortenUrlResponse,
 } from "../schemas/short-links";
-import { getProvider, createRelayApiProvider } from "../services/short-link-providers";
 import type { ShortLinkProvider } from "../services/short-link-providers";
-import { encryptToken, maybeDecrypt } from "../lib/crypto";
+import {
+	createRelayApiProvider,
+	getProvider,
+} from "../services/short-link-providers";
 import type { Env, Variables } from "../types";
-import { requireAllWorkspaceScopeMiddleware } from "../middleware/permissions";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
-
-app.use("*", requireAllWorkspaceScopeMiddleware);
 
 // --- Helpers ---
 
 /** Resolve the provider instance + API key from config. Built-in provider uses KV, others use decrypted API key. */
 async function resolveProvider(
-	config: { provider: string | null; apiKey: string | null; domain: string | null },
+	config: {
+		provider: string | null;
+		apiKey: string | null;
+		domain: string | null;
+	},
 	env: Env,
+	db: Database,
+	organizationId: string,
+	workspaceId: string | null = null,
 ): Promise<{ provider: ShortLinkProvider; apiKey: string } | null> {
 	if (!config.provider) return null;
 
 	if (config.provider === "relayapi") {
 		const baseUrl = env.API_BASE_URL || "https://api.relayapi.dev";
-		return { provider: createRelayApiProvider(env.KV, baseUrl), apiKey: "builtin" };
+		return {
+			provider: createRelayApiProvider({
+				db,
+				kv: env.KV,
+				baseUrl,
+				organizationId,
+				workspaceId,
+			}),
+			apiKey: "builtin",
+		};
 	}
 
 	if (!config.apiKey) return null;
@@ -55,11 +85,16 @@ const getConfigRoute = createRoute({
 	security: [{ Bearer: [] }],
 	responses: {
 		200: {
-			description: "Short link configuration (defaults returned if not yet configured)",
+			description:
+				"Short link configuration (defaults returned if not yet configured)",
 			content: { "application/json": { schema: ShortLinkConfigResponse } },
 		},
 		401: {
 			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "All-workspace access required",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -92,6 +127,10 @@ const updateConfigRoute = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "All-workspace access required",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -104,6 +143,7 @@ const testConfigRoute = createRoute({
 	description:
 		"Test the configured provider by shortening a test URL. Returns the shortened URL on success.",
 	security: [{ Bearer: [] }],
+	request: { query: ShortLinkTestQuery },
 	responses: {
 		200: {
 			description: "Test result",
@@ -115,6 +155,14 @@ const testConfigRoute = createRoute({
 		},
 		401: {
 			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		400: {
+			description: "Workspace ID required",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -167,6 +215,14 @@ const listByPostRoute = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Post not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -196,6 +252,18 @@ const shortenRoute = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Workspace not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Workspace not active",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -218,6 +286,10 @@ const statsRoute = createRoute({
 			description: "Short link not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -228,6 +300,8 @@ const statsRoute = createRoute({
 // --- Route handlers ---
 
 app.openapi(getConfigRoute, async (c) => {
+	const denied = assertAllWorkspaceScope(c);
+	if (denied) return denied as never;
 	const orgId = c.get("orgId");
 	const db = c.get("db");
 
@@ -256,7 +330,12 @@ app.openapi(getConfigRoute, async (c) => {
 		{
 			id: config.id,
 			mode: config.mode as "always" | "ask" | "never",
-			provider: config.provider as "relayapi" | "dub" | "short_io" | "bitly" | null,
+			provider: config.provider as
+				| "relayapi"
+				| "dub"
+				| "short_io"
+				| "bitly"
+				| null,
 			has_api_key: !!config.apiKey,
 			domain: config.domain,
 			created_at: config.createdAt.toISOString(),
@@ -267,6 +346,8 @@ app.openapi(getConfigRoute, async (c) => {
 });
 
 app.openapi(updateConfigRoute, async (c) => {
+	const denied = assertAllWorkspaceScope(c);
+	if (denied) return denied as never;
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
@@ -275,7 +356,10 @@ app.openapi(updateConfigRoute, async (c) => {
 	// (either from this request or from an existing saved config)
 	if (body.mode !== "never") {
 		const [existing] = await db
-			.select({ provider: shortLinkConfigs.provider, apiKey: shortLinkConfigs.apiKey })
+			.select({
+				provider: shortLinkConfigs.provider,
+				apiKey: shortLinkConfigs.apiKey,
+			})
 			.from(shortLinkConfigs)
 			.where(eq(shortLinkConfigs.organizationId, orgId))
 			.limit(1);
@@ -286,13 +370,23 @@ app.openapi(updateConfigRoute, async (c) => {
 		// Built-in provider doesn't need an API key; third-party providers do
 		if (!effectiveProvider) {
 			return c.json(
-				{ error: { code: "INVALID_CONFIG", message: "Provider is required when mode is not 'never'" } },
+				{
+					error: {
+						code: "INVALID_CONFIG",
+						message: "Provider is required when mode is not 'never'",
+					},
+				},
 				400,
 			);
 		}
 		if (effectiveProvider !== "relayapi" && !effectiveApiKey) {
 			return c.json(
-				{ error: { code: "INVALID_CONFIG", message: "API key is required for third-party providers" } },
+				{
+					error: {
+						code: "INVALID_CONFIG",
+						message: "API key is required for third-party providers",
+					},
+				},
 				400,
 			);
 		}
@@ -334,7 +428,12 @@ app.openapi(updateConfigRoute, async (c) => {
 		{
 			id: config.id,
 			mode: config.mode as "always" | "ask" | "never",
-			provider: config.provider as "relayapi" | "dub" | "short_io" | "bitly" | null,
+			provider: config.provider as
+				| "relayapi"
+				| "dub"
+				| "short_io"
+				| "bitly"
+				| null,
 			has_api_key: !!config.apiKey,
 			domain: config.domain,
 			created_at: config.createdAt.toISOString(),
@@ -347,6 +446,13 @@ app.openapi(updateConfigRoute, async (c) => {
 app.openapi(testConfigRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const db = c.get("db");
+	const { workspace_id } = c.req.valid("query");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"short link",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	const [config] = await db
 		.select()
@@ -354,17 +460,27 @@ app.openapi(testConfigRoute, async (c) => {
 		.where(eq(shortLinkConfigs.organizationId, orgId))
 		.limit(1);
 
-	if (!config || !config.provider) {
+	if (!config?.provider) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "No provider configured" } },
 			404,
 		);
 	}
 
-	const resolved = await resolveProvider(config, c.env);
+	const resolved = await resolveProvider(
+		config,
+		c.env,
+		db,
+		orgId,
+		scope.workspaceId,
+	);
 	if (!resolved) {
 		return c.json(
-			{ success: false, short_url: null, error: "Provider not configured correctly" },
+			{
+				success: false,
+				short_url: null,
+				error: "Provider not configured correctly",
+			},
 			200,
 		);
 	}
@@ -394,6 +510,7 @@ app.openapi(listShortLinksRoute, async (c) => {
 	const db = c.get("db");
 
 	const conditions = [eq(shortLinks.organizationId, orgId)];
+	applyWorkspaceScope(c, conditions, shortLinks.workspaceId);
 	// Keyset pagination on (createdAt, id). Read the cursor row's created_at as raw
 	// text so it isn't round-tripped through a JS Date, which truncates Postgres
 	// microseconds to millisecond precision and would skip rows sharing the cursor's
@@ -425,6 +542,7 @@ app.openapi(listShortLinksRoute, async (c) => {
 		{
 			data: data.map((sl) => ({
 				id: sl.id,
+				workspace_id: sl.workspaceId,
 				original_url: sl.originalUrl,
 				short_url: sl.shortUrl,
 				post_id: sl.postId,
@@ -442,22 +560,36 @@ app.openapi(listByPostRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { postId } = c.req.valid("param");
 	const db = c.get("db");
+	const [post] = await db
+		.select({ workspaceId: posts.workspaceId })
+		.from(posts)
+		.where(and(eq(posts.id, postId), eq(posts.organizationId, orgId)))
+		.limit(1);
+	if (!post) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
+	}
+	const postDenied = assertWorkspaceScope(c, post.workspaceId);
+	if (postDenied) return postDenied as never;
 
+	const conditions = [
+		eq(shortLinks.organizationId, orgId),
+		eq(shortLinks.postId, postId),
+	];
+	applyWorkspaceScope(c, conditions, shortLinks.workspaceId);
 	const rows = await db
 		.select()
 		.from(shortLinks)
-		.where(
-			and(
-				eq(shortLinks.organizationId, orgId),
-				eq(shortLinks.postId, postId),
-			),
-		)
+		.where(and(...conditions))
 		.orderBy(desc(shortLinks.createdAt));
 
 	return c.json(
 		{
 			data: rows.map((sl) => ({
 				id: sl.id,
+				workspace_id: sl.workspaceId,
 				original_url: sl.originalUrl,
 				short_url: sl.shortUrl,
 				post_id: sl.postId,
@@ -473,6 +605,12 @@ app.openapi(shortenRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		body.workspace_id,
+		"short link",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	const [config] = await db
 		.select()
@@ -485,35 +623,60 @@ app.openapi(shortenRoute, async (c) => {
 			{
 				error: {
 					code: "PROVIDER_NOT_CONFIGURED",
-					message: "No short link provider configured. Set up a provider in short link settings.",
+					message:
+						"No short link provider configured. Set up a provider in short link settings.",
 				},
 			},
 			400,
 		);
 	}
 
-	const resolved = await resolveProvider(config, c.env);
+	const resolved = await resolveProvider(
+		config,
+		c.env,
+		db,
+		orgId,
+		scope.workspaceId,
+	);
 	if (!resolved) {
 		return c.json(
-			{ error: { code: "INVALID_PROVIDER", message: "Provider not configured correctly" } },
+			{
+				error: {
+					code: "INVALID_PROVIDER",
+					message: "Provider not configured correctly",
+				},
+			},
 			400,
 		);
 	}
 
 	try {
-		const shortUrl = await resolved.provider.shorten(resolved.apiKey, config.domain, body.url);
-
-		// Store the short link
-		await db.insert(shortLinks).values({
-			organizationId: orgId,
-			originalUrl: body.url,
-			shortUrl,
-		});
-
-		return c.json(
-			{ original_url: body.url, short_url: shortUrl },
-			200,
+		const shortUrl = await resolved.provider.shorten(
+			resolved.apiKey,
+			config.domain,
+			body.url,
 		);
+		const shortCode = new URL(shortUrl).pathname
+			.split("/")
+			.filter(Boolean)
+			.at(-1);
+		if (!shortCode)
+			throw new Error("Short-link provider returned an invalid URL");
+
+		// RelayAPI allocation is already durable before `shorten` returns. External
+		// providers still need their result recorded locally.
+		if (config.provider !== "relayapi") {
+			await db.insert(shortLinks).values({
+				organizationId: orgId,
+				workspaceId: scope.workspaceId,
+				originalUrl: body.url,
+				provider: config.provider,
+				shortCode,
+				shortUrl,
+			});
+		}
+
+		return c.json({ original_url: body.url, short_url: shortUrl }, 200);
 	} catch (err) {
 		return c.json(
 			{
@@ -535,9 +698,7 @@ app.openapi(statsRoute, async (c) => {
 	const [link] = await db
 		.select()
 		.from(shortLinks)
-		.where(
-			and(eq(shortLinks.id, id), eq(shortLinks.organizationId, orgId)),
-		)
+		.where(and(eq(shortLinks.id, id), eq(shortLinks.organizationId, orgId)))
 		.limit(1);
 
 	if (!link) {
@@ -546,6 +707,8 @@ app.openapi(statsRoute, async (c) => {
 			404,
 		);
 	}
+	const denied = assertWorkspaceScope(c, link.workspaceId);
+	if (denied) return denied as never;
 
 	// Built-in (relayapi) links count clicks directly in short_links.click_count
 	// (the redirect handler's atomic increment) — that DB value is authoritative,
@@ -560,10 +723,13 @@ app.openapi(statsRoute, async (c) => {
 			.limit(1);
 
 		if (config?.provider && config.provider !== "relayapi") {
-			const resolved = await resolveProvider(config, c.env);
+			const resolved = await resolveProvider(config, c.env, db, orgId);
 
 			if (resolved) {
-				clickCount = await resolved.provider.getClickCount(resolved.apiKey, link.shortUrl);
+				clickCount = await resolved.provider.getClickCount(
+					resolved.apiKey,
+					link.shortUrl,
+				);
 
 				// Update cached count
 				c.executionCtx.waitUntil(

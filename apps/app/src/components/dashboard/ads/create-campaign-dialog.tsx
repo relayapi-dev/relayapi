@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,6 +48,7 @@ export function CreateCampaignDialog({ open, onOpenChange, adAccounts, onCreated
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const operationRef = useRef<{ requestBody: string; key: string } | null>(null);
 
   const createMutation = useMutation<{ id: string }>("ads/campaigns", "POST");
 
@@ -62,6 +63,7 @@ export function CreateCampaignDialog({ open, onOpenChange, adAccounts, onCreated
       setStartDate("");
       setEndDate("");
       setError(null);
+      operationRef.current = null;
     }
   }, [open]);
 
@@ -104,8 +106,15 @@ export function CreateCampaignDialog({ open, onOpenChange, adAccounts, onCreated
     if (startDate) body.start_date = startDate;
     if (endDate) body.end_date = endDate;
 
+    const requestBody = JSON.stringify(body);
+    if (operationRef.current?.requestBody !== requestBody) {
+      operationRef.current = { requestBody, key: crypto.randomUUID() };
+    }
+    body.operation_id = operationRef.current.key;
+
     const result = await createMutation.mutate(body);
     if (result) {
+      operationRef.current = null;
       onCreated();
       onOpenChange(false);
     }

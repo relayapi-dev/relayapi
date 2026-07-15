@@ -21,16 +21,20 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
+import { encryptAccountToken } from "../lib/account-token-crypto";
 import type { Graph } from "../schemas/automation-graph";
 import type { SendMessageRequest } from "../services/message-sender";
 import { enrollContact } from "../services/automations/runner";
 
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -96,24 +100,32 @@ async function createContactWithChannel(
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	await db.insert(contactChannels).values({
+		organizationId: orgId,
 		contactId: ct.id,
 		socialAccountId,
-		platform,
+		platform: platform as typeof contactChannels.$inferInsert.platform,
 		identifier,
 	});
 	return ct;
 }
 
 async function createSocialAccount(platform: string) {
+	const id = generateId("acc_");
 	const [acc] = await db
 		.insert(socialAccounts)
 		.values({
+			id,
 			organizationId: orgId,
 			workspaceId,
 			platform: platform as never,
 			platformAccountId: `platacc_${platform}_${Date.now()}`,
 			username: `bot_${platform}`,
-			accessToken: "test-token-plaintext",
+			accessToken: await encryptAccountToken(
+				"test-token-plaintext",
+				TEST_ENCRYPTION_KEY,
+				id,
+				"access_token",
+			),
 		})
 		.returning();
 	if (!acc) throw new Error("social account insert failed");
@@ -121,6 +133,7 @@ async function createSocialAccount(platform: string) {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixtureOrg();
 		dbAvailable = true;
@@ -144,11 +157,7 @@ describe("automation message handler", () => {
 		}
 
 		const acc = await createSocialAccount("telegram");
-		const ct = await createContactWithChannel(
-			"telegram",
-			"tg_chat_42",
-			acc.id,
-		);
+		const ct = await createContactWithChannel("telegram", "tg_chat_42", acc.id);
 
 		const graph: Graph = {
 			schema_version: 1,
@@ -210,6 +219,7 @@ describe("automation message handler", () => {
 			env: {
 				db,
 				sendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
 				// Pre-seed contact merge-tag data into run context so
 				// {{contact.name}} resolves without a DB hydrate.
 			},
@@ -244,11 +254,7 @@ describe("automation message handler", () => {
 		}
 
 		const acc = await createSocialAccount("telegram");
-		const ct = await createContactWithChannel(
-			"telegram",
-			"tg_chat_99",
-			acc.id,
-		);
+		const ct = await createContactWithChannel("telegram", "tg_chat_99", acc.id);
 
 		const graph: Graph = {
 			schema_version: 1,
@@ -303,7 +309,7 @@ describe("automation message handler", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport },
+			env: { db, sendTransport, ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		});
 
 		expect(sendCalls).toHaveLength(1);
@@ -364,7 +370,7 @@ describe("automation message handler", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport },
+			env: { db, sendTransport, ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		});
 
 		const run = await db.query.automationRuns.findFirst({

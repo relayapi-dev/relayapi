@@ -115,8 +115,7 @@ Respond ONLY with a JSON array.`;
 			messages: [{ role: "user", content: prompt }],
 		});
 
-		const responseText =
-			(result as { response?: string }).response ?? "";
+		const responseText = (result as { response?: string }).response ?? "";
 		const parsed = extractJson(responseText) as Array<
 			Partial<Omit<ClassifyResult, "id">>
 		>;
@@ -140,13 +139,8 @@ Respond ONLY with a JSON array.`;
 							: 0,
 					label:
 						item.sentiment?.label &&
-						["positive", "neutral", "negative"].includes(
-							item.sentiment.label,
-						)
-							? (item.sentiment.label as
-									| "positive"
-									| "neutral"
-									| "negative")
+						["positive", "neutral", "negative"].includes(item.sentiment.label)
+							? (item.sentiment.label as "positive" | "neutral" | "negative")
 							: "neutral",
 				},
 				intent:
@@ -162,8 +156,7 @@ Respond ONLY with a JSON array.`;
 						? (item.intent as ClassifyResult["intent"])
 						: "general",
 				urgency:
-					item.urgency &&
-					["high", "medium", "low"].includes(item.urgency)
+					item.urgency && ["high", "medium", "low"].includes(item.urgency)
 						? (item.urgency as "high" | "medium" | "low")
 						: "low",
 				requires_response:
@@ -187,8 +180,14 @@ export async function suggestReplies(
 	conversationId: string,
 	orgId: string,
 	options?: SuggestReplyOptions,
+	workspaceScope?: "all" | string[],
 ): Promise<SuggestReplyResult[]> {
-	const convo = await getConversationWithMessages(db, conversationId, orgId);
+	const convo = await getConversationWithMessages(
+		db,
+		conversationId,
+		orgId,
+		workspaceScope,
+	);
 	if (!convo) {
 		return [];
 	}
@@ -222,8 +221,7 @@ Respond ONLY with a JSON array.`;
 			messages: [{ role: "user", content: prompt }],
 		});
 
-		const responseText =
-			(result as { response?: string }).response ?? "";
+		const responseText = (result as { response?: string }).response ?? "";
 		const parsed = extractJson(responseText) as SuggestReplyResult[];
 
 		if (!Array.isArray(parsed)) {
@@ -255,8 +253,14 @@ export async function summarizeConversation(
 	db: Database,
 	conversationId: string,
 	orgId: string,
+	workspaceScope?: "all" | string[],
 ): Promise<SummarizeResult | null> {
-	const convo = await getConversationWithMessages(db, conversationId, orgId);
+	const convo = await getConversationWithMessages(
+		db,
+		conversationId,
+		orgId,
+		workspaceScope,
+	);
 	if (!convo) {
 		return null;
 	}
@@ -295,8 +299,7 @@ Respond ONLY with JSON.`;
 			messages: [{ role: "user", content: prompt }],
 		});
 
-		const responseText =
-			(result as { response?: string }).response ?? "";
+		const responseText = (result as { response?: string }).response ?? "";
 		const parsed = extractJson(responseText) as Partial<SummarizeResult>;
 
 		return {
@@ -305,9 +308,7 @@ Respond ONLY with JSON.`;
 					? parsed.summary
 					: "Unable to generate summary.",
 			key_topics: Array.isArray(parsed.key_topics)
-				? parsed.key_topics.filter(
-						(t): t is string => typeof t === "string",
-					)
+				? parsed.key_topics.filter((t): t is string => typeof t === "string")
 				: [],
 			action_needed:
 				typeof parsed.action_needed === "string"

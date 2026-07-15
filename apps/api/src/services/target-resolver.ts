@@ -1,6 +1,6 @@
 import type { Database } from "@relayapi/db";
-import { workspaces, socialAccounts } from "@relayapi/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { socialAccounts, workspaces } from "@relayapi/db";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Platform } from "../schemas/common";
 import { PLATFORMS } from "../schemas/common";
 
@@ -22,6 +22,8 @@ export interface FailedTarget {
 export interface TargetResolution {
 	resolved: ResolvedTarget[];
 	failed: FailedTarget[];
+	/** Distinct workspace identities of the accounts selected by this request. */
+	workspaceIds: Array<string | null>;
 }
 
 function isPlatformName(value: string): value is Platform {
@@ -50,7 +52,14 @@ export async function resolveTargets(
 	orgId: string,
 	targets: string[],
 	workspaceScope: "all" | string[],
-	prefetchedAccounts?: Array<{ id: string; platform: string; username: string | null; displayName: string | null; workspaceId: string | null }>,
+	prefetchedAccounts?: Array<{
+		id: string;
+		platform: string;
+		username: string | null;
+		displayName: string | null;
+		workspaceId: string | null;
+	}>,
+	resourceWorkspaceId?: string | null,
 ): Promise<TargetResolution> {
 	const resolved: ResolvedTarget[] = [];
 	const failed: FailedTarget[] = [];
@@ -89,25 +98,47 @@ export async function resolveTargets(
 
 	// Use pre-fetched accounts if available, otherwise fetch once
 	// When workspace scope is set, only include accounts from allowed workspaces
-	const prefetchConditions = [eq(socialAccounts.organizationId, orgId)];
+	const prefetchConditions = [
+		eq(socialAccounts.organizationId, orgId),
+		eq(socialAccounts.lifecycleStatus, "active"),
+	];
 	if (workspaceScope !== "all") {
-		prefetchConditions.push(inArray(socialAccounts.workspaceId, workspaceScope));
+		prefetchConditions.push(
+			workspaceScope.length === 0
+				? sql`false`
+				: (or(
+						isNull(socialAccounts.workspaceId),
+						inArray(socialAccounts.workspaceId, workspaceScope),
+					) ?? sql`false`),
+		);
 	}
-	const rawAccounts = prefetchedAccounts ?? await db
-		.select({
-			id: socialAccounts.id,
-			platform: socialAccounts.platform,
-			username: socialAccounts.username,
-			displayName: socialAccounts.displayName,
-			workspaceId: socialAccounts.workspaceId,
-		})
-		.from(socialAccounts)
-		.where(and(...prefetchConditions));
+	const rawAccounts =
+		prefetchedAccounts ??
+		(await db
+			.select({
+				id: socialAccounts.id,
+				platform: socialAccounts.platform,
+				username: socialAccounts.username,
+				displayName: socialAccounts.displayName,
+				workspaceId: socialAccounts.workspaceId,
+			})
+			.from(socialAccounts)
+			.where(and(...prefetchConditions)));
 
 	// Safety filter: ensure prefetched accounts also respect workspace scope
-	const orgAccounts = (prefetchedAccounts && workspaceScope !== "all")
-		? rawAccounts.filter(a => a.workspaceId != null && workspaceScope.includes(a.workspaceId))
-		: rawAccounts;
+	let orgAccounts =
+		prefetchedAccounts && workspaceScope !== "all"
+			? rawAccounts.filter(
+					(a) =>
+						workspaceScope.length > 0 &&
+						(a.workspaceId == null || workspaceScope.includes(a.workspaceId)),
+				)
+			: rawAccounts;
+	if (resourceWorkspaceId) {
+		orgAccounts = orgAccounts.filter(
+			(account) => account.workspaceId === resourceWorkspaceId,
+		);
+	}
 
 	// Resolve platform name targets
 	for (const platform of platformTargets) {
@@ -158,7 +189,9 @@ export async function resolveTargets(
 				continue;
 			}
 
-			const workspaceAccounts = orgAccounts.filter((a) => a.workspaceId === wsId);
+			const workspaceAccounts = orgAccounts.filter(
+				(a) => a.workspaceId === wsId,
+			);
 			if (workspaceAccounts.length === 0) {
 				failed.push({
 					key: wsId,
@@ -217,5 +250,34 @@ export async function resolveTargets(
 		}
 	}
 
-	return { resolved, failed };
+	// Semantic selectors can overlap (for example ["twitter", "acc_x"] or a
+	// platform plus a workspace containing the same account). Persist exactly one
+	// target per account. Precedence is deterministic: platform selectors, then
+	// workspace selectors, then direct account selectors, matching the resolution
+	// passes above. Selector-keyed target_options therefore come from the first
+	// matching selector only.
+	const seenAccountIds = new Set<string>();
+	const deduplicated = resolved.flatMap((target) => {
+		const accounts = target.accounts.filter((account) => {
+			if (seenAccountIds.has(account.id)) return false;
+			seenAccountIds.add(account.id);
+			return true;
+		});
+		return accounts.length > 0 ? [{ ...target, accounts }] : [];
+	});
+
+	const selectedAccountIds = new Set(
+		deduplicated.flatMap((target) =>
+			target.accounts.map((account) => account.id),
+		),
+	);
+	const workspaceIds = [
+		...new Set(
+			orgAccounts
+				.filter((account) => selectedAccountIds.has(account.id))
+				.map((account) => account.workspaceId),
+		),
+	];
+
+	return { resolved: deduplicated, failed, workspaceIds };
 }

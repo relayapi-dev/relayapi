@@ -24,8 +24,14 @@ export const POST: APIRoute = async (ctx) => {
   const client = await requireClient(ctx);
   if (client instanceof Response) return client;
   try {
-    const body = await ctx.request.json();
-    const data = await client.ads.createCampaign(body);
+    const { operation_id: operationId, ...body } = await ctx.request.json();
+    if (typeof operationId !== "string" || !operationId) {
+      return Response.json(
+        { error: { code: "IDEMPOTENCY_KEY_REQUIRED", message: "operation_id is required" } },
+        { status: 400 },
+      );
+    }
+    const data = await client.ads.createCampaign(body, { idempotencyKey: operationId });
     return Response.json(data, { status: 201 });
   } catch (e) {
     return handleSdkError(e);

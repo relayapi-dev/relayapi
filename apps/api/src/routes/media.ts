@@ -2,7 +2,26 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { generateId, media, posts } from "@relayapi/db";
 import type { AwsClient } from "aws4fetch";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { ErrorResponse, IdParam, FilterParams } from "../schemas/common";
+import {
+	createBoundedReadableBody,
+	parseContentLength,
+	ResponseTooLargeError,
+} from "../lib/fetch-public-url";
+import {
+	getCachedR2Client,
+	presignR2Url,
+	presignViewUrlWithCache,
+	RELAY_MEDIA_HOST,
+} from "../lib/r2-presign";
+import { resolveOperationalCreateScope } from "../lib/request-access";
+import { thumbnailKeyFor } from "../lib/thumbnails";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+} from "../lib/workspace-scope";
+import { ErrorResponse, FilterParams, IdParam } from "../schemas/common";
 import {
 	MediaListResponse,
 	MediaPresignRequest,
@@ -10,20 +29,13 @@ import {
 	MediaResponse,
 	MediaUploadResponse,
 } from "../schemas/media";
+import { processMediaDeletion } from "../services/media-reliability";
 import type { Env, Variables } from "../types";
-import { applyWorkspaceScope } from "../lib/workspace-scope";
-import {
-	getCachedR2Client,
-	presignR2Url,
-	presignViewUrlWithCache,
-	purgePresignedViewCache,
-	RELAY_MEDIA_HOST,
-} from "../lib/r2-presign";
-import { thumbnailKeyFor } from "../lib/thumbnails";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
 const PRESIGN_GET_EXPIRES = 3600; // 1 hour
+export const MAX_MEDIA_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 // SECURITY: Allowed MIME types to prevent stored XSS via SVG/HTML uploads
 const ALLOWED_MIME_TYPES = new Set([
@@ -40,6 +52,7 @@ const ALLOWED_MIME_TYPES = new Set([
 	"video/mpeg",
 	"audio/mpeg",
 	"audio/mp4",
+	"audio/webm",
 	"audio/wav",
 	"audio/ogg",
 	"application/pdf",
@@ -48,7 +61,9 @@ const ALLOWED_MIME_TYPES = new Set([
 function requireR2Client(env: Env): AwsClient {
 	const client = getCachedR2Client(env);
 	if (!client) {
-		throw new Error("R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and CF_ACCOUNT_ID must be set");
+		throw new Error(
+			"R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and CF_ACCOUNT_ID must be set",
+		);
 	}
 	return client;
 }
@@ -62,6 +77,24 @@ async function getPresignedViewUrl(
 	storageKey: string,
 ): Promise<string> {
 	return presignViewUrlWithCache(env, client, storageKey, PRESIGN_GET_EXPIRES);
+}
+
+type MediaReadSource = {
+	storageKey: string;
+	url: string | null;
+	thumbnailUrl: string | null;
+	originalDeletedAt: Date | null;
+};
+
+/** Never mint a fresh URL for an original R2 object known to be gone. */
+export async function getMediaReadUrl(
+	env: Env,
+	record: MediaReadSource,
+): Promise<string | null> {
+	if (record.originalDeletedAt || record.url === null) {
+		return record.thumbnailUrl || null;
+	}
+	return getPresignedViewUrl(env, requireR2Client(env), record.storageKey);
 }
 
 // --- Route definitions ---
@@ -93,15 +126,67 @@ const uploadMedia = createRoute({
 	tags: ["Media"],
 	summary: "Upload a file",
 	description:
-		"Upload a raw file body. Pass the filename as a query parameter and set the Content-Type header to the file's actual MIME type (e.g. image/png, video/mp4). The Content-Type is validated against an allowlist; application/octet-stream is rejected.",
+		"Upload a raw file body. Pass the filename as a query parameter and set Content-Type to one of the documented media types. Generic application/octet-stream bodies are rejected.",
 	security: [{ Bearer: [] }],
 	request: {
 		query: z.object({
 			filename: z.string().describe("Original filename"),
+			workspace_id: z
+				.string()
+				.optional()
+				.describe("Workspace ID for the media record"),
 		}),
 		body: {
 			content: {
-				"application/octet-stream": {
+				"image/jpeg": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"image/png": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"image/gif": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"image/webp": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"image/heic": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"image/heif": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"image/avif": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"video/mp4": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"video/webm": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"video/quicktime": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"video/mpeg": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"audio/mpeg": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"audio/mp4": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"audio/webm": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"audio/wav": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"audio/ogg": {
+					schema: z.string().openapi({ type: "string", format: "binary" }),
+				},
+				"application/pdf": {
 					schema: z.string().openapi({ type: "string", format: "binary" }),
 				},
 			},
@@ -116,6 +201,10 @@ const uploadMedia = createRoute({
 		},
 		400: {
 			description: "Bad request",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		413: {
+			description: "File exceeds the upload size limit",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
@@ -172,6 +261,10 @@ const getMedia = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -191,6 +284,10 @@ const deleteMedia = createRoute({
 		},
 		404: {
 			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		409: {
@@ -214,7 +311,9 @@ const confirmMedia = createRoute({
 			content: {
 				"application/json": {
 					schema: z.object({
-						storage_key: z.string().describe("The storage key from the presign response URL"),
+						storage_key: z
+							.string()
+							.describe("The storage key from the presign response URL"),
 					}),
 				},
 			},
@@ -280,6 +379,9 @@ app.openapi(listMedia, async (c) => {
 		.select({
 			id: media.id,
 			storageKey: media.storageKey,
+			url: media.url,
+			thumbnailUrl: media.thumbnailUrl,
+			originalDeletedAt: media.originalDeletedAt,
 			filename: media.filename,
 			mimeType: media.mimeType,
 			size: media.size,
@@ -296,10 +398,7 @@ app.openapi(listMedia, async (c) => {
 	const hasMore = records.length > limit;
 	const data = records.slice(0, limit);
 
-	const client = requireR2Client(c.env);
-	const urls = await Promise.all(
-		data.map((r) => getPresignedViewUrl(c.env, client, r.storageKey)),
-	);
+	const urls = await Promise.all(data.map((r) => getMediaReadUrl(c.env, r)));
 
 	return c.json(
 		{
@@ -323,82 +422,145 @@ app.openapi(listMedia, async (c) => {
 
 app.openapi(uploadMedia, async (c) => {
 	const orgId = c.get("orgId");
-	const { filename } = c.req.valid("query");
+	const { filename, workspace_id } = c.req.valid("query");
+	const scope = await resolveOperationalCreateScope(c, workspace_id, "media");
+	if (!scope.ok) return scope.response as never;
 	const contentType =
 		c.req.header("content-type") ?? "application/octet-stream";
 
 	// SECURITY: Validate MIME type against allowlist to prevent stored XSS
-	if (!ALLOWED_MIME_TYPES.has((contentType.split(";")[0] ?? "").trim().toLowerCase())) {
+	if (
+		!ALLOWED_MIME_TYPES.has(
+			(contentType.split(";")[0] ?? "").trim().toLowerCase(),
+		)
+	) {
 		return c.json(
-			{ error: { code: "INVALID_CONTENT_TYPE", message: `Content type '${contentType}' is not allowed. Supported types: images, videos, audio, and PDF.` } } as never,
+			{
+				error: {
+					code: "INVALID_CONTENT_TYPE",
+					message: `Content type '${contentType}' is not allowed. Supported types: images, videos, audio, and PDF.`,
+				},
+			} as never,
 			400 as never,
 		);
 	}
 
-	// SECURITY: Enforce max upload size (50MB) to prevent OOM on Workers
-	const MAX_UPLOAD_SIZE = 50 * 1024 * 1024;
-	const contentLength = parseInt(c.req.header("content-length") ?? "0", 10);
-	if (contentLength > MAX_UPLOAD_SIZE) {
+	// Reject a declared oversized body before touching R2 or the database. The
+	// counting stream below independently enforces the same bound when the
+	// header is absent, zero, malformed, or dishonest.
+	const contentLength = parseContentLength(c.req.raw.headers);
+	if (contentLength !== null && contentLength > MAX_MEDIA_UPLOAD_BYTES) {
+		void c.req.raw.body?.cancel().catch(() => {});
 		return c.json(
-			{ error: { code: "FILE_TOO_LARGE", message: `Max upload size is ${MAX_UPLOAD_SIZE / 1024 / 1024}MB` } } as never,
-			400 as never,
+			{
+				error: {
+					code: "FILE_TOO_LARGE",
+					message: `Max upload size is ${MAX_MEDIA_UPLOAD_BYTES / 1024 / 1024}MB`,
+				},
+			} as never,
+			413 as never,
 		);
 	}
 
-	let body: ArrayBuffer | ReadableStream<Uint8Array> | null = c.req.raw.body;
-	let size = contentLength;
-
-	if (!body || contentLength <= 0) {
-		const bufferedBody = await c.req.arrayBuffer();
-		if (!bufferedBody || bufferedBody.byteLength === 0) {
-			return c.json(
-				{ error: { code: "BAD_REQUEST", message: "Request body is empty" } },
-				400,
-			);
-		}
-
-		if (bufferedBody.byteLength > MAX_UPLOAD_SIZE) {
-			return c.json(
-				{ error: { code: "FILE_TOO_LARGE", message: `Max upload size is ${MAX_UPLOAD_SIZE / 1024 / 1024}MB` } } as never,
-				400 as never,
-			);
-		}
-
-		body = bufferedBody;
-		size = bufferedBody.byteLength;
+	const requestBody = c.req.raw.body;
+	if (!requestBody) {
+		return c.json(
+			{ error: { code: "BAD_REQUEST", message: "Request body is empty" } },
+			400,
+		);
 	}
+	const boundedBody = createBoundedReadableBody(
+		requestBody,
+		MAX_MEDIA_UPLOAD_BYTES,
+		contentLength,
+	);
 
 	// Sanitize filename: strip path separators, traversal sequences, and XSS-relevant chars.
 	// Also replace %, #, ? — these survive the storage key but break the canonical-URL
 	// round-trip (new URL() + decodeURIComponent) used to re-derive the key at presign/
 	// publish time, producing dead media URLs.
-	const safeFilename = filename.replace(/[/\\]/g, "_").replace(/\.\./g, "_").replace(/\0/g, "").replace(/[<>"'&]/g, "_").replace(/[%#?]/g, "_");
+	const safeFilename = filename
+		.replace(/[/\\]/g, "_")
+		.replace(/\.\./g, "_")
+		.replace(/\0/g, "")
+		.replace(/[<>"'&]/g, "_")
+		.replace(/[%#?]/g, "_");
 	const storageKey = `${orgId}/${generateId("file_")}/${safeFilename}`;
+	const url = `https://media.relayapi.dev/${storageKey}`;
+	const db = c.get("db");
+	const mediaId = generateId("med_");
 
-	await c.env.MEDIA_BUCKET.put(storageKey, body, {
-		httpMetadata: { contentType },
-		customMetadata: { orgId, filename: safeFilename },
+	// Persist the upload intent before R2 sees the object. An object-create event
+	// can therefore always find the row, and a Worker crash after the PUT leaves
+	// an `uploading` row that the scheduled reconciler can repair.
+	await db.insert(media).values({
+		id: mediaId,
+		organizationId: orgId,
+		workspaceId: scope.workspaceId,
+		filename: safeFilename,
+		mimeType: contentType,
+		size: contentLength ?? 0,
+		storageKey,
+		url,
+		status: "uploading",
 	});
 
-	const url = `https://media.relayapi.dev/${storageKey}`;
-
-	const db = c.get("db");
+	let size = 0;
+	let streamFailure: unknown;
+	void boundedBody.bytesRead.catch((error) => {
+		streamFailure = error;
+	});
 	try {
-		await db.insert(media).values({
-			organizationId: orgId,
-			filename: safeFilename,
-			mimeType: contentType,
-			size,
-			storageKey,
-			url,
+		await c.env.MEDIA_BUCKET.put(storageKey, boundedBody.body, {
+			httpMetadata: { contentType },
+			customMetadata: { orgId, filename: safeFilename },
 		});
-	} catch (err) {
-		// Clean up R2 object if the DB write fails to avoid orphaned files
-		await c.env.MEDIA_BUCKET.delete(storageKey).catch((deleteErr) =>
-			console.error(`Failed to clean up R2 object ${storageKey}:`, deleteErr),
-		);
-		throw err;
+		size = await boundedBody.bytesRead;
+	} catch (error) {
+		// Keep the durable intent for the scheduled reconciler, but distinguish a
+		// failed stream from an object that may have completed before a lost reply.
+		await db
+			.update(media)
+			.set({ status: "upload_failed" })
+			.where(eq(media.id, mediaId));
+		await Promise.resolve();
+		if (
+			error instanceof ResponseTooLargeError ||
+			streamFailure instanceof ResponseTooLargeError
+		) {
+			return c.json(
+				{
+					error: {
+						code: "FILE_TOO_LARGE",
+						message: `Max upload size is ${MAX_MEDIA_UPLOAD_BYTES / 1024 / 1024}MB`,
+					},
+				} as never,
+				413 as never,
+			);
+		}
+		throw error;
 	}
+
+	if (size === 0) {
+		await Promise.all([
+			c.env.MEDIA_BUCKET.delete(storageKey),
+			db
+				.update(media)
+				.set({ status: "upload_failed" })
+				.where(eq(media.id, mediaId)),
+		]);
+		return c.json(
+			{ error: { code: "BAD_REQUEST", message: "Request body is empty" } },
+			400,
+		);
+	}
+
+	// If this write fails, do not delete the accepted object. The R2 event or
+	// scheduled reconciler will observe the durable row and complete it.
+	await db
+		.update(media)
+		.set({ status: "ready", size })
+		.where(eq(media.id, mediaId));
 
 	return c.json(
 		{
@@ -423,12 +585,23 @@ app.openapi(uploadMedia, async (c) => {
 // @ts-expect-error — Hono strict return types; handler returns valid response or error
 app.openapi(presignMedia, async (c) => {
 	const orgId = c.get("orgId");
-	const { filename, content_type } = c.req.valid("json");
+	const { filename, content_type, workspace_id } = c.req.valid("json");
+	const scope = await resolveOperationalCreateScope(c, workspace_id, "media");
+	if (!scope.ok) return scope.response as never;
 
 	// SECURITY: Validate MIME type against allowlist to prevent stored XSS
-	if (!ALLOWED_MIME_TYPES.has((content_type.split(";")[0] ?? "").trim().toLowerCase())) {
+	if (
+		!ALLOWED_MIME_TYPES.has(
+			(content_type.split(";")[0] ?? "").trim().toLowerCase(),
+		)
+	) {
 		return c.json(
-			{ error: { code: "INVALID_CONTENT_TYPE", message: `Content type '${content_type}' is not allowed. Supported types: images, videos, audio, and PDF.` } } as never,
+			{
+				error: {
+					code: "INVALID_CONTENT_TYPE",
+					message: `Content type '${content_type}' is not allowed. Supported types: images, videos, audio, and PDF.`,
+				},
+			} as never,
 			400 as never,
 		);
 	}
@@ -436,7 +609,13 @@ app.openapi(presignMedia, async (c) => {
 	const { R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, CF_ACCOUNT_ID } = c.env;
 	if (!R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !CF_ACCOUNT_ID) {
 		return c.json(
-			{ error: { code: "NOT_CONFIGURED", message: "Media presigned uploads are not configured. Use the direct upload endpoint instead." } },
+			{
+				error: {
+					code: "NOT_CONFIGURED",
+					message:
+						"Media presigned uploads are not configured. Use the direct upload endpoint instead.",
+				},
+			},
 			400,
 		);
 	}
@@ -444,7 +623,11 @@ app.openapi(presignMedia, async (c) => {
 	// Replace %, #, ? in addition to path separators / traversal / NUL: these survive
 	// into the storage key but break the canonical-URL round-trip (new URL() +
 	// decodeURIComponent) used to re-derive the key at presign/publish time.
-	const safeFilename = filename.replace(/[/\\]/g, "_").replace(/\.\./g, "_").replace(/\0/g, "").replace(/[%#?]/g, "_");
+	const safeFilename = filename
+		.replace(/[/\\]/g, "_")
+		.replace(/\.\./g, "_")
+		.replace(/\0/g, "")
+		.replace(/[%#?]/g, "_");
 	const storageKey = `${orgId}/${generateId("file_")}/${safeFilename}`;
 	const expiresIn = 3600; // 1 hour
 
@@ -465,6 +648,7 @@ app.openapi(presignMedia, async (c) => {
 	const db = c.get("db");
 	await db.insert(media).values({
 		organizationId: orgId,
+		workspaceId: scope.workspaceId,
 		filename,
 		mimeType: content_type,
 		size: 0,
@@ -500,9 +684,17 @@ app.openapi(getMedia, async (c) => {
 			404,
 		);
 	}
+	if (record.status === "deleting" || record.status === "deletion_failed") {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Media not found" } },
+			404,
+		);
+	}
+	if (isWorkspaceScopeDenied(c, record.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
-	const client = requireR2Client(c.env);
-	const url = await getPresignedViewUrl(c.env, client, record.storageKey);
+	const url = await getMediaReadUrl(c.env, record);
 
 	return c.json(
 		{
@@ -526,7 +718,12 @@ app.openapi(deleteMedia, async (c) => {
 	const db = c.get("db");
 
 	const [record] = await db
-		.select({ id: media.id, storageKey: media.storageKey })
+		.select({
+			id: media.id,
+			storageKey: media.storageKey,
+			thumbnailKey: media.thumbnailKey,
+			workspaceId: media.workspaceId,
+		})
 		.from(media)
 		.where(and(eq(media.id, id), eq(media.organizationId, orgId)))
 		.limit(1);
@@ -537,11 +734,11 @@ app.openapi(deleteMedia, async (c) => {
 			404,
 		);
 	}
+	const denied = assertWorkspaceScope(c, record.workspaceId);
+	if (denied) return denied;
 
-	// Refuse to delete media still referenced by an active (non-terminal) post:
-	// otherwise the post fails only at publish time when the now-missing object
-	// 404s on the platform. Media URLs are persisted verbatim in
-	// platform_overrides._media[].url as `https://<host>/<storageKey>`.
+	// Preserve accepted draft/scheduled/publishing posts: the durable deletion
+	// flow must not tombstone media that one of those posts still references.
 	const canonicalUrl = `https://${RELAY_MEDIA_HOST}/${record.storageKey}`;
 	const referencing = await db
 		.select({ id: posts.id })
@@ -554,7 +751,6 @@ app.openapi(deleteMedia, async (c) => {
 			),
 		)
 		.limit(1);
-
 	if (referencing.length > 0) {
 		return c.json(
 			{
@@ -568,17 +764,22 @@ app.openapi(deleteMedia, async (c) => {
 		);
 	}
 
-	// Delete original + thumbnail from R2 + DB row in parallel (independent
-	// systems), and purge any cached presigned GET URL so list responses stop
-	// returning a URL that now 404s.
-	await Promise.all([
-		c.env.MEDIA_BUCKET.delete(record.storageKey),
-		c.env.THUMBNAIL_BUCKET.delete(thumbnailKeyFor(record.storageKey)).catch(
-			() => {},
-		),
-		db.delete(media).where(eq(media.id, id)),
-		purgePresignedViewCache(c.env, record.storageKey, PRESIGN_GET_EXPIRES),
-	]);
+	// Commit the tombstone before either provider boundary. If the Worker dies at
+	// any later point, the every-minute reconciler resumes the two idempotent R2
+	// deletes. The row is hidden immediately but retained until both keys are gone.
+	const now = new Date();
+	await db
+		.update(media)
+		.set({
+			status: "deleting",
+			url: null,
+			thumbnailKey: record.thumbnailKey ?? thumbnailKeyFor(record.storageKey),
+			deletionRequestedAt: sql<Date>`COALESCE(${media.deletionRequestedAt}, ${now})`,
+			deletionNextRetryAt: now,
+			deletionLastError: null,
+		})
+		.where(and(eq(media.id, id), eq(media.organizationId, orgId)));
+	await processMediaDeletion(db, c.env, id, now);
 
 	return c.body(null, 204);
 });
@@ -591,7 +792,9 @@ app.openapi(confirmMedia, async (c) => {
 	// SECURITY: Validate storage key belongs to this org to prevent cross-org R2 oracle
 	if (!storage_key.startsWith(`${orgId}/`)) {
 		return c.json(
-			{ error: { code: "BAD_REQUEST", message: "Invalid storage key" } } as never,
+			{
+				error: { code: "BAD_REQUEST", message: "Invalid storage key" },
+			} as never,
 			400 as never,
 		);
 	}
@@ -607,20 +810,34 @@ app.openapi(confirmMedia, async (c) => {
 
 	// SEC-02: Re-verify MIME type at confirm time (presigned uploads can bypass declared type)
 	const actualContentType = r2Object.httpMetadata?.contentType;
-	if (actualContentType && !ALLOWED_MIME_TYPES.has((actualContentType.split(";")[0] ?? "").trim().toLowerCase())) {
+	if (
+		actualContentType &&
+		!ALLOWED_MIME_TYPES.has(
+			(actualContentType.split(";")[0] ?? "").trim().toLowerCase(),
+		)
+	) {
 		await c.env.MEDIA_BUCKET.delete(storage_key);
 		return c.json(
-			{ error: { code: "INVALID_FILE_TYPE", message: `File type '${actualContentType}' is not allowed` } },
+			{
+				error: {
+					code: "INVALID_FILE_TYPE",
+					message: `File type '${actualContentType}' is not allowed`,
+				},
+			},
 			400 as never,
 		);
 	}
 
 	// SEC-11: Enforce size limit on presigned uploads (direct uploads already enforce 50MB)
-	const MAX_CONFIRM_SIZE = 50 * 1024 * 1024;
-	if (r2Object.size > MAX_CONFIRM_SIZE) {
+	if (r2Object.size > MAX_MEDIA_UPLOAD_BYTES) {
 		await c.env.MEDIA_BUCKET.delete(storage_key);
 		return c.json(
-			{ error: { code: "FILE_TOO_LARGE", message: `File size ${r2Object.size} exceeds maximum of ${MAX_CONFIRM_SIZE / 1024 / 1024}MB` } },
+			{
+				error: {
+					code: "FILE_TOO_LARGE",
+					message: `File size ${r2Object.size} exceeds maximum of ${MAX_MEDIA_UPLOAD_BYTES / 1024 / 1024}MB`,
+				},
+			},
 			400 as never,
 		);
 	}
@@ -662,13 +879,17 @@ app.openapi(confirmMedia, async (c) => {
 
 	if (!record) {
 		return c.json(
-			{ error: { code: "NOT_FOUND", message: "No pending media record found for this storage key" } },
+			{
+				error: {
+					code: "NOT_FOUND",
+					message: "No pending media record found for this storage key",
+				},
+			},
 			404,
 		);
 	}
 
-	const client = requireR2Client(c.env);
-	const viewUrl = await getPresignedViewUrl(c.env, client, record.storageKey);
+	const viewUrl = await getMediaReadUrl(c.env, record);
 
 	return c.json(
 		{

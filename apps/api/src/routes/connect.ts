@@ -1,37 +1,39 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { createDb, socialAccounts, socialAccountSyncState } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
-import { rehostAvatar } from "../services/avatar-store";
+import {
+	createDb,
+	type Database,
+	socialAccountSyncState,
+	socialAccounts,
+} from "@relayapi/db";
+import { eq } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import {
-	OAUTH_CONFIGS,
-	INSTAGRAM_DIRECT_CONFIG,
 	buildAuthUrl,
 	exchangeCode,
 	generatePkce,
 	generateStateToken,
+	INSTAGRAM_DIRECT_CONFIG,
+	OAUTH_CONFIGS,
 } from "../config/oauth";
-import type { Platform } from "../schemas/common";
-import { ErrorResponse } from "../schemas/common";
-import { maybeEncrypt, maybeDecrypt } from "../lib/crypto";
+import { encryptAccountToken } from "../lib/account-token-crypto";
+import { parseApiKeyWorkspaceScope } from "../lib/api-key-workspace-scope";
+import { maybeDecrypt, maybeEncrypt } from "../lib/crypto";
 import { isAllowedCustomerRedirectUrl } from "../lib/customer-redirect";
+import { sha256Hex } from "../lib/durable-operation";
 import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
+import { buildMailchimpApiUrl, getMailchimpDatacenter } from "../lib/mailchimp";
 import {
-	assertAllWorkspaceScope,
 	assertWriteAccess,
+	resolveOperationalCreateScope,
+	validatePersistedOperationalScope,
 } from "../lib/request-access";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
-import { dispatchWebhookEvent } from "../services/webhook-delivery";
 import {
-	sanitizeSocialAccountMetadata,
-	withMetaAdsUserAccessToken,
-} from "../services/ad-access-token";
-import { socialPlatformToAdPlatform } from "../services/ad-platforms";
-import { discoverAdAccounts } from "../services/ad-service";
-import { getSupportedSyncPlatforms } from "../services/external-post-sync/index";
-import type { SyncPostsMessage } from "../services/external-post-sync/types";
-import { logConnectionEvent } from "./connections";
-import { subscribeFacebookPage, subscribeInstagramAccount, verifyInstagramWebhookSubscription, verifyWhatsAppWebhookSubscription } from "../services/webhook-subscription";
+	assertWorkspaceScope,
+	canAccessWorkspaceScope,
+} from "../lib/workspace-scope";
+import type { Platform } from "../schemas/common";
+import { ErrorResponse } from "../schemas/common";
 import {
 	CompleteOAuthBody,
 	CompleteOAuthParams,
@@ -41,14 +43,16 @@ import {
 	ConnectConvertKitBody,
 	ConnectListMonkBody,
 	ConnectMailchimpBody,
-	ConnectTelegramDirectBody,
 	FacebookPagesResponse,
 	GBPLocationsResponse,
+	InitTelegramQuery,
 	InitTelegramResponse,
 	LinkedInOrgsResponse,
 	PendingDataQuery,
 	PendingDataResponse,
+	PendingSelectionResponse,
 	PinterestBoardsResponse,
+	SecondarySelectionQuery,
 	SelectFacebookPageBody,
 	SelectGBPLocationBody,
 	SelectLinkedInOrgBody,
@@ -64,15 +68,47 @@ import {
 	WhatsAppEmbeddedSignupBody,
 	WhatsAppSDKConfigResponse,
 } from "../schemas/connect";
+import {
+	isAccountWorkspaceAccessError,
+	isAccountWorkspaceConflictError,
+	upsertConnectedAccountWithCredentials,
+} from "../services/account-credential-write";
+import {
+	sanitizeSocialAccountMetadata,
+	withMetaAdsUserAccessToken,
+} from "../services/ad-access-token";
+import { socialPlatformToAdPlatform } from "../services/ad-platforms";
+import { discoverAdAccounts } from "../services/ad-service";
+import { rehostAvatar } from "../services/avatar-store";
+import { getSupportedSyncPlatforms } from "../services/external-post-sync/index";
+import type { SyncPostsMessage } from "../services/external-post-sync/types";
+import {
+	claimOneTimeCapability,
+	issueOneTimeCapability,
+} from "../services/one-time-capability";
+import {
+	issueTelegramConnectionChallenge,
+	readTelegramConnectionChallenge,
+} from "../services/telegram-connection";
+import {
+	enqueuePersistedWebhookEvent,
+	type PersistedWebhookEvent,
+	persistWebhookEventInTransaction,
+	type WebhookTransaction,
+} from "../services/webhook-delivery";
+import {
+	subscribeFacebookPage,
+	subscribeInstagramAccount,
+	verifyInstagramWebhookSubscription,
+	verifyWhatsAppWebhookSubscription,
+} from "../services/webhook-subscription";
 import type { Env, Variables } from "../types";
+import { logConnectionEvent } from "./connections";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
 app.use("*", async (c, next) => {
-	const denied = assertWriteAccess(c) ?? assertAllWorkspaceScope(
-		c,
-		"Connecting or managing accounts requires an API key with access to all workspaces.",
-	);
+	const denied = assertWriteAccess(c);
 	if (denied) return denied;
 	return next();
 });
@@ -88,7 +124,7 @@ const startOAuth = createRoute({
 	tags: ["Connect"],
 	summary: "Start OAuth flow",
 	description:
-		"Returns an auth_url to redirect the user for OAuth authorization.",
+		"Returns an auth_url and binds the initiating API key plus its workspace grant to one-time OAuth state. workspace_id is required only when Require Workspace ID is enabled.",
 	security: [{ Bearer: [] }],
 	request: { params: StartOAuthParams, query: StartOAuthQuery },
 	responses: {
@@ -109,13 +145,18 @@ const completeOAuth = createRoute({
 	path: "/{platform}",
 	tags: ["Connect"],
 	summary: "Complete OAuth callback",
-	description: "Exchange OAuth code for tokens and save the account.",
+	description:
+		"Exchange an OAuth code and save the account after revalidating both the flow's initial workspace grant and the initiating API key's live authorization. Reconnects never move an existing identity implicitly.",
 	security: [{ Bearer: [] }],
 	request: {
 		params: CompleteOAuthParams,
 		body: { content: { "application/json": { schema: CompleteOAuthBody } } },
 	},
 	responses: {
+		200: {
+			description: "OAuth complete; secondary account selection required",
+			content: { "application/json": { schema: PendingSelectionResponse } },
+		},
 		201: {
 			description: "Account connected",
 			content: { "application/json": { schema: CompleteOAuthResponse } },
@@ -138,10 +179,18 @@ const connectBeehiiv = createRoute({
 	tags: ["Connect"],
 	summary: "Connect Beehiiv newsletter",
 	security: [{ Bearer: [] }],
-	request: { body: { content: { "application/json": { schema: ConnectBeehiivBody } } } },
+	request: {
+		body: { content: { "application/json": { schema: ConnectBeehiivBody } } },
+	},
 	responses: {
-		200: { description: "Connected", content: { "application/json": { schema: CompleteOAuthResponse } } },
-		400: { description: "Auth failed", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Connected",
+			content: { "application/json": { schema: CompleteOAuthResponse } },
+		},
+		400: {
+			description: "Auth failed",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -152,10 +201,20 @@ const connectConvertKit = createRoute({
 	tags: ["Connect"],
 	summary: "Connect ConvertKit (Kit) newsletter",
 	security: [{ Bearer: [] }],
-	request: { body: { content: { "application/json": { schema: ConnectConvertKitBody } } } },
+	request: {
+		body: {
+			content: { "application/json": { schema: ConnectConvertKitBody } },
+		},
+	},
 	responses: {
-		200: { description: "Connected", content: { "application/json": { schema: CompleteOAuthResponse } } },
-		400: { description: "Auth failed", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Connected",
+			content: { "application/json": { schema: CompleteOAuthResponse } },
+		},
+		400: {
+			description: "Auth failed",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -166,10 +225,18 @@ const connectMailchimp = createRoute({
 	tags: ["Connect"],
 	summary: "Connect Mailchimp newsletter",
 	security: [{ Bearer: [] }],
-	request: { body: { content: { "application/json": { schema: ConnectMailchimpBody } } } },
+	request: {
+		body: { content: { "application/json": { schema: ConnectMailchimpBody } } },
+	},
 	responses: {
-		200: { description: "Connected", content: { "application/json": { schema: CompleteOAuthResponse } } },
-		400: { description: "Auth failed", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Connected",
+			content: { "application/json": { schema: CompleteOAuthResponse } },
+		},
+		400: {
+			description: "Auth failed",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -180,10 +247,18 @@ const connectListMonk = createRoute({
 	tags: ["Connect"],
 	summary: "Connect self-hosted ListMonk newsletter",
 	security: [{ Bearer: [] }],
-	request: { body: { content: { "application/json": { schema: ConnectListMonkBody } } } },
+	request: {
+		body: { content: { "application/json": { schema: ConnectListMonkBody } } },
+	},
 	responses: {
-		200: { description: "Connected", content: { "application/json": { schema: CompleteOAuthResponse } } },
-		400: { description: "Auth failed", content: { "application/json": { schema: ErrorResponse } } },
+		200: {
+			description: "Connected",
+			content: { "application/json": { schema: CompleteOAuthResponse } },
+		},
+		400: {
+			description: "Auth failed",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -219,14 +294,24 @@ const connectBluesky = createRoute({
 // Telegram
 // ===========================================================================
 
+// Telegram Bot API: https://core.telegram.org/bots/api
+// Sections: "Making requests", "getChat", and "getChatMember"
+// Request form: GET or POST https://api.telegram.org/bot<token>/METHOD_NAME
+// Ownership lookup: POST https://api.telegram.org/bot<token>/getChat with field
+// chat_id, then POST https://api.telegram.org/bot<token>/getChatMember with
+// fields chat_id and user_id. getChatMember is guaranteed for other users only
+// when the bot is an administrator in the target chat.
+
 const initTelegram = createRoute({
 	operationId: "initTelegram",
 	method: "post",
 	path: "/telegram",
 	tags: ["Connect"],
 	summary: "Initiate Telegram bot connection",
-	description: "Generates a 6-character access code (valid 15 minutes).",
+	description:
+		"Generates an organization- and workspace-bound bot challenge code (valid 15 minutes).",
 	security: [{ Bearer: [] }],
+	request: { query: InitTelegramQuery },
 	responses: {
 		200: {
 			description: "Access code generated",
@@ -261,32 +346,6 @@ const pollTelegram = createRoute({
 	},
 });
 
-const connectTelegramDirect = createRoute({
-	operationId: "connectTelegramDirect",
-	method: "post",
-	path: "/telegram/direct",
-	tags: ["Connect"],
-	summary: "Connect Telegram directly with chat ID",
-	security: [{ Bearer: [] }],
-	request: {
-		body: {
-			content: {
-				"application/json": { schema: ConnectTelegramDirectBody },
-			},
-		},
-	},
-	responses: {
-		201: {
-			description: "Account connected",
-			content: { "application/json": { schema: CompleteOAuthResponse } },
-		},
-		401: {
-			description: "Unauthorized",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
 // ===========================================================================
 // Pending data (headless)
 // ===========================================================================
@@ -298,7 +357,7 @@ const getPendingData = createRoute({
 	tags: ["Connect"],
 	summary: "Fetch pending OAuth data",
 	description:
-		"One-time use, expires after 10 minutes. For headless OAuth flows.",
+		"One-time use, expires after 10 minutes, and may only be polled by the API key that initiated the headless OAuth flow.",
 	security: [{ Bearer: [] }],
 	request: { query: PendingDataQuery },
 	responses: {
@@ -324,6 +383,7 @@ const listFacebookPages = createRoute({
 	tags: ["Connect"],
 	summary: "List Facebook Pages after OAuth",
 	security: [{ Bearer: [] }],
+	request: { query: SecondarySelectionQuery },
 	responses: {
 		200: {
 			description: "Available pages",
@@ -363,6 +423,7 @@ const listLinkedInOrgs = createRoute({
 	tags: ["Connect"],
 	summary: "List LinkedIn organizations after OAuth",
 	security: [{ Bearer: [] }],
+	request: { query: SecondarySelectionQuery },
 	responses: {
 		200: {
 			description: "Available organizations",
@@ -400,6 +461,7 @@ const listPinterestBoards = createRoute({
 	tags: ["Connect"],
 	summary: "List Pinterest boards after OAuth",
 	security: [{ Bearer: [] }],
+	request: { query: SecondarySelectionQuery },
 	responses: {
 		200: {
 			description: "Available boards",
@@ -439,6 +501,7 @@ const listGBPLocations = createRoute({
 	tags: ["Connect"],
 	summary: "List Google Business locations after OAuth",
 	security: [{ Bearer: [] }],
+	request: { query: SecondarySelectionQuery },
 	responses: {
 		200: {
 			description: "Available locations",
@@ -476,6 +539,7 @@ const listSnapchatProfiles = createRoute({
 	tags: ["Connect"],
 	summary: "List Snapchat Public Profiles after OAuth",
 	security: [{ Bearer: [] }],
+	request: { query: SecondarySelectionQuery },
 	responses: {
 		200: {
 			description: "Available profiles",
@@ -603,6 +667,80 @@ function formatAccountResponse(account: {
 	};
 }
 
+type ConnectedSocialAccount = typeof socialAccounts.$inferSelect;
+
+function accountWorkspaceConflictResponse(
+	c: Parameters<typeof assertWriteAccess>[0],
+	error: unknown,
+): Response | undefined {
+	if (isAccountWorkspaceAccessError(error)) {
+		return c.json(
+			{
+				error: {
+					code: error.code,
+					message: error.message,
+				},
+			},
+			403,
+		);
+	}
+	if (!isAccountWorkspaceConflictError(error)) return undefined;
+	return c.json(
+		{
+			error: {
+				code: error.code,
+				message: error.message,
+				details: {
+					existing_workspace_id: error.existingWorkspaceId,
+					requested_workspace_id: error.requestedWorkspaceId,
+				},
+			},
+		},
+		409,
+	);
+}
+
+function accountConnectedPayload(account: ConnectedSocialAccount) {
+	return {
+		account_id: account.id,
+		platform: account.platform,
+		username: account.username,
+		display_name: account.displayName,
+	};
+}
+
+/**
+ * Commit the authoritative account upsert and customer-webhook outbox rows as
+ * one database transaction. Queue handoff remains post-commit and best-effort;
+ * the scheduled outbox dispatcher recovers a Worker stop or Queue outage.
+ */
+async function persistConnectedAccount(params: {
+	db: Database;
+	orgId: string;
+	connectionOperationId: string;
+	upsert: (
+		tx: WebhookTransaction,
+	) => Promise<ConnectedSocialAccount | undefined>;
+}): Promise<{
+	account: ConnectedSocialAccount;
+	webhook: PersistedWebhookEvent;
+}> {
+	return params.db.transaction(async (tx) => {
+		const account = await params.upsert(tx);
+		if (!account) throw new Error("Account upsert returned no row");
+		const webhook = await persistWebhookEventInTransaction(
+			tx,
+			params.orgId,
+			"account.connected",
+			accountConnectedPayload(account),
+			{
+				occurrenceId: `account-connect:${params.connectionOperationId}`,
+			},
+		);
+		return { account, webhook };
+	});
+}
+
 // ===========================================================================
 // Shared OAuth exchange logic
 // ===========================================================================
@@ -615,9 +753,100 @@ const SECONDARY_SELECTION_PLATFORMS = new Set([
 	"snapchat",
 ]);
 
+type PendingSecondaryScope = {
+	initiator_key_id: string;
+	initial_workspace_scope: "all" | string[];
+	workspace_id: string | null;
+};
+
+function pendingSecondaryKey(
+	organizationId: string,
+	platform: string,
+	connectToken: string,
+): string {
+	return `pending-secondary:${organizationId}:${platform}:${connectToken}`;
+}
+
+async function authorizePendingSecondary(
+	c: Parameters<typeof assertWriteAccess>[0],
+	data: PendingSecondaryScope,
+): Promise<
+	| { ok: true; initialWorkspaceScope: "all" | string[] }
+	| { ok: false; response: Response }
+> {
+	if (
+		data.initiator_key_id !== c.get("keyId") ||
+		!("initial_workspace_scope" in data)
+	) {
+		return {
+			ok: false,
+			response: c.json(
+				{
+					error: {
+						code: "NO_PENDING_DATA",
+						message: "No pending OAuth selection was found.",
+					},
+				},
+				404,
+			),
+		};
+	}
+	const initialWorkspaceScope = parseApiKeyWorkspaceScope({
+		workspace_scope: data.initial_workspace_scope,
+	});
+	if (initialWorkspaceScope === null) {
+		return {
+			ok: false,
+			response: c.json(
+				{
+					error: {
+						code: "NO_PENDING_DATA",
+						message: "No pending OAuth selection was found.",
+					},
+				},
+				404,
+			),
+		};
+	}
+	if (!canAccessWorkspaceScope(initialWorkspaceScope, data.workspace_id)) {
+		return {
+			ok: false,
+			response: c.json(
+				{
+					error: {
+						code: "WORKSPACE_ACCESS_DENIED",
+						message:
+							"The initiating API key did not authorize this connection scope.",
+					},
+				},
+				403,
+			),
+		};
+	}
+	const validation = await validatePersistedOperationalScope(c.get("db"), {
+		apiKeyId: data.initiator_key_id,
+		organizationId: c.get("orgId"),
+		workspaceId: data.workspace_id,
+		resourceName: "connected account",
+	});
+	if (!validation.ok) {
+		return {
+			ok: false,
+			response: c.json(
+				{ error: { code: validation.code, message: validation.message } },
+				validation.status,
+			),
+		};
+	}
+	return { ok: true, initialWorkspaceScope };
+}
+
 export type OAuthExchangeResult =
-	| { status: "success"; account: ReturnType<typeof formatAccountResponse>["account"] }
-	| { status: "pending_selection"; platform: string }
+	| {
+			status: "success";
+			account: ReturnType<typeof formatAccountResponse>["account"];
+	  }
+	| { status: "pending_selection"; platform: string; connectToken: string }
 	| { status: "error"; code: string; message: string };
 
 /**
@@ -627,22 +856,50 @@ export type OAuthExchangeResult =
 export async function exchangeAndSaveAccount(params: {
 	env: Env;
 	orgId: string;
+	initiatorKeyId: string;
+	authorizedWorkspaceScope: "all" | string[];
+	/** Scope accepted at authenticated initiation and carried by one-time state. */
+	workspaceId?: string | null;
+	/**
+	 * Whether the caller supplied workspace_id. In optional mode an omitted value
+	 * creates new identities at organization scope, but reconnects an existing
+	 * identity in place instead of silently demoting it from its workspace.
+	 */
+	workspaceWasExplicit?: boolean;
 	platform: string;
 	code: string;
 	redirectUri: string;
 	codeVerifier?: string;
 	method?: string;
+	/** Stable identifier created when this OAuth flow starts. */
+	connectionOperationId?: string;
 	/**
 	 * Optional execution-context deferral. When provided, all best-effort
-	 * post-upsert side effects (avatar re-host, webhook dispatch, connection log,
-	 * queue sends, Instagram webhook subscriptions, sync-state init, ad-account
+	 * post-upsert side effects (avatar re-host, webhook Queue handoff, connection
+	 * log, Instagram webhook subscriptions, sync-state init, ad-account
 	 * discovery) run via waitUntil AFTER the response is returned, so the
 	 * user-facing OAuth redirect / JSON response is not blocked on external HTTP
 	 * round-trips. When absent (e.g. tests), the work runs fire-and-forget.
 	 */
 	waitUntil?: (p: Promise<unknown>) => void;
 }): Promise<OAuthExchangeResult> {
-	const { env, orgId, platform, code, redirectUri, codeVerifier, method } = params;
+	const {
+		env,
+		orgId,
+		initiatorKeyId,
+		authorizedWorkspaceScope,
+		workspaceId = null,
+		platform,
+		code,
+		redirectUri,
+		codeVerifier,
+		method,
+	} = params;
+	const workspaceWasExplicit =
+		params.workspaceWasExplicit ?? workspaceId !== null;
+	const connectionOperationId =
+		params.connectionOperationId ??
+		`oauth:${await sha256Hex(`${orgId}:${platform}:${code}`)}`;
 	// Defer helper: run post-response side effects without blocking the response.
 	const defer = (p: Promise<unknown>): void => {
 		const safe = Promise.resolve(p).catch((err) =>
@@ -660,18 +917,35 @@ export async function exchangeAndSaveAccount(params: {
 		? INSTAGRAM_DIRECT_CONFIG
 		: OAUTH_CONFIGS[platform as Platform];
 	if (!oauthConfig) {
-		return { status: "error", code: "OAUTH_NOT_SUPPORTED", message: `OAuth is not configured for ${platform}.` };
+		return {
+			status: "error",
+			code: "OAUTH_NOT_SUPPORTED",
+			message: `OAuth is not configured for ${platform}.`,
+		};
 	}
 
 	const clientId = oauthConfig.getClientId(env);
 	const clientSecret = oauthConfig.getClientSecret(env);
 	if (!clientId || !clientSecret) {
-		return { status: "error", code: "MISSING_CREDENTIALS", message: `OAuth credentials not configured for ${platform}.` };
+		return {
+			status: "error",
+			code: "MISSING_CREDENTIALS",
+			message: `OAuth credentials not configured for ${platform}.`,
+		};
 	}
 
 	// Exchange code for tokens
-	const tokens = await exchangeCode(oauthConfig, clientId, clientSecret, code, redirectUri, codeVerifier);
-	console.log(`[oauth][${platform}] Token exchange success: token_received=${!!tokens.access_token}, user_id=${tokens.user_id ?? "none"}, expires_in=${tokens.expires_in ?? "none"}`);
+	const tokens = await exchangeCode(
+		oauthConfig,
+		clientId,
+		clientSecret,
+		code,
+		redirectUri,
+		codeVerifier,
+	);
+	console.log(
+		`[oauth][${platform}] Token exchange success: token_received=${!!tokens.access_token}, user_id=${tokens.user_id ?? "none"}, expires_in=${tokens.expires_in ?? "none"}`,
+	);
 
 	// Threads: exchange short-lived token (1h) for long-lived token (60 days)
 	// Note: Meta docs specify GET-only for this endpoint — secrets in URL is an accepted platform limitation
@@ -681,7 +955,10 @@ export async function exchangeAndSaveAccount(params: {
 				`https://graph.threads.net/access_token?grant_type=th_exchange_token&client_secret=${clientSecret}&access_token=${tokens.access_token}`,
 			);
 			if (llRes.ok) {
-				const llData = (await llRes.json()) as { access_token: string; expires_in?: number };
+				const llData = (await llRes.json()) as {
+					access_token: string;
+					expires_in?: number;
+				};
 				tokens.access_token = llData.access_token;
 				tokens.expires_in = llData.expires_in;
 			}
@@ -700,28 +977,45 @@ export async function exchangeAndSaveAccount(params: {
 				client_secret: clientSecret,
 				access_token: tokens.access_token,
 			});
-			const llRes = await fetch(`${GRAPH_BASE.instagram}/access_token?${llParams}`);
+			const llRes = await fetch(
+				`${GRAPH_BASE.instagram}/access_token?${llParams}`,
+			);
 			if (llRes.ok) {
-				const llData = (await llRes.json()) as { access_token: string; expires_in?: number };
+				const llData = (await llRes.json()) as {
+					access_token: string;
+					expires_in?: number;
+				};
 				tokens.access_token = llData.access_token;
 				tokens.expires_in = llData.expires_in;
 			} else {
-				console.warn(`[oauth][${platform}] Long-lived token exchange failed: ${llRes.status} ${await llRes.text()}`);
+				console.warn(
+					`[oauth][${platform}] Long-lived token exchange failed: ${llRes.status} ${await llRes.text()}`,
+				);
 			}
 		} catch (err) {
-			console.warn(`[oauth][${platform}] Long-lived token exchange error:`, err);
+			console.warn(
+				`[oauth][${platform}] Long-lived token exchange error:`,
+				err,
+			);
 		}
 	}
 
 	// Facebook/Instagram (via Facebook): exchange short-lived token for long-lived token (60 days)
 	// Note: Meta docs specify GET-only — secrets in URL is an accepted platform limitation
-	if ((platform === "facebook" || (platform === "instagram" && !isInstagramDirect)) && tokens.access_token) {
+	if (
+		(platform === "facebook" ||
+			(platform === "instagram" && !isInstagramDirect)) &&
+		tokens.access_token
+	) {
 		try {
 			const llRes = await fetch(
 				`${GRAPH_BASE.facebook}/oauth/access_token?grant_type=fb_exchange_token&client_id=${clientId}&client_secret=${clientSecret}&fb_exchange_token=${tokens.access_token}`,
 			);
 			if (llRes.ok) {
-				const llData = (await llRes.json()) as { access_token: string; expires_in?: number };
+				const llData = (await llRes.json()) as {
+					access_token: string;
+					expires_in?: number;
+				};
 				tokens.access_token = llData.access_token;
 				tokens.expires_in = llData.expires_in;
 			}
@@ -747,17 +1041,30 @@ export async function exchangeAndSaveAccount(params: {
 		} else {
 			profileUrl = oauthConfig.profileUrl;
 		}
-		console.log(`[oauth][${platform}] Profile fetch URL: ${profileUrl.replace(/access_token=[^&]+/, "access_token=REDACTED")}`);
-		const profileRes = await fetch(profileUrl, isInstagramDirect
-			? {}
-			: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
+		console.log(
+			`[oauth][${platform}] Profile fetch URL: ${profileUrl.replace(/access_token=[^&]+/, "access_token=REDACTED")}`,
+		);
+		const profileRes = await fetch(
+			profileUrl,
+			isInstagramDirect
+				? {}
+				: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
 		);
 		if (profileRes.ok) {
 			const profile = (await profileRes.json()) as Record<string, unknown>;
 			console.log(`[oauth][${platform}] Profile fetched: id=${profile.id}`);
 
 			if (platform === "twitter") {
-				const data = (profile as { data?: { id?: string; username?: string; name?: string; profile_image_url?: string } }).data;
+				const data = (
+					profile as {
+						data?: {
+							id?: string;
+							username?: string;
+							name?: string;
+							profile_image_url?: string;
+						};
+					}
+				).data;
 				profileId = data?.id ?? null;
 				username = data?.username ?? null;
 				displayName = data?.name ?? displayName;
@@ -777,10 +1084,15 @@ export async function exchangeAndSaveAccount(params: {
 				const igId = (profile as { id?: string }).id;
 				profileId = igUserId ?? igId ?? null;
 				igAppScopedId = igId ?? null;
-				console.log(`[oauth][${platform}] Profile ID resolved: ${profileId} (source: ${igUserId ? "profile.user_id" : igId ? "profile.id" : "none"}), appScopedId: ${igAppScopedId}`);
+				console.log(
+					`[oauth][${platform}] Profile ID resolved: ${profileId} (source: ${igUserId ? "profile.user_id" : igId ? "profile.id" : "none"}), appScopedId: ${igAppScopedId}`,
+				);
 				username = (profile as { username?: string }).username ?? null;
-				displayName = (profile as { name?: string }).name ?? username ?? displayName;
-				avatarUrl = (profile as { profile_picture_url?: string }).profile_picture_url ?? null;
+				displayName =
+					(profile as { name?: string }).name ?? username ?? displayName;
+				avatarUrl =
+					(profile as { profile_picture_url?: string }).profile_picture_url ??
+					null;
 			} else if (platform === "instagram" && !isInstagramDirect) {
 				// Instagram via Facebook Login: the /me profile returns the Facebook User ID.
 				// We need the linked Instagram Business Account ID from the user's Pages.
@@ -809,25 +1121,42 @@ export async function exchangeAndSaveAccount(params: {
 							username = igba.username ?? null;
 							displayName = igba.name ?? igba.username ?? displayName;
 							avatarUrl = igba.profile_picture_url ?? null;
-							console.log(`[oauth][instagram] Resolved IGBA from Facebook Pages: id=${igba.id}`);
+							console.log(
+								`[oauth][instagram] Resolved IGBA from Facebook Pages: id=${igba.id}`,
+							);
 						}
 					}
 				} catch (err) {
-					console.error("[oauth][instagram] Failed to fetch IGBA from Pages:", err);
+					console.error(
+						"[oauth][instagram] Failed to fetch IGBA from Pages:",
+						err,
+					);
 				}
 				// Fallback to Facebook user profile if no IGBA found
 				if (!profileId) {
 					profileId = (profile as { id?: string }).id ?? null;
 					username = (profile as { name?: string }).name ?? null;
 					displayName = username ?? displayName;
-					console.warn("[oauth][instagram] No IGBA found on any Facebook Page, falling back to Facebook User ID");
+					console.warn(
+						"[oauth][instagram] No IGBA found on any Facebook Page, falling back to Facebook User ID",
+					);
 				}
 			} else if (platform === "facebook") {
 				profileId = (profile as { id?: string }).id ?? null;
 				username = (profile as { name?: string }).name ?? null;
 				displayName = username ?? displayName;
 			} else if (platform === "youtube") {
-				const items = (profile as { items?: Array<{ id?: string; snippet?: { title?: string; thumbnails?: { default?: { url?: string } } } }> }).items;
+				const items = (
+					profile as {
+						items?: Array<{
+							id?: string;
+							snippet?: {
+								title?: string;
+								thumbnails?: { default?: { url?: string } };
+							};
+						}>;
+					}
+				).items;
 				const channel = items?.[0];
 				profileId = channel?.id ?? null;
 				displayName = channel?.snippet?.title ?? displayName;
@@ -835,37 +1164,63 @@ export async function exchangeAndSaveAccount(params: {
 			} else if (platform === "threads") {
 				profileId = (profile as { id?: string }).id ?? null;
 				username = (profile as { username?: string }).username ?? null;
-				displayName = (profile as { name?: string }).name ?? username ?? displayName;
-				avatarUrl = (profile as { threads_profile_picture_url?: string }).threads_profile_picture_url ?? null;
+				displayName =
+					(profile as { name?: string }).name ?? username ?? displayName;
+				avatarUrl =
+					(profile as { threads_profile_picture_url?: string })
+						.threads_profile_picture_url ?? null;
 			} else {
-				profileId = (profile as { id?: string }).id ?? (profile as { user_id?: string }).user_id ?? null;
-				username = (profile as { username?: string }).username ?? (profile as { name?: string }).name ?? null;
+				profileId =
+					(profile as { id?: string }).id ??
+					(profile as { user_id?: string }).user_id ??
+					null;
+				username =
+					(profile as { username?: string }).username ??
+					(profile as { name?: string }).name ??
+					null;
 				displayName = username ?? displayName;
 			}
 		} else {
 			const errBody = await profileRes.text().catch(() => "");
-			console.error(`[oauth][${platform}] Profile fetch failed: ${profileRes.status} ${errBody}`);
+			console.error(
+				`[oauth][${platform}] Profile fetch failed: ${profileRes.status} ${errBody}`,
+			);
 		}
 	} catch (err) {
 		console.error(`[oauth][${platform}] Profile fetch error:`, err);
 	}
 
-	// Fallback: use user_id from token response
+	// Fallback: use the stable provider user identifier from the token response.
 	// IMPORTANT: For Instagram direct, tokens.user_id is an app-scoped ID that differs from
 	// the profile's user_id (IG Professional Account ID). Using it would create ghost duplicates
 	// that the unique constraint can't catch. Reject instead of creating inconsistent data.
-	if (!profileId && tokens.user_id) {
+	const tokenProfileId = tokens.user_id;
+	if (!profileId && tokenProfileId) {
 		if (isInstagramDirect) {
-			console.error(`[oauth][${platform}] Profile fetch failed — refusing to fall back to token user_id (different ID type would create duplicates)`);
-			return { status: "error", code: "PROFILE_FETCH_FAILED", message: "Could not retrieve your Instagram profile. Please try again." };
+			console.error(
+				`[oauth][${platform}] Profile fetch failed — refusing to fall back to token user_id (different ID type would create duplicates)`,
+			);
+			return {
+				status: "error",
+				code: "PROFILE_FETCH_FAILED",
+				message: "Could not retrieve your Instagram profile. Please try again.",
+			};
 		}
-		console.log(`[oauth][${platform}] Using user_id from token response as fallback profileId: ${tokens.user_id}`);
-		profileId = String(tokens.user_id);
+		console.log(
+			`[oauth][${platform}] Using token user identifier as fallback profileId: ${tokenProfileId}`,
+		);
+		profileId = String(tokenProfileId);
 	}
 
 	if (!profileId) {
-		console.error(`[oauth][${platform}] No profileId available — profile fetch and token user_id both failed`);
-		return { status: "error", code: "PROFILE_FETCH_FAILED", message: `Could not retrieve your ${platform} profile. Please try again.` };
+		console.error(
+			`[oauth][${platform}] No profileId available — profile fetch and token user identifier both failed`,
+		);
+		return {
+			status: "error",
+			code: "PROFILE_FETCH_FAILED",
+			message: `Could not retrieve your ${platform} profile. Please try again.`,
+		};
 	}
 
 	const tokenExpiresAt = tokens.expires_in
@@ -874,16 +1229,28 @@ export async function exchangeAndSaveAccount(params: {
 
 	// Multi-select platforms: store token for secondary selection step
 	if (SECONDARY_SELECTION_PLATFORMS.has(platform)) {
+		const connectToken = crypto.randomUUID();
 		// SECURITY: Encrypt access token AND refresh token before storing in KV
 		// (consistent with DB encryption at rest). The refresh_token and expires_at
 		// MUST be carried through to the select handler — without them the saved
 		// account has no way to auto-refresh and dies when the short-lived access
 		// token expires (Google/Snapchat ~1h, Pinterest ~30d).
-		const encryptedToken = await maybeEncrypt(tokens.access_token, env.ENCRYPTION_KEY);
-		const encryptedRefreshToken = await maybeEncrypt(tokens.refresh_token, env.ENCRYPTION_KEY);
+		const encryptedToken = await maybeEncrypt(
+			tokens.access_token,
+			env.ENCRYPTION_KEY,
+		);
+		const encryptedRefreshToken = await maybeEncrypt(
+			tokens.refresh_token,
+			env.ENCRYPTION_KEY,
+		);
 		await env.KV.put(
-			`pending-secondary:${orgId}:${platform}`,
+			pendingSecondaryKey(orgId, platform, connectToken),
 			JSON.stringify({
+				connection_operation_id: connectionOperationId,
+				initiator_key_id: initiatorKeyId,
+				initial_workspace_scope: authorizedWorkspaceScope,
+				workspace_id: workspaceId,
+				workspace_id_was_explicit: workspaceWasExplicit,
 				access_token: encryptedToken,
 				refresh_token: encryptedRefreshToken,
 				profile_id: profileId,
@@ -891,16 +1258,16 @@ export async function exchangeAndSaveAccount(params: {
 			}),
 			{ expirationTtl: 600 },
 		);
-		return { status: "pending_selection", platform };
+		return { status: "pending_selection", platform, connectToken };
 	}
 
 	// Single-select platforms: atomic upsert account
-	console.log(`[oauth][${platform}] Upserting account: orgId=${orgId}, profileId=${profileId}`);
+	console.log(
+		`[oauth][${platform}] Upserting account: orgId=${orgId}, profileId=${profileId}`,
+	);
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
 	const encKey = env.ENCRYPTION_KEY;
-	const encAccessToken = await maybeEncrypt(tokens.access_token, encKey);
-	const encRefreshToken = await maybeEncrypt(tokens.refresh_token, encKey);
 	// Record the Instagram connection method so the token-refresh cron can pick
 	// the correct refresh grant. Instagram via Facebook Login stores a Facebook
 	// user token that the ig_refresh_token grant can never refresh — flagging it
@@ -909,66 +1276,83 @@ export async function exchangeAndSaveAccount(params: {
 		platform === "instagram"
 			? { ig_login_method: isInstagramDirect ? "direct" : "facebook" }
 			: null;
-	let account: typeof socialAccounts.$inferSelect | undefined;
+	let account: ConnectedSocialAccount;
+	let persistedWebhook: PersistedWebhookEvent;
 	try {
-		[account] = await db
-			.insert(socialAccounts)
-			.values({
-				organizationId: orgId,
-				platform: platform as Platform,
-				platformAccountId: profileId,
-				username,
-				displayName,
-				avatarUrl,
-				accessToken: encAccessToken,
-				refreshToken: encRefreshToken,
-				tokenExpiresAt,
-				scopes: oauthConfig.scopes,
-				...(igMetadata ? { metadata: igMetadata } : {}),
-				...(igAppScopedId ? { webhookAccountId: igAppScopedId } : {}),
-			})
-			.onConflictDoUpdate({
-				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-				set: {
-					username,
-					displayName,
-					avatarUrl,
-					accessToken: encAccessToken,
-					refreshToken: encRefreshToken,
-					tokenExpiresAt,
-					scopes: oauthConfig.scopes,
-					updatedAt: new Date(),
-					...(igMetadata ? { metadata: igMetadata } : {}),
-					...(igAppScopedId ? { webhookAccountId: igAppScopedId } : {}),
-				},
-			})
-			.returning();
+		({ account, webhook: persistedWebhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId,
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, encKey, {
+					apiKeyId: initiatorKeyId,
+					authorizedWorkspaceScope,
+					insert: {
+						organizationId: orgId,
+						workspaceId,
+						platform: platform as Platform,
+						platformAccountId: profileId,
+						username,
+						displayName,
+						avatarUrl,
+						tokenExpiresAt,
+						scopes: oauthConfig.scopes,
+						...(igMetadata ? { metadata: igMetadata } : {}),
+						...(igAppScopedId ? { webhookAccountId: igAppScopedId } : {}),
+					},
+					update: {
+						username,
+						displayName,
+						avatarUrl,
+						tokenExpiresAt,
+						scopes: oauthConfig.scopes,
+						...(igMetadata ? { metadata: igMetadata } : {}),
+						...(igAppScopedId ? { webhookAccountId: igAppScopedId } : {}),
+					},
+					preserveExistingWorkspaceOnOmission: !workspaceWasExplicit,
+					accessToken: tokens.access_token,
+					refreshToken: tokens.refresh_token,
+				}),
+		}));
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		console.error(`[oauth][${platform}] Account upsert failed:`, message);
-		return { status: "error", code: "ACCOUNT_SAVE_FAILED", message: `Failed to save your ${platform} account. Please try connecting again.` };
+		if (isAccountWorkspaceConflictError(err)) {
+			return {
+				status: "error",
+				code: err.code,
+				message: err.message,
+			};
+		}
+		if (isAccountWorkspaceAccessError(err)) {
+			return {
+				status: "error",
+				code: err.code,
+				message: err.message,
+			};
+		}
+		return {
+			status: "error",
+			code: "ACCOUNT_SAVE_FAILED",
+			message: `Failed to save your ${platform} account. Please try connecting again.`,
+		};
 	}
 
-	if (!account) {
-		console.error(`[oauth][${platform}] Upsert returned no account`);
-		return { status: "error", code: "INTERNAL_ERROR", message: "Failed to save account" };
-	}
-
-	// Detect whether this was a new insert or an update to an existing account.
-	// (Synchronous — the timestamps are already on the returned row.)
-	const isNewAccount = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
 	const accessTokenForSubs = tokens.access_token;
 
 	// Defer ALL best-effort post-upsert side effects so the user-facing OAuth
 	// response (browser 302 / JSON) returns immediately instead of blocking on
-	// external HTTP round-trips (avatar CDN fetch + R2 put, customer webhook
-	// delivery, queue sends, Instagram Graph subscriptions, ad-account discovery).
-	// The account row is already fully persisted; the response carries the raw CDN
-	// avatar URL as the documented best-effort fallback until the re-host completes.
+	// external HTTP round-trips (avatar CDN fetch + R2 put, Queue handoff,
+	// Instagram Graph subscriptions, ad-account discovery). The account and
+	// customer-webhook outbox are already committed atomically; the response
+	// carries the raw CDN avatar URL until the best-effort re-host completes.
 	defer(
 		(async () => {
 			// Run the independent side effects concurrently; each logs its own errors.
 			await Promise.allSettled([
+				// Immediate Queue handoff for the already-durable outbox rows.
+				enqueuePersistedWebhookEvent(env, db, persistedWebhook),
+
 				// Avatar re-host to R2 (external fetch + R2 put + DB update).
 				(async () => {
 					if (!avatarUrl) return;
@@ -981,31 +1365,23 @@ export async function exchangeAndSaveAccount(params: {
 					}
 				})(),
 
-				// Customer webhook + connection log.
+				// Connection log. Every completed OAuth operation is a distinct
+				// occurrence, including reconnects with an identical account snapshot.
 				(async () => {
-					if (isNewAccount) {
-						console.log(`[oauth][${platform}] Inserted new account ${account.id}`);
-						await dispatchWebhookEvent(env, db, orgId, "account.connected", {
-							account_id: account.id,
-							platform: account.platform,
-							username: account.username,
-							display_name: account.displayName,
-						});
-						await logConnectionEvent(env, orgId, {
+					console.log(
+						`[oauth][${platform}] Connected account ${account.id} (operation ${connectionOperationId})`,
+					);
+					await logConnectionEvent(
+						env,
+						orgId,
+						{
 							account_id: account.id,
 							platform: account.platform,
 							event: "connected",
 							message: `Connected ${account.displayName || account.username || platform} account`,
-						}, db);
-					} else {
-						console.log(`[oauth][${platform}] Updated existing account ${account.id}`);
-						await logConnectionEvent(env, orgId, {
-							account_id: account.id,
-							platform: account.platform,
-							event: "connected",
-							message: `Reconnected ${account.displayName || account.username || platform} account`,
-						}, db);
-					}
+						},
+						db,
+					);
 				})(),
 
 				// Subscribe YouTube channels to PubSubHubbub for video upload notifications.
@@ -1019,7 +1395,9 @@ export async function exchangeAndSaveAccount(params: {
 							organization_id: orgId,
 							account_id: account.id,
 							event_type: "subscribe",
-							payload: { callback_url: `${apiBaseUrl}/webhooks/platform/youtube` },
+							payload: {
+								callback_url: `${apiBaseUrl}/webhooks/platform/youtube`,
+							},
 							received_at: new Date().toISOString(),
 						});
 					}
@@ -1040,15 +1418,24 @@ export async function exchangeAndSaveAccount(params: {
 							verifyToken,
 						);
 						if (!result.success) {
-							console.error("[webhook-sub] Instagram subscription failed:", result.error);
+							console.error(
+								"[webhook-sub] Instagram subscription failed:",
+								result.error,
+							);
 						}
 					}
 					// Per-user subscription — required by Meta to deliver webhooks for this account.
 					// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/webhooks
 					if (accessTokenForSubs) {
-						const userSubResult = await subscribeInstagramAccount(profileId, accessTokenForSubs);
+						const userSubResult = await subscribeInstagramAccount(
+							profileId,
+							accessTokenForSubs,
+						);
 						if (!userSubResult.success) {
-							console.error("[webhook-sub] Instagram user subscription failed:", userSubResult.error);
+							console.error(
+								"[webhook-sub] Instagram user subscription failed:",
+								userSubResult.error,
+							);
 						}
 					}
 				})(),
@@ -1086,9 +1473,14 @@ export async function exchangeAndSaveAccount(params: {
 					if (!socialPlatformToAdPlatform(platform)) return;
 					try {
 						await discoverAdAccounts(env, orgId, account.id);
-						console.log(`[oauth][${platform}] Auto-discovered ad accounts for ${account.id}`);
+						console.log(
+							`[oauth][${platform}] Auto-discovered ad accounts for ${account.id}`,
+						);
 					} catch (err) {
-						console.error(`[oauth][${platform}] Ad account discovery failed (non-critical):`, err);
+						console.error(
+							`[oauth][${platform}] Ad account discovery failed (non-critical):`,
+							err,
+						);
 					}
 				})(),
 			]);
@@ -1099,79 +1491,204 @@ export async function exchangeAndSaveAccount(params: {
 }
 
 // ===========================================================================
-// Route handlers — Bluesky and Telegram Direct must be registered
-// BEFORE the /{platform} catch-all routes
+// Fixed-platform handlers must be registered before the /{platform} catch-all.
 // ===========================================================================
 
 // --- Newsletter: Beehiiv ---
 // @ts-expect-error — hono-zod-openapi strict typing
 app.openapi(connectBeehiiv, async (c) => {
 	const orgId = c.get("orgId");
-	const { api_key, publication_id } = c.req.valid("json");
+	const { api_key, publication_id, workspace_id } = c.req.valid("json");
 	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	try {
 		// Validate credentials by fetching publication info
-		const res = await fetch(`https://api.beehiiv.com/v2/publications/${publication_id}`, {
-			headers: { Authorization: `Bearer ${api_key}` },
-		});
+		const res = await fetch(
+			`https://api.beehiiv.com/v2/publications/${publication_id}`,
+			{
+				headers: { Authorization: `Bearer ${api_key}` },
+			},
+		);
 		if (!res.ok) {
-			return c.json({ error: { code: "AUTH_FAILED", message: "Invalid Beehiiv API key or publication ID." } } as never, 400 as never);
+			return c.json(
+				{
+					error: {
+						code: "AUTH_FAILED",
+						message: "Invalid Beehiiv API key or publication ID.",
+					},
+				} as never,
+				400 as never,
+			);
 		}
 		const pub = (await res.json()) as { data?: { name?: string } };
 		const pubName = pub.data?.name ?? "Beehiiv Newsletter";
 
-		const encrypted = await maybeEncrypt(api_key, c.env.ENCRYPTION_KEY);
-		const [account] = await db.insert(socialAccounts).values({
-			organizationId: orgId, platform: "beehiiv", platformAccountId: publication_id,
-			username: pubName, displayName: pubName, accessToken: encrypted,
-			metadata: { publication_id, publication_name: pubName },
-		}).onConflictDoUpdate({
-			target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-			set: { username: pubName, displayName: pubName, accessToken: encrypted, metadata: { publication_id, publication_name: pubName }, updatedAt: new Date() },
-		}).returning();
-
-		if (!account) throw new Error("Failed to upsert account");
-		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account.id, platform: "beehiiv", username: pubName }));
-		return c.json({ account_id: account.id, platform: "beehiiv", username: pubName, display_name: pubName }, 200);
+		const { account, webhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId: crypto.randomUUID(),
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: c.get("keyId"),
+					authorizedWorkspaceScope: c.get("workspaceScope"),
+					insert: {
+						organizationId: orgId,
+						workspaceId: scope.workspaceId,
+						platform: "beehiiv",
+						platformAccountId: publication_id,
+						username: pubName,
+						displayName: pubName,
+						metadata: { publication_id, publication_name: pubName },
+					},
+					update: {
+						username: pubName,
+						displayName: pubName,
+						metadata: { publication_id, publication_name: pubName },
+					},
+					preserveExistingWorkspaceOnOmission: workspace_id === undefined,
+					accessToken: api_key,
+				}),
+		});
+		c.executionCtx.waitUntil(enqueuePersistedWebhookEvent(c.env, db, webhook));
+		return c.json(
+			{
+				account_id: account.id,
+				platform: "beehiiv",
+				username: pubName,
+				display_name: pubName,
+			},
+			200,
+		);
 	} catch (err) {
-		console.error("[connect] Connection failed:", err instanceof Error ? err.message : err);
-		return c.json({ error: { code: "INTERNAL_ERROR", message: "Connection failed. Please try again." } } as never, 500 as never);
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[connect] Connection failed:",
+			err instanceof Error ? err.message : err,
+		);
+		return c.json(
+			{
+				error: {
+					code: "INTERNAL_ERROR",
+					message: "Connection failed. Please try again.",
+				},
+			} as never,
+			500 as never,
+		);
 	}
 });
 
-// --- Newsletter: ConvertKit ---
+// --- Newsletter: Kit (formerly ConvertKit) ---
+// Official docs: https://developers.kit.com/api-reference/accounts/get-current-account
+// Section "Get current account" documents:
+// GET https://api.kit.com/v4/account
+// Header: X-Kit-Api-Key: <api-key>
+// Response fields: account.id, account.name, account.primary_email_address.
+// Authentication guide: https://developers.kit.com/api-reference/authentication
+// Section "Using V4 API keys" uses the same endpoint and header in its cURL.
+// Upgrade guide: https://developers.kit.com/api-reference/upgrading-to-v4
+// Section "General updates" states that V4 API Keys are not compatible with V3.
 // @ts-expect-error — hono-zod-openapi strict typing
 app.openapi(connectConvertKit, async (c) => {
 	const orgId = c.get("orgId");
-	const { api_key, api_secret } = c.req.valid("json");
+	const { api_key, workspace_id } = c.req.valid("json");
 	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	try {
-		const res = await fetch(`https://api.convertkit.com/v3/account?api_secret=${api_secret}`);
+		const res = await fetch("https://api.kit.com/v4/account", {
+			headers: { "X-Kit-Api-Key": api_key },
+		});
 		if (!res.ok) {
-			return c.json({ error: { code: "AUTH_FAILED", message: "Invalid ConvertKit credentials." } } as never, 400 as never);
+			return c.json(
+				{
+					error: {
+						code: "AUTH_FAILED",
+						message: "Invalid Kit API v4 key.",
+					},
+				} as never,
+				400 as never,
+			);
 		}
-		const account_info = (await res.json()) as { name?: string; primary_email_address?: string };
-		const name = account_info.name ?? "ConvertKit";
+		const accountInfo = (await res.json()) as {
+			account?: {
+				id?: number;
+				name?: string;
+				primary_email_address?: string;
+			};
+			user?: { email?: string };
+		};
+		const kitAccount = accountInfo.account;
+		const name = kitAccount?.name ?? "Kit";
 
-		const encryptedKey = await maybeEncrypt(api_key, c.env.ENCRYPTION_KEY);
-		const encryptedSecret = await maybeEncrypt(api_secret, c.env.ENCRYPTION_KEY);
-		const [account] = await db.insert(socialAccounts).values({
-			organizationId: orgId, platform: "convertkit", platformAccountId: api_key.slice(-8),
-			username: name, displayName: name, accessToken: encryptedKey, refreshToken: encryptedSecret,
-			metadata: { account_name: name },
-		}).onConflictDoUpdate({
-			target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-			set: { username: name, displayName: name, accessToken: encryptedKey, refreshToken: encryptedSecret, updatedAt: new Date() },
-		}).returning();
-
-		if (!account) throw new Error("Failed to upsert account");
-		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account.id, platform: "convertkit", username: name }));
-		return c.json({ account_id: account.id, platform: "convertkit", username: name, display_name: name }, 200);
+		const { account, webhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId: crypto.randomUUID(),
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: c.get("keyId"),
+					authorizedWorkspaceScope: c.get("workspaceScope"),
+					insert: {
+						organizationId: orgId,
+						workspaceId: scope.workspaceId,
+						platform: "convertkit",
+						platformAccountId: api_key.slice(-8),
+						username: name,
+						displayName: name,
+						metadata: {
+							account_name: name,
+							account_id: kitAccount?.id,
+							primary_email_address:
+								kitAccount?.primary_email_address ?? accountInfo.user?.email,
+						},
+					},
+					update: {
+						username: name,
+						displayName: name,
+					},
+					preserveExistingWorkspaceOnOmission: workspace_id === undefined,
+					accessToken: api_key,
+					refreshToken: null,
+				}),
+		});
+		c.executionCtx.waitUntil(enqueuePersistedWebhookEvent(c.env, db, webhook));
+		return c.json(
+			{
+				account_id: account.id,
+				platform: "convertkit",
+				username: name,
+				display_name: name,
+			},
+			200,
+		);
 	} catch (err) {
-		console.error("[connect] Connection failed:", err instanceof Error ? err.message : err);
-		return c.json({ error: { code: "INTERNAL_ERROR", message: "Connection failed. Please try again." } } as never, 500 as never);
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[connect] Connection failed:",
+			err instanceof Error ? err.message : err,
+		);
+		return c.json(
+			{
+				error: {
+					code: "INTERNAL_ERROR",
+					message: "Connection failed. Please try again.",
+				},
+			} as never,
+			500 as never,
+		);
 	}
 });
 
@@ -1179,36 +1696,100 @@ app.openapi(connectConvertKit, async (c) => {
 // @ts-expect-error — hono-zod-openapi strict typing
 app.openapi(connectMailchimp, async (c) => {
 	const orgId = c.get("orgId");
-	const { api_key } = c.req.valid("json");
+	const { api_key, workspace_id } = c.req.valid("json");
 	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	try {
-		const datacenter = api_key.split("-").pop() ?? "us1";
-		const authHeader = `Basic ${btoa(`relayapi:${api_key}`)}`;
-		const res = await fetch(`https://${datacenter}.api.mailchimp.com/3.0/`, { headers: { Authorization: authHeader } });
-		if (!res.ok) {
-			return c.json({ error: { code: "AUTH_FAILED", message: "Invalid Mailchimp API key." } } as never, 400 as never);
+		const datacenter = getMailchimpDatacenter(api_key);
+		if (!datacenter) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_API_KEY",
+						message: "Mailchimp API key has an invalid datacenter suffix.",
+					},
+				} as never,
+				400 as never,
+			);
 		}
-		const info = (await res.json()) as { account_name?: string; login_id?: string; account_id?: string };
+		const authHeader = `Basic ${btoa(`relayapi:${api_key}`)}`;
+		const res = await fetch(buildMailchimpApiUrl(datacenter), {
+			headers: { Authorization: authHeader },
+		});
+		if (!res.ok) {
+			return c.json(
+				{
+					error: { code: "AUTH_FAILED", message: "Invalid Mailchimp API key." },
+				} as never,
+				400 as never,
+			);
+		}
+		const info = (await res.json()) as {
+			account_name?: string;
+			login_id?: string;
+			account_id?: string;
+		};
 		const name = info.account_name ?? "Mailchimp";
 		const accountId = info.account_id ?? api_key.slice(-8);
 
-		const encrypted = await maybeEncrypt(api_key, c.env.ENCRYPTION_KEY);
-		const [account] = await db.insert(socialAccounts).values({
-			organizationId: orgId, platform: "mailchimp", platformAccountId: accountId,
-			username: name, displayName: name, accessToken: encrypted,
-			metadata: { datacenter, account_name: name },
-		}).onConflictDoUpdate({
-			target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-			set: { username: name, displayName: name, accessToken: encrypted, metadata: { datacenter, account_name: name }, updatedAt: new Date() },
-		}).returning();
-
-		if (!account) throw new Error("Failed to upsert account");
-		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account.id, platform: "mailchimp", username: name }));
-		return c.json({ account_id: account.id, platform: "mailchimp", username: name, display_name: name }, 200);
+		const { account, webhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId: crypto.randomUUID(),
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: c.get("keyId"),
+					authorizedWorkspaceScope: c.get("workspaceScope"),
+					insert: {
+						organizationId: orgId,
+						workspaceId: scope.workspaceId,
+						platform: "mailchimp",
+						platformAccountId: accountId,
+						username: name,
+						displayName: name,
+						metadata: { datacenter, account_name: name },
+					},
+					update: {
+						username: name,
+						displayName: name,
+						metadata: { datacenter, account_name: name },
+					},
+					preserveExistingWorkspaceOnOmission: workspace_id === undefined,
+					accessToken: api_key,
+				}),
+		});
+		c.executionCtx.waitUntil(enqueuePersistedWebhookEvent(c.env, db, webhook));
+		return c.json(
+			{
+				account_id: account.id,
+				platform: "mailchimp",
+				username: name,
+				display_name: name,
+			},
+			200,
+		);
 	} catch (err) {
-		console.error("[connect] Connection failed:", err instanceof Error ? err.message : err);
-		return c.json({ error: { code: "INTERNAL_ERROR", message: "Connection failed. Please try again." } } as never, 500 as never);
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[connect] Connection failed:",
+			err instanceof Error ? err.message : err,
+		);
+		return c.json(
+			{
+				error: {
+					code: "INTERNAL_ERROR",
+					message: "Connection failed. Please try again.",
+				},
+			} as never,
+			500 as never,
+		);
 	}
 });
 
@@ -1216,23 +1797,59 @@ app.openapi(connectMailchimp, async (c) => {
 // @ts-expect-error — hono-zod-openapi strict typing
 app.openapi(connectListMonk, async (c) => {
 	const orgId = c.get("orgId");
-	const { instance_url, username: user, password } = c.req.valid("json");
+	const {
+		instance_url,
+		username: user,
+		password,
+		workspace_id,
+	} = c.req.valid("json");
 	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	try {
 		const cleanUrl = instance_url.replace(/\/$/, "");
 
 		// SSRF protection: block private/reserved IPs and non-HTTPS URLs
 		if (await isBlockedUrlWithDns(cleanUrl)) {
-			return c.json({ error: { code: "BAD_REQUEST", message: "instance_url must be a public host. Private/reserved IPs are not allowed." } } as never, 400 as never);
+			return c.json(
+				{
+					error: {
+						code: "BAD_REQUEST",
+						message:
+							"instance_url must be a public host. Private/reserved IPs are not allowed.",
+					},
+				} as never,
+				400 as never,
+			);
 		}
 		try {
 			const parsed = new URL(cleanUrl);
 			if (parsed.protocol !== "https:") {
-				return c.json({ error: { code: "BAD_REQUEST", message: "instance_url must use HTTPS." } } as never, 400 as never);
+				return c.json(
+					{
+						error: {
+							code: "BAD_REQUEST",
+							message: "instance_url must use HTTPS.",
+						},
+					} as never,
+					400 as never,
+				);
 			}
 		} catch {
-			return c.json({ error: { code: "BAD_REQUEST", message: "instance_url is not a valid URL." } } as never, 400 as never);
+			return c.json(
+				{
+					error: {
+						code: "BAD_REQUEST",
+						message: "instance_url is not a valid URL.",
+					},
+				} as never,
+				400 as never,
+			);
 		}
 
 		const basicAuth = btoa(`${user}:${password}`);
@@ -1241,34 +1858,84 @@ app.openapi(connectListMonk, async (c) => {
 			redirect: "error",
 		});
 		if (!res.ok) {
-			return c.json({ error: { code: "AUTH_FAILED", message: "Invalid ListMonk credentials or instance URL." } } as never, 400 as never);
+			return c.json(
+				{
+					error: {
+						code: "AUTH_FAILED",
+						message: "Invalid ListMonk credentials or instance URL.",
+					},
+				} as never,
+				400 as never,
+			);
 		}
 
-		const encrypted = await maybeEncrypt(basicAuth, c.env.ENCRYPTION_KEY);
 		const name = `ListMonk (${new URL(cleanUrl).hostname})`;
-		const [account] = await db.insert(socialAccounts).values({
-			organizationId: orgId, platform: "listmonk", platformAccountId: cleanUrl,
-			username: name, displayName: name, accessToken: encrypted,
-			metadata: { instance_url: cleanUrl },
-		}).onConflictDoUpdate({
-			target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-			set: { username: name, displayName: name, accessToken: encrypted, metadata: { instance_url: cleanUrl }, updatedAt: new Date() },
-		}).returning();
-
-		if (!account) throw new Error("Failed to upsert account");
-		c.executionCtx.waitUntil(dispatchWebhookEvent(c.env, db, orgId, "account.connected", { account_id: account.id, platform: "listmonk", username: name }));
-		return c.json({ account_id: account.id, platform: "listmonk", username: name, display_name: name }, 200);
+		const { account, webhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId: crypto.randomUUID(),
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: c.get("keyId"),
+					authorizedWorkspaceScope: c.get("workspaceScope"),
+					insert: {
+						organizationId: orgId,
+						workspaceId: scope.workspaceId,
+						platform: "listmonk",
+						platformAccountId: cleanUrl,
+						username: name,
+						displayName: name,
+						metadata: { instance_url: cleanUrl },
+					},
+					update: {
+						username: name,
+						displayName: name,
+						metadata: { instance_url: cleanUrl },
+					},
+					preserveExistingWorkspaceOnOmission: workspace_id === undefined,
+					accessToken: basicAuth,
+				}),
+		});
+		c.executionCtx.waitUntil(enqueuePersistedWebhookEvent(c.env, db, webhook));
+		return c.json(
+			{
+				account_id: account.id,
+				platform: "listmonk",
+				username: name,
+				display_name: name,
+			},
+			200,
+		);
 	} catch (err) {
-		console.error("[connect] Connection failed:", err instanceof Error ? err.message : err);
-		return c.json({ error: { code: "INTERNAL_ERROR", message: "Connection failed. Please try again." } } as never, 500 as never);
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[connect] Connection failed:",
+			err instanceof Error ? err.message : err,
+		);
+		return c.json(
+			{
+				error: {
+					code: "INTERNAL_ERROR",
+					message: "Connection failed. Please try again.",
+				},
+			} as never,
+			500 as never,
+		);
 	}
 });
 
 // --- Bluesky (credential-based) ---
 app.openapi(connectBluesky, async (c) => {
 	const orgId = c.get("orgId");
-	const { handle, app_password } = c.req.valid("json");
+	const { handle, app_password, workspace_id } = c.req.valid("json");
 	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	try {
 		// Bluesky: Create an authenticated session using handle + app password
@@ -1305,77 +1972,62 @@ app.openapi(connectBluesky, async (c) => {
 		};
 
 		// Atomic upsert: update if already connected
-		const encryptedAppPw = await maybeEncrypt(app_password, c.env.ENCRYPTION_KEY);
-		let account: typeof socialAccounts.$inferSelect | undefined;
+		let account: ConnectedSocialAccount;
+		let persistedWebhook: PersistedWebhookEvent;
 		try {
-			[account] = await db
-				.insert(socialAccounts)
-				.values({
-					organizationId: orgId,
-					platform: "bluesky",
-					platformAccountId: session.did,
-					username: session.handle,
-					displayName: session.handle,
-					accessToken: encryptedAppPw,
-				})
-				.onConflictDoUpdate({
-					target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-					set: {
-						username: session.handle,
-						displayName: session.handle,
-						accessToken: encryptedAppPw,
-						updatedAt: new Date(),
-					},
-				})
-				.returning();
+			({ account, webhook: persistedWebhook } = await persistConnectedAccount({
+				db,
+				orgId,
+				connectionOperationId: crypto.randomUUID(),
+				upsert: async (tx) =>
+					upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+						apiKeyId: c.get("keyId"),
+						authorizedWorkspaceScope: c.get("workspaceScope"),
+						insert: {
+							organizationId: orgId,
+							workspaceId: scope.workspaceId,
+							platform: "bluesky",
+							platformAccountId: session.did,
+							username: session.handle,
+							displayName: session.handle,
+						},
+						update: {
+							username: session.handle,
+							displayName: session.handle,
+						},
+						preserveExistingWorkspaceOnOmission: workspace_id === undefined,
+						accessToken: app_password,
+					}),
+			}));
 		} catch (err) {
-			console.error("[oauth][bluesky] Account upsert failed:", err instanceof Error ? err.message : err);
-			return c.json(
-				{ error: { code: "ACCOUNT_SAVE_FAILED", message: "Failed to save Bluesky account. Please try again." } } as never,
-				500 as never,
+			const conflict = accountWorkspaceConflictResponse(c, err);
+			if (conflict) return conflict as never;
+			console.error(
+				"[oauth][bluesky] Account upsert failed:",
+				err instanceof Error ? err.message : err,
 			);
-		}
-
-		if (!account) {
 			return c.json(
 				{
 					error: {
-						code: "INTERNAL_ERROR",
-						message: "Failed to save account",
+						code: "ACCOUNT_SAVE_FAILED",
+						message: "Failed to save Bluesky account. Please try again.",
 					},
 				} as never,
 				500 as never,
 			);
 		}
 
-		const isNewBlueskyAccount = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-		if (isNewBlueskyAccount) {
-			c.executionCtx.waitUntil(
-				dispatchWebhookEvent(c.env, db, orgId, "account.connected", {
-					account_id: account.id,
-					platform: account.platform,
-					username: account.username,
-					display_name: account.displayName,
-				}),
-			);
-			c.executionCtx.waitUntil(
-				logConnectionEvent(c.env, orgId, {
-					account_id: account.id,
-					platform: account.platform,
-					event: "connected",
-					message: `Connected ${account.displayName || "bluesky"} account`,
-				}),
-			);
-		} else {
-			c.executionCtx.waitUntil(
-				logConnectionEvent(c.env, orgId, {
-					account_id: account.id,
-					platform: account.platform,
-					event: "connected",
-					message: `Reconnected ${account.displayName || "bluesky"} account`,
-				}),
-			);
-		}
+		c.executionCtx.waitUntil(
+			enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+		);
+		c.executionCtx.waitUntil(
+			logConnectionEvent(c.env, orgId, {
+				account_id: account.id,
+				platform: account.platform,
+				event: "connected",
+				message: `Connected ${account.displayName || "bluesky"} account`,
+			}),
+		);
 
 		return c.json(formatAccountResponse(account) as never, 201 as never);
 	} catch {
@@ -1393,28 +2045,31 @@ app.openapi(connectBluesky, async (c) => {
 
 // --- Telegram ---
 app.openapi(initTelegram, async (c) => {
-	const code = Array.from(crypto.getRandomValues(new Uint8Array(3)))
-		.map((b) => b.toString(16).padStart(2, "0").toUpperCase())
-		.join("");
-	const fullCode = `RLAY-${code}`;
-	const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
-
-	await c.env.KV.put(
-		`telegram-code:${fullCode}`,
-		JSON.stringify({ org_id: c.get("orgId"), status: "pending" }),
-		{ expirationTtl: 900 },
+	const { workspace_id } = c.req.valid("query");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return scope.response as never;
+	const { code, expiresAt } = await issueTelegramConnectionChallenge(
+		c.get("db"),
+		c.get("orgId"),
+		c.get("keyId"),
+		c.get("workspaceScope"),
+		scope.workspaceId,
 	);
 
 	return c.json(
 		{
-			code: fullCode,
+			code,
 			expires_at: expiresAt.toISOString(),
 			expires_in: 900,
 			bot_username: "RelayAPIBot",
 			instructions: [
 				"1. Add @RelayAPIBot as an administrator in your channel/group",
 				"2. Open a private chat with @RelayAPIBot",
-				`3. Send: ${fullCode} @yourchannel (replace @yourchannel with your channel username)`,
+				`3. Send: ${code} @yourchannel (replace @yourchannel with your channel username)`,
 				"4. Wait for confirmation — poll GET /v1/connect/telegram?code=... for status",
 			],
 		} as never,
@@ -1425,102 +2080,49 @@ app.openapi(initTelegram, async (c) => {
 app.openapi(pollTelegram, async (c) => {
 	const orgId = c.get("orgId");
 	const { code } = c.req.valid("query");
-	const data = await c.env.KV.get<{
-		org_id: string;
-		status: string;
-		chat_id?: string;
-		chat_title?: string;
-	}>(`telegram-code:${code}`, "json");
-
-	if (!data) {
-		return c.json({ status: "expired" } as never, 200 as never);
+	const data = await readTelegramConnectionChallenge(c.get("db"), orgId, code);
+	if (data.apiKeyId !== undefined && data.apiKeyId !== c.get("keyId")) {
+		return c.json(
+			{
+				error: { code: "NOT_FOUND", message: "Challenge not found" },
+			} as never,
+			404 as never,
+		);
 	}
-
-	// SECURITY: Verify the code belongs to the requesting org
-	if (data.org_id !== orgId) {
-		return c.json({ status: "expired" } as never, 200 as never);
+	if (data.workspaceId !== undefined) {
+		const denied = assertWorkspaceScope(c, data.workspaceId);
+		if (denied) return denied as never;
 	}
 
 	return c.json(
 		{
 			status: data.status,
-			chat_id: data.chat_id,
-			chat_title: data.chat_title,
+			chat_id: data.chatId,
+			chat_title: data.chatTitle,
 		} as never,
 		200 as never,
 	);
 });
 
-app.openapi(connectTelegramDirect, async (c) => {
-	const orgId = c.get("orgId");
-	const { chat_id } = c.req.valid("json");
-	const db = c.get("db");
-
-	let account: typeof socialAccounts.$inferSelect | undefined;
-	try {
-		[account] = await db
-			.insert(socialAccounts)
-			.values({
-				organizationId: orgId,
-				platform: "telegram",
-				platformAccountId: chat_id,
-				username: null,
-				displayName: `Telegram ${chat_id}`,
-			})
-			.onConflictDoUpdate({
-				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-				set: {
-					displayName: `Telegram ${chat_id}`,
-					updatedAt: new Date(),
-				},
-			})
-			.returning();
-	} catch (err) {
-		console.error("[oauth][telegram] Account upsert failed:", err instanceof Error ? err.message : err);
-		return c.json(
-			{ error: { code: "ACCOUNT_SAVE_FAILED", message: "Failed to save Telegram account. Please try again." } } as never,
-			500 as never,
-		);
-	}
-
-	if (!account) {
-		return c.json(
-			{
-				error: { code: "INTERNAL_ERROR", message: "Failed to save account" },
-			} as never,
-			500 as never,
-		);
-	}
-
-	const isNewTelegramAccount = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-	if (isNewTelegramAccount) {
-		c.executionCtx.waitUntil(
-			dispatchWebhookEvent(c.env, db, orgId, "account.connected", {
-				account_id: account.id,
-				platform: account.platform,
-				username: account.username,
-				display_name: account.displayName,
-			}),
-		);
-	}
-	c.executionCtx.waitUntil(
-		logConnectionEvent(c.env, orgId, {
-			account_id: account.id,
-			platform: account.platform,
-			event: "connected",
-			message: `${isNewTelegramAccount ? "Connected" : "Reconnected"} ${account.displayName || account.username || account.platform} account`,
-		}),
-	);
-
-	return c.json(formatAccountResponse(account) as never, 201 as never);
-});
-
 // --- Pending data ---
 app.openapi(getPendingData, async (c) => {
 	const { token } = c.req.valid("query");
-	const data = await c.env.KV.get(`pending-oauth:${token}`, "json");
+	const data = await c.env.KV.get<
+		Record<string, unknown> & {
+			organization_id?: string;
+			initiator_key_id?: string;
+			initial_workspace_scope?: "all" | string[];
+			workspace_id?: string | null;
+		}
+	>(`pending-oauth:${token}`, "json");
 
-	if (!data) {
+	if (
+		!data ||
+		data.organization_id !== c.get("orgId") ||
+		data.initiator_key_id !== c.get("keyId") ||
+		!("initial_workspace_scope" in data) ||
+		!("workspace_id" in data)
+	) {
 		return c.json(
 			{
 				error: { code: "NOT_FOUND", message: "Token not found or expired" },
@@ -1528,9 +2130,42 @@ app.openapi(getPendingData, async (c) => {
 			404 as never,
 		);
 	}
+	const initialWorkspaceScope = parseApiKeyWorkspaceScope({
+		workspace_scope: data.initial_workspace_scope,
+	});
+	if (initialWorkspaceScope === null) {
+		return c.json(
+			{
+				error: { code: "NOT_FOUND", message: "Token not found or expired" },
+			} as never,
+			404 as never,
+		);
+	}
+	const validation = await validatePersistedOperationalScope(c.get("db"), {
+		apiKeyId: data.initiator_key_id,
+		organizationId: c.get("orgId"),
+		workspaceId: data.workspace_id ?? null,
+		resourceName: "connected account",
+	});
+	if (!validation.ok) {
+		return c.json(
+			{
+				error: { code: validation.code, message: validation.message },
+			} as never,
+			validation.status as never,
+		);
+	}
+	const denied = assertWorkspaceScope(c, data.workspace_id ?? null);
+	if (denied) return denied as never;
 
 	await c.env.KV.delete(`pending-oauth:${token}`);
-	return c.json(data as never, 200 as never);
+	const {
+		organization_id: _organizationId,
+		initiator_key_id: _initiatorKeyId,
+		initial_workspace_scope: _initialWorkspaceScope,
+		...response
+	} = data;
+	return c.json(response as never, 200 as never);
 });
 
 // --- WhatsApp ---
@@ -1564,6 +2199,12 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		body.workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	const appId = c.env.WHATSAPP_APP_ID;
 	const appSecret = c.env.WHATSAPP_APP_SECRET;
@@ -1661,9 +2302,7 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 
 	// Step 3: Fetch phone number ID from WABA
 	// https://developers.facebook.com/docs/whatsapp/business-management-api/manage-phone-numbers
-	const phoneUrl = new URL(
-		`${GRAPH_BASE.facebook}/${wabaId}/phone_numbers`,
-	);
+	const phoneUrl = new URL(`${GRAPH_BASE.facebook}/${wabaId}/phone_numbers`);
 	phoneUrl.searchParams.set("access_token", accessToken);
 
 	const phoneRes = await fetch(phoneUrl.toString());
@@ -1705,67 +2344,74 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 	const displayPhoneNumber = phone.display_phone_number;
 
 	// Step 4: Atomic upsert to handle re-connections gracefully
-	const encryptedWaToken = await maybeEncrypt(accessToken, c.env.ENCRYPTION_KEY);
-	let account: typeof socialAccounts.$inferSelect | undefined;
+	let account: ConnectedSocialAccount;
+	let persistedWebhook: PersistedWebhookEvent;
 	try {
-		[account] = await db
-			.insert(socialAccounts)
-			.values({
-				organizationId: orgId,
-				platform: "whatsapp",
-				platformAccountId: phoneNumberId,
-				accessToken: encryptedWaToken,
-				displayName: displayPhoneNumber || "WhatsApp Business",
-				metadata: { waba_id: wabaId, phone_number: displayPhoneNumber },
-			})
-			.onConflictDoUpdate({
-				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-				set: {
-					accessToken: encryptedWaToken,
-					displayName: displayPhoneNumber || "WhatsApp Business",
-					metadata: { waba_id: wabaId, phone_number: displayPhoneNumber },
-					updatedAt: new Date(),
-				},
-			})
-			.returning();
+		({ account, webhook: persistedWebhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId: crypto.randomUUID(),
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: c.get("keyId"),
+					authorizedWorkspaceScope: c.get("workspaceScope"),
+					insert: {
+						organizationId: orgId,
+						workspaceId: scope.workspaceId,
+						platform: "whatsapp",
+						platformAccountId: phoneNumberId,
+						displayName: displayPhoneNumber || "WhatsApp Business",
+						metadata: {
+							waba_id: wabaId,
+							phone_number: displayPhoneNumber,
+						},
+					},
+					update: {
+						displayName: displayPhoneNumber || "WhatsApp Business",
+						metadata: {
+							waba_id: wabaId,
+							phone_number: displayPhoneNumber,
+						},
+					},
+					preserveExistingWorkspaceOnOmission: body.workspace_id === undefined,
+					accessToken,
+				}),
+		}));
 	} catch (err) {
-		console.error("[oauth][whatsapp] Account upsert failed:", err instanceof Error ? err.message : err);
-		return c.json(
-			{ error: { code: "ACCOUNT_SAVE_FAILED", message: "Failed to save WhatsApp account. Please try again." } } as never,
-			500 as never,
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[oauth][whatsapp] Account upsert failed:",
+			err instanceof Error ? err.message : err,
 		);
-	}
-
-	if (!account) {
 		return c.json(
 			{
-				error: { code: "INTERNAL_ERROR", message: "Failed to save account" },
+				error: {
+					code: "ACCOUNT_SAVE_FAILED",
+					message: "Failed to save WhatsApp account. Please try again.",
+				},
 			} as never,
 			500 as never,
 		);
 	}
 
-	const isNewWaAccount = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-	if (isNewWaAccount) {
-		c.executionCtx.waitUntil(
-			dispatchWebhookEvent(c.env, db, orgId, "account.connected", {
-				account_id: account.id,
-				platform: account.platform,
-				username: account.username,
-				display_name: account.displayName,
-			}),
-		);
-	}
+	c.executionCtx.waitUntil(
+		enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+	);
 	c.executionCtx.waitUntil(
 		logConnectionEvent(c.env, orgId, {
 			account_id: account.id,
 			platform: account.platform,
 			event: "connected",
-			message: `${isNewWaAccount ? "Connected" : "Reconnected"} ${account.displayName || account.username || account.platform} account`,
+			message: `Connected ${account.displayName || account.username || account.platform} account`,
 		}),
 	);
 
-	if (c.env.WHATSAPP_APP_ID && c.env.WHATSAPP_APP_SECRET && c.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN) {
+	if (
+		c.env.WHATSAPP_APP_ID &&
+		c.env.WHATSAPP_APP_SECRET &&
+		c.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN
+	) {
 		c.executionCtx.waitUntil(
 			verifyWhatsAppWebhookSubscription(
 				c.env.WHATSAPP_APP_ID,
@@ -1783,68 +2429,75 @@ app.openapi(whatsappCredentials, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		body.workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return scope.response as never;
 
-	const encWaCredToken = await maybeEncrypt(body.access_token, c.env.ENCRYPTION_KEY);
-	let account: typeof socialAccounts.$inferSelect | undefined;
+	let account: ConnectedSocialAccount;
+	let persistedWebhook: PersistedWebhookEvent;
 	try {
-		[account] = await db
-			.insert(socialAccounts)
-			.values({
-				organizationId: orgId,
-				platform: "whatsapp",
-				platformAccountId: body.phone_number_id,
-				accessToken: encWaCredToken,
-				displayName: "WhatsApp Business",
-				metadata: { waba_id: body.waba_id },
-			})
-			.onConflictDoUpdate({
-				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-				set: {
-					accessToken: encWaCredToken,
-					displayName: "WhatsApp Business",
-					metadata: { waba_id: body.waba_id },
-					updatedAt: new Date(),
-				},
-			})
-			.returning();
+		({ account, webhook: persistedWebhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId: crypto.randomUUID(),
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: c.get("keyId"),
+					authorizedWorkspaceScope: c.get("workspaceScope"),
+					insert: {
+						organizationId: orgId,
+						workspaceId: scope.workspaceId,
+						platform: "whatsapp",
+						platformAccountId: body.phone_number_id,
+						displayName: "WhatsApp Business",
+						metadata: { waba_id: body.waba_id },
+					},
+					update: {
+						displayName: "WhatsApp Business",
+						metadata: { waba_id: body.waba_id },
+					},
+					preserveExistingWorkspaceOnOmission: body.workspace_id === undefined,
+					accessToken: body.access_token,
+				}),
+		}));
 	} catch (err) {
-		console.error("[oauth][whatsapp] Account upsert failed:", err instanceof Error ? err.message : err);
-		return c.json(
-			{ error: { code: "ACCOUNT_SAVE_FAILED", message: "Failed to save WhatsApp account. Please try again." } } as never,
-			500 as never,
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[oauth][whatsapp] Account upsert failed:",
+			err instanceof Error ? err.message : err,
 		);
-	}
-
-	if (!account) {
 		return c.json(
 			{
-				error: { code: "INTERNAL_ERROR", message: "Failed to save account" },
+				error: {
+					code: "ACCOUNT_SAVE_FAILED",
+					message: "Failed to save WhatsApp account. Please try again.",
+				},
 			} as never,
 			500 as never,
 		);
 	}
 
-	const isNewWaCred = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-	if (isNewWaCred) {
-		c.executionCtx.waitUntil(
-			dispatchWebhookEvent(c.env, db, orgId, "account.connected", {
-				account_id: account.id,
-				platform: account.platform,
-				username: account.username,
-				display_name: account.displayName,
-			}),
-		);
-	}
+	c.executionCtx.waitUntil(
+		enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+	);
 	c.executionCtx.waitUntil(
 		logConnectionEvent(c.env, orgId, {
 			account_id: account.id,
 			platform: account.platform,
 			event: "connected",
-			message: `${isNewWaCred ? "Connected" : "Reconnected"} ${account.displayName || account.username || account.platform} account`,
+			message: `Connected ${account.displayName || account.username || account.platform} account`,
 		}),
 	);
 
-	if (c.env.WHATSAPP_APP_ID && c.env.WHATSAPP_APP_SECRET && c.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN) {
+	if (
+		c.env.WHATSAPP_APP_ID &&
+		c.env.WHATSAPP_APP_SECRET &&
+		c.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN
+	) {
 		c.executionCtx.waitUntil(
 			verifyWhatsAppWebhookSubscription(
 				c.env.WHATSAPP_APP_ID,
@@ -1874,7 +2527,9 @@ interface FacebookPage {
  * beyond #25 impossible to select. We request limit=100 and follow next links
  * (capped at 20 pages = up to 2000 Pages) to bound worst-case latency.
  */
-async function fetchAllFacebookPages(accessToken: string): Promise<FacebookPage[]> {
+async function fetchAllFacebookPages(
+	accessToken: string,
+): Promise<FacebookPage[]> {
 	const pages: FacebookPage[] = [];
 	let url: string | null =
 		`${GRAPH_BASE.facebook}/me/accounts?fields=id,name,category,access_token&limit=100&access_token=${accessToken}`;
@@ -1895,17 +2550,27 @@ async function fetchAllFacebookPages(accessToken: string): Promise<FacebookPage[
 
 app.openapi(listFacebookPages, async (c) => {
 	const orgId = c.get("orgId");
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-		profile_id?: string;
-		expires_at?: string | null;
-	}>(`pending-secondary:${orgId}:facebook`, "json");
+	const { connect_token } = c.req.valid("query");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			connection_operation_id: string;
+			workspace_id_was_explicit?: boolean;
+			access_token: string;
+			profile_id?: string;
+			expires_at?: string | null;
+		}
+	>(pendingSecondaryKey(orgId, "facebook", connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json({ pages: [] } as never, 200 as never);
 	}
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
 	// SECURITY: Decrypt token from KV
-	const accessToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
+	const accessToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
 
 	try {
 		// Facebook Pages API: List pages managed by the authenticated user.
@@ -1932,11 +2597,15 @@ app.openapi(selectFacebookPage, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-		profile_id?: string;
-		expires_at?: string | null;
-	}>(`pending-secondary:${orgId}:facebook`, "json");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			connection_operation_id: string;
+			workspace_id_was_explicit?: boolean;
+			access_token: string;
+			profile_id?: string;
+			expires_at?: string | null;
+		}
+	>(pendingSecondaryKey(orgId, "facebook", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json(
@@ -1949,8 +2618,14 @@ app.openapi(selectFacebookPage, async (c) => {
 			400 as never,
 		);
 	}
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
 	// SECURITY: Decrypt token from KV
-	const decryptedFbToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
+	const decryptedFbToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
+	const connectionOperationId = pendingData.connection_operation_id;
 
 	// Fetch page access token
 	try {
@@ -1963,7 +2638,10 @@ app.openapi(selectFacebookPage, async (c) => {
 		if (!page) {
 			return c.json(
 				{
-					error: { code: "NOT_FOUND", message: "Page not found in user's pages" },
+					error: {
+						code: "NOT_FOUND",
+						message: "Page not found in user's pages",
+					},
 				} as never,
 				404 as never,
 			);
@@ -1984,68 +2662,98 @@ app.openapi(selectFacebookPage, async (c) => {
 		}
 
 		// Atomic upsert: update if page already connected, insert otherwise
-		const encryptedPageToken = await maybeEncrypt(page.access_token, c.env.ENCRYPTION_KEY);
-		const [existingAccount] = await db
-			.select({ metadata: socialAccounts.metadata })
-			.from(socialAccounts)
-			.where(
-				and(
-					eq(socialAccounts.organizationId, orgId),
-					eq(socialAccounts.platform, "facebook"),
-					eq(socialAccounts.platformAccountId, page.id),
-				),
-			)
-			.limit(1);
-		const metadata = withMetaAdsUserAccessToken(
-			existingAccount?.metadata ?? null,
-			pendingData.access_token,
-			pendingData.profile_id,
-			pendingData.expires_at ?? null,
-		);
 		const facebookConfig = OAUTH_CONFIGS.facebook;
 		if (!facebookConfig) {
 			throw new Error("Facebook OAuth config is not registered");
 		}
-		let account: typeof socialAccounts.$inferSelect | undefined;
+		let account: ConnectedSocialAccount;
+		let persistedWebhook: PersistedWebhookEvent;
 		try {
-			[account] = await db
-				.insert(socialAccounts)
-				.values({
-					organizationId: orgId,
-					platform: "facebook",
-					platformAccountId: page.id,
-					username: page.name,
-					displayName: page.name,
-					avatarUrl: pageAvatarUrl,
-					accessToken: encryptedPageToken,
-					scopes: facebookConfig.scopes,
-					metadata,
-				})
-				.onConflictDoUpdate({
-					target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-					set: {
-						username: page.name,
-						displayName: page.name,
-						avatarUrl: pageAvatarUrl,
-						accessToken: encryptedPageToken,
-						scopes: facebookConfig.scopes,
-						metadata,
-						updatedAt: new Date(),
-					},
-				})
-				.returning();
+			({ account, webhook: persistedWebhook } = await persistConnectedAccount({
+				db,
+				orgId,
+				connectionOperationId,
+				upsert: async (tx) => {
+					const saved = await upsertConnectedAccountWithCredentials(
+						tx,
+						c.env.ENCRYPTION_KEY,
+						{
+							apiKeyId: pendingData.initiator_key_id,
+							authorizedWorkspaceScope: authorization.initialWorkspaceScope,
+							insert: {
+								organizationId: orgId,
+								workspaceId: pendingData.workspace_id,
+								platform: "facebook",
+								platformAccountId: page.id,
+								username: page.name,
+								displayName: page.name,
+								avatarUrl: pageAvatarUrl,
+								scopes: facebookConfig.scopes,
+							},
+							update: {
+								username: page.name,
+								displayName: page.name,
+								avatarUrl: pageAvatarUrl,
+								scopes: facebookConfig.scopes,
+							},
+							preserveExistingWorkspaceOnOmission: !(
+								pendingData.workspace_id_was_explicit ??
+								pendingData.workspace_id !== null
+							),
+							accessToken: page.access_token,
+						},
+					);
+					if (!saved) return undefined;
+					const adsToken = await encryptAccountToken(
+						decryptedFbToken,
+						c.env.ENCRYPTION_KEY,
+						saved.id,
+						"meta_ads_user_access_token",
+					);
+					if (!adsToken) throw new Error("Facebook user token is unavailable");
+					const metadata = withMetaAdsUserAccessToken(
+						saved.metadata,
+						adsToken,
+						pendingData.profile_id,
+						pendingData.expires_at ?? null,
+					);
+					const [updated] = await tx
+						.update(socialAccounts)
+						.set({ metadata, updatedAt: new Date() })
+						.where(eq(socialAccounts.id, saved.id))
+						.returning();
+					return updated;
+				},
+			}));
 		} catch (err) {
-			console.error("[oauth][facebook] Account upsert failed:", err instanceof Error ? err.message : err);
+			const conflict = accountWorkspaceConflictResponse(c, err);
+			if (conflict) return conflict as never;
+			console.error(
+				"[oauth][facebook] Account upsert failed:",
+				err instanceof Error ? err.message : err,
+			);
 			return c.json(
-				{ error: { code: "ACCOUNT_SAVE_FAILED", message: "Failed to save Facebook page. Please try again." } } as never,
+				{
+					error: {
+						code: "ACCOUNT_SAVE_FAILED",
+						message: "Failed to save Facebook page. Please try again.",
+					},
+				} as never,
 				500 as never,
 			);
 		}
 
 		if (account) {
+			c.executionCtx.waitUntil(
+				enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+			);
 			// Re-host the avatar to R2 so the stored URL is durable (best-effort).
 			if (pageAvatarUrl) {
-				const stableAvatar = await rehostAvatar(c.env, account.id, pageAvatarUrl);
+				const stableAvatar = await rehostAvatar(
+					c.env,
+					account.id,
+					pageAvatarUrl,
+				);
 				if (stableAvatar) {
 					await db
 						.update(socialAccounts)
@@ -2055,34 +2763,14 @@ app.openapi(selectFacebookPage, async (c) => {
 				}
 			}
 
-			const isNewFbPage = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-			if (isNewFbPage) {
-				c.executionCtx.waitUntil(
-					dispatchWebhookEvent(c.env, db, orgId, "account.connected", {
-						account_id: account.id,
-						platform: account.platform,
-						username: account.username,
-						display_name: account.displayName,
-					}),
-				);
-				c.executionCtx.waitUntil(
-					logConnectionEvent(c.env, orgId, {
-						account_id: account.id,
-						platform: account.platform,
-						event: "connected",
-						message: `Connected ${account.displayName || "facebook"} page`,
-					}),
-				);
-			} else {
-				c.executionCtx.waitUntil(
-					logConnectionEvent(c.env, orgId, {
-						account_id: account.id,
-						platform: account.platform,
-						event: "connected",
-						message: `Reconnected ${account.displayName || "facebook"} page`,
-					}),
-				);
-			}
+			c.executionCtx.waitUntil(
+				logConnectionEvent(c.env, orgId, {
+					account_id: account.id,
+					platform: account.platform,
+					event: "connected",
+					message: `Connected ${account.displayName || "facebook"} page`,
+				}),
+			);
 		}
 
 		// Subscribe page to platform webhooks for real-time comment/message events
@@ -2100,15 +2788,22 @@ app.openapi(selectFacebookPage, async (c) => {
 			c.executionCtx.waitUntil(
 				discoverAdAccounts(c.env, orgId, account.id)
 					.then(() => {
-						console.log(`[oauth][facebook] Auto-discovered ad accounts for ${account.id}`);
+						console.log(
+							`[oauth][facebook] Auto-discovered ad accounts for ${account.id}`,
+						);
 					})
 					.catch((err) => {
-						console.error("[oauth][facebook] Ad account discovery failed (non-critical):", err);
+						console.error(
+							"[oauth][facebook] Ad account discovery failed (non-critical):",
+							err,
+						);
 					}),
 			);
 		}
 
-		await c.env.KV.delete(`pending-secondary:${orgId}:facebook`);
+		await c.env.KV.delete(
+			pendingSecondaryKey(orgId, "facebook", body.connect_token),
+		);
 
 		if (!account) {
 			return c.json(
@@ -2133,15 +2828,23 @@ app.openapi(selectFacebookPage, async (c) => {
 // --- Secondary selection: LinkedIn Organizations ---
 app.openapi(listLinkedInOrgs, async (c) => {
 	const orgId = c.get("orgId");
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-	}>(`pending-secondary:${orgId}:linkedin`, "json");
+	const { connect_token } = c.req.valid("query");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			access_token: string;
+		}
+	>(pendingSecondaryKey(orgId, "linkedin", connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json({ organizations: [] } as never, 200 as never);
 	}
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
 	// SECURITY: Decrypt token from KV
-	const decryptedLiToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
+	const decryptedLiToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
 
 	try {
 		const organizations =
@@ -2167,12 +2870,16 @@ app.openapi(selectLinkedInOrg, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-		refresh_token?: string | null;
-		profile_id?: string;
-		expires_at?: string | null;
-	}>(`pending-secondary:${orgId}:linkedin`, "json");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			connection_operation_id: string;
+			workspace_id_was_explicit?: boolean;
+			access_token: string;
+			refresh_token?: string | null;
+			profile_id?: string;
+			expires_at?: string | null;
+		}
+	>(pendingSecondaryKey(orgId, "linkedin", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json(
@@ -2185,67 +2892,92 @@ app.openapi(selectLinkedInOrg, async (c) => {
 			400 as never,
 		);
 	}
-	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
-	const decryptedLiSetToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
-	const encLinkedinToken = await maybeEncrypt(decryptedLiSetToken, c.env.ENCRYPTION_KEY);
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
+	// SECURITY: Decrypt the one-time KV payload; the account writer seals it to
+	// the stable database id inside the transaction.
+	const decryptedLiSetToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
+	const connectionOperationId = pendingData.connection_operation_id;
 	// Carry through the refresh token + expiry so accounts with programmatic-refresh
 	// approval can auto-refresh (LinkedIn access tokens expire in ~60 days).
 	const decryptedLiRefreshToken = pendingData.refresh_token
 		? await maybeDecrypt(pendingData.refresh_token, c.env.ENCRYPTION_KEY)
 		: null;
-	const encLiRefreshToken = decryptedLiRefreshToken
-		? await maybeEncrypt(decryptedLiRefreshToken, c.env.ENCRYPTION_KEY)
+	const liTokenExpiresAt = pendingData.expires_at
+		? new Date(pendingData.expires_at)
 		: null;
-	const liTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
 	// For org accounts, use the org URN. For personal accounts, use the stable profile ID from OAuth.
-	const linkedinPlatformId = body.organization_urn ?? pendingData.profile_id ?? `linkedin_${Date.now()}`;
+	const linkedinPlatformId =
+		body.organization_urn ?? pendingData.profile_id ?? `linkedin_${Date.now()}`;
 	const linkedinConfig = OAUTH_CONFIGS.linkedin;
 	if (!linkedinConfig) {
 		throw new Error("LinkedIn OAuth config is not registered");
 	}
-	let account: typeof socialAccounts.$inferSelect | undefined;
+	let account: ConnectedSocialAccount;
+	let persistedWebhook: PersistedWebhookEvent;
 	try {
-		[account] = await db
-			.insert(socialAccounts)
-			.values({
-				organizationId: orgId,
-				platform: "linkedin",
-				platformAccountId: linkedinPlatformId,
-				displayName: `LinkedIn Org ${body.organization_urn ?? "personal"}`,
-				accessToken: encLinkedinToken,
-				refreshToken: encLiRefreshToken,
-				tokenExpiresAt: liTokenExpiresAt,
-				metadata: {
-					account_type: body.account_type ?? "organization",
-					organization_urn: body.organization_urn,
-				},
-				scopes: linkedinConfig.scopes,
-			})
-			.onConflictDoUpdate({
-				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-				set: {
-					displayName: `LinkedIn Org ${body.organization_urn ?? "personal"}`,
-					accessToken: encLinkedinToken,
-					refreshToken: encLiRefreshToken,
-					tokenExpiresAt: liTokenExpiresAt,
-					metadata: {
-						account_type: body.account_type ?? "organization",
-						organization_urn: body.organization_urn,
+		({ account, webhook: persistedWebhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId,
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: pendingData.initiator_key_id,
+					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
+					insert: {
+						organizationId: orgId,
+						workspaceId: pendingData.workspace_id,
+						platform: "linkedin",
+						platformAccountId: linkedinPlatformId,
+						displayName: `LinkedIn Org ${body.organization_urn ?? "personal"}`,
+						tokenExpiresAt: liTokenExpiresAt,
+						metadata: {
+							account_type: body.account_type ?? "organization",
+							organization_urn: body.organization_urn,
+						},
+						scopes: linkedinConfig.scopes,
 					},
-					scopes: linkedinConfig.scopes,
-					updatedAt: new Date(),
-				},
-			})
-			.returning();
+					update: {
+						displayName: `LinkedIn Org ${body.organization_urn ?? "personal"}`,
+						tokenExpiresAt: liTokenExpiresAt,
+						metadata: {
+							account_type: body.account_type ?? "organization",
+							organization_urn: body.organization_urn,
+						},
+						scopes: linkedinConfig.scopes,
+					},
+					preserveExistingWorkspaceOnOmission: !(
+						pendingData.workspace_id_was_explicit ??
+						pendingData.workspace_id !== null
+					),
+					accessToken: decryptedLiSetToken,
+					refreshToken: decryptedLiRefreshToken,
+				}),
+		}));
 	} catch (err) {
-		console.error("[oauth][linkedin] Account upsert failed:", err instanceof Error ? err.message : err);
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[oauth][linkedin] Account upsert failed:",
+			err instanceof Error ? err.message : err,
+		);
 		return c.json(
-			{ error: { code: "ACCOUNT_SAVE_FAILED", message: "Failed to save LinkedIn account. Please try again." } } as never,
+			{
+				error: {
+					code: "ACCOUNT_SAVE_FAILED",
+					message: "Failed to save LinkedIn account. Please try again.",
+				},
+			} as never,
 			500 as never,
 		);
 	}
 
-	await c.env.KV.delete(`pending-secondary:${orgId}:linkedin`);
+	await c.env.KV.delete(
+		pendingSecondaryKey(orgId, "linkedin", body.connect_token),
+	);
 
 	if (!account) {
 		return c.json(
@@ -2256,23 +2988,15 @@ app.openapi(selectLinkedInOrg, async (c) => {
 		);
 	}
 
-	const isNewLinkedin = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-	if (isNewLinkedin) {
-		c.executionCtx.waitUntil(
-			dispatchWebhookEvent(c.env, db, orgId, "account.connected", {
-				account_id: account.id,
-				platform: account.platform,
-				username: account.username,
-				display_name: account.displayName,
-			}),
-		);
-	}
+	c.executionCtx.waitUntil(
+		enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+	);
 	c.executionCtx.waitUntil(
 		logConnectionEvent(c.env, orgId, {
 			account_id: account.id,
 			platform: account.platform,
 			event: "connected",
-			message: `${isNewLinkedin ? "Connected" : "Reconnected"} ${account.displayName || account.username || account.platform} account`,
+			message: `Connected ${account.displayName || account.username || account.platform} account`,
 		}),
 	);
 
@@ -2282,15 +3006,23 @@ app.openapi(selectLinkedInOrg, async (c) => {
 // --- Secondary selection: Pinterest Boards ---
 app.openapi(listPinterestBoards, async (c) => {
 	const orgId = c.get("orgId");
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-	}>(`pending-secondary:${orgId}:pinterest`, "json");
+	const { connect_token } = c.req.valid("query");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			access_token: string;
+		}
+	>(pendingSecondaryKey(orgId, "pinterest", connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json({ boards: [] } as never, 200 as never);
 	}
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
 	// SECURITY: Decrypt token from KV
-	const decryptedPinListToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
+	const decryptedPinListToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
 
 	try {
 		// Pinterest Boards API: List all boards for the authenticated user
@@ -2330,12 +3062,16 @@ app.openapi(selectPinterestBoard, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-		refresh_token?: string | null;
-		profile_id?: string;
-		expires_at?: string | null;
-	}>(`pending-secondary:${orgId}:pinterest`, "json");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			connection_operation_id: string;
+			workspace_id_was_explicit?: boolean;
+			access_token: string;
+			refresh_token?: string | null;
+			profile_id?: string;
+			expires_at?: string | null;
+		}
+	>(pendingSecondaryKey(orgId, "pinterest", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json(
@@ -2348,18 +3084,23 @@ app.openapi(selectPinterestBoard, async (c) => {
 			400 as never,
 		);
 	}
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
 
 	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
-	const decryptedPinSetToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
+	const decryptedPinSetToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
+	const connectionOperationId = pendingData.connection_operation_id;
 	// Carry through the refresh token + expiry so the account can auto-refresh
 	// (Pinterest access tokens expire in ~30 days).
 	const decryptedPinRefreshToken = pendingData.refresh_token
 		? await maybeDecrypt(pendingData.refresh_token, c.env.ENCRYPTION_KEY)
 		: null;
-	const encPinRefreshToken = decryptedPinRefreshToken
-		? await maybeEncrypt(decryptedPinRefreshToken, c.env.ENCRYPTION_KEY)
+	const pinTokenExpiresAt = pendingData.expires_at
+		? new Date(pendingData.expires_at)
 		: null;
-	const pinTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
 
 	// Fetch user profile for account creation
 	let username = "Pinterest User";
@@ -2385,50 +3126,68 @@ app.openapi(selectPinterestBoard, async (c) => {
 		// Continue with defaults
 	}
 
-	const encPinterestToken = await maybeEncrypt(decryptedPinSetToken, c.env.ENCRYPTION_KEY);
 	const pinterestConfig = OAUTH_CONFIGS.pinterest;
 	if (!pinterestConfig) {
 		throw new Error("Pinterest OAuth config is not registered");
 	}
-	let account: typeof socialAccounts.$inferSelect | undefined;
+	let account: ConnectedSocialAccount;
+	let persistedWebhook: PersistedWebhookEvent;
 	try {
-		[account] = await db
-			.insert(socialAccounts)
-			.values({
-				organizationId: orgId,
-				platform: "pinterest",
-				platformAccountId: profileId,
-				username,
-				displayName: username,
-				accessToken: encPinterestToken,
-				refreshToken: encPinRefreshToken,
-				tokenExpiresAt: pinTokenExpiresAt,
-				metadata: { default_board_id: body.board_id },
-				scopes: pinterestConfig.scopes,
-			})
-			.onConflictDoUpdate({
-				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-				set: {
-					username,
-					displayName: username,
-					accessToken: encPinterestToken,
-					refreshToken: encPinRefreshToken,
-					tokenExpiresAt: pinTokenExpiresAt,
-					metadata: { default_board_id: body.board_id },
-					scopes: pinterestConfig.scopes,
-					updatedAt: new Date(),
-				},
-			})
-			.returning();
+		({ account, webhook: persistedWebhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId,
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: pendingData.initiator_key_id,
+					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
+					insert: {
+						organizationId: orgId,
+						workspaceId: pendingData.workspace_id,
+						platform: "pinterest",
+						platformAccountId: profileId,
+						username,
+						displayName: username,
+						tokenExpiresAt: pinTokenExpiresAt,
+						metadata: { default_board_id: body.board_id },
+						scopes: pinterestConfig.scopes,
+					},
+					update: {
+						username,
+						displayName: username,
+						tokenExpiresAt: pinTokenExpiresAt,
+						metadata: { default_board_id: body.board_id },
+						scopes: pinterestConfig.scopes,
+					},
+					preserveExistingWorkspaceOnOmission: !(
+						pendingData.workspace_id_was_explicit ??
+						pendingData.workspace_id !== null
+					),
+					accessToken: decryptedPinSetToken,
+					refreshToken: decryptedPinRefreshToken,
+				}),
+		}));
 	} catch (err) {
-		console.error("[oauth][pinterest] Account upsert failed:", err instanceof Error ? err.message : err);
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[oauth][pinterest] Account upsert failed:",
+			err instanceof Error ? err.message : err,
+		);
 		return c.json(
-			{ error: { code: "ACCOUNT_SAVE_FAILED", message: "Failed to save Pinterest account. Please try again." } } as never,
+			{
+				error: {
+					code: "ACCOUNT_SAVE_FAILED",
+					message: "Failed to save Pinterest account. Please try again.",
+				},
+			} as never,
 			500 as never,
 		);
 	}
 
-	await c.env.KV.delete(`pending-secondary:${orgId}:pinterest`);
+	await c.env.KV.delete(
+		pendingSecondaryKey(orgId, "pinterest", body.connect_token),
+	);
 
 	if (!account) {
 		return c.json(
@@ -2439,23 +3198,15 @@ app.openapi(selectPinterestBoard, async (c) => {
 		);
 	}
 
-	const isNewPinterest = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-	if (isNewPinterest) {
-		c.executionCtx.waitUntil(
-			dispatchWebhookEvent(c.env, db, orgId, "account.connected", {
-				account_id: account.id,
-				platform: account.platform,
-				username: account.username,
-				display_name: account.displayName,
-			}),
-		);
-	}
+	c.executionCtx.waitUntil(
+		enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+	);
 	c.executionCtx.waitUntil(
 		logConnectionEvent(c.env, orgId, {
 			account_id: account.id,
 			platform: account.platform,
 			event: "connected",
-			message: `${isNewPinterest ? "Connected" : "Reconnected"} ${account.displayName || account.username || account.platform} account`,
+			message: `Connected ${account.displayName || account.username || account.platform} account`,
 		}),
 	);
 
@@ -2465,21 +3216,29 @@ app.openapi(selectPinterestBoard, async (c) => {
 // --- Secondary selection: Google Business Locations ---
 app.openapi(listGBPLocations, async (c) => {
 	const orgId = c.get("orgId");
+	const { connect_token } = c.req.valid("query");
 	// Note: refresh_token / expires_at are also present in this KV entry (written
 	// by exchangeAndSaveAccount) and are preserved by the spread when we re-put
 	// the entry below with google_account_name — required so the select handler
 	// can persist them and the account can auto-refresh.
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-		refresh_token?: string | null;
-		expires_at?: string | null;
-	}>(`pending-secondary:${orgId}:googlebusiness`, "json");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			access_token: string;
+			refresh_token?: string | null;
+			expires_at?: string | null;
+		}
+	>(pendingSecondaryKey(orgId, "googlebusiness", connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json({ locations: [] } as never, 200 as never);
 	}
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
 	// SECURITY: Decrypt token from KV
-	const decryptedGbpToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
+	const decryptedGbpToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
 
 	try {
 		// Google Business Account Management API: List all GBP accounts for the user
@@ -2503,7 +3262,7 @@ app.openapi(listGBPLocations, async (c) => {
 
 		// Persist the Google Account name so GMB management routes can use it for v4 API calls
 		await c.env.KV.put(
-			`pending-secondary:${orgId}:googlebusiness`,
+			pendingSecondaryKey(orgId, "googlebusiness", connect_token),
 			JSON.stringify({ ...pendingData, google_account_name: gmbAccount.name }),
 			{ expirationTtl: 600 },
 		);
@@ -2548,12 +3307,16 @@ app.openapi(selectGBPLocation, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-		refresh_token?: string | null;
-		expires_at?: string | null;
-		google_account_name?: string;
-	}>(`pending-secondary:${orgId}:googlebusiness`, "json");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			connection_operation_id: string;
+			workspace_id_was_explicit?: boolean;
+			access_token: string;
+			refresh_token?: string | null;
+			expires_at?: string | null;
+			google_account_name?: string;
+		}
+	>(pendingSecondaryKey(orgId, "googlebusiness", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json(
@@ -2567,6 +3330,10 @@ app.openapi(selectGBPLocation, async (c) => {
 			400 as never,
 		);
 	}
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
 
 	if (!pendingData.google_account_name) {
 		return c.json(
@@ -2580,60 +3347,85 @@ app.openapi(selectGBPLocation, async (c) => {
 			400 as never,
 		);
 	}
-	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
-	const decryptedGbpSetToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
-	const encGbpToken = await maybeEncrypt(decryptedGbpSetToken, c.env.ENCRYPTION_KEY);
+	// SECURITY: Decrypt the one-time KV payload; the account writer seals it.
+	const decryptedGbpSetToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
+	const connectionOperationId = pendingData.connection_operation_id;
 	// Carry through the refresh token + expiry so the account can auto-refresh
 	// (Google access tokens expire in ~1 hour — without the refresh token the
 	// account dies almost immediately).
 	const decryptedGbpRefreshToken = pendingData.refresh_token
 		? await maybeDecrypt(pendingData.refresh_token, c.env.ENCRYPTION_KEY)
 		: null;
-	const encGbpRefreshToken = decryptedGbpRefreshToken
-		? await maybeEncrypt(decryptedGbpRefreshToken, c.env.ENCRYPTION_KEY)
+	const gbpTokenExpiresAt = pendingData.expires_at
+		? new Date(pendingData.expires_at)
 		: null;
-	const gbpTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
 	const googleBusinessConfig = OAUTH_CONFIGS.googlebusiness;
 	if (!googleBusinessConfig) {
 		throw new Error("Google Business OAuth config is not registered");
 	}
-	let account: typeof socialAccounts.$inferSelect | undefined;
+	let account: ConnectedSocialAccount;
+	let persistedWebhook: PersistedWebhookEvent;
 	try {
-		[account] = await db
-			.insert(socialAccounts)
-			.values({
-				organizationId: orgId,
-				platform: "googlebusiness",
-				platformAccountId: body.location_id,
-				displayName: `Google Business ${body.location_id}`,
-				accessToken: encGbpToken,
-				refreshToken: encGbpRefreshToken,
-				tokenExpiresAt: gbpTokenExpiresAt,
-				metadata: { location_id: body.location_id, google_account_name: pendingData.google_account_name },
-				scopes: googleBusinessConfig.scopes,
-			})
-			.onConflictDoUpdate({
-				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-				set: {
-					displayName: `Google Business ${body.location_id}`,
-					accessToken: encGbpToken,
-					refreshToken: encGbpRefreshToken,
-					tokenExpiresAt: gbpTokenExpiresAt,
-					metadata: { location_id: body.location_id, google_account_name: pendingData.google_account_name },
-					scopes: googleBusinessConfig.scopes,
-					updatedAt: new Date(),
-				},
-			})
-			.returning();
+		({ account, webhook: persistedWebhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId,
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: pendingData.initiator_key_id,
+					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
+					insert: {
+						organizationId: orgId,
+						workspaceId: pendingData.workspace_id,
+						platform: "googlebusiness",
+						platformAccountId: body.location_id,
+						displayName: `Google Business ${body.location_id}`,
+						tokenExpiresAt: gbpTokenExpiresAt,
+						metadata: {
+							location_id: body.location_id,
+							google_account_name: pendingData.google_account_name,
+						},
+						scopes: googleBusinessConfig.scopes,
+					},
+					update: {
+						displayName: `Google Business ${body.location_id}`,
+						tokenExpiresAt: gbpTokenExpiresAt,
+						metadata: {
+							location_id: body.location_id,
+							google_account_name: pendingData.google_account_name,
+						},
+						scopes: googleBusinessConfig.scopes,
+					},
+					preserveExistingWorkspaceOnOmission: !(
+						pendingData.workspace_id_was_explicit ??
+						pendingData.workspace_id !== null
+					),
+					accessToken: decryptedGbpSetToken,
+					refreshToken: decryptedGbpRefreshToken,
+				}),
+		}));
 	} catch (err) {
-		console.error("[oauth][googlebusiness] Account upsert failed:", err instanceof Error ? err.message : err);
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[oauth][googlebusiness] Account upsert failed:",
+			err instanceof Error ? err.message : err,
+		);
 		return c.json(
-			{ error: { code: "ACCOUNT_SAVE_FAILED", message: "Failed to save Google Business account. Please try again." } } as never,
+			{
+				error: {
+					code: "ACCOUNT_SAVE_FAILED",
+					message: "Failed to save Google Business account. Please try again.",
+				},
+			} as never,
 			500 as never,
 		);
 	}
 
-	await c.env.KV.delete(`pending-secondary:${orgId}:googlebusiness`);
+	await c.env.KV.delete(
+		pendingSecondaryKey(orgId, "googlebusiness", body.connect_token),
+	);
 
 	if (!account) {
 		return c.json(
@@ -2644,23 +3436,15 @@ app.openapi(selectGBPLocation, async (c) => {
 		);
 	}
 
-	const isNewGbp = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-	if (isNewGbp) {
-		c.executionCtx.waitUntil(
-			dispatchWebhookEvent(c.env, db, orgId, "account.connected", {
-				account_id: account.id,
-				platform: account.platform,
-				username: account.username,
-				display_name: account.displayName,
-			}),
-		);
-	}
+	c.executionCtx.waitUntil(
+		enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+	);
 	c.executionCtx.waitUntil(
 		logConnectionEvent(c.env, orgId, {
 			account_id: account.id,
 			platform: account.platform,
 			event: "connected",
-			message: `${isNewGbp ? "Connected" : "Reconnected"} ${account.displayName || account.username || account.platform} account`,
+			message: `Connected ${account.displayName || account.username || account.platform} account`,
 		}),
 	);
 
@@ -2670,25 +3454,30 @@ app.openapi(selectGBPLocation, async (c) => {
 // --- Secondary selection: Snapchat Profiles ---
 app.openapi(listSnapchatProfiles, async (c) => {
 	const orgId = c.get("orgId");
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-	}>(`pending-secondary:${orgId}:snapchat`, "json");
+	const { connect_token } = c.req.valid("query");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			access_token: string;
+		}
+	>(pendingSecondaryKey(orgId, "snapchat", connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json({ profiles: [] } as never, 200 as never);
 	}
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
 	// SECURITY: Decrypt token from KV
-	const decryptedSnapListToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
+	const decryptedSnapListToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
 
 	try {
 		// Snapchat Marketing API: List organizations the authenticated user belongs to
 		// https://developers.snap.com/api/marketing-api/general/Myself
-		const res = await fetch(
-			"https://adsapi.snapchat.com/v1/me/organizations",
-			{
-				headers: { Authorization: `Bearer ${decryptedSnapListToken}` },
-			},
-		);
+		const res = await fetch("https://adsapi.snapchat.com/v1/me/organizations", {
+			headers: { Authorization: `Bearer ${decryptedSnapListToken}` },
+		});
 		if (!res.ok) {
 			return c.json({ profiles: [] } as never, 200 as never);
 		}
@@ -2721,11 +3510,15 @@ app.openapi(selectSnapchatProfile, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const pendingData = await c.env.KV.get<{
-		access_token: string;
-		refresh_token?: string | null;
-		expires_at?: string | null;
-	}>(`pending-secondary:${orgId}:snapchat`, "json");
+	const pendingData = await c.env.KV.get<
+		PendingSecondaryScope & {
+			connection_operation_id: string;
+			workspace_id_was_explicit?: boolean;
+			access_token: string;
+			refresh_token?: string | null;
+			expires_at?: string | null;
+		}
+	>(pendingSecondaryKey(orgId, "snapchat", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
 		return c.json(
@@ -2738,58 +3531,81 @@ app.openapi(selectSnapchatProfile, async (c) => {
 			400 as never,
 		);
 	}
+	const authorization = await authorizePendingSecondary(c, pendingData);
+	if (!authorization.ok) return authorization.response as never;
+	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
+	if (denied) return denied as never;
 
-	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
-	const decryptedSnapSetToken = await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY) ?? "";
-	const encSnapToken = await maybeEncrypt(decryptedSnapSetToken, c.env.ENCRYPTION_KEY);
+	// SECURITY: Decrypt the one-time KV payload; the account writer seals it.
+	const decryptedSnapSetToken =
+		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
+	const connectionOperationId = pendingData.connection_operation_id;
 	// Carry through the refresh token + expiry so the account can auto-refresh
 	// (Snapchat access tokens expire in ~1 hour).
 	const decryptedSnapRefreshToken = pendingData.refresh_token
 		? await maybeDecrypt(pendingData.refresh_token, c.env.ENCRYPTION_KEY)
 		: null;
-	const encSnapRefreshToken = decryptedSnapRefreshToken
-		? await maybeEncrypt(decryptedSnapRefreshToken, c.env.ENCRYPTION_KEY)
+	const snapTokenExpiresAt = pendingData.expires_at
+		? new Date(pendingData.expires_at)
 		: null;
-	const snapTokenExpiresAt = pendingData.expires_at ? new Date(pendingData.expires_at) : null;
 	const snapchatConfig = OAUTH_CONFIGS.snapchat;
 	if (!snapchatConfig) {
 		throw new Error("Snapchat OAuth config is not registered");
 	}
-	let account: typeof socialAccounts.$inferSelect | undefined;
+	let account: ConnectedSocialAccount;
+	let persistedWebhook: PersistedWebhookEvent;
 	try {
-		[account] = await db
-			.insert(socialAccounts)
-			.values({
-				organizationId: orgId,
-				platform: "snapchat",
-				platformAccountId: body.profile_id,
-				displayName: `Snapchat ${body.profile_id}`,
-				accessToken: encSnapToken,
-				refreshToken: encSnapRefreshToken,
-				tokenExpiresAt: snapTokenExpiresAt,
-				scopes: snapchatConfig.scopes,
-			})
-			.onConflictDoUpdate({
-				target: [socialAccounts.organizationId, socialAccounts.platform, socialAccounts.platformAccountId],
-				set: {
-					displayName: `Snapchat ${body.profile_id}`,
-					accessToken: encSnapToken,
-					refreshToken: encSnapRefreshToken,
-					tokenExpiresAt: snapTokenExpiresAt,
-					scopes: snapchatConfig.scopes,
-					updatedAt: new Date(),
-				},
-			})
-			.returning();
+		({ account, webhook: persistedWebhook } = await persistConnectedAccount({
+			db,
+			orgId,
+			connectionOperationId,
+			upsert: async (tx) =>
+				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+					apiKeyId: pendingData.initiator_key_id,
+					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
+					insert: {
+						organizationId: orgId,
+						workspaceId: pendingData.workspace_id,
+						platform: "snapchat",
+						platformAccountId: body.profile_id,
+						displayName: `Snapchat ${body.profile_id}`,
+						tokenExpiresAt: snapTokenExpiresAt,
+						scopes: snapchatConfig.scopes,
+					},
+					update: {
+						displayName: `Snapchat ${body.profile_id}`,
+						tokenExpiresAt: snapTokenExpiresAt,
+						scopes: snapchatConfig.scopes,
+					},
+					preserveExistingWorkspaceOnOmission: !(
+						pendingData.workspace_id_was_explicit ??
+						pendingData.workspace_id !== null
+					),
+					accessToken: decryptedSnapSetToken,
+					refreshToken: decryptedSnapRefreshToken,
+				}),
+		}));
 	} catch (err) {
-		console.error("[oauth][snapchat] Account upsert failed:", err instanceof Error ? err.message : err);
+		const conflict = accountWorkspaceConflictResponse(c, err);
+		if (conflict) return conflict as never;
+		console.error(
+			"[oauth][snapchat] Account upsert failed:",
+			err instanceof Error ? err.message : err,
+		);
 		return c.json(
-			{ error: { code: "ACCOUNT_SAVE_FAILED", message: "Failed to save Snapchat account. Please try again." } } as never,
+			{
+				error: {
+					code: "ACCOUNT_SAVE_FAILED",
+					message: "Failed to save Snapchat account. Please try again.",
+				},
+			} as never,
 			500 as never,
 		);
 	}
 
-	await c.env.KV.delete(`pending-secondary:${orgId}:snapchat`);
+	await c.env.KV.delete(
+		pendingSecondaryKey(orgId, "snapchat", body.connect_token),
+	);
 
 	if (!account) {
 		return c.json(
@@ -2800,23 +3616,15 @@ app.openapi(selectSnapchatProfile, async (c) => {
 		);
 	}
 
-	const isNewSnap = (account.updatedAt.getTime() - account.connectedAt.getTime()) < 5000;
-	if (isNewSnap) {
-		c.executionCtx.waitUntil(
-			dispatchWebhookEvent(c.env, db, orgId, "account.connected", {
-				account_id: account.id,
-				platform: account.platform,
-				username: account.username,
-				display_name: account.displayName,
-			}),
-		);
-	}
+	c.executionCtx.waitUntil(
+		enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+	);
 	c.executionCtx.waitUntil(
 		logConnectionEvent(c.env, orgId, {
 			account_id: account.id,
 			platform: account.platform,
 			event: "connected",
-			message: `${isNewSnap ? "Connected" : "Reconnected"} ${account.displayName || account.username || account.platform} account`,
+			message: `Connected ${account.displayName || account.username || account.platform} account`,
 		}),
 	);
 
@@ -2828,6 +3636,12 @@ app.openapi(startOAuth, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform } = c.req.valid("param");
 	const query = c.req.valid("query");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		query.workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return scope.response as never;
 	const method = query.method ?? undefined;
 	const headless = query.headless === "true";
 	// Customer's redirect URL — where we redirect after the OAuth exchange completes.
@@ -2839,7 +3653,12 @@ app.openapi(startOAuth, async (c) => {
 	// SECURITY: Validate redirect_url against allowed domains and protocols.
 	if (!isAllowedCustomerRedirectUrl(customerRedirectUrl)) {
 		return c.json(
-			{ error: { code: "INVALID_REDIRECT_URL", message: "Invalid redirect_url" } } as never,
+			{
+				error: {
+					code: "INVALID_REDIRECT_URL",
+					message: "Invalid redirect_url",
+				},
+			} as never,
 			400 as never,
 		);
 	}
@@ -2880,6 +3699,7 @@ app.openapi(startOAuth, async (c) => {
 
 	// Generate state token and PKCE if required
 	const state = generateStateToken();
+	const connectionOperationId = crypto.randomUUID();
 	let codeChallenge: string | undefined;
 	let codeVerifier: string | undefined;
 
@@ -2889,21 +3709,31 @@ app.openapi(startOAuth, async (c) => {
 		codeVerifier = pkce.codeVerifier;
 	}
 
-	// Store the customer's redirect URL in KV — the server-side callback will redirect here.
+	// Store the customer's redirect state in SQL so it is globally visible and
+	// atomically single-use. The PKCE verifier is encrypted by the capability
+	// service and the raw state token is never persisted.
 	// When `headless` is set, the callback instead writes the exchange result to
 	// `pending-oauth:{state}` (polled via GET /connect/pending-data) and skips the redirect.
-	await c.env.KV.put(
-		`oauth-state:${state}`,
-		JSON.stringify({
+	await issueOneTimeCapability(c.get("db"), c.env.ENCRYPTION_KEY, {
+		kind: "oauth_state",
+		token: state,
+		organizationId: orgId,
+		payload: {
 			org_id: orgId,
+			initiator_key_id: c.get("keyId"),
+			initial_workspace_scope: c.get("workspaceScope"),
+			workspace_id: scope.workspaceId,
+			workspace_id_was_explicit: query.workspace_id !== undefined,
+			settings_revision: scope.settingsRevision,
 			platform,
+			connection_operation_id: connectionOperationId,
 			method: method ?? null,
 			redirect_url: customerRedirectUrl,
 			code_verifier: codeVerifier ?? null,
 			headless,
-		}),
-		{ expirationTtl: 600 }, // 10 minutes
-	);
+		},
+		expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+	});
 
 	// Build auth URL with RelayAPI's callback — NOT the customer's URL
 	const authUrl = buildAuthUrl(
@@ -2917,7 +3747,10 @@ app.openapi(startOAuth, async (c) => {
 	// In headless mode, also return the temp token the caller polls with after the
 	// user finishes the provider authorization in a browser/webview.
 	if (headless) {
-		return c.json({ auth_url: authUrl, temp_token: state } as never, 200 as never);
+		return c.json(
+			{ auth_url: authUrl, temp_token: state } as never,
+			200 as never,
+		);
 	}
 
 	return c.json({ auth_url: authUrl } as never, 200 as never);
@@ -2936,7 +3769,12 @@ app.openapi(completeOAuth, async (c) => {
 	// SECURITY: Validate redirect_url against allowed domains and protocols.
 	if (!isAllowedCustomerRedirectUrl(customerRedirectUrl)) {
 		return c.json(
-			{ error: { code: "INVALID_REDIRECT_URL", message: "Invalid redirect_url" } } as never,
+			{
+				error: {
+					code: "INVALID_REDIRECT_URL",
+					message: "Invalid redirect_url",
+				},
+			} as never,
 			400 as never,
 		);
 	}
@@ -2949,28 +3787,91 @@ app.openapi(completeOAuth, async (c) => {
 	// Retrieve code_verifier and method from KV state if available
 	let codeVerifier: string | undefined;
 	let method: string | undefined;
+	let connectionOperationId: string | undefined;
+	let workspaceId: string | null = null;
+	let workspaceWasExplicit = false;
+	let initiatorKeyId = c.get("keyId");
+	let authorizedWorkspaceScope: "all" | string[] = c.get("workspaceScope");
 
 	if (body.state) {
-		const stateData = await c.env.KV.get<{
+		const stateData = await claimOneTimeCapability<{
 			org_id: string;
+			initiator_key_id: string;
+			initial_workspace_scope: "all" | string[];
+			workspace_id: string | null;
+			workspace_id_was_explicit?: boolean;
+			settings_revision: number;
 			platform: string;
+			connection_operation_id: string;
 			method?: string | null;
 			redirect_url?: string;
 			code_verifier: string | null;
-		}>(`oauth-state:${body.state}`, "json");
+		}>(c.get("db"), c.env.ENCRYPTION_KEY, "oauth_state", body.state);
 		if (
 			stateData?.org_id === orgId &&
-			stateData?.platform === platform
+			stateData?.platform === platform &&
+			stateData.initiator_key_id === c.get("keyId")
 		) {
 			if (
-				stateData.redirect_url
-				&& stateData.redirect_url !== customerRedirectUrl
+				body.workspace_id !== undefined &&
+				body.workspace_id !== stateData.workspace_id
+			) {
+				return c.json(
+					{
+						error: {
+							code: "WORKSPACE_ID_MISMATCH",
+							message:
+								"workspace_id does not match the OAuth flow that was started.",
+						},
+					} as never,
+					400 as never,
+				);
+			}
+			const denied = assertWorkspaceScope(c, stateData.workspace_id);
+			if (denied) return denied as never;
+			const initialWorkspaceScope = parseApiKeyWorkspaceScope({
+				workspace_scope: stateData.initial_workspace_scope,
+			});
+			if (initialWorkspaceScope === null) {
+				return c.json(
+					{
+						error: {
+							code: "INVALID_STATE",
+							message: "OAuth state contains invalid authorization data.",
+						},
+					} as never,
+					400 as never,
+				);
+			}
+			const validation = await validatePersistedOperationalScope(c.get("db"), {
+				apiKeyId: stateData.initiator_key_id,
+				organizationId: orgId,
+				workspaceId: stateData.workspace_id,
+				resourceName: "connected account",
+			});
+			if (!validation.ok) {
+				return c.json(
+					{
+						error: { code: validation.code, message: validation.message },
+					} as never,
+					validation.status as never,
+				);
+			}
+			workspaceId = stateData.workspace_id;
+			initiatorKeyId = stateData.initiator_key_id;
+			authorizedWorkspaceScope = initialWorkspaceScope;
+			workspaceWasExplicit =
+				stateData.workspace_id_was_explicit ?? stateData.workspace_id !== null;
+			if (
+				stateData.redirect_url &&
+				stateData.redirect_url !== customerRedirectUrl
 			) {
 				return c.json(
 					{
 						error: {
 							code: "REDIRECT_URL_MISMATCH",
-							message: "redirect_url does not match the OAuth flow that was started.",
+							message:
+								"redirect_url does not match the OAuth flow that was started.",
 						},
 					} as never,
 					400 as never,
@@ -2978,7 +3879,7 @@ app.openapi(completeOAuth, async (c) => {
 			}
 			codeVerifier = stateData.code_verifier ?? undefined;
 			method = stateData.method ?? undefined;
-			await c.env.KV.delete(`oauth-state:${body.state}`);
+			connectionOperationId = stateData.connection_operation_id;
 		} else {
 			return c.json(
 				{
@@ -3000,6 +3901,19 @@ app.openapi(completeOAuth, async (c) => {
 			} as never,
 			400 as never,
 		);
+	}
+
+	if (!body.state) {
+		const scope = await resolveOperationalCreateScope(
+			c,
+			body.workspace_id,
+			"connected account",
+		);
+		if (!scope.ok) return scope.response as never;
+		workspaceId = scope.workspaceId;
+		workspaceWasExplicit = body.workspace_id !== undefined;
+		initiatorKeyId = c.get("keyId");
+		authorizedWorkspaceScope = c.get("workspaceScope");
 	}
 
 	if (platform === "instagram" && !body.state) {
@@ -3030,16 +3944,28 @@ app.openapi(completeOAuth, async (c) => {
 		const result = await exchangeAndSaveAccount({
 			env: c.env,
 			orgId,
+			initiatorKeyId,
+			authorizedWorkspaceScope,
+			workspaceId,
+			workspaceWasExplicit,
 			platform,
 			code: body.code,
 			redirectUri: oauthRedirectUri,
 			codeVerifier,
 			method,
+			connectionOperationId,
 			waitUntil: (p) => c.executionCtx.waitUntil(p),
 		});
 
 		if (result.status === "error") {
-			const statusCode = result.code === "INTERNAL_ERROR" ? 500 : 400;
+			const statusCode =
+				result.code === "INTERNAL_ERROR"
+					? 500
+					: result.code === "ACCOUNT_WORKSPACE_CONFLICT"
+						? 409
+						: result.code === "WORKSPACE_ACCESS_DENIED"
+							? 403
+							: 400;
 			return c.json(
 				{ error: { code: result.code, message: result.message } } as never,
 				statusCode as never,
@@ -3049,15 +3975,9 @@ app.openapi(completeOAuth, async (c) => {
 		if (result.status === "pending_selection") {
 			return c.json(
 				{
-					id: "pending",
+					status: "pending_selection",
+					connect_token: result.connectToken,
 					platform,
-					platform_account_id: "pending",
-					username: null,
-					display_name: `${platform} account`,
-					avatar_url: null,
-					metadata: null,
-					connected_at: new Date().toISOString(),
-					updated_at: new Date().toISOString(),
 				} as never,
 				200 as never,
 			);
@@ -3066,7 +3986,10 @@ app.openapi(completeOAuth, async (c) => {
 		return c.json({ account: result.account } as never, 201 as never);
 	} catch (err) {
 		// SECURITY: Log full error server-side but return generic message to prevent leaking platform internals
-		console.error("[oauth] Token exchange failed:", err instanceof Error ? err.message : err);
+		console.error(
+			"[oauth] Token exchange failed:",
+			err instanceof Error ? err.message : err,
+		);
 		return c.json(
 			{
 				error: {

@@ -2,15 +2,16 @@ import {
 	automationRuns,
 	createDb,
 	inboxConversations,
+	inboxEventEffects,
 	inboxMessages,
 	socialAccounts,
 	webhookEndpoints,
 } from "@relayapi/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
-import { maybeDecrypt } from "../lib/crypto";
+import { decryptAccountToken } from "../lib/account-token-crypto";
 import { notifyRealtime } from "../lib/notify-post-update";
-import type { InboxQueueMessage } from "../routes/platform-webhooks";
+import type { NormalizedInboxQueueMessage as InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
 import { matchAndEnrollOrBinding } from "./automations/binding-router";
 import { resumeWaitingRunOnInput } from "./automations/input-resume";
@@ -28,6 +29,118 @@ import {
 } from "./inbox-persistence";
 import { deliverWebhook, dispatchWebhookEvent } from "./webhook-delivery";
 import { subscribeYouTubeChannel } from "./webhook-subscription";
+
+type InboxEffect = "automation" | "customer_webhook" | "realtime";
+
+export async function runInboxEffectOnce(
+	db: ReturnType<typeof createDb>,
+	event: Pick<
+		NormalizedInboxEvent,
+		"organization_id" | "account_id" | "platform_event_id"
+	>,
+	effect: InboxEffect,
+	replayPayload: InboxQueueMessage,
+	run: () => Promise<unknown>,
+): Promise<void> {
+	const now = new Date();
+	const claimed = await db
+		.insert(inboxEventEffects)
+		.values({
+			organizationId: event.organization_id,
+			accountId: event.account_id,
+			platformEventId: event.platform_event_id,
+			effect,
+			status: "in_flight",
+			attempts: 1,
+			leaseToken: 1,
+			leaseExpiresAt: new Date(now.getTime() + 2 * 60_000),
+			startedAt: now,
+			effectStartedAt: null,
+			replayPayload: replayPayload as unknown as Record<string, unknown>,
+			nextAttemptAt: now,
+			updatedAt: now,
+		})
+		.onConflictDoUpdate({
+			target: [
+				inboxEventEffects.organizationId,
+				inboxEventEffects.accountId,
+				inboxEventEffects.platformEventId,
+				inboxEventEffects.effect,
+			],
+			set: {
+				status: "in_flight",
+				attempts: sql`${inboxEventEffects.attempts} + 1`,
+				leaseToken: sql`${inboxEventEffects.leaseToken} + 1`,
+				leaseExpiresAt: new Date(now.getTime() + 2 * 60_000),
+				startedAt: now,
+				effectStartedAt: null,
+				error: null,
+				replayPayload: replayPayload as unknown as Record<string, unknown>,
+				updatedAt: now,
+			},
+			setWhere: eq(inboxEventEffects.status, "pending"),
+		})
+		.returning({
+			id: inboxEventEffects.id,
+			leaseToken: inboxEventEffects.leaseToken,
+		});
+	const claim = claimed[0];
+	if (!claim) return;
+	const fence = and(
+		eq(inboxEventEffects.id, claim.id),
+		eq(inboxEventEffects.leaseToken, claim.leaseToken),
+		eq(inboxEventEffects.status, "in_flight"),
+	);
+	// Customer webhook dispatch only commits a deterministic database outbox row;
+	// it does not perform the customer HTTP request. A crash or DB error before
+	// this effect is marked complete is therefore safe to replay. Automation and
+	// realtime effects can cross an external boundary inside `run`, so they keep
+	// the conservative pre-effect marker.
+	const replaySafeUntilComplete = effect === "customer_webhook";
+	if (!replaySafeUntilComplete) {
+		const boundary = await db
+			.update(inboxEventEffects)
+			.set({ effectStartedAt: new Date(), updatedAt: new Date() })
+			.where(fence)
+			.returning({ id: inboxEventEffects.id });
+		if (!boundary[0]) return;
+	}
+	try {
+		await run();
+		await db
+			.update(inboxEventEffects)
+			.set({
+				status: "completed",
+				completedAt: new Date(),
+				leaseExpiresAt: null,
+				updatedAt: new Date(),
+			})
+			.where(fence);
+	} catch (error) {
+		const errorMessage = (
+			error instanceof Error ? error.message : String(error)
+		).slice(0, 1_000);
+		await db
+			.update(inboxEventEffects)
+			.set({
+				status: replaySafeUntilComplete ? "pending" : "unknown",
+				leaseExpiresAt: null,
+				...(replaySafeUntilComplete
+					? { nextAttemptAt: new Date(), effectStartedAt: null }
+					: {}),
+				error: errorMessage,
+				updatedAt: new Date(),
+			})
+			.where(fence);
+		console.error(
+			replaySafeUntilComplete
+				? `[inbox-processor] ${effect} failed before durable completion`
+				: `[inbox-processor] ${effect} outcome unknown`,
+			error,
+		);
+		throw error;
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Normalized event structure
@@ -301,14 +414,20 @@ export async function processInboxEvent(
 		const payload = message.payload as {
 			callback_url: string;
 		};
+		const hubSecret = env.YOUTUBE_HUB_SECRET;
+		if (!hubSecret) {
+			throw new Error(
+				"YouTube webhook subscription is disabled: YOUTUBE_HUB_SECRET is not configured",
+			);
+		}
 		const result = await subscribeYouTubeChannel(
 			message.platform_account_id,
 			payload.callback_url,
+			hubSecret,
 		);
 		if (!result.success) {
-			console.error(
-				`[inbox-processor] YouTube subscribe failed for ${message.platform_account_id}:`,
-				result.error,
+			throw new Error(
+				`YouTube subscribe failed for ${message.platform_account_id}: ${result.error ?? "unknown error"}`,
 			);
 		}
 		return;
@@ -352,8 +471,18 @@ export async function processInboxEvent(
 				accessToken: socialAccounts.accessToken,
 			})
 			.from(socialAccounts)
-			.where(eq(socialAccounts.id, event.account_id))
+			.where(
+				and(
+					eq(socialAccounts.id, event.account_id),
+					eq(socialAccounts.organizationId, event.organization_id),
+					eq(socialAccounts.lifecycleStatus, "active"),
+				),
+			)
 			.limit(1);
+		// Disconnect and tenant deletion fence new inbound side effects. The account
+		// lookup already carries the lifecycle predicate, so a miss is a terminal
+		// no-op rather than permission to persist against a null workspace.
+		if (!sa) continue;
 		// `follow` and `ad_click` events don't correspond to a message — they
 		// describe a relationship change or ad engagement. We still route them
 		// through the automation matcher (step 2) but skip inbox persistence.
@@ -374,20 +503,16 @@ export async function processInboxEvent(
 			if (isPersistedEvent) {
 				conversation = await upsertConversation(db, {
 					organizationId: event.organization_id,
-					workspaceId: sa?.workspaceId ?? null,
+					workspaceId: sa.workspaceId,
 					accountId: event.account_id,
 					platform: event.platform as UpsertConversationData["platform"],
 					type: event.type === "comment" ? "comment_thread" : "dm",
 					platformConversationId:
-						event.post_id ||
-						event.conversation_id ||
-						event.platform_event_id,
+						event.post_id || event.conversation_id || event.platform_event_id,
 					participantName: conversationPartner?.name ?? null,
 					participantPlatformId: conversationPartner?.id ?? null,
 					participantAvatar:
-						conversationPartner?.avatar_url ??
-						event.author?.avatar_url ??
-						null,
+						conversationPartner?.avatar_url ?? event.author?.avatar_url ?? null,
 					postPlatformId: event.post_id ?? null,
 				});
 				if (conversation) {
@@ -415,14 +540,8 @@ export async function processInboxEvent(
 											inboxConversations.organizationId,
 											event.organization_id,
 										),
-										eq(
-											inboxConversations.platform,
-											event.platform as never,
-										),
-										eq(
-											inboxConversations.contactId,
-											conversation.contactId,
-										),
+										eq(inboxConversations.platform, event.platform as never),
+										eq(inboxConversations.contactId, conversation.contactId),
 										eq(inboxMessages.direction, "inbound"),
 									),
 								)
@@ -459,9 +578,7 @@ export async function processInboxEvent(
 						direction,
 						attachments: event.attachments ?? [],
 						platformData:
-							Object.keys(platformData).length > 0
-								? platformData
-								: undefined,
+							Object.keys(platformData).length > 0 ? platformData : undefined,
 						previewText: derivePreviewText(event),
 						createdAt: new Date(event.created_at),
 					});
@@ -496,18 +613,19 @@ export async function processInboxEvent(
 			// `insertMessage` doesn't defeat it.
 			const isFirstInboundOnChannel =
 				event.type === "message" && hadPriorInboundOnChannel === false;
-			await dispatchAutomationMatch(event, db, env, {
-				workspace_id: sa?.workspaceId ?? null,
-				is_conversation_start:
-					event.type === "message" && (conversation?.messageCount ?? 0) === 0,
-				is_first_inbound_on_channel: isFirstInboundOnChannel,
-				// Internal DB conversation id (inbox_conversations.id). The
-				// normalized event's `conversation_id` holds the PLATFORM-level
-				// id (Telegram chat id, Meta user psid, etc.), which is NOT a
-				// valid FK for `automation_runs.conversation_id`. Without this
-				// override, the runner's `enrollContact` insert trips the FK.
-				internal_conversation_id: conversation?.id ?? null,
-			});
+			await runInboxEffectOnce(db, event, "automation", message, () =>
+				dispatchAutomationMatch(event, db, env, {
+					workspace_id: sa?.workspaceId ?? null,
+					is_conversation_start:
+						event.type === "message" && (conversation?.messageCount ?? 0) === 0,
+					is_first_inbound_on_channel: isFirstInboundOnChannel,
+					// Internal DB conversation id (inbox_conversations.id). The
+					// normalized event's `conversation_id` holds the PLATFORM-level
+					// id (Telegram chat id, Meta user psid, etc.), which is NOT a
+					// valid FK for `automation_runs.conversation_id`.
+					internal_conversation_id: conversation?.id ?? null,
+				}),
+			);
 		}
 
 		// 1b. Meta participant profile enrichment — Instagram/Messenger webhooks
@@ -529,10 +647,9 @@ export async function processInboxEvent(
 			continue;
 		}
 
-		// 3 + 4. Dispatch the outbound customer webhook AND the dashboard realtime
-		// notify CONCURRENTLY. These are independent: a dead/slow customer webhook
-		// endpoint (up to ~20s of inline retries in deliverWebhook) must not delay
-		// the realtime inbox update or hold up the rest of the batch.
+		// 3 + 4. Persist the customer-webhook outbox row and notify the dashboard
+		// concurrently. Customer HTTP runs only in its dedicated Queue consumer, so
+		// a slow endpoint never adds latency to inbound processing.
 		const webhookEvent =
 			event.type === "comment"
 				? "comment.received"
@@ -557,22 +674,34 @@ export async function processInboxEvent(
 							conversation_id: conversation?.id ?? event.conversation_id,
 							platform: event.platform,
 						};
-		await Promise.allSettled([
-			dispatchWebhookEvent(env, db, event.organization_id, webhookEvent, {
-				id: event.platform_event_id,
-				type: event.type,
-				platform: event.platform,
-				account_id: event.account_id,
-				author: event.author,
-				text: event.text,
-				post_id: event.post_id,
-				conversation_id: event.conversation_id,
-				parent_id: event.parent_id,
-				created_at: event.created_at,
-			}),
-			notifyRealtime(env, event.organization_id, realtimeEvent).catch((err) => {
-				console.error("[inbox-processor] notifyRealtime failed:", err);
-			}),
+		await Promise.all([
+			runInboxEffectOnce(db, event, "customer_webhook", message, () =>
+				dispatchWebhookEvent(
+					env,
+					db,
+					event.organization_id,
+					webhookEvent,
+					{
+						id: event.platform_event_id,
+						type: event.type,
+						platform: event.platform,
+						account_id: event.account_id,
+						author: event.author,
+						text: event.text,
+						post_id: event.post_id,
+						conversation_id: event.conversation_id,
+						parent_id: event.parent_id,
+						created_at: event.created_at,
+					},
+					{
+						workspaceId: sa?.workspaceId ?? null,
+						occurrenceId: `inbox:${event.account_id}:${event.platform_event_id}:${webhookEvent}`,
+					},
+				),
+			),
+			runInboxEffectOnce(db, event, "realtime", message, () =>
+				notifyRealtime(env, event.organization_id, realtimeEvent),
+			),
 		]);
 	}
 }
@@ -607,7 +736,9 @@ async function enrichMetaParticipantProfile(
 		return;
 	}
 
-	const existingParticipantMetadata = asRecord(conversation.participantMetadata);
+	const existingParticipantMetadata = asRecord(
+		conversation.participantMetadata,
+	);
 	const existingInstagramProfile = asRecord(
 		existingParticipantMetadata?.instagramProfile,
 	);
@@ -628,7 +759,12 @@ async function enrichMetaParticipantProfile(
 	if (!shouldEnrich) return;
 
 	try {
-		const token = await maybeDecrypt(accessToken, env.ENCRYPTION_KEY);
+		const token = await decryptAccountToken(
+			accessToken,
+			env.ENCRYPTION_KEY,
+			event.account_id,
+			"access_token",
+		);
 		if (!token) throw new Error("Failed to decrypt access token");
 
 		const profile =
@@ -636,19 +772,20 @@ async function enrichMetaParticipantProfile(
 				? await fetchInstagramParticipantProfile(participantId, token)
 				: await fetchFacebookParticipantProfile(participantId, token);
 		if (profile) {
-			const conversationPatch: Partial<typeof inboxConversations.$inferInsert> = {
-				participantMetadata: {
-					...(existingParticipantMetadata ?? {}),
-					[event.platform === "instagram"
-						? "instagramProfile"
-						: "facebookProfile"]: {
-						...(event.platform === "instagram"
-							? (existingInstagramProfile ?? {})
-							: (existingFacebookProfile ?? {})),
-						...profile.metadata,
+			const conversationPatch: Partial<typeof inboxConversations.$inferInsert> =
+				{
+					participantMetadata: {
+						...(existingParticipantMetadata ?? {}),
+						[event.platform === "instagram"
+							? "instagramProfile"
+							: "facebookProfile"]: {
+							...(event.platform === "instagram"
+								? (existingInstagramProfile ?? {})
+								: (existingFacebookProfile ?? {})),
+							...profile.metadata,
+						},
 					},
-				},
-			};
+				};
 
 			// Re-host the profile picture to R2 (served durably by the public
 			// /avatars/:id route) so it survives Meta's short-lived signed-CDN
@@ -757,7 +894,8 @@ function deriveInboundEventKind(
  * Waiting runs (a `user_input` node pending input) take precedence — inbound
  * text is fed into the paused run instead of starting a fresh one.
  *
- * Best-effort: automation failures never block inbox processing.
+ * Failures propagate to the durable effect ledger. The Queue can then retry a
+ * pre-boundary lease or leave an ambiguous started effect for reconciliation.
  */
 async function dispatchAutomationMatch(
 	event: NormalizedInboxEvent,
@@ -855,8 +993,7 @@ async function dispatchAutomationMatch(
 			text: event.text,
 			// story_reply/story_mention match on story_id (falls back to post_id
 			// for platforms that don't distinguish the two surfaces).
-			postId:
-				event.story_id ?? event.post_id ?? undefined,
+			postId: event.story_id ?? event.post_id ?? undefined,
 			adId: event.ad_id,
 			isFirstInboundOnChannel: meta?.is_first_inbound_on_channel,
 			payload: {
@@ -884,6 +1021,7 @@ async function dispatchAutomationMatch(
 		await matchAndEnrollOrBinding(db, inboundEvent, envAsRecord);
 	} catch (err) {
 		console.error("[inbox-processor] automation dispatch failed:", err);
+		throw err;
 	}
 }
 
@@ -1119,8 +1257,9 @@ function extractMetaMessageMarkers(msg: FacebookMessagingPayload): {
 		if (att.type === "share") markers.is_share_to_dm = true;
 		if (att.type === "story_mention") {
 			markers.is_story_mention = true;
-			const storyId = (att.payload as { story_id?: string; id?: string })
-				?.story_id ?? (att.payload as { id?: string })?.id;
+			const storyId =
+				(att.payload as { story_id?: string; id?: string })?.story_id ??
+				(att.payload as { id?: string })?.id;
 			if (storyId) markers.story_id = String(storyId);
 			const storyUrl = (att.payload as { url?: string })?.url;
 			if (storyUrl) markers.story_url = String(storyUrl);
@@ -1275,8 +1414,7 @@ function normalizeFacebookEvent(
 		const customerId = msg.sender.id;
 		const markers = extractMetaMessageMarkers(msg);
 		const quickReplyPayload = msg.message?.quick_reply?.payload;
-		const interactivePayload =
-			msg.postback?.payload ?? quickReplyPayload;
+		const interactivePayload = msg.postback?.payload ?? quickReplyPayload;
 		const interactiveKind = msg.postback?.payload
 			? "postback"
 			: quickReplyPayload
@@ -1311,8 +1449,7 @@ function normalizeFacebookEvent(
 		const customerId = msg.recipient.id;
 		const markers = extractMetaMessageMarkers(msg);
 		const quickReplyPayload = msg.message?.quick_reply?.payload;
-		const interactivePayload =
-			msg.postback?.payload ?? quickReplyPayload;
+		const interactivePayload = msg.postback?.payload ?? quickReplyPayload;
 		const interactiveKind = msg.postback?.payload
 			? "postback"
 			: quickReplyPayload
@@ -1467,8 +1604,7 @@ function normalizeInstagramEvent(
 		const customerId = msg.sender.id;
 		const markers = extractMetaMessageMarkers(msg);
 		const quickReplyPayload = msg.message?.quick_reply?.payload;
-		const interactivePayload =
-			msg.postback?.payload ?? quickReplyPayload;
+		const interactivePayload = msg.postback?.payload ?? quickReplyPayload;
 		const interactiveKind = msg.postback?.payload
 			? "postback"
 			: quickReplyPayload
@@ -1504,8 +1640,7 @@ function normalizeInstagramEvent(
 		const customerId = msg.recipient.id;
 		const markers = extractMetaMessageMarkers(msg);
 		const quickReplyPayload = msg.message?.quick_reply?.payload;
-		const interactivePayload =
-			msg.postback?.payload ?? quickReplyPayload;
+		const interactivePayload = msg.postback?.payload ?? quickReplyPayload;
 		const interactiveKind = msg.postback?.payload
 			? "postback"
 			: quickReplyPayload
@@ -1779,6 +1914,19 @@ async function processWhatsAppStatuses(
 	const value = message.payload as WhatsAppWebhookValue;
 	if (!value.statuses?.length) return;
 
+	const [activeAccount] = await db
+		.select({ id: socialAccounts.id })
+		.from(socialAccounts)
+		.where(
+			and(
+				eq(socialAccounts.id, message.account_id),
+				eq(socialAccounts.organizationId, message.organization_id),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		)
+		.limit(1);
+	if (!activeAccount) return;
+
 	// Pre-fetch the org's enabled endpoints subscribed to message.status_updated
 	// ONCE. Without a subscriber we run only the status UPDATEs and skip dispatch
 	// entirely, avoiding a per-status uncached endpoint SELECT + delivery.
@@ -1799,7 +1947,7 @@ async function processWhatsAppStatuses(
 	// Process statuses concurrently — each is an independent UPDATE (+ optional
 	// dispatch). Statuses were previously strictly serial (>=200ms each), backing
 	// up the shared inbox queue consumer on WhatsApp broadcast status floods.
-	await Promise.allSettled(
+	const statusResults = await Promise.allSettled(
 		value.statuses.map(async (status) => {
 			const incomingRank = WA_STATUS_RANK[status.status] ?? 0;
 			// Only apply the update when the incoming status is at least as
@@ -1816,6 +1964,7 @@ async function processWhatsAppStatuses(
 				})
 				.where(
 					and(
+						eq(inboxMessages.organizationId, message.organization_id),
 						eq(inboxMessages.platformMessageId, status.id),
 						sql`COALESCE(
 							CASE (${inboxMessages.platformData} #>> '{wa_status,status}')
@@ -1835,25 +1984,38 @@ async function processWhatsAppStatuses(
 				});
 
 			if (updated && statusEndpoints.length > 0) {
-				await Promise.allSettled(
+				await Promise.all(
 					statusEndpoints.map((w) =>
-						deliverWebhook(env, w, "message.status_updated", {
-							message_id: status.id,
-							status: status.status,
-							recipient: status.recipient_id,
-							timestamp: status.timestamp,
-							errors: status.errors,
-						}).catch((err) =>
-							console.error(
-								`[inbox-processor] wa status webhook delivery failed for ${w.id}:`,
-								err,
-							),
+						deliverWebhook(
+							env,
+							w,
+							"message.status_updated",
+							{
+								message_id: status.id,
+								status: status.status,
+								recipient: status.recipient_id,
+								timestamp: status.timestamp,
+								errors: status.errors,
+							},
+							db,
+							`whatsapp-status:${status.id}:${status.status}:${status.timestamp}`,
 						),
 					),
 				);
 			}
 		}),
 	);
+	const statusFailures = statusResults.filter(
+		(result): result is PromiseRejectedResult => result.status === "rejected",
+	);
+	if (statusFailures.length > 0) {
+		// The raw receipt must remain retryable until every status update has a
+		// terminal DB decision. Updates are rank-monotonic, so replay is safe.
+		throw new AggregateError(
+			statusFailures.map((failure) => failure.reason),
+			`Failed to persist ${statusFailures.length} WhatsApp delivery status update(s)`,
+		);
+	}
 }
 
 // --- Telegram ---

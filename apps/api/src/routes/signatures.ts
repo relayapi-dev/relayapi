@@ -1,16 +1,19 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { type createDb, signatures } from "@relayapi/db";
 import { and, desc, eq, lt, ne } from "drizzle-orm";
+import { assertAllWorkspaceScope } from "../lib/request-access";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+} from "../lib/workspace-scope";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
 	CreateSignatureBody,
-	UpdateSignatureBody,
-	SignatureResponse,
 	SignatureListResponse,
+	SignatureResponse,
+	UpdateSignatureBody,
 } from "../schemas/signatures";
 import type { Env, Variables } from "../types";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
-import { assertScopedCreateWorkspace } from "../lib/request-access";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -210,7 +213,8 @@ const setDefaultRoute = createRoute({
 	path: "/{id}/set-default",
 	tags: ["Signatures"],
 	summary: "Set a signature as the default",
-	description: "Sets this signature as the default. Clears isDefault on all other signatures in the organization.",
+	description:
+		"Sets this signature as the default. Clears isDefault on all other signatures in the organization.",
 	security: [{ Bearer: [] }],
 	request: { params: IdParam },
 	responses: {
@@ -240,10 +244,7 @@ app.openapi(getDefaultSignatureRoute, async (c) => {
 		.select()
 		.from(signatures)
 		.where(
-			and(
-				eq(signatures.organizationId, orgId),
-				eq(signatures.isDefault, true),
-			),
+			and(eq(signatures.organizationId, orgId), eq(signatures.isDefault, true)),
 		)
 		.limit(1);
 
@@ -284,7 +285,9 @@ app.openapi(listSignatures, async (c) => {
 	return c.json(
 		{
 			data: data.map(serialize),
-			next_cursor: hasMore ? (data.at(-1)?.createdAt.toISOString() ?? null) : null,
+			next_cursor: hasMore
+				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				: null,
 			has_more: hasMore,
 		},
 		200,
@@ -297,7 +300,10 @@ app.openapi(createSignatureRoute, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "signature");
+	const denied = assertAllWorkspaceScope(
+		c,
+		"Only an all-workspace API key can create organization-shared signatures.",
+	);
 	if (denied) return denied;
 
 	let row: typeof signatures.$inferSelect | undefined;
@@ -309,7 +315,7 @@ app.openapi(createSignatureRoute, async (c) => {
 				.insert(signatures)
 				.values({
 					organizationId: orgId,
-					workspaceId: body.workspace_id ?? null,
+					workspaceId: null,
 					name: body.name,
 					content: body.content,
 					isDefault: true,
@@ -334,7 +340,7 @@ app.openapi(createSignatureRoute, async (c) => {
 			.insert(signatures)
 			.values({
 				organizationId: orgId,
-				workspaceId: body.workspace_id ?? null,
+				workspaceId: null,
 				name: body.name,
 				content: body.content,
 				isDefault: false,
@@ -346,7 +352,12 @@ app.openapi(createSignatureRoute, async (c) => {
 
 	if (!row) {
 		return c.json(
-			{ error: { code: "INTERNAL_ERROR", message: "Failed to create signature" } } as never,
+			{
+				error: {
+					code: "INTERNAL_ERROR",
+					message: "Failed to create signature",
+				},
+			} as never,
 			500 as never,
 		);
 	}
@@ -362,12 +373,7 @@ app.openapi(getSignatureRoute, async (c) => {
 	const [row] = await db
 		.select()
 		.from(signatures)
-		.where(
-			and(
-				eq(signatures.id, id),
-				eq(signatures.organizationId, orgId),
-			),
-		)
+		.where(and(eq(signatures.id, id), eq(signatures.organizationId, orgId)))
 		.limit(1);
 
 	if (!row) {
@@ -388,16 +394,13 @@ app.openapi(updateSignatureRoute, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(c);
+	if (accessDenied) return accessDenied as never;
 
 	const [existing] = await db
 		.select()
 		.from(signatures)
-		.where(
-			and(
-				eq(signatures.id, id),
-				eq(signatures.organizationId, orgId),
-			),
-		)
+		.where(and(eq(signatures.id, id), eq(signatures.organizationId, orgId)))
 		.limit(1);
 
 	if (!existing) {
@@ -431,10 +434,7 @@ app.openapi(updateSignatureRoute, async (c) => {
 				.update(signatures)
 				.set({ isDefault: false, updatedAt: new Date() })
 				.where(
-					and(
-						eq(signatures.organizationId, orgId),
-						ne(signatures.id, id),
-					),
+					and(eq(signatures.organizationId, orgId), ne(signatures.id, id)),
 				);
 		});
 	} else {
@@ -453,16 +453,13 @@ app.openapi(deleteSignatureRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(c);
+	if (accessDenied) return accessDenied as never;
 
 	const [existing] = await db
 		.select({ id: signatures.id, workspaceId: signatures.workspaceId })
 		.from(signatures)
-		.where(
-			and(
-				eq(signatures.id, id),
-				eq(signatures.organizationId, orgId),
-			),
-		)
+		.where(and(eq(signatures.id, id), eq(signatures.organizationId, orgId)))
 		.limit(1);
 
 	if (!existing) {
@@ -484,16 +481,13 @@ app.openapi(setDefaultRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(c);
+	if (accessDenied) return accessDenied as never;
 
 	const [existing] = await db
 		.select()
 		.from(signatures)
-		.where(
-			and(
-				eq(signatures.id, id),
-				eq(signatures.organizationId, orgId),
-			),
-		)
+		.where(and(eq(signatures.id, id), eq(signatures.organizationId, orgId)))
 		.limit(1);
 
 	if (!existing) {
@@ -508,7 +502,10 @@ app.openapi(setDefaultRoute, async (c) => {
 
 	await setDefaultSignature(db, orgId, id);
 
-	return c.json(serialize({ ...existing, isDefault: true, updatedAt: new Date() }), 200);
+	return c.json(
+		serialize({ ...existing, isDefault: true, updatedAt: new Date() }),
+		200,
+	);
 });
 
 export default app;

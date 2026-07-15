@@ -4,7 +4,7 @@ const perform = async (z: ZObject, bundle: Bundle) => {
   const { content, targets, scheduled_at, media, timezone } = bundle.inputData;
 
   const body: Record<string, unknown> = {
-    targets: (targets as string[]).map((accountId: string) => ({ account_id: accountId })),
+    targets: targets as string[],
     scheduled_at: scheduled_at || 'now',
   };
 
@@ -55,7 +55,7 @@ const createPost = {
         type: 'string' as const,
         list: true,
         required: true,
-        dynamic: 'find_account.id.display_name',
+        dynamic: 'account_options.id.display_name',
         helpText: 'Select one or more connected social media accounts to post to.',
       },
       {

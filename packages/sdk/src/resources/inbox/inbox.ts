@@ -18,7 +18,6 @@ import {
   MessageSendResponse,
   MessageSendTypingParams,
   NoteCreateParams,
-  NoteDeleteParams,
   NoteDeleteResponse,
   NoteListResponse,
   NoteResponse,
@@ -84,7 +83,6 @@ export declare namespace Inbox {
     type MessageDeleteParams as MessageDeleteParams,
     type NoteCreateParams as NoteCreateParams,
     type NoteUpdateParams as NoteUpdateParams,
-    type NoteDeleteParams as NoteDeleteParams,
   };
 
   export {

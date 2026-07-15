@@ -20,6 +20,8 @@ interface Workspace {
   name: string;
   description: string | null;
   account_ids: string[];
+  lifecycle_status: "active" | "archived" | "erasing";
+  revision: number;
   created_at: string;
 }
 
@@ -53,9 +55,16 @@ export function WorkspacesPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    const res = await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
-    if (res.ok || res.status === 204) refetch();
+  const handleArchive = async (workspace: Workspace) => {
+    const res = await fetch(`/api/workspaces/${workspace.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "archive",
+        expected_revision: workspace.revision,
+      }),
+    });
+    if (res.ok) refetch();
   };
 
   if (loading) {
@@ -196,8 +205,8 @@ export function WorkspacesPage() {
                     <button
                       type="button"
                       className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-destructive"
-                      onClick={() => handleDelete(group.id)}
-                      title="Delete workspace"
+                      onClick={() => handleArchive(group)}
+                      title="Archive workspace"
                     >
                       <Trash2 className="size-4" />
                     </button>

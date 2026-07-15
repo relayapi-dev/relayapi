@@ -2,20 +2,33 @@ import { describe, expect, it } from 'vitest';
 import type { ZObject } from 'zapier-platform-core';
 import { addAuthHeader, handleErrors } from '../src/lib/requestHelper';
 
+const TEST_API_KEY = ['rlay', 'live', 'test123'].join('_');
+
 describe('Authentication', () => {
   it('should pass the API key in the Authorization header', async () => {
     const bundle = {
       authData: {
-        apiKey: 'rlay_live_test123',
+        apiKey: TEST_API_KEY,
       },
     };
 
     // Test the beforeRequest middleware directly
-    const request = { headers: {} };
+    const request = { url: 'https://api.relayapi.dev/v1/posts', headers: {} };
     const result = addAuthHeader(request, {} as unknown as ZObject, bundle);
 
     expect(result.headers).toHaveProperty('Authorization');
-    expect(result.headers.Authorization).toBe('Bearer rlay_live_test123');
+    expect(result.headers.Authorization).toBe(`Bearer ${TEST_API_KEY}`);
+  });
+
+  it('never forwards the API key to file or presigned upload hosts', () => {
+    const request = { url: 'https://files.zapier.com/example', headers: {} };
+    const result = addAuthHeader(
+      request,
+      {} as unknown as ZObject,
+      { authData: { apiKey: TEST_API_KEY } },
+    );
+
+    expect(result.headers).not.toHaveProperty('Authorization');
   });
 
   it('should handle 401 errors as ExpiredAuthError', () => {

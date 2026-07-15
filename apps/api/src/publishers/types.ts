@@ -7,6 +7,11 @@ export interface MediaAttachment {
 }
 
 export interface PublishRequest {
+	/**
+	 * Stable application operation id. A publisher forwards it only when the
+	 * provider exposes an idempotency control for the relevant mutation.
+	 */
+	operation_id: string;
 	content: string | null;
 	media: MediaAttachment[];
 	target_options: Record<string, unknown>;
@@ -45,6 +50,17 @@ export interface PublishResult {
 	success: boolean;
 	platform_post_id?: string;
 	platform_url?: string;
+	/** The provider explicitly rejected the request before a visible effect. */
+	outcome?: { disposition: "definitive_rejection" };
+	/**
+	 * Internal retry directive. Publishers may set this only when the provider
+	 * explicitly rejected the mutating request and the complete publish operation
+	 * has not produced an externally visible effect.
+	 */
+	retry?: {
+		disposition: "safe_to_retry";
+		after_ms?: number;
+	};
 	error?: {
 		code: PublishErrorCode;
 		message: string;
@@ -63,17 +79,24 @@ export interface PublishResult {
 export class PublishError extends Error {
 	code?: PublishErrorCode;
 	statusCode?: number;
+	retryAfterMs?: number;
 	/** Raw failure context, e.g. `"HTTP 400\n{...platform json...}"`. Sanitized before storage. */
 	detail?: string;
 	constructor(
 		message: string,
-		opts?: { code?: PublishErrorCode; statusCode?: number; detail?: string },
+		opts?: {
+			code?: PublishErrorCode;
+			statusCode?: number;
+			detail?: string;
+			retryAfterMs?: number;
+		},
 	) {
 		super(message);
 		this.name = "PublishError";
 		this.code = opts?.code;
 		this.statusCode = opts?.statusCode;
 		this.detail = opts?.detail;
+		this.retryAfterMs = opts?.retryAfterMs;
 	}
 }
 
@@ -93,9 +116,20 @@ export interface EngagementActionResult {
 export interface Publisher {
 	platform: Platform;
 	publish(request: PublishRequest): Promise<PublishResult>;
-	repost?(account: EngagementAccount, platformPostId: string): Promise<EngagementActionResult>;
-	comment?(account: EngagementAccount, platformPostId: string, text: string): Promise<EngagementActionResult>;
-	quote?(account: EngagementAccount, platformPostId: string, text: string): Promise<EngagementActionResult>;
+	repost?(
+		account: EngagementAccount,
+		platformPostId: string,
+	): Promise<EngagementActionResult>;
+	comment?(
+		account: EngagementAccount,
+		platformPostId: string,
+		text: string,
+	): Promise<EngagementActionResult>;
+	quote?(
+		account: EngagementAccount,
+		platformPostId: string,
+		text: string,
+	): Promise<EngagementActionResult>;
 }
 
 const MAX_DETAIL_LENGTH = 4096;
@@ -128,17 +162,58 @@ export function sanitizeErrorDetail(detail: string): string {
  * falls back to a `PublishError`'s explicit `code` or "PUBLISH_FAILED". A
  * `PublishError`'s raw `detail` (sanitized + truncated) is attached when present.
  */
-export function classifyPublishError(err: unknown): PublishResult {
+export function classifyPublishError(
+	err: unknown,
+	options: {
+		safeToRetryRateLimit?: boolean;
+		definitiveHttpRejection?: boolean;
+	} = {},
+): PublishResult {
 	const message = err instanceof Error ? err.message : "Unknown error";
 	const detail =
-		err instanceof PublishError && err.detail ? sanitizeErrorDetail(err.detail) : undefined;
+		err instanceof PublishError && err.detail
+			? sanitizeErrorDetail(err.detail)
+			: undefined;
 	const detailField = detail ? { detail } : {};
+	const structuredHttpRejection =
+		err instanceof PublishError &&
+		typeof err.statusCode === "number" &&
+		err.statusCode >= 400 &&
+		err.statusCode < 500 &&
+		err.statusCode !== 408;
+	// Outcome classification and rate-limit retry permission are deliberately
+	// separate. A caller opting into a safe 429 replay must not cause every other
+	// 4xx from a multi-step publish to be labelled a definitive rejection.
+	const outcome =
+		structuredHttpRejection && options.definitiveHttpRejection === true
+			? ({ disposition: "definitive_rejection" } as const)
+			: undefined;
 
-	const prefixes = ["TOKEN_EXPIRED", "RATE_LIMITED", "PLATFORM_ERROR", "CONTENT_ERROR"] as const;
+	const prefixes = [
+		"TOKEN_EXPIRED",
+		"RATE_LIMITED",
+		"PLATFORM_ERROR",
+		"CONTENT_ERROR",
+	] as const;
 	for (const prefix of prefixes) {
 		if (message.startsWith(`${prefix}:`)) {
+			const retry =
+				prefix === "RATE_LIMITED" &&
+				options.safeToRetryRateLimit === true &&
+				structuredHttpRejection
+					? {
+							disposition: "safe_to_retry" as const,
+							...(typeof err.retryAfterMs === "number" &&
+							Number.isFinite(err.retryAfterMs) &&
+							err.retryAfterMs >= 0
+								? { after_ms: Math.floor(err.retryAfterMs) }
+								: {}),
+						}
+					: undefined;
 			return {
 				success: false,
+				...(outcome ? { outcome } : {}),
+				...(retry ? { retry } : {}),
 				error: {
 					code: prefix,
 					message: message.slice(prefix.length + 2), // strip "PREFIX: "
@@ -149,6 +224,7 @@ export function classifyPublishError(err: unknown): PublishResult {
 	}
 	return {
 		success: false,
+		...(outcome ? { outcome } : {}),
 		error: {
 			code: (err instanceof PublishError && err.code) || "PUBLISH_FAILED",
 			message,

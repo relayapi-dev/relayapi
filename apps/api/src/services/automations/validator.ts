@@ -1,6 +1,7 @@
 // apps/api/src/services/automations/validator.ts
 import { applyDerivedPorts } from "./ports";
 import type { Graph, } from "../../schemas/automation-graph";
+import { compileSafeAutomationRegex } from "./safe-regex";
 
 export type ValidationIssue = {
   code: string;
@@ -61,7 +62,10 @@ export function validateGraph(graph: Graph): ValidationResult {
     }
   }
 
-  // 2.5. v1.1-stubbed actions cannot be used yet (spec §B10 fix).
+  // 2.5. Reject node configuration that the runtime cannot safely execute.
+  // Input patterns use the same deliberately small subset as keyword patterns;
+  // validating here prevents a persisted pattern from becoming a permanent
+  // non-match at runtime.
   //
   // `change_main_menu` depends on Meta's `messenger_profile.persistent_menu`
   // sync, which is deferred to v1.1. The runtime handler throws if it ever
@@ -73,6 +77,24 @@ export function validateGraph(graph: Graph): ValidationResult {
       'Action "change_main_menu" requires v1.1 platform sync — not yet available',
   };
   for (const n of canonical.nodes) {
+    if (n.kind === "input") {
+      const config = n.config as Record<string, unknown> | null | undefined;
+      const validation = config?.validation;
+      if (validation && typeof validation === "object" && !Array.isArray(validation)) {
+        const pattern = (validation as Record<string, unknown>).pattern;
+        if (
+          pattern !== undefined &&
+          (typeof pattern !== "string" || !compileSafeAutomationRegex(pattern))
+        ) {
+          errors.push({
+            code: "invalid_input_pattern",
+            message: "input validation.pattern must be a supported safe regular expression",
+            node_key: n.key,
+          });
+        }
+      }
+    }
+
     if (n.kind !== "action_group") continue;
     const actions = Array.isArray((n.config as Record<string, unknown> | null | undefined)?.actions)
       ? ((n.config as { actions: unknown[] }).actions as unknown[])

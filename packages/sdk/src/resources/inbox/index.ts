@@ -32,7 +32,6 @@ export {
   type MessageDeleteParams,
   type NoteCreateParams,
   type NoteUpdateParams,
-  type NoteDeleteParams,
 } from './conversations';
 export { Inbox } from './inbox';
 export { Reviews, type ReviewListResponse, type ReviewListParams } from './reviews/index';

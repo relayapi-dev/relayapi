@@ -1,8 +1,24 @@
 import { GRAPH_BASE } from "../config/api-versions";
-import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	awaitResponseWithBodyCompletion,
+	ensureResponseContentLength,
+	fetchPublicUrl,
+	getFixedLengthResponseBody,
+} from "../lib/fetch-public-url";
+import {
+	classifyPublishError,
+	type EngagementAccount,
+	type EngagementActionResult,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 const GRAPH_API = GRAPH_BASE.facebook;
+// RelayAPI defensive streaming ceiling. Meta's Page Stories developer reference
+// specifies video duration/format but does not publish a general 4 GB API limit.
+const FACEBOOK_STREAM_UPLOAD_MAX_BYTES = 4_000_000_000;
 
 interface FacebookAuth {
 	access_token: string;
@@ -45,17 +61,36 @@ async function graphPost(
 
 		// Classify Facebook-specific errors for retry/refresh decisions
 		// Docs: https://developers.facebook.com/docs/graph-api/guides/error-handling
-		if (detail.includes("Error validating access token") || detail.includes("REVOKED_ACCESS_TOKEN") ||
-			subcode === 490 || subcode === 463 || subcode === 464 || subcode === 467 || fbCode === 190) {
-			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
+		if (
+			detail.includes("Error validating access token") ||
+			detail.includes("REVOKED_ACCESS_TOKEN") ||
+			subcode === 490 ||
+			subcode === 463 ||
+			subcode === 464 ||
+			subcode === 467 ||
+			fbCode === 190
+		) {
+			throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
 		if (subcode === 1390008 || fbCode === 32 || fbCode === 4 || fbCode === 17) {
-			throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
+			throw new PublishError(`RATE_LIMITED: ${detail}`, {
+				statusCode: res.status,
+				detail: raw,
+			});
 		}
 		if (fbCode === 368) {
-			throw new PublishError(`PLATFORM_ERROR: Temporarily blocked — ${detail}`, { statusCode: res.status, detail: raw });
+			throw new PublishError(
+				`PLATFORM_ERROR: Temporarily blocked — ${detail}`,
+				{ statusCode: res.status, detail: raw },
+			);
 		}
-		throw new PublishError(`Facebook API error: ${detail}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`Facebook API error: ${detail}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	return res.json() as Promise<Record<string, unknown>>;
@@ -70,8 +105,15 @@ async function createTextPost(
 ): Promise<{ id: string; permalink_url?: string }> {
 	// Facebook Graph API: Create page feed post (read-after-write for permalink_url)
 	// Docs: https://developers.facebook.com/docs/pages-api/posts
-	const result = await graphPost(`/${auth.page_id}/feed?fields=id,permalink_url`, auth, { message });
-	return { id: result.id as string, permalink_url: result.permalink_url as string | undefined };
+	const result = await graphPost(
+		`/${auth.page_id}/feed?fields=id,permalink_url`,
+		auth,
+		{ message },
+	);
+	return {
+		id: result.id as string,
+		permalink_url: result.permalink_url as string | undefined,
+	};
 }
 
 /**
@@ -144,11 +186,14 @@ async function createMultiImagePost(
 		);
 	}
 
-	const res = await fetch(`${GRAPH_API}/${auth.page_id}/feed?fields=id,permalink_url`, {
-		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded" },
-		body: params.toString(),
-	});
+	const res = await fetch(
+		`${GRAPH_API}/${auth.page_id}/feed?fields=id,permalink_url`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: params.toString(),
+		},
+	);
 
 	if (!res.ok) {
 		const err = (await res.json().catch(() => ({}))) as {
@@ -156,11 +201,17 @@ async function createMultiImagePost(
 		};
 		const detail = err.error?.message ?? res.statusText;
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-		throw new PublishError(`Facebook API error: ${detail}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`Facebook API error: ${detail}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	const result = (await res.json()) as Record<string, unknown>;
-	return { id: result.id as string, permalink_url: result.permalink_url as string | undefined };
+	return {
+		id: result.id as string,
+		permalink_url: result.permalink_url as string | undefined,
+	};
 }
 
 /**
@@ -178,8 +229,15 @@ async function createVideoPost(
 
 	// Facebook Graph API: Upload and publish video to page via file_url
 	// https://developers.facebook.com/docs/graph-api/reference/page/videos/
-	const result = await graphPost(`/${auth.page_id}/videos?fields=id,permalink_url`, auth, body);
-	return { id: result.id as string, permalink_url: result.permalink_url as string | undefined };
+	const result = await graphPost(
+		`/${auth.page_id}/videos?fields=id,permalink_url`,
+		auth,
+		body,
+	);
+	return {
+		id: result.id as string,
+		permalink_url: result.permalink_url as string | undefined,
+	};
 }
 
 /**
@@ -225,34 +283,59 @@ async function createVideoStory(
 	if (!videoRes.ok) {
 		throw new PublishError(
 			`Failed to fetch story video from ${videoUrl}: ${videoRes.statusText}`,
-			{ statusCode: videoRes.status, detail: `HTTP ${videoRes.status} ${videoRes.statusText}` },
+			{
+				statusCode: videoRes.status,
+				detail: `HTTP ${videoRes.status} ${videoRes.statusText}`,
+			},
 		);
 	}
-	const videoBlob = await videoRes.arrayBuffer();
+	const preparedVideoRes = await ensureResponseContentLength(
+		videoRes,
+		FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+		() =>
+			fetchPublicUrl(videoUrl, {
+				timeout: 30_000,
+				maxBytes: FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+			}),
+	);
+	const source = getFixedLengthResponseBody(
+		preparedVideoRes,
+		FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+	);
 
-	const uploadRes = await fetch(uploadUrl, {
-		method: "POST",
-		headers: {
-			Authorization: `OAuth ${auth.access_token}`,
-			"Content-Type": "application/octet-stream",
-			file_size: videoBlob.byteLength.toString(),
-			offset: "0",
-		},
-		body: videoBlob,
-	});
+	const uploadRes = await awaitResponseWithBodyCompletion(
+		fetch(uploadUrl, {
+			method: "POST",
+			headers: {
+				Authorization: `OAuth ${auth.access_token}`,
+				"Content-Type": "application/octet-stream",
+				file_size: source.contentLength.toString(),
+				offset: "0",
+			},
+			body: source.body,
+		}),
+		source.completion,
+	);
 	if (!uploadRes.ok) {
-		throw new PublishError(`Facebook video story upload failed: ${uploadRes.statusText}`, {
-			statusCode: uploadRes.status,
-			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
-		});
+		throw new PublishError(
+			`Facebook video story upload failed: ${uploadRes.statusText}`,
+			{
+				statusCode: uploadRes.status,
+				detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+			},
+		);
 	}
-
 	// Step 3: Finish upload
 	const finishResult = await graphPost(`/${auth.page_id}/video_stories`, auth, {
 		upload_phase: "finish",
 		video_id: videoId,
 	});
-	return { id: (finishResult.post_id as string) ?? (finishResult.id as string) ?? videoId };
+	return {
+		id:
+			(finishResult.post_id as string) ??
+			(finishResult.id as string) ??
+			videoId,
+	};
 }
 
 /**
@@ -280,31 +363,51 @@ async function createReel(
 	if (!videoRes.ok) {
 		throw new PublishError(
 			`Failed to fetch reel video from ${videoUrl}: ${videoRes.statusText}`,
-			{ statusCode: videoRes.status, detail: `HTTP ${videoRes.status} ${videoRes.statusText}` },
+			{
+				statusCode: videoRes.status,
+				detail: `HTTP ${videoRes.status} ${videoRes.statusText}`,
+			},
 		);
 	}
-	const videoBlob = await videoRes.arrayBuffer();
+	const preparedVideoRes = await ensureResponseContentLength(
+		videoRes,
+		FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+		() =>
+			fetchPublicUrl(videoUrl, {
+				timeout: 30_000,
+				maxBytes: FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+			}),
+	);
+	const source = getFixedLengthResponseBody(
+		preparedVideoRes,
+		FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+	);
 
 	// Facebook Graph API: Upload reel video binary (phase 2)
 	// Method must be POST, Content-Type must be application/octet-stream, offset header required
 	// Docs: https://developers.facebook.com/docs/video-api/guides/reels-publishing
-	const uploadRes = await fetch(uploadUrl, {
-		method: "POST",
-		headers: {
-			Authorization: `OAuth ${auth.access_token}`,
-			"Content-Type": "application/octet-stream",
-			offset: "0",
-			file_size: videoBlob.byteLength.toString(),
-		},
-		body: videoBlob,
-	});
+	const uploadRes = await awaitResponseWithBodyCompletion(
+		fetch(uploadUrl, {
+			method: "POST",
+			headers: {
+				Authorization: `OAuth ${auth.access_token}`,
+				"Content-Type": "application/octet-stream",
+				offset: "0",
+				file_size: source.contentLength.toString(),
+			},
+			body: source.body,
+		}),
+		source.completion,
+	);
 	if (!uploadRes.ok) {
-		throw new PublishError(`Facebook reel upload failed: ${uploadRes.statusText}`, {
-			statusCode: uploadRes.status,
-			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
-		});
+		throw new PublishError(
+			`Facebook reel upload failed: ${uploadRes.statusText}`,
+			{
+				statusCode: uploadRes.status,
+				detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+			},
+		);
 	}
-
 	// Facebook Graph API: Finish reel upload (phase 3)
 	// video_state: "PUBLISHED" is required to actually publish the reel
 	// Docs: https://developers.facebook.com/docs/video-api/guides/reels-publishing
@@ -320,7 +423,11 @@ async function createReel(
 		finishBody.title = title;
 	}
 
-	const finishResult = await graphPost(`/${auth.page_id}/video_reels`, auth, finishBody);
+	const finishResult = await graphPost(
+		`/${auth.page_id}/video_reels`,
+		auth,
+		finishBody,
+	);
 	return { id: (finishResult.post_id as string) ?? videoId };
 }
 
@@ -340,7 +447,11 @@ async function postFirstComment(
 export const facebookPublisher: Publisher = {
 	platform: "facebook",
 
-	async comment(account: EngagementAccount, platformPostId: string, text: string): Promise<EngagementActionResult> {
+	async comment(
+		account: EngagementAccount,
+		platformPostId: string,
+		text: string,
+	): Promise<EngagementActionResult> {
 		try {
 			const auth: FacebookAuth = {
 				access_token: account.access_token,
@@ -348,7 +459,9 @@ export const facebookPublisher: Publisher = {
 			};
 			// Facebook Graph API: Post a comment on a published object
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/object/comments/
-			const result = await graphPost(`/${platformPostId}/comments`, auth, { message: text });
+			const result = await graphPost(`/${platformPostId}/comments`, auth, {
+				message: text,
+			});
 			return { success: true, platform_post_id: result.id as string };
 		} catch (err) {
 			const result = classifyPublishError(err);
@@ -379,13 +492,16 @@ export const facebookPublisher: Publisher = {
 			// Determine content type
 			if (contentType === "story") {
 				// Story — requires exactly one media item
-				if (media.length === 0) {
+				if (media.length !== 1) {
+					// Official docs: https://developers.facebook.com/docs/page-stories-api
+					// Sections "Photo stories" and "Video stories" use
+					// `/{page-id}/photo_stories` and `/{page-id}/video_stories` and
+					// create one story from one photo_id or one video upload session.
 					return {
 						success: false,
 						error: {
-							code: "MEDIA_REQUIRED",
-							message:
-								"Facebook stories require at least one media attachment.",
+							code: media.length === 0 ? "MEDIA_REQUIRED" : "TOO_MANY_MEDIA",
+							message: "Facebook stories require exactly one media attachment.",
 						},
 					};
 				}
@@ -409,7 +525,10 @@ export const facebookPublisher: Publisher = {
 
 			if (contentType === "reel") {
 				// Reel — requires exactly one video
-				if (media.length === 0 || media[0]?.type !== "video") {
+				if (media.length !== 1 || media[0]?.type !== "video") {
+					// Official docs: https://developers.facebook.com/documentation/video-api/guides/reels-publishing
+					// Sections "Create a Reel" through "Publish a Reel" use one
+					// video_id/upload session for each published Reel.
 					return {
 						success: false,
 						error: {
@@ -453,6 +572,17 @@ export const facebookPublisher: Publisher = {
 
 			if (videos.length > 0) {
 				// Video post (single video only)
+				if (videos.length > 1) {
+					// Official docs: https://developers.facebook.com/docs/graph-api/reference/page/videos/
+					// The Page `videos` POST creates one Video from one `file_url`.
+					return {
+						success: false,
+						error: {
+							code: "TOO_MANY_VIDEOS",
+							message: "Facebook feed video posts support one video.",
+						},
+					};
+				}
 				const result = await createVideoPost(
 					auth,
 					videos[0]?.url ?? "",
@@ -505,9 +635,10 @@ export const facebookPublisher: Publisher = {
 			// Use permalink_url from API response when available, fall back to constructed URL
 			// Post IDs are typically PAGEID_POSTID format
 			const parts = postId.split("_");
-			const fallbackUrl = parts.length === 2
-				? `https://www.facebook.com/${parts[0]}/posts/${parts[1]}`
-				: `https://www.facebook.com/${auth.page_id}/posts/${postId}`;
+			const fallbackUrl =
+				parts.length === 2
+					? `https://www.facebook.com/${parts[0]}/posts/${parts[1]}`
+					: `https://www.facebook.com/${auth.page_id}/posts/${postId}`;
 			const platformUrl = permalinkUrl ?? fallbackUrl;
 
 			return {
@@ -516,7 +647,7 @@ export const facebookPublisher: Publisher = {
 				platform_url: platformUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

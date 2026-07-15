@@ -30,14 +30,21 @@ export class RealtimeDO extends DurableObject {
 		if (request.headers.get("Upgrade") === "websocket") {
 			const pair = new WebSocketPair();
 			this.ctx.acceptWebSocket(pair[1]);
-			return new Response(null, { status: 101, webSocket: pair[0] });
+			return new Response(null, {
+				status: 101,
+				webSocket: pair[0],
+				headers: { "Sec-WebSocket-Protocol": "relayapi.v1" },
+			});
 		}
 
 		return new Response("Not found", { status: 404 });
 	}
 
 	// Hibernation API handler — called when a message arrives on a hibernated WS
-	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+	async webSocketMessage(
+		ws: WebSocket,
+		message: string | ArrayBuffer,
+	): Promise<void> {
 		try {
 			const data = JSON.parse(message as string);
 			if (data.type === "ping") {

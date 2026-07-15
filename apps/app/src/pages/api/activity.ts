@@ -17,7 +17,12 @@ type ActivityItem =
   | {
       id: string;
       kind: "connection";
-      event: "connected" | "disconnected" | "token_refreshed" | "error";
+			event:
+				| "connected"
+				| "disconnecting"
+				| "disconnected"
+				| "token_refreshed"
+				| "error";
       platforms: string[];
       text: string | null;
       timestamp: string;
@@ -42,14 +47,22 @@ export const GET: APIRoute = async (ctx) => {
       for (const p of postsRes.value.data) {
         if (!p.published_at) continue;
         const platforms = p.targets
-          ? [...new Set(Object.values(p.targets).map((t) => t.platform))]
+					? [
+							...new Set(
+								Object.values(p.targets).flatMap((target) =>
+									target.platform ? [target.platform] : [],
+								),
+							),
+						]
           : [];
         items.push({
           id: `post_${p.id}`,
           kind: "post",
           event: "published",
           platforms,
-          text: p.content ? p.content.replace(/\s+/g, " ").trim().slice(0, 140) : null,
+					text: p.content
+						? p.content.replace(/\s+/g, " ").trim().slice(0, 140)
+						: null,
           timestamp: p.published_at,
         });
       }

@@ -3,23 +3,33 @@
 // ---------------------------------------------------------------------------
 
 import {
-	createDb,
-	ads,
 	adAccounts,
 	adCampaigns,
+	adCreationOperations,
+	ads,
+	createDb,
+	eq,
+	externalPosts,
+	organization,
 	posts,
 	postTargets,
-	externalPosts,
 	socialAccounts,
-	eq,
 } from "@relayapi/db";
 import { and, inArray, sql } from "drizzle-orm";
+import {
+	canAccessWorkspaceScope,
+	workspaceScopeSqlCondition,
+} from "../lib/workspace-scope";
 import type { Env } from "../types";
+import { resolveAdsAccessToken } from "./ad-access-token";
+import {
+	beginAdCreationOperation,
+	executeClaimedAdCreationOperation,
+} from "./ad-creation-operations";
 import {
 	getAdPlatformAdapter,
 	socialPlatformToAdPlatform,
 } from "./ad-platforms";
-import { resolveAdsAccessToken } from "./ad-access-token";
 import type {
 	AdPlatform,
 	AdTargeting,
@@ -45,11 +55,20 @@ async function getAccountWithToken(
 			socialAccount: socialAccounts,
 		})
 		.from(adAccounts)
-		.innerJoin(socialAccounts, eq(adAccounts.socialAccountId, socialAccounts.id))
+		.innerJoin(
+			socialAccounts,
+			and(
+				eq(adAccounts.socialAccountId, socialAccounts.id),
+				eq(socialAccounts.organizationId, orgId),
+			),
+		)
+		.innerJoin(organization, eq(organization.id, socialAccounts.organizationId))
 		.where(
 			and(
 				eq(adAccounts.id, adAccountId),
 				eq(adAccounts.organizationId, orgId),
+				eq(socialAccounts.lifecycleStatus, "active"),
+				eq(organization.lifecycleStatus, "active"),
 			),
 		)
 		.limit(1);
@@ -124,9 +143,9 @@ async function upsertAdAccounts(
 
 /**
  * Remove (or neutralise) ad accounts the user can access but that don't promote
- * any connected Page/IG. Rows with no dependent campaigns/ads are deleted; rows
- * with history have their boostable set emptied so the list endpoint hides them
- * without cascade-deleting campaigns/ads.
+ * any connected Page/IG. Rows with no dependent campaigns, ads, or durable paid
+ * operations are deleted; rows with history have their boostable set emptied so
+ * the list endpoint hides them without deleting that history.
  */
 async function pruneUnmatchedAdAccounts(
 	db: Database,
@@ -147,7 +166,7 @@ async function pruneUnmatchedAdAccounts(
 	if (stale.length === 0) return;
 
 	const staleIds = stale.map((r) => r.id);
-	const [campaignRefs, adRefs] = await Promise.all([
+	const [campaignRefs, adRefs, operationRefs] = await Promise.all([
 		db
 			.select({ adAccountId: adCampaigns.adAccountId })
 			.from(adCampaigns)
@@ -156,10 +175,15 @@ async function pruneUnmatchedAdAccounts(
 			.select({ adAccountId: ads.adAccountId })
 			.from(ads)
 			.where(inArray(ads.adAccountId, staleIds)),
+		db
+			.select({ adAccountId: adCreationOperations.adAccountId })
+			.from(adCreationOperations)
+			.where(inArray(adCreationOperations.adAccountId, staleIds)),
 	]);
 	const referenced = new Set<string>([
 		...campaignRefs.map((r) => r.adAccountId),
 		...adRefs.map((r) => r.adAccountId),
+		...operationRefs.map((r) => r.adAccountId),
 	]);
 
 	const deletable = staleIds.filter((id) => !referenced.has(id));
@@ -184,6 +208,7 @@ export async function discoverAdAccounts(
 	orgId: string,
 	socialAccountId: string,
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
+	workspaceScope: "all" | string[] = "all",
 ): Promise<
 	{
 		id: string;
@@ -200,11 +225,16 @@ export async function discoverAdAccounts(
 			and(
 				eq(socialAccounts.id, socialAccountId),
 				eq(socialAccounts.organizationId, orgId),
+				eq(socialAccounts.lifecycleStatus, "active"),
 			),
 		)
 		.limit(1);
 
-	if (!socialAcc) throw new AdPlatformError("NOT_FOUND", "Social account not found");
+	if (!socialAcc)
+		throw new AdPlatformError("NOT_FOUND", "Social account not found");
+	if (!canAccessWorkspaceScope(workspaceScope, socialAcc.workspaceId)) {
+		throw new AdPlatformError("NOT_FOUND", "Social account not found");
+	}
 
 	const adPlatform = socialPlatformToAdPlatform(socialAcc.platform);
 	if (!adPlatform) {
@@ -252,6 +282,16 @@ export async function discoverAdAccounts(
 
 	// Match each ad account's promotable Pages/IG accounts against ALL of the
 	// org's connected Meta accounts (not just the one that triggered discovery).
+	const connectedConditions = [
+		eq(socialAccounts.organizationId, orgId),
+		inArray(socialAccounts.platform, ["facebook", "instagram"]),
+		eq(socialAccounts.lifecycleStatus, "active"),
+	];
+	if (workspaceScope !== "all") {
+		connectedConditions.push(
+			workspaceScopeSqlCondition(workspaceScope, socialAccounts.workspaceId),
+		);
+	}
 	const connected = await db
 		.select({
 			id: socialAccounts.id,
@@ -262,12 +302,7 @@ export async function discoverAdAccounts(
 			workspaceId: socialAccounts.workspaceId,
 		})
 		.from(socialAccounts)
-		.where(
-			and(
-				eq(socialAccounts.organizationId, orgId),
-				inArray(socialAccounts.platform, ["facebook", "instagram"]),
-			),
-		);
+		.where(and(...connectedConditions));
 
 	type Connected = (typeof connected)[number];
 	const pageBySocialPlatformId = new Map<string, Connected>();
@@ -306,9 +341,7 @@ export async function discoverAdAccounts(
 				const fb = pageBySocialPlatformId.get(page.pageId);
 				if (fb) matches.set(fb.id, fb);
 				if (page.instagramBusinessAccountId) {
-					const ig = igBySocialPlatformId.get(
-						page.instagramBusinessAccountId,
-					);
+					const ig = igBySocialPlatformId.get(page.instagramBusinessAccountId);
 					if (ig) matches.set(ig.id, ig);
 				}
 			}
@@ -377,6 +410,8 @@ export async function createCampaign(
 		startDate?: string;
 		endDate?: string;
 		specialAdCategories?: string[];
+		/** Stable request/Queue identity. Required before creating paid objects. */
+		operationKey?: string;
 	},
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ) {
@@ -385,43 +420,51 @@ export async function createCampaign(
 
 	const adapter = getAdPlatformAdapter(ctx.adPlatform);
 	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
-
-	const result = await adapter.createCampaign(
-		ctx.accessToken,
-		ctx.adAccount.platformAdAccountId,
-		{
-			name: params.name,
-			objective: params.objective,
-			dailyBudgetCents: params.dailyBudgetCents,
-			lifetimeBudgetCents: params.lifetimeBudgetCents,
-			currency: params.currency,
-			startDate: params.startDate,
-			endDate: params.endDate,
-			specialAdCategories: params.specialAdCategories,
-		},
-	);
-
-	const [campaign] = await db
-		.insert(adCampaigns)
-		.values({
-			organizationId: orgId,
-			workspaceId: ctx.adAccount.workspaceId,
-			adAccountId: params.adAccountId,
-			platform: ctx.adPlatform,
-			platformCampaignId: result.platformCampaignId,
-			name: params.name,
-			objective: params.objective as typeof adCampaigns.$inferInsert.objective,
-			status: "active",
-			dailyBudgetCents: params.dailyBudgetCents,
-			lifetimeBudgetCents: params.lifetimeBudgetCents,
-			currency: params.currency ?? "USD",
-			startDate: params.startDate ? new Date(params.startDate) : null,
-			endDate: params.endDate ? new Date(params.endDate) : null,
-			metadata: { platformAdSetId: result.platformAdSetId },
-		})
-		.returning();
-
-	return campaign;
+	const { operationKey, ...request } = params;
+	const operation = await beginAdCreationOperation({
+		db,
+		organizationId: orgId,
+		workspaceId: ctx.adAccount.workspaceId,
+		adAccountId: params.adAccountId,
+		kind: "create_campaign",
+		platform: ctx.adPlatform,
+		operationKey,
+		request,
+	});
+	if ("completed" in operation) {
+		if (!operation.completed.localCampaignId) {
+			throw new AdPlatformError(
+				"OPERATION_RESULT_MISSING",
+				"The campaign operation completed without a local result",
+			);
+		}
+		const [existing] = await db
+			.select()
+			.from(adCampaigns)
+			.where(
+				and(
+					eq(adCampaigns.id, operation.completed.localCampaignId),
+					eq(adCampaigns.organizationId, orgId),
+				),
+			)
+			.limit(1);
+		if (existing) return existing;
+		throw new AdPlatformError(
+			"OPERATION_RESULT_MISSING",
+			"The campaign operation result is no longer available",
+		);
+	}
+	const result = await executeClaimedAdCreationOperation({
+		db,
+		claim: operation,
+		adapter,
+		accessToken: ctx.accessToken,
+		platformAdAccountId: ctx.adAccount.platformAdAccountId,
+	});
+	if (result.kind !== "create_campaign") {
+		throw new Error("Campaign operation returned an ad result");
+	}
+	return result.campaign;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +491,8 @@ export async function createAd(
 		durationDays?: number;
 		startDate?: string;
 		endDate?: string;
+		/** Stable request/Queue identity. Required before creating paid objects. */
+		operationKey?: string;
 	},
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ) {
@@ -456,140 +501,51 @@ export async function createAd(
 
 	const adapter = getAdPlatformAdapter(ctx.adPlatform);
 	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
-
-	// Auto-create campaign if needed
-	let campaignId = params.campaignId;
-	let platformCampaignId: string | undefined;
-	let platformAdSetId: string | undefined;
-
-	if (!campaignId) {
-		if (!params.objective) {
+	const { operationKey, ...request } = params;
+	const operation = await beginAdCreationOperation({
+		db,
+		organizationId: orgId,
+		workspaceId: ctx.adAccount.workspaceId,
+		adAccountId: params.adAccountId,
+		kind: "create_ad",
+		platform: ctx.adPlatform,
+		operationKey,
+		request,
+	});
+	if ("completed" in operation) {
+		if (!operation.completed.localAdId) {
 			throw new AdPlatformError(
-				"MISSING_OBJECTIVE",
-				"objective is required when campaign_id is not provided",
+				"OPERATION_RESULT_MISSING",
+				"The ad operation completed without a local result",
 			);
 		}
-
-		const campaignResult = await adapter.createCampaign(
-			ctx.accessToken,
-			ctx.adAccount.platformAdAccountId,
-			{
-				name: params.name,
-				objective: params.objective,
-				dailyBudgetCents: params.dailyBudgetCents,
-				lifetimeBudgetCents: params.lifetimeBudgetCents,
-				startDate: params.startDate,
-				endDate: params.endDate,
-			},
-		);
-
-		const [newCampaign] = await db
-			.insert(adCampaigns)
-			.values({
-				organizationId: orgId,
-				workspaceId: ctx.adAccount.workspaceId,
-				adAccountId: params.adAccountId,
-				platform: ctx.adPlatform,
-				platformCampaignId: campaignResult.platformCampaignId,
-				name: params.name,
-				objective:
-					(params.objective as typeof adCampaigns.$inferInsert.objective) ??
-					"engagement",
-				status: "active",
-				dailyBudgetCents: params.dailyBudgetCents,
-				lifetimeBudgetCents: params.lifetimeBudgetCents,
-				metadata: { platformAdSetId: campaignResult.platformAdSetId },
-			})
-			.returning();
-
-		if (!newCampaign) {
-			throw new AdPlatformError("DB_ERROR", "Failed to create campaign");
-		}
-		campaignId = newCampaign.id;
-		platformCampaignId = campaignResult.platformCampaignId;
-		platformAdSetId = campaignResult.platformAdSetId;
-	} else {
-		// Fetch existing campaign
 		const [existing] = await db
 			.select()
-			.from(adCampaigns)
+			.from(ads)
 			.where(
 				and(
-					eq(adCampaigns.id, campaignId),
-					eq(adCampaigns.organizationId, orgId),
+					eq(ads.id, operation.completed.localAdId),
+					eq(ads.organizationId, orgId),
 				),
 			)
 			.limit(1);
-
-		if (!existing) throw new AdPlatformError("NOT_FOUND", "Campaign not found");
-
-		platformCampaignId = existing.platformCampaignId ?? undefined;
-		platformAdSetId = (
-			existing.metadata as { platformAdSetId?: string } | null
-		)?.platformAdSetId;
-	}
-
-	if (!platformCampaignId) {
+		if (existing) return existing;
 		throw new AdPlatformError(
-			"MISSING_CAMPAIGN",
-			"Could not resolve platform campaign id",
+			"OPERATION_RESULT_MISSING",
+			"The ad operation result is no longer available",
 		);
 	}
-	if (!campaignId) {
-		throw new AdPlatformError("MISSING_CAMPAIGN", "Could not resolve campaign id");
+	const result = await executeClaimedAdCreationOperation({
+		db,
+		claim: operation,
+		adapter,
+		accessToken: ctx.accessToken,
+		platformAdAccountId: ctx.adAccount.platformAdAccountId,
+	});
+	if (result.kind !== "create_ad") {
+		throw new Error("Ad operation returned the wrong result kind");
 	}
-
-	// Create ad on platform
-	const adResult = await adapter.createAd(
-		ctx.accessToken,
-		ctx.adAccount.platformAdAccountId,
-		{
-			campaignId: platformCampaignId,
-			adSetId: platformAdSetId,
-			name: params.name,
-			headline: params.headline,
-			body: params.body,
-			callToAction: params.callToAction,
-			linkUrl: params.linkUrl,
-			imageUrl: params.imageUrl,
-			videoUrl: params.videoUrl,
-			targeting: params.targeting,
-			dailyBudgetCents: params.dailyBudgetCents,
-			lifetimeBudgetCents: params.lifetimeBudgetCents,
-			startDate: params.startDate,
-			endDate: params.endDate,
-			durationDays: params.durationDays,
-		},
-	);
-
-	// Insert into DB
-	const [ad] = await db
-		.insert(ads)
-		.values({
-			organizationId: orgId,
-			workspaceId: ctx.adAccount.workspaceId,
-			campaignId,
-			adAccountId: params.adAccountId,
-			platform: ctx.adPlatform,
-			platformAdId: adResult.platformAdId,
-			name: params.name,
-			status: adResult.status as typeof ads.$inferInsert.status,
-			headline: params.headline,
-			body: params.body,
-			callToAction: params.callToAction,
-			linkUrl: params.linkUrl,
-			imageUrl: params.imageUrl,
-			videoUrl: params.videoUrl,
-			targeting: params.targeting as typeof ads.$inferInsert.targeting,
-			dailyBudgetCents: params.dailyBudgetCents,
-			lifetimeBudgetCents: params.lifetimeBudgetCents,
-			startDate: params.startDate ? new Date(params.startDate) : null,
-			endDate: params.endDate ? new Date(params.endDate) : null,
-			durationDays: params.durationDays,
-		})
-		.returning();
-
-	return ad;
+	return result.ad;
 }
 
 export async function boostPost(
@@ -611,6 +567,8 @@ export async function boostPost(
 		bidAmount?: number;
 		tracking?: { pixelId?: string; urlTags?: string };
 		specialAdCategories?: string[];
+		/** Stable request/Queue identity. Required before creating paid objects. */
+		operationKey?: string;
 	},
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
 ) {
@@ -618,9 +576,8 @@ export async function boostPost(
 	// (post_target_id) or a natively-published post synced into external_posts
 	// (external_post_id). Exactly one is provided (enforced by BoostPostBody).
 	let platformPostId: string;
-	let boostPostTargetId: string | null = null;
-	let boostExternalPostId: string | null = null;
 	let postSocialAccountId: string | null = null;
+	let sourceWorkspaceId: string | null = null;
 
 	if (params.externalPostId) {
 		const [ext] = await db
@@ -642,8 +599,8 @@ export async function boostPost(
 			);
 		}
 		platformPostId = ext.platformPostId;
-		boostExternalPostId = ext.id;
 		postSocialAccountId = ext.socialAccountId;
+		sourceWorkspaceId = ext.workspaceId;
 	} else {
 		// Exactly one of externalPostId/postTargetId is provided (enforced by
 		// BoostPostBody); in this branch postTargetId must be present.
@@ -651,8 +608,8 @@ export async function boostPost(
 			throw new AdPlatformError("NOT_FOUND", "Post target not found");
 		}
 		// Verify the post target exists, is published, and belongs to this org
-		const [target] = await db
-			.select()
+		const [targetRow] = await db
+			.select({ target: postTargets, workspaceId: posts.workspaceId })
 			.from(postTargets)
 			.innerJoin(posts, eq(postTargets.postId, posts.id))
 			.where(
@@ -661,8 +618,8 @@ export async function boostPost(
 					eq(posts.organizationId, orgId),
 				),
 			)
-			.limit(1)
-			.then((rows) => rows.map((r) => r.post_targets));
+			.limit(1);
+		const target = targetRow?.target;
 
 		if (!target)
 			throw new AdPlatformError("NOT_FOUND", "Post target not found");
@@ -679,12 +636,18 @@ export async function boostPost(
 			);
 		}
 		platformPostId = target.platformPostId;
-		boostPostTargetId = target.id;
 		postSocialAccountId = target.socialAccountId;
+		sourceWorkspaceId = targetRow.workspaceId;
 	}
 
 	const ctx = await getAccountWithToken(db, params.adAccountId, orgId, env);
 	if (!ctx) throw new AdPlatformError("NOT_FOUND", "Ad account not found");
+	if (sourceWorkspaceId !== ctx.adAccount.workspaceId) {
+		throw new AdPlatformError(
+			"INVALID_STATE",
+			"The promoted post must belong to the ad account workspace",
+		);
+	}
 
 	// Guard: the post's account must be one this ad account can actually promote.
 	// Skip when the boostable set is unknown (legacy/non-Meta) to avoid regressions.
@@ -706,83 +669,51 @@ export async function boostPost(
 	const adapter = getAdPlatformAdapter(ctx.adPlatform);
 	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
 
-	const adName = params.name ?? `Boost - ${platformPostId}`;
-
-	const result = await adapter.boostPost(
-		ctx.accessToken,
-		ctx.adAccount.platformAdAccountId,
-		{
-			platformPostId,
-			name: adName,
-			objective: params.objective ?? "engagement",
-			targeting: params.targeting,
-			dailyBudgetCents: params.dailyBudgetCents,
-			lifetimeBudgetCents: params.lifetimeBudgetCents,
-			currency: params.currency,
-			durationDays: params.durationDays,
-			startDate: params.startDate,
-			endDate: params.endDate,
-			bidAmount: params.bidAmount,
-			tracking: params.tracking
-				? {
-						pixelId: params.tracking.pixelId,
-						urlTags: params.tracking.urlTags,
-					}
-				: undefined,
-			specialAdCategories: params.specialAdCategories,
-		},
-	);
-
-	// Create campaign + ad in DB
-	const [campaign] = await db
-		.insert(adCampaigns)
-		.values({
-			organizationId: orgId,
-			workspaceId: ctx.adAccount.workspaceId,
-			adAccountId: params.adAccountId,
-			platform: ctx.adPlatform,
-			platformCampaignId: result.platformCampaignId,
-			name: adName,
-			objective: (params.objective ??
-				"engagement") as typeof adCampaigns.$inferInsert.objective,
-			status: "active",
-			dailyBudgetCents: params.dailyBudgetCents,
-			lifetimeBudgetCents: params.lifetimeBudgetCents,
-			metadata: { platformAdSetId: result.platformAdSetId },
-		})
-		.returning();
-
-	if (!campaign) {
-		throw new AdPlatformError("DB_ERROR", "Failed to create campaign");
+	const { operationKey, ...request } = params;
+	const operation = await beginAdCreationOperation({
+		db,
+		organizationId: orgId,
+		workspaceId: ctx.adAccount.workspaceId,
+		adAccountId: params.adAccountId,
+		kind: "boost_post",
+		platform: ctx.adPlatform,
+		operationKey,
+		request: { ...request, platformPostId },
+	});
+	if ("completed" in operation) {
+		if (!operation.completed.localAdId) {
+			throw new AdPlatformError(
+				"OPERATION_RESULT_MISSING",
+				"The boost operation completed without a local result",
+			);
+		}
+		const [existing] = await db
+			.select()
+			.from(ads)
+			.where(
+				and(
+					eq(ads.id, operation.completed.localAdId),
+					eq(ads.organizationId, orgId),
+				),
+			)
+			.limit(1);
+		if (existing) return existing;
+		throw new AdPlatformError(
+			"OPERATION_RESULT_MISSING",
+			"The boost operation result is no longer available",
+		);
 	}
-
-	const endDate = params.endDate
-		? new Date(params.endDate)
-		: new Date(Date.now() + params.durationDays * 86400000);
-
-	const [ad] = await db
-		.insert(ads)
-		.values({
-			organizationId: orgId,
-			workspaceId: ctx.adAccount.workspaceId,
-			campaignId: campaign.id,
-			adAccountId: params.adAccountId,
-			platform: ctx.adPlatform,
-			platformAdId: result.platformAdId,
-			name: adName,
-			status: "pending_review",
-			boostPostTargetId,
-			boostExternalPostId,
-			boostPlatformPostId: platformPostId,
-			targeting: params.targeting as typeof ads.$inferInsert.targeting,
-			dailyBudgetCents: params.dailyBudgetCents,
-			lifetimeBudgetCents: params.lifetimeBudgetCents,
-			endDate,
-			durationDays: params.durationDays,
-		})
-		.returning();
-
-	return ad;
+	const result = await executeClaimedAdCreationOperation({
+		db,
+		claim: operation,
+		adapter,
+		accessToken: ctx.accessToken,
+		platformAdAccountId: ctx.adAccount.platformAdAccountId,
+	});
+	if (result.kind !== "boost_post") {
+		throw new Error("Boost operation returned the wrong result kind");
+	}
+	return result.ad;
 }
 
 export async function updateAd(
@@ -834,8 +765,10 @@ export async function updateAd(
 	const updateData: Record<string, unknown> = { updatedAt: new Date() };
 	if (params.name) updateData.name = params.name;
 	if (params.status) updateData.status = params.status;
-	if (params.dailyBudgetCents) updateData.dailyBudgetCents = params.dailyBudgetCents;
-	if (params.lifetimeBudgetCents) updateData.lifetimeBudgetCents = params.lifetimeBudgetCents;
+	if (params.dailyBudgetCents)
+		updateData.dailyBudgetCents = params.dailyBudgetCents;
+	if (params.lifetimeBudgetCents)
+		updateData.lifetimeBudgetCents = params.lifetimeBudgetCents;
 	if (params.targeting) updateData.targeting = params.targeting;
 
 	const [updated] = await db

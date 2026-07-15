@@ -1,7 +1,23 @@
-import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	awaitResponseWithBodyCompletion,
+	fetchPublicUrl,
+} from "../lib/fetch-public-url";
+import { createStreamingMultipartBody } from "../lib/multipart-stream";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 const REDDIT_API = "https://oauth.reddit.com";
+// Reddit's current native-video guidance permits files below 1 GB. The legacy
+// media-lease endpoint does not publish a narrower universal limit, so keep this
+// as a defensive streaming ceiling and let the lease enforce format-specific
+// limits instead of silently degrading valid uploads above an arbitrary 50 MiB.
+// https://support.reddithelp.com/hc/en-us/articles/48109333836692-How-do-I-add-video-in-comments
+const REDDIT_MEDIA_MAX_BYTES = 1024 * 1024 * 1024;
 
 async function redditFetch(
 	url: string,
@@ -17,15 +33,22 @@ async function redditFetch(
 			...(options.headers ?? {}),
 		},
 	});
-	if (res.status === 401) throw new PublishError("TOKEN_EXPIRED: Reddit access token invalid or expired", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
-	if (res.status === 429) throw new PublishError("RATE_LIMITED: Reddit rate limit exceeded", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
-	// Read Reddit rate limit headers for proactive throttling
-	// Docs: https://github.com/reddit-archive/reddit/wiki/API (Rules section)
-	const remaining = res.headers.get("x-ratelimit-remaining");
-	if (remaining !== null && Number.parseFloat(remaining) <= 1) {
-		const resetSecs = res.headers.get("x-ratelimit-reset");
-		throw new Error(`RATE_LIMITED: Reddit rate limit nearly exhausted. Resets in ${resetSecs ?? "unknown"} seconds.`);
-	}
+	if (res.status === 401)
+		throw new PublishError(
+			"TOKEN_EXPIRED: Reddit access token invalid or expired",
+			{
+				statusCode: res.status,
+				detail: `HTTP ${res.status} ${res.statusText}`,
+			},
+		);
+	if (res.status === 429)
+		throw new PublishError("RATE_LIMITED: Reddit rate limit exceeded", {
+			statusCode: res.status,
+			detail: `HTTP ${res.status} ${res.statusText}`,
+		});
+	// A low remaining quota on a successful response does not mean this request
+	// was rejected. Returning the response avoids replaying an already-created
+	// post; an actual 429 above remains safely retryable.
 	return res;
 }
 
@@ -80,7 +103,10 @@ async function uploadMediaAsset(
 	if (!leaseRes.ok) {
 		const errText = await leaseRes.text().catch(() => leaseRes.statusText);
 		const raw = `HTTP ${leaseRes.status}\n${errText}`;
-		throw new PublishError(`Reddit media asset lease failed: ${errText}`, { statusCode: leaseRes.status, detail: raw });
+		throw new PublishError(`Reddit media asset lease failed: ${errText}`, {
+			statusCode: leaseRes.status,
+			detail: raw,
+		});
 	}
 
 	const leaseData = (await leaseRes.json()) as RedditMediaAssetResponse;
@@ -94,23 +120,38 @@ async function uploadMediaAsset(
 			detail: `HTTP ${fileRes.status} ${fileRes.statusText}`,
 		});
 	}
-	const fileBlob = await fileRes.blob();
-
 	// Step 3: Upload to S3 using multipart/form-data
 	const uploadUrl = args.action.startsWith("http")
 		? args.action
 		: `https:${args.action}`;
 
-	const formData = new FormData();
-	for (const field of args.fields) {
-		formData.append(field.name, field.value);
-	}
-	formData.append("file", fileBlob, filename);
+	const multipart = await createStreamingMultipartBody(
+		args.fields.map((field) => [field.name, field.value] as const),
+		{
+			fieldName: "file",
+			filename,
+			contentType: mimetype,
+			response: fileRes,
+			maxBytes: REDDIT_MEDIA_MAX_BYTES,
+			refetch: () =>
+				fetchPublicUrl(fileUrl, {
+					timeout: 30_000,
+					maxBytes: REDDIT_MEDIA_MAX_BYTES,
+				}),
+		},
+	);
 
-	const uploadRes = await fetch(uploadUrl, {
-		method: "POST",
-		body: formData,
-	});
+	const uploadRes = await awaitResponseWithBodyCompletion(
+		fetch(uploadUrl, {
+			method: "POST",
+			headers: {
+				"Content-Type": multipart.contentType,
+				"Content-Length": multipart.contentLength.toString(),
+			},
+			body: multipart.body,
+		}),
+		multipart.completion,
+	);
 
 	// S3 returns 201 Created with a Location header containing the hosted URL
 	if (uploadRes.status === 201 || uploadRes.ok) {
@@ -191,7 +232,10 @@ async function submitGalleryPost(
 	if (!res.ok) {
 		const errText = await res.text().catch(() => res.statusText);
 		const raw = `HTTP ${res.status}\n${errText}`;
-		throw new PublishError(`Reddit gallery submit failed: ${errText}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`Reddit gallery submit failed: ${errText}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	return res.json() as Promise<RedditGallerySubmitResponse>;
@@ -227,11 +271,15 @@ async function waitForRedditWebSocket(
 
 		ws.addEventListener("message", (event) => {
 			try {
-				const data = JSON.parse(typeof event.data === "string" ? event.data : "");
+				const data = JSON.parse(
+					typeof event.data === "string" ? event.data : "",
+				);
 				if (data?.payload?.redirect) {
 					clearTimeout(timer);
 					ws.close();
-					const match = data.payload.redirect.match(/\/comments\/([a-z0-9]+)\//);
+					const match = data.payload.redirect.match(
+						/\/comments\/([a-z0-9]+)\//,
+					);
 					const id = match?.[1] ?? "";
 					resolve({
 						id,
@@ -288,7 +336,10 @@ async function submitPost(
 	if (!res.ok) {
 		const errText = await res.text().catch(() => res.statusText);
 		const raw = `HTTP ${res.status}\n${errText}`;
-		throw new PublishError(`Reddit submit failed: ${errText}`, { statusCode: res.status, detail: raw });
+		throw new PublishError(`Reddit submit failed: ${errText}`, {
+			statusCode: res.status,
+			detail: raw,
+		});
 	}
 
 	return res.json() as Promise<RedditSubmitResponse>;
@@ -399,7 +450,8 @@ export const redditPublisher: Publisher = {
 					params.url = uploaded.url;
 
 					// Reddit requires a video_poster_url (thumbnail)
-					const thumbnailUrl = (opts.thumbnail_url as string) ?? (opts.video_poster_url as string);
+					const thumbnailUrl =
+						(opts.thumbnail_url as string) ?? (opts.video_poster_url as string);
 					if (thumbnailUrl) {
 						const thumbInfo = inferMediaInfo(thumbnailUrl);
 						const thumbUploaded = await uploadMediaAsset(
@@ -560,7 +612,7 @@ export const redditPublisher: Publisher = {
 				platform_url: postUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

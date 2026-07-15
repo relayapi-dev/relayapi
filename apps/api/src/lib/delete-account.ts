@@ -1,18 +1,18 @@
 import {
+	accountRevocationJobs,
 	adAccounts,
-	adAudiences,
-	adCampaigns,
-	adSyncLogs,
-	ads,
+	automationBindings,
+	automationEntrypoints,
+	autoPostRules,
+	broadcasts,
+	connectionLogs,
 	type Database,
-	postTargets,
 	socialAccounts,
 } from "@relayapi/db";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 /**
- * Identity of a social account needed to compute its KV cache keys. Pull these
- * fields from the account row before it is deleted from the database.
+ * Identity of a social account needed to compute its KV cache keys.
  */
 export interface AccountCacheIdentity {
 	/** social_accounts.id (the internal account id, e.g. `acc_...`) */
@@ -75,39 +75,137 @@ export async function invalidateAccountCaches(
 	await Promise.all(keys.map((key) => kv.delete(key).catch(() => {})));
 }
 
+/**
+ * Lifecycle-safe disconnect. Despite the historical function name, this no
+ * longer deletes the account or any immutable history. The durable account row
+ * is immediately excluded from active work, account-scoped configuration is
+ * paused, an audit snapshot is committed, and a revocation job retains the
+ * encrypted credential until the provider outcome is reconciled.
+ */
 export async function deleteConnectedAccountGraph(
 	db: Database,
 	accountId: string,
-): Promise<void> {
-	await db.transaction(async (tx) => {
-		const adAccountRows = await tx
-			.select({ id: adAccounts.id })
-			.from(adAccounts)
+): Promise<undefined>;
+export async function deleteConnectedAccountGraph<T>(
+	db: Database,
+	accountId: string,
+	onDisconnected: (
+		tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+		account: typeof socialAccounts.$inferSelect,
+	) => Promise<T>,
+): Promise<T | undefined>;
+export async function deleteConnectedAccountGraph<T>(
+	db: Database,
+	accountId: string,
+	onDisconnected?: (
+		tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+		account: typeof socialAccounts.$inferSelect,
+	) => Promise<T>,
+): Promise<T | undefined> {
+	return db.transaction(async (tx) => {
+		const [account] = await tx
+			.select()
+			.from(socialAccounts)
+			.where(eq(socialAccounts.id, accountId))
+			.for("update")
+			.limit(1);
+		if (account?.lifecycleStatus !== "active") return;
+
+		const now = new Date();
+		await tx
+			.insert(accountRevocationJobs)
+			.values({
+				accountId: account.id,
+				organizationId: account.organizationId,
+				platform: account.platform,
+				accessTokenCiphertext: account.accessToken,
+				refreshTokenCiphertext: account.refreshToken,
+				sourceTokenVersion: account.tokenVersion,
+				status: "pending",
+				nextAttemptAt: now,
+			})
+			.onConflictDoUpdate({
+				target: accountRevocationJobs.accountId,
+				set: {
+					accessTokenCiphertext: account.accessToken,
+					refreshTokenCiphertext: account.refreshToken,
+					sourceTokenVersion: account.tokenVersion,
+					status: "pending",
+					attempts: 0,
+					nextAttemptAt: now,
+					leaseExpiresAt: null,
+					lastError: null,
+					providerResponse: null,
+					completedAt: null,
+					updatedAt: now,
+				},
+			});
+
+		await tx.insert(connectionLogs).values({
+			organizationId: account.organizationId,
+			socialAccountId: account.id,
+			platform: account.platform,
+			event: "disconnecting",
+			message: `Disconnect requested for ${account.displayName || account.username || account.platform}`,
+			snapshot: {
+				account_id: account.id,
+				platform: account.platform,
+				platform_account_id: account.platformAccountId,
+				username: account.username,
+				display_name: account.displayName,
+				workspace_id: account.workspaceId,
+				requested_at: now.toISOString(),
+			},
+		});
+
+		await tx
+			.update(socialAccounts)
+			.set({
+				lifecycleStatus: "disconnecting",
+				disconnectRequestedAt: now,
+				disconnectReason: "user_requested",
+				tokenExpiresAt: null,
+				updatedAt: now,
+			})
+			.where(eq(socialAccounts.id, accountId));
+
+		await tx
+			.update(autoPostRules)
+			.set({ status: "paused", updatedAt: now })
+			.where(
+				and(
+					eq(autoPostRules.organizationId, account.organizationId),
+					sql`${autoPostRules.accountIds} @> ${JSON.stringify([accountId])}::jsonb`,
+				),
+			);
+		await tx
+			.update(broadcasts)
+			.set({
+				status: "cancelled",
+				completedAt: now,
+				leaseExpiresAt: null,
+				revision: sql`${broadcasts.revision} + 1`,
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(broadcasts.socialAccountId, accountId),
+					inArray(broadcasts.status, ["draft", "scheduled", "sending"]),
+				),
+			);
+		await tx
+			.update(automationEntrypoints)
+			.set({ status: "disabled", updatedAt: now })
+			.where(eq(automationEntrypoints.socialAccountId, accountId));
+		await tx
+			.update(automationBindings)
+			.set({ status: "inactive", updatedAt: now })
+			.where(eq(automationBindings.socialAccountId, accountId));
+		await tx
+			.update(adAccounts)
+			.set({ status: "disconnected", updatedAt: now })
 			.where(eq(adAccounts.socialAccountId, accountId));
 
-		const adAccountIds = adAccountRows.map((row) => row.id);
-
-		console.log(`[accounts] Deleting account ${accountId}: removing post_targets...`);
-		await tx.delete(postTargets).where(eq(postTargets.socialAccountId, accountId));
-
-		if (adAccountIds.length > 0) {
-			console.log(`[accounts] Deleting account ${accountId}: removing ad_sync_logs...`);
-			await tx.delete(adSyncLogs).where(inArray(adSyncLogs.adAccountId, adAccountIds));
-			console.log(`[accounts] Deleting account ${accountId}: removing ads...`);
-			await tx.delete(ads).where(inArray(ads.adAccountId, adAccountIds));
-			console.log(`[accounts] Deleting account ${accountId}: removing ad_campaigns...`);
-			await tx
-				.delete(adCampaigns)
-				.where(inArray(adCampaigns.adAccountId, adAccountIds));
-			console.log(`[accounts] Deleting account ${accountId}: removing ad_audiences...`);
-			await tx
-				.delete(adAudiences)
-				.where(inArray(adAudiences.adAccountId, adAccountIds));
-			console.log(`[accounts] Deleting account ${accountId}: removing ad_accounts...`);
-			await tx.delete(adAccounts).where(inArray(adAccounts.id, adAccountIds));
-		}
-
-		console.log(`[accounts] Deleting account ${accountId}: removing social_accounts...`);
-		await tx.delete(socialAccounts).where(eq(socialAccounts.id, accountId));
+		return onDisconnected?.(tx, account);
 	});
 }

@@ -24,6 +24,7 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
+import { encryptToken } from "../lib/crypto";
 import type { Graph } from "../schemas/automation-graph";
 import {
 	matchAndEnrollOrBinding,
@@ -43,10 +44,12 @@ import {
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -86,7 +89,9 @@ async function seedFixture() {
 
 async function teardownFixture() {
 	if (!orgId) return;
-	await db.delete(automationRuns).where(eq(automationRuns.organizationId, orgId));
+	await db
+		.delete(automationRuns)
+		.where(eq(automationRuns.organizationId, orgId));
 	await db
 		.delete(automationContactControls)
 		.where(eq(automationContactControls.organizationId, orgId));
@@ -95,7 +100,9 @@ async function teardownFixture() {
 		.where(eq(automationBindings.organizationId, orgId));
 	await db.delete(automations).where(eq(automations.organizationId, orgId));
 	await db.delete(contacts).where(eq(contacts.organizationId, orgId));
-	await db.delete(socialAccounts).where(eq(socialAccounts.organizationId, orgId));
+	await db
+		.delete(socialAccounts)
+		.where(eq(socialAccounts.organizationId, orgId));
 	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
 	await db.delete(organization).where(eq(organization.id, orgId));
 }
@@ -143,6 +150,7 @@ async function makeContact() {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;
@@ -187,12 +195,7 @@ describe("computeSpecificity", () => {
 
 	it("returns 25 for asset-filtered comment", () => {
 		expect(
-			computeSpecificity(
-				"comment_created",
-				{ post_ids: ["p_1"] },
-				null,
-				null,
-			),
+			computeSpecificity("comment_created", { post_ids: ["p_1"] }, null, null),
 		).toBe(25);
 	});
 
@@ -283,7 +286,10 @@ describe("extractByPath", () => {
 
 	it("handles nested array paths", () => {
 		expect(
-			extractByPath({ items: [{ name: "first" }, { name: "second" }] }, "$.items[1].name"),
+			extractByPath(
+				{ items: [{ name: "first" }, { name: "second" }] },
+				"$.items[1].name",
+			),
 		).toBe("second");
 	});
 
@@ -292,7 +298,7 @@ describe("extractByPath", () => {
 	});
 
 	it("handles bracket-quoted keys", () => {
-		expect(extractByPath({ "weird key": 42 }, "$[\"weird key\"]")).toBe(42);
+		expect(extractByPath({ "weird key": 42 }, '$["weird key"]')).toBe(42);
 	});
 });
 
@@ -504,6 +510,7 @@ describe("matchAndEnroll", () => {
 		const [ep] = await db
 			.insert(automationEntrypoints)
 			.values({
+				organizationId: orgId,
 				automationId: auto.id,
 				channel: "telegram",
 				kind: "dm_received",
@@ -563,6 +570,7 @@ describe("matchAndEnroll", () => {
 		const ct = await makeContact();
 
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: autoKeyword.id,
 			channel: "telegram",
 			kind: "dm_received",
@@ -572,6 +580,7 @@ describe("matchAndEnroll", () => {
 			specificity: 30,
 		});
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: autoBroad.id,
 			channel: "telegram",
 			kind: "dm_received",
@@ -601,6 +610,7 @@ describe("matchAndEnroll", () => {
 		const auto = await makeAutomation("pause-check");
 		const ct = await makeContact();
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "telegram",
 			kind: "dm_received",
@@ -732,6 +742,7 @@ describe("routeBinding", () => {
 		const [ep] = await db
 			.insert(automationEntrypoints)
 			.values({
+				organizationId: orgId,
 				automationId: auto.id,
 				channel: "telegram",
 				kind: "dm_received",
@@ -782,7 +793,10 @@ describe("routeBinding", () => {
 });
 
 describe("receiveAutomationWebhook", () => {
-	async function hmacHex(secret: string, body: string): Promise<string> {
+	async function hmacHex(
+		secret: string,
+		signedPayload: string,
+	): Promise<string> {
 		const key = await crypto.subtle.importKey(
 			"raw",
 			new TextEncoder().encode(secret),
@@ -793,7 +807,7 @@ describe("receiveAutomationWebhook", () => {
 		const sig = await crypto.subtle.sign(
 			"HMAC",
 			key,
-			new TextEncoder().encode(body),
+			new TextEncoder().encode(signedPayload),
 		);
 		return Array.from(new Uint8Array(sig))
 			.map((b) => b.toString(16).padStart(2, "0"))
@@ -819,10 +833,12 @@ describe("receiveAutomationWebhook", () => {
 
 		const auto = await makeAutomation("webhook-auto");
 		const ct = await makeContact();
-		// Use a plaintext secret — maybeDecrypt passes through non-enc: strings.
 		const slug = `slug-${generateId("").slice(-10)}`;
 		const secret = "s3cr3t-key";
+		const entrypointId = generateId("aep_");
 		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "telegram",
 			kind: "webhook_inbound",
@@ -830,7 +846,10 @@ describe("receiveAutomationWebhook", () => {
 			socialAccountId: null,
 			config: {
 				webhook_slug: slug,
-				webhook_secret: secret,
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
 				contact_lookup: {
 					by: "contact_id",
 					field_path: "$.contact_id",
@@ -841,7 +860,18 @@ describe("receiveAutomationWebhook", () => {
 		});
 
 		const body = JSON.stringify({ contact_id: ct.id, note: "from webhook" });
-		const sig = await hmacHex(secret, body);
+		const timestamp = Math.floor(Date.now() / 1000).toString();
+		const sig = await hmacHex(secret, `${timestamp}.${body}`);
+		const missingTimestamp = await receiveAutomationWebhook(
+			db,
+			{
+				slug,
+				rawBody: body,
+				signatureHeader: `sha256=${sig}`,
+			},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
+		);
+		expect(missingTimestamp.status).toBe("bad_signature");
 
 		const result = await receiveAutomationWebhook(
 			db,
@@ -849,10 +879,23 @@ describe("receiveAutomationWebhook", () => {
 				slug,
 				rawBody: body,
 				signatureHeader: `sha256=${sig}`,
+				timestampHeader: timestamp,
 			},
-			{},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(result.status).toBe("ok");
+
+		const replay = await receiveAutomationWebhook(
+			db,
+			{
+				slug,
+				rawBody: body,
+				signatureHeader: `sha256=${sig}`,
+				timestampHeader: timestamp,
+			},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
+		);
+		expect(replay.status).toBe("duplicate");
 	});
 
 	it("rejects a bad signature", async () => {
@@ -860,7 +903,11 @@ describe("receiveAutomationWebhook", () => {
 
 		const auto = await makeAutomation("webhook-badsig");
 		const slug = `slug-${generateId("").slice(-10)}`;
+		const secret = "correct-secret";
+		const entrypointId = generateId("aep_");
 		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "telegram",
 			kind: "webhook_inbound",
@@ -868,20 +915,26 @@ describe("receiveAutomationWebhook", () => {
 			socialAccountId: null,
 			config: {
 				webhook_slug: slug,
-				webhook_secret: "correct-secret",
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
 				contact_lookup: { by: "contact_id", field_path: "$.contact_id" },
 			},
 			specificity: 30,
 		});
 		const body = JSON.stringify({ contact_id: "ct_missing" });
+		const timestamp = Math.floor(Date.now() / 1000).toString();
 		const result = await receiveAutomationWebhook(
 			db,
 			{
 				slug,
 				rawBody: body,
-				signatureHeader: "sha256=deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+				signatureHeader:
+					"sha256=deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+				timestampHeader: timestamp,
 			},
-			{},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(result.status).toBe("bad_signature");
 	});
@@ -892,7 +945,10 @@ describe("receiveAutomationWebhook", () => {
 		const auto = await makeAutomation("webhook-badjson");
 		const slug = `slug-${generateId("").slice(-10)}`;
 		const secret = "x";
+		const entrypointId = generateId("aep_");
 		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "telegram",
 			kind: "webhook_inbound",
@@ -900,17 +956,26 @@ describe("receiveAutomationWebhook", () => {
 			socialAccountId: null,
 			config: {
 				webhook_slug: slug,
-				webhook_secret: secret,
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
 				contact_lookup: { by: "contact_id", field_path: "$.contact_id" },
 			},
 			specificity: 30,
 		});
 		const body = "not-json-at-all";
-		const sig = await hmacHex(secret, body);
+		const timestamp = Math.floor(Date.now() / 1000).toString();
+		const sig = await hmacHex(secret, `${timestamp}.${body}`);
 		const result = await receiveAutomationWebhook(
 			db,
-			{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
-			{},
+			{
+				slug,
+				rawBody: body,
+				signatureHeader: `sha256=${sig}`,
+				timestampHeader: timestamp,
+			},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(result.status).toBe("bad_payload");
 	});

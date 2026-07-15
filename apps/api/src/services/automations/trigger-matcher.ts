@@ -22,6 +22,7 @@ import {
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { evaluateFilterGroup } from "./filter-eval";
 import { enrollContact } from "./runner";
+import { testSafeAutomationRegex } from "./safe-regex";
 
 export type InboundEventKind =
 	| "dm_received"
@@ -59,6 +60,8 @@ export type InboundEvent = {
 	fieldValueAfter?: unknown;
 	eventName?: string;
 	payload?: Record<string, unknown>;
+	/** Stable source occurrence used to deduplicate replayed enrollment. */
+	triggerOccurrenceId?: string | null;
 	/**
 	 * Optional metadata set by `processInboxEvent` indicating whether this
 	 * inbound is the contact's first message on this channel. The
@@ -174,18 +177,13 @@ function matchesKeywordConfig(
 	const keywords = (config.keywords as string[] | undefined) ?? [];
 	if (keywords.length === 0) return true;
 	const mode = (config.match_mode as string | undefined) ?? "contains";
-	const caseSensitive =
-		(config.case_sensitive as boolean | undefined) ?? false;
+	const caseSensitive = (config.case_sensitive as boolean | undefined) ?? false;
 	const hay = caseSensitive ? text : text.toLowerCase();
 	return keywords.some((k) => {
 		const kw = caseSensitive ? k : k.toLowerCase();
 		if (mode === "exact") return hay === kw;
 		if (mode === "regex") {
-			try {
-				return new RegExp(k, caseSensitive ? "" : "i").test(text);
-			} catch {
-				return false;
-			}
+			return testSafeAutomationRegex(k, text, caseSensitive ? "" : "i");
 		}
 		return hay.includes(kw);
 	});
@@ -320,7 +318,10 @@ export async function matchAndEnroll(
 			automation: { id: automations.id },
 		})
 		.from(automationEntrypoints)
-		.innerJoin(automations, eq(automationEntrypoints.automationId, automations.id))
+		.innerJoin(
+			automations,
+			eq(automationEntrypoints.automationId, automations.id),
+		)
 		.where(
 			and(
 				eq(automationEntrypoints.channel, event.channel as never),
@@ -334,10 +335,7 @@ export async function matchAndEnroll(
 				event.socialAccountId
 					? or(
 							isNull(automationEntrypoints.socialAccountId),
-							eq(
-								automationEntrypoints.socialAccountId,
-								event.socialAccountId,
-							),
+							eq(automationEntrypoints.socialAccountId, event.socialAccountId),
 						)
 					: // Internal events (tag_applied, field_changed, conversion_event,
 						// ref_link_click, schedule) don't originate from a specific social
@@ -387,15 +385,12 @@ export async function matchAndEnroll(
 
 		const filters = row.entrypoint.filters as Record<string, unknown> | null;
 		if (filters) {
-			const ok = evaluateFilterGroup(
-				filters as never,
-				{
-					contact: (contactRow as Record<string, unknown> | undefined) ?? null,
-					tags: tagList,
-					fields: fieldsMap,
-					state: (event.payload as Record<string, unknown> | undefined) ?? {},
-				},
-			);
+			const ok = evaluateFilterGroup(filters as never, {
+				contact: (contactRow as Record<string, unknown> | undefined) ?? null,
+				tags: tagList,
+				fields: fieldsMap,
+				state: (event.payload as Record<string, unknown> | undefined) ?? {},
+			});
 			if (!ok) continue;
 		}
 		survivors.push(row);
@@ -489,10 +484,7 @@ export async function matchAndEnroll(
 			const cooldownStart = new Date(
 				Date.now() - ep.reentryCooldownMin * 60 * 1000,
 			);
-			if (
-				stats?.lastCompletedAt &&
-				stats.lastCompletedAt >= cooldownStart
-			) {
+			if (stats?.lastCompletedAt && stats.lastCompletedAt >= cooldownStart) {
 				continue;
 			}
 		}
@@ -531,6 +523,7 @@ export async function matchAndEnroll(
 			channel: event.channel,
 			entrypointId: picked.entrypoint.id,
 			bindingId: null,
+			triggerOccurrenceId: event.triggerOccurrenceId ?? null,
 			// Pin the account that triggered this match so outbound
 			// sends scope contact_channels to the correct account in a
 			// multi-account workspace. Internal-only events (schedule,

@@ -8,7 +8,12 @@ export const RefUrlCreateSpec = z.object({
 		.max(100)
 		.regex(/^[a-zA-Z0-9_-]+$/)
 		.describe("URL-safe slug; must be unique within the organization"),
-	workspace_id: z.string().optional(),
+	workspace_id: z
+		.string()
+		.optional()
+		.describe(
+			"Workspace ID. Omission inherits the automation workspace in either policy mode; without an automation parent, strict mode requires an explicit value.",
+		),
 	automation_id: z
 		.string()
 		.nullable()

@@ -47,10 +47,11 @@ import {
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -90,7 +91,9 @@ async function seedFixture() {
 
 async function teardownFixture() {
 	if (!orgId) return;
-	await db.delete(automationRuns).where(eq(automationRuns.organizationId, orgId));
+	await db
+		.delete(automationRuns)
+		.where(eq(automationRuns.organizationId, orgId));
 	await db
 		.delete(automationContactControls)
 		.where(eq(automationContactControls.organizationId, orgId));
@@ -107,6 +110,7 @@ async function teardownFixture() {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;
@@ -190,7 +194,9 @@ describe("automation catalog", () => {
 	});
 
 	it("contains channel_capabilities for all 4 supported channels", () => {
-		const channels = Object.keys(AUTOMATION_CATALOG.channel_capabilities).sort();
+		const channels = Object.keys(
+			AUTOMATION_CATALOG.channel_capabilities,
+		).sort();
 		expect(channels).toEqual(
 			["facebook", "instagram", "telegram", "whatsapp"].sort(),
 		);
@@ -206,9 +212,9 @@ describe("automation catalog", () => {
 		for (const b of AUTOMATION_CATALOG.binding_types) {
 			expect(b.channels).not.toContain("tiktok");
 		}
-		expect(
-			Object.keys(AUTOMATION_CATALOG.channel_capabilities),
-		).not.toContain("tiktok");
+		expect(Object.keys(AUTOMATION_CATALOG.channel_capabilities)).not.toContain(
+			"tiktok",
+		);
 	});
 
 	it("contains the 8 template kinds", () => {
@@ -256,16 +262,13 @@ describe("automations router registration order", () => {
 			// Minimal stub context so the `/{id}` handler — if erroneously hit —
 			// would return a 404 body we can distinguish from the catalog body.
 			c.set("orgId", "org_test");
-			c.set(
-				"db",
-				{
-					select: () => ({
-						from: () => ({
-							where: () => ({ limit: async () => [] }),
-						}),
+			c.set("db", {
+				select: () => ({
+					from: () => ({
+						where: () => ({ limit: async () => [] }),
 					}),
-				},
-			);
+				}),
+			});
 			c.set("apiKey", { workspaceId: null });
 			await next();
 		});
@@ -359,7 +362,11 @@ describe("binding config validation", () => {
 	it("attaches a `binding_pending_sync` warning only for stubbed binding types", () => {
 		// Stubbed types — these don't push to the platform yet. Warning MUST
 		// be present so the dashboard can surface a "not yet synced" banner.
-		for (const stubbed of ["main_menu", "conversation_starter", "ice_breaker"]) {
+		for (const stubbed of [
+			"main_menu",
+			"conversation_starter",
+			"ice_breaker",
+		]) {
 			const w = buildBindingWarnings(stubbed);
 			expect(Array.isArray(w)).toBe(true);
 			if (!w) throw new Error("expected warnings array");
@@ -441,6 +448,7 @@ describe("entrypoint + binding creation (integration)", () => {
 		const [ep] = await db
 			.insert(automationEntrypoints)
 			.values({
+				organizationId: orgId,
 				automationId: auto.id,
 				channel: "telegram",
 				kind: "dm_received",
@@ -571,9 +579,7 @@ describe("automation create from template", () => {
 			blank: {},
 			welcome_flow: {},
 			faq_bot: {
-				keywords: [
-					{ label: "hours", keyword: "hours", reply: "We're open." },
-				],
+				keywords: [{ label: "hours", keyword: "hours", reply: "We're open." }],
 			},
 			lead_capture: { tag: "lead", capture_field: "email" },
 			comment_to_dm: {
@@ -631,9 +637,7 @@ describe("automation create from template", () => {
 		// graph has `ports` derived per node and `canvas_x` / `canvas_y` set
 		// by the template's auto-layout helper — these are what the dashboard
 		// needs to render handles and distinct node positions.
-		const { validateGraph } = await import(
-			"../services/automations/validator"
-		);
+		const { validateGraph } = await import("../services/automations/validator");
 
 		const built = buildGraphFromTemplate({
 			kind: "comment_to_dm",

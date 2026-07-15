@@ -1,8 +1,38 @@
-import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { getLinkedInRestHeaders, LINKEDIN_API_BASE } from "../lib/linkedin-rest";
-import { classifyPublishError, PublishError, type EngagementAccount, type EngagementActionResult, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	awaitResponseWithBodyCompletion,
+	ensureResponseContentLength,
+	fetchPublicUrl,
+	getChunkedResponseBody,
+	getFixedLengthResponseBody,
+	parseContentLength,
+} from "../lib/fetch-public-url";
+import {
+	getLinkedInRestHeaders,
+	LINKEDIN_API_BASE,
+} from "../lib/linkedin-rest";
+import {
+	classifyPublishError,
+	type EngagementAccount,
+	type EngagementActionResult,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 const CHARACTER_LIMIT = 3000;
+// RelayAPI defensive streaming ceiling; the Images API publishes formats and
+// GIF frame limits but currently provides no image byte ceiling.
+const LINKEDIN_IMAGE_MAX_BYTES = 50 * 1024 * 1024;
+// LinkedIn Documents API: file size cannot exceed 100 MB.
+// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/documents-api
+const LINKEDIN_DOCUMENT_MAX_BYTES = 100 * 1024 * 1024;
+// Videos API > "Video File Size Specifications" says 75 KB to 500 MB. The
+// initialize schema separately accepts a byte count up to 5 GB; use the stricter
+// published file specification to avoid uploads that pass init but fail later.
+// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api
+const LINKEDIN_VIDEO_MAX_BYTES = 500_000_000;
+const LINKEDIN_VIDEO_PART_MAX_BYTES = 4 * 1024 * 1024;
 
 interface LinkedInAuth {
 	access_token: string;
@@ -21,28 +51,62 @@ async function linkedinFetch(
 		}),
 	});
 	// Classify HTTP-level errors that apply to all LinkedIn API calls
-	if (res.status === 401) throw new PublishError(`TOKEN_EXPIRED: LinkedIn token expired or invalid`, { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
-	if (res.status === 429) throw new PublishError(`RATE_LIMITED: LinkedIn rate limit exceeded`, { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
-	return res;
-}
-
-/**
- * Fetch media bytes from a URL.
- */
-async function fetchMediaBytes(
-	url: string,
-): Promise<{ bytes: ArrayBuffer; contentType: string; size: number }> {
-	const res = await fetchPublicUrl(url, { timeout: 30_000 });
-	if (!res.ok) {
-		throw new PublishError(`Failed to fetch media from ${url}: ${res.statusText}`, {
+	if (res.status === 401)
+		throw new PublishError(`TOKEN_EXPIRED: LinkedIn token expired or invalid`, {
 			statusCode: res.status,
 			detail: `HTTP ${res.status} ${res.statusText}`,
 		});
+	if (res.status === 429)
+		throw new PublishError(`RATE_LIMITED: LinkedIn rate limit exceeded`, {
+			statusCode: res.status,
+			detail: `HTTP ${res.status} ${res.statusText}`,
+		});
+	return res;
+}
+
+export function getLinkedInVideoPartSizes(
+	instructions: Array<{ firstByte: number; lastByte: number }>,
+	totalBytes: number,
+): number[] {
+	let nextFirstByte = 0;
+	const partSizes = instructions.map((instruction) => {
+		if (
+			!Number.isSafeInteger(instruction.firstByte) ||
+			!Number.isSafeInteger(instruction.lastByte) ||
+			instruction.firstByte !== nextFirstByte ||
+			instruction.lastByte < instruction.firstByte
+		) {
+			throw new Error(
+				"LinkedIn returned non-contiguous video upload instructions",
+			);
+		}
+		const partSize = instruction.lastByte - instruction.firstByte + 1;
+		if (partSize > LINKEDIN_VIDEO_PART_MAX_BYTES) {
+			throw new Error(
+				"LinkedIn returned an oversized video upload instruction",
+			);
+		}
+		nextFirstByte = instruction.lastByte + 1;
+		return partSize;
+	});
+	if (nextFirstByte !== totalBytes) {
+		throw new Error("LinkedIn video upload instructions do not cover the file");
 	}
-	const bytes = await res.arrayBuffer();
-	const contentType =
-		res.headers.get("content-type") ?? "application/octet-stream";
-	return { bytes, contentType, size: bytes.byteLength };
+	return partSizes;
+}
+
+async function fetchMediaResponse(url: string): Promise<Response> {
+	const res = await fetchPublicUrl(url, { timeout: 30_000 });
+	if (!res.ok) {
+		throw new PublishError(
+			`Failed to fetch media from ${url}: ${res.statusText}`,
+			{
+				statusCode: res.status,
+				detail: `HTTP ${res.status} ${res.statusText}`,
+			},
+		);
+	}
+	return res;
 }
 
 /**
@@ -56,8 +120,6 @@ async function uploadImage(
 	ownerUrn: string,
 	mediaUrl: string,
 ): Promise<string> {
-	const { bytes } = await fetchMediaBytes(mediaUrl);
-
 	// LinkedIn Images API — Initialize image upload
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api#initialize-image-upload
 	const initRes = await linkedinFetch(
@@ -86,23 +148,38 @@ async function uploadImage(
 		value: { uploadUrl: string; image: string };
 	};
 	const { uploadUrl, image: imageUrn } = initData.value;
+	const mediaResponse = await ensureResponseContentLength(
+		await fetchMediaResponse(mediaUrl),
+		LINKEDIN_IMAGE_MAX_BYTES,
+		() => fetchMediaResponse(mediaUrl),
+	);
+	const source = getFixedLengthResponseBody(
+		mediaResponse,
+		LINKEDIN_IMAGE_MAX_BYTES,
+	);
 
 	// LinkedIn Images API — Upload image binary to the pre-signed URL
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api#initialize-image-upload
-	const uploadRes = await fetch(uploadUrl, {
-		method: "PUT",
-		headers: {
-			Authorization: `Bearer ${auth.access_token}`,
-			"Content-Type": "application/octet-stream",
-		},
-		body: bytes,
-	});
+	const uploadRes = await awaitResponseWithBodyCompletion(
+		fetch(uploadUrl, {
+			method: "PUT",
+			headers: {
+				Authorization: `Bearer ${auth.access_token}`,
+				"Content-Type": "application/octet-stream",
+			},
+			body: source.body,
+		}),
+		source.completion,
+	);
 
 	if (!uploadRes.ok) {
-		throw new PublishError(`LinkedIn image upload failed: ${uploadRes.statusText}`, {
-			statusCode: uploadRes.status,
-			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
-		});
+		throw new PublishError(
+			`LinkedIn image upload failed: ${uploadRes.statusText}`,
+			{
+				statusCode: uploadRes.status,
+				detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+			},
+		);
 	}
 
 	return imageUrn;
@@ -120,7 +197,13 @@ async function uploadVideo(
 	ownerUrn: string,
 	mediaUrl: string,
 ): Promise<string> {
-	const { bytes, size } = await fetchMediaBytes(mediaUrl);
+	let mediaResponse = await fetchMediaResponse(mediaUrl);
+	mediaResponse = await ensureResponseContentLength(
+		mediaResponse,
+		LINKEDIN_VIDEO_MAX_BYTES,
+		() => fetchMediaResponse(mediaUrl),
+	);
+	const size = parseContentLength(mediaResponse.headers) as number;
 
 	// LinkedIn Videos API — Initialize video upload
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api#initialize-video-upload
@@ -141,6 +224,7 @@ async function uploadVideo(
 	);
 
 	if (!initRes.ok) {
+		void mediaResponse.body?.cancel().catch(() => {});
 		const err = await initRes.json().catch(() => ({}));
 		const raw = `HTTP ${initRes.status}\n${JSON.stringify(err)}`;
 		throw new PublishError(
@@ -164,6 +248,7 @@ async function uploadVideo(
 	const uploadInstructions = initData.value.uploadInstructions;
 	const uploadToken = initData.value.uploadToken ?? "";
 	if (!uploadInstructions || uploadInstructions.length === 0) {
+		void mediaResponse.body?.cancel().catch(() => {});
 		throw new Error("LinkedIn video upload: no upload instructions returned");
 	}
 
@@ -171,8 +256,26 @@ async function uploadVideo(
 	// Large videos are split across multiple upload instructions (~4MB each)
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api
 	const uploadedPartIds: string[] = [];
-	for (const instruction of uploadInstructions) {
-		const chunk = bytes.slice(instruction.firstByte, instruction.lastByte + 1);
+	const partSizes = getLinkedInVideoPartSizes(uploadInstructions, size);
+	const source = getChunkedResponseBody(
+		mediaResponse,
+		LINKEDIN_VIDEO_MAX_BYTES,
+		partSizes,
+	);
+	let instructionIndex = 0;
+	for await (const chunk of source.chunks) {
+		const instruction = uploadInstructions[instructionIndex++];
+		if (!instruction) {
+			throw new Error(
+				"LinkedIn returned fewer upload instructions than required",
+			);
+		}
+		const expectedBytes = instruction.lastByte - instruction.firstByte + 1;
+		if (chunk.byteLength !== expectedBytes) {
+			throw new Error(
+				`LinkedIn upload part ${instructionIndex} expected ${expectedBytes} bytes, got ${chunk.byteLength}`,
+			);
+		}
 		const uploadRes = await fetch(instruction.uploadUrl, {
 			method: "PUT",
 			headers: {
@@ -185,14 +288,27 @@ async function uploadVideo(
 		if (!uploadRes.ok) {
 			throw new PublishError(
 				`LinkedIn video part upload failed: ${uploadRes.statusText}`,
-				{ statusCode: uploadRes.status, detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}` },
+				{
+					statusCode: uploadRes.status,
+					detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+				},
 			);
 		}
 
 		// Collect ETag for finalizeUpload — strip surrounding quotes per RFC 7232
 		const rawEtag = uploadRes.headers.get("etag") ?? "";
 		const etag = rawEtag.replace(/^"|"$/g, "");
+		if (!etag) {
+			throw new Error(
+				`LinkedIn video part ${instructionIndex} upload did not return an ETag`,
+			);
+		}
 		uploadedPartIds.push(etag);
+	}
+	if (instructionIndex !== uploadInstructions.length) {
+		throw new Error(
+			"LinkedIn returned more upload instructions than media parts",
+		);
 	}
 
 	// LinkedIn Videos API — Finalize the upload (required step)
@@ -250,10 +366,13 @@ async function pollVideoStatus(
 		);
 
 		if (!res.ok) {
-			throw new PublishError(`LinkedIn video status check failed: ${res.statusText}`, {
-				statusCode: res.status,
-				detail: `HTTP ${res.status} ${res.statusText}`,
-			});
+			throw new PublishError(
+				`LinkedIn video status check failed: ${res.statusText}`,
+				{
+					statusCode: res.status,
+					detail: `HTTP ${res.status} ${res.statusText}`,
+				},
+			);
 		}
 
 		const data = (await res.json()) as {
@@ -284,8 +403,6 @@ async function uploadDocument(
 	ownerUrn: string,
 	mediaUrl: string,
 ): Promise<string> {
-	const { bytes } = await fetchMediaBytes(mediaUrl);
-
 	// LinkedIn Documents API — Initialize document upload
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/documents-api#initialize-document-upload
 	const initRes = await linkedinFetch(
@@ -314,23 +431,38 @@ async function uploadDocument(
 		value: { uploadUrl: string; document: string };
 	};
 	const { uploadUrl, document: documentUrn } = initData.value;
+	const mediaResponse = await ensureResponseContentLength(
+		await fetchMediaResponse(mediaUrl),
+		LINKEDIN_DOCUMENT_MAX_BYTES,
+		() => fetchMediaResponse(mediaUrl),
+	);
+	const source = getFixedLengthResponseBody(
+		mediaResponse,
+		LINKEDIN_DOCUMENT_MAX_BYTES,
+	);
 
 	// LinkedIn Documents API — Upload document binary to the pre-signed URL
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/documents-api#initialize-document-upload
-	const uploadRes = await fetch(uploadUrl, {
-		method: "PUT",
-		headers: {
-			Authorization: `Bearer ${auth.access_token}`,
-			"Content-Type": "application/octet-stream",
-		},
-		body: bytes,
-	});
+	const uploadRes = await awaitResponseWithBodyCompletion(
+		fetch(uploadUrl, {
+			method: "PUT",
+			headers: {
+				Authorization: `Bearer ${auth.access_token}`,
+				"Content-Type": "application/octet-stream",
+			},
+			body: source.body,
+		}),
+		source.completion,
+	);
 
 	if (!uploadRes.ok) {
-		throw new PublishError(`LinkedIn document upload failed: ${uploadRes.statusText}`, {
-			statusCode: uploadRes.status,
-			detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
-		});
+		throw new PublishError(
+			`LinkedIn document upload failed: ${uploadRes.statusText}`,
+			{
+				statusCode: uploadRes.status,
+				detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+			},
+		);
 	}
 
 	return documentUrn;
@@ -378,23 +510,52 @@ async function postFirstComment(
  * Determine the media type category for a set of media items.
  * LinkedIn cannot mix images with videos or documents.
  */
-function classifyMedia(
+export function classifyMedia(
 	media: Array<{ url: string; type?: string }>,
 ): "image" | "video" | "document" | "none" {
 	if (media.length === 0) return "none";
 
-	const hasVideo = media.some((m) => m.type === "video" || m.type === "gif");
-	const hasDocument = media.some((m) => m.type === "document");
-	const hasImage = media.some((m) => !m.type || m.type === "image");
+	// Official docs: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api
+	// Section "Image Specifications" lists JPG, GIF, and PNG and allows GIFs up
+	// to 250 frames. The Videos API "Video File Size Specifications" section at
+	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api
+	// documents MP4, so GIFs must use the Images API rather than the Videos API.
+	const videoCount = media.filter((m) => m.type === "video").length;
+	const documentCount = media.filter((m) => m.type === "document").length;
+	const imageCount = media.filter(
+		(m) => !m.type || m.type === "image" || m.type === "gif",
+	).length;
+	const hasVideo = videoCount > 0;
+	const hasDocument = documentCount > 0;
+	const hasImage = imageCount > 0;
+
+	if (imageCount > 20) {
+		// Official docs: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/multiimage-post-api
+		// Section "MultiImage schema" -> images has a minimum of 2 and maximum
+		// of 20. One image uses the normal media content object.
+		throw new Error(
+			`CONTENT_ERROR: LinkedIn multi-image posts support at most 20 images; received ${imageCount}.`,
+		);
+	}
+	if (videoCount > 1) {
+		// Official docs: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api
+		// Section "Create a post" -> content.media contains one media URN.
+		throw new Error("CONTENT_ERROR: LinkedIn supports one video per post.");
+	}
+	if (documentCount > 1) {
+		// Same official Posts API section: a document post uses one content.media
+		// object and therefore one uploaded document URN.
+		throw new Error("CONTENT_ERROR: LinkedIn supports one document per post.");
+	}
 
 	if (hasVideo && (hasImage || hasDocument)) {
 		throw new Error(
-			"LinkedIn does not allow mixing media types. Cannot combine videos with images or documents.",
+			"CONTENT_ERROR: LinkedIn does not allow mixing videos with images or documents.",
 		);
 	}
 	if (hasDocument && hasImage) {
 		throw new Error(
-			"LinkedIn does not allow mixing media types. Cannot combine documents with images.",
+			"CONTENT_ERROR: LinkedIn does not allow mixing documents with images.",
 		);
 	}
 
@@ -434,7 +595,10 @@ export function escapeLinkedInCommentary(text: string): string {
 export const linkedinPublisher: Publisher = {
 	platform: "linkedin",
 
-	async repost(account: EngagementAccount, platformPostId: string): Promise<EngagementActionResult> {
+	async repost(
+		account: EngagementAccount,
+		platformPostId: string,
+	): Promise<EngagementActionResult> {
 		try {
 			const auth: LinkedInAuth = { access_token: account.access_token };
 			const authorUrn = account.platform_account_id;
@@ -460,9 +624,13 @@ export const linkedinPublisher: Publisher = {
 			});
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
-				const detail = (err as Record<string, string>).message ?? res.statusText;
+				const detail =
+					(err as Record<string, string>).message ?? res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-				throw new PublishError(`LinkedIn reshare failed: ${detail}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(`LinkedIn reshare failed: ${detail}`, {
+					statusCode: res.status,
+					detail: raw,
+				});
 			}
 			const postUrn = res.headers.get("x-restli-id") ?? "";
 			return { success: true, platform_post_id: postUrn };
@@ -472,7 +640,11 @@ export const linkedinPublisher: Publisher = {
 		}
 	},
 
-	async comment(account: EngagementAccount, platformPostId: string, text: string): Promise<EngagementActionResult> {
+	async comment(
+		account: EngagementAccount,
+		platformPostId: string,
+		text: string,
+	): Promise<EngagementActionResult> {
 		try {
 			const auth: LinkedInAuth = { access_token: account.access_token };
 			const authorUrn = account.platform_account_id;
@@ -493,9 +665,13 @@ export const linkedinPublisher: Publisher = {
 			);
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
-				const detail = (err as Record<string, string>).message ?? res.statusText;
+				const detail =
+					(err as Record<string, string>).message ?? res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-				throw new PublishError(`LinkedIn comment failed: ${detail}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(`LinkedIn comment failed: ${detail}`, {
+					statusCode: res.status,
+					detail: raw,
+				});
 			}
 			const data = (await res.json()) as { id?: string; commentUrn?: string };
 			return { success: true, platform_post_id: data.commentUrn ?? data.id };
@@ -561,7 +737,7 @@ export const linkedinPublisher: Publisher = {
 			if (mediaCategory === "image") {
 				const imageUrns = await Promise.all(
 					media
-						.filter((m) => !m.type || m.type === "image")
+						.filter((m) => !m.type || m.type === "image" || m.type === "gif")
 						.map((m) => uploadImage(auth, authorUrn, m.url)),
 				);
 
@@ -576,19 +752,16 @@ export const linkedinPublisher: Publisher = {
 								id: urn,
 								altText:
 									(
-										media.filter((m) => !m.type || m.type === "image")[idx] as
-											| { alt_text?: string }
-											| undefined
+										media.filter(
+											(m) => !m.type || m.type === "image" || m.type === "gif",
+										)[idx] as { alt_text?: string } | undefined
 									)?.alt_text ?? "",
 							})),
 						},
 					};
 				}
 			} else if (mediaCategory === "video") {
-				// GIFs count as video on LinkedIn
-				const videoItem = media.find(
-					(m) => m.type === "video" || m.type === "gif",
-				);
+				const videoItem = media.find((m) => m.type === "video");
 				if (videoItem) {
 					const videoUrn = await uploadVideo(auth, authorUrn, videoItem.url);
 					postBody.content = {
@@ -627,13 +800,26 @@ export const linkedinPublisher: Publisher = {
 				const detail =
 					(err as Record<string, string>).message ?? res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-				if (res.status === 401 || detail.includes("Unauthorized") || detail.includes("invalid_grant")) {
-					throw new PublishError(`TOKEN_EXPIRED: ${detail}`, { statusCode: res.status, detail: raw });
+				if (
+					res.status === 401 ||
+					detail.includes("Unauthorized") ||
+					detail.includes("invalid_grant")
+				) {
+					throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+						statusCode: res.status,
+						detail: raw,
+					});
 				}
 				if (res.status === 429) {
-					throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: res.status, detail: raw });
+					throw new PublishError(`RATE_LIMITED: ${detail}`, {
+						statusCode: res.status,
+						detail: raw,
+					});
 				}
-				throw new PublishError(`LinkedIn post creation failed: ${detail}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(`LinkedIn post creation failed: ${detail}`, {
+					statusCode: res.status,
+					detail: raw,
+				});
 			}
 
 			// LinkedIn returns the post URN in the x-restli-id header
@@ -664,7 +850,7 @@ export const linkedinPublisher: Publisher = {
 				platform_url: platformUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

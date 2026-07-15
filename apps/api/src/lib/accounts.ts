@@ -1,6 +1,6 @@
 import { type createDb, socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
-import { maybeDecrypt } from "./crypto";
+import { decryptAccountTokens } from "./account-token-crypto";
 
 /**
  * Fetches a social account owned by the given org, with decrypted tokens.
@@ -16,13 +16,13 @@ export async function getOwnedAccount(
 		.select()
 		.from(socialAccounts)
 		.where(
-			and(eq(socialAccounts.id, id), eq(socialAccounts.organizationId, orgId)),
+			and(
+				eq(socialAccounts.id, id),
+				eq(socialAccounts.organizationId, orgId),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
 		)
 		.limit(1);
 	if (!account) return null;
-	return {
-		...account,
-		accessToken: await maybeDecrypt(account.accessToken, encryptionKey),
-		refreshToken: await maybeDecrypt(account.refreshToken, encryptionKey),
-	};
+	return decryptAccountTokens(account, encryptionKey);
 }

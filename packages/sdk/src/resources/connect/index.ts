@@ -23,10 +23,9 @@ export { Pinterest } from './pinterest/index';
 export { Snapchat } from './snapchat/index';
 export {
   Telegram,
-  type TelegramConnectDirectlyResponse,
+  type TelegramInitiateConnectionParams,
   type TelegramInitiateConnectionResponse,
   type TelegramPollConnectionStatusResponse,
-  type TelegramConnectDirectlyParams,
   type TelegramPollConnectionStatusParams,
 } from './telegram';
 export {

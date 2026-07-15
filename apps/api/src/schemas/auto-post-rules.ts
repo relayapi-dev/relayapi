@@ -19,11 +19,34 @@ export const CreateAutoPostRuleBody = z.object({
 		.url()
 		.refine(isHttpOrHttpsUrl, "URL must use http or https")
 		.describe("RSS/Atom feed URL"),
-	polling_interval_minutes: z.number().int().min(15).max(1440).default(60).describe("How often to check the feed (minutes)"),
-	content_template: z.string().max(5000).optional().describe("Post template with {{title}}, {{url}}, {{description}}, {{published_date}} variables"),
-	append_feed_url: z.boolean().default(true).describe("Append the article URL to the post content"),
-	account_ids: z.array(z.string()).default([]).describe("Target account IDs (empty = all accounts)"),
-	workspace_id: z.string().optional().describe("Workspace ID to scope this rule to"),
+	polling_interval_minutes: z
+		.number()
+		.int()
+		.min(15)
+		.max(1440)
+		.default(60)
+		.describe("How often to check the feed (minutes)"),
+	content_template: z
+		.string()
+		.max(5000)
+		.optional()
+		.describe(
+			"Post template with {{title}}, {{url}}, {{description}}, {{published_date}} variables",
+		),
+	append_feed_url: z
+		.boolean()
+		.default(true)
+		.describe("Append the article URL to the post content"),
+	account_ids: z
+		.array(z.string())
+		.default([])
+		.describe("Target account IDs (empty = all accounts)"),
+	workspace_id: z
+		.string()
+		.optional()
+		.describe(
+			"Workspace ID. Omission inherits the sole account workspace in either policy mode; without a scoped account parent, strict mode requires an explicit value.",
+		),
 });
 
 // --- Update ---
@@ -71,7 +94,6 @@ export const TestFeedBody = z.object({
 		.url()
 		.refine(isHttpOrHttpsUrl, "URL must use http or https")
 		.describe("RSS/Atom feed URL to test"),
-	workspace_id: z.string().optional().describe("Workspace ID (required when workspace enforcement is enabled)"),
 });
 
 export const TestFeedItemSchema = z.object({

@@ -8,6 +8,11 @@
 // in `ctx.context[response_key]` (default "last_http_response") so downstream
 // nodes can branch on it via the condition/filter engine.
 
+import {
+	fetchPublicUrl,
+	readResponseBytes,
+} from "../../../lib/fetch-public-url";
+import { loadAutomationHttpRequestSecret } from "../graph-secrets";
 import { applyMergeTags } from "../merge-tags";
 import type { NodeHandler, RunContext } from "../types";
 
@@ -18,11 +23,24 @@ type HttpRequestConfig = {
 	body?: string;
 	timeout_ms?: number;
 	response_key?: string;
+	secret_ref?: string;
+	credentials_configured?: boolean;
 };
+
+const MAX_TIMEOUT_MS = 30_000;
+const MIN_TIMEOUT_MS = 1;
+const MAX_REQUEST_BODY_BYTES = 256 * 1024;
+const MAX_RESPONSE_BODY_BYTES = 512 * 1024;
+const MAX_REQUEST_HEADER_BYTES = 128 * 1024;
+
+function byteLength(value: string): number {
+	return new TextEncoder().encode(value).byteLength;
+}
 
 function buildMergeCtx(ctx: RunContext) {
 	return {
-		contact: (ctx.context?.contact as Record<string, unknown> | undefined) ?? null,
+		contact:
+			(ctx.context?.contact as Record<string, unknown> | undefined) ?? null,
 		state: ctx.context ?? {},
 	};
 }
@@ -32,29 +50,71 @@ export const httpRequestHandler: NodeHandler<HttpRequestConfig> = {
 	async handle(node, ctx) {
 		const cfg = (node.config ?? {}) as HttpRequestConfig;
 		const mergeCtx = buildMergeCtx(ctx);
+		if (!cfg.secret_ref) {
+			throw new Error(
+				"http_request: write-only request configuration is missing",
+			);
+		}
+		const encryptionKey = ctx.env.ENCRYPTION_KEY;
+		if (typeof encryptionKey !== "string" || encryptionKey === "") {
+			throw new Error("http_request: credential encryption is unavailable");
+		}
+		const secret = await loadAutomationHttpRequestSecret(
+			ctx.db,
+			encryptionKey,
+			{
+				id: cfg.secret_ref,
+				organizationId: ctx.organizationId,
+				automationId: ctx.automationId,
+				nodeKey: node.key,
+			},
+		);
 
-		const url = applyMergeTags(cfg.url ?? "", mergeCtx);
+		const url = applyMergeTags(secret.url ?? "", mergeCtx);
 		const method = cfg.method ?? "POST";
 		const headers: Record<string, string> = {};
-		for (const [k, v] of Object.entries(cfg.headers ?? {})) {
+		for (const [k, v] of Object.entries(secret.headers ?? {})) {
 			headers[k] = applyMergeTags(v, mergeCtx);
 		}
-		const body = cfg.body ? applyMergeTags(cfg.body, mergeCtx) : undefined;
+		if (
+			ctx.effectIdempotencyKey &&
+			!Object.keys(headers).some(
+				(key) => key.toLowerCase() === "idempotency-key",
+			)
+		) {
+			headers["Idempotency-Key"] = ctx.effectIdempotencyKey;
+		}
+		const body = secret.body
+			? applyMergeTags(secret.body, mergeCtx)
+			: undefined;
 
-		const timeoutMs = cfg.timeout_ms ?? 15_000;
+		const timeoutMs = Math.max(
+			MIN_TIMEOUT_MS,
+			Math.min(cfg.timeout_ms ?? 15_000, MAX_TIMEOUT_MS),
+		);
 		const responseKey = cfg.response_key ?? "last_http_response";
-
-		const abort = new AbortController();
-		const timer = setTimeout(() => abort.abort(), timeoutMs);
+		if (body && byteLength(body) > MAX_REQUEST_BODY_BYTES) {
+			throw new Error("http_request: request body exceeds 256 KiB");
+		}
+		const headerBytes = Object.entries(headers).reduce(
+			(total, [key, value]) => total + byteLength(key) + byteLength(value),
+			0,
+		);
+		if (headerBytes > MAX_REQUEST_HEADER_BYTES) {
+			throw new Error("http_request: headers exceed 128 KiB");
+		}
 
 		try {
-			const res = await fetch(url, {
+			const res = await fetchPublicUrl(url, {
 				method,
 				headers,
 				body,
-				signal: abort.signal,
+				timeout: timeoutMs,
+				timeoutThroughBody: true,
 			});
-			const text = await res.text();
+			const text = new TextDecoder().decode(
+				await readResponseBytes(res, MAX_RESPONSE_BODY_BYTES),
+			);
 			let parsed: unknown = text;
 			try {
 				parsed = JSON.parse(text);
@@ -64,6 +124,9 @@ export const httpRequestHandler: NodeHandler<HttpRequestConfig> = {
 
 			const headerObj: Record<string, string> = {};
 			res.headers.forEach((value, key) => {
+				if (/(authorization|cookie|token|secret|api[-_]?key)/i.test(key)) {
+					return;
+				}
 				headerObj[key] = value;
 			});
 
@@ -77,20 +140,18 @@ export const httpRequestHandler: NodeHandler<HttpRequestConfig> = {
 			return {
 				result: "advance",
 				via_port: viaPort,
-				payload: { status: res.status, url, method },
+				payload: { status: res.status, method },
 			};
 		} catch (err: unknown) {
 			const e = err as { name?: string; message?: string };
-			const isTimeout = e?.name === "AbortError";
+			const isTimeout = e?.name === "AbortError" || e?.name === "TimeoutError";
 			const msg = isTimeout ? "timeout" : String(e?.message ?? err);
 			ctx.context[responseKey] = { error: msg };
 			return {
 				result: "advance",
 				via_port: "error",
-				payload: { error: msg, url, method },
+				payload: { error: msg, method },
 			};
-		} finally {
-			clearTimeout(timer);
 		}
 	},
 };

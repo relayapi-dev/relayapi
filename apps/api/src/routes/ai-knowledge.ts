@@ -3,6 +3,10 @@ import { aiKnowledgeBases, aiKnowledgeDocuments } from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import {
+	resolveOperationalCreateScope,
+	workspaceScopeKey,
+} from "../lib/request-access";
+import {
 	applyWorkspaceScope,
 	isWorkspaceScopeDenied,
 	WORKSPACE_ACCESS_DENIED_BODY,
@@ -85,12 +89,18 @@ app.openapi(createKb, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 	const orgId = c.get("orgId");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		body.workspace_id,
+		"knowledge base",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	const [row] = await db
 		.insert(aiKnowledgeBases)
 		.values({
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: scope.workspaceId,
 			name: body.name,
 			description: body.description,
 			embeddingModel: body.embedding_model,
@@ -193,7 +203,10 @@ app.openapi(getKb, async (c) => {
 	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const row = await db.query.aiKnowledgeBases.findFirst({
-		where: and(eq(aiKnowledgeBases.id, id), eq(aiKnowledgeBases.organizationId, orgId)),
+		where: and(
+			eq(aiKnowledgeBases.id, id),
+			eq(aiKnowledgeBases.organizationId, orgId),
+		),
 	});
 	if (!row)
 		return c.json(
@@ -242,7 +255,10 @@ app.openapi(updateKb, async (c) => {
 	const orgId = c.get("orgId");
 
 	const row = await db.query.aiKnowledgeBases.findFirst({
-		where: and(eq(aiKnowledgeBases.id, id), eq(aiKnowledgeBases.organizationId, orgId)),
+		where: and(
+			eq(aiKnowledgeBases.id, id),
+			eq(aiKnowledgeBases.organizationId, orgId),
+		),
 	});
 	if (!row)
 		return c.json(
@@ -299,7 +315,10 @@ app.openapi(deleteKb, async (c) => {
 	const orgId = c.get("orgId");
 
 	const row = await db.query.aiKnowledgeBases.findFirst({
-		where: and(eq(aiKnowledgeBases.id, id), eq(aiKnowledgeBases.organizationId, orgId)),
+		where: and(
+			eq(aiKnowledgeBases.id, id),
+			eq(aiKnowledgeBases.organizationId, orgId),
+		),
 	});
 	if (!row)
 		return c.json(
@@ -379,6 +398,8 @@ app.openapi(createDoc, async (c) => {
 	const [row] = await db
 		.insert(aiKnowledgeDocuments)
 		.values({
+			organizationId: kb.organizationId,
+			scopeKey: workspaceScopeKey(kb.workspaceId),
 			kbId: id,
 			sourceType: body.source_type,
 			sourceRef: body.source_ref,
@@ -439,7 +460,9 @@ app.openapi(listDocs, async (c) => {
 	// millisecond. Bind it back with an explicit ::timestamptz cast.
 	if (cursor) {
 		const cursorRow = await db
-			.select({ createdAt: sql<string>`${aiKnowledgeDocuments.createdAt}::text` })
+			.select({
+				createdAt: sql<string>`${aiKnowledgeDocuments.createdAt}::text`,
+			})
 			.from(aiKnowledgeDocuments)
 			.where(eq(aiKnowledgeDocuments.id, cursor))
 			.limit(1);
@@ -454,7 +477,10 @@ app.openapi(listDocs, async (c) => {
 		.select()
 		.from(aiKnowledgeDocuments)
 		.where(and(...conditions))
-		.orderBy(desc(aiKnowledgeDocuments.createdAt), desc(aiKnowledgeDocuments.id))
+		.orderBy(
+			desc(aiKnowledgeDocuments.createdAt),
+			desc(aiKnowledgeDocuments.id),
+		)
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -516,7 +542,9 @@ app.openapi(deleteDoc, async (c) => {
 			404,
 		);
 
-	await db.delete(aiKnowledgeDocuments).where(eq(aiKnowledgeDocuments.id, documentId));
+	await db
+		.delete(aiKnowledgeDocuments)
+		.where(eq(aiKnowledgeDocuments.id, documentId));
 	return c.body(null, 204);
 });
 

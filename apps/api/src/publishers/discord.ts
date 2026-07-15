@@ -1,5 +1,25 @@
-import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	ensureResponseContentLength,
+	fetchPublicUrl,
+} from "../lib/fetch-public-url";
+import {
+	createStreamingMultipartFilesBody,
+	type StreamingMultipartFile,
+} from "../lib/multipart-stream";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
+
+// Official docs: https://docs.discord.com/developers/reference#uploading-files
+// Section "Uploading Files" says the limit is per attachment, defaults to
+// 10 MiB, and may be higher by user/server tier. Discord does not expose that
+// tier through an incoming webhook, so this is only a defensive streaming cap;
+// Discord remains authoritative for the actual per-attachment allowance.
+const DISCORD_FILE_MAX_BYTES = 500 * 1024 * 1024;
 
 /**
  * Discord publisher.
@@ -18,16 +38,140 @@ interface DiscordEmbed {
 	image?: { url: string };
 	thumbnail?: { url: string };
 	footer?: { text: string };
+	author?: { name: string };
+	fields?: Array<{ name: string; value: string }>;
 	timestamp?: string;
+}
+
+function discordEmbedText(
+	container: Record<string, unknown>,
+	key: string,
+	path: string,
+	limit: number,
+	required = false,
+): string {
+	const value = container[key];
+	if (value === undefined && !required) return "";
+	if (typeof value !== "string") {
+		throw new Error(`CONTENT_ERROR: Discord embed ${path} must be a string.`);
+	}
+	if (value.length > limit) {
+		throw new Error(
+			`CONTENT_ERROR: Discord embed ${path} exceeds the ${limit}-character limit.`,
+		);
+	}
+	return value;
+}
+
+/**
+ * Validate and count every text-bearing embed field without trusting the
+ * caller-supplied target_options shape.
+ * Official docs: https://docs.discord.com/developers/resources/message#embed-limits
+ * Section "Embed Limits" defines the per-field limits, at most 25 fields, and
+ * a combined 6,000 characters across all embeds.
+ */
+export function getDiscordEmbedTextLength(embeds: unknown[]): number {
+	let totalChars = 0;
+	for (const [embedIndex, rawEmbed] of embeds.entries()) {
+		if (!rawEmbed || typeof rawEmbed !== "object" || Array.isArray(rawEmbed)) {
+			throw new Error(
+				`CONTENT_ERROR: Discord embed ${embedIndex} must be an object.`,
+			);
+		}
+		const embed = rawEmbed as Record<string, unknown>;
+		totalChars += discordEmbedText(
+			embed,
+			"title",
+			`${embedIndex}.title`,
+			256,
+		).length;
+		totalChars += discordEmbedText(
+			embed,
+			"description",
+			`${embedIndex}.description`,
+			4096,
+		).length;
+
+		for (const [key, textKey, limit] of [
+			["footer", "text", 2048],
+			["author", "name", 256],
+		] as const) {
+			const nested = embed[key];
+			if (nested !== undefined) {
+				if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+					throw new Error(
+						`CONTENT_ERROR: Discord embed ${embedIndex}.${key} must be an object.`,
+					);
+				}
+				totalChars += discordEmbedText(
+					nested as Record<string, unknown>,
+					textKey,
+					`${embedIndex}.${key}.${textKey}`,
+					limit,
+					true,
+				).length;
+			}
+		}
+
+		const fields = embed.fields;
+		if (fields !== undefined) {
+			if (!Array.isArray(fields)) {
+				throw new Error(
+					`CONTENT_ERROR: Discord embed ${embedIndex}.fields must be an array.`,
+				);
+			}
+			if (fields.length > 25) {
+				throw new Error(
+					`CONTENT_ERROR: Discord embed ${embedIndex} exceeds the 25-field limit.`,
+				);
+			}
+			for (const [fieldIndex, rawField] of fields.entries()) {
+				if (
+					!rawField ||
+					typeof rawField !== "object" ||
+					Array.isArray(rawField)
+				) {
+					throw new Error(
+						`CONTENT_ERROR: Discord embed ${embedIndex}.fields.${fieldIndex} must be an object.`,
+					);
+				}
+				const field = rawField as Record<string, unknown>;
+				totalChars += discordEmbedText(
+					field,
+					"name",
+					`${embedIndex}.fields.${fieldIndex}.name`,
+					256,
+					true,
+				).length;
+				totalChars += discordEmbedText(
+					field,
+					"value",
+					`${embedIndex}.fields.${fieldIndex}.value`,
+					1024,
+					true,
+				).length;
+			}
+		}
+	}
+	return totalChars;
 }
 
 export const discordPublisher: Publisher = {
 	platform: "discord",
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
+		const pendingFileResponses: Response[] = [];
+		const cancelPendingFiles = async () => {
+			await Promise.all(
+				pendingFileResponses.map((response) =>
+					response.body?.cancel().catch(() => {}),
+				),
+			);
+			pendingFileResponses.length = 0;
+		};
 		try {
 			const webhookUrl = request.account.access_token;
-			if (!webhookUrl || !webhookUrl.includes("discord.com/api/webhooks")) {
+			if (!webhookUrl?.includes("discord.com/api/webhooks")) {
 				throw new Error(
 					"Invalid Discord webhook URL. Expected format: https://discord.com/api/webhooks/{id}/{token}",
 				);
@@ -69,27 +213,79 @@ export const discordPublisher: Publisher = {
 			const media =
 				(opts.media as Array<{ url: string; type?: string }>) ?? request.media;
 
-			const fileBlobs: Array<{ blob: Blob; filename: string }> = [];
+			const files: StreamingMultipartFile[] = [];
 			const embeds: DiscordEmbed[] = [];
 
 			if (media.length > 0) {
-				for (const [i, item] of media.slice(0, 10).entries()) {
+				if (media.length > 10) {
+					// Official docs: https://docs.discord.com/developers/resources/webhook#execute-webhook
+					// Section "Execute Webhook" permits up to 10 embed objects. Media
+					// fetch failures fall back to one embed per item, so cap the input
+					// instead of silently losing attachments in that documented path.
+					return {
+						success: false,
+						error: {
+							code: "TOO_MANY_MEDIA",
+							message: `Discord messages support at most 10 media items in this publisher; received ${media.length}.`,
+						},
+					};
+				}
+				for (const [i, item] of media.entries()) {
 					const isVideo = item.type === "video";
 					if (isVideo) {
 						// Videos as link in content (Discord auto-embeds video URLs)
 						const videoContent = `${body.content ?? ""}\n${item.url}`.trim();
 						if (videoContent.length <= 2000) {
 							body.content = videoContent;
+						} else {
+							// Same official Execute Webhook section: content is at most 2,000
+							// characters. Never report success after dropping the video URL.
+							await cancelPendingFiles();
+							return {
+								success: false,
+								error: {
+									code: "CONTENT_TOO_LONG",
+									message:
+										"Discord content plus attached video URLs exceeds the 2,000-character limit.",
+								},
+							};
 						}
 					} else {
-						// Try to download image for file upload
+						// Prepare a bounded response stream for one multipart attachment.
 						try {
-							const mediaRes = await fetchPublicUrl(item.url, { timeout: 30_000 });
+							const mediaUrl = item.url;
+							let mediaRes = await fetchPublicUrl(mediaUrl, {
+								timeout: 30_000,
+								maxBytes: DISCORD_FILE_MAX_BYTES,
+							});
 							if (mediaRes.ok) {
-								const blob = await mediaRes.blob();
+								mediaRes = await ensureResponseContentLength(
+									mediaRes,
+									DISCORD_FILE_MAX_BYTES,
+									() =>
+										fetchPublicUrl(mediaUrl, {
+											timeout: 30_000,
+											maxBytes: DISCORD_FILE_MAX_BYTES,
+										}),
+								);
 								const ext = item.url.split(".").pop()?.split("?")[0] ?? "png";
-								fileBlobs.push({ blob, filename: `image_${i}.${ext}` });
+								files.push({
+									fieldName: `files[${files.length}]`,
+									filename: `image_${i}.${ext}`,
+									contentType:
+										mediaRes.headers.get("content-type") ??
+										"application/octet-stream",
+									response: mediaRes,
+									maxBytes: DISCORD_FILE_MAX_BYTES,
+									refetch: () =>
+										fetchPublicUrl(mediaUrl, {
+											timeout: 30_000,
+											maxBytes: DISCORD_FILE_MAX_BYTES,
+										}),
+								});
+								pendingFileResponses.push(mediaRes);
 							} else {
+								void mediaRes.body?.cancel().catch(() => {});
 								// Fallback to embed URL
 								embeds.push({ image: { url: item.url } });
 							}
@@ -108,17 +304,27 @@ export const discordPublisher: Publisher = {
 			// Custom embeds from target_options — merge with media embeds
 			if (opts.embeds) {
 				const existing = (body.embeds as unknown[]) ?? [];
-				body.embeds = [...existing, ...(opts.embeds as unknown[])].slice(0, 10);
+				const combined = [...existing, ...(opts.embeds as unknown[])];
+				// Official Execute Webhook field `embeds`: array of up to 10 embeds.
+				if (combined.length > 10) {
+					await cancelPendingFiles();
+					return {
+						success: false,
+						error: {
+							code: "TOO_MANY_EMBEDS",
+							message: `Discord supports at most 10 embeds; received ${combined.length}.`,
+						},
+					};
+				}
+				body.embeds = combined;
 			}
 
 			// Discord embed total character limit: 6,000 across all embeds
 			// Docs: https://docs.discord.com/developers/resources/message#embed-object-embed-limits
 			if (body.embeds) {
-				let totalChars = 0;
-				for (const embed of body.embeds as DiscordEmbed[]) {
-					totalChars += (embed.title?.length ?? 0) + (embed.description?.length ?? 0);
-				}
+				const totalChars = getDiscordEmbedTextLength(body.embeds as unknown[]);
 				if (totalChars > 6000) {
+					await cancelPendingFiles();
 					return {
 						success: false,
 						error: {
@@ -130,7 +336,7 @@ export const discordPublisher: Publisher = {
 			}
 
 			// Must have at least one of content, embeds, or files
-			if (!body.content && !body.embeds && fileBlobs.length === 0) {
+			if (!body.content && !body.embeds && files.length === 0) {
 				throw new Error(
 					"Discord requires at least content, embeds, or files in the message.",
 				);
@@ -138,16 +344,32 @@ export const discordPublisher: Publisher = {
 
 			// Send request — use multipart if files are present, JSON otherwise
 			let res: Response;
-			if (fileBlobs.length > 0) {
-				const formData = new FormData();
-				formData.append("payload_json", JSON.stringify(body));
-				for (const [i, file] of fileBlobs.entries()) {
-					formData.append(`files[${i}]`, file.blob, file.filename);
+			if (files.length > 0) {
+				const multipart = await createStreamingMultipartFilesBody(
+					[["payload_json", JSON.stringify(body)]],
+					files,
+				);
+				pendingFileResponses.length = 0;
+				const [responseOutcome, completionOutcome] = await Promise.allSettled([
+					fetch(`${webhookUrl}?wait=true`, {
+						method: "POST",
+						headers: {
+							"Content-Type": multipart.contentType,
+							"Content-Length": multipart.contentLength.toString(),
+						},
+						body: multipart.body,
+					}),
+					multipart.completion,
+				]);
+				if (responseOutcome.status === "rejected") {
+					throw completionOutcome.status === "rejected"
+						? completionOutcome.reason
+						: responseOutcome.reason;
 				}
-				res = await fetch(`${webhookUrl}?wait=true`, {
-					method: "POST",
-					body: formData,
-				});
+				res = responseOutcome.value;
+				if (res.ok && completionOutcome.status === "rejected") {
+					throw completionOutcome.reason;
+				}
 			} else {
 				// Discord Webhook API: Execute Webhook
 				// Docs: https://docs.discord.com/developers/resources/webhook#execute-webhook
@@ -160,14 +382,30 @@ export const discordPublisher: Publisher = {
 
 			if (res.status === 429) {
 				const retryAfter = res.headers.get("retry-after");
-				throw new PublishError(`RATE_LIMITED: Discord rate limit exceeded. Retry after ${retryAfter ?? "unknown"} seconds.`, { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+				const retryAfterSeconds = retryAfter
+					? Number.parseFloat(retryAfter)
+					: Number.NaN;
+				throw new PublishError(
+					`RATE_LIMITED: Discord rate limit exceeded. Retry after ${retryAfter ?? "unknown"} seconds.`,
+					{
+						statusCode: res.status,
+						detail: `HTTP ${res.status} ${res.statusText}`,
+						retryAfterMs:
+							Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+								? retryAfterSeconds * 1000
+								: undefined,
+					},
+				);
 			}
 
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
 				const detail = (err as { message?: string }).message ?? res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-				throw new PublishError(`Discord webhook failed: ${detail}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(`Discord webhook failed: ${detail}`, {
+					statusCode: res.status,
+					detail: raw,
+				});
 			}
 
 			const result = (await res.json()) as {
@@ -204,7 +442,8 @@ export const discordPublisher: Publisher = {
 				platform_url: platformUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			await cancelPendingFiles();
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

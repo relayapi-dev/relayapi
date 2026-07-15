@@ -114,3 +114,120 @@ describe("meta ad adapter listAudiences", () => {
 		}
 	});
 });
+
+describe("meta paid-object crash recovery", () => {
+	it("finds a correlated object with bounded cursor pagination", async () => {
+		const originalFetch = globalThis.fetch;
+		const calls: string[] = [];
+		globalThis.fetch = (async (url: string | URL) => {
+			calls.push(url.toString());
+			const page = calls.length;
+			return Response.json({
+				data:
+					page === 3
+						? [{ id: "campaign_3", name: "Launch [relay:adop_1]" }]
+						: [{ id: `campaign_${page}`, name: "Unrelated" }],
+				paging:
+					page < 3
+						? { next: "present", cursors: { after: `cursor_${page}` } }
+						: undefined,
+			});
+		}) as typeof fetch;
+
+		try {
+			const id = await metaAdAdapter.creation.findCreatedObject(
+				"tok",
+				"act_123",
+				{
+					phase: "campaign",
+					marker: "[relay:adop_1]",
+				},
+			);
+			expect(id).toBe("campaign_3");
+			expect(calls).toHaveLength(3);
+			expect(calls[1]).toContain("after=cursor_1");
+			expect(calls[2]).toContain("after=cursor_2");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("stops correlation lookup after three full pages", async () => {
+		const originalFetch = globalThis.fetch;
+		let calls = 0;
+		globalThis.fetch = Object.assign(
+			async () => {
+				calls += 1;
+				return Response.json({
+					data: [{ id: `creative_${calls}`, name: "Unrelated" }],
+					paging: { next: "present", cursors: { after: `cursor_${calls}` } },
+				});
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		try {
+			const id = await metaAdAdapter.creation.findCreatedObject(
+				"tok",
+				"act_123",
+				{
+					phase: "creative",
+					marker: "[relay:adop_missing]",
+				},
+			);
+			expect(id).toBeNull();
+			expect(calls).toBe(3);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("keeps the operation marker on boost creatives", async () => {
+		const originalFetch = globalThis.fetch;
+		let body: Record<string, unknown> | undefined;
+		globalThis.fetch = (async (_url: string | URL, init?: RequestInit) => {
+			body = JSON.parse(String(init?.body));
+			return Response.json({ id: "creative_1" });
+		}) as typeof fetch;
+
+		try {
+			await metaAdAdapter.creation.createCreative("tok", "act_123", {
+				name: "Boosted Post [relay:adop_1]",
+				platformPostId: "page_1_post_1",
+			});
+			expect(body).toMatchObject({
+				name: "Boosted Post [relay:adop_1] - Creative",
+				object_story_id: "page_1_post_1",
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("checks boost activation with exact read-only requests", async () => {
+		const originalFetch = globalThis.fetch;
+		const calls: { url: string; method?: string }[] = [];
+		globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+			calls.push({ url: url.toString(), method: init?.method });
+			return Response.json({
+				status: url.toString().includes("campaign_1") ? "ACTIVE" : "PAUSED",
+			});
+		}) as typeof fetch;
+
+		try {
+			const active = await metaAdAdapter.creation.isBoostActivated(
+				"tok",
+				"campaign_1",
+				"adset_1",
+			);
+			expect(active).toBe(false);
+			expect(calls).toHaveLength(2);
+			expect(calls.every((call) => call.method === undefined)).toBe(true);
+			expect(calls.every((call) => call.url.includes("fields=status"))).toBe(
+				true,
+			);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+});

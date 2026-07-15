@@ -175,7 +175,7 @@ curl -X PUT "<presigned_url>" \
 ```bash
 curl -X POST "https://api.relayapi.dev/v1/media/upload?filename=photo.jpg" \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
-  -H "Content-Type: application/octet-stream" \
+  -H "Content-Type: image/jpeg" \
   --data-binary @photo.jpg
 ```
 
@@ -490,22 +490,17 @@ curl -X POST https://api.relayapi.dev/v1/connect/bluesky \
 ### Telegram (bot code)
 
 ```bash
-# Initiate — returns a 6-char code and bot username
+# Initiate — returns an organization-bound challenge code and bot username
 curl -X POST https://api.relayapi.dev/v1/connect/telegram \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
-# Returns: { "code": "ABC123", "bot_username": "@relayapi_bot", "expires_in": 900 }
+# Returns: { "code": "RLAY-A1B2C3D4E5F6", "bot_username": "@relayapi_bot", "expires_in": 900 }
 
-# Tell the user to message the bot with: /start ABC123
+# Tell the user to message the bot with: /start RLAY-A1B2C3D4E5F6
 
 # Poll for connection status
-curl "https://api.relayapi.dev/v1/connect/telegram?code=ABC123" \
+curl "https://api.relayapi.dev/v1/connect/telegram?code=RLAY-A1B2C3D4E5F6" \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 # Returns: { "status": "pending" | "connected" | "expired" }
-
-# Or connect directly with a known chat ID
-curl -X POST https://api.relayapi.dev/v1/connect/telegram/direct \
-  -H "Authorization: Bearer $RELAYAPI_API_KEY" \
-  -d '{ "chat_id": "-100123456789" }'
 ```
 
 ### Connection Logs

@@ -1,8 +1,8 @@
-import { createDb, posts, postTargets } from "@relayapi/db";
-import { and, asc, eq, inArray, isNull, lte, or } from "drizzle-orm";
-import { incrementUsage } from "../middleware/usage-tracking";
+import { createDb, posts, postTargets, publishOutbox } from "@relayapi/db";
+import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { notifyRealtime } from "../lib/notify-post-update";
 import type { Env } from "../types";
+import { dispatchPublishOutbox, publishOutboxRow } from "./publish-outbox";
 
 /**
  * Process all scheduled posts whose scheduled_at <= now.
@@ -46,11 +46,51 @@ export async function processScheduledPosts(env: Env): Promise<void> {
 	// publishPostById CAS-claims on (status, updatedAt), and publishThreadPosition claims
 	// each item with status in {scheduled, publishing}. The cron only ever re-selects
 	// status="scheduled", so a claimed post is not re-enqueued next tick.
-	const claimed = await db
-		.update(posts)
-		.set({ status: "publishing", updatedAt: new Date() })
-		.where(and(inArray(posts.id, duePostIds), eq(posts.status, "scheduled")))
-		.returning({ id: posts.id });
+	const claimed = await db.transaction(async (tx) => {
+		const rows = await tx
+			.update(posts)
+			.set({
+				status: "publishing",
+				revision: sql`${posts.revision} + 1`,
+				updatedAt: new Date(),
+			})
+			.where(and(inArray(posts.id, duePostIds), eq(posts.status, "scheduled")))
+			.returning({ id: posts.id });
+		const claimedIds = new Set(rows.map((row) => row.id));
+		const claimedPosts = duePosts.filter((post) => claimedIds.has(post.id));
+		if (claimedPosts.length > 0) {
+			await tx
+				.update(postTargets)
+				.set({
+					status: "publishing",
+					deliveryState: "queued",
+					updatedAt: new Date(),
+				})
+				.where(
+					inArray(
+						postTargets.postId,
+						claimedPosts.map((post) => post.id),
+					),
+				);
+			await tx
+				.insert(publishOutbox)
+				.values(
+					claimedPosts.map((post) =>
+						post.threadGroupId && post.threadPosition === 0
+							? publishOutboxRow({
+									organizationId: post.organizationId,
+									threadGroupId: post.threadGroupId,
+								})
+							: publishOutboxRow({
+									organizationId: post.organizationId,
+									postId: post.id,
+								}),
+					),
+				)
+				.onConflictDoNothing();
+		}
+		return rows;
+	});
 	const claimedIds = new Set(claimed.map((row) => row.id));
 
 	// Only proceed with posts we actually claimed. A post that lost the claim race
@@ -58,69 +98,13 @@ export async function processScheduledPosts(env: Env): Promise<void> {
 	const claimedPosts = duePosts.filter((p) => claimedIds.has(p.id));
 	if (claimedPosts.length === 0) return;
 
-	// Batch-fetch all targets for claimed posts in one query
-	const claimedPostIds = claimedPosts.map((p) => p.id);
-	const allTargets = await db
-		.select({ id: postTargets.id, postId: postTargets.postId })
-		.from(postTargets)
-		.where(inArray(postTargets.postId, claimedPostIds));
-
-	// Count targets per post
-	const targetCountByPost = new Map<string, number>();
-	for (const t of allTargets) {
-		targetCountByPost.set(t.postId, (targetCountByPost.get(t.postId) ?? 0) + 1);
-	}
-
-	// Group usage units by orgId so we increment once per org
-	const usageByOrg = new Map<string, number>();
-	for (const post of claimedPosts) {
-		const units = Math.max(targetCountByPost.get(post.id) ?? 0, 1);
-		usageByOrg.set(
-			post.organizationId,
-			(usageByOrg.get(post.organizationId) ?? 0) + units,
-		);
-	}
-
-	// Increment usage once per org
-	await Promise.allSettled(
-		[...usageByOrg.entries()].map(([orgId, units]) =>
-			incrementUsage(env.KV, orgId, units),
-		),
-	);
-
-	// Build publish messages — thread root posts use publish_thread, standalone posts
-	// use publish. Send via sendBatch (up to 100 messages per call) instead of one
-	// send() per post to cut Queues subrequests at burst scheduling slots.
-	const messages = claimedPosts.map((post) =>
-		post.threadGroupId && post.threadPosition === 0
-			? {
-					body: {
-						type: "publish_thread" as const,
-						thread_group_id: post.threadGroupId,
-						org_id: post.organizationId,
-						position: 0,
-					},
-				}
-			: {
-					body: {
-						type: "publish" as const,
-						post_id: post.id,
-						org_id: post.organizationId,
-						usage_tracked: true,
-					},
-				},
-	);
-	const sendChunks: Array<typeof messages> = [];
-	for (let i = 0; i < messages.length; i += 100) {
-		sendChunks.push(messages.slice(i, i + 100));
-	}
-	await Promise.allSettled(
-		sendChunks.map((chunk) => env.PUBLISH_QUEUE.sendBatch(chunk)),
-	);
+	await dispatchPublishOutbox(env);
 
 	// Notify dashboard that scheduled posts are now being published.
 	// Group by org to send one notification per org (not per post).
-	const orgsWithDuePosts = [...new Set(claimedPosts.map((p) => p.organizationId))];
+	const orgsWithDuePosts = [
+		...new Set(claimedPosts.map((p) => p.organizationId)),
+	];
 	await Promise.allSettled(
 		orgsWithDuePosts.map((orgId) => {
 			const orgPosts = claimedPosts.filter((p) => p.organizationId === orgId);

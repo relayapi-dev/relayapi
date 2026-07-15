@@ -1,52 +1,84 @@
+import { createDb } from "@relayapi/db";
 import { Hono } from "hono";
 import { assertAllWorkspaceScope } from "../lib/request-access";
+import {
+	claimOneTimeCapability,
+	issueOneTimeCapability,
+} from "../services/one-time-capability";
 import type { Env, Variables } from "../types";
 
-/**
- * WebSocket upgrade — authenticated via short-lived ticket.
- * Mounted before the global /v1/* auth middleware, so this handles its own auth.
- */
+const PUBLIC_PROTOCOL = "relayapi.v1";
+const TICKET_PROTOCOL_PREFIX = "relayapi-ticket.";
+
+function ticketFromProtocols(value: string | undefined): string | null {
+	if (!value) return null;
+	for (const protocol of value.split(",").map((item) => item.trim())) {
+		if (protocol.startsWith(TICKET_PROTOCOL_PREFIX)) {
+			const ticket = protocol.slice(TICKET_PROTOCOL_PREFIX.length);
+			if (/^[a-f0-9]{32}$/.test(ticket)) return ticket;
+		}
+	}
+	return null;
+}
+
+/** WebSocket upgrade authenticated by an atomic, single-use SQL capability. */
 export const websocketUpgrade = new Hono<{ Bindings: Env }>();
 
 websocketUpgrade.get("/", async (c) => {
-	const upgradeHeader = c.req.header("Upgrade");
-	if (!upgradeHeader || upgradeHeader !== "websocket") {
-		return c.json({ error: { code: "BAD_REQUEST", message: "Expected WebSocket upgrade" } }, 426);
+	if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
+		return c.json(
+			{ error: { code: "BAD_REQUEST", message: "Expected WebSocket upgrade" } },
+			426,
+		);
 	}
-
-	if (c.req.query("token")) {
+	if (c.req.query("token") || c.req.query("ticket")) {
 		return c.json(
 			{
 				error: {
-					code: "TOKEN_QUERY_UNSUPPORTED",
-					message: "Raw API keys are not accepted on WebSocket URLs. Request a ws ticket first.",
+					code: "CAPABILITY_QUERY_UNSUPPORTED",
+					message:
+						"WebSocket credentials are not accepted in URLs; use the returned subprotocol.",
 				},
 			},
 			400,
 		);
 	}
 
-	const ticket = c.req.query("ticket");
+	const ticket = ticketFromProtocols(c.req.header("sec-websocket-protocol"));
 	if (!ticket) {
-		return c.json({ error: { code: "UNAUTHORIZED", message: "Missing ticket" } }, 401);
+		return c.json(
+			{ error: { code: "UNAUTHORIZED", message: "Missing ticket protocol" } },
+			401,
+		);
 	}
-
-	const data = await c.env.KV.get<{ org_id: string }>(`ws-ticket:${ticket}`, "json");
-	if (!data) {
-		return c.json({ error: { code: "UNAUTHORIZED", message: "Invalid or expired ticket" } }, 401);
+	const db = createDb(c.env.HYPERDRIVE.connectionString);
+	const data = await claimOneTimeCapability<{ org_id: string }>(
+		db,
+		c.env.ENCRYPTION_KEY,
+		"websocket_ticket",
+		ticket,
+	);
+	if (!data || typeof data.org_id !== "string") {
+		return c.json(
+			{ error: { code: "UNAUTHORIZED", message: "Invalid or expired ticket" } },
+			401,
+		);
 	}
-
-	await c.env.KV.delete(`ws-ticket:${ticket}`);
 
 	const doId = c.env.REALTIME.idFromName(data.org_id);
 	const stub = c.env.REALTIME.get(doId);
-	return stub.fetch(c.req.raw);
+	const headers = new Headers(c.req.raw.headers);
+	// Do not forward the bearer ticket into the Durable Object. It selects only
+	// the public protocol, which the browser can safely expose as ws.protocol.
+	headers.set("Sec-WebSocket-Protocol", PUBLIC_PROTOCOL);
+	return stub.fetch(new Request(c.req.raw, { headers }));
 });
 
-/**
- * WebSocket ticket issuance — requires the standard /v1/* auth middleware chain.
- */
-export const websocketTicket = new Hono<{ Bindings: Env; Variables: Variables }>();
+/** Ticket issuance uses the normal authenticated /v1 middleware chain. */
+export const websocketTicket = new Hono<{
+	Bindings: Env;
+	Variables: Variables;
+}>();
 
 websocketTicket.get("/", async (c) => {
 	const denied = assertAllWorkspaceScope(
@@ -56,19 +88,20 @@ websocketTicket.get("/", async (c) => {
 	if (denied) return denied;
 
 	const ticket = crypto.randomUUID().replace(/-/g, "");
-	const expiresAt = new Date(Date.now() + 60_000).toISOString();
-
-	await c.env.KV.put(
-		`ws-ticket:${ticket}`,
-		JSON.stringify({ org_id: c.get("orgId"), expires_at: expiresAt }),
-		{ expirationTtl: 60 },
-	);
-
+	const expiresAt = new Date(Date.now() + 60_000);
+	await issueOneTimeCapability(c.get("db"), c.env.ENCRYPTION_KEY, {
+		kind: "websocket_ticket",
+		token: ticket,
+		organizationId: c.get("orgId"),
+		payload: { org_id: c.get("orgId") },
+		expiresAt,
+	});
 	return c.json(
 		{
 			ticket,
-			expires_at: expiresAt,
-			ws_url: `/v1/ws?ticket=${ticket}`,
+			protocol: `${TICKET_PROTOCOL_PREFIX}${ticket}`,
+			expires_at: expiresAt.toISOString(),
+			ws_url: "/v1/ws",
 		},
 		200,
 	);

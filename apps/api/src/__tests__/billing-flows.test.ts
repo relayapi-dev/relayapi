@@ -5,7 +5,7 @@
  * They use the same mock infrastructure as individual tests but chain multiple
  * operations together to verify end-to-end correctness.
  */
-import { describe, it, expect, beforeEach, mock } from "bun:test";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
 
 // ── Module mocks (must be before imports of modules under test) ──
 
@@ -16,6 +16,9 @@ mock.module("../services/notification-manager", () => ({
 
 // We need a reference to the mock DB that handleEvent will use
 let activeDb: ReturnType<typeof import("./__mocks__/db").createMockDb>;
+let canonicalSubscriptionStatus = "active";
+let canonicalCancelAtPeriodEnd = false;
+let canonicalInvoiceStatus: "open" | "paid" = "open";
 
 mock.module("@relayapi/db", () => {
 	const { mockEq } = require("./__mocks__/db");
@@ -29,6 +32,9 @@ mock.module("@relayapi/db", () => {
 		status: { name: "status" },
 		cancelAtPeriodEnd: { name: "cancelAtPeriodEnd" },
 		monthlyPriceCents: { name: "monthlyPriceCents" },
+		trialEndsAt: { name: "trialEndsAt" },
+		currentPeriodStart: { name: "currentPeriodStart" },
+		currentPeriodEnd: { name: "currentPeriodEnd" },
 		toString: () => "organization_subscriptions",
 	};
 	const invoices = {
@@ -44,6 +50,28 @@ mock.module("@relayapi/db", () => {
 	};
 	const usageRecords = { toString: () => "usage_records" };
 	const apiRequestLogs = { toString: () => "api_request_logs" };
+	const billingOutbox = {
+		id: { name: "id" },
+		organizationId: { name: "organizationId" },
+		status: { name: "status" },
+		attempts: { name: "attempts" },
+		leaseToken: { name: "leaseToken" },
+		nextAttemptAt: { name: "nextAttemptAt" },
+		leaseExpiresAt: { name: "leaseExpiresAt" },
+		createdAt: { name: "createdAt" },
+		updatedAt: { name: "updatedAt" },
+		toString: () => "billing_outbox",
+	};
+	const stripeEvents = { toString: () => "stripe_events" };
+	const subscriptionCheckoutOperations = {
+		organizationId: { name: "organizationId" },
+		stripeCheckoutSessionId: { name: "stripeCheckoutSessionId" },
+		toString: () => "subscription_checkout_operations",
+	};
+	const whatsappPhoneNumbers = {
+		id: { name: "id" },
+		toString: () => "whatsapp_phone_numbers",
+	};
 
 	return {
 		createDb: () => activeDb,
@@ -52,25 +80,65 @@ mock.module("@relayapi/db", () => {
 		apikey,
 		usageRecords,
 		apiRequestLogs,
+		billingOutbox,
+		stripeEvents,
+		subscriptionCheckoutOperations,
+		whatsappPhoneNumbers,
 		eq: (col: unknown, val: unknown) => mockEq(col, val),
 	};
 });
 
 mock.module("drizzle-orm", () => {
 	const { mockEq } = require("./__mocks__/db");
+	type Condition = { _filter?: (row: Record<string, unknown>) => boolean };
 	return {
 		eq: (col: unknown, val: unknown) => mockEq(col, val),
-		sql: (strings: TemplateStringsArray, ..._values: unknown[]) =>
-			strings.join(""),
+		and: (...conditions: Condition[]) => ({
+			_filter: (row: Record<string, unknown>) =>
+				conditions.every((condition) => condition._filter?.(row) ?? true),
+		}),
+		or: (...conditions: Condition[]) => ({
+			_filter: (row: Record<string, unknown>) =>
+				conditions.some((condition) => condition._filter?.(row) ?? false),
+		}),
+		inArray: (col: { name: string }, values: unknown[]) => ({
+			_filter: (row: Record<string, unknown>) => values.includes(row[col.name]),
+		}),
+		gt: (col: { name: string }, value: unknown) => ({
+			_filter: (row: Record<string, unknown>) =>
+				String(row[col.name]) > String(value),
+		}),
+		lte: (col: { name: string }, value: Date) => ({
+			_filter: (row: Record<string, unknown>) => {
+				const candidate = row[col.name];
+				return candidate == null || (candidate as Date) <= value;
+			},
+		}),
+		asc: (value: unknown) => value,
+		sql: Object.assign(
+			(_strings: TemplateStringsArray, ..._values: unknown[]) => 1,
+			{ join: () => "" },
+		),
 	};
 });
 
 mock.module("../services/stripe", () => ({
 	createStripeClient: () => {
-		const { createMockSubscription } = require("./__mocks__/stripe");
+		const {
+			createMockInvoice,
+			createMockSubscription,
+		} = require("./__mocks__/stripe");
 		return {
 			subscriptions: {
-				retrieve: async () => createMockSubscription(),
+				retrieve: async () =>
+					createMockSubscription({
+						status: canonicalSubscriptionStatus,
+						cancel_at_period_end: canonicalCancelAtPeriodEnd,
+					}),
+			},
+			invoices: {
+				retrieve: async () =>
+					createMockInvoice({ status: canonicalInvoiceStatus }),
 			},
 		};
 	},
@@ -78,18 +146,19 @@ mock.module("../services/stripe", () => ({
 
 // ── Now import modules under test ──
 
-import { handleEvent, } from "../routes/stripe-webhooks";
 import { incrementUsage } from "../middleware/usage-tracking";
+import { handleEvent } from "../routes/stripe-webhooks";
+import { processBillingOutbox } from "../services/billing-outbox";
+import type { Env, KVKeyData } from "../types";
 import { createMockDb } from "./__mocks__/db";
-import { type MockKV, createMockEnv } from "./__mocks__/env";
+import { createMockEnv, type MockKV } from "./__mocks__/env";
 import {
 	createCheckoutCompletedEvent,
-	createSubscriptionUpdatedEvent,
-	createSubscriptionDeletedEvent,
-	createInvoicePaymentFailedEvent,
 	createInvoicePaidEvent,
+	createInvoicePaymentFailedEvent,
+	createSubscriptionDeletedEvent,
+	createSubscriptionUpdatedEvent,
 } from "./__mocks__/stripe";
-import type { Env, KVKeyData } from "../types";
 
 // ── Helpers ──
 
@@ -132,19 +201,6 @@ function seedApiKeys(
 	);
 }
 
-async function getKVPlan(kv: MockKV, keyHash: string): Promise<string> {
-	const raw = await kv.get(`apikey:${keyHash}`, "json");
-	return (raw as KVKeyData)?.plan ?? "unknown";
-}
-
-async function getKVCallsIncluded(
-	kv: MockKV,
-	keyHash: string,
-): Promise<number> {
-	const raw = await kv.get(`apikey:${keyHash}`, "json");
-	return (raw as KVKeyData)?.calls_included ?? 0;
-}
-
 // ── Tests ──
 
 let db: ReturnType<typeof createMockDb>;
@@ -158,9 +214,12 @@ beforeEach(() => {
 	db = createMockDb();
 	activeDb = db;
 	mockNotify.mockClear();
+	canonicalSubscriptionStatus = "active";
+	canonicalCancelAtPeriodEnd = false;
+	canonicalInvoiceStatus = "open";
 });
 
-describe("Upgrade flow: checkout → webhook → KV pro", () => {
+describe("Upgrade flow: checkout → webhook → auth-cache invalidation", () => {
 	it("completes upgrade end-to-end", async () => {
 		// Start: org has cancelled subscription, free KV keys
 		seedOrgSub(db, { status: "cancelled", stripeSubscriptionId: null });
@@ -175,13 +234,18 @@ describe("Upgrade flow: checkout → webhook → KV pro", () => {
 		await handleEvent(event, env);
 
 		// DB should be updated to active
-		const sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
+		const sub = db._getData("organizationSubscriptions")[0] as Record<
+			string,
+			unknown
+		>;
 		expect(sub.status).toBe("active");
 		expect(sub.stripeSubscriptionId).toBe("sub_test_123");
 
-		// KV should be upgraded to pro
-		expect(await getKVPlan(kv, "hashed_key_1")).toBe("pro");
-		expect(await getKVCallsIncluded(kv, "hashed_key_1")).toBe(10_000);
+		// The request commits the effect; the background drain invalidates the
+		// stale cache so auth rehydrates the authoritative active row.
+		expect(await kv.get("apikey:hashed_key_1", "json")).not.toBeNull();
+		await processBillingOutbox(env, db as never);
+		expect(await kv.get("apikey:hashed_key_1", "json")).toBeNull();
 	});
 });
 
@@ -195,29 +259,36 @@ describe("Cancel at period end → deleted", () => {
 			status: "active",
 			cancelAtPeriodEnd: true,
 		});
+		canonicalCancelAtPeriodEnd = true;
 		await handleEvent(updateEvent, env);
 
 		// DB should have cancelAtPeriodEnd=true, status still active
-		let sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
+		let sub = db._getData("organizationSubscriptions")[0] as Record<
+			string,
+			unknown
+		>;
 		expect(sub.cancelAtPeriodEnd).toBe(true);
 		expect(sub.status).toBe("active");
 
-		// KV should still be pro (user keeps access until period end)
-		expect(await getKVPlan(kv, "hashed_key_1")).toBe("pro");
+		await processBillingOutbox(env, db as never);
+		expect(await kv.get("apikey:hashed_key_1", "json")).toBeNull();
+		seedApiKeys(db, kv, "org_test_123", "pro");
 
 		// Step 2: Period ends, subscription deleted
 		const deleteEvent = createSubscriptionDeletedEvent();
 		await handleEvent(deleteEvent, env);
 
 		// DB should be cancelled
-		sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
+		sub = db._getData("organizationSubscriptions")[0] as Record<
+			string,
+			unknown
+		>;
 		expect(sub.status).toBe("cancelled");
 		expect(sub.stripeSubscriptionId).toBeNull();
 		expect(sub.cancelAtPeriodEnd).toBe(false);
 
-		// KV should be downgraded to free
-		expect(await getKVPlan(kv, "hashed_key_1")).toBe("free");
-		expect(await getKVCallsIncluded(kv, "hashed_key_1")).toBe(200);
+		await processBillingOutbox(env, db as never);
+		expect(await kv.get("apikey:hashed_key_1", "json")).toBeNull();
 	});
 });
 
@@ -228,16 +299,22 @@ describe("Payment failure and recovery", () => {
 
 		// Step 1: Payment fails
 		const failEvent = createInvoicePaymentFailedEvent();
+		canonicalSubscriptionStatus = "past_due";
+		canonicalInvoiceStatus = "open";
 		await handleEvent(failEvent, env);
 
-		// DB should be past_due, KV should be free
-		let sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
+		// DB should be past_due and its stale cached entitlement invalidated.
+		let sub = db._getData("organizationSubscriptions")[0] as Record<
+			string,
+			unknown
+		>;
 		expect(sub.status).toBe("past_due");
-		expect(await getKVPlan(kv, "hashed_key_1")).toBe("free");
-		expect(await getKVCallsIncluded(kv, "hashed_key_1")).toBe(200);
+		await processBillingOutbox(env, db as never);
+		expect(await kv.get("apikey:hashed_key_1", "json")).toBeNull();
 
 		// Notification should have been sent
 		expect(mockNotify).toHaveBeenCalled();
+		seedApiKeys(db, kv, "org_test_123", "free");
 
 		// Step 2: Payment succeeds
 		// Need to seed a local invoice for the paid event
@@ -249,18 +326,23 @@ describe("Payment failure and recovery", () => {
 		]);
 
 		const paidEvent = createInvoicePaidEvent();
+		canonicalSubscriptionStatus = "active";
+		canonicalInvoiceStatus = "paid";
 		await handleEvent(paidEvent, env);
 
-		// DB should be active again, KV should be pro
-		sub = db._getData("organizationSubscriptions")[0] as Record<string, unknown>;
+		// DB should be active again and the cached free entitlement invalidated.
+		sub = db._getData("organizationSubscriptions")[0] as Record<
+			string,
+			unknown
+		>;
 		expect(sub.status).toBe("active");
-		expect(await getKVPlan(kv, "hashed_key_1")).toBe("pro");
-		expect(await getKVCallsIncluded(kv, "hashed_key_1")).toBe(10_000);
+		await processBillingOutbox(env, db as never);
+		expect(await kv.get("apikey:hashed_key_1", "json")).toBeNull();
 	});
 });
 
-describe("Usage enforcement across plan change", () => {
-	it("blocks free user at limit, allows after upgrade", async () => {
+describe("Usage state across plan change", () => {
+	it("preserves usage and invalidates stale free entitlement after upgrade", async () => {
 		seedOrgSub(db, { status: "cancelled" });
 		seedApiKeys(db, kv, "org_test_123", "free");
 
@@ -270,7 +352,11 @@ describe("Usage enforcement across plan change", () => {
 		await kv.put(`usage:org_test_123:${month}`, "200");
 
 		// Usage count should be at limit
-		const count = await incrementUsage(kv as unknown as KVNamespace, "org_test_123", 1);
+		const count = await incrementUsage(
+			kv as unknown as KVNamespace,
+			"org_test_123",
+			1,
+		);
 		expect(count).toBe(201); // incremented past limit
 
 		// After upgrade webhook
@@ -279,10 +365,10 @@ describe("Usage enforcement across plan change", () => {
 		});
 		await handleEvent(event, env);
 
-		// KV plan should now be pro
-		expect(await getKVPlan(kv, "hashed_key_1")).toBe("pro");
-		expect(await getKVCallsIncluded(kv, "hashed_key_1")).toBe(10_000);
-
-		// Usage count is still 201, but pro plan has 10k limit — no block
+		const sub = db._getData("organizationSubscriptions")[0];
+		expect(sub?.status).toBe("active");
+		await processBillingOutbox(env, db as never);
+		expect(await kv.get("apikey:hashed_key_1", "json")).toBeNull();
+		expect(await kv.get(`usage:org_test_123:${month}`)).toBe("201");
 	});
 });

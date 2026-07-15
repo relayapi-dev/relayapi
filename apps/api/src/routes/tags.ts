@@ -1,20 +1,20 @@
-import { createRoute, OpenAPIHono, } from "@hono/zod-openapi";
+import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { tags } from "@relayapi/db";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
-import { ErrorResponse, IdParam } from "../schemas/common";
-import {
-	CreateTagBody,
-	UpdateTagBody,
-	TagResponse,
-	TagListQuery,
-	TagListResponse,
-} from "../schemas/tags";
-import type { Env, Variables } from "../types";
+import { assertAllWorkspaceScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
 } from "../lib/workspace-scope";
-import { assertScopedCreateWorkspace } from "../lib/request-access";
+import { ErrorResponse, IdParam } from "../schemas/common";
+import {
+	CreateTagBody,
+	TagListQuery,
+	TagListResponse,
+	TagResponse,
+	UpdateTagBody,
+} from "../schemas/tags";
+import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -128,14 +128,17 @@ app.openapi(createTag, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "tag");
+	const denied = assertAllWorkspaceScope(
+		c,
+		"Only an all-workspace API key can create organization-shared tags.",
+	);
 	if (denied) return denied;
 
 	const [row] = await db
 		.insert(tags)
 		.values({
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: null,
 			name: body.name,
 			color: body.color,
 		})
@@ -188,6 +191,8 @@ app.openapi(updateTag, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(c);
+	if (accessDenied) return accessDenied as never;
 
 	const [existing] = await db
 		.select()
@@ -247,6 +252,8 @@ app.openapi(deleteTag, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(c);
+	if (accessDenied) return accessDenied as never;
 
 	const [existing] = await db
 		.select({ id: tags.id, workspaceId: tags.workspaceId })

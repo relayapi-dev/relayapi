@@ -13,7 +13,7 @@ import * as schema from "./schema";
  * Options per Cloudflare Hyperdrive docs:
  * - prepare: true  — lets Hyperdrive cache prepared statements (fewer round-trips)
  * - max: 5         — Workers limit on concurrent outbound connections per request
- * - fetch_types: false — skip extra round-trip for type metadata
+ * - fetch_types: true — required because RelayAPI uses PostgreSQL array columns
  */
 export function createDb(
 	connectionString: string,
@@ -22,7 +22,7 @@ export function createDb(
 	const client = postgres(connectionString, {
 		prepare: true,
 		max: 5,
-		fetch_types: false,
+		fetch_types: true,
 	});
 	const onQuery = opts?.onQuery;
 	return drizzle(client, {

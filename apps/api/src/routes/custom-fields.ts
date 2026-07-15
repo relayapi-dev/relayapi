@@ -1,8 +1,13 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
+import { customFieldDefinitions } from "@relayapi/db";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { assertAllWorkspaceScope } from "../lib/request-access";
 import {
-	customFieldDefinitions,
-} from "@relayapi/db";
-import { and, eq, desc, sql } from "drizzle-orm";
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+} from "../lib/workspace-scope";
 import { ErrorResponse } from "../schemas/common";
 import {
 	CreateFieldBody,
@@ -12,7 +17,6 @@ import {
 	UpdateFieldBody,
 } from "../schemas/custom-fields";
 import type { Env, Variables } from "../types";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -99,7 +103,8 @@ const updateField = createRoute({
 	path: "/{id}",
 	tags: ["Custom Fields"],
 	summary: "Update a custom field definition",
-	description: "Only name and options can be updated. Type and slug are immutable.",
+	description:
+		"Only name and options can be updated. Type and slug are immutable.",
 	security: [{ Bearer: [] }],
 	request: {
 		params: FieldIdParams,
@@ -112,6 +117,10 @@ const updateField = createRoute({
 		},
 		404: {
 			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -132,6 +141,10 @@ const deleteField = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -142,10 +155,20 @@ app.openapi(createField, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(
+		c,
+		"Only an all-workspace API key can create organization-shared custom fields.",
+	);
+	if (accessDenied) return accessDenied as never;
 
 	if (body.type === "select" && (!body.options || body.options.length === 0)) {
 		return c.json(
-			{ error: { code: "VALIDATION_ERROR", message: "Options are required for select type" } },
+			{
+				error: {
+					code: "VALIDATION_ERROR",
+					message: "Options are required for select type",
+				},
+			},
 			400,
 		);
 	}
@@ -153,7 +176,12 @@ app.openapi(createField, async (c) => {
 	const slug = body.slug ?? slugify(body.name);
 	if (!slug) {
 		return c.json(
-			{ error: { code: "VALIDATION_ERROR", message: "Could not generate a valid slug from the field name" } },
+			{
+				error: {
+					code: "VALIDATION_ERROR",
+					message: "Could not generate a valid slug from the field name",
+				},
+			},
 			400,
 		);
 	}
@@ -172,7 +200,12 @@ app.openapi(createField, async (c) => {
 
 	if (existing) {
 		return c.json(
-			{ error: { code: "CONFLICT", message: `A field with slug "${slug}" already exists` } },
+			{
+				error: {
+					code: "CONFLICT",
+					message: `A field with slug "${slug}" already exists`,
+				},
+			},
 			409,
 		);
 	}
@@ -181,7 +214,7 @@ app.openapi(createField, async (c) => {
 		.insert(customFieldDefinitions)
 		.values({
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: null,
 			name: body.name,
 			slug,
 			type: body.type,
@@ -217,7 +250,9 @@ app.openapi(listFields, async (c) => {
 	// ::timestamptz cast to keep the keyset comparison exact.
 	if (cursor) {
 		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${customFieldDefinitions.createdAt}::text` })
+			.select({
+				createdAt: sql<string>`${customFieldDefinitions.createdAt}::text`,
+			})
 			.from(customFieldDefinitions)
 			.where(eq(customFieldDefinitions.id, cursor))
 			.limit(1);
@@ -232,7 +267,10 @@ app.openapi(listFields, async (c) => {
 		.select()
 		.from(customFieldDefinitions)
 		.where(and(...conditions))
-		.orderBy(desc(customFieldDefinitions.createdAt), desc(customFieldDefinitions.id))
+		.orderBy(
+			desc(customFieldDefinitions.createdAt),
+			desc(customFieldDefinitions.id),
+		)
 		.limit(limit + 1);
 
 	const hasMore = fields.length > limit;
@@ -253,6 +291,30 @@ app.openapi(updateField, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(c);
+	if (accessDenied) return accessDenied as never;
+	const [existing] = await db
+		.select({
+			id: customFieldDefinitions.id,
+			workspaceId: customFieldDefinitions.workspaceId,
+		})
+		.from(customFieldDefinitions)
+		.where(
+			and(
+				eq(customFieldDefinitions.id, id),
+				eq(customFieldDefinitions.organizationId, orgId),
+			),
+		)
+		.limit(1);
+	if (!existing) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Field not found" } },
+			404,
+		);
+	}
+	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
 	const updateSet: Record<string, unknown> = { updatedAt: new Date() };
 	if (body.name !== undefined) updateSet.name = body.name;
@@ -283,9 +345,14 @@ app.openapi(deleteField, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(c);
+	if (accessDenied) return accessDenied as never;
 
 	const [existing] = await db
-		.select({ id: customFieldDefinitions.id, workspaceId: customFieldDefinitions.workspaceId })
+		.select({
+			id: customFieldDefinitions.id,
+			workspaceId: customFieldDefinitions.workspaceId,
+		})
 		.from(customFieldDefinitions)
 		.where(
 			and(

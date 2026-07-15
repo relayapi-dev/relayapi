@@ -1,4 +1,10 @@
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 /**
  * ConvertKit (Kit) publisher.
@@ -6,10 +12,10 @@ import { classifyPublishError, PublishError, type Publisher, type PublishRequest
  * API key stored in access_token.
  *
  * Kit API v4:
- * - Create Broadcast: https://developers.kit.com/v4/broadcasts/create
+ * - Create Broadcast: https://developers.kit.com/api-reference/broadcasts/create-a-broadcast
  *   POST /v4/broadcasts
- *   Body: { email_template_id?, content, subject, description?, public?, send_at? }
- *   Headers: Authorization: Bearer {api_key}
+ *   Body: { email_template_id?, content, subject, preview_text?, public?, send_at? }
+ *   Headers: X-Kit-Api-Key: {api_key}
  * - V3 is deprecated: https://developers.kit.com/api-reference/upgrading-to-v4
  */
 
@@ -34,20 +40,29 @@ export const convertkitPublisher: Publisher = {
 			}
 
 			const opts = request.target_options;
-			const subject = (opts.subject as string) ??
+			const subject =
+				(opts.subject as string) ??
 				(request.content?.split("\n")[0]?.slice(0, 100) || "Newsletter Update");
-			const contentHtml = (opts.content_html as string) ??
-				wrapInHtml(request.content ?? "");
+			const contentHtml =
+				(opts.content_html as string) ?? wrapInHtml(request.content ?? "");
 			const previewText = opts.preview_text as string | undefined;
 
-			// Kit API v4: Create Broadcast
-			// Docs: https://developers.kit.com/v4/broadcasts/create
+			// Kit API v4: Create Broadcast.
+			// Official docs: https://developers.kit.com/api-reference/broadcasts/create-a-broadcast
+			// Section "Create a broadcast": POST https://api.kit.com/v4/broadcasts
+			// with content, subject, preview_text, public, published_at, and send_at.
 			const createBody: Record<string, unknown> = {
 				subject,
 				content: contentHtml,
 			};
 			if (previewText) {
-				createBody.description = previewText;
+				createBody.preview_text = previewText;
+			}
+			if (typeof opts.public === "boolean") {
+				createBody.public = opts.public;
+			}
+			if (typeof opts.published_at === "string") {
+				createBody.published_at = opts.published_at;
 			}
 
 			// email_template_id replaces v3's email_layout_template
@@ -56,15 +71,20 @@ export const convertkitPublisher: Publisher = {
 				createBody.email_template_id = templateId;
 			}
 
-			// Set send_at to publish immediately (current time in ISO format)
-			// Users can override via target_options.send_at
+			// The official section documents null as a draft and a timestamp as a
+			// scheduled send; it does not expose a separate immediate-send action.
+			// Default one minute ahead to use the documented scheduling behavior and
+			// avoid a network-delayed "now" timestamp becoming a past timestamp.
+			// Users can override the schedule through target_options.send_at.
 			const sendAt = opts.send_at as string | undefined;
-			createBody.send_at = sendAt ?? new Date().toISOString();
+			createBody.send_at =
+				sendAt ?? new Date(Date.now() + 60_000).toISOString();
 
 			const createRes = await fetch(`${KIT_API}/broadcasts`, {
 				method: "POST",
 				headers: {
-					Authorization: `Bearer ${apiKey}`,
+					// Same official section, cURL example: `X-Kit-Api-Key`.
+					"X-Kit-Api-Key": apiKey,
 					"Content-Type": "application/json",
 				},
 				body: JSON.stringify(createBody),
@@ -84,16 +104,26 @@ export const convertkitPublisher: Publisher = {
 				const raw = `HTTP ${createRes.status}\n${JSON.stringify(err)}`;
 
 				if (createRes.status === 401) {
-					throw new PublishError(`TOKEN_EXPIRED: Kit credentials invalid: ${detail}`, { statusCode: createRes.status, detail: raw });
+					throw new PublishError(
+						`TOKEN_EXPIRED: Kit credentials invalid: ${detail}`,
+						{ statusCode: createRes.status, detail: raw },
+					);
 				}
 				if (createRes.status === 429) {
-					throw new PublishError(`RATE_LIMITED: ${detail}`, { statusCode: createRes.status, detail: raw });
+					throw new PublishError(`RATE_LIMITED: ${detail}`, {
+						statusCode: createRes.status,
+						detail: raw,
+					});
 				}
-				throw new PublishError(`Kit create failed (${createRes.status}): ${detail}`, { statusCode: createRes.status, detail: raw });
+				throw new PublishError(
+					`Kit create failed (${createRes.status}): ${detail}`,
+					{ statusCode: createRes.status, detail: raw },
+				);
 			}
 
 			const created = (await createRes.json()) as {
-				broadcast?: { id?: number };
+				// Official response schema, field `broadcast.public_url`.
+				broadcast?: { id?: number; public_url?: string | null };
 			};
 			const broadcastId = created.broadcast?.id;
 			if (!broadcastId) {
@@ -103,10 +133,12 @@ export const convertkitPublisher: Publisher = {
 			return {
 				success: true,
 				platform_post_id: String(broadcastId),
-				platform_url: `https://app.kit.com/broadcasts/${broadcastId}`,
+				platform_url:
+					created.broadcast?.public_url ??
+					`https://app.kit.com/broadcasts/${broadcastId}`,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

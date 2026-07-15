@@ -42,10 +42,11 @@ import type { SendMessageRequest } from "../services/message-sender";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -155,9 +156,7 @@ async function teardownFixture() {
 			),
 		);
 	await db.delete(automations).where(eq(automations.organizationId, orgId));
-	await db
-		.delete(inboxMessages)
-		.where(eq(inboxMessages.organizationId, orgId));
+	await db.delete(inboxMessages).where(eq(inboxMessages.organizationId, orgId));
 	await db
 		.delete(inboxConversations)
 		.where(eq(inboxConversations.organizationId, orgId));
@@ -178,6 +177,7 @@ async function teardownFixture() {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;
@@ -221,6 +221,7 @@ async function createEntrypoint(params: {
 	const [ep] = await db
 		.insert(automationEntrypoints)
 		.values({
+			organizationId: orgId,
 			automationId: params.automationId,
 			channel: "telegram" as never,
 			kind: params.kind as never,
@@ -270,6 +271,7 @@ async function createContactWithChannel(identifier: string) {
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	await db.insert(contactChannels).values({
+		organizationId: orgId,
 		contactId: ct.id,
 		socialAccountId,
 		platform: "telegram",
@@ -356,6 +358,7 @@ async function createIgContactWithChannel(identifier: string) {
 		.returning();
 	if (!ct) throw new Error("ig contact insert failed");
 	await db.insert(contactChannels).values({
+		organizationId: orgId,
 		contactId: ct.id,
 		socialAccountId: igSocialAccountId,
 		platform: "instagram",
@@ -601,9 +604,7 @@ describe("3.2 button postback resumes waiting run (pipeline)", () => {
 
 		// Seed a waiting run parked at the `ask` node — mirrors what
 		// `enrollContact` would leave behind once the message dispatches.
-		const { enrollContact } = await import(
-			"../services/automations/runner"
-		);
+		const { enrollContact } = await import("../services/automations/runner");
 		const { runId } = await enrollContact(db, {
 			automationId: auto.id,
 			organizationId: orgId,
@@ -705,9 +706,7 @@ describe("3.3 quick-reply resumes waiting run (pipeline)", () => {
 		const chatId = "70003";
 		const ct = await createContactWithChannel(chatId);
 
-		const { enrollContact } = await import(
-			"../services/automations/runner"
-		);
+		const { enrollContact } = await import("../services/automations/runner");
 		const { runId } = await enrollContact(db, {
 			automationId: auto.id,
 			organizationId: orgId,
@@ -789,9 +788,7 @@ describe("3.4 text reply to input node (pipeline regression)", () => {
 		const chatId = "70004";
 		const ct = await createContactWithChannel(chatId);
 
-		const { enrollContact } = await import(
-			"../services/automations/runner"
-		);
+		const { enrollContact } = await import("../services/automations/runner");
 		const { runId } = await enrollContact(db, {
 			automationId: auto.id,
 			organizationId: orgId,
@@ -844,9 +841,7 @@ describe("3.5 entrypoint keyword match (pipeline regression)", () => {
 					key: "reply",
 					kind: "message",
 					config: {
-						blocks: [
-							{ id: "b1", type: "text", text: "Here's a pizza menu" },
-						],
+						blocks: [{ id: "b1", type: "text", text: "Here's a pizza menu" }],
 					},
 					ports: [
 						{ key: "in", direction: "input" },
@@ -966,9 +961,7 @@ describe("3.6 Meta quick-reply payload resumes waiting run (pipeline)", () => {
 		const customerId = `igcust_${generateId("").slice(-8)}`;
 		const ct = await createIgContactWithChannel(customerId);
 
-		const { enrollContact } = await import(
-			"../services/automations/runner"
-		);
+		const { enrollContact } = await import("../services/automations/runner");
 		const { runId } = await enrollContact(db, {
 			automationId: auto.id,
 			organizationId: orgId,
@@ -1067,10 +1060,14 @@ describe("3.7 multi-account: run pins socialAccountId of triggering account (F2)
 			],
 		};
 
-		const auto = await createInstagramAutomation("pipeline-multi-account", graph);
+		const auto = await createInstagramAutomation(
+			"pipeline-multi-account",
+			graph,
+		);
 
 		// Create a keyword entrypoint SCOPED to account A (our original).
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "instagram" as never,
 			kind: "dm_received" as never,
@@ -1100,6 +1097,7 @@ describe("3.7 multi-account: run pins socialAccountId of triggering account (F2)
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 		await db.insert(contactChannels).values({
+			organizationId: orgId,
 			contactId: ct.id,
 			socialAccountId: igSocialAccountId,
 			platform: "instagram",
@@ -1108,6 +1106,7 @@ describe("3.7 multi-account: run pins socialAccountId of triggering account (F2)
 		// Sleep 5ms to ensure the B channel is strictly newer than A.
 		await new Promise((r) => setTimeout(r, 5));
 		await db.insert(contactChannels).values({
+			organizationId: orgId,
 			contactId: ct.id,
 			socialAccountId: igSaB.id,
 			platform: "instagram",
@@ -1219,11 +1218,9 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 				participantPlatformId: chatId,
 			})
 			.returning();
-			if (!commentConv) throw new Error("comment conversation insert failed");
+		if (!commentConv) throw new Error("comment conversation insert failed");
 
-		const { enrollContact } = await import(
-			"../services/automations/runner"
-		);
+		const { enrollContact } = await import("../services/automations/runner");
 		// Enroll the run AGAINST the comment-thread conversation — the inbound
 		// DM callback will arrive under a different (DM-thread) conversation,
 		// but Plan 7 drops the conversation filter so the resume still lands.
@@ -1278,9 +1275,7 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		const alice = await createContactWithChannel(aliceChat);
 		const bob = await createContactWithChannel(bobChat);
 
-		const { enrollContact } = await import(
-			"../services/automations/runner"
-		);
+		const { enrollContact } = await import("../services/automations/runner");
 		const { runId: aliceRunId } = await enrollContact(db, {
 			automationId: aliceAuto.id,
 			organizationId: orgId,
@@ -1345,9 +1340,7 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		const chatId = "70103";
 		const ct = await createContactWithChannel(chatId);
 
-		const { enrollContact } = await import(
-			"../services/automations/runner"
-		);
+		const { enrollContact } = await import("../services/automations/runner");
 		const { runId: olderRunId } = await enrollContact(db, {
 			automationId: olderAuto.id,
 			organizationId: orgId,
@@ -1460,9 +1453,7 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		const chatId = "70104";
 		const ct = await createContactWithChannel(chatId);
 
-		const { enrollContact } = await import(
-			"../services/automations/runner"
-		);
+		const { enrollContact } = await import("../services/automations/runner");
 		const { runId: yesRunId } = await enrollContact(db, {
 			automationId: yesAuto.id,
 			organizationId: orgId,

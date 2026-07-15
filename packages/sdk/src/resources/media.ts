@@ -54,19 +54,19 @@ export class Media extends APIResource {
 
   /**
    * Upload a raw file body. Pass the filename as a query parameter and set the
-   * Content-Type header.
+   * Content-Type header to the file's actual allowed media type.
    */
   upload(
-    body: string | ArrayBuffer | ArrayBufferView | Blob | DataView,
+    body: string | ArrayBuffer | ArrayBufferView | Blob | DataView | ReadableStream<Uint8Array>,
     params: MediaUploadParams,
     options?: RequestOptions,
   ): APIPromise<MediaUploadResponse> {
-    const { filename } = params;
+    const { filename, content_type, workspace_id } = params;
     return this._client.post('/v1/media/upload', {
       body: body,
-      query: { filename },
+      query: { filename, workspace_id },
       ...options,
-      headers: buildHeaders([{ 'Content-Type': 'application/octet-stream' }, options?.headers]),
+      headers: buildHeaders([{ 'Content-Type': content_type }, options?.headers]),
     });
   }
 }
@@ -98,7 +98,8 @@ export interface MediaRetrieveResponse {
   size: number;
 
   /**
-   * Public URL
+   * Original URL while retained, otherwise the durable thumbnail URL; null when
+   * neither is available
    */
   url: string | null;
 
@@ -167,6 +168,11 @@ export interface MediaGetPresignURLParams {
    * Desired filename
    */
   filename: string;
+
+  /**
+   * Workspace ID for the media record
+   */
+  workspace_id?: string;
 }
 
 export interface MediaConfirmParams {
@@ -178,9 +184,19 @@ export interface MediaConfirmParams {
 
 export interface MediaUploadParams {
   /**
+   * The file's actual MIME type. Generic application/octet-stream is rejected.
+   */
+  content_type: string;
+
+  /**
    * Query param: Original filename
    */
   filename: string;
+
+  /**
+   * Workspace ID for the media record
+   */
+  workspace_id?: string;
 }
 
 export interface MediaListParams {
@@ -237,7 +253,8 @@ export namespace MediaListResponse {
     size: number;
 
     /**
-     * Public URL
+     * Original URL while retained, otherwise the durable thumbnail URL; null when
+     * neither is available
      */
     url: string | null;
 

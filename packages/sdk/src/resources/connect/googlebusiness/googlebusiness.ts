@@ -2,7 +2,7 @@
 
 import { APIResource } from '../../../core/resource';
 import * as LocationsAPI from './locations';
-import { LocationListResponse, LocationSelectParams, LocationSelectResponse, Locations } from './locations';
+import { LocationListParams, LocationListResponse, LocationSelectParams, LocationSelectResponse, Locations } from './locations';
 
 export class Googlebusiness extends APIResource {
   locations: LocationsAPI.Locations = new LocationsAPI.Locations(this._client);
@@ -14,6 +14,7 @@ export declare namespace Googlebusiness {
   export {
     Locations as Locations,
     type LocationListResponse as LocationListResponse,
+    type LocationListParams as LocationListParams,
     type LocationSelectResponse as LocationSelectResponse,
     type LocationSelectParams as LocationSelectParams,
   };

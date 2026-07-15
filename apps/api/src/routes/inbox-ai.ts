@@ -1,6 +1,10 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { inboxMessages } from "@relayapi/db";
 import { desc, inArray } from "drizzle-orm";
+import {
+	INVALID_CURSOR_BODY,
+	InvalidPaginationCursorError,
+} from "../lib/pagination-cursor";
 import { ErrorResponse } from "../schemas/common";
 import {
 	ClassifyBody,
@@ -20,6 +24,7 @@ import {
 } from "../services/inbox-ai";
 import { listConversations } from "../services/inbox-persistence";
 import type { Env, Variables } from "../types";
+import { resolveInboxTarget } from "./inbox-helpers";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -171,12 +176,27 @@ app.openapi(suggestReplyRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { conversation_id, tone, max_suggestions, context } =
 		c.req.valid("json");
-
-	const suggestions = await suggestReplies(ai, db, conversation_id, orgId, {
-		tone,
-		max_suggestions,
-		context,
+	const target = await resolveInboxTarget(db, {
+		conversationId: conversation_id,
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
 	});
+	if (!target) {
+		return c.json({ suggestions: [] } as never, 200);
+	}
+
+	const suggestions = await suggestReplies(
+		ai,
+		db,
+		target.conversation.id,
+		orgId,
+		{
+			tone,
+			max_suggestions,
+			context,
+		},
+		c.get("workspaceScope"),
+	);
 
 	return c.json({ suggestions } as never, 200);
 });
@@ -234,8 +254,21 @@ app.openapi(summarizeRoute, async (c) => {
 	const db = c.get("db");
 	const orgId = c.get("orgId");
 	const { conversation_id } = c.req.valid("json");
+	const target = await resolveInboxTarget(db, {
+		conversationId: conversation_id,
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+	});
 
-	const result = await summarizeConversation(ai, db, conversation_id, orgId);
+	const result = target
+		? await summarizeConversation(
+				ai,
+				db,
+				target.conversation.id,
+				orgId,
+				c.get("workspaceScope"),
+			)
+		: null;
 
 	if (!result) {
 		return c.json(
@@ -269,6 +302,10 @@ const prioritiesRoute = createRoute({
 			description: "Prioritized conversation list",
 			content: { "application/json": { schema: PrioritiesResponse } },
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -289,16 +326,24 @@ app.openapi(prioritiesRoute, async (c) => {
 				.filter(Boolean)
 		: undefined;
 
-	const result = await listConversations(db, orgId, {
-		type,
-		platform,
-		status,
-		accountId: account_id,
-		labels: parsedLabels,
-		cursor,
-		limit,
-		workspaceScope: c.get("workspaceScope"),
-	});
+	let result: Awaited<ReturnType<typeof listConversations>>;
+	try {
+		result = await listConversations(db, orgId, {
+			type,
+			platform,
+			status,
+			accountId: account_id,
+			labels: parsedLabels,
+			cursor,
+			limit,
+			workspaceScope: c.get("workspaceScope"),
+		});
+	} catch (error) {
+		if (error instanceof InvalidPaginationCursorError) {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+		throw error;
+	}
 
 	// Fetch the latest message's sentiment/classification for every conversation
 	// in ONE query (DISTINCT ON keyed on conversation_id) instead of N+1

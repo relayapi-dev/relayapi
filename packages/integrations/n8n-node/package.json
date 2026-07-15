@@ -8,6 +8,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc && cp nodes/RelayApi/relayapi.svg dist/nodes/RelayApi/",
+    "test": "bun test test",
     "prepublishOnly": "npm run build"
   },
   "n8n": {

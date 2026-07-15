@@ -10,6 +10,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { uploadMedia } from "@/lib/upload-media";
 
 type FileUploadStatus = "pending" | "uploading" | "success" | "error";
 
@@ -96,26 +97,16 @@ export function UploadMediaDialog({ open, onOpenChange, onUploaded }: UploadMedi
     }, 150);
 
     try {
-      const res = await fetch(
-        `/api/media/upload?filename=${encodeURIComponent(item.file.name)}`,
-        { method: "POST", body: item.file },
-      );
-
+      await uploadMedia(item.file);
       clearInterval(interval);
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        updateFile(item.id, {
-          status: "error",
-          progress: 0,
-          error: err?.error?.message || `Upload failed (${res.status})`,
-        });
-      } else {
-        updateFile(item.id, { status: "success", progress: 100 });
-      }
-    } catch {
+      updateFile(item.id, { status: "success", progress: 100 });
+    } catch (error) {
       clearInterval(interval);
-      updateFile(item.id, { status: "error", progress: 0, error: "Network error" });
+      updateFile(item.id, {
+        status: "error",
+        progress: 0,
+        error: error instanceof Error ? error.message : "Network error",
+      });
     }
   }, [updateFile]);
 

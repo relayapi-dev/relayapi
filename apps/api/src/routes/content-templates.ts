@@ -1,16 +1,19 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { contentTemplates } from "@relayapi/db";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { assertAllWorkspaceScope } from "../lib/request-access";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+} from "../lib/workspace-scope";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
+	ContentTemplateListResponse,
+	ContentTemplateResponse,
 	CreateContentTemplateBody,
 	UpdateContentTemplateBody,
-	ContentTemplateResponse,
-	ContentTemplateListResponse,
 } from "../schemas/content-templates";
 import type { Env, Variables } from "../types";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
-import { assertScopedCreateWorkspace } from "../lib/request-access";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
@@ -168,7 +171,9 @@ app.openapi(listContentTemplates, async (c) => {
 		conditions.push(eq(contentTemplates.workspaceId, workspace_id));
 	}
 	if (tag) {
-		conditions.push(sql`${contentTemplates.tags} @> ${JSON.stringify([tag])}::jsonb`);
+		conditions.push(
+			sql`${contentTemplates.tags} @> ${JSON.stringify([tag])}::jsonb`,
+		);
 	}
 	if (cursor) {
 		// Cursor is the createdAt timestamp of the last item
@@ -188,7 +193,9 @@ app.openapi(listContentTemplates, async (c) => {
 	return c.json(
 		{
 			data: data.map(serialize),
-			next_cursor: hasMore ? (data.at(-1)?.createdAt.toISOString() ?? null) : null,
+			next_cursor: hasMore
+				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				: null,
 			has_more: hasMore,
 		},
 		200,
@@ -201,14 +208,17 @@ app.openapi(createContentTemplateRoute, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const denied = assertScopedCreateWorkspace(c, body.workspace_id, "content template");
+	const denied = assertAllWorkspaceScope(
+		c,
+		"Only an all-workspace API key can create organization-shared content templates.",
+	);
 	if (denied) return denied;
 
 	const [row] = await db
 		.insert(contentTemplates)
 		.values({
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: null,
 			name: body.name,
 			description: body.description ?? null,
 			content: body.content,
@@ -219,7 +229,12 @@ app.openapi(createContentTemplateRoute, async (c) => {
 
 	if (!row) {
 		return c.json(
-			{ error: { code: "INTERNAL_ERROR", message: "Failed to create content template" } } as never,
+			{
+				error: {
+					code: "INTERNAL_ERROR",
+					message: "Failed to create content template",
+				},
+			} as never,
 			500 as never,
 		);
 	}
@@ -261,6 +276,8 @@ app.openapi(updateContentTemplateRoute, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(c);
+	if (accessDenied) return accessDenied as never;
 
 	const [existing] = await db
 		.select()
@@ -287,7 +304,8 @@ app.openapi(updateContentTemplateRoute, async (c) => {
 	if (body.name !== undefined) updates.name = body.name;
 	if (body.description !== undefined) updates.description = body.description;
 	if (body.content !== undefined) updates.content = body.content;
-	if (body.platform_overrides !== undefined) updates.platformOverrides = body.platform_overrides;
+	if (body.platform_overrides !== undefined)
+		updates.platformOverrides = body.platform_overrides;
 	if (body.tags !== undefined) updates.tags = body.tags;
 
 	const [updated] = await db
@@ -303,9 +321,14 @@ app.openapi(deleteContentTemplate, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
+	const accessDenied = assertAllWorkspaceScope(c);
+	if (accessDenied) return accessDenied as never;
 
 	const [existing] = await db
-		.select({ id: contentTemplates.id, workspaceId: contentTemplates.workspaceId })
+		.select({
+			id: contentTemplates.id,
+			workspaceId: contentTemplates.workspaceId,
+		})
 		.from(contentTemplates)
 		.where(
 			and(

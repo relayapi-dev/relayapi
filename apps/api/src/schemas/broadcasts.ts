@@ -25,11 +25,16 @@ export const CreateBroadcastBody = z.object({
 	template: TemplateInput.optional().describe(
 		"WhatsApp template (required for WhatsApp broadcasts)",
 	),
-	workspace_id: z.string().optional().describe("Workspace ID to scope this broadcast to"),
+	workspace_id: z
+		.string()
+		.optional()
+		.describe(
+			"Optional workspace ID. Omission inherits the account workspace in either policy mode; an explicit value must match it.",
+		),
 });
 
 export const UpdateBroadcastBody = z.object({
-	name: z.string().optional(),
+	name: z.string().nullable().optional(),
 	description: z.string().nullable().optional(),
 	message_text: z.string().optional(),
 	template: TemplateInput.optional(),
@@ -56,6 +61,7 @@ export const BroadcastListQuery = z.object({
 			"sending",
 			"sent",
 			"partially_failed",
+			"requires_attention",
 			"failed",
 			"cancelled",
 		])
@@ -83,6 +89,7 @@ export const BroadcastResponse = z.object({
 		"sending",
 		"sent",
 		"partially_failed",
+		"requires_attention",
 		"failed",
 		"cancelled",
 	]),
@@ -118,7 +125,7 @@ export const AddRecipientsBody = z.object({
 
 export const RecipientListQuery = z.object({
 	status: z
-		.enum(["pending", "sent", "failed"])
+		.enum(["pending", "sending", "sent", "failed", "unknown", "cancelled"])
 		.optional()
 		.describe("Filter by delivery status"),
 	cursor: z.string().optional().describe("Pagination cursor"),
@@ -135,7 +142,14 @@ export const RecipientResponse = z.object({
 	id: z.string(),
 	contact_id: z.string().nullable(),
 	contact_identifier: z.string(),
-	status: z.enum(["pending", "sent", "failed"]),
+	status: z.enum([
+		"pending",
+		"sending",
+		"sent",
+		"failed",
+		"unknown",
+		"cancelled",
+	]),
 	message_id: z.string().nullable(),
 	error: z.string().nullable(),
 	sent_at: z.string().datetime().nullable(),

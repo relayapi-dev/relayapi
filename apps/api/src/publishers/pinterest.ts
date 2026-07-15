@@ -1,7 +1,20 @@
-import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	awaitResponseWithBodyCompletion,
+	fetchPublicUrl,
+} from "../lib/fetch-public-url";
+import { createStreamingMultipartBody } from "../lib/multipart-stream";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 const PINTEREST_API = "https://api.pinterest.com/v5";
+// Pinterest video Pins support files up to 2 GB.
+// https://help.pinterest.com/en/business/article/pinterest-product-specs
+const PINTEREST_VIDEO_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 async function pinterestFetch(
 	url: string,
@@ -16,8 +29,19 @@ async function pinterestFetch(
 			...(options.headers ?? {}),
 		},
 	});
-	if (res.status === 401) throw new PublishError("TOKEN_EXPIRED: Pinterest access token invalid or expired", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
-	if (res.status === 429) throw new PublishError("RATE_LIMITED: Pinterest rate limit exceeded", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 401)
+		throw new PublishError(
+			"TOKEN_EXPIRED: Pinterest access token invalid or expired",
+			{
+				statusCode: res.status,
+				detail: `HTTP ${res.status} ${res.statusText}`,
+			},
+		);
+	if (res.status === 429)
+		throw new PublishError("RATE_LIMITED: Pinterest rate limit exceeded", {
+			statusCode: res.status,
+			detail: `HTTP ${res.status} ${res.statusText}`,
+		});
 	return res;
 }
 
@@ -50,6 +74,21 @@ export const pinterestPublisher: Publisher = {
 
 			// Pinterest supports up to 5 images per carousel pin, or 1 video
 			const videoCount = media.filter((m) => m.type === "video").length;
+			const unsupportedMedia = media.some(
+				(m) => m.type && m.type !== "image" && m.type !== "video",
+			);
+			if (unsupportedMedia) {
+				// Official docs: https://developers.pinterest.com/docs/work-with-organic-content-and-users/create-boards-and-pins/
+				// Section "Step 4: Create Pin" lists image and video media_source
+				// variants; generic document/GIF attachment types are not accepted.
+				return {
+					success: false,
+					error: {
+						code: "UNSUPPORTED_MEDIA_TYPE",
+						message: "Pinterest pins support image or video attachments.",
+					},
+				};
+			}
 			if (videoCount > 1) {
 				return {
 					success: false,
@@ -68,12 +107,13 @@ export const pinterestPublisher: Publisher = {
 					},
 				};
 			}
-			if (videoCount === 1 && media.length > 1) {
+			if (videoCount === 1 && media.length > 2) {
 				return {
 					success: false,
 					error: {
 						code: "INVALID_MEDIA_MIX",
-						message: "Video pins support only 1 video per pin.",
+						message:
+							"Pinterest video pins support one video and one optional cover image.",
 					},
 				};
 			}
@@ -122,6 +162,43 @@ export const pinterestPublisher: Publisher = {
 			const videoItem = media.find((m) => m.type === "video");
 			const imageItems = media.filter((m) => m.type !== "video");
 			const isVideo = !!videoItem;
+			const coverImageUrl =
+				imageItems[0]?.url ?? (opts.cover_image_url as string | undefined);
+			const rawCoverKeyFrameTime = opts.cover_image_key_frame_time;
+			if (
+				rawCoverKeyFrameTime !== undefined &&
+				(typeof rawCoverKeyFrameTime !== "number" ||
+					!Number.isSafeInteger(rawCoverKeyFrameTime) ||
+					rawCoverKeyFrameTime < 0)
+			) {
+				return {
+					success: false,
+					error: {
+						code: "CONTENT_ERROR",
+						message:
+							"Pinterest cover_image_key_frame_time must be a non-negative integer number of seconds.",
+					},
+				};
+			}
+			const coverKeyFrameTime = rawCoverKeyFrameTime as number | undefined;
+
+			if (isVideo && !coverImageUrl && coverKeyFrameTime === undefined) {
+				// Official guide: https://developers.pinterest.com/docs/work-with-organic-content-and-users/create-boards-and-pins/
+				// Section "Step 4: Create Pin" warns that omitting a valid cover image
+				// produces HTTP 400. The current OpenAPI source below additionally
+				// documents a video key-frame cover, so accept either representation.
+				// Official OpenAPI: https://github.com/pinterest/api-description/blob/main/v5/openapi.yaml
+				// Schema `PinMediaSourceVideoID` fields: cover_image_url,
+				// cover_image_data, and cover_image_key_frame_time.
+				return {
+					success: false,
+					error: {
+						code: "COVER_IMAGE_REQUIRED",
+						message:
+							"Pinterest video pins require an image attachment, target_options.cover_image_url, or target_options.cover_image_key_frame_time.",
+					},
+				};
+			}
 
 			const pinBody: Record<string, unknown> = {
 				board_id: boardId,
@@ -181,31 +258,50 @@ export const pinterestPublisher: Publisher = {
 					timeout: 30_000,
 				});
 				if (!videoRes.ok) {
-					throw new PublishError(`Failed to fetch video: ${videoRes.statusText}`, {
-						statusCode: videoRes.status,
-						detail: `HTTP ${videoRes.status} ${videoRes.statusText}`,
-					});
+					throw new PublishError(
+						`Failed to fetch video: ${videoRes.statusText}`,
+						{
+							statusCode: videoRes.status,
+							detail: `HTTP ${videoRes.status} ${videoRes.statusText}`,
+						},
+					);
 				}
-				const videoBlob = await videoRes.blob();
-
-				const uploadForm = new FormData();
-				for (const [key, value] of Object.entries(
-					registerData.upload_parameters,
-				)) {
-					uploadForm.append(key, value);
-				}
-				uploadForm.append("file", videoBlob);
+				const multipart = await createStreamingMultipartBody(
+					Object.entries(registerData.upload_parameters),
+					{
+						fieldName: "file",
+						filename: "video",
+						contentType: videoRes.headers.get("content-type") ?? "video/mp4",
+						response: videoRes,
+						maxBytes: PINTEREST_VIDEO_MAX_BYTES,
+						refetch: () =>
+							fetchPublicUrl(videoItem?.url ?? "", {
+								timeout: 30_000,
+								maxBytes: PINTEREST_VIDEO_MAX_BYTES,
+							}),
+					},
+				);
 
 				// Pinterest Media API — Upload video binary to the pre-signed URL
 				// https://developers.pinterest.com/docs/api/v5/media-create/
-				const uploadRes = await fetch(registerData.upload_url, {
-					method: "POST",
-					body: uploadForm,
-				});
+				const uploadRes = await awaitResponseWithBodyCompletion(
+					fetch(registerData.upload_url, {
+						method: "POST",
+						headers: {
+							"Content-Type": multipart.contentType,
+							"Content-Length": multipart.contentLength.toString(),
+						},
+						body: multipart.body,
+					}),
+					multipart.completion,
+				);
 				if (!uploadRes.ok) {
 					throw new PublishError(
 						`Pinterest video upload failed: ${uploadRes.statusText}`,
-						{ statusCode: uploadRes.status, detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}` },
+						{
+							statusCode: uploadRes.status,
+							detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+						},
 					);
 				}
 
@@ -236,15 +332,18 @@ export const pinterestPublisher: Publisher = {
 					throw new Error("Pinterest video processing timed out");
 				}
 
-				// Use explicit cover_image_url from options, or fall back to a non-video media item
-				const coverImageUrl =
-					(opts.cover_image_url as string | undefined) ??
-					imageItems[0]?.url;
-				pinBody.media_source = {
+				// Official OpenAPI `PinMediaSourceVideoID`: source_type + media_id are
+				// required; URL and key-frame covers are both documented properties.
+				const videoMediaSource: Record<string, unknown> = {
 					source_type: "video_id",
 					media_id: mediaId,
-					...(coverImageUrl ? { cover_image_url: coverImageUrl } : {}),
 				};
+				if (coverImageUrl) {
+					videoMediaSource.cover_image_url = coverImageUrl;
+				} else if (coverKeyFrameTime !== undefined) {
+					videoMediaSource.cover_image_key_frame_time = coverKeyFrameTime;
+				}
+				pinBody.media_source = videoMediaSource;
 			} else if (imageItems.length === 1) {
 				// Single image pin
 				pinBody.media_source = {
@@ -273,7 +372,10 @@ export const pinterestPublisher: Publisher = {
 				const err = await res.json().catch(() => ({}));
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 				const detail = (err as { message?: string }).message ?? res.statusText;
-				throw new PublishError(`Pinterest pin creation failed: ${detail}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(`Pinterest pin creation failed: ${detail}`, {
+					statusCode: res.status,
+					detail: raw,
+				});
 			}
 
 			const result = (await res.json()) as {
@@ -292,7 +394,7 @@ export const pinterestPublisher: Publisher = {
 				platform_url: pinUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

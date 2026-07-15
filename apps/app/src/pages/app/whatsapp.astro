@@ -1,6 +1,6 @@
 ---
-import DashboardLayout from "../../layouts/DashboardLayout.astro";
 import { WhatsAppRouteApp } from "../../components/dashboard/route-apps/whatsapp-route-app";
+import DashboardLayout from "../../layouts/DashboardLayout.astro";
 import {
 	getDashboardRouteContext,
 	getSearchParamValue,
@@ -10,8 +10,8 @@ const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
 const initialTab = getSearchParamValue(
 	Astro.url,
 	"tab",
-	["broadcasts", "templates", "groups", "settings"] as const,
-	"broadcasts",
+	["templates", "groups", "settings"] as const,
+	"templates",
 );
 ---
 

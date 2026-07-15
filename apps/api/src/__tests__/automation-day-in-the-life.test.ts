@@ -48,6 +48,7 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
+import { encryptToken } from "../lib/crypto";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Graph } from "../schemas/automation-graph";
 import {
@@ -67,10 +68,12 @@ import type { Env } from "../types";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -208,17 +211,13 @@ async function teardownFixture() {
 			),
 		);
 	await db.delete(automations).where(eq(automations.organizationId, orgId));
-	await db
-		.delete(inboxMessages)
-		.where(eq(inboxMessages.organizationId, orgId));
+	await db.delete(inboxMessages).where(eq(inboxMessages.organizationId, orgId));
 	await db
 		.delete(inboxConversations)
 		.where(eq(inboxConversations.organizationId, orgId));
 	await db
 		.delete(contactChannels)
-		.where(
-			inArray(contactChannels.socialAccountId, [accountAId, accountBId]),
-		);
+		.where(inArray(contactChannels.socialAccountId, [accountAId, accountBId]));
 	await db
 		.delete(customFieldDefinitions)
 		.where(eq(customFieldDefinitions.organizationId, orgId));
@@ -231,6 +230,7 @@ async function teardownFixture() {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;
@@ -336,7 +336,7 @@ function buildInstagramDmEvent(params: {
 	};
 }
 
-async function hmacHex(secret: string, body: string): Promise<string> {
+async function hmacHex(secret: string, signedPayload: string): Promise<string> {
 	const key = await crypto.subtle.importKey(
 		"raw",
 		new TextEncoder().encode(secret),
@@ -347,7 +347,7 @@ async function hmacHex(secret: string, body: string): Promise<string> {
 	const sig = await crypto.subtle.sign(
 		"HMAC",
 		key,
-		new TextEncoder().encode(body),
+		new TextEncoder().encode(signedPayload),
 	);
 	return Array.from(new Uint8Array(sig))
 		.map((b) => b.toString(16).padStart(2, "0"))
@@ -459,9 +459,7 @@ describe("day-in-the-life", () => {
 					kind: "message",
 					title: "Cancel message",
 					config: {
-						blocks: [
-							{ id: "b_cancel", type: "text", text: "No worries." },
-						],
+						blocks: [{ id: "b_cancel", type: "text", text: "No worries." }],
 					},
 					ports: [
 						{ key: "in", direction: "input" },
@@ -473,9 +471,7 @@ describe("day-in-the-life", () => {
 					kind: "message",
 					title: "Not subscribed",
 					config: {
-						blocks: [
-							{ id: "b_ns", type: "text", text: "Not subscribed" },
-						],
+						blocks: [{ id: "b_ns", type: "text", text: "Not subscribed" }],
 					},
 					ports: [
 						{ key: "in", direction: "input" },
@@ -583,6 +579,7 @@ describe("day-in-the-life", () => {
 		commentAutomationId = auto.id;
 
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "instagram",
 			kind: "comment_created",
@@ -734,6 +731,7 @@ describe("day-in-the-life", () => {
 		if (!followup) throw new Error("followup insert failed");
 		_followupAutomationId = followup.id;
 		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
 			automationId: followup.id,
 			channel: "instagram",
 			kind: "tag_applied",
@@ -961,6 +959,7 @@ describe("day-in-the-life", () => {
 			.returning();
 		if (!charliePre) throw new Error("charlie pre-create failed");
 		await db.insert(contactChannels).values({
+			organizationId: orgId,
 			contactId: charliePre.id,
 			socialAccountId: accountAId,
 			platform: "instagram",
@@ -980,10 +979,7 @@ describe("day-in-the-life", () => {
 		const [charlieContact] = await db
 			.select({ id: contacts.id })
 			.from(contacts)
-			.innerJoin(
-				contactChannels,
-				eq(contacts.id, contactChannels.contactId),
-			)
+			.innerJoin(contactChannels, eq(contacts.id, contactChannels.contactId))
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
@@ -1110,6 +1106,7 @@ describe("day-in-the-life", () => {
 		const [ep] = await db
 			.insert(automationEntrypoints)
 			.values({
+				organizationId: orgId,
 				automationId: auto.id,
 				channel: "instagram",
 				kind: "schedule",
@@ -1120,9 +1117,7 @@ describe("day-in-the-life", () => {
 					timezone: "America/New_York",
 				},
 				filters: {
-					all: [
-						{ field: "tags", op: "contains", value: "subscribed" },
-					],
+					all: [{ field: "tags", op: "contains", value: "subscribed" }],
 				},
 				specificity: 20,
 			})
@@ -1228,7 +1223,10 @@ describe("day-in-the-life", () => {
 
 		const slug = `ditl-${generateId("").slice(-10)}`;
 		const secret = "ditl-secret";
+		const entrypointId = generateId("aep_");
 		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
 			automationId: auto.id,
 			channel: "instagram",
 			kind: "webhook_inbound",
@@ -1236,7 +1234,10 @@ describe("day-in-the-life", () => {
 			socialAccountId: null,
 			config: {
 				webhook_slug: slug,
-				webhook_secret: secret,
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
 				contact_lookup: {
 					by: "email",
 					field_path: "$.email",
@@ -1247,11 +1248,17 @@ describe("day-in-the-life", () => {
 		});
 
 		const body = JSON.stringify({ email: "dave@example.com" });
-		const sig = await hmacHex(secret, body);
+		const timestamp = Math.floor(Date.now() / 1000).toString();
+		const sig = await hmacHex(secret, `${timestamp}.${body}`);
 		const result = await receiveAutomationWebhook(
 			db,
-			{ slug, rawBody: body, signatureHeader: `sha256=${sig}` },
-			{},
+			{
+				slug,
+				rawBody: body,
+				signatureHeader: `sha256=${sig}`,
+				timestampHeader: timestamp,
+			},
+			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(result.status).toBe("ok");
 

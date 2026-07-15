@@ -3,14 +3,17 @@
 // ---------------------------------------------------------------------------
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import {
-	adAccounts,
-	adAudiences,
-	adCampaigns,
-	ads,
-	eq,
-} from "@relayapi/db";
+import { adAccounts, adAudiences, adCampaigns, ads, eq } from "@relayapi/db";
 import { and, desc, inArray, sql } from "drizzle-orm";
+import type { Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { decryptAccountToken } from "../lib/account-token-crypto";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+	isWorkspaceScopeDenied,
+	WORKSPACE_ACCESS_DENIED_BODY,
+} from "../lib/workspace-scope";
 import {
 	AdAccountResponse,
 	AdAnalyticsParams,
@@ -39,23 +42,110 @@ import {
 import { ErrorResponse, IdParam } from "../schemas/common";
 import * as adAnalytics from "../services/ad-analytics";
 import * as adAudienceService from "../services/ad-audience";
-import {
-	getAdPlatformAdapter,
-} from "../services/ad-platforms";
-import { AdPlatformError } from "../services/ad-platforms/types";
+import { getAdPlatformAdapter } from "../services/ad-platforms";
 import type { AdTargeting } from "../services/ad-platforms/types";
+import { AdPlatformError } from "../services/ad-platforms/types";
 import * as adService from "../services/ad-service";
 import type { Env, Variables } from "../types";
-import {
-	applyWorkspaceScope,
-	assertWorkspaceScope,
-} from "../lib/workspace-scope";
-import type { Context } from "hono";
-import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+const RequiredIdempotencyKeyHeaders = z.object({
+	"idempotency-key": z.string().min(1).openapi({
+		description:
+			"Caller-generated key that identifies one logical paid-object creation",
+		example: "paid-operation-018f1f6e",
+	}),
+});
 
 type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
+
+async function authorizeAdAccount(
+	c: AppContext,
+	id: string,
+): Promise<Response | undefined> {
+	const [row] = await c
+		.get("db")
+		.select({ workspaceId: adAccounts.workspaceId })
+		.from(adAccounts)
+		.where(
+			and(eq(adAccounts.id, id), eq(adAccounts.organizationId, c.get("orgId"))),
+		)
+		.limit(1);
+	if (!row) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Ad account not found" } },
+			404,
+		);
+	}
+	return assertWorkspaceScope(c, row.workspaceId);
+}
+
+async function authorizeCampaign(
+	c: AppContext,
+	id: string,
+): Promise<Response | undefined> {
+	const [row] = await c
+		.get("db")
+		.select({ workspaceId: adCampaigns.workspaceId })
+		.from(adCampaigns)
+		.where(
+			and(
+				eq(adCampaigns.id, id),
+				eq(adCampaigns.organizationId, c.get("orgId")),
+			),
+		)
+		.limit(1);
+	if (!row) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Campaign not found" } },
+			404,
+		);
+	}
+	return assertWorkspaceScope(c, row.workspaceId);
+}
+
+async function authorizeAd(
+	c: AppContext,
+	id: string,
+): Promise<Response | undefined> {
+	const [row] = await c
+		.get("db")
+		.select({ workspaceId: ads.workspaceId })
+		.from(ads)
+		.where(and(eq(ads.id, id), eq(ads.organizationId, c.get("orgId"))))
+		.limit(1);
+	if (!row) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Ad not found" } },
+			404,
+		);
+	}
+	return assertWorkspaceScope(c, row.workspaceId);
+}
+
+async function authorizeAudience(
+	c: AppContext,
+	id: string,
+): Promise<Response | undefined> {
+	const [row] = await c
+		.get("db")
+		.select({ workspaceId: adAudiences.workspaceId })
+		.from(adAudiences)
+		.where(
+			and(
+				eq(adAudiences.id, id),
+				eq(adAudiences.organizationId, c.get("orgId")),
+			),
+		)
+		.limit(1);
+	if (!row) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Audience not found" } },
+			404,
+		);
+	}
+	return assertWorkspaceScope(c, row.workspaceId);
+}
 
 // ---------------------------------------------------------------------------
 // Error handler helper
@@ -66,12 +156,19 @@ function handleAdError(c: AppContext, err: unknown) {
 		const status =
 			err.code === "NOT_FOUND"
 				? 404
-				: err.code === "INVALID_STATE"
+				: err.code === "IDEMPOTENCY_KEY_REQUIRED" ||
+						err.code === "IDEMPOTENCY_KEY_REUSED"
 					? 400
-					: err.code === "UNSUPPORTED_PLATFORM" ||
-							err.code === "UNSUPPORTED_FEATURE"
-						? 422
-						: 500;
+					: err.code === "OPERATION_IN_PROGRESS" ||
+							err.code === "UNKNOWN_EXTERNAL_OUTCOME" ||
+							err.code === "MANUAL_REVIEW_REQUIRED"
+						? 409
+						: err.code === "INVALID_STATE"
+							? 400
+							: err.code === "UNSUPPORTED_PLATFORM" ||
+									err.code === "UNSUPPORTED_FEATURE"
+								? 422
+								: 500;
 		return c.json(
 			{ error: { code: err.code, message: err.message } },
 			status as ContentfulStatusCode,
@@ -144,10 +241,10 @@ const listAdAccounts = createRoute({
 			content: {
 				"application/json": {
 					schema: z.object({
-							data: z.array(AdAccountResponse),
-							next_cursor: z.string().nullable(),
-							has_more: z.boolean(),
-						}),
+						data: z.array(AdAccountResponse),
+						next_cursor: z.string().nullable(),
+						has_more: z.boolean(),
+					}),
 				},
 			},
 		},
@@ -164,7 +261,8 @@ const listAdAccounts = createRoute({
 
 app.openapi(listAdAccounts, async (c) => {
 	const orgId = c.get("orgId");
-	const { social_account_id, workspace_id, q, cursor, limit } = c.req.valid("query");
+	const { social_account_id, workspace_id, q, cursor, limit } =
+		c.req.valid("query");
 
 	try {
 		// Discovering ad accounts is an external Meta crawl (1 + N×(1-10) Graph
@@ -188,6 +286,7 @@ app.openapi(listAdAccounts, async (c) => {
 					orgId,
 					social_account_id,
 					c.get("db"),
+					c.get("workspaceScope"),
 				);
 				try {
 					await c.env.KV.put(discoverKey, "1", { expirationTtl: 600 });
@@ -234,39 +333,40 @@ app.openapi(listAdAccounts, async (c) => {
 		const hasMore = accounts.length > limit;
 		const items = accounts.slice(0, limit);
 
-		return c.json({
-			data: items.map((a) => {
-				const md = (a.metadata ?? {}) as Record<string, unknown>;
-				return {
-					id: a.id,
-					social_account_id: a.socialAccountId,
-					platform: a.platform,
-					platform_ad_account_id: a.platformAdAccountId,
-					name: a.name,
-					currency: a.currency,
-					timezone: a.timezone,
-					status: a.status,
-					boostable_social_account_ids: Array.isArray(
-						md.boostable_social_account_ids,
-					)
-						? (md.boostable_social_account_ids as string[])
-						: [],
-					boostable_accounts: Array.isArray(md.boostable_accounts)
-						? (md.boostable_accounts as {
-								id: string;
-								platform: string;
-								username: string | null;
-							}[])
-						: [],
-				};
-			}),
-			next_cursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
-			has_more: hasMore,
-		} as {
-			data: z.infer<typeof AdAccountResponse>[];
-			next_cursor: string | null;
-			has_more: boolean;
-		},
+		return c.json(
+			{
+				data: items.map((a) => {
+					const md = (a.metadata ?? {}) as Record<string, unknown>;
+					return {
+						id: a.id,
+						social_account_id: a.socialAccountId,
+						platform: a.platform,
+						platform_ad_account_id: a.platformAdAccountId,
+						name: a.name,
+						currency: a.currency,
+						timezone: a.timezone,
+						status: a.status,
+						boostable_social_account_ids: Array.isArray(
+							md.boostable_social_account_ids,
+						)
+							? (md.boostable_social_account_ids as string[])
+							: [],
+						boostable_accounts: Array.isArray(md.boostable_accounts)
+							? (md.boostable_accounts as {
+									id: string;
+									platform: string;
+									username: string | null;
+								}[])
+							: [],
+					};
+				}),
+				next_cursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
+				has_more: hasMore,
+			} as {
+				data: z.infer<typeof AdAccountResponse>[];
+				next_cursor: string | null;
+				has_more: boolean;
+			},
 			200,
 		);
 	} catch (err) {
@@ -286,6 +386,7 @@ const createCampaignRoute = createRoute({
 	summary: "Create a campaign",
 	security: [{ Bearer: [] }],
 	request: {
+		headers: RequiredIdempotencyKeyHeaders,
 		body: { content: { "application/json": { schema: CreateCampaignBody } } },
 	},
 	responses: {
@@ -305,6 +406,9 @@ const createCampaignRoute = createRoute({
 app.openapi(createCampaignRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
+	const operationKey = c.req.valid("header")["idempotency-key"];
+	const denied = await authorizeAdAccount(c, body.ad_account_id);
+	if (denied) return denied as never;
 
 	try {
 		const campaign = await adService.createCampaign(
@@ -320,6 +424,7 @@ app.openapi(createCampaignRoute, async (c) => {
 				startDate: body.start_date,
 				endDate: body.end_date,
 				specialAdCategories: body.special_ad_categories,
+				operationKey,
 			},
 			c.get("db"),
 		);
@@ -465,7 +570,9 @@ const getCampaign = createRoute({
 	responses: {
 		200: {
 			description: "Campaign",
-			content: { "application/json": { schema: z.object({ data: CampaignResponse }) } },
+			content: {
+				"application/json": { schema: z.object({ data: CampaignResponse }) },
+			},
 		},
 		404: {
 			description: "Not found",
@@ -504,27 +611,28 @@ app.openapi(getCampaign, async (c) => {
 		.from(ads)
 		.where(eq(ads.campaignId, campaign.id));
 
-	return c.json({
-		data: {
-			id: campaign.id,
-			ad_account_id: campaign.adAccountId,
-			platform: campaign.platform,
-			platform_campaign_id: campaign.platformCampaignId,
-			name: campaign.name,
-			objective: campaign.objective,
-			status: campaign.status,
-			daily_budget_cents: campaign.dailyBudgetCents,
-			lifetime_budget_cents: campaign.lifetimeBudgetCents,
-			currency: campaign.currency,
-			start_date: campaign.startDate?.toISOString() ?? null,
-			end_date: campaign.endDate?.toISOString() ?? null,
-			is_external: campaign.isExternal,
-			ad_count: adCount?.count ?? 0,
-			metrics: null,
-			created_at: campaign.createdAt.toISOString(),
-			updated_at: campaign.updatedAt.toISOString(),
-		},
-	} as { data: z.infer<typeof CampaignResponse> },
+	return c.json(
+		{
+			data: {
+				id: campaign.id,
+				ad_account_id: campaign.adAccountId,
+				platform: campaign.platform,
+				platform_campaign_id: campaign.platformCampaignId,
+				name: campaign.name,
+				objective: campaign.objective,
+				status: campaign.status,
+				daily_budget_cents: campaign.dailyBudgetCents,
+				lifetime_budget_cents: campaign.lifetimeBudgetCents,
+				currency: campaign.currency,
+				start_date: campaign.startDate?.toISOString() ?? null,
+				end_date: campaign.endDate?.toISOString() ?? null,
+				is_external: campaign.isExternal,
+				ad_count: adCount?.count ?? 0,
+				metrics: null,
+				created_at: campaign.createdAt.toISOString(),
+				updated_at: campaign.updatedAt.toISOString(),
+			},
+		} as { data: z.infer<typeof CampaignResponse> },
 		200,
 	);
 });
@@ -560,6 +668,8 @@ app.openapi(updateCampaignStatus, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
+	const denied = await authorizeCampaign(c, id);
+	if (denied) return denied as never;
 
 	try {
 		if (body.status) {
@@ -616,6 +726,8 @@ const deleteCampaign = createRoute({
 app.openapi(deleteCampaign, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
+	const denied = await authorizeCampaign(c, id);
+	if (denied) return denied as never;
 
 	try {
 		const db = c.get("db");
@@ -644,6 +756,7 @@ const createAdRoute = createRoute({
 	summary: "Create standalone ad with custom creative",
 	security: [{ Bearer: [] }],
 	request: {
+		headers: RequiredIdempotencyKeyHeaders,
 		body: { content: { "application/json": { schema: CreateAdBody } } },
 	},
 	responses: {
@@ -663,6 +776,13 @@ const createAdRoute = createRoute({
 app.openapi(createAdRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
+	const operationKey = c.req.valid("header")["idempotency-key"];
+	const denied = await authorizeAdAccount(c, body.ad_account_id);
+	if (denied) return denied as never;
+	if (body.campaign_id) {
+		const campaignDenied = await authorizeCampaign(c, body.campaign_id);
+		if (campaignDenied) return campaignDenied as never;
+	}
 
 	try {
 		const ad = await adService.createAd(
@@ -685,12 +805,16 @@ app.openapi(createAdRoute, async (c) => {
 				durationDays: body.duration_days,
 				startDate: body.start_date,
 				endDate: body.end_date,
+				operationKey,
 			},
 			c.get("db"),
 		);
 
 		if (!ad) throw new Error("Failed to create ad");
-		return c.json({ data: formatAdResponse(ad) as z.infer<typeof AdResponse> }, 201);
+		return c.json(
+			{ data: formatAdResponse(ad) as z.infer<typeof AdResponse> },
+			201,
+		);
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -704,6 +828,7 @@ const boostPostRoute = createRoute({
 	summary: "Boost an existing published post",
 	security: [{ Bearer: [] }],
 	request: {
+		headers: RequiredIdempotencyKeyHeaders,
 		body: { content: { "application/json": { schema: BoostPostBody } } },
 	},
 	responses: {
@@ -723,6 +848,9 @@ const boostPostRoute = createRoute({
 app.openapi(boostPostRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
+	const operationKey = c.req.valid("header")["idempotency-key"];
+	const denied = await authorizeAdAccount(c, body.ad_account_id);
+	if (denied) return denied as never;
 
 	try {
 		const ad = await adService.boostPost(
@@ -749,12 +877,16 @@ app.openapi(boostPostRoute, async (c) => {
 						}
 					: undefined,
 				specialAdCategories: body.special_ad_categories,
+				operationKey,
 			},
 			c.get("db"),
 		);
 
 		if (!ad) throw new Error("Failed to create ad");
-		return c.json({ data: formatAdResponse(ad) as z.infer<typeof AdResponse> }, 201);
+		return c.json(
+			{ data: formatAdResponse(ad) as z.infer<typeof AdResponse> },
+			201,
+		);
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -845,8 +977,11 @@ const getAdAnalytics = createRoute({
 });
 
 app.openapi(getAdAnalytics, async (c) => {
+	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { from, to, breakdowns } = c.req.valid("query");
+	const denied = await authorizeAd(c, id);
+	if (denied) return denied as never;
 
 	const startDate =
 		from ?? new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
@@ -856,7 +991,14 @@ app.openapi(getAdAnalytics, async (c) => {
 		// Use stored metrics first; fall back to live if breakdowns requested or stored is empty
 		if (!breakdowns) {
 			const db = c.get("db");
-			const stored = await adAnalytics.getAdAnalytics(db, id, startDate, endDate);
+			const stored = await adAnalytics.getAdAnalytics(
+				db,
+				id,
+				orgId,
+				c.get("workspaceScope"),
+				startDate,
+				endDate,
+			);
 			if (stored.daily.length > 0) {
 				return c.json(
 					{ data: stored } as { data: z.infer<typeof AdAnalyticsResponse> },
@@ -869,9 +1011,12 @@ app.openapi(getAdAnalytics, async (c) => {
 		const result = await adAnalytics.getAdAnalyticsLive(
 			c.env,
 			id,
+			orgId,
+			c.get("workspaceScope"),
 			startDate,
 			endDate,
 			breakdowns?.split(","),
+			c.get("db"),
 		);
 
 		return c.json(
@@ -939,6 +1084,7 @@ app.openapi(searchInterests, async (c) => {
 	const { socialAccounts: saTable } = await import("@relayapi/db");
 	const [sa] = await db
 		.select({
+			id: saTable.id,
 			accessToken: saTable.accessToken,
 			workspaceId: saTable.workspaceId,
 		})
@@ -953,11 +1099,12 @@ app.openapi(searchInterests, async (c) => {
 	const denied = assertWorkspaceScope(c, sa.workspaceId);
 	if (denied) return denied as never;
 
-	let accessToken = sa.accessToken;
-	if (accessToken && c.env.ENCRYPTION_KEY) {
-		const { maybeDecrypt } = await import("../lib/crypto");
-		accessToken = await maybeDecrypt(accessToken, c.env.ENCRYPTION_KEY);
-	}
+	const accessToken = await decryptAccountToken(
+		sa.accessToken,
+		c.env.ENCRYPTION_KEY,
+		sa.id,
+		"access_token",
+	);
 
 	try {
 		const interests = await adapter.searchInterests(accessToken ?? "", q);
@@ -1005,6 +1152,12 @@ const createAudience = createRoute({
 app.openapi(createAudience, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
+	const denied = await authorizeAdAccount(c, body.ad_account_id);
+	if (denied) return denied as never;
+	if (body.source_audience_id) {
+		const sourceDenied = await authorizeAudience(c, body.source_audience_id);
+		if (sourceDenied) return sourceDenied as never;
+	}
 
 	try {
 		const audience = await adAudienceService.createAudience(c.env, orgId, {
@@ -1076,6 +1229,8 @@ app.openapi(listAudiences, async (c) => {
 	const orgId = c.get("orgId");
 	const { ad_account_id, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
+	const denied = await authorizeAdAccount(c, ad_account_id);
+	if (denied) return denied as never;
 
 	// Import existing custom audiences from the platform before reading (mirrors
 	// how listAdAccounts discovers accounts). This is an expensive external Meta
@@ -1170,6 +1325,10 @@ const getAudience = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -1190,22 +1349,26 @@ app.openapi(getAudience, async (c) => {
 			404,
 		);
 	}
+	if (isWorkspaceScopeDenied(c, audience.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
 
-	return c.json({
-		data: {
-			id: audience.id,
-			ad_account_id: audience.adAccountId,
-			platform: audience.platform,
-			platform_audience_id: audience.platformAudienceId,
-			name: audience.name,
-			type: audience.type,
-			description: audience.description,
-			size: audience.size,
-			status: audience.status,
-			created_at: audience.createdAt.toISOString(),
-			updated_at: audience.updatedAt.toISOString(),
-		},
-	} as { data: z.infer<typeof AudienceResponse> },
+	return c.json(
+		{
+			data: {
+				id: audience.id,
+				ad_account_id: audience.adAccountId,
+				platform: audience.platform,
+				platform_audience_id: audience.platformAudienceId,
+				name: audience.name,
+				type: audience.type,
+				description: audience.description,
+				size: audience.size,
+				status: audience.status,
+				created_at: audience.createdAt.toISOString(),
+				updated_at: audience.updatedAt.toISOString(),
+			},
+		} as { data: z.infer<typeof AudienceResponse> },
 		200,
 	);
 });
@@ -1241,6 +1404,8 @@ app.openapi(addAudienceUsers, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const { users } = c.req.valid("json");
+	const denied = await authorizeAudience(c, id);
+	if (denied) return denied as never;
 
 	try {
 		const result = await adAudienceService.addUsersToAudience(
@@ -1249,7 +1414,11 @@ app.openapi(addAudienceUsers, async (c) => {
 			id,
 			users,
 		);
-		return c.json({ added: result.added, invalid: result.invalid, stored: result.stored });
+		return c.json({
+			added: result.added,
+			invalid: result.invalid,
+			stored: result.stored,
+		});
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -1276,6 +1445,8 @@ const deleteAudienceRoute = createRoute({
 app.openapi(deleteAudienceRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
+	const denied = await authorizeAudience(c, id);
+	if (denied) return denied as never;
 
 	try {
 		await adAudienceService.deleteAudience(c.env, orgId, id);
@@ -1315,6 +1486,8 @@ app.openapi(triggerSync, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
+	const denied = await authorizeAdAccount(c, id);
+	if (denied) return denied as never;
 
 	try {
 		// Validate the account exists and belongs to the org before enqueueing.
@@ -1377,6 +1550,10 @@ const getAd = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -1396,6 +1573,9 @@ app.openapi(getAd, async (c) => {
 			{ error: { code: "NOT_FOUND", message: "Ad not found" } },
 			404,
 		);
+	}
+	if (isWorkspaceScopeDenied(c, ad.workspaceId)) {
+		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
 	return c.json(
@@ -1433,6 +1613,8 @@ app.openapi(updateAdRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
+	const denied = await authorizeAd(c, id);
+	if (denied) return denied as never;
 
 	try {
 		const updated = await adService.updateAd(
@@ -1480,6 +1662,8 @@ const deleteAdRoute = createRoute({
 app.openapi(deleteAdRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
+	const denied = await authorizeAd(c, id);
+	if (denied) return denied as never;
 
 	try {
 		await adService.cancelAd(c.env, orgId, id, c.get("db"));

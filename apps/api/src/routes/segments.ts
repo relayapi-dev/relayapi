@@ -1,18 +1,19 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { segments } from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
+import { resolveOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
 	isWorkspaceScopeDenied,
 	WORKSPACE_ACCESS_DENIED_BODY,
 } from "../lib/workspace-scope";
+import { ErrorResponse, PaginationParams } from "../schemas/common";
 import {
 	SegmentCreateSpec,
 	SegmentListResponse,
 	SegmentResponse,
 	SegmentUpdateSpec,
 } from "../schemas/segments";
-import { ErrorResponse, PaginationParams } from "../schemas/common";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -65,12 +66,18 @@ app.openapi(createSegment, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 	const orgId = c.get("orgId");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		body.workspace_id,
+		"segment",
+	);
+	if (!scope.ok) return scope.response as never;
 
 	const [row] = await db
 		.insert(segments)
 		.values({
 			organizationId: orgId,
-			workspaceId: body.workspace_id ?? null,
+			workspaceId: scope.workspaceId,
 			name: body.name,
 			description: body.description,
 			filter: body.filter,
@@ -175,7 +182,10 @@ app.openapi(getSegment, async (c) => {
 		where: and(eq(segments.id, id), eq(segments.organizationId, orgId)),
 	});
 	if (!row)
-		return c.json({ error: { code: "not_found", message: "Segment not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Segment not found" } },
+			404,
+		);
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
@@ -219,7 +229,10 @@ app.openapi(updateSegment, async (c) => {
 		where: and(eq(segments.id, id), eq(segments.organizationId, orgId)),
 	});
 	if (!row)
-		return c.json({ error: { code: "not_found", message: "Segment not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Segment not found" } },
+			404,
+		);
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
@@ -271,7 +284,10 @@ app.openapi(deleteSegment, async (c) => {
 		where: and(eq(segments.id, id), eq(segments.organizationId, orgId)),
 	});
 	if (!row)
-		return c.json({ error: { code: "not_found", message: "Segment not found" } }, 404);
+		return c.json(
+			{ error: { code: "not_found", message: "Segment not found" } },
+			404,
+		);
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}

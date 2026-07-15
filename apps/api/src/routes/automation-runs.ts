@@ -9,12 +9,8 @@
 // - POST /v1/automation-runs/{id}/stop  — force-exit an active/waiting run
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import {
-	automationRuns,
-	automationStepRuns,
-	automations,
-} from "@relayapi/db";
-import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import { automationRuns, automationStepRuns, automations } from "@relayapi/db";
+import { and, asc, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
 import { ErrorResponse } from "../schemas/common";
@@ -134,10 +130,7 @@ async function loadScopedRun(c: AppContext, id: string) {
 		.from(automationRuns)
 		.innerJoin(automations, eq(automationRuns.automationId, automations.id))
 		.where(
-			and(
-				eq(automationRuns.id, id),
-				eq(automationRuns.organizationId, orgId),
-			),
+			and(eq(automationRuns.id, id), eq(automationRuns.organizationId, orgId)),
 		)
 		.limit(1);
 	if (!result) return null;
@@ -217,9 +210,7 @@ automationScopedRuns.openapi(listRuns, async (c) => {
 		conditions.push(eq(automationRuns.contactId, query.contact_id));
 	}
 	if (query.started_after) {
-		conditions.push(
-			sql`${automationRuns.startedAt} >= ${query.started_after}`,
-		);
+		conditions.push(sql`${automationRuns.startedAt} >= ${query.started_after}`);
 	}
 	if (query.started_before) {
 		conditions.push(
@@ -258,9 +249,7 @@ automationScopedRuns.openapi(listRuns, async (c) => {
 		{
 			data: data.map(serializeRun),
 			next_cursor:
-				hasMore && data.length > 0
-					? (data[data.length - 1]?.id ?? null)
-					: null,
+				hasMore && data.length > 0 ? (data[data.length - 1]?.id ?? null) : null,
 			has_more: hasMore,
 		},
 		200,
@@ -354,7 +343,9 @@ app.openapi(listSteps, async (c) => {
 		// rows sharing the millisecond); bind it back with an explicit ::timestamptz
 		// cast to keep the keyset comparison exact.
 		const [cursorRow] = await db
-			.select({ executedAt: sql<string>`${automationStepRuns.executedAt}::text` })
+			.select({
+				executedAt: sql<string>`${automationStepRuns.executedAt}::text`,
+			})
 			.from(automationStepRuns)
 			.where(eq(automationStepRuns.id, cursorId))
 			.limit(1);
@@ -438,11 +429,28 @@ app.openapi(stopRun, async (c) => {
 			status: "exited",
 			exitReason: "admin_stopped",
 			completedAt: new Date(),
+			revision: sql`${automationRuns.revision} + 1`,
 			updatedAt: new Date(),
 		})
-		.where(eq(automationRuns.id, id))
+		.where(
+			and(
+				eq(automationRuns.id, id),
+				eq(automationRuns.revision, run.revision),
+				inArray(automationRuns.status, ["active", "waiting"]),
+			),
+		)
 		.returning();
-	if (!updated) return notFound(c);
+	if (!updated) {
+		return c.json(
+			{
+				error: {
+					code: "STATE_CONFLICT",
+					message: "Run changed while the stop request was being applied",
+				},
+			},
+			422,
+		);
+	}
 	return c.json(serializeRun(updated), 200);
 });
 

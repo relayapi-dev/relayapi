@@ -14,6 +14,7 @@ import { automationRuns, automations, type Database } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import type { Graph } from "../../schemas/automation-graph";
 import { runLoop, updateRunOptimistic } from "./runner";
+import { testSafeAutomationRegex } from "./safe-regex";
 
 export type InputResumeOutcome =
 	| { port: "captured"; capturedValue: unknown }
@@ -93,10 +94,7 @@ export function resolveInputResume(
 				return canRetry ? { port: "retry" } : { port: "invalid" };
 			}
 			// Mime-type enforcement — skip when the operator hasn't set a list.
-			if (
-				config.accepted_mime_types &&
-				config.accepted_mime_types.length > 0
-			) {
+			if (config.accepted_mime_types && config.accepted_mime_types.length > 0) {
 				const mime = attachment.mime_type ?? "";
 				if (!config.accepted_mime_types.includes(mime)) {
 					return canRetry ? { port: "retry" } : { port: "invalid" };
@@ -166,10 +164,7 @@ export function resolveInputResume(
 			// numbers were captured and flowed downstream as valid data.
 			const min = config.validation?.min;
 			const max = config.validation?.max;
-			if (
-				(min !== undefined && n < min) ||
-				(max !== undefined && n > max)
-			) {
+			if ((min !== undefined && n < min) || (max !== undefined && n > max)) {
 				return canRetry ? { port: "retry" } : { port: "invalid" };
 			}
 			return { port: "captured", capturedValue: n };
@@ -183,14 +178,8 @@ export function resolveInputResume(
 			}
 			const pattern = config.validation?.pattern;
 			if (pattern) {
-				try {
-					const re = new RegExp(pattern);
-					if (!re.test(trimmed)) {
-						return canRetry ? { port: "retry" } : { port: "invalid" };
-					}
-				} catch {
-					// Malformed regex — treat as "no constraint" so operator mistakes
-					// don't wedge runs.
+				if (!testSafeAutomationRegex(pattern, trimmed)) {
+					return canRetry ? { port: "retry" } : { port: "invalid" };
 				}
 			}
 			return { port: "captured", capturedValue: trimmed };
@@ -242,7 +231,7 @@ export async function resumeWaitingRunOnInput(
 	}) as Graph;
 
 	const node = graph.nodes.find((n) => n.key === run.currentNodeKey);
-	if (!node || node.kind !== "input") return "race";
+	if (node?.kind !== "input") return "race";
 
 	const config = (node.config ?? {}) as InputConfig;
 	const ctx = ((run.context as Record<string, unknown>) ?? {}) as Record<
@@ -270,10 +259,10 @@ export async function resumeWaitingRunOnInput(
 			_input_retries: { ...retryMap, [node.key]: currentRetries + 1 },
 			last_input_value: inboundText ?? "",
 		};
-		// Guard on updatedAt: if the timeout job (or a duplicate inbound) won the
+		// Guard on revision: if the timeout job (or a duplicate inbound) won the
 		// race and advanced this run, don't clobber its state — report a race so
 		// the caller may fall through to entrypoint matching.
-		const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+		const ok = await updateRunOptimistic(db, runId, run.revision, {
 			context: updatedContext,
 		});
 		if (!ok) return "race";
@@ -310,7 +299,7 @@ export async function resumeWaitingRunOnInput(
 	if (!edge) {
 		// Operator didn't wire this port — graceful completion. Matches the
 		// runner's behavior when an advance port has no outgoing edge.
-		const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+		const ok = await updateRunOptimistic(db, runId, run.revision, {
 			status: "completed",
 			exitReason: "completed",
 			completedAt: new Date(),
@@ -324,11 +313,11 @@ export async function resumeWaitingRunOnInput(
 		return "completed";
 	}
 
-	// Guard on updatedAt so a concurrent timeout-fire (which advances through a
+	// Guard on revision so a concurrent timeout-fire (which advances through a
 	// DIFFERENT port) and this reply path don't both advance the run and both
 	// invoke runLoop against the same pre-update snapshot (duplicate side
 	// effects). Exactly one wins; the loser reports a race.
-	const ok = await updateRunOptimistic(db, runId, run.updatedAt, {
+	const ok = await updateRunOptimistic(db, runId, run.revision, {
 		status: "active",
 		waitingFor: null,
 		waitingUntil: null,

@@ -1,46 +1,44 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	broadcasts,
 	broadcastRecipients,
+	broadcasts,
 	type createDb,
 	socialAccounts,
-	whatsappBroadcasts,
-	whatsappBroadcastRecipients,
 } from "@relayapi/db";
-import { and, eq, desc, sql } from "drizzle-orm";
-import { maybeDecrypt } from "../lib/crypto";
+import { and, eq } from "drizzle-orm";
+import { GRAPH_BASE } from "../config/api-versions";
+import { decryptAccountTokens } from "../lib/account-token-crypto";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
+import { canAccessWorkspaceScope } from "../lib/workspace-scope";
+import { BroadcastResponse as GenericBroadcastResponse } from "../schemas/broadcasts";
 import { ErrorResponse } from "../schemas/common";
 import {
 	AccountIdQuery,
-	BroadcastIdParams,
-	BroadcastListQuery,
-	BroadcastListResponse,
-	BroadcastResponse,
 	BulkSendBody,
 	BusinessProfileResponse,
-	CreateBroadcastBody,
+	CreateFlowBody,
 	CreateTemplateBody,
+	DisplayNameResponse,
+	FlowAccountIdBody,
+	FlowIdParams,
+	FlowListResponse,
+	FlowResponse,
 	PhoneNumberListResponse,
+	SendFlowBody,
 	TemplateIdParams,
 	TemplateListResponse,
 	TemplateResponse,
 	UpdateBusinessProfileBody,
 	UpdateDisplayNameBody,
-	DisplayNameResponse,
+	UpdateFlowBody,
+	UploadFlowJsonBody,
 	UploadProfilePhotoBody,
 	UploadProfilePhotoResponse,
-	FlowResponse,
-	FlowListResponse,
-	CreateFlowBody,
-	UpdateFlowBody,
-	FlowIdParams,
-	UploadFlowJsonBody,
-	FlowAccountIdBody,
-	SendFlowBody,
 } from "../schemas/whatsapp";
-import { BroadcastResponse as GenericBroadcastResponse } from "../schemas/broadcasts";
-import { GRAPH_BASE } from "../config/api-versions";
+import {
+	getAllowedRecipientHashes,
+	hashRecipientIdentifier,
+} from "../services/contact-consent";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -66,20 +64,14 @@ async function getWhatsAppAccount(
 				eq(socialAccounts.id, accountId),
 				eq(socialAccounts.organizationId, orgId),
 				eq(socialAccounts.platform, "whatsapp"),
+				eq(socialAccounts.lifecycleStatus, "active"),
 			),
 		)
 		.limit(1);
 	if (!account) return null;
-	if (workspaceScope !== "all") {
-		if (!account.workspaceId || !workspaceScope.includes(account.workspaceId)) {
-			return null;
-		}
-	}
-	return {
-		...account,
-		accessToken: await maybeDecrypt(account.accessToken, encryptionKey),
-		refreshToken: await maybeDecrypt(account.refreshToken, encryptionKey),
-	};
+	if (!canAccessWorkspaceScope(workspaceScope, account.workspaceId))
+		return null;
+	return decryptAccountTokens(account, encryptionKey);
 }
 
 // =====================
@@ -107,155 +99,8 @@ const bulkSend = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
-	},
-});
-
-// =====================
-// Broadcasts
-// =====================
-
-const listBroadcasts = createRoute({
-	operationId: "whatsappListBroadcasts",
-	method: "get",
-	path: "/broadcasts",
-	tags: ["WhatsApp"],
-	summary: "List broadcasts",
-	deprecated: true,
-	description: "Deprecated. Use GET /v1/broadcasts instead.",
-	security: [{ Bearer: [] }],
-	request: { query: BroadcastListQuery },
-	responses: {
-		200: {
-			description: "Broadcasts list",
-			content: {
-				"application/json": { schema: BroadcastListResponse },
-			},
-		},
-		401: {
-			description: "Unauthorized",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-const createBroadcast = createRoute({
-	operationId: "whatsappCreateBroadcast",
-	method: "post",
-	path: "/broadcasts",
-	tags: ["WhatsApp"],
-	summary: "Create a broadcast",
-	deprecated: true,
-	description: "Deprecated. Use POST /v1/broadcasts instead.",
-	security: [{ Bearer: [] }],
-	request: {
-		body: {
-			content: { "application/json": { schema: CreateBroadcastBody } },
-		},
-	},
-	responses: {
-		201: {
-			description: "Broadcast created",
-			content: {
-				"application/json": { schema: BroadcastResponse },
-			},
-		},
-		401: {
-			description: "Unauthorized",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-const getBroadcast = createRoute({
-	operationId: "whatsappGetBroadcast",
-	method: "get",
-	path: "/broadcasts/{broadcast_id}",
-	tags: ["WhatsApp"],
-	summary: "Get broadcast details",
-	deprecated: true,
-	description: "Deprecated. Use GET /v1/broadcasts/{id} instead.",
-	security: [{ Bearer: [] }],
-	request: { params: BroadcastIdParams },
-	responses: {
-		200: {
-			description: "Broadcast details",
-			content: {
-				"application/json": { schema: BroadcastResponse },
-			},
-		},
-		401: {
-			description: "Unauthorized",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-		404: {
-			description: "Not found",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-const deleteBroadcast = createRoute({
-	operationId: "whatsappDeleteBroadcast",
-	method: "delete",
-	path: "/broadcasts/{broadcast_id}",
-	tags: ["WhatsApp"],
-	summary: "Delete a broadcast",
-	deprecated: true,
-	description: "Deprecated. Use DELETE /v1/broadcasts/{id} instead.",
-	security: [{ Bearer: [] }],
-	request: { params: BroadcastIdParams },
-	responses: {
-		204: { description: "Broadcast deleted" },
-		401: {
-			description: "Unauthorized",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-const sendBroadcast = createRoute({
-	operationId: "whatsappSendBroadcast",
-	method: "post",
-	path: "/broadcasts/{broadcast_id}/send",
-	tags: ["WhatsApp"],
-	summary: "Send a broadcast immediately",
-	deprecated: true,
-	description: "Deprecated. Use POST /v1/broadcasts/{id}/send instead.",
-	security: [{ Bearer: [] }],
-	request: { params: BroadcastIdParams },
-	responses: {
-		200: {
-			description: "Broadcast sent",
-			content: {
-				"application/json": { schema: BroadcastResponse },
-			},
-		},
-		401: {
-			description: "Unauthorized",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
-	},
-});
-
-const scheduleBroadcast = createRoute({
-	operationId: "whatsappScheduleBroadcast",
-	method: "post",
-	path: "/broadcasts/{broadcast_id}/schedule",
-	tags: ["WhatsApp"],
-	summary: "Schedule a broadcast",
-	deprecated: true,
-	description: "Deprecated. Use POST /v1/broadcasts/{id}/schedule instead.",
-	security: [{ Bearer: [] }],
-	request: { params: BroadcastIdParams },
-	responses: {
-		200: {
-			description: "Broadcast scheduled",
-			content: {
-				"application/json": { schema: BroadcastResponse },
-			},
-		},
-		401: {
-			description: "Unauthorized",
+		400: {
+			description: "No recipient has current consent",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -468,12 +313,18 @@ const updateDisplayName = createRoute({
 	summary: "Request display name change (requires Meta review)",
 	security: [{ Bearer: [] }],
 	request: {
-		body: { content: { "application/json": { schema: UpdateDisplayNameBody } } },
+		body: {
+			content: { "application/json": { schema: UpdateDisplayNameBody } },
+		},
 	},
 	responses: {
 		200: {
 			description: "Name change request submitted",
-			content: { "application/json": { schema: z.object({ success: z.boolean(), message: z.string() }) } },
+			content: {
+				"application/json": {
+					schema: z.object({ success: z.boolean(), message: z.string() }),
+				},
+			},
 		},
 		401: {
 			description: "Unauthorized",
@@ -494,7 +345,9 @@ const uploadProfilePhoto = createRoute({
 	summary: "Upload WhatsApp Business profile photo",
 	security: [{ Bearer: [] }],
 	request: {
-		body: { content: { "application/json": { schema: UploadProfilePhotoBody } } },
+		body: {
+			content: { "application/json": { schema: UploadProfilePhotoBody } },
+		},
 	},
 	responses: {
 		200: {
@@ -614,7 +467,9 @@ const deleteFlow = createRoute({
 	responses: {
 		200: {
 			description: "Flow deleted",
-			content: { "application/json": { schema: z.object({ success: z.boolean() }) } },
+			content: {
+				"application/json": { schema: z.object({ success: z.boolean() }) },
+			},
 		},
 		401: {
 			description: "Unauthorized",
@@ -637,7 +492,9 @@ const publishFlow = createRoute({
 	responses: {
 		200: {
 			description: "Flow published",
-			content: { "application/json": { schema: z.object({ success: z.boolean() }) } },
+			content: {
+				"application/json": { schema: z.object({ success: z.boolean() }) },
+			},
 		},
 		401: {
 			description: "Unauthorized",
@@ -660,7 +517,9 @@ const deprecateFlow = createRoute({
 	responses: {
 		200: {
 			description: "Flow deprecated",
-			content: { "application/json": { schema: z.object({ success: z.boolean() }) } },
+			content: {
+				"application/json": { schema: z.object({ success: z.boolean() }) },
+			},
 		},
 		401: {
 			description: "Unauthorized",
@@ -683,7 +542,14 @@ const getFlowJson = createRoute({
 	responses: {
 		200: {
 			description: "Flow JSON asset",
-			content: { "application/json": { schema: z.object({ download_url: z.string().nullable(), expires_at: z.string().nullable() }) } },
+			content: {
+				"application/json": {
+					schema: z.object({
+						download_url: z.string().nullable(),
+						expires_at: z.string().nullable(),
+					}),
+				},
+			},
 		},
 		401: {
 			description: "Unauthorized",
@@ -706,7 +572,14 @@ const uploadFlowJson = createRoute({
 	responses: {
 		200: {
 			description: "Flow JSON uploaded",
-			content: { "application/json": { schema: z.object({ success: z.boolean(), validation_errors: z.array(z.any()).optional() }) } },
+			content: {
+				"application/json": {
+					schema: z.object({
+						success: z.boolean(),
+						validation_errors: z.array(z.any()).optional(),
+					}),
+				},
+			},
 		},
 		401: {
 			description: "Unauthorized",
@@ -728,7 +601,9 @@ const sendFlowMessage = createRoute({
 	responses: {
 		200: {
 			description: "Flow message sent",
-			content: { "application/json": { schema: z.object({ message_id: z.string() }) } },
+			content: {
+				"application/json": { schema: z.object({ message_id: z.string() }) },
+			},
 		},
 		401: {
 			description: "Unauthorized",
@@ -748,11 +623,59 @@ app.openapi(bulkSend, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
+		);
+	}
+	const allowedHashes = await getAllowedRecipientHashes(
+		db,
+		orgId,
+		"whatsapp",
+		"marketing",
+		body.recipients.map((recipient) => ({ identifier: recipient.phone })),
+	);
+	const authorizedRecipients = (
+		await Promise.all(
+			body.recipients.map(async (recipient) => ({
+				...recipient,
+				identifierHash: await hashRecipientIdentifier(
+					"whatsapp",
+					recipient.phone,
+				),
+			})),
+		)
+	).filter((recipient) => allowedHashes.has(recipient.identifierHash));
+	const uniqueRecipients = Array.from(
+		new Map(
+			authorizedRecipients.map((recipient) => [
+				recipient.identifierHash,
+				recipient,
+			]),
+		).values(),
+	);
+	if (uniqueRecipients.length === 0) {
+		return c.json(
+			{
+				error: {
+					code: "CONSENT_REQUIRED",
+					message: "No recipient has current WhatsApp marketing consent",
+				},
+			},
+			400,
 		);
 	}
 
@@ -760,45 +683,70 @@ app.openapi(bulkSend, async (c) => {
 	// asynchronously — the previous inline send loop could exceed Worker
 	// wall-time / subrequest limits for large recipient lists. Clients poll
 	// GET /v1/broadcasts/{id} for delivery status.
-	const [broadcast] = await db
-		.insert(broadcasts)
-		.values({
-			organizationId: orgId,
-			workspaceId: account.workspaceId ?? null,
-			socialAccountId: account.id,
-			platform: "whatsapp",
-			name: "WhatsApp bulk send",
-			templateName: body.template.name,
-			templateLanguage: body.template.language,
-			templateComponents: body.template.components ?? null,
-			status: "scheduled",
-			scheduledAt: new Date(),
-		})
-		.returning();
+	const b = await db.transaction(async (tx) => {
+		// Re-read and lock the active account in the same transaction that makes
+		// the due parent visible. Disconnect and workspace changes cannot interleave
+		// between validation and the parent/recipient commit.
+		const [activeAccount] = await tx
+			.select({
+				id: socialAccounts.id,
+				workspaceId: socialAccounts.workspaceId,
+				scopeKey: socialAccounts.scopeKey,
+			})
+			.from(socialAccounts)
+			.where(
+				and(
+					eq(socialAccounts.id, account.id),
+					eq(socialAccounts.organizationId, orgId),
+					eq(socialAccounts.platform, "whatsapp"),
+					eq(socialAccounts.lifecycleStatus, "active"),
+				),
+			)
+			.limit(1)
+			.for("update");
+		if (!activeAccount) return null;
 
-	if (!broadcast) throw new Error("Failed to create broadcast");
+		const [broadcast] = await tx
+			.insert(broadcasts)
+			.values({
+				organizationId: orgId,
+				workspaceId: activeAccount.workspaceId,
+				socialAccountId: activeAccount.id,
+				platform: "whatsapp",
+				name: "WhatsApp bulk send",
+				templateName: body.template.name,
+				templateLanguage: body.template.language,
+				templateComponents: body.template.components ?? null,
+				status: "scheduled",
+				scheduledAt: new Date(),
+				recipientCount: uniqueRecipients.length,
+			})
+			.returning();
+		if (!broadcast) throw new Error("Failed to create broadcast");
 
-	// Bulk insert recipients (onConflictDoNothing dedups repeated phones within
-	// the same broadcast); recipientCount reflects rows actually added.
-	const insertResult = await db
-		.insert(broadcastRecipients)
-		.values(
-			body.recipients.map((recipient) => ({
+		await tx.insert(broadcastRecipients).values(
+			uniqueRecipients.map((recipient) => ({
+				organizationId: orgId,
+				scopeKey: broadcast.scopeKey,
 				broadcastId: broadcast.id,
 				contactIdentifier: recipient.phone,
+				contactIdentifierHash: recipient.identifierHash,
+				variables: recipient.variables ?? null,
 			})),
-		)
-		.onConflictDoNothing()
-		.returning({ id: broadcastRecipients.id });
-
-	const [updated] = await db
-		.update(broadcasts)
-		.set({ recipientCount: insertResult.length, updatedAt: new Date() })
-		.where(eq(broadcasts.id, broadcast.id))
-		.returning();
-
-	if (!updated) throw new Error("Failed to update broadcast");
-	const b = updated;
+		);
+		return broadcast;
+	});
+	if (!b) {
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account became inactive before queueing",
+				},
+			},
+			401,
+		);
+	}
 	return c.json(
 		{
 			id: b.id,
@@ -812,6 +760,7 @@ app.openapi(bulkSend, async (c) => {
 				| "sending"
 				| "sent"
 				| "partially_failed"
+				| "requires_attention"
 				| "failed"
 				| "cancelled",
 			message_text: b.messageText ?? null,
@@ -828,293 +777,6 @@ app.openapi(bulkSend, async (c) => {
 	);
 });
 
-// --- Broadcasts (Drizzle-based) ---
-
-app.openapi(listBroadcasts, async (c) => {
-	const orgId = c.get("orgId");
-	const { account_id, cursor, limit } = c.req.valid("query");
-	const db = c.get("db");
-
-	const conditions = [
-		eq(whatsappBroadcasts.organizationId, orgId),
-		eq(whatsappBroadcasts.socialAccountId, account_id),
-	];
-
-	// Keyset pagination (composite: createdAt DESC, id DESC to handle ties),
-	// mirroring the canonical GET /v1/broadcasts route.
-	if (cursor) {
-		// Read the boundary createdAt as ::text (full microsecond precision) and
-		// bind it back with an explicit ::timestamptz cast. Selecting it as a JS
-		// Date truncates to milliseconds, so the `= cursorCreatedAt` tie branch
-		// would miss rows sharing the boundary millisecond and silently skip them.
-		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${whatsappBroadcasts.createdAt}::text` })
-			.from(whatsappBroadcasts)
-			.where(eq(whatsappBroadcasts.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${whatsappBroadcasts.createdAt}, ${whatsappBroadcasts.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
-			);
-		}
-	}
-
-	const rows = await db
-		.select()
-		.from(whatsappBroadcasts)
-		.where(and(...conditions))
-		.orderBy(desc(whatsappBroadcasts.createdAt), desc(whatsappBroadcasts.id))
-		.limit(limit + 1);
-
-	const hasMore = rows.length > limit;
-	const page = rows.slice(0, limit);
-
-	return c.json(
-		{
-			data: page.map((b) => ({
-				id: b.id,
-				name: b.name,
-				status: b.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
-				template: b.templateName,
-				recipient_count: b.recipientCount,
-				sent: b.sentCount,
-				failed: b.failedCount,
-				scheduled_at: b.scheduledAt?.toISOString() ?? null,
-				created_at: b.createdAt.toISOString(),
-			})),
-			next_cursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
-			has_more: hasMore,
-		},
-		200,
-	);
-});
-
-app.openapi(createBroadcast, async (c) => {
-	const orgId = c.get("orgId");
-	const body = c.req.valid("json");
-	const db = c.get("db");
-
-	const [broadcast] = await db
-		.insert(whatsappBroadcasts)
-		.values({
-			organizationId: orgId,
-			socialAccountId: body.account_id,
-			name: body.name,
-			status: body.scheduled_at ? "scheduled" : "draft",
-			templateName: body.template.name,
-			templateLanguage: body.template.language,
-			templateComponents: body.template.components ?? null,
-			recipientCount: body.recipients.length,
-			scheduledAt: body.scheduled_at ? new Date(body.scheduled_at) : null,
-		})
-		.returning();
-
-	if (!broadcast) throw new Error("Failed to create broadcast");
-
-	// Insert recipients
-	if (body.recipients.length > 0) {
-		await db.insert(whatsappBroadcastRecipients).values(
-			body.recipients.map((r) => ({
-				broadcastId: broadcast.id,
-				phone: r.phone,
-				variables: r.variables ?? null,
-			})),
-		);
-	}
-
-	return c.json(
-		{
-			id: broadcast.id,
-			name: broadcast.name,
-			status: broadcast.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
-			template: broadcast.templateName,
-			recipient_count: broadcast.recipientCount,
-			sent: broadcast.sentCount,
-			failed: broadcast.failedCount,
-			scheduled_at: broadcast.scheduledAt?.toISOString() ?? null,
-			created_at: broadcast.createdAt.toISOString(),
-		},
-		201,
-	);
-});
-
-app.openapi(getBroadcast, async (c) => {
-	const orgId = c.get("orgId");
-	const { broadcast_id } = c.req.valid("param");
-	const db = c.get("db");
-
-	const [broadcast] = await db
-		.select()
-		.from(whatsappBroadcasts)
-		.where(
-			and(
-				eq(whatsappBroadcasts.id, broadcast_id),
-				eq(whatsappBroadcasts.organizationId, orgId),
-			),
-		)
-		.limit(1);
-
-	if (!broadcast) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Broadcast not found" } },
-			404,
-		);
-	}
-
-	return c.json(
-		{
-			id: broadcast.id,
-			name: broadcast.name,
-			status: broadcast.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
-			template: broadcast.templateName,
-			recipient_count: broadcast.recipientCount,
-			sent: broadcast.sentCount,
-			failed: broadcast.failedCount,
-			scheduled_at: broadcast.scheduledAt?.toISOString() ?? null,
-			created_at: broadcast.createdAt.toISOString(),
-		},
-		200,
-	);
-});
-
-app.openapi(deleteBroadcast, async (c) => {
-	const orgId = c.get("orgId");
-	const { broadcast_id } = c.req.valid("param");
-	const db = c.get("db");
-
-	await db
-		.delete(whatsappBroadcasts)
-		.where(
-			and(
-				eq(whatsappBroadcasts.id, broadcast_id),
-				eq(whatsappBroadcasts.organizationId, orgId),
-			),
-		);
-
-	return c.body(null, 204);
-});
-
-// @ts-expect-error — Hono strict return types; handler returns valid BroadcastResponse or ErrorResponse
-app.openapi(sendBroadcast, async (c) => {
-	const orgId = c.get("orgId");
-	const { broadcast_id } = c.req.valid("param");
-	const db = c.get("db");
-
-	const [broadcast] = await db
-		.select()
-		.from(whatsappBroadcasts)
-		.where(
-			and(
-				eq(whatsappBroadcasts.id, broadcast_id),
-				eq(whatsappBroadcasts.organizationId, orgId),
-			),
-		)
-		.limit(1);
-
-	if (!broadcast) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Broadcast not found" } },
-			404,
-		);
-	}
-
-	if (broadcast.status !== "draft" && broadcast.status !== "scheduled") {
-		return c.json(
-			{ error: { code: "INVALID_STATUS", message: `Broadcast is already ${broadcast.status}` } },
-			400,
-		);
-	}
-
-	const account = await getWhatsAppAccount(db, broadcast.socialAccountId, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-
-	if (!account || !account.accessToken) {
-		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
-			401,
-		);
-	}
-
-	// Queue the broadcast for asynchronous delivery. The previous inline loop did
-	// one external send + DB update per recipient (up to 1000) on the request
-	// path, which could exceed Worker wall-time / subrequest limits and time out.
-	// The every-minute WhatsApp broadcast processor now delivers it in resumable,
-	// bounded chunks. Clients poll GET /v1/whatsapp/broadcasts/{id} for status.
-	const [updated] = await db
-		.update(whatsappBroadcasts)
-		.set({ status: "scheduled", scheduledAt: new Date(), updatedAt: new Date() })
-		.where(eq(whatsappBroadcasts.id, broadcast_id))
-		.returning();
-
-	if (!updated) throw new Error("Failed to update broadcast");
-	return c.json(
-		{
-			id: updated.id,
-			name: updated.name,
-			status: updated.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
-			template: updated.templateName,
-			recipient_count: updated.recipientCount,
-			sent: updated.sentCount,
-			failed: updated.failedCount,
-			scheduled_at: updated.scheduledAt?.toISOString() ?? null,
-			created_at: updated.createdAt.toISOString(),
-		},
-		200,
-	);
-});
-
-// @ts-expect-error — Hono strict return types; handler returns valid BroadcastResponse or ErrorResponse
-app.openapi(scheduleBroadcast, async (c) => {
-	const orgId = c.get("orgId");
-	const { broadcast_id } = c.req.valid("param");
-	const db = c.get("db");
-
-	const [existing] = await db
-		.select()
-		.from(whatsappBroadcasts)
-		.where(
-			and(
-				eq(whatsappBroadcasts.id, broadcast_id),
-				eq(whatsappBroadcasts.organizationId, orgId),
-			),
-		)
-		.limit(1);
-
-	if (!existing) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Broadcast not found" } },
-			404,
-		);
-	}
-
-	const scheduledAt = existing.scheduledAt ?? new Date(Date.now() + 60 * 60 * 1000);
-
-	const [updated] = await db
-		.update(whatsappBroadcasts)
-		.set({
-			status: "scheduled",
-			scheduledAt,
-			updatedAt: new Date(),
-		})
-		.where(eq(whatsappBroadcasts.id, broadcast_id))
-		.returning();
-
-	if (!updated) throw new Error("Failed to update broadcast");
-	return c.json(
-		{
-			id: updated.id,
-			name: updated.name,
-			status: updated.status as "draft" | "scheduled" | "sending" | "sent" | "partially_failed" | "failed",
-			template: updated.templateName,
-			recipient_count: updated.recipientCount,
-			sent: updated.sentCount,
-			failed: updated.failedCount,
-			scheduled_at: updated.scheduledAt?.toISOString() ?? null,
-			created_at: updated.createdAt.toISOString(),
-		},
-		200,
-	);
-});
-
 // --- Templates (WhatsApp Cloud API) ---
 
 app.openapi(listTemplates, async (c) => {
@@ -1122,10 +784,21 @@ app.openapi(listTemplates, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
@@ -1134,7 +807,13 @@ app.openapi(listTemplates, async (c) => {
 	const wabaId = meta?.waba_id as string | undefined;
 	if (!wabaId) {
 		return c.json(
-			{ error: { code: "MISSING_WABA_ID", message: "WhatsApp Business Account ID not configured in account metadata" } },
+			{
+				error: {
+					code: "MISSING_WABA_ID",
+					message:
+						"WhatsApp Business Account ID not configured in account metadata",
+				},
+			},
 			401,
 		);
 	}
@@ -1142,14 +821,18 @@ app.openapi(listTemplates, async (c) => {
 	try {
 		// WhatsApp Business Management API: List message templates for a WABA
 		// https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates
-		const res = await fetch(
-			`${WA_API_BASE}/${wabaId}/message_templates`,
-			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
-		);
+		const res = await fetch(`${WA_API_BASE}/${wabaId}/message_templates`, {
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		});
 		if (!res.ok) {
 			const err = await res.text();
 			return c.json(
-				{ error: { code: "WA_API_ERROR", message: `Failed to list templates: ${err}` } },
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to list templates: ${err}`,
+					},
+				},
 				401,
 			);
 		}
@@ -1191,7 +874,12 @@ app.openapi(listTemplates, async (c) => {
 		);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			401,
 		);
 	}
@@ -1202,10 +890,21 @@ app.openapi(createTemplate, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
@@ -1214,7 +913,13 @@ app.openapi(createTemplate, async (c) => {
 	const wabaId = meta?.waba_id as string | undefined;
 	if (!wabaId) {
 		return c.json(
-			{ error: { code: "MISSING_WABA_ID", message: "WhatsApp Business Account ID not configured in account metadata" } },
+			{
+				error: {
+					code: "MISSING_WABA_ID",
+					message:
+						"WhatsApp Business Account ID not configured in account metadata",
+				},
+			},
 			401,
 		);
 	}
@@ -1239,7 +944,12 @@ app.openapi(createTemplate, async (c) => {
 		if (!res.ok) {
 			const err = await res.text();
 			return c.json(
-				{ error: { code: "WA_API_ERROR", message: `Failed to create template: ${err}` } },
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to create template: ${err}`,
+					},
+				},
 				401,
 			);
 		}
@@ -1255,7 +965,10 @@ app.openapi(createTemplate, async (c) => {
 			{
 				name: body.name,
 				language: body.language,
-				status: (json.status ?? "PENDING") as "APPROVED" | "PENDING" | "REJECTED",
+				status: (json.status ?? "PENDING") as
+					| "APPROVED"
+					| "PENDING"
+					| "REJECTED",
 				category: body.category,
 				components: body.components,
 			},
@@ -1263,7 +976,12 @@ app.openapi(createTemplate, async (c) => {
 		);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			401,
 		);
 	}
@@ -1275,10 +993,21 @@ app.openapi(getTemplate, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
@@ -1287,7 +1016,13 @@ app.openapi(getTemplate, async (c) => {
 	const wabaId = meta?.waba_id as string | undefined;
 	if (!wabaId) {
 		return c.json(
-			{ error: { code: "MISSING_WABA_ID", message: "WhatsApp Business Account ID not configured in account metadata" } },
+			{
+				error: {
+					code: "MISSING_WABA_ID",
+					message:
+						"WhatsApp Business Account ID not configured in account metadata",
+				},
+			},
 			401,
 		);
 	}
@@ -1338,7 +1073,10 @@ app.openapi(getTemplate, async (c) => {
 				name: template.name,
 				language: template.language,
 				status: template.status as "APPROVED" | "PENDING" | "REJECTED",
-				category: template.category as "MARKETING" | "UTILITY" | "AUTHENTICATION",
+				category: template.category as
+					| "MARKETING"
+					| "UTILITY"
+					| "AUTHENTICATION",
 				components: template.components.map((comp) => ({
 					type: comp.type as "HEADER" | "BODY" | "FOOTER" | "BUTTONS",
 					...(comp.text !== undefined ? { text: comp.text } : {}),
@@ -1350,7 +1088,12 @@ app.openapi(getTemplate, async (c) => {
 		);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			404,
 		);
 	}
@@ -1362,10 +1105,21 @@ app.openapi(deleteTemplate, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
@@ -1374,7 +1128,13 @@ app.openapi(deleteTemplate, async (c) => {
 	const wabaId = meta?.waba_id as string | undefined;
 	if (!wabaId) {
 		return c.json(
-			{ error: { code: "MISSING_WABA_ID", message: "WhatsApp Business Account ID not configured in account metadata" } },
+			{
+				error: {
+					code: "MISSING_WABA_ID",
+					message:
+						"WhatsApp Business Account ID not configured in account metadata",
+				},
+			},
 			401,
 		);
 	}
@@ -1395,13 +1155,23 @@ app.openapi(deleteTemplate, async (c) => {
 		if (!res.ok) {
 			const err = await res.text();
 			return c.json(
-				{ error: { code: "WA_API_ERROR", message: `Failed to delete template: ${err}` } },
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to delete template: ${err}`,
+					},
+				},
 				401,
 			);
 		}
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			401,
 		);
 	}
@@ -1416,14 +1186,24 @@ app.openapi(getBusinessProfile, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
-
 	const phoneNumberId = account.platformAccountId;
 
 	try {
@@ -1439,7 +1219,12 @@ app.openapi(getBusinessProfile, async (c) => {
 		if (!res.ok) {
 			const err = await res.text();
 			return c.json(
-				{ error: { code: "WA_API_ERROR", message: `Failed to get business profile: ${err}` } },
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to get business profile: ${err}`,
+					},
+				},
 				401,
 			);
 		}
@@ -1470,7 +1255,12 @@ app.openapi(getBusinessProfile, async (c) => {
 		);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			401,
 		);
 	}
@@ -1481,10 +1271,21 @@ app.openapi(updateBusinessProfile, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
@@ -1496,7 +1297,8 @@ app.openapi(updateBusinessProfile, async (c) => {
 		messaging_product: "whatsapp",
 	};
 	if (body.about !== undefined) updatePayload.about = body.about;
-	if (body.description !== undefined) updatePayload.description = body.description;
+	if (body.description !== undefined)
+		updatePayload.description = body.description;
 	if (body.email !== undefined) updatePayload.email = body.email;
 	if (body.websites !== undefined) updatePayload.websites = body.websites;
 	if (body.address !== undefined) updatePayload.address = body.address;
@@ -1519,7 +1321,12 @@ app.openapi(updateBusinessProfile, async (c) => {
 		if (!updateRes.ok) {
 			const err = await updateRes.text();
 			return c.json(
-				{ error: { code: "WA_API_ERROR", message: `Failed to update business profile: ${err}` } },
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to update business profile: ${err}`,
+					},
+				},
 				401,
 			);
 		}
@@ -1574,7 +1381,12 @@ app.openapi(updateBusinessProfile, async (c) => {
 		);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			401,
 		);
 	}
@@ -1587,10 +1399,21 @@ app.openapi(listPhoneNumbers, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
@@ -1599,7 +1422,13 @@ app.openapi(listPhoneNumbers, async (c) => {
 	const wabaId = meta?.waba_id as string | undefined;
 	if (!wabaId) {
 		return c.json(
-			{ error: { code: "MISSING_WABA_ID", message: "WhatsApp Business Account ID not configured in account metadata" } },
+			{
+				error: {
+					code: "MISSING_WABA_ID",
+					message:
+						"WhatsApp Business Account ID not configured in account metadata",
+				},
+			},
 			401,
 		);
 	}
@@ -1607,15 +1436,19 @@ app.openapi(listPhoneNumbers, async (c) => {
 	try {
 		// WhatsApp Business Management API: List phone numbers for a WABA
 		// https://developers.facebook.com/docs/whatsapp/business-management-api/phone-numbers
-		const res = await fetch(
-			`${WA_API_BASE}/${wabaId}/phone_numbers`,
-			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
-		);
+		const res = await fetch(`${WA_API_BASE}/${wabaId}/phone_numbers`, {
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
 			return c.json(
-				{ error: { code: "WA_API_ERROR", message: `Failed to list phone numbers: ${err}` } },
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to list phone numbers: ${err}`,
+					},
+				},
 				401,
 			);
 		}
@@ -1647,7 +1480,12 @@ app.openapi(listPhoneNumbers, async (c) => {
 		);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			401,
 		);
 	}
@@ -1660,10 +1498,21 @@ app.openapi(getDisplayName, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
@@ -1683,7 +1532,12 @@ app.openapi(getDisplayName, async (c) => {
 		if (!res.ok) {
 			const err = await res.text();
 			return c.json(
-				{ error: { code: "WA_API_ERROR", message: `Failed to get display name: ${err}` } },
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to get display name: ${err}`,
+					},
+				},
 				401,
 			);
 		}
@@ -1702,7 +1556,12 @@ app.openapi(getDisplayName, async (c) => {
 		);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			401,
 		);
 	}
@@ -1713,10 +1572,21 @@ app.openapi(updateDisplayName, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
@@ -1743,15 +1613,32 @@ app.openapi(updateDisplayName, async (c) => {
 		if (!res.ok) {
 			const err = await res.text();
 			return c.json(
-				{ error: { code: "WA_API_ERROR", message: `Failed to update display name: ${err}` } },
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to update display name: ${err}`,
+					},
+				},
 				401,
 			);
 		}
 
-		return c.json({ success: true, message: "Display name change request submitted. Meta review may take 1-3 business days." }, 200);
+		return c.json(
+			{
+				success: true,
+				message:
+					"Display name change request submitted. Meta review may take 1-3 business days.",
+			},
+			200,
+		);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			401,
 		);
 	}
@@ -1765,10 +1652,21 @@ app.openapi(uploadProfilePhoto, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
 		return c.json(
-			{ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } },
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
 			401,
 		);
 	}
@@ -1780,14 +1678,33 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		const photoUrl = new URL(body.photo_url);
 		if (photoUrl.protocol !== "https:") {
 			return c.json(
-				{ error: { code: "INVALID_URL", message: "Only HTTPS URLs are allowed" } },
+				{
+					error: {
+						code: "INVALID_URL",
+						message: "Only HTTPS URLs are allowed",
+					},
+				},
 				400,
 			);
 		}
 		const host = photoUrl.hostname.toLowerCase();
-		if (host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".local") || host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.") || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
+		if (
+			host === "localhost" ||
+			host === "127.0.0.1" ||
+			host === "[::1]" ||
+			host.endsWith(".local") ||
+			host.startsWith("10.") ||
+			host.startsWith("192.168.") ||
+			host.startsWith("169.254.") ||
+			/^172\.(1[6-9]|2\d|3[01])\./.test(host)
+		) {
 			return c.json(
-				{ error: { code: "INVALID_URL", message: "Private or localhost URLs are not allowed" } },
+				{
+					error: {
+						code: "INVALID_URL",
+						message: "Private or localhost URLs are not allowed",
+					},
+				},
 				400,
 			);
 		}
@@ -1796,7 +1713,12 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		const imageRes = await fetchPublicUrl(body.photo_url, { timeout: 30_000 });
 		if (!imageRes.ok) {
 			return c.json(
-				{ error: { code: "FETCH_FAILED", message: `Failed to fetch image from URL: ${imageRes.statusText}` } },
+				{
+					error: {
+						code: "FETCH_FAILED",
+						message: `Failed to fetch image from URL: ${imageRes.statusText}`,
+					},
+				},
 				400,
 			);
 		}
@@ -1824,7 +1746,12 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		if (!sessionRes.ok) {
 			const err = await sessionRes.text();
 			return c.json(
-				{ error: { code: "UPLOAD_SESSION_FAILED", message: `Failed to create upload session: ${err}` } },
+				{
+					error: {
+						code: "UPLOAD_SESSION_FAILED",
+						message: `Failed to create upload session: ${err}`,
+					},
+				},
 				502,
 			);
 		}
@@ -1833,7 +1760,12 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		const uploadSessionId = sessionData.id;
 		if (!uploadSessionId) {
 			return c.json(
-				{ error: { code: "UPLOAD_SESSION_FAILED", message: "No upload session ID returned" } },
+				{
+					error: {
+						code: "UPLOAD_SESSION_FAILED",
+						message: "No upload session ID returned",
+					},
+				},
 				502,
 			);
 		}
@@ -1843,23 +1775,25 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		// Section: "Upload File Data" — POST /upload:<SESSION_ID>
 		// Headers: Authorization: OAuth {token}, file_offset: 0
 		// Body: raw binary | Returns: { h: "<FILE_HANDLE>" }
-		const uploadRes = await fetch(
-			`${WA_API_BASE}/${uploadSessionId}`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `OAuth ${account.accessToken}`,
-					"Content-Type": contentType,
-					file_offset: "0",
-				},
-				body: imageBytes,
+		const uploadRes = await fetch(`${WA_API_BASE}/${uploadSessionId}`, {
+			method: "POST",
+			headers: {
+				Authorization: `OAuth ${account.accessToken}`,
+				"Content-Type": contentType,
+				file_offset: "0",
 			},
-		);
+			body: imageBytes,
+		});
 
 		if (!uploadRes.ok) {
 			const err = await uploadRes.text();
 			return c.json(
-				{ error: { code: "UPLOAD_FAILED", message: `Failed to upload photo: ${err}` } },
+				{
+					error: {
+						code: "UPLOAD_FAILED",
+						message: `Failed to upload photo: ${err}`,
+					},
+				},
 				502,
 			);
 		}
@@ -1868,7 +1802,9 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		const fileHandle = uploadData.h;
 		if (!fileHandle) {
 			return c.json(
-				{ error: { code: "UPLOAD_FAILED", message: "No file handle returned" } },
+				{
+					error: { code: "UPLOAD_FAILED", message: "No file handle returned" },
+				},
 				502,
 			);
 		}
@@ -1896,7 +1832,12 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		if (!profileRes.ok) {
 			const err = await profileRes.text();
 			return c.json(
-				{ error: { code: "PROFILE_UPDATE_FAILED", message: `Failed to set profile photo: ${err}` } },
+				{
+					error: {
+						code: "PROFILE_UPDATE_FAILED",
+						message: `Failed to set profile photo: ${err}`,
+					},
+				},
 				502,
 			);
 		}
@@ -1906,13 +1847,20 @@ app.openapi(uploadProfilePhoto, async (c) => {
 			`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile?fields=profile_picture_url`,
 			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 		);
-		const updatedJson = (await updatedRes.json()) as { data?: Array<{ profile_picture_url?: string }> };
+		const updatedJson = (await updatedRes.json()) as {
+			data?: Array<{ profile_picture_url?: string }>;
+		};
 		const newUrl = updatedJson.data?.[0]?.profile_picture_url ?? null;
 
 		return c.json({ success: true, profile_picture_url: newUrl }, 200);
 	} catch (e) {
 		return c.json(
-			{ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } },
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
 			502,
 		);
 	}
@@ -1922,7 +1870,9 @@ app.openapi(uploadProfilePhoto, async (c) => {
 
 /** Helper to resolve WABA ID from account metadata */
 function getWabaId(account: { metadata: unknown }): string | undefined {
-	return (account.metadata as Record<string, unknown> | null)?.waba_id as string | undefined;
+	return (account.metadata as Record<string, unknown> | null)?.waba_id as
+		| string
+		| undefined;
 }
 
 /** Verify a flow belongs to the caller's WABA by checking the flow's waba_id field */
@@ -1936,14 +1886,26 @@ async function assertFlowOwnership(
 			`${WA_API_BASE}/${flowId}?fields=id,whatsapp_business_account`,
 			{ headers: { Authorization: `Bearer ${accessToken}` } },
 		);
-		if (!res.ok) return { owned: false, error: `Flow not found or inaccessible (HTTP ${res.status})` };
-		const data = (await res.json()) as { whatsapp_business_account?: { id?: string } };
+		if (!res.ok)
+			return {
+				owned: false,
+				error: `Flow not found or inaccessible (HTTP ${res.status})`,
+			};
+		const data = (await res.json()) as {
+			whatsapp_business_account?: { id?: string };
+		};
 		const flowWabaId = data.whatsapp_business_account?.id;
 		if (!flowWabaId) {
-			return { owned: false, error: "Could not verify flow ownership: WABA not returned by Meta API" };
+			return {
+				owned: false,
+				error: "Could not verify flow ownership: WABA not returned by Meta API",
+			};
 		}
 		if (flowWabaId !== wabaId) {
-			return { owned: false, error: "Flow does not belong to this WhatsApp Business Account" };
+			return {
+				owned: false,
+				error: "Flow does not belong to this WhatsApp Business Account",
+			};
 		}
 		return { owned: true };
 	} catch {
@@ -1957,32 +1919,66 @@ app.openapi(listFlows, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const wabaId = getWabaId(account);
 	if (!wabaId) {
-		return c.json({ error: { code: "MISSING_WABA_ID", message: "WABA ID not configured" } }, 401);
+		return c.json(
+			{ error: { code: "MISSING_WABA_ID", message: "WABA ID not configured" } },
+			401,
+		);
 	}
 
 	try {
 		// WhatsApp Flows API — List flows for a WABA
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "List Flows" — GET /{waba-id}/flows
-		const res = await fetch(
-			`${WA_API_BASE}/${wabaId}/flows`,
-			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
-		);
+		const res = await fetch(`${WA_API_BASE}/${wabaId}/flows`, {
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		});
 		if (!res.ok) {
 			const err = await res.text();
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to list flows: ${err}` } }, 502);
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to list flows: ${err}`,
+					},
+				},
+				502,
+			);
 		}
-		const json = (await res.json()) as { data?: Array<Record<string, unknown>> };
+		const json = (await res.json()) as {
+			data?: Array<Record<string, unknown>>;
+		};
 		return c.json({ data: json.data ?? [] }, 200);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 
@@ -1992,14 +1988,31 @@ app.openapi(createFlow, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const wabaId = getWabaId(account);
 	if (!wabaId) {
-		return c.json({ error: { code: "MISSING_WABA_ID", message: "WABA ID not configured" } }, 401);
+		return c.json(
+			{ error: { code: "MISSING_WABA_ID", message: "WABA ID not configured" } },
+			401,
+		);
 	}
 
 	try {
@@ -2015,26 +2028,34 @@ app.openapi(createFlow, async (c) => {
 			payload.clone_flow_id = body.clone_flow_id;
 		}
 
-		const res = await fetch(
-			`${WA_API_BASE}/${wabaId}/flows`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(payload),
+		const res = await fetch(`${WA_API_BASE}/${wabaId}/flows`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${account.accessToken}`,
+				"Content-Type": "application/json",
 			},
-		);
+			body: JSON.stringify(payload),
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to create flow: ${err}` } }, 502);
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to create flow: ${err}`,
+					},
+				},
+				502,
+			);
 		}
 
 		const data = (await res.json()) as { id?: string };
 		if (!data.id) {
-			return c.json({ error: { code: "WA_API_ERROR", message: "No flow ID returned" } }, 502);
+			return c.json(
+				{ error: { code: "WA_API_ERROR", message: "No flow ID returned" } },
+				502,
+			);
 		}
 
 		// Fetch the full flow details
@@ -2045,7 +2066,15 @@ app.openapi(createFlow, async (c) => {
 		const detail = (await detailRes.json()) as Record<string, unknown>;
 		return c.json(detail, 201);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 
@@ -2056,16 +2085,37 @@ app.openapi(getFlow, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const wabaId = getWabaId(account);
 	if (wabaId) {
-		const ownership = await assertFlowOwnership(flow_id, wabaId, account.accessToken);
+		const ownership = await assertFlowOwnership(
+			flow_id,
+			wabaId,
+			account.accessToken,
+		);
 		if (!ownership.owned) {
-			return c.json({ error: { code: "FORBIDDEN", message: ownership.error } }, 403);
+			return c.json(
+				{ error: { code: "FORBIDDEN", message: ownership.error } },
+				403,
+			);
 		}
 	}
 
@@ -2081,12 +2131,28 @@ app.openapi(getFlow, async (c) => {
 		);
 		if (!res.ok) {
 			const err = await res.text();
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to get flow: ${err}` } }, 502);
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to get flow: ${err}`,
+					},
+				},
+				502,
+			);
 		}
 		const data = (await res.json()) as Record<string, unknown>;
 		return c.json(data, 200);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 
@@ -2097,16 +2163,37 @@ app.openapi(updateFlow, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const wabaId = getWabaId(account);
 	if (wabaId) {
-		const ownership = await assertFlowOwnership(flow_id, wabaId, account.accessToken);
+		const ownership = await assertFlowOwnership(
+			flow_id,
+			wabaId,
+			account.accessToken,
+		);
 		if (!ownership.owned) {
-			return c.json({ error: { code: "FORBIDDEN", message: ownership.error } }, 403);
+			return c.json(
+				{ error: { code: "FORBIDDEN", message: ownership.error } },
+				403,
+			);
 		}
 	}
 
@@ -2119,21 +2206,26 @@ app.openapi(updateFlow, async (c) => {
 		if (body.name !== undefined) payload.name = body.name;
 		if (body.categories !== undefined) payload.categories = body.categories;
 
-		const res = await fetch(
-			`${WA_API_BASE}/${flow_id}`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(payload),
+		const res = await fetch(`${WA_API_BASE}/${flow_id}`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${account.accessToken}`,
+				"Content-Type": "application/json",
 			},
-		);
+			body: JSON.stringify(payload),
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to update flow: ${err}` } }, 502);
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to update flow: ${err}`,
+					},
+				},
+				502,
+			);
 		}
 
 		// Fetch updated details
@@ -2144,7 +2236,15 @@ app.openapi(updateFlow, async (c) => {
 		const detail = (await detailRes.json()) as Record<string, unknown>;
 		return c.json(detail, 200);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 
@@ -2155,16 +2255,37 @@ app.openapi(deleteFlow, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const wabaId = getWabaId(account);
 	if (wabaId) {
-		const ownership = await assertFlowOwnership(flow_id, wabaId, account.accessToken);
+		const ownership = await assertFlowOwnership(
+			flow_id,
+			wabaId,
+			account.accessToken,
+		);
 		if (!ownership.owned) {
-			return c.json({ error: { code: "FORBIDDEN", message: ownership.error } }, 403);
+			return c.json(
+				{ error: { code: "FORBIDDEN", message: ownership.error } },
+				403,
+			);
 		}
 	}
 
@@ -2172,22 +2293,35 @@ app.openapi(deleteFlow, async (c) => {
 		// WhatsApp Flows API — Delete a DRAFT flow
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Delete Flow" — DELETE /{flow-id}, returns { success: true }
-		const res = await fetch(
-			`${WA_API_BASE}/${flow_id}`,
-			{
-				method: "DELETE",
-				headers: { Authorization: `Bearer ${account.accessToken}` },
-			},
-		);
+		const res = await fetch(`${WA_API_BASE}/${flow_id}`, {
+			method: "DELETE",
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to delete flow: ${err}` } }, 502);
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to delete flow: ${err}`,
+					},
+				},
+				502,
+			);
 		}
 
 		return c.json({ success: true }, 200);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 
@@ -2198,16 +2332,37 @@ app.openapi(publishFlow, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const wabaId = getWabaId(account);
 	if (wabaId) {
-		const ownership = await assertFlowOwnership(flow_id, wabaId, account.accessToken);
+		const ownership = await assertFlowOwnership(
+			flow_id,
+			wabaId,
+			account.accessToken,
+		);
 		if (!ownership.owned) {
-			return c.json({ error: { code: "FORBIDDEN", message: ownership.error } }, 403);
+			return c.json(
+				{ error: { code: "FORBIDDEN", message: ownership.error } },
+				403,
+			);
 		}
 	}
 
@@ -2215,22 +2370,35 @@ app.openapi(publishFlow, async (c) => {
 		// WhatsApp Flows API — Publish a flow (irreversible, DRAFT → PUBLISHED)
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Publish Flow" — POST /{flow-id}/publish, no body required, returns { success: true }
-		const res = await fetch(
-			`${WA_API_BASE}/${flow_id}/publish`,
-			{
-				method: "POST",
-				headers: { Authorization: `Bearer ${account.accessToken}` },
-			},
-		);
+		const res = await fetch(`${WA_API_BASE}/${flow_id}/publish`, {
+			method: "POST",
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to publish flow: ${err}` } }, 502);
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to publish flow: ${err}`,
+					},
+				},
+				502,
+			);
 		}
 
 		return c.json({ success: true }, 200);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 
@@ -2241,16 +2409,37 @@ app.openapi(deprecateFlow, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const wabaId = getWabaId(account);
 	if (wabaId) {
-		const ownership = await assertFlowOwnership(flow_id, wabaId, account.accessToken);
+		const ownership = await assertFlowOwnership(
+			flow_id,
+			wabaId,
+			account.accessToken,
+		);
 		if (!ownership.owned) {
-			return c.json({ error: { code: "FORBIDDEN", message: ownership.error } }, 403);
+			return c.json(
+				{ error: { code: "FORBIDDEN", message: ownership.error } },
+				403,
+			);
 		}
 	}
 
@@ -2258,22 +2447,35 @@ app.openapi(deprecateFlow, async (c) => {
 		// WhatsApp Flows API — Deprecate a published flow (irreversible)
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Deprecate Flow" — POST /{flow-id}/deprecate, no body, returns { success: true }
-		const res = await fetch(
-			`${WA_API_BASE}/${flow_id}/deprecate`,
-			{
-				method: "POST",
-				headers: { Authorization: `Bearer ${account.accessToken}` },
-			},
-		);
+		const res = await fetch(`${WA_API_BASE}/${flow_id}/deprecate`, {
+			method: "POST",
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to deprecate flow: ${err}` } }, 502);
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to deprecate flow: ${err}`,
+					},
+				},
+				502,
+			);
 		}
 
 		return c.json({ success: true }, 200);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 
@@ -2284,16 +2486,37 @@ app.openapi(getFlowJson, async (c) => {
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const wabaId = getWabaId(account);
 	if (wabaId) {
-		const ownership = await assertFlowOwnership(flow_id, wabaId, account.accessToken);
+		const ownership = await assertFlowOwnership(
+			flow_id,
+			wabaId,
+			account.accessToken,
+		);
 		if (!ownership.owned) {
-			return c.json({ error: { code: "FORBIDDEN", message: ownership.error } }, 403);
+			return c.json(
+				{ error: { code: "FORBIDDEN", message: ownership.error } },
+				403,
+			);
 		}
 	}
 
@@ -2302,17 +2525,26 @@ app.openapi(getFlowJson, async (c) => {
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Get Flow Assets" — GET /{flow-id}/assets
 		// Returns: { data: [{ name, asset_type, download_url }] } — look for name === "flow.json"
-		const res = await fetch(
-			`${WA_API_BASE}/${flow_id}/assets`,
-			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
-		);
+		const res = await fetch(`${WA_API_BASE}/${flow_id}/assets`, {
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to get flow JSON: ${err}` } }, 502);
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to get flow JSON: ${err}`,
+					},
+				},
+				502,
+			);
 		}
 
-		const json = (await res.json()) as { data?: Array<{ name?: string; download_url?: string }> };
+		const json = (await res.json()) as {
+			data?: Array<{ name?: string; download_url?: string }>;
+		};
 		const asset = json.data?.find((a) => a.name === "flow.json");
 
 		return c.json(
@@ -2323,7 +2555,15 @@ app.openapi(getFlowJson, async (c) => {
 			200,
 		);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 
@@ -2334,16 +2574,37 @@ app.openapi(uploadFlowJson, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
 	}
 
 	const wabaId = getWabaId(account);
 	if (wabaId) {
-		const ownership = await assertFlowOwnership(flow_id, wabaId, account.accessToken);
+		const ownership = await assertFlowOwnership(
+			flow_id,
+			wabaId,
+			account.accessToken,
+		);
 		if (!ownership.owned) {
-			return c.json({ error: { code: "FORBIDDEN", message: ownership.error } }, 403);
+			return c.json(
+				{ error: { code: "FORBIDDEN", message: ownership.error } },
+				403,
+			);
 		}
 	}
 
@@ -2353,39 +2614,64 @@ app.openapi(uploadFlowJson, async (c) => {
 		// Section: "Update Flow JSON" — POST /{flow-id}/assets (multipart form-data)
 		// Required fields: file (JSON blob), name: "flow.json", asset_type: "FLOW_JSON"
 		// Returns validation_errors array if JSON is invalid
-		const flowJsonBlob = new Blob([JSON.stringify(body.flow_json)], { type: "application/json" });
+		const flowJsonBlob = new Blob([JSON.stringify(body.flow_json)], {
+			type: "application/json",
+		});
 		const formData = new FormData();
 		formData.append("file", flowJsonBlob, "flow.json");
 		formData.append("name", "flow.json");
 		formData.append("asset_type", "FLOW_JSON");
 
-		const res = await fetch(
-			`${WA_API_BASE}/${flow_id}/assets`,
-			{
-				method: "POST",
-				headers: { Authorization: `Bearer ${account.accessToken}` },
-				body: formData,
-			},
-		);
+		const res = await fetch(`${WA_API_BASE}/${flow_id}/assets`, {
+			method: "POST",
+			headers: { Authorization: `Bearer ${account.accessToken}` },
+			body: formData,
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
 			// Meta returns validation errors in the response body
 			try {
-				const parsed = JSON.parse(err) as { error?: { error_user_msg?: string; error_data?: { validation_errors?: unknown[] } } };
+				const parsed = JSON.parse(err) as {
+					error?: {
+						error_user_msg?: string;
+						error_data?: { validation_errors?: unknown[] };
+					};
+				};
 				if (parsed.error?.error_data?.validation_errors) {
 					return c.json(
-						{ success: false, validation_errors: parsed.error.error_data.validation_errors },
+						{
+							success: false,
+							validation_errors: parsed.error.error_data.validation_errors,
+						},
 						200,
 					);
 				}
-			} catch { /* not JSON, fall through */ }
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to upload flow JSON: ${err}` } }, 502);
+			} catch {
+				/* not JSON, fall through */
+			}
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to upload flow JSON: ${err}`,
+					},
+				},
+				502,
+			);
 		}
 
 		return c.json({ success: true }, 200);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 
@@ -2395,9 +2681,45 @@ app.openapi(sendFlowMessage, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getWhatsAppAccount(db, body.account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getWhatsAppAccount(
+		db,
+		body.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account || !account.accessToken) {
-		return c.json({ error: { code: "ACCOUNT_NOT_FOUND", message: "WhatsApp account not found or missing access token" } }, 401);
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "WhatsApp account not found or missing access token",
+				},
+			},
+			401,
+		);
+	}
+	const allowedFlowHashes = await getAllowedRecipientHashes(
+		db,
+		orgId,
+		"whatsapp",
+		"automation",
+		[{ identifier: body.recipient_phone }],
+	);
+	if (
+		!allowedFlowHashes.has(
+			await hashRecipientIdentifier("whatsapp", body.recipient_phone),
+		)
+	) {
+		return c.json(
+			{
+				error: {
+					code: "CONSENT_REQUIRED",
+					message: "Current WhatsApp automation consent is required",
+				},
+			},
+			400,
+		);
 	}
 
 	const phoneNumberId = account.platformAccountId;
@@ -2416,7 +2738,9 @@ app.openapi(sendFlowMessage, async (c) => {
 			type: "interactive",
 			interactive: {
 				type: "flow",
-				header: body.header_text ? { type: "text", text: body.header_text } : undefined,
+				header: body.header_text
+					? { type: "text", text: body.header_text }
+					: undefined,
 				body: { text: body.body_text },
 				footer: body.footer_text ? { text: body.footer_text } : undefined,
 				action: {
@@ -2436,21 +2760,26 @@ app.openapi(sendFlowMessage, async (c) => {
 			},
 		};
 
-		const res = await fetch(
-			`${WA_API_BASE}/${phoneNumberId}/messages`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(payload),
+		const res = await fetch(`${WA_API_BASE}/${phoneNumberId}/messages`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${account.accessToken}`,
+				"Content-Type": "application/json",
 			},
-		);
+			body: JSON.stringify(payload),
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
-			return c.json({ error: { code: "WA_API_ERROR", message: `Failed to send flow message: ${err}` } }, 502);
+			return c.json(
+				{
+					error: {
+						code: "WA_API_ERROR",
+						message: `Failed to send flow message: ${err}`,
+					},
+				},
+				502,
+			);
 		}
 
 		const json = (await res.json()) as { messages?: Array<{ id?: string }> };
@@ -2458,7 +2787,15 @@ app.openapi(sendFlowMessage, async (c) => {
 
 		return c.json({ message_id: messageId }, 200);
 	} catch (e) {
-		return c.json({ error: { code: "WA_API_ERROR", message: e instanceof Error ? e.message : "Unknown error" } }, 502);
+		return c.json(
+			{
+				error: {
+					code: "WA_API_ERROR",
+					message: e instanceof Error ? e.message : "Unknown error",
+				},
+			},
+			502,
+		);
 	}
 });
 

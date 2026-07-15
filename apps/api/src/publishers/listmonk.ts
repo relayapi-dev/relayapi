@@ -1,5 +1,11 @@
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 /**
  * ListMonk publisher.
@@ -27,22 +33,28 @@ export const listmonkPublisher: Publisher = {
 			const instanceUrl = (metadata?.instance_url as string) ?? "";
 
 			if (!authToken || !instanceUrl) {
-				throw new Error("CONTENT_ERROR: ListMonk credentials and instance URL are required.");
+				throw new Error(
+					"CONTENT_ERROR: ListMonk credentials and instance URL are required.",
+				);
 			}
 
 			if (await isBlockedUrlWithDns(instanceUrl)) {
-				throw new Error("CONTENT_ERROR: ListMonk instance URL points to a blocked address.");
+				throw new Error(
+					"CONTENT_ERROR: ListMonk instance URL points to a blocked address.",
+				);
 			}
 
 			const authHeader = `Basic ${authToken}`;
 			const opts = request.target_options;
 
-			const subject = (opts.subject as string) ??
+			const subject =
+				(opts.subject as string) ??
 				(request.content?.split("\n")[0]?.slice(0, 100) || "Newsletter Update");
-			const contentHtml = (opts.content_html as string) ??
-				wrapInHtml(request.content ?? "");
+			const contentHtml =
+				(opts.content_html as string) ?? wrapInHtml(request.content ?? "");
 			const listId = opts.list_id as number | undefined;
 			const templateId = opts.template_id as number | undefined;
+			const sendAt = opts.send_at as string | undefined;
 
 			// Find a list if not specified
 			let targetListIds: number[] = listId ? [listId] : [];
@@ -63,11 +75,14 @@ export const listmonkPublisher: Publisher = {
 			}
 
 			if (targetListIds.length === 0) {
-				throw new Error("CONTENT_ERROR: No ListMonk list found. Create one or specify list_id.");
+				throw new Error(
+					"CONTENT_ERROR: No ListMonk list found. Create one or specify list_id.",
+				);
 			}
 
-			// Step 1: Create a campaign
-			// Docs: https://listmonk.app/docs/apis/campaigns/#post-apicampaigns
+			// Step 1: Create a campaign.
+			// Official docs: https://listmonk.app/docs/apis/campaigns/
+			// Section "POST /api/campaigns" -> request fields `send_at` and `headers`.
 			const body: Record<string, unknown> = {
 				name: subject,
 				subject,
@@ -75,6 +90,7 @@ export const listmonkPublisher: Publisher = {
 				content_type: "html",
 				type: "regular",
 				lists: targetListIds,
+				...(sendAt ? { send_at: sendAt } : {}),
 			};
 
 			if (templateId) {
@@ -98,7 +114,11 @@ export const listmonkPublisher: Publisher = {
 
 			const headers = opts.headers as Record<string, string> | undefined;
 			if (headers) {
-				body.headers = Object.entries(headers).map(([k, v]) => ({ key: k, value: v }));
+				// The official example is an array of JSON key/value objects, e.g.
+				// [{ "x-custom-header": "value" }], not `{ key, value }` records.
+				body.headers = Object.entries(headers).map(([key, value]) => ({
+					[key]: value,
+				}));
 			}
 
 			const createRes = await fetch(`${instanceUrl}/api/campaigns`, {
@@ -119,9 +139,15 @@ export const listmonkPublisher: Publisher = {
 				const raw = `HTTP ${createRes.status}\n${JSON.stringify(err)}`;
 
 				if (createRes.status === 401) {
-					throw new PublishError(`TOKEN_EXPIRED: ListMonk credentials invalid: ${detail}`, { statusCode: createRes.status, detail: raw });
+					throw new PublishError(
+						`TOKEN_EXPIRED: ListMonk credentials invalid: ${detail}`,
+						{ statusCode: createRes.status, detail: raw },
+					);
 				}
-				throw new PublishError(`ListMonk create campaign failed (${createRes.status}): ${detail}`, { statusCode: createRes.status, detail: raw });
+				throw new PublishError(
+					`ListMonk create campaign failed (${createRes.status}): ${detail}`,
+					{ statusCode: createRes.status, detail: raw },
+				);
 			}
 
 			const created = (await createRes.json()) as {
@@ -132,9 +158,10 @@ export const listmonkPublisher: Publisher = {
 				throw new Error("ListMonk: No campaign ID returned");
 			}
 
-			// Step 2: Start or schedule the campaign
-			// Docs: https://listmonk.app/docs/apis/campaigns/#put-apicampaignscampaign_idstatus
-			const sendAt = opts.send_at as string | undefined;
+			// Step 2: Start or schedule the campaign.
+			// Official docs: https://listmonk.app/docs/apis/campaigns/
+			// Section "PUT /api/campaigns/{campaign_id}/status" -> the request body
+			// contains only `status`; `send_at` belongs to campaign creation above.
 			const targetStatus = sendAt ? "scheduled" : "running";
 			const statusRes = await fetch(
 				`${instanceUrl}/api/campaigns/${campaignId}/status`,
@@ -145,10 +172,7 @@ export const listmonkPublisher: Publisher = {
 						"Content-Type": "application/json",
 					},
 					redirect: "error",
-					body: JSON.stringify({
-						status: targetStatus,
-						...(sendAt ? { send_at: sendAt } : {}),
-					}),
+					body: JSON.stringify({ status: targetStatus }),
 				},
 			);
 
@@ -157,7 +181,10 @@ export const listmonkPublisher: Publisher = {
 					message?: string;
 				};
 				const raw = `HTTP ${statusRes.status}\n${JSON.stringify(err)}`;
-				throw new PublishError(`ListMonk start campaign failed: ${err?.message ?? statusRes.statusText}`, { statusCode: statusRes.status, detail: raw });
+				throw new PublishError(
+					`ListMonk start campaign failed: ${err?.message ?? statusRes.statusText}`,
+					{ statusCode: statusRes.status, detail: raw },
+				);
 			}
 
 			return {
@@ -166,7 +193,7 @@ export const listmonkPublisher: Publisher = {
 				platform_url: `${instanceUrl}/campaigns/${campaignId}`,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { definitiveHttpRejection: true });
 		}
 	},
 };

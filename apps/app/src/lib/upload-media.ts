@@ -6,6 +6,8 @@ export interface UploadedMedia {
 }
 
 export async function uploadMedia(file: File): Promise<UploadedMedia> {
+	let uploadedUrl: string | null = null;
+
 	try {
 		const presignRes = await fetch("/api/media/presign", {
 			method: "POST",
@@ -24,30 +26,54 @@ export async function uploadMedia(file: File): Promise<UploadedMedia> {
 				body: file,
 			});
 			if (put.ok) {
-				// Confirm the upload so the media row flips pending -> ready
-				// (otherwise it stays size=0 and never appears in the library,
-				// and confirm-time MIME/size re-verification never runs).
-				// The storage key is the URL path after the host, taken from the
-				// raw string (not URL.pathname) to avoid percent-encoding the key,
-				// since the API stores and looks it up in its un-encoded form.
-				const parsed = new URL(url);
-				const storageKey = url
-					.slice(parsed.origin.length)
-					.replace(/^\/+/, "");
-				const confirmRes = await fetch("/api/media/confirm", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ storage_key: storageKey }),
-				});
-				if (confirmRes.ok) {
-					return { url, type: file.type, filename: file.name, size: file.size };
-				}
-				// Confirm failed (e.g. rejected MIME/size) — fall through to the
-				// direct upload proxy rather than returning an unconfirmed URL.
+				uploadedUrl = url;
 			}
 		}
 	} catch {
 		// Presign flow is best-effort; fall back to the direct upload proxy.
+	}
+
+	if (uploadedUrl !== null) {
+		let confirmRes: Response;
+		try {
+			// Confirm the upload so the media row flips pending -> ready. The
+			// storage key comes from the raw URL string to preserve its encoding.
+			const parsed = new URL(uploadedUrl);
+			const storageKey = uploadedUrl
+				.slice(parsed.origin.length)
+				.replace(/^\/+/, "");
+			confirmRes = await fetch("/api/media/confirm", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ storage_key: storageKey }),
+			});
+		} catch {
+			throw new Error(
+				"Upload succeeded, but confirmation could not be completed. Please try again.",
+			);
+		}
+
+		if (!confirmRes.ok) {
+			const err = (await confirmRes.json().catch(() => null)) as
+				| { error?: { message?: string } }
+				| { message?: string }
+				| null;
+			const message =
+				err && typeof err === "object"
+					? (("error" in err ? err.error?.message : undefined) ??
+						("message" in err ? err.message : undefined))
+					: undefined;
+			throw new Error(
+				message ?? `Upload confirmation failed: ${confirmRes.status}`,
+			);
+		}
+
+		return {
+			url: uploadedUrl,
+			type: file.type,
+			filename: file.name,
+			size: file.size,
+		};
 	}
 
 	// Fallback: direct upload through app proxy

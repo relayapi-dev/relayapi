@@ -8,8 +8,8 @@ export class Pages extends APIResource {
   /**
    * List Facebook Pages after OAuth
    */
-  list(options?: RequestOptions): APIPromise<PageListResponse> {
-    return this._client.get('/v1/connect/facebook/pages', options);
+  list(query: PageListParams, options?: RequestOptions): APIPromise<PageListResponse> {
+    return this._client.get('/v1/connect/facebook/pages', { query, ...options });
   }
 
   /**
@@ -106,9 +106,15 @@ export interface PageSelectParams {
   page_id: string;
 }
 
+export interface PageListParams {
+  /** Operation-scoped token returned by the OAuth callback. */
+  connect_token: string;
+}
+
 export declare namespace Pages {
   export {
     type PageListResponse as PageListResponse,
+    type PageListParams as PageListParams,
     type PageSelectResponse as PageSelectResponse,
     type PageSelectParams as PageSelectParams,
   };

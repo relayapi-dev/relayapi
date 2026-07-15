@@ -43,10 +43,11 @@ import {
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 let dbAvailable = false;
 let orgId = "";
@@ -86,7 +87,9 @@ async function seedFixture() {
 
 async function teardownFixture() {
 	if (!orgId) return;
-	await db.delete(automationRuns).where(eq(automationRuns.organizationId, orgId));
+	await db
+		.delete(automationRuns)
+		.where(eq(automationRuns.organizationId, orgId));
 	await db
 		.delete(automationContactControls)
 		.where(eq(automationContactControls.organizationId, orgId));
@@ -95,7 +98,9 @@ async function teardownFixture() {
 		.where(eq(automationBindings.organizationId, orgId));
 	await db.delete(automations).where(eq(automations.organizationId, orgId));
 	await db.delete(contacts).where(eq(contacts.organizationId, orgId));
-	await db.delete(socialAccounts).where(eq(socialAccounts.organizationId, orgId));
+	await db
+		.delete(socialAccounts)
+		.where(eq(socialAccounts.organizationId, orgId));
 	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
 	await db.delete(organization).where(eq(organization.id, orgId));
 }
@@ -150,6 +155,7 @@ async function makeEntrypoint(
 	const [ep] = await db
 		.insert(automationEntrypoints)
 		.values({
+			organizationId: orgId,
 			automationId: autoId,
 			channel: "telegram",
 			kind,
@@ -164,6 +170,7 @@ async function makeEntrypoint(
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixture();
 		dbAvailable = true;

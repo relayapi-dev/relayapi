@@ -4,31 +4,31 @@
 // Docs: https://developers.facebook.com/docs/marketing-apis
 // ---------------------------------------------------------------------------
 
+import { GRAPH_BASE } from "../../config/api-versions";
+import { fetchWithTimeout } from "../../lib/fetch-timeout";
 import type {
 	AdMetricPoint,
 	AdMetricsWithDemographics,
 	AdPlatformAdapter,
 	AdTargeting,
-	BoostPostParams,
-	CreateAdParams,
+	CreateAdSetParams,
 	CreateAudienceParams,
 	CreateCampaignParams,
+	CreateCreativeParams,
+	CreatePlatformAdParams,
+	DateRange,
 	ExternalAdData,
 	ExternalAdSyncResult,
+	FindCreatedAdObjectParams,
 	HashedUser,
 	PlatformAdAccount,
-	PlatformAdResult,
 	PlatformAudience,
 	PlatformAudienceResult,
-	PlatformCampaignResult,
 	PromotablePage,
-	DateRange,
 	TargetingInterest,
 	UpdateAdParams,
 } from "./types";
 import { AdPlatformError } from "./types";
-import { GRAPH_BASE } from "../../config/api-versions";
-import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 const GRAPH_API = GRAPH_BASE.facebook;
 
@@ -198,12 +198,232 @@ function buildTargetingSpec(targeting?: AdTargeting): Record<string, unknown> {
 	return spec;
 }
 
+const META_CORRELATION_PAGE_LIMIT = 3;
+
+async function findCreatedObjectByMarker(
+	accessToken: string,
+	adAccountId: string,
+	params: FindCreatedAdObjectParams,
+): Promise<string | null> {
+	let edge: string;
+	switch (params.phase) {
+		case "campaign":
+			edge = `${adAccountId}/campaigns`;
+			break;
+		case "ad_set":
+			if (!params.platformCampaignId) {
+				throw new AdPlatformError(
+					"INVALID_STATE",
+					"A campaign ID is required to reconcile an ad set",
+				);
+			}
+			edge = `${params.platformCampaignId}/adsets`;
+			break;
+		case "creative":
+			edge = `${adAccountId}/adcreatives`;
+			break;
+		case "ad":
+			if (!params.platformAdSetId) {
+				throw new AdPlatformError(
+					"INVALID_STATE",
+					"An ad set ID is required to reconcile an ad",
+				);
+			}
+			edge = `${params.platformAdSetId}/ads`;
+			break;
+	}
+
+	let after: string | undefined;
+	for (let page = 0; page < META_CORRELATION_PAGE_LIMIT; page++) {
+		const cursor = after ? `&after=${encodeURIComponent(after)}` : "";
+		const result = await metaFetch<{
+			data?: { id: string; name?: string }[];
+			paging?: { next?: string; cursors?: { after?: string } };
+		}>(
+			`${GRAPH_API}/${edge}?fields=id,name&limit=100${cursor}`,
+			accessToken,
+		);
+		const match = result.data?.find((item) =>
+			item.name?.includes(params.marker),
+		);
+		if (match) return match.id;
+		after = result.paging?.next ? result.paging.cursors?.after : undefined;
+		if (!after) break;
+	}
+
+	return null;
+}
+
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
 
 export const metaAdAdapter: AdPlatformAdapter = {
 	platform: "meta",
+	creation: {
+		async createCampaign(
+			accessToken: string,
+			adAccountId: string,
+			params: CreateCampaignParams,
+		): Promise<string> {
+			const campaign = await metaFetch<{ id: string }>(
+				`${GRAPH_API}/${adAccountId}/campaigns`,
+				accessToken,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						name: params.name,
+						objective: mapObjectiveToMeta(params.objective),
+						status: "PAUSED",
+						special_ad_categories: params.specialAdCategories ?? [],
+					}),
+				},
+			);
+			return campaign.id;
+		},
+
+		async createAdSet(
+			accessToken: string,
+			adAccountId: string,
+			params: CreateAdSetParams,
+		): Promise<string> {
+			const body: Record<string, unknown> = {
+				name: `${params.name} - Ad Set`,
+				campaign_id: params.campaignId,
+				billing_event: "IMPRESSIONS",
+				optimization_goal: params.mode === "boost" ? "POST_ENGAGEMENT" : "REACH",
+				status: "PAUSED",
+				targeting:
+					params.mode === "boost"
+						? buildTargetingSpec(params.targeting)
+						: { geo_locations: { countries: ["US"] } },
+			};
+
+			if (params.dailyBudgetCents) {
+				body.daily_budget = params.dailyBudgetCents;
+			} else if (params.lifetimeBudgetCents) {
+				body.lifetime_budget = params.lifetimeBudgetCents;
+			}
+			if (params.startDate) body.start_time = params.startDate;
+			if (params.endDate) body.end_time = params.endDate;
+			if (params.bidAmount) body.bid_amount = Math.round(params.bidAmount * 100);
+			if (params.pixelId) body.promoted_object = { pixel_id: params.pixelId };
+
+			const adSet = await metaFetch<{ id: string }>(
+				`${GRAPH_API}/${adAccountId}/adsets`,
+				accessToken,
+				{ method: "POST", body: JSON.stringify(body) },
+			);
+			return adSet.id;
+		},
+
+		async createCreative(
+			accessToken: string,
+			adAccountId: string,
+			params: CreateCreativeParams,
+		): Promise<string> {
+			const body: Record<string, unknown> = {
+				name: `${params.name} - Creative`,
+			};
+
+			if (params.platformPostId) {
+				body.object_story_id = params.platformPostId;
+				if (params.urlTags) body.url_tags = params.urlTags;
+			} else if (params.linkUrl) {
+				const linkData: Record<string, unknown> = { link: params.linkUrl };
+				if (params.imageUrl) linkData.image_url = params.imageUrl;
+				if (params.headline) linkData.name = params.headline;
+				if (params.body) linkData.message = params.body;
+				if (params.callToAction) {
+					linkData.call_to_action = {
+						type: params.callToAction,
+						value: { link: params.linkUrl },
+					};
+				}
+				body.object_story_spec = { link_data: linkData };
+			} else if (params.imageUrl) {
+				body.object_story_spec = {
+					photo_data: {
+						image_url: params.imageUrl,
+						message: params.body ?? "",
+					},
+				};
+			} else if (params.videoUrl) {
+				body.object_story_spec = {
+					video_data: {
+						video_url: params.videoUrl,
+						message: params.body ?? "",
+						title: params.headline ?? "",
+					},
+				};
+			}
+
+			const creative = await metaFetch<{ id: string }>(
+				`${GRAPH_API}/${adAccountId}/adcreatives`,
+				accessToken,
+				{ method: "POST", body: JSON.stringify(body) },
+			);
+			return creative.id;
+		},
+
+		async createAd(
+			accessToken: string,
+			adAccountId: string,
+			params: CreatePlatformAdParams,
+		): Promise<string> {
+			const ad = await metaFetch<{ id: string }>(
+				`${GRAPH_API}/${adAccountId}/ads`,
+				accessToken,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						name: params.name,
+						adset_id: params.adSetId,
+						creative: { creative_id: params.creativeId },
+						status: params.active ? "ACTIVE" : "PAUSED",
+					}),
+				},
+			);
+			return ad.id;
+		},
+
+		findCreatedObject: findCreatedObjectByMarker,
+
+		async activateBoost(
+			accessToken: string,
+			platformCampaignId: string,
+			platformAdSetId: string,
+		): Promise<void> {
+			await Promise.all([
+				metaFetch(`${GRAPH_API}/${platformCampaignId}`, accessToken, {
+					method: "POST",
+					body: JSON.stringify({ status: "ACTIVE" }),
+				}),
+				metaFetch(`${GRAPH_API}/${platformAdSetId}`, accessToken, {
+					method: "POST",
+					body: JSON.stringify({ status: "ACTIVE" }),
+				}),
+			]);
+		},
+
+		async isBoostActivated(
+			accessToken: string,
+			platformCampaignId: string,
+			platformAdSetId: string,
+		): Promise<boolean> {
+			const [campaign, adSet] = await Promise.all([
+				metaFetch<{ status?: string }>(
+					`${GRAPH_API}/${platformCampaignId}?fields=status`,
+					accessToken,
+				),
+				metaFetch<{ status?: string }>(
+					`${GRAPH_API}/${platformAdSetId}?fields=status`,
+					accessToken,
+				),
+			]);
+			return campaign.status === "ACTIVE" && adSet.status === "ACTIVE";
+		},
+	},
 
 	// -----------------------------------------------------------------------
 	// Ad Accounts
@@ -351,244 +571,6 @@ export const metaAdAdapter: AdPlatformAdapter = {
 				a.operation_status?.description ??
 				null,
 		}));
-	},
-
-	// -----------------------------------------------------------------------
-	// Campaigns
-	// -----------------------------------------------------------------------
-
-	async createCampaign(
-		accessToken: string,
-		adAccountId: string,
-		params: CreateCampaignParams,
-	): Promise<PlatformCampaignResult> {
-		// 1. Create campaign
-		const campaignData = await metaFetch<{ id: string }>(
-			`${GRAPH_API}/${adAccountId}/campaigns`,
-			accessToken,
-			{
-				method: "POST",
-				body: JSON.stringify({
-					name: params.name,
-					objective: mapObjectiveToMeta(params.objective),
-					status: "PAUSED",
-					special_ad_categories: params.specialAdCategories ?? [],
-				}),
-			},
-		);
-
-		// 2. Create ad set
-		const adSetBody: Record<string, unknown> = {
-			name: `${params.name} - Ad Set`,
-			campaign_id: campaignData.id,
-			billing_event: "IMPRESSIONS",
-			optimization_goal: "REACH",
-			status: "PAUSED",
-			targeting: { geo_locations: { countries: ["US"] } },
-		};
-
-		if (params.dailyBudgetCents) {
-			adSetBody.daily_budget = params.dailyBudgetCents;
-		} else if (params.lifetimeBudgetCents) {
-			adSetBody.lifetime_budget = params.lifetimeBudgetCents;
-			if (params.endDate) adSetBody.end_time = params.endDate;
-		}
-
-		if (params.startDate) adSetBody.start_time = params.startDate;
-		if (params.endDate) adSetBody.end_time = params.endDate;
-
-		const adSetData = await metaFetch<{ id: string }>(
-			`${GRAPH_API}/${adAccountId}/adsets`,
-			accessToken,
-			{ method: "POST", body: JSON.stringify(adSetBody) },
-		);
-
-		return {
-			platformCampaignId: campaignData.id,
-			platformAdSetId: adSetData.id,
-			status: "paused",
-		};
-	},
-
-	// -----------------------------------------------------------------------
-	// Ads
-	// -----------------------------------------------------------------------
-
-	async createAd(
-		accessToken: string,
-		adAccountId: string,
-		params: CreateAdParams,
-	): Promise<PlatformAdResult> {
-		// 1. Create ad creative
-		const creativeBody: Record<string, unknown> = {
-			name: `${params.name} - Creative`,
-		};
-
-		if (params.linkUrl) {
-			const linkData: Record<string, unknown> = {
-				link: params.linkUrl,
-			};
-			if (params.imageUrl) linkData.image_url = params.imageUrl;
-			if (params.headline) linkData.name = params.headline;
-			if (params.body) linkData.message = params.body;
-			if (params.callToAction) {
-				linkData.call_to_action = {
-					type: params.callToAction,
-					value: { link: params.linkUrl },
-				};
-			}
-			creativeBody.object_story_spec = {
-				link_data: linkData,
-			};
-		} else if (params.imageUrl) {
-			creativeBody.object_story_spec = {
-				photo_data: {
-					image_url: params.imageUrl,
-					message: params.body ?? "",
-				},
-			};
-		} else if (params.videoUrl) {
-			creativeBody.object_story_spec = {
-				video_data: {
-					video_url: params.videoUrl,
-					message: params.body ?? "",
-					title: params.headline ?? "",
-				},
-			};
-		}
-
-		const creative = await metaFetch<{ id: string }>(
-			`${GRAPH_API}/${adAccountId}/adcreatives`,
-			accessToken,
-			{ method: "POST", body: JSON.stringify(creativeBody) },
-		);
-
-		// 2. Create ad
-		const adData = await metaFetch<{ id: string }>(
-			`${GRAPH_API}/${adAccountId}/ads`,
-			accessToken,
-			{
-				method: "POST",
-				body: JSON.stringify({
-					name: params.name,
-					adset_id: params.adSetId,
-					creative: { creative_id: creative.id },
-					status: "PAUSED",
-				}),
-			},
-		);
-
-		return {
-			platformCampaignId: params.campaignId,
-			platformAdSetId: params.adSetId,
-			platformAdId: adData.id,
-			status: "pending_review",
-		};
-	},
-
-	async boostPost(
-		accessToken: string,
-		adAccountId: string,
-		params: BoostPostParams,
-	): Promise<PlatformAdResult> {
-		// 1. Create campaign
-		const campaign = await metaFetch<{ id: string }>(
-			`${GRAPH_API}/${adAccountId}/campaigns`,
-			accessToken,
-			{
-				method: "POST",
-				body: JSON.stringify({
-					name: params.name ?? "Boosted Post",
-					objective: mapObjectiveToMeta(params.objective),
-					status: "PAUSED",
-					special_ad_categories: params.specialAdCategories ?? [],
-				}),
-			},
-		);
-
-		// 2. Create ad set with targeting + budget
-		const adSetBody: Record<string, unknown> = {
-			name: `${params.name ?? "Boosted Post"} - Ad Set`,
-			campaign_id: campaign.id,
-			billing_event: "IMPRESSIONS",
-			optimization_goal: "POST_ENGAGEMENT",
-			daily_budget: params.dailyBudgetCents,
-			status: "PAUSED",
-			targeting: buildTargetingSpec(params.targeting),
-		};
-
-		if (params.startDate) adSetBody.start_time = params.startDate;
-		if (params.endDate) {
-			adSetBody.end_time = params.endDate;
-		} else if (params.durationDays) {
-			const end = new Date();
-			end.setDate(end.getDate() + params.durationDays);
-			adSetBody.end_time = end.toISOString();
-		}
-
-		if (params.bidAmount) {
-			adSetBody.bid_amount = Math.round(params.bidAmount * 100);
-		}
-
-		if (params.tracking?.pixelId) {
-			adSetBody.promoted_object = { pixel_id: params.tracking.pixelId };
-		}
-
-		const adSet = await metaFetch<{ id: string }>(
-			`${GRAPH_API}/${adAccountId}/adsets`,
-			accessToken,
-			{ method: "POST", body: JSON.stringify(adSetBody) },
-		);
-
-		// 3. Create ad creative using existing post
-		const creative = await metaFetch<{ id: string }>(
-			`${GRAPH_API}/${adAccountId}/adcreatives`,
-			accessToken,
-			{
-				method: "POST",
-				body: JSON.stringify({
-					name: `Boost - ${params.platformPostId}`,
-					object_story_id: params.platformPostId,
-					...(params.tracking?.urlTags
-						? { url_tags: params.tracking.urlTags }
-						: {}),
-				}),
-			},
-		);
-
-		// 4. Create ad
-		const ad = await metaFetch<{ id: string }>(
-			`${GRAPH_API}/${adAccountId}/ads`,
-			accessToken,
-			{
-				method: "POST",
-				body: JSON.stringify({
-					name: params.name ?? "Boosted Post",
-					adset_id: adSet.id,
-					creative: { creative_id: creative.id },
-					status: "ACTIVE",
-				}),
-			},
-		);
-
-		// 5. Activate the campaign + ad set
-		await Promise.all([
-			metaFetch(`${GRAPH_API}/${campaign.id}`, accessToken, {
-				method: "POST",
-				body: JSON.stringify({ status: "ACTIVE" }),
-			}),
-			metaFetch(`${GRAPH_API}/${adSet.id}`, accessToken, {
-				method: "POST",
-				body: JSON.stringify({ status: "ACTIVE" }),
-			}),
-		]);
-
-		return {
-			platformCampaignId: campaign.id,
-			platformAdSetId: adSet.id,
-			platformAdId: ad.id,
-			status: "pending_review",
-		};
 	},
 
 	async updateAd(

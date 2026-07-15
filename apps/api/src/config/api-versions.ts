@@ -19,12 +19,15 @@ export const API_VERSIONS = {
 	pinterest: "v5",
 	// https://developers.tiktok.com/doc/content-posting-api-overview
 	tiktok: "v2",
-	// https://learn.microsoft.com/en-us/linkedin/marketing/versioning — Latest Version: April 2026 (202604)
+	// https://learn.microsoft.com/en-us/linkedin/marketing/versioning
+	// 202604 remains supported; latest verified 2026-07-15 is 202607.
 	linkedin: "202604",
 } as const;
 
 export const GRAPH_BASE = {
 	facebook: `https://graph.facebook.com/${API_VERSIONS.meta_graph}`,
 	instagram: `https://graph.instagram.com/${API_VERSIONS.meta_graph}`,
-	threads: `https://graph.threads.net/${API_VERSIONS.threads_graph}`,
+	// https://developers.facebook.com/docs/threads/posts
+	// Current publishing examples use https://graph.threads.com/v1.0/...
+	threads: `https://graph.threads.com/${API_VERSIONS.threads_graph}`,
 } as const;

@@ -1,101 +1,251 @@
 /**
- * Resumable scheduled broadcast processor — runs on the every-minute cron.
+ * Lease-fenced scheduled broadcast processor.
  *
- * Picks up broadcasts that are due (`scheduled` and scheduledAt <= now) or
- * already in flight (`sending`), and sends their pending recipients in bounded
- * per-tick chunks. Capping the work per invocation keeps a single run well under
- * the Workers subrequest / wall-time limits; a large broadcast simply resumes on
- * the next tick until no recipient is left pending. Counts are finalized from the
- * recipients' persisted DB statuses, so resumption across ticks is safe.
- *
- * Mirrors the WhatsApp-specific processor (whatsapp-broadcast-processor.ts).
+ * The generic `broadcasts` / `broadcast_recipients` tables are the only
+ * broadcast runtime, including WhatsApp. A worker owns a parent revision and a
+ * monotonically increasing lease token; every claim, provider fence, heartbeat,
+ * release, and finalization proves that ownership. Route-side cancellation
+ * advances the revision, so an older worker cannot finalize over it.
  */
 
 import {
-	createDb,
-	broadcasts,
 	broadcastRecipients,
+	broadcasts,
+	createDb,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, asc, eq, inArray, lte, or, sql } from "drizzle-orm";
-import type { Env } from "../types";
-import { sendMessage } from "./message-sender";
-import { refreshTokenIfNeeded } from "./token-refresh";
+import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { notifyRealtime } from "../lib/notify-post-update";
+import type { Env } from "../types";
+import {
+	getAllowedRecipientHashes,
+	hashRecipientIdentifier,
+} from "./contact-consent";
+import { sendMessage } from "./message-sender";
+import { refreshTokenIfNeeded } from "./token-refresh-coordinator";
 
-// Cap recipients processed per cron tick (across all broadcasts handled in the
-// tick). Each recipient costs ~1 send + 1 update subrequest, so 200 is well
-// under the per-invocation limit. Larger broadcasts resume on subsequent ticks.
 const MAX_RECIPIENTS_PER_TICK = 200;
 const CHUNK_SIZE = 50;
 const INTER_CHUNK_DELAY_MS = 1000;
-// A recipient claimed (`sending`) by a tick that then died is reverted to
-// `pending` once its broadcast hasn't been touched for this long. A live tick
-// bumps the broadcast's updatedAt every run (well under this window), so the
-// sweep can never steal rows from an in-flight tick.
-const STALE_CLAIM_MS = 10 * 60 * 1000;
+const BROADCAST_LEASE_MS = 2 * 60 * 1000;
+
+type BroadcastRow = typeof broadcasts.$inferSelect;
+
+interface BroadcastLease {
+	broadcast: BroadcastRow;
+	revision: number;
+	leaseToken: number;
+}
+
+interface ClaimedRecipient {
+	id: string;
+	contact_id: string | null;
+	contact_identifier: string;
+	contact_identifier_hash: string;
+	variables: unknown;
+}
+
+export function broadcastFinalStatus(
+	sent: number,
+	failed: number,
+	unknown: number,
+): "sent" | "partially_failed" | "requires_attention" | "failed" {
+	if (unknown > 0) return "requires_attention";
+	if (failed === 0) return "sent";
+	if (sent === 0) return "failed";
+	return "partially_failed";
+}
+
+function leaseExpiry(): Date {
+	return new Date(Date.now() + BROADCAST_LEASE_MS);
+}
 
 export async function processScheduledBroadcasts(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-
-	const dueBroadcasts = await db
+	const now = new Date();
+	const candidates = await db
 		.select()
 		.from(broadcasts)
 		.where(
-			or(
-				and(
-					eq(broadcasts.status, "scheduled"),
-					lte(broadcasts.scheduledAt, new Date()),
+			and(
+				or(
+					and(
+						eq(broadcasts.status, "scheduled"),
+						lte(broadcasts.scheduledAt, now),
+					),
+					eq(broadcasts.status, "sending"),
 				),
-				eq(broadcasts.status, "sending"),
+				or(
+					isNull(broadcasts.leaseExpiresAt),
+					lte(broadcasts.leaseExpiresAt, now),
+				),
 			),
 		)
-		.orderBy(asc(broadcasts.scheduledAt))
+		.orderBy(asc(broadcasts.scheduledAt), asc(broadcasts.id))
 		.limit(5);
 
-	if (dueBroadcasts.length === 0) return;
-
 	let budget = MAX_RECIPIENTS_PER_TICK;
-	for (const broadcast of dueBroadcasts) {
+	for (const candidate of candidates) {
 		if (budget <= 0) break;
 		try {
-			budget -= await executeBroadcast(db, broadcast, env, budget);
-		} catch (err) {
+			const lease = await claimBroadcastLease(db, candidate, env);
+			if (!lease) continue;
+			budget -= await executeBroadcast(db, lease, env, budget);
+		} catch (error) {
 			console.error(
-				`[broadcast-processor] Failed to process broadcast ${broadcast.id}:`,
-				err,
+				`[broadcast-processor] Failed to process broadcast ${candidate.id}:`,
+				error,
 			);
-			// Mark as failed so it doesn't retry forever
-			await db
-				.update(broadcasts)
-				.set({
-					status: "failed",
-					completedAt: new Date(),
-					updatedAt: new Date(),
-				})
-				.where(eq(broadcasts.id, broadcast.id));
-			await notifyRealtime(env, broadcast.organizationId, {
-				type: "broadcast.updated",
-				broadcast_id: broadcast.id,
-				status: "failed",
-			}).catch(() => {});
+			// The bounded lease expires and makes the parent recoverable. Recipients
+			// that crossed the provider boundary become `unknown` on the next claim.
 		}
 	}
 }
 
-/**
- * Process up to `budget` pending recipients of a single broadcast. Returns the
- * number of recipients actually processed this tick. If recipients remain, the
- * broadcast is left in `sending` and resumes next tick; otherwise it is
- * finalized from the recipients' persisted DB statuses.
- */
-async function executeBroadcast(
+async function claimBroadcastLease(
 	db: ReturnType<typeof createDb>,
-	broadcast: typeof broadcasts.$inferSelect,
+	candidate: BroadcastRow,
 	env: Env,
-	budget: number,
-): Promise<number> {
-	// Get the social account's access token
+): Promise<BroadcastLease | null> {
+	const now = new Date();
+	const [claimed] = await db
+		.update(broadcasts)
+		.set({
+			status: "sending",
+			revision: sql`${broadcasts.revision} + 1`,
+			leaseToken: sql`${broadcasts.leaseToken} + 1`,
+			leaseExpiresAt: leaseExpiry(),
+			updatedAt: now,
+		})
+		.where(
+			and(
+				eq(broadcasts.id, candidate.id),
+				eq(broadcasts.organizationId, candidate.organizationId),
+				eq(broadcasts.revision, candidate.revision),
+				candidate.status === "scheduled"
+					? and(
+							eq(broadcasts.status, "scheduled"),
+							lte(broadcasts.scheduledAt, now),
+						)
+					: eq(broadcasts.status, "sending"),
+				or(
+					isNull(broadcasts.leaseExpiresAt),
+					lte(broadcasts.leaseExpiresAt, now),
+				),
+			),
+		)
+		.returning();
+	if (!claimed) return null;
+
+	// Recover only the previous lease's incomplete claims. Work that definitely
+	// did not reach the provider can retry; work that may have reached it cannot.
+	await db.execute(sql`
+		UPDATE broadcast_recipients
+		   SET status = CASE
+		                  WHEN request_may_have_been_sent_at IS NULL THEN 'pending'
+		                  ELSE 'unknown'
+		                END,
+		       delivery_state = CASE
+		                          WHEN request_may_have_been_sent_at IS NULL THEN 'pending'
+		                          ELSE 'unknown'
+		                        END,
+		       claimed_at = NULL,
+		       error = CASE
+		                 WHEN request_may_have_been_sent_at IS NULL THEN NULL
+		                 ELSE 'Delivery worker stopped after the provider boundary'
+		               END
+		 WHERE broadcast_id = ${claimed.id}
+		   AND organization_id = ${claimed.organizationId}
+		   AND scope_key = ${claimed.scopeKey}
+		   AND status = 'sending'
+	`);
+
+	if (candidate.status === "scheduled") {
+		await notifyRealtime(env, claimed.organizationId, {
+			type: "broadcast.updated",
+			broadcast_id: claimed.id,
+			status: "sending",
+		}).catch(() => {});
+	}
+
+	return {
+		broadcast: claimed,
+		revision: claimed.revision,
+		leaseToken: claimed.leaseToken,
+	};
+}
+
+async function renewLease(
+	db: ReturnType<typeof createDb>,
+	lease: BroadcastLease,
+): Promise<boolean> {
+	const renewed = await db
+		.update(broadcasts)
+		.set({ leaseExpiresAt: leaseExpiry(), updatedAt: new Date() })
+		.where(
+			and(
+				eq(broadcasts.id, lease.broadcast.id),
+				eq(broadcasts.organizationId, lease.broadcast.organizationId),
+				eq(broadcasts.status, "sending"),
+				eq(broadcasts.revision, lease.revision),
+				eq(broadcasts.leaseToken, lease.leaseToken),
+				gt(broadcasts.leaseExpiresAt, new Date()),
+			),
+		)
+		.returning({ id: broadcasts.id });
+	return renewed.length === 1;
+}
+
+async function claimRecipientChunk(
+	db: ReturnType<typeof createDb>,
+	lease: BroadcastLease,
+	limit: number,
+): Promise<ClaimedRecipient[]> {
+	return (await db.execute(sql`
+		WITH claimed AS (
+			SELECT r.id
+			  FROM broadcast_recipients r
+			 WHERE r.broadcast_id = ${lease.broadcast.id}
+			   AND r.organization_id = ${lease.broadcast.organizationId}
+			   AND r.scope_key = ${lease.broadcast.scopeKey}
+			   AND r.status = 'pending'
+			   AND EXISTS (
+			       SELECT 1
+			         FROM broadcasts b
+			         JOIN social_accounts a
+			           ON a.id = b.social_account_id
+			          AND a.organization_id = b.organization_id
+			          AND a.scope_key = b.scope_key
+			          AND a.platform = b.platform
+			        WHERE b.id = ${lease.broadcast.id}
+			          AND b.organization_id = ${lease.broadcast.organizationId}
+			          AND b.status = 'sending'
+			          AND b.revision = ${lease.revision}
+			          AND b.lease_token = ${lease.leaseToken}
+			          AND b.lease_expires_at > NOW()
+			          AND a.lifecycle_status = 'active'
+			   )
+			 ORDER BY r.id ASC
+			 LIMIT ${limit}
+			 FOR UPDATE SKIP LOCKED
+		)
+		UPDATE broadcast_recipients r
+		   SET status = 'sending',
+		       delivery_state = 'in_flight',
+		       claimed_at = NOW(),
+		       request_may_have_been_sent_at = NULL,
+		       error = NULL
+		  FROM claimed
+		 WHERE r.id = claimed.id
+		RETURNING r.id, r.contact_id, r.contact_identifier,
+		          r.contact_identifier_hash, r.variables
+	`)) as unknown as ClaimedRecipient[];
+}
+
+async function loadProviderFence(
+	db: ReturnType<typeof createDb>,
+	lease: BroadcastLease,
+) {
 	const [account] = await db
 		.select({
 			id: socialAccounts.id,
@@ -103,243 +253,417 @@ async function executeBroadcast(
 			accessToken: socialAccounts.accessToken,
 			refreshToken: socialAccounts.refreshToken,
 			tokenExpiresAt: socialAccounts.tokenExpiresAt,
+			tokenVersion: socialAccounts.tokenVersion,
 			platformAccountId: socialAccounts.platformAccountId,
 		})
-		.from(socialAccounts)
-		.where(eq(socialAccounts.id, broadcast.socialAccountId))
+		.from(broadcasts)
+		.innerJoin(
+			socialAccounts,
+			and(
+				eq(socialAccounts.id, broadcasts.socialAccountId),
+				eq(socialAccounts.organizationId, broadcasts.organizationId),
+				eq(socialAccounts.scopeKey, broadcasts.scopeKey),
+				eq(socialAccounts.platform, broadcasts.platform),
+			),
+		)
+		.where(
+			and(
+				eq(broadcasts.id, lease.broadcast.id),
+				eq(broadcasts.organizationId, lease.broadcast.organizationId),
+				eq(broadcasts.status, "sending"),
+				eq(broadcasts.revision, lease.revision),
+				eq(broadcasts.leaseToken, lease.leaseToken),
+				gt(broadcasts.leaseExpiresAt, new Date()),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		)
 		.limit(1);
+	return account ?? null;
+}
 
-	if (!account) {
-		console.error(
-			`[broadcast-processor] Account ${broadcast.socialAccountId} not found`,
-		);
-		await db
-			.update(broadcasts)
-			.set({ status: "failed", completedAt: new Date(), updatedAt: new Date() })
-			.where(eq(broadcasts.id, broadcast.id));
-		return 0;
+async function authorizeProviderChunk(
+	db: ReturnType<typeof createDb>,
+	lease: BroadcastLease,
+	env: Env,
+) {
+	let account = await loadProviderFence(db, lease);
+	if (!account) return null;
+	let token = await refreshTokenIfNeeded(env, account);
+	if (!token) return null;
+
+	// Token refresh can advance token_version, and disconnect can race refresh.
+	// Re-read the exact active account + parent lease immediately before the
+	// message provider boundary. If the grant changed, decrypt the current grant
+	// and fence it once more before returning it to the chunk sender.
+	let fenced = await loadProviderFence(db, lease);
+	if (!fenced) return null;
+	if (fenced.tokenVersion !== account.tokenVersion) {
+		token = await refreshTokenIfNeeded(env, fenced);
+		if (!token) return null;
+		account = fenced;
+		fenced = await loadProviderFence(db, lease);
+		if (!fenced || fenced.tokenVersion !== account.tokenVersion) return null;
 	}
+	return { account: fenced, token };
+}
 
-	const token = await refreshTokenIfNeeded(env, account);
-	if (!token) {
-		console.error(
-			`[broadcast-processor] No access token for account ${broadcast.socialAccountId}`,
+async function releaseUnattemptedClaims(
+	db: ReturnType<typeof createDb>,
+	lease: BroadcastLease,
+	ids: string[],
+): Promise<void> {
+	if (ids.length === 0) return;
+	await db.execute(sql`
+		UPDATE broadcast_recipients r
+		   SET status = CASE WHEN b.status = 'cancelled' THEN 'cancelled' ELSE 'pending' END,
+		       delivery_state = CASE WHEN b.status = 'cancelled' THEN 'cancelled' ELSE 'pending' END,
+		       claimed_at = NULL,
+		       error = CASE WHEN b.status = 'cancelled'
+		                    THEN 'Broadcast cancelled before provider delivery'
+		                    ELSE NULL END
+		  FROM broadcasts b
+		 WHERE b.id = r.broadcast_id
+		   AND r.id IN (${sql.join(
+					ids.map((id) => sql`${id}`),
+					sql`, `,
+				)})
+		   AND r.broadcast_id = ${lease.broadcast.id}
+		   AND r.organization_id = ${lease.broadcast.organizationId}
+		   AND r.scope_key = ${lease.broadcast.scopeKey}
+		   AND r.status = 'sending'
+		   AND r.request_may_have_been_sent_at IS NULL
+	`);
+}
+
+async function failRemainingRecipients(
+	db: ReturnType<typeof createDb>,
+	lease: BroadcastLease,
+	error: string,
+): Promise<void> {
+	await db.execute(sql`
+		UPDATE broadcast_recipients
+		   SET status = 'failed',
+		       delivery_state = 'failed',
+		       claimed_at = NULL,
+		       error = ${error}
+		 WHERE broadcast_id = ${lease.broadcast.id}
+		   AND organization_id = ${lease.broadcast.organizationId}
+		   AND scope_key = ${lease.broadcast.scopeKey}
+		   AND (
+		       status = 'pending'
+		       OR (status = 'sending' AND request_may_have_been_sent_at IS NULL)
+		   )
+	`);
+}
+
+async function executeBroadcast(
+	db: ReturnType<typeof createDb>,
+	lease: BroadcastLease,
+	env: Env,
+	budget: number,
+): Promise<number> {
+	let processed = 0;
+	while (processed < budget) {
+		if (!(await renewLease(db, lease))) return processed;
+		const batch = await claimRecipientChunk(
+			db,
+			lease,
+			Math.min(CHUNK_SIZE, budget - processed),
 		);
-		await db
-			.update(broadcasts)
-			.set({ status: "failed", completedAt: new Date(), updatedAt: new Date() })
-			.where(eq(broadcasts.id, broadcast.id));
-		return 0;
-	}
+		if (batch.length === 0) break;
 
-	// Stale-claim sweep: if this broadcast has been in flight but untouched for
-	// longer than STALE_CLAIM_MS (its tick died mid-send), revert any recipients
-	// stuck in `sending` back to `pending` so they get re-claimed and re-sent.
-	// The sweep is claimed atomically by bumping updatedAt only while it is still
-	// stale (compare-and-set): if another tick won, `.returning()` is empty and we
-	// skip — so the sweep can never revert rows a live tick is currently holding.
-	if (broadcast.status === "sending") {
-		const staleBefore = new Date(Date.now() - STALE_CLAIM_MS);
-		const sweepClaim = await db
-			.update(broadcasts)
-			.set({ updatedAt: new Date() })
-			.where(
-				and(
-					eq(broadcasts.id, broadcast.id),
-					eq(broadcasts.status, "sending"),
-					lte(broadcasts.updatedAt, staleBefore),
-				),
+		const allowedHashes = await getAllowedRecipientHashes(
+			db,
+			lease.broadcast.organizationId,
+			lease.broadcast.platform,
+			"marketing",
+			batch.map((recipient) => ({
+				identifier: recipient.contact_identifier,
+				contactId: recipient.contact_id,
+			})),
+		);
+		const withHashes = await Promise.all(
+			batch.map(async (recipient) => ({
+				...recipient,
+				contact_identifier_hash:
+					recipient.contact_identifier_hash ||
+					(await hashRecipientIdentifier(
+						lease.broadcast.platform,
+						recipient.contact_identifier,
+					)),
+			})),
+		);
+		const sendBatch = withHashes.filter((recipient) =>
+			allowedHashes.has(recipient.contact_identifier_hash),
+		);
+		const suppressedIds = withHashes
+			.filter(
+				(recipient) => !allowedHashes.has(recipient.contact_identifier_hash),
 			)
-			.returning({ id: broadcasts.id });
-		if (sweepClaim.length > 0) {
+			.map((recipient) => recipient.id);
+		if (suppressedIds.length > 0) {
 			await db
 				.update(broadcastRecipients)
-				.set({ status: "pending" })
+				.set({
+					status: "failed",
+					deliveryState: "failed",
+					claimedAt: null,
+					error: "Current channel/purpose consent is required",
+				})
 				.where(
 					and(
-						eq(broadcastRecipients.broadcastId, broadcast.id),
+						inArray(broadcastRecipients.id, suppressedIds),
 						eq(broadcastRecipients.status, "sending"),
+						isNull(broadcastRecipients.requestMayHaveBeenSentAt),
 					),
 				);
 		}
-	}
+		if (sendBatch.length === 0) {
+			processed += batch.length;
+			continue;
+		}
 
-	// Claim a freshly-due broadcast so the next tick doesn't re-pick it. Compare-
-	// and-set on the status: if a concurrent tick already claimed it
-	// (`.returning()` empty), skip — that tick owns this broadcast.
-	if (broadcast.status === "scheduled") {
-		const claimed = await db
-			.update(broadcasts)
-			.set({ status: "sending", updatedAt: new Date() })
-			.where(
-				and(
-					eq(broadcasts.id, broadcast.id),
-					eq(broadcasts.status, "scheduled"),
-				),
-			)
-			.returning({ id: broadcasts.id });
-		if (claimed.length === 0) return 0;
-		await notifyRealtime(env, broadcast.organizationId, {
-			type: "broadcast.updated",
-			broadcast_id: broadcast.id,
-			status: "sending",
-		}).catch(() => {});
-	}
+		const authorization = await authorizeProviderChunk(db, lease, env);
+		if (!authorization) {
+			if (await renewLease(db, lease)) {
+				await failRemainingRecipients(
+					db,
+					lease,
+					"Broadcast account is inactive or has no usable access token",
+				);
+			} else {
+				await releaseUnattemptedClaims(
+					db,
+					lease,
+					sendBatch.map((recipient) => recipient.id),
+				);
+				return processed;
+			}
+			break;
+		}
 
-	let processed = 0;
-	while (processed < budget) {
-		const chunkLimit = Math.min(CHUNK_SIZE, budget - processed);
-
-		// Atomically claim a chunk of pending recipients: flip them to `sending`
-		// under FOR UPDATE SKIP LOCKED so an overlapping cron tick can never read
-		// the same still-`pending` rows and send the message twice. Only the rows
-		// this statement returns are sent by this tick.
-		const batch = (await db.execute(sql`
-			WITH claimed AS (
-				SELECT id
-				  FROM broadcast_recipients
-				 WHERE broadcast_id = ${broadcast.id}
-				   AND status = 'pending'
-				 ORDER BY id ASC
-				 LIMIT ${chunkLimit}
-				 FOR UPDATE SKIP LOCKED
-			)
+		// Mark only still-owned recipient claims as having crossed the provider
+		// boundary. Cancellation can safely cancel every other pending/claimed row.
+		const marked = (await db.execute(sql`
 			UPDATE broadcast_recipients r
-			   SET status = 'sending'
-			  FROM claimed
-			 WHERE r.id = claimed.id
-			RETURNING r.id, r.contact_identifier, r.variables
-		`)) as unknown as Array<{
-			id: string;
-			contact_identifier: string;
-			variables: unknown;
-		}>;
-
-		if (batch.length === 0) break;
+			   SET delivery_state = 'unknown', request_may_have_been_sent_at = NOW()
+			 WHERE r.id IN (${sql.join(
+					sendBatch.map((recipient) => sql`${recipient.id}`),
+					sql`, `,
+				)})
+			   AND r.broadcast_id = ${lease.broadcast.id}
+			   AND r.organization_id = ${lease.broadcast.organizationId}
+			   AND r.scope_key = ${lease.broadcast.scopeKey}
+			   AND r.status = 'sending'
+			   AND r.request_may_have_been_sent_at IS NULL
+			   AND EXISTS (
+			       SELECT 1
+			         FROM broadcasts b
+			         JOIN social_accounts a
+			           ON a.id = b.social_account_id
+			          AND a.organization_id = b.organization_id
+			          AND a.scope_key = b.scope_key
+			          AND a.platform = b.platform
+			        WHERE b.id = ${lease.broadcast.id}
+			          AND b.organization_id = ${lease.broadcast.organizationId}
+			          AND b.status = 'sending'
+			          AND b.revision = ${lease.revision}
+			          AND b.lease_token = ${lease.leaseToken}
+			          AND b.lease_expires_at > NOW()
+			          AND a.lifecycle_status = 'active'
+			          AND a.token_version = ${authorization.account.tokenVersion}
+			   )
+			RETURNING r.id
+		`)) as unknown as Array<{ id: string }>;
+		const markedIds = new Set(marked.map((row) => row.id));
+		const unmarkedIds = sendBatch
+			.filter((recipient) => !markedIds.has(recipient.id))
+			.map((recipient) => recipient.id);
+		await releaseUnattemptedClaims(db, lease, unmarkedIds);
+		const providerBatch = sendBatch.filter((recipient) =>
+			markedIds.has(recipient.id),
+		);
+		if (providerBatch.length === 0) {
+			processed += batch.length;
+			continue;
+		}
 
 		const results = await Promise.allSettled(
-			batch.map((recipient) =>
+			providerBatch.map((recipient) =>
 				sendMessage({
-					platform: broadcast.platform,
-					accessToken: token,
-					platformAccountId: account.platformAccountId ?? "",
+					platform: lease.broadcast.platform,
+					accessToken: authorization.token,
+					platformAccountId: authorization.account.platformAccountId ?? "",
 					recipientId: recipient.contact_identifier,
-					text: broadcast.messageText ?? "",
-					templateName: broadcast.templateName ?? undefined,
-					templateLanguage: broadcast.templateLanguage ?? undefined,
+					text: lease.broadcast.messageText ?? "",
+					templateName: lease.broadcast.templateName ?? undefined,
+					templateLanguage: lease.broadcast.templateLanguage ?? undefined,
 					templateComponents:
 						(recipient.variables
 							? (recipient.variables as unknown[])
-							: (broadcast.templateComponents as unknown[] | null)) ??
+							: (lease.broadcast.templateComponents as unknown[] | null)) ??
 						undefined,
 				}),
 			),
 		);
 
-		// Collapse the chunk's outcomes into at most two set-based UPDATEs (one for
-		// successes, one for failures) instead of one round trip per recipient.
 		const sentRows: Array<{ id: string; messageId: string | null }> = [];
 		const failedRows: Array<{ id: string; error: string }> = [];
-		for (const [j, settled] of results.entries()) {
-			const recipient = batch[j];
+		const unknownRows: Array<{ id: string; error: string }> = [];
+		for (const [index, settled] of results.entries()) {
+			const recipient = providerBatch[index];
 			if (!recipient) continue;
 			if (settled.status === "fulfilled" && settled.value.success) {
 				sentRows.push({
 					id: recipient.id,
 					messageId: settled.value.messageId ?? null,
 				});
+			} else if (settled.status === "fulfilled") {
+				failedRows.push({
+					id: recipient.id,
+					error: settled.value.error ?? "Provider rejected the message",
+				});
 			} else {
-				const error =
-					settled.status === "fulfilled"
-						? (settled.value.error ?? "Unknown error")
-						: settled.reason instanceof Error
+				unknownRows.push({
+					id: recipient.id,
+					error:
+						settled.reason instanceof Error
 							? settled.reason.message
-							: "Unknown error";
-				failedRows.push({ id: recipient.id, error });
+							: "Provider outcome unknown",
+				});
 			}
 		}
-
-		const writes: Promise<unknown>[] = [];
-		if (sentRows.length > 0) {
-			const values = sql.join(
-				sentRows.map((r) => sql`(${r.id}::text, ${r.messageId}::text)`),
-				sql`, `,
-			);
-			writes.push(
-				db.execute(sql`
-					UPDATE broadcast_recipients r
-					   SET status = 'sent', message_id = v.message_id, sent_at = NOW()
-					  FROM (VALUES ${values}) AS v(id, message_id)
-					 WHERE r.id = v.id
-				`),
-			);
-		}
-		if (failedRows.length > 0) {
-			const values = sql.join(
-				failedRows.map((r) => sql`(${r.id}::text, ${r.error}::text)`),
-				sql`, `,
-			);
-			writes.push(
-				db.execute(sql`
-					UPDATE broadcast_recipients r
-					   SET status = 'failed', error = v.error
-					  FROM (VALUES ${values}) AS v(id, error)
-					 WHERE r.id = v.id
-				`),
-			);
-		}
-		await Promise.all(writes);
+		await persistChunkOutcomes(db, sentRows, failedRows, unknownRows);
 		processed += batch.length;
-
-		// Delay between batches to respect platform rate limits
-		await new Promise((r) => setTimeout(r, INTER_CHUNK_DELAY_MS));
+		if (processed < budget) {
+			await new Promise((resolve) => setTimeout(resolve, INTER_CHUNK_DELAY_MS));
+		}
 	}
 
-	const countByStatus = async (...statuses: string[]): Promise<number> => {
-		const rows = await db
-			.select({ count: sql<number>`count(*)::int` })
-			.from(broadcastRecipients)
-			.where(
-				and(
-					eq(broadcastRecipients.broadcastId, broadcast.id),
-					inArray(broadcastRecipients.status, statuses),
-				),
-			);
-		return rows[0]?.count ?? 0;
-	};
+	await finalizeOrRelease(db, lease, env);
+	return processed;
+}
 
-	// More recipients to go — keep it in `sending` and resume on the next tick.
-	// Also wait while any recipient is still `sending` (claimed by a concurrent
-	// tick): finalizing now would close the broadcast before those settle.
-	if ((await countByStatus("pending", "sending")) > 0) {
+async function persistChunkOutcomes(
+	db: ReturnType<typeof createDb>,
+	sentRows: Array<{ id: string; messageId: string | null }>,
+	failedRows: Array<{ id: string; error: string }>,
+	unknownRows: Array<{ id: string; error: string }>,
+): Promise<void> {
+	const writes: Promise<unknown>[] = [];
+	if (sentRows.length > 0) {
+		const values = sql.join(
+			sentRows.map((row) => sql`(${row.id}::text, ${row.messageId}::text)`),
+			sql`, `,
+		);
+		writes.push(
+			db.execute(sql`
+				UPDATE broadcast_recipients r
+				   SET status = 'sent', delivery_state = 'succeeded',
+				       message_id = v.message_id, sent_at = NOW()
+				  FROM (VALUES ${values}) AS v(id, message_id)
+				 WHERE r.id = v.id AND r.status = 'sending'
+			`),
+		);
+	}
+	if (failedRows.length > 0) {
+		const values = sql.join(
+			failedRows.map((row) => sql`(${row.id}::text, ${row.error}::text)`),
+			sql`, `,
+		);
+		writes.push(
+			db.execute(sql`
+				UPDATE broadcast_recipients r
+				   SET status = 'failed', delivery_state = 'failed', error = v.error
+				  FROM (VALUES ${values}) AS v(id, error)
+				 WHERE r.id = v.id AND r.status = 'sending'
+			`),
+		);
+	}
+	if (unknownRows.length > 0) {
+		const values = sql.join(
+			unknownRows.map((row) => sql`(${row.id}::text, ${row.error}::text)`),
+			sql`, `,
+		);
+		writes.push(
+			db.execute(sql`
+				UPDATE broadcast_recipients r
+				   SET status = 'unknown', delivery_state = 'unknown', error = v.error
+				  FROM (VALUES ${values}) AS v(id, error)
+				 WHERE r.id = v.id AND r.status = 'sending'
+			`),
+		);
+	}
+	await Promise.all(writes);
+}
+
+async function finalizeOrRelease(
+	db: ReturnType<typeof createDb>,
+	lease: BroadcastLease,
+	env: Env,
+): Promise<void> {
+	const [counts] = await db
+		.select({
+			pending: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} IN ('pending', 'sending'))::int`,
+			sent: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} = 'sent')::int`,
+			failed: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} = 'failed')::int`,
+			unknown: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} = 'unknown')::int`,
+		})
+		.from(broadcastRecipients)
+		.where(
+			and(
+				eq(broadcastRecipients.broadcastId, lease.broadcast.id),
+				eq(broadcastRecipients.organizationId, lease.broadcast.organizationId),
+				eq(broadcastRecipients.scopeKey, lease.broadcast.scopeKey),
+			),
+		);
+	if ((counts?.pending ?? 0) > 0) {
 		await db
 			.update(broadcasts)
-			.set({ status: "sending", updatedAt: new Date() })
-			.where(eq(broadcasts.id, broadcast.id));
-		return processed;
+			.set({ leaseExpiresAt: null, updatedAt: new Date() })
+			.where(
+				and(
+					eq(broadcasts.id, lease.broadcast.id),
+					eq(broadcasts.organizationId, lease.broadcast.organizationId),
+					eq(broadcasts.status, "sending"),
+					eq(broadcasts.revision, lease.revision),
+					eq(broadcasts.leaseToken, lease.leaseToken),
+				),
+			);
+		return;
 	}
 
-	// Done — finalize from the recipients' persisted statuses.
-	const sent = await countByStatus("sent");
-	const failed = await countByStatus("failed");
-	const finalStatus =
-		failed === 0 ? "sent" : sent === 0 ? "failed" : "partially_failed";
-
-	await db
+	const sent = counts?.sent ?? 0;
+	const failed = counts?.failed ?? 0;
+	const unknown = counts?.unknown ?? 0;
+	const finalStatus = broadcastFinalStatus(sent, failed, unknown);
+	const finalized = await db
 		.update(broadcasts)
 		.set({
 			status: finalStatus,
 			sentCount: sent,
 			failedCount: failed,
 			completedAt: new Date(),
+			leaseExpiresAt: null,
+			revision: sql`${broadcasts.revision} + 1`,
 			updatedAt: new Date(),
 		})
-		.where(eq(broadcasts.id, broadcast.id));
-	await notifyRealtime(env, broadcast.organizationId, {
+		.where(
+			and(
+				eq(broadcasts.id, lease.broadcast.id),
+				eq(broadcasts.organizationId, lease.broadcast.organizationId),
+				eq(broadcasts.status, "sending"),
+				eq(broadcasts.revision, lease.revision),
+				eq(broadcasts.leaseToken, lease.leaseToken),
+				gt(broadcasts.leaseExpiresAt, new Date()),
+			),
+		)
+		.returning({ id: broadcasts.id });
+	if (finalized.length === 0) return;
+
+	await notifyRealtime(env, lease.broadcast.organizationId, {
 		type: "broadcast.updated",
-		broadcast_id: broadcast.id,
+		broadcast_id: lease.broadcast.id,
 		status: finalStatus,
 	}).catch(() => {});
-
-	return processed;
 }

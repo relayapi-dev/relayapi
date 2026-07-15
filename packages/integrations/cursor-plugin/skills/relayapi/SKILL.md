@@ -385,16 +385,14 @@ const { code, bot_username, expires_in } = await client.connect.telegram.initiat
 // Poll status
 const status = await client.connect.telegram.pollConnectionStatus({ code });
 // status: "pending" | "connected" | "expired"
-
-// Or connect directly with chat ID
-const { account } = await client.connect.telegram.connectDirectly({ chat_id: "-100123456789" });
 ```
 
 ### Connection Logs
 
 ```typescript
 const logs = await client.connections.listLogs();
-// Events: connected, disconnected, token_refreshed, error
+// Events: connected, disconnecting, disconnected, token_refreshed, error
+// Each entry also includes an immutable lifecycle snapshot (or null).
 ```
 
 ---

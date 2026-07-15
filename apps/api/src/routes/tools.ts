@@ -1,7 +1,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { socialAccounts, generateId } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
-import { maybeDecrypt } from "../lib/crypto";
+import { decryptAccountToken } from "../lib/account-token-crypto";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
 import { getLinkedInRestHeaders, LINKEDIN_REST_BASE } from "../lib/linkedin-rest";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
@@ -554,6 +554,7 @@ app.openapi(resolveMention, async (c) => {
 	// Look up LinkedIn account for API access
 	const [account] = await db
 		.select({
+			id: socialAccounts.id,
 			accessToken: socialAccounts.accessToken,
 			workspaceId: socialAccounts.workspaceId,
 		})
@@ -615,7 +616,12 @@ app.openapi(resolveMention, async (c) => {
 			200,
 		);
 	}
-	const accessToken = await maybeDecrypt(account.accessToken, c.env.ENCRYPTION_KEY);
+	const accessToken = await decryptAccountToken(
+		account.accessToken,
+		c.env.ENCRYPTION_KEY,
+		account.id,
+		"access_token",
+	);
 	if (!accessToken) {
 		return c.json(
 			{ resolved: false, error: "LinkedIn account not found or missing access token" },

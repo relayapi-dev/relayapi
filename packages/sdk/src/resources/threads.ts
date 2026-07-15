@@ -66,7 +66,9 @@ export interface ThreadCreateParams {
   timezone?: string;
 
   /**
-   * Workspace ID.
+   * Workspace ID. When omitted, the thread inherits the sole target-account
+   * workspace in either policy mode. Organization scope is available only while
+   * Require Workspace ID is disabled.
    */
   workspace_id?: string;
 }

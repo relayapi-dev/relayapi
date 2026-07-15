@@ -27,6 +27,13 @@ export class Webhooks extends APIResource {
   }
 
   /**
+   * Atomically replace a webhook signing secret. The new secret is returned once.
+   */
+  rotateSecret(id: string, options?: RequestOptions): APIPromise<WebhookCreateResponse> {
+    return this._client.post(path`/v1/webhooks/${id}/rotate-secret`, options);
+  }
+
+  /**
    * List webhook endpoints
    */
   list(
@@ -233,13 +240,18 @@ export interface WebhookCreateParams {
     | 'post.failed'
     | 'post.scheduled'
     | 'post.recycled'
+    | 'thread.published'
     | 'account.connected'
     | 'account.disconnected'
     | 'comment.received'
     | 'message.received'
+    | 'message.sent'
     | 'auto_post.created'
     | 'auto_post.error'
-    | 'engagement_rule.triggered'
+    | 'streak.started'
+    | 'streak.milestone'
+    | 'streak.warning'
+    | 'streak.broken'
     | 'cross_post_action.executed'
     | 'cross_post_action.failed'
   >;
@@ -270,13 +282,18 @@ export interface WebhookUpdateParams {
     | 'post.failed'
     | 'post.scheduled'
     | 'post.recycled'
+    | 'thread.published'
     | 'account.connected'
     | 'account.disconnected'
     | 'comment.received'
     | 'message.received'
+    | 'message.sent'
     | 'auto_post.created'
     | 'auto_post.error'
-    | 'engagement_rule.triggered'
+    | 'streak.started'
+    | 'streak.milestone'
+    | 'streak.warning'
+    | 'streak.broken'
     | 'cross_post_action.executed'
     | 'cross_post_action.failed'
   >;

@@ -1,10 +1,12 @@
 import type { Env } from "../types";
 import { consumeAdsQueue } from "./ads";
-import { consumeAutomationQueue } from "./automation";
+import { consumeCustomerWebhookQueue } from "./customer-webhook";
+import { consumeDeadLetterQueue } from "./dead-letter";
 import { consumeEmailQueue } from "./email";
 import { consumeInboxQueue } from "./inbox";
 import { consumeMediaCleanupQueue } from "./media-cleanup";
 import { consumePublishQueue } from "./publish";
+import { consumeQueueRescue } from "./queue-rescue";
 import { consumeSyncQueue } from "./sync";
 import { consumeTokenRefreshQueue } from "./token-refresh";
 import { consumeToolsQueue } from "./tools";
@@ -14,6 +16,28 @@ export async function handleQueueBatch(
 	env: Env,
 ): Promise<void> {
 	switch (batch.queue) {
+		case "relayapi-queue-rescue":
+			return consumeQueueRescue(batch, env);
+		case "relayapi-media-cleanup-dlq":
+		case "relayapi-publish-dlq":
+		case "relayapi-email-dlq":
+		case "relayapi-refresh-dlq":
+		case "relayapi-inbox-dlq":
+		case "relayapi-tools-dlq":
+		case "relayapi-ads-dlq":
+		case "relayapi-sync-dlq":
+		case "relayapi-customer-webhooks-dlq":
+			return consumeDeadLetterQueue(batch, env);
+		case "relayapi-customer-webhooks":
+			return consumeCustomerWebhookQueue(
+				batch as Parameters<typeof consumeCustomerWebhookQueue>[0],
+				env,
+			);
+		case "relayapi-publish":
+			return consumePublishQueue(
+				batch as Parameters<typeof consumePublishQueue>[0],
+				env,
+			);
 		case "relayapi-email":
 			return consumeEmailQueue(
 				batch as Parameters<typeof consumeEmailQueue>[0],
@@ -49,16 +73,7 @@ export async function handleQueueBatch(
 				batch as Parameters<typeof consumeSyncQueue>[0],
 				env,
 			);
-		case "relayapi-automation":
-			return consumeAutomationQueue(
-				batch as Parameters<typeof consumeAutomationQueue>[0],
-				env,
-			);
 		default:
-			// Default is the publish queue (PUBLISH_QUEUE binding)
-			return consumePublishQueue(
-				batch as Parameters<typeof consumePublishQueue>[0],
-				env,
-			);
+			throw new Error(`No queue consumer registered for ${batch.queue}`);
 	}
 }

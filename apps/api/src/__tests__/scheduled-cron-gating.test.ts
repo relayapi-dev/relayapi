@@ -18,16 +18,14 @@ const counter = (name: string) => async () => {
 mock.module("../services/scheduler", () => ({
 	processScheduledPosts: counter("processScheduledPosts"),
 }));
+mock.module("../services/publish-outbox", () => ({
+	dispatchPublishOutbox: counter("dispatchPublishOutbox"),
+}));
 mock.module("../services/recycling-processor", () => ({
 	processRecyclingPosts: counter("processRecyclingPosts"),
 }));
 mock.module("../services/broadcast-processor", () => ({
 	processScheduledBroadcasts: counter("processScheduledBroadcasts"),
-}));
-mock.module("../services/whatsapp-broadcast-processor", () => ({
-	processScheduledWhatsAppBroadcasts: counter(
-		"processScheduledWhatsAppBroadcasts",
-	),
 }));
 mock.module("../services/cross-post-processor", () => ({
 	processCrossPostActions: counter("processCrossPostActions"),
@@ -35,6 +33,55 @@ mock.module("../services/cross-post-processor", () => ({
 mock.module("../services/automations/scheduler", () => ({
 	processAutomationSchedule: counter("processAutomationSchedule"),
 	processAutomationInputTimeouts: counter("processAutomationInputTimeouts"),
+}));
+mock.module("../services/automations/webhook-receiver", () => ({
+	reconcileAutomationWebhookReceipts: counter(
+		"reconcileAutomationWebhookReceipts",
+	),
+}));
+mock.module("../services/automation-wait-reconciler", () => ({
+	reconcileAutomationWaits: counter("reconcileAutomationWaits"),
+}));
+mock.module("../services/automation-webhook-receipt-cleanup", () => ({
+	cleanupAutomationWebhookReceipts: counter("cleanupAutomationWebhookReceipts"),
+}));
+mock.module("../services/idempotency-receipt-reconciler", () => ({
+	reconcileIdempotencyReceipts: counter("reconcileIdempotencyReceipts"),
+}));
+mock.module("../services/inbound-webhook-reconciler", () => ({
+	reconcileInboundWebhookReceipts: counter("reconcileInboundWebhookReceipts"),
+}));
+mock.module("../services/queue-replay", () => ({
+	reconcileQueueReplayClaims: counter("reconcileQueueReplayClaims"),
+}));
+mock.module("../services/webhook-delivery", () => ({
+	reconcileCustomerWebhookDeliveries: counter(
+		"reconcileCustomerWebhookDeliveries",
+	),
+}));
+mock.module("../services/webhook-retention", () => ({
+	cleanupCustomerWebhookHistory: counter("cleanupCustomerWebhookHistory"),
+}));
+mock.module("../services/inbox-effect-reconciler", () => ({
+	reconcileInboxEventEffects: counter("reconcileInboxEventEffects"),
+}));
+mock.module("../services/media-reliability", () => ({
+	reconcileMediaDeletions: counter("reconcileMediaDeletions"),
+	reconcileMediaUploads: counter("reconcileMediaUploads"),
+}));
+mock.module("../services/post-publish-reconciler", () => ({
+	reconcilePostPublishExecutions: counter("reconcilePostPublishExecutions"),
+}));
+mock.module("../services/thread-execution-reconciler", () => ({
+	reconcileThreadExecutions: counter("reconcileThreadExecutions"),
+}));
+mock.module("../services/one-time-capability-cleanup", () => ({
+	cleanupOneTimeCapabilities: counter("cleanupOneTimeCapabilities"),
+}));
+mock.module("../services/telegram-connection", () => ({
+	cleanupExpiredTelegramConnectionChallenges: counter(
+		"cleanupExpiredTelegramConnectionChallenges",
+	),
 }));
 mock.module("../services/invoice-generator", () => ({
 	generateInvoices: counter("generateInvoices"),
@@ -51,6 +98,9 @@ mock.module("../services/webhook-subscription", () => ({
 mock.module("../services/inbox-maintenance", () => ({
 	cleanupOldConversations: counter("cleanupOldConversations"),
 }));
+mock.module("../services/encryption-rotation", () => ({
+	rotateEncryptedValues: counter("rotateEncryptedValues"),
+}));
 mock.module("../services/weekly-digest", () => ({
 	processWeeklyDigest: counter("processWeeklyDigest"),
 }));
@@ -59,8 +109,9 @@ mock.module("../services/external-post-sync/cron", () => ({
 }));
 mock.module("../services/analytics-refresh", () => ({
 	enqueueAnalyticsRefresh: counter("enqueueAnalyticsRefresh"),
+	scheduleFirstMetricsRefresh: async () => {},
 }));
-mock.module("../services/auto-post-processor", () => ({
+mock.module("../services/rss-generator", () => ({
 	processAutoPostRules: counter("processAutoPostRules"),
 }));
 mock.module("../services/streak", () => ({
@@ -72,18 +123,68 @@ mock.module("../services/short-link-click-sync", () => ({
 mock.module("../services/ad-sync", () => ({
 	syncAllExternalAds: counter("syncAllExternalAds"),
 }));
+mock.module("../services/thumbnail-backfill", () => ({
+	backfillMissingThumbnails: counter("backfillMissingThumbnails"),
+}));
+mock.module("../routes/stripe-webhooks", () => ({
+	processPendingStripeEvents: counter("processPendingStripeEvents"),
+}));
+mock.module("../services/billing-outbox", () => ({
+	processBillingOutbox: counter("processBillingOutbox"),
+}));
+mock.module("../services/account-revocation", () => ({
+	processAccountRevocations: counter("processAccountRevocations"),
+}));
+mock.module("../services/tenant-deletion", () => ({
+	processTenantDeletionJobs: counter("processTenantDeletionJobs"),
+}));
+mock.module("../services/workspace-erasure", () => ({
+	processWorkspaceErasureJobs: counter("processWorkspaceErasureJobs"),
+}));
+mock.module("../services/inbound-webhook-retention", () => ({
+	redactExpiredInboundWebhookPayloads: counter(
+		"redactExpiredInboundWebhookPayloads",
+	),
+}));
+mock.module("../services/phone-number-operations", () => ({
+	reconcilePhoneProvisioningOperations: counter(
+		"reconcilePhoneProvisioningOperations",
+	),
+	processDuePhoneReleases: counter("processDuePhoneReleases"),
+}));
+mock.module("../services/ad-creation-operations", () => ({
+	reconcileAdCreationOperations: counter("reconcileAdCreationOperations"),
+}));
 
 const { handleScheduled } = await import("../scheduled/index");
+
 import type { Env } from "../types";
 
 const EVERY_MINUTE_TASKS = [
+	"dispatchPublishOutbox",
 	"processScheduledPosts",
 	"processRecyclingPosts",
 	"processScheduledBroadcasts",
-	"processScheduledWhatsAppBroadcasts",
 	"processCrossPostActions",
 	"processAutomationSchedule",
 	"processAutomationInputTimeouts",
+	"reconcileAutomationWaits",
+	"processPendingStripeEvents",
+	"processBillingOutbox",
+	"processAccountRevocations",
+	"processTenantDeletionJobs",
+	"processWorkspaceErasureJobs",
+	"reconcilePhoneProvisioningOperations",
+	"processDuePhoneReleases",
+	"reconcileAdCreationOperations",
+	"reconcileIdempotencyReceipts",
+	"reconcileCustomerWebhookDeliveries",
+	"reconcileInboxEventEffects",
+	"reconcileMediaDeletions",
+	"reconcileMediaUploads",
+	"reconcilePostPublishExecutions",
+	"reconcileThreadExecutions",
+	"reconcileAutomationWebhookReceipts",
 ];
 
 async function fire(cron: string) {
@@ -93,7 +194,7 @@ async function fire(cron: string) {
 		passThroughOnException: () => {},
 	} as unknown as ExecutionContext;
 	await handleScheduled(
-		{ cron, scheduledTime: 0, type: "scheduled" } as unknown as ScheduledEvent,
+		{ cron, scheduledTime: 0, noRetry: () => {} },
 		{} as Env,
 		ctx,
 	);
@@ -111,6 +212,8 @@ describe("handleScheduled cron gating", () => {
 		expect(calls.enqueueExternalPostSync ?? 0).toBe(0);
 		expect(calls.syncAllExternalAds ?? 0).toBe(0);
 		expect(calls.generateInvoices ?? 0).toBe(0);
+		expect(calls.reconcileInboundWebhookReceipts ?? 0).toBe(0);
+		expect(calls.reconcileQueueReplayClaims ?? 0).toBe(0);
 	});
 
 	it("*/5 does NOT re-run the every-minute tasks", async () => {
@@ -119,14 +222,22 @@ describe("handleScheduled cron gating", () => {
 		expect(calls.enqueueExternalPostSync).toBe(1);
 		expect(calls.enqueueAnalyticsRefresh).toBe(1);
 		expect(calls.processAutoPostRules).toBe(1);
+		expect(calls.cleanupAutomationWebhookReceipts).toBe(1);
+		expect(calls.cleanupOneTimeCapabilities).toBe(1);
+		expect(calls.cleanupExpiredTelegramConnectionChallenges).toBe(1);
+		expect(calls.redactExpiredInboundWebhookPayloads).toBe(1);
 		expect(calls.checkStreaks).toBe(1);
 		expect(calls.syncShortLinkClicks).toBe(1);
+		expect(calls.reconcileInboundWebhookReceipts).toBe(1);
+		expect(calls.reconcileQueueReplayClaims).toBe(1);
+		expect(calls.cleanupCustomerWebhookHistory).toBe(1);
 	});
 
 	it("*/30 only syncs ads", async () => {
 		await fire("*/30 * * * *");
 		for (const t of EVERY_MINUTE_TASKS) expect(calls[t] ?? 0).toBe(0);
 		expect(calls.syncAllExternalAds).toBe(1);
+		expect(calls.backfillMissingThumbnails).toBe(1);
 	});
 
 	it("daily 9am runs invoice generation + dunning/token-refresh/pubsub/inbox-cleanup", async () => {
@@ -140,6 +251,10 @@ describe("handleScheduled cron gating", () => {
 		expect(calls.enqueueExpiringTokenRefresh).toBe(1);
 		expect(calls.renewYouTubePubSubSubscriptions).toBe(1);
 		expect(calls.cleanupOldConversations).toBe(1);
+		expect(calls.rotateEncryptedValues).toBe(1);
+		expect(calls.cleanupAutomationWebhookReceipts ?? 0).toBe(0);
+		expect(calls.cleanupOneTimeCapabilities ?? 0).toBe(0);
+		expect(calls.cleanupExpiredTelegramConnectionChallenges ?? 0).toBe(0);
 	});
 
 	it("weekly Monday 9am runs the digest only", async () => {

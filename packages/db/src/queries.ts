@@ -16,7 +16,7 @@ import { member, organizationSubscriptions } from "./schema";
  * orgs a user was merely invited to don't consume their free-org quota.
  */
 export async function countOwnedFreeOrganizationsForUser(
-	db: Database,
+	db: Pick<Database, "select">,
 	userId: string,
 ): Promise<number> {
 	const rows = await db

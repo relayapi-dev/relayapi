@@ -33,7 +33,8 @@ re-verified (see §2).
 - **The three maintainer decisions**, applied consistently:
   - **P4 breaking changes** — retry/bulk/bulk-csv → `202 publishing`,
     broadcast send + ads sync → `202 queued`, automations list slimmed,
-    whatsapp broadcasts paginated. SDK + dashboard updated in lockstep.
+    the duplicate WhatsApp-specific broadcast API retired in favor of the generic
+    broadcast resource. SDK + dashboard updated in lockstep.
   - **Billing aligned to the Stripe billing period** — the period is carried
     in the `apikey:*` KV record (auth hydration + every `syncOrgKeysToKV`
     call: subscription.updated/created/checkout), both write paths key
@@ -166,7 +167,7 @@ introduced. **Fixed:**
   fixed the cron's 00:00+00:30 double-sweep.
 - **[MED] Avatar staleness:** the edge-cache Cache-Control was bumped to 24h
   with no cross-colo purge. Bounded back to 1h while keeping the edge cache.
-- **[MED] Deprecated whatsapp broadcasts cursor** + **[LOW] analytics
+- **[MED] Duplicate WhatsApp broadcast API retired** + **[LOW] analytics
   empty-result caching** + **[LOW] content-decay null publishedAt**: fixed.
 
 **Documented as residual (drift / needs SDK regen / safe), not reworked:**

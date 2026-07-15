@@ -1,12 +1,22 @@
 name: Deploy API
 
-# Tests gate the deploy: the deploy job only runs when typecheck + the full
-# isolated test suite pass (DB-dependent suites skip themselves in CI, where
-# no database is reachable).
+# Pushes run the complete validation gate and deploy only when production is
+# already on the reviewed migration. Applying a pending production migration
+# requires an explicit manual run. External backup policy is operated outside
+# this repository and is not represented by a misleading workflow checkbox.
 #
 # Required repository secrets:
 # - CLOUDFLARE_API_TOKEN
 # - CLOUDFLARE_ACCOUNT_ID  (relay account: 3496f40fcd55a91da50ded8abea2cf7a)
+#
+# Required `production` environment configuration:
+# - PRODUCTION_DATABASE_URL (migration role, protected TCP host, port 5433,
+#   and sslmode=verify-full)
+# - PRODUCTION_DATABASE_HOSTNAME
+# - PRODUCTION_DATABASE_CA_CERT
+# - PRODUCTION_DATABASE_ACCESS_CLIENT_ID
+# - PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET
+# Repository environment reviewers should also be configured before launch.
 
 on:
   push:
@@ -15,6 +25,7 @@ on:
       - "apps/api/**"
       - "packages/db/**"
       - "packages/auth/**"
+      - "packages/config/**"
       - "package.json"
       - "bun.lock"
       - ".github/workflows/deploy-api.yml"
@@ -58,11 +69,10 @@ jobs:
         run: bun run test
         working-directory: apps/api
 
-  deploy:
-    name: Deploy API
+  platform-tests:
+    name: Worker Types + Runtime Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: test
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -73,9 +83,324 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Deploy API
-        run: bunx wrangler deploy --keep-vars
+      - name: Verify generated API Worker types
+        working-directory: apps/api
+        run: bun run types:check
+
+      - name: Run workerd platform integration tests
+        working-directory: apps/api
+        run: bun run test:workerd
+
+  contracts:
+    name: API, SDK, and integrations contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify pinned OpenAPI is from this checkout
+        working-directory: apps/api
+        run: bun run openapi:check
+
+      - name: Verify generated API reference is current
+        working-directory: apps/docs
+        run: bun run docs:check
+
+      - name: Build TypeScript SDK
+        working-directory: packages/sdk
+        run: bun run build
+
+      - name: Test n8n contract
+        working-directory: packages/integrations/n8n-node
+        run: bun run test
+
+      - name: Build n8n node
+        working-directory: packages/integrations/n8n-node
+        run: bun run build
+
+      - name: Test Zapier workflows
+        working-directory: packages/integrations/zapier-app
+        run: bun run test
+
+      - name: Build Zapier app
+        working-directory: packages/integrations/zapier-app
+        run: bun run build
+
+  migration-gate:
+    name: Replay migrations on a clean database
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: relayapi_migration_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d relayapi_migration_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: postgresql://postgres:postgres@127.0.0.1:5432/relayapi_migration_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve migration history comparison base
+        id: migration_base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            base_sha="${{ github.event.before }}"
+          else
+            base_sha="$(git rev-parse HEAD^)"
+          fi
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test baseline rebuild safety controls
+        run: bun run --cwd packages/db test:baseline-builder
+
+      - name: Test migration history and policy rejection controls
+        run: bun run --cwd packages/db test:migration-contracts
+
+      - name: Verify immutable migration manifest
+        run: bun run db:migration-manifest
+
+      - name: Verify migration history is append-only
+        run: bun run db:migration-append-only
+        env:
+          MIGRATION_BASE_SHA: ${{ steps.migration_base.outputs.sha }}
+
+      - name: Verify expand-contract migration policy
+        run: bun run db:migration-policy
+
+      - name: Verify schema contract registry
+        run: bun run db:verify-schema-contracts
+
+      - name: Apply migrations to a clean database
+        run: bun run db:migrate
+
+      - name: Verify migration replay is idempotent
+        run: bun run db:migrate
+
+      - name: Verify migrated database catalog
+        run: bun run db:verify
+
+      - name: Verify exact applied migration hashes
+        run: bun run db:migration-history:current
+
+  deploy:
+    name: Deploy API (migrate only on a reviewed manual run)
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test, platform-tests, contracts, migration-gate]
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Require a sealed virgin baseline for production
+        run: bun run --cwd packages/db baseline:sealed:check
+
+      - name: Start Access-protected production database tunnel
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRODUCTION_DATABASE_HOSTNAME: ${{ secrets.PRODUCTION_DATABASE_HOSTNAME }}
+          PRODUCTION_DATABASE_CA_CERT: ${{ secrets.PRODUCTION_DATABASE_CA_CERT }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.PRODUCTION_DATABASE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+
+          test -n "$PRODUCTION_DATABASE_URL"
+          test -n "$PRODUCTION_DATABASE_HOSTNAME"
+          test -n "$PRODUCTION_DATABASE_CA_CERT"
+          test -n "$TUNNEL_SERVICE_TOKEN_ID"
+          test -n "$TUNNEL_SERVICE_TOKEN_SECRET"
+
+          bun -e '
+            const url = new URL(process.env.PRODUCTION_DATABASE_URL);
+            if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+              throw new Error("PRODUCTION_DATABASE_URL must use PostgreSQL");
+            }
+            if (url.hostname !== process.env.PRODUCTION_DATABASE_HOSTNAME) {
+              throw new Error("Migration DSN hostname must match the protected Access hostname");
+            }
+            if (url.port !== "5433") {
+              throw new Error("Migration DSN must target the local cloudflared listener on port 5433");
+            }
+            if (url.searchParams.get("sslmode") !== "verify-full") {
+              throw new Error("Migration DSN must require sslmode=verify-full");
+            }
+            if (url.username === "relayapi_runtime") {
+              throw new Error("The no-DDL Worker runtime role cannot run migrations");
+            }
+          '
+
+          printf '%s\n' "$PRODUCTION_DATABASE_CA_CERT" > "$RUNNER_TEMP/relayapi-postgres-ca.crt"
+          sudo install -m 0644 "$RUNNER_TEMP/relayapi-postgres-ca.crt" \
+            /usr/local/share/ca-certificates/relayapi-postgres-ca.crt
+          sudo update-ca-certificates
+
+          docker run --detach --rm --pull always --network host \
+            --name "relayapi-db-access-${GITHUB_RUN_ID}" \
+            --env TUNNEL_SERVICE_TOKEN_ID \
+            --env TUNNEL_SERVICE_TOKEN_SECRET \
+            cloudflare/cloudflared:2026.6.0 \
+            access tcp \
+            --hostname "$PRODUCTION_DATABASE_HOSTNAME" \
+            --url 127.0.0.1:5433 \
+            --loglevel warn
+
+          # Keep cloudflared's DNS resolution inside its container. Only database
+          # clients on the runner resolve the certificate hostname to the listener.
+          printf '127.0.0.1\t%s\n' "$PRODUCTION_DATABASE_HOSTNAME" | sudo tee -a /etc/hosts >/dev/null
+
+          ready=false
+          for _ in $(seq 1 30); do
+            if timeout 1 bash -c '</dev/tcp/127.0.0.1/5433' 2>/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = "true"
+
+      - name: Verify Cloudflare deployment prerequisites
+        run: bun run cloudflare:verify-prerequisites
         working-directory: apps/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify reviewed migration manifest
+        run: bun run db:migration-manifest
+
+      - name: Verify expand-contract migration policy
+        run: bun run db:migration-policy
+
+      - name: Verify schema contract registry
+        run: bun run db:verify-schema-contracts
+
+      - name: Verify production migration history preflight
+        run: bun run db:migration-history
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: Capture currently deployed Worker version
+        id: previous_worker
+        run: |
+          set -euo pipefail
+          version_id="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one Worker version at 100% traffic")
+            end
+          ')"
+          printf 'version_id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Apply reviewed production migrations
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: bun run db:migrate
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: Verify production catalog
+        run: bun run db:verify
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: Verify production migration hashes are current
+        run: bun run db:migration-history:current
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: Deploy API
+        id: deploy_worker
+        run: bunx wrangler deploy --keep-vars --strict --message "GitHub release ${GITHUB_SHA}"
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Capture deployed Worker version
+        id: deployed_worker
+        run: |
+          set -euo pipefail
+          version_id="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one Worker version at 100% traffic")
+            end
+          ')"
+          test "$version_id" != "${{ steps.previous_worker.outputs.version_id }}"
+          printf 'version_id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Run production health and OpenAPI smoke
+        run: bun run cloudflare:smoke-production
+        working-directory: apps/api
+
+      - name: Verify deployed Cloudflare resources and Worker version
+        run: bun run cloudflare:verify-production
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          EXPECTED_WORKER_VERSION_ID: ${{ steps.deployed_worker.outputs.version_id }}
+
+      - name: Roll back Worker after a failed post-deploy gate
+        # Push deploys run only after the catalog is already current, so code-only
+        # rollback is safe there. A manual run can apply a forward-only migration;
+        # restoring old code against that new schema would require compatibility
+        # shims we intentionally do not carry, so manual failures need reviewed
+        # forward recovery instead of automatic rollback.
+        if: ${{ failure() && github.event_name == 'push' && steps.deploy_worker.outcome == 'success' && steps.previous_worker.outputs.version_id != '' }}
+        run: >-
+          bunx wrangler rollback "${{ steps.previous_worker.outputs.version_id }}"
+          --message "Automated rollback after failed release gate for ${GITHUB_SHA}"
+          --yes
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Stop production database tunnel
+        if: ${{ always() }}
+        run: docker rm --force "relayapi-db-access-${GITHUB_RUN_ID}" >/dev/null 2>&1 || true

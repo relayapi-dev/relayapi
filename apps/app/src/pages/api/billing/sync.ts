@@ -1,9 +1,50 @@
-import type { APIRoute } from "astro";
 import { env } from "cloudflare:workers";
+import {
+	API_KEY_CACHE_TTL_SECONDS,
+	getBillingPolicy,
+	PRICING,
+} from "@relayapi/config";
+import { apikey, eq, organizationSubscriptions } from "@relayapi/db";
+import type { APIRoute } from "astro";
 import Stripe from "stripe";
-import { organizationSubscriptions, apikey, eq } from "@relayapi/db";
-import { PRICING } from "@relayapi/config";
 import { requireBillingAdmin } from "@/lib/api-utils";
+
+type LocalSubscriptionStatus = "trialing" | "active" | "past_due" | "cancelled";
+
+function mapStripeStatus(
+	status: Stripe.Subscription.Status,
+): LocalSubscriptionStatus {
+	if (status === "active" || status === "trialing") return status;
+	if (status === "past_due" || status === "unpaid") return "past_due";
+	return "cancelled";
+}
+
+async function findEntitledSubscription(
+	stripe: Stripe,
+	customerId: string,
+): Promise<Stripe.Subscription | null> {
+	let startingAfter: string | undefined;
+	let trialing: Stripe.Subscription | null = null;
+	for (;;) {
+		// Omitting status returns all non-canceled subscriptions, so active and
+		// trialing can be found with one request in the normal case.
+		const page = await stripe.subscriptions.list({
+			customer: customerId,
+			limit: 100,
+			...(startingAfter ? { starting_after: startingAfter } : {}),
+		});
+		for (const subscription of page.data) {
+			if (subscription.status === "active") return subscription;
+			if (subscription.status === "trialing" && !trialing) {
+				trialing = subscription;
+			}
+		}
+		if (!page.has_more) return trialing;
+		const lastSubscription = page.data.at(-1);
+		if (!lastSubscription) return trialing;
+		startingAfter = lastSubscription.id;
+	}
+}
 
 export const POST: APIRoute = async (context) => {
   const forbidden = await requireBillingAdmin(context);
@@ -37,7 +78,9 @@ export const POST: APIRoute = async (context) => {
   // If we have a subscription ID, fetch it directly to get the full state
   if (sub.stripeSubscriptionId) {
     try {
-      const subscription = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
+			const subscription = await stripe.subscriptions.retrieve(
+				sub.stripeSubscriptionId,
+			);
 
       const firstItem = subscription.items?.data?.[0];
       const periodStart = firstItem
@@ -47,19 +90,22 @@ export const POST: APIRoute = async (context) => {
         ? new Date(firstItem.current_period_end * 1000)
         : new Date();
 
-      const statusMap: Record<string, string> = {
-        active: "active",
-        past_due: "past_due",
-        canceled: "cancelled",
-        unpaid: "past_due",
-        trialing: "trialing",
-      };
-      const newStatus = statusMap[subscription.status] || "cancelled";
-      const isPro = newStatus === "active" || newStatus === "trialing";
+			const newStatus = mapStripeStatus(subscription.status);
+			const trialEndsAt = subscription.trial_end
+				? new Date(subscription.trial_end * 1000)
+				: null;
+			const decision = getBillingPolicy({
+				status: newStatus,
+				stripeSubscriptionId: subscription.id,
+				trialEndsAt,
+				currentPeriodStart: periodStart,
+				currentPeriodEnd: periodEnd,
+			});
 
       // The Stripe Customer Portal uses `cancel_at` (timestamp) rather than
       // `cancel_at_period_end` (boolean). Check BOTH to detect scheduled cancellation.
-      const isCancelling = subscription.cancel_at_period_end || !!subscription.cancel_at;
+			const isCancelling =
+				subscription.cancel_at_period_end || !!subscription.cancel_at;
 
       await db
         .update(organizationSubscriptions)
@@ -68,16 +114,15 @@ export const POST: APIRoute = async (context) => {
           cancelAtPeriodEnd: isCancelling,
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
+					trialEndsAt,
           ...(newStatus === "cancelled" ? { stripeSubscriptionId: null } : {}),
           updatedAt: new Date(),
         })
         .where(eq(organizationSubscriptions.organizationId, orgId));
 
-      const plan = isPro ? "pro" : "free";
-      const callsIncluded = isPro ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded;
-      await syncKeysToKV(db, kv, orgId, plan, callsIncluded);
+			await syncKeysToKV(db, kv, orgId, decision);
 
-      return Response.json({ plan });
+			return Response.json({ plan: decision.entitlement });
     } catch (err: unknown) {
       // Subscription was deleted in Stripe (404) — downgrade
       const statusCode =
@@ -95,7 +140,12 @@ export const POST: APIRoute = async (context) => {
           })
           .where(eq(organizationSubscriptions.organizationId, orgId));
 
-        await syncKeysToKV(db, kv, orgId, "free", PRICING.freeCallsIncluded);
+				await syncKeysToKV(
+					db,
+					kv,
+					orgId,
+					getBillingPolicy({ status: "cancelled" }),
+				);
         return Response.json({ plan: "free" });
       }
       throw err;
@@ -103,13 +153,10 @@ export const POST: APIRoute = async (context) => {
   }
 
   // No subscription ID — check if there's a new active subscription
-  const subscriptions = await stripe.subscriptions.list({
-    customer: sub.stripeCustomerId,
-    status: "active",
-    limit: 1,
-  });
-
-  const activeSub = subscriptions.data[0];
+	const activeSub = await findEntitledSubscription(
+		stripe,
+		sub.stripeCustomerId,
+	);
   if (!activeSub) {
     return Response.json({ plan: "free" });
   }
@@ -122,28 +169,41 @@ export const POST: APIRoute = async (context) => {
     ? new Date(firstItem.current_period_end * 1000)
     : new Date();
 
+	const syncedStatus = mapStripeStatus(activeSub.status);
+	const trialEndsAt = activeSub.trial_end
+		? new Date(activeSub.trial_end * 1000)
+		: null;
+	const decision = getBillingPolicy({
+		status: syncedStatus,
+		stripeSubscriptionId: activeSub.id,
+		trialEndsAt,
+		currentPeriodStart: periodStart,
+		currentPeriodEnd: periodEnd,
+	});
+
   await db
     .update(organizationSubscriptions)
     .set({
-      status: "active",
+			status: syncedStatus,
       stripeSubscriptionId: activeSub.id,
-      cancelAtPeriodEnd: activeSub.cancel_at_period_end || !!activeSub.cancel_at,
+			cancelAtPeriodEnd:
+				activeSub.cancel_at_period_end || !!activeSub.cancel_at,
       currentPeriodStart: periodStart,
       currentPeriodEnd: periodEnd,
+			trialEndsAt,
       updatedAt: new Date(),
     })
     .where(eq(organizationSubscriptions.organizationId, orgId));
 
-  await syncKeysToKV(db, kv, orgId, "pro", PRICING.proCallsIncluded);
-  return Response.json({ plan: "pro" });
+	await syncKeysToKV(db, kv, orgId, decision);
+	return Response.json({ plan: decision.entitlement });
 };
 
 async function syncKeysToKV(
   db: App.Locals["db"],
   kv: App.Locals["kv"],
   orgId: string,
-  plan: string,
-  callsIncluded: number,
+	decision: ReturnType<typeof getBillingPolicy>,
 ) {
   const orgKeys = await db
     .select({ key: apikey.key })
@@ -154,13 +214,15 @@ async function syncKeysToKV(
     const raw = await kv.get(`apikey:${k.key}`);
     if (raw) {
       const data = JSON.parse(raw);
-      data.plan = plan;
-      data.calls_included = callsIncluded;
-      // Mirror the API's apikey:* KV TTL convention (24h). The short TTL is a
-      // deliberate revocation backstop so a key disabled/mutated in the DB stops
-      // authenticating within a day; the API middleware re-hydrates on first use.
+			data.plan = decision.entitlement;
+			data.calls_included =
+				decision.entitlement === "pro"
+					? PRICING.proCallsIncluded
+					: PRICING.freeCallsIncluded;
+			data.period_start = decision.usagePeriod?.start.toISOString() ?? null;
+			data.period_end = decision.usagePeriod?.end.toISOString() ?? null;
       await kv.put(`apikey:${k.key}`, JSON.stringify(data), {
-        expirationTtl: 86400,
+				expirationTtl: API_KEY_CACHE_TTL_SECONDS,
       });
     }
   }

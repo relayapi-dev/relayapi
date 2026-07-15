@@ -1,5 +1,5 @@
 import { createDb, socialAccounts } from "@relayapi/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import type { Env } from "../types";
 
@@ -38,9 +38,7 @@ export async function subscribeFacebookPage(
 				error: `Facebook subscribe failed: ${res.status} ${err}`,
 			};
 		}
-		console.log(
-			`[webhook-sub] Facebook page ${pageId} subscribed to webhooks`,
-		);
+		console.log(`[webhook-sub] Facebook page ${pageId} subscribed to webhooks`);
 		return { success: true };
 	} catch (err) {
 		return {
@@ -59,38 +57,41 @@ export async function subscribeFacebookPage(
  * Subscriptions expire after `lease_seconds` and must be renewed.
  *
  * Docs: https://developers.google.com/youtube/v3/guides/push_notifications
+ * Section: "Subscribe to Push Notifications" steps 1-3
  * Hub: https://pubsubhubbub.appspot.com/subscribe
+ * Request: POST application/x-www-form-urlencoded fields hub.callback,
+ * hub.topic, hub.verify, hub.mode, hub.lease_seconds, and hub.secret.
+ * Authenticated distribution: https://www.w3.org/TR/websub/#authenticated-content-distribution
  */
 export async function subscribeYouTubeChannel(
 	channelId: string,
 	callbackUrl: string,
-	hubSecret?: string,
+	hubSecret: string,
 ): Promise<{ success: boolean; error?: string }> {
+	if (!hubSecret) {
+		return {
+			success: false,
+			error: "YOUTUBE_HUB_SECRET is required for authenticated subscriptions",
+		};
+	}
+
 	try {
-		const topicUrl = `https://www.youtube.com/xml/feeds/videos.xml?channel_id=${channelId}`;
+		const topicUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
 		const params: Record<string, string> = {
 			"hub.callback": callbackUrl,
 			"hub.topic": topicUrl,
 			"hub.verify": "async",
 			"hub.mode": "subscribe",
 			"hub.lease_seconds": "864000", // 10 days
+			"hub.secret": hubSecret,
 		};
-		// Register a hub.secret so the hub signs deliveries with X-Hub-Signature.
-		// Without this, the /youtube handler's HMAC check can never succeed when
-		// YOUTUBE_HUB_SECRET is configured (no signature is ever sent).
-		if (hubSecret) {
-			params["hub.secret"] = hubSecret;
-		}
-		const res = await fetch(
-			"https://pubsubhubbub.appspot.com/subscribe",
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/x-www-form-urlencoded",
-				},
-				body: new URLSearchParams(params).toString(),
+		const res = await fetch("https://pubsubhubbub.appspot.com/subscribe", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/x-www-form-urlencoded",
 			},
-		);
+			body: new URLSearchParams(params).toString(),
+		});
 		// PubSubHubbub returns 202 Accepted for async verification
 		if (!res.ok && res.status !== 202) {
 			const err = await res.text();
@@ -149,26 +150,25 @@ export async function verifyWhatsAppWebhookSubscription(
 				(s) => s.object === "whatsapp_business_account",
 			);
 			if (existing?.active && existing.callback_url === callbackUrl) {
-				console.log("[webhook-sub] WhatsApp webhook subscription already active");
+				console.log(
+					"[webhook-sub] WhatsApp webhook subscription already active",
+				);
 				return { success: true };
 			}
 		}
 
 		// Create/update subscription
-		const res = await fetch(
-			`${GRAPH_BASE.facebook}/${appId}/subscriptions`,
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/x-www-form-urlencoded" },
-				body: new URLSearchParams({
-					object: "whatsapp_business_account",
-					callback_url: callbackUrl,
-					verify_token: verifyToken,
-					fields: "messages",
-					access_token: appAccessToken,
-				}).toString(),
-			},
-		);
+		const res = await fetch(`${GRAPH_BASE.facebook}/${appId}/subscriptions`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: new URLSearchParams({
+				object: "whatsapp_business_account",
+				callback_url: callbackUrl,
+				verify_token: verifyToken,
+				fields: "messages",
+				access_token: appAccessToken,
+			}).toString(),
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
@@ -276,30 +276,27 @@ export async function verifyInstagramWebhookSubscription(
 					active: boolean;
 				}>;
 			};
-			const existing = checkJson.data?.find(
-				(s) => s.object === "instagram",
-			);
+			const existing = checkJson.data?.find((s) => s.object === "instagram");
 			if (existing?.active && existing.callback_url === callbackUrl) {
-				console.log("[webhook-sub] Instagram webhook subscription already active");
+				console.log(
+					"[webhook-sub] Instagram webhook subscription already active",
+				);
 				return { success: true };
 			}
 		}
 
 		// Create/update subscription
-		const res = await fetch(
-			`${GRAPH_BASE.facebook}/${appId}/subscriptions`,
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/x-www-form-urlencoded" },
-				body: new URLSearchParams({
-					object: "instagram",
-					callback_url: callbackUrl,
-					verify_token: verifyToken,
-					fields: "messages,comments",
-					access_token: appAccessToken,
-				}).toString(),
-			},
-		);
+		const res = await fetch(`${GRAPH_BASE.facebook}/${appId}/subscriptions`, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: new URLSearchParams({
+				object: "instagram",
+				callback_url: callbackUrl,
+				verify_token: verifyToken,
+				fields: "messages,comments",
+				access_token: appAccessToken,
+			}).toString(),
+		});
 
 		if (!res.ok) {
 			const err = await res.text();
@@ -327,21 +324,29 @@ export async function verifyInstagramWebhookSubscription(
  * Renew PubSubHubbub subscriptions for all connected YouTube accounts.
  * Should be called daily since leases are set to 10 days.
  */
-export async function renewYouTubePubSubSubscriptions(
-	env: Env,
-): Promise<void> {
+export async function renewYouTubePubSubSubscriptions(env: Env): Promise<void> {
+	const hubSecret = env.YOUTUBE_HUB_SECRET;
+	if (!hubSecret) {
+		throw new Error(
+			"YouTube webhook subscriptions are disabled: YOUTUBE_HUB_SECRET is not configured",
+		);
+	}
+
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const youtubeAccounts = await db
 		.selectDistinct({
 			platformAccountId: socialAccounts.platformAccountId,
 		})
 		.from(socialAccounts)
-		.where(eq(socialAccounts.platform, "youtube"));
+		.where(
+			and(
+				eq(socialAccounts.platform, "youtube"),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		);
 
 	const apiBaseUrl = env.API_BASE_URL || "https://api.relayapi.dev";
 	const callbackUrl = `${apiBaseUrl}/webhooks/platform/youtube`;
-	const hubSecret = env.YOUTUBE_HUB_SECRET;
-
 	// Dedupe channel IDs (same channel can appear in multiple workspaces) and
 	// process them in bounded-concurrency chunks instead of one serial POST per
 	// row, so a few hundred accounts don't take minutes or blow the Workers

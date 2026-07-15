@@ -1,483 +1,370 @@
-import { mock, describe, it, expect, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
 
-// ---------------------------------------------------------------------------
-// Module mocks — MUST come before importing the code under test
-// ---------------------------------------------------------------------------
+const committedByOrg = new Map<string, number>();
+const reserveCalls: Array<{
+	organizationId: string;
+	units: number;
+	hardLimit: boolean;
+	idempotencyKey: string;
+}> = [];
+const finalizeCalls: Array<{ status: number; units: number }> = [];
+let reservationSequence = 0;
+
 mock.module("@relayapi/db", () => ({
+	apiRequestLogs: {},
 	createDb: () => ({
 		insert: () => ({
-			values: () => ({
-				onConflictDoUpdate: () => ({
-					// biome-ignore lint/suspicious/noThenProperty: intentional thenable to mock an awaitable Drizzle query builder
-					then: (resolve: (v: undefined) => void) => resolve(undefined),
-				}),
-				// biome-ignore lint/suspicious/noThenProperty: intentional thenable to mock an awaitable Drizzle query builder
-				then: (resolve: (v: undefined) => void) => resolve(undefined),
-			}),
+			values: async () => undefined,
 		}),
 	}),
-	usageRecords: {},
-	apiRequestLogs: {},
 }));
 
+mock.module("../services/usage-meter", () => ({
+	reserveMutationUsage: async (
+		_db: unknown,
+		input: {
+			organizationId: string;
+			units: number;
+			includedUnits: number;
+			hardLimit: boolean;
+			idempotencyKey: string;
+			periodStart: Date;
+			periodEnd: Date;
+		},
+	) => {
+		reserveCalls.push(input);
+		const committedUnits = committedByOrg.get(input.organizationId) ?? 0;
+		if (input.hardLimit && committedUnits + input.units > input.includedUnits) {
+			return {
+				ok: false as const,
+				includedUnits: input.includedUnits,
+				committedUnits,
+				reservedUnits: 0,
+			};
+		}
+		reservationSequence += 1;
+		return {
+			ok: true as const,
+			reservation: {
+				id: `ur_${reservationSequence}`,
+				bucketId: "ub_test",
+				organizationId: input.organizationId,
+				units: input.units,
+				state: "reserved" as const,
+				includedUnits: input.includedUnits,
+				committedUnits,
+				reservedUnits: input.units,
+				periodStart: input.periodStart,
+				periodEnd: input.periodEnd,
+			},
+		};
+	},
+	finalizeMutationUsage: async (
+		_db: unknown,
+		reservation: {
+			organizationId: string;
+			units: number;
+			includedUnits: number;
+		},
+		status: number,
+	) => {
+		finalizeCalls.push({ status, units: reservation.units });
+		const before = committedByOrg.get(reservation.organizationId) ?? 0;
+		const committedUnits = before + (status < 400 ? reservation.units : 0);
+		committedByOrg.set(reservation.organizationId, committedUnits);
+		return {
+			includedUnits: reservation.includedUnits,
+			committedUnits,
+			reservedUnits: 0,
+		};
+	},
+}));
+
+let notificationCount = 0;
 mock.module("../services/notification-manager", () => ({
-	sendNotificationToOrg: async () => {},
+	sendNotificationToOrg: async () => {
+		notificationCount += 1;
+	},
 }));
 
+import { createDb } from "@relayapi/db";
 import { Hono } from "hono";
 import {
-	incrementUsage,
 	getUsageCount,
+	incrementUsage,
 	usageTrackingMiddleware,
 } from "../middleware/usage-tracking";
-import { createDb } from "@relayapi/db";
 import type { Env, Variables } from "../types";
-import { MockKV, createMockEnv } from "./__mocks__/env";
+import { createMockEnv, MockKV } from "./__mocks__/env";
 
-// ===========================================================================
-// Helpers
-// ===========================================================================
-
-/** Build the current month key segment (YYYY-MM) matching the production code. */
 function currentMonthKey(): string {
 	const now = new Date();
 	return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-/**
- * Create a minimal Hono app wired with the usage-tracking middleware.
- * A fake "auth" middleware runs first to inject the context variables the
- * real auth middleware would set.
- */
-function createTestApp(opts: {
-	plan?: "free" | "pro";
-	callsIncluded?: number;
-	orgId?: string;
-	keyId?: string;
-}) {
-	const {
-		plan = "free",
-		callsIncluded = 200,
-		orgId = "org_test",
-		keyId = "key_test",
-	} = opts;
-
+function createTestApp(
+	options: {
+		plan?: "free" | "pro";
+		callsIncluded?: number;
+		orgId?: string;
+	} = {},
+) {
+	const { plan = "free", callsIncluded = 200, orgId = "org_test" } = options;
 	const app = new Hono<{ Bindings: Env; Variables: Variables }>();
-
-	// Fake auth middleware — sets the variables the usage middleware reads
 	app.use("*", async (c, next) => {
 		c.set("orgId", orgId);
-		c.set("keyId", keyId);
+		c.set("keyId", "key_test");
 		c.set("plan", plan);
 		c.set("callsIncluded", callsIncluded);
-		// Mirror dbContextMiddleware: usage tracking now reads the shared c.get("db").
+		c.set("periodStart", null);
+		c.set("periodEnd", null);
 		c.set("db", createDb(c.env.HYPERDRIVE.connectionString));
 		await next();
 	});
-
 	app.use("*", usageTrackingMiddleware);
-
-	// Test routes
 	app.get("/v1/posts", (c) => c.json({ ok: true }));
+	app.options("/v1/posts", (c) => c.body(null, 204));
 	app.post("/v1/posts", (c) => c.json({ ok: true }));
-	app.post("/v1/posts/bulk", async (c) => c.json({ ok: true }));
-	app.post("/v1/posts/bulk-csv", async (c) => c.json({ ok: true }));
-	app.post("/v1/contacts/bulk", async (c) => c.json({ ok: true }));
-	app.post("/v1/contacts/bulk-operations", async (c) => c.json({ ok: true }));
-	app.post("/v1/whatsapp/bulk-send", async (c) => c.json({ ok: true }));
-	app.post("/v1/inbox/bulk", async (c) => c.json({ ok: true }));
-
+	app.post("/v1/rejected", (c) => c.json({ error: { code: "INVALID" } }, 422));
+	app.post("/v1/throws", () => {
+		throw new Error("boom");
+	});
+	app.post("/v1/posts/bulk", (c) => c.json({ ok: true }));
+	app.post("/v1/posts/bulk-csv", (c) => c.json({ ok: true }));
+	app.post("/v1/contacts/bulk", (c) => c.json({ ok: true }));
+	app.post("/v1/contacts/bulk-operations", (c) => c.json({ ok: true }));
+	app.post("/v1/whatsapp/bulk-send", (c) => c.json({ ok: true }));
+	app.post("/v1/inbox/bulk", (c) => c.json({ ok: true }));
+	app.onError((error, c) =>
+		c.json({ error: { code: "INTERNAL_ERROR", message: error.message } }, 500),
+	);
 	return app;
 }
 
-/**
- * Create a mock execution context that captures waitUntil promises so we
- * can await them in tests.
- */
-function createExecutionCtx() {
+function createExecutionContext() {
 	const promises: Promise<unknown>[] = [];
-	const ctx = {
-		waitUntil: (p: Promise<unknown>) => {
-			promises.push(p);
-		},
-		passThroughOnException: () => {},
-		props: undefined,
-	} as unknown as ExecutionContext;
-	return { ctx, promises };
+	return {
+		promises,
+		context: {
+			waitUntil: (promise: Promise<unknown>) => promises.push(promise),
+			passThroughOnException: () => undefined,
+			props: undefined,
+		} as unknown as ExecutionContext,
+	};
 }
 
-/**
- * Fire a request against the test app and drain all async side-effects.
- */
 async function executeRequest(
 	app: Hono<{ Bindings: Env; Variables: Variables }>,
 	request: Request,
 	env: Env,
 ) {
-	const { ctx, promises } = createExecutionCtx();
-	const res = await app.fetch(request, env, ctx);
-	// Drain all fire-and-forget promises so assertions on KV writes etc. work.
-	await Promise.allSettled(promises);
-	return { res, promises };
+	const execution = createExecutionContext();
+	const response = await app.fetch(request, env, execution.context);
+	await Promise.all(execution.promises);
+	return response;
 }
 
-// ===========================================================================
-// incrementUsage
-// ===========================================================================
-
-describe("incrementUsage", () => {
+describe("usage KV projection helpers", () => {
 	let kv: MockKV;
 
 	beforeEach(() => {
 		kv = new MockKV();
 	});
 
-	it("increments from zero and returns 1", async () => {
-		const result = await incrementUsage(kv as unknown as KVNamespace, "org_1");
-		expect(result).toBe(1);
-	});
-
-	it("increments from an existing count", async () => {
-		const month = currentMonthKey();
-		await kv.put(`usage:org_1:${month}`, "42");
-
-		const result = await incrementUsage(kv as unknown as KVNamespace, "org_1");
-		expect(result).toBe(43);
-	});
-
-	it("increments by a custom amount", async () => {
-		const month = currentMonthKey();
-		await kv.put(`usage:org_1:${month}`, "10");
-
-		const result = await incrementUsage(
-			kv as unknown as KVNamespace,
-			"org_1",
-			5,
+	it("projects a count without claiming KV is authoritative", async () => {
+		await kv.put(`usage:org_1:${currentMonthKey()}`, "9");
+		expect(await incrementUsage(kv as unknown as KVNamespace, "org_1", 3)).toBe(
+			12,
 		);
-		expect(result).toBe(15);
+		expect(await getUsageCount(kv as unknown as KVNamespace, "org_1")).toBe(12);
 	});
 
-	it("uses the correct KV key format usage:{orgId}:{YYYY-MM}", async () => {
-		await incrementUsage(kv as unknown as KVNamespace, "org_abc");
-
-		const month = currentMonthKey();
-		const expectedKey = `usage:org_abc:${month}`;
-		const stored = await kv.get(expectedKey, "text");
-		expect(stored).toBe("1");
+	it("returns zero when no projection exists", async () => {
+		expect(await getUsageCount(kv as unknown as KVNamespace, "org_new")).toBe(
+			0,
+		);
 	});
 });
-
-// ===========================================================================
-// getUsageCount
-// ===========================================================================
-
-describe("getUsageCount", () => {
-	let kv: MockKV;
-
-	beforeEach(() => {
-		kv = new MockKV();
-	});
-
-	it("returns 0 when no usage has been recorded", async () => {
-		const count = await getUsageCount(kv as unknown as KVNamespace, "org_new");
-		expect(count).toBe(0);
-	});
-
-	it("returns the current count from KV", async () => {
-		const month = currentMonthKey();
-		await kv.put(`usage:org_1:${month}`, "99");
-
-		const count = await getUsageCount(kv as unknown as KVNamespace, "org_1");
-		expect(count).toBe(99);
-	});
-});
-
-// ===========================================================================
-// usageTrackingMiddleware
-// ===========================================================================
 
 describe("usageTrackingMiddleware", () => {
 	let env: Env;
 	let kv: MockKV;
 
 	beforeEach(() => {
-		const mock = createMockEnv();
-		env = mock.env;
-		kv = mock.kv;
+		const mockEnv = createMockEnv();
+		env = mockEnv.env;
+		kv = mockEnv.kv;
 		kv._clear();
+		committedByOrg.clear();
+		reserveCalls.length = 0;
+		finalizeCalls.length = 0;
+		reservationSequence = 0;
+		notificationCount = 0;
 	});
 
-	// -----------------------------------------------------------------------
-	// Free plan — under / at / over limit
-	// -----------------------------------------------------------------------
-
-	it("allows free plan requests under the limit", async () => {
-		const month = currentMonthKey();
-		await kv.put(`usage:org_test:${month}`, "50");
-
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/posts", { method: "POST" });
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
+	it("commits one unit only after a successful mutation", async () => {
+		const response = await executeRequest(
+			createTestApp(),
+			new Request("http://localhost/v1/posts", { method: "POST" }),
+			env,
+		);
+		expect(response.status).toBe(200);
+		expect(committedByOrg.get("org_test")).toBe(1);
+		expect(finalizeCalls).toEqual([{ status: 200, units: 1 }]);
+		expect(response.headers.get("X-Usage-Count")).toBe("1");
+		expect(await getUsageCount(env.KV, "org_test")).toBe(1);
 	});
 
-	it("blocks free plan at the limit (countBefore >= callsIncluded)", async () => {
-		const month = currentMonthKey();
-		// Usage is already at the limit before this request
-		await kv.put(`usage:org_test:${month}`, "200");
+	it("releases a reservation for a handled 4xx response", async () => {
+		const response = await executeRequest(
+			createTestApp(),
+			new Request("http://localhost/v1/rejected", { method: "POST" }),
+			env,
+		);
+		expect(response.status).toBe(422);
+		expect(committedByOrg.get("org_test")).toBe(0);
+		expect(finalizeCalls).toEqual([{ status: 422, units: 1 }]);
+	});
 
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/posts", { method: "POST" });
-		const { res } = await executeRequest(app, req, env);
+	it("releases a reservation when the handler throws", async () => {
+		const response = await executeRequest(
+			createTestApp(),
+			new Request("http://localhost/v1/throws", { method: "POST" }),
+			env,
+		);
+		expect(response.status).toBe(500);
+		expect(committedByOrg.get("org_test")).toBe(0);
+		expect(finalizeCalls).toEqual([{ status: 500, units: 1 }]);
+	});
 
-		expect(res.status).toBe(403);
-		const body = (await res.json()) as { error: { code: string } };
+	it("keeps GET and OPTIONS requests free", async () => {
+		const app = createTestApp();
+		const getResponse = await executeRequest(
+			app,
+			new Request("http://localhost/v1/posts"),
+			env,
+		);
+		const optionsResponse = await executeRequest(
+			app,
+			new Request("http://localhost/v1/posts", { method: "OPTIONS" }),
+			env,
+		);
+		expect(getResponse.status).toBe(200);
+		expect(optionsResponse.status).toBe(204);
+		expect(reserveCalls).toHaveLength(0);
+		expect(committedByOrg.has("org_test")).toBe(false);
+	});
+
+	it("enforces a free-plan limit from PostgreSQL state, not KV", async () => {
+		await kv.put(`usage:org_test:${currentMonthKey()}`, "0");
+		committedByOrg.set("org_test", 2);
+		const response = await executeRequest(
+			createTestApp({ callsIncluded: 2 }),
+			new Request("http://localhost/v1/posts", { method: "POST" }),
+			env,
+		);
+		expect(response.status).toBe(403);
+		const body = (await response.json()) as { error: { code: string } };
 		expect(body.error.code).toBe("FREE_LIMIT_REACHED");
+		expect(finalizeCalls).toHaveLength(0);
 	});
 
-	it("blocks free plan over the limit", async () => {
-		const month = currentMonthKey();
-		await kv.put(`usage:org_test:${month}`, "250");
-
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/posts", { method: "POST" });
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(403);
-		const body = (await res.json()) as { error: { code: string } };
-		expect(body.error.code).toBe("FREE_LIMIT_REACHED");
+	it("ignores a stale high KV hint when PostgreSQL allows the mutation", async () => {
+		await kv.put(`usage:org_test:${currentMonthKey()}`, "9999");
+		const response = await executeRequest(
+			createTestApp({ callsIncluded: 2 }),
+			new Request("http://localhost/v1/posts", { method: "POST" }),
+			env,
+		);
+		expect(response.status).toBe(200);
+		expect(committedByOrg.get("org_test")).toBe(1);
 	});
 
-	// -----------------------------------------------------------------------
-	// Pro plan — no hard limit
-	// -----------------------------------------------------------------------
-
-	it("allows pro plan requests over the included amount", async () => {
-		const month = currentMonthKey();
-		await kv.put(`usage:org_test:${month}`, "15000");
-
-		const app = createTestApp({
-			plan: "pro",
-			callsIncluded: 10_000,
-		});
-		const req = new Request("http://localhost/v1/posts", { method: "POST" });
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
+	it("does not hard-stop a pro plan above its included units", async () => {
+		committedByOrg.set("org_test", 10);
+		const response = await executeRequest(
+			createTestApp({ plan: "pro", callsIncluded: 10 }),
+			new Request("http://localhost/v1/posts", { method: "POST" }),
+			env,
+		);
+		expect(response.status).toBe(200);
+		expect(reserveCalls[0]?.hardLimit).toBe(false);
+		expect(committedByOrg.get("org_test")).toBe(11);
 	});
 
-	// -----------------------------------------------------------------------
-	// Bulk endpoint — counts items individually
-	// -----------------------------------------------------------------------
-
-	it("counts bulk items individually", async () => {
-		const month = currentMonthKey();
-		// Start from 0 so the new count = 3
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/posts/bulk", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ posts: [{}, {}, {}] }),
-		});
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-
-		// KV should show count = 3 (one per item, not one per request)
-		const stored = await kv.get(`usage:org_test:${month}`, "text");
-		expect(stored).toBe("3");
-	});
-
-	it("counts contact bulk-create items individually", async () => {
-		const month = currentMonthKey();
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/contacts/bulk", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ contacts: [{}, {}] }),
-		});
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-		const stored = await kv.get(`usage:org_test:${month}`, "text");
-		expect(stored).toBe("2");
-	});
-
-	it("counts contact bulk-operation targets individually", async () => {
-		const month = currentMonthKey();
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/contacts/bulk-operations", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ action: "delete", contact_ids: ["c1", "c2", "c3"] }),
-		});
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-		const stored = await kv.get(`usage:org_test:${month}`, "text");
-		expect(stored).toBe("3");
-	});
-
-	it("counts WhatsApp bulk recipients individually", async () => {
-		const month = currentMonthKey();
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/whatsapp/bulk-send", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				account_id: "acc_1",
-				recipients: [{ phone: "+15550001" }, { phone: "+15550002" }, { phone: "+15550003" }],
-				template: { name: "promo", language: "en" },
+	it.each([
+		["/v1/posts/bulk", { posts: [{}, {}, {}] }, 3],
+		["/v1/contacts/bulk", { contacts: [{}, {}] }, 2],
+		[
+			"/v1/contacts/bulk-operations",
+			{ contact_ids: ["c1", "c2", "c3", "c4"] },
+			4,
+		],
+		["/v1/whatsapp/bulk-send", { recipients: [{}, {}, {}] }, 3],
+		["/v1/inbox/bulk", { targets: ["a", "b"] }, 2],
+	] as const)("reserves one unit per item for %s", async (path, body, units) => {
+		const response = await executeRequest(
+			createTestApp(),
+			new Request(`http://localhost${path}`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
 			}),
-		});
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-		const stored = await kv.get(`usage:org_test:${month}`, "text");
-		expect(stored).toBe("3");
+			env,
+		);
+		expect(response.status).toBe(200);
+		expect(reserveCalls[0]?.units).toBe(units);
+		expect(committedByOrg.get("org_test")).toBe(units);
 	});
 
-	it("counts inbox bulk targets individually", async () => {
-		const month = currentMonthKey();
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/inbox/bulk", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				action: "archive",
-				targets: ["conv_1", "conv_2", "conv_3", "conv_4"],
-			}),
-		});
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-		const stored = await kv.get(`usage:org_test:${month}`, "text");
-		expect(stored).toBe("4");
-	});
-
-	it("counts bulk CSV rows individually without relying on parsedBody", async () => {
-		const month = currentMonthKey();
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
+	it("counts CSV data rows, excluding the header", async () => {
 		const formData = new FormData();
 		formData.set(
 			"file",
-			new File(
-				[
-					"content,targets,scheduled_at\n",
-					"Post 1,twitter,now\n",
-					"Post 2,linkedin,now\n",
-					"Post 3,facebook,now\n",
-				],
-				"posts.csv",
-				{ type: "text/csv" },
-			),
+			new File(["content,targets\nOne,twitter\nTwo,linkedin\n"], "posts.csv", {
+				type: "text/csv",
+			}),
 		);
-		const req = new Request("http://localhost/v1/posts/bulk-csv", {
-			method: "POST",
-			body: formData,
-		});
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-		const stored = await kv.get(`usage:org_test:${month}`, "text");
-		expect(stored).toBe("3");
+		const response = await executeRequest(
+			createTestApp(),
+			new Request("http://localhost/v1/posts/bulk-csv", {
+				method: "POST",
+				body: formData,
+			}),
+			env,
+		);
+		expect(response.status).toBe(200);
+		expect(reserveCalls[0]?.units).toBe(2);
 	});
 
-	// -----------------------------------------------------------------------
-	// GET requests — no billing increment
-	// -----------------------------------------------------------------------
-
-	it("skips billing for GET requests", async () => {
-		const month = currentMonthKey();
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/posts", { method: "GET" });
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-
-		// Usage counter should not exist (no KV write for GET)
-		const stored = await kv.get(`usage:org_test:${month}`, "text");
-		expect(stored).toBeNull();
+	it("uses a fresh execution key for every mutation", async () => {
+		const app = createTestApp();
+		for (let index = 0; index < 2; index += 1) {
+			await executeRequest(
+				app,
+				new Request("http://localhost/v1/posts", {
+					method: "POST",
+					headers: { "Idempotency-Key": "same-caller-key" },
+				}),
+				env,
+			);
+		}
+		expect(reserveCalls[0]?.idempotencyKey).not.toBe(
+			reserveCalls[1]?.idempotencyKey,
+		);
 	});
 
-	// -----------------------------------------------------------------------
-	// Response headers
-	// -----------------------------------------------------------------------
-
-	it("sets X-Usage-Count and X-Usage-Limit headers on success", async () => {
-		const month = currentMonthKey();
-		await kv.put(`usage:org_test:${month}`, "50");
-
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/posts", { method: "POST" });
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-		expect(res.headers.get("X-Usage-Count")).toBe("51");
-		expect(res.headers.get("X-Usage-Limit")).toBe("200");
-	});
-
-	// -----------------------------------------------------------------------
-	// Usage warnings
-	// -----------------------------------------------------------------------
-
-	it("sends 80% usage warning when threshold is crossed", async () => {
-		const month = currentMonthKey();
-		// 159 calls used; next call brings it to 160 = 80% of 200
-		await kv.put(`usage:org_test:${month}`, "159");
-
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/posts", { method: "POST" });
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-
-		// The warning dedup key should have been set in KV
-		const warningKey = `usage_warning:org_test:80:${month}`;
-		const warningFlag = await kv.get(warningKey, "text");
-		expect(warningFlag).toBe("1");
-	});
-
-	it("sends 100% usage warning when threshold is crossed", async () => {
-		const month = currentMonthKey();
-		// 199 calls used; next call brings it to 200 = 100% of 200
-		await kv.put(`usage:org_test:${month}`, "199");
-
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/posts", { method: "POST" });
-		const { res } = await executeRequest(app, req, env);
-
-		// countBefore = 199, which is < 200 (callsIncluded), so the request
-		// should still go through (the limit check is countBefore >= callsIncluded)
-		expect(res.status).toBe(200);
-
-		// The 100% warning dedup key should have been written
-		const warningKey = `usage_warning:org_test:100:${month}`;
-		const warningFlag = await kv.get(warningKey, "text");
-		expect(warningFlag).toBe("1");
-	});
-
-	it("deduplicates warnings when the flag already exists in KV", async () => {
-		const month = currentMonthKey();
-		// Pre-seed the 80% warning flag so it looks like it was already sent
-		const warningKey = `usage_warning:org_test:80:${month}`;
-		await kv.put(warningKey, "1");
-
-		// Set usage to 159 so the next call crosses 80% again
-		await kv.put(`usage:org_test:${month}`, "159");
-
-		const app = createTestApp({ plan: "free", callsIncluded: 200 });
-		const req = new Request("http://localhost/v1/posts", { method: "POST" });
-		const { res } = await executeRequest(app, req, env);
-
-		expect(res.status).toBe(200);
-
-		// The warning flag should still be "1" (not re-written or doubled).
-		// Since sendNotificationToOrg is mocked, the key test is that the
-		// existing flag prevents the notification path from writing again.
-		// The flag value remains "1" as it was — no duplicate notification sent.
-		const warningFlag = await kv.get(warningKey, "text");
-		expect(warningFlag).toBe("1");
+	it("emits a warning only when a committed threshold is crossed", async () => {
+		committedByOrg.set("org_test", 159);
+		const response = await executeRequest(
+			createTestApp({ callsIncluded: 200 }),
+			new Request("http://localhost/v1/posts", { method: "POST" }),
+			env,
+		);
+		expect(response.status).toBe(200);
+		expect(notificationCount).toBe(1);
+		expect(
+			await kv.get(`usage_warning:org_test:80:${currentMonthKey()}`, "text"),
+		).toBe("1");
 	});
 });

@@ -3,6 +3,7 @@
 export {
   Profiles,
   type ProfileListResponse,
+  type ProfileListParams,
   type ProfileSelectResponse,
   type ProfileSelectParams,
 } from './profiles';

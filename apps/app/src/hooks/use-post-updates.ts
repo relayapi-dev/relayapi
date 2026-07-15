@@ -29,12 +29,19 @@ let connecting = false;
 
 function broadcast(event: RealtimeEvent) {
   for (const listener of listeners) {
-    try { listener(event); } catch { /* ignore */ }
+		try {
+			listener(event);
+		} catch {
+			/* ignore */
+		}
   }
 }
 
 function cleanupWs() {
-  if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+	if (pingInterval) {
+		clearInterval(pingInterval);
+		pingInterval = null;
+	}
   if (ws) {
     ws.onopen = null;
     ws.onmessage = null;
@@ -51,10 +58,10 @@ function scheduleReconnect() {
   reconnectTimeout = setTimeout(() => ensureConnection(), delay);
 }
 
-function connectWs(url: string, ticket: string) {
+function connectWs(url: string, protocol: string) {
   if (listeners.size === 0) return;
 
-  ws = new WebSocket(`${url}?ticket=${encodeURIComponent(ticket)}`);
+	ws = new WebSocket(url, ["relayapi.v1", protocol]);
 
   ws.onopen = () => {
     attempt = 0;
@@ -71,7 +78,9 @@ function connectWs(url: string, ticket: string) {
       if (data.type && data.type !== "pong") {
         broadcast(data);
       }
-    } catch { /* ignore */ }
+		} catch {
+			/* ignore */
+		}
   };
 
   ws.onclose = () => {
@@ -79,7 +88,9 @@ function connectWs(url: string, ticket: string) {
     scheduleReconnect();
   };
 
-  ws.onerror = () => { /* onclose fires after onerror */ };
+	ws.onerror = () => {
+		/* onclose fires after onerror */
+	};
 }
 
 async function ensureConnection() {
@@ -93,8 +104,8 @@ async function ensureConnection() {
       scheduleReconnect();
       return;
     }
-    const info = (await res.json()) as { url: string; ticket: string };
-    if (listeners.size > 0) connectWs(info.url, info.ticket);
+		const info = (await res.json()) as { url: string; protocol: string };
+		if (listeners.size > 0) connectWs(info.url, info.protocol);
   } catch {
     // Network error — retry after backoff
     scheduleReconnect();
@@ -112,11 +123,17 @@ function unsubscribe(listener: Listener) {
   listeners.delete(listener);
   if (listeners.size === 0) {
     // No more subscribers — tear down the connection
-    if (reconnectTimeout) { clearTimeout(reconnectTimeout); reconnectTimeout = null; }
+		if (reconnectTimeout) {
+			clearTimeout(reconnectTimeout);
+			reconnectTimeout = null;
+		}
     // Null handlers BEFORE close to prevent onclose from triggering reconnect
     const socket = ws;
     cleanupWs();
-    if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
+		if (
+			socket?.readyState === WebSocket.OPEN ||
+			socket?.readyState === WebSocket.CONNECTING
+		) {
       socket.close();
     }
     attempt = 0;
@@ -149,7 +166,11 @@ export function useRealtimeUpdates(
     };
 
     const deferMs =
-      typeof options?.defer === "number" ? options.defer : options?.defer ? 2500 : 0;
+			typeof options?.defer === "number"
+				? options.defer
+				: options?.defer
+					? 2500
+					: 0;
 
     let cancelDeferredSubscribe: () => void;
     if (deferMs > 0) {

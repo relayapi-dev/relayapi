@@ -34,7 +34,7 @@ export interface CrossPostActionResponse {
   target_account_id: string;
   content: string | null;
   delay_minutes: number;
-  status: 'pending' | 'executed' | 'failed' | 'cancelled';
+  status: 'pending' | 'processing' | 'executing' | 'retry' | 'executed' | 'failed' | 'unknown' | 'cancelled';
   execute_at: string;
   executed_at: string | null;
   result_post_id: string | null;

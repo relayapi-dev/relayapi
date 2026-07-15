@@ -5,13 +5,34 @@ import { TagResponse } from "./tags";
 // ── Idea Media ───────────────────────────────────────────────────────────────
 
 export const IdeaMediaResponse = z.object({
-	id: z.string().describe("Media ID"),
-	url: z.string().describe("Media URL"),
-	type: z
-		.enum(["image", "video", "gif", "document"])
-		.describe("Media type"),
+	id: z.string().describe("Idea attachment ID"),
+	media_id: z.string().describe("Durable media-library row ID"),
+	url: z
+		.string()
+		.url()
+		.nullable()
+		.describe("Presigned original URL, or durable thumbnail fallback"),
+	thumbnail: z
+		.string()
+		.url()
+		.nullable()
+		.describe("Durable preview URL when available"),
+	type: z.enum(["image", "video", "gif", "document"]).describe("Media type"),
 	alt: z.string().nullable().describe("Alt text"),
 	position: z.number().int().describe("Ordering position"),
+	status: z
+		.enum([
+			"pending",
+			"uploading",
+			"upload_failed",
+			"ready",
+			"deleting",
+			"deletion_failed",
+		])
+		.describe("Durable object lifecycle state"),
+	original_available: z
+		.boolean()
+		.describe("Whether the full-resolution original is retained and ready"),
 });
 
 // ── Idea Response ────────────────────────────────────────────────────────────
@@ -27,6 +48,11 @@ export const IdeaResponse = z.object({
 		.string()
 		.nullable()
 		.describe("Post ID if converted (most recent)"),
+	revision: z
+		.number()
+		.int()
+		.nonnegative()
+		.describe("Optimistic concurrency revision"),
 	tags: z.array(TagResponse).describe("Associated tags"),
 	media: z.array(IdeaMediaResponse).describe("Attached media"),
 	workspace_id: z.string().nullable().describe("Workspace ID"),
@@ -36,18 +62,6 @@ export const IdeaResponse = z.object({
 
 // ── Create / Update ──────────────────────────────────────────────────────────
 
-const CreateIdeaMediaItem = z.object({
-	url: z
-		.string()
-		.url()
-		.describe("Public URL of the uploaded media file (from POST /v1/media/upload)"),
-	type: z
-		.enum(["image", "video", "gif", "document"])
-		.optional()
-		.describe("Media type. Inferred from the URL extension if omitted."),
-	alt: z.string().max(500).optional().describe("Alt text"),
-});
-
 export const CreateIdeaBody = z
 	.object({
 		title: z.string().max(500).optional().describe("Short title"),
@@ -55,7 +69,9 @@ export const CreateIdeaBody = z
 		group_id: z
 			.string()
 			.optional()
-			.describe("Idea group ID. If omitted, placed in default 'Unassigned' group."),
+			.describe(
+				"Idea group ID. If omitted, placed in default 'Unassigned' group.",
+			),
 		tag_ids: z
 			.array(z.string())
 			.max(20)
@@ -69,26 +85,31 @@ export const CreateIdeaBody = z
 			.string()
 			.optional()
 			.describe("Workspace ID to scope this idea to"),
-		media: z
-			.array(CreateIdeaMediaItem)
-			.max(20)
-			.optional()
-			.describe(
-				"Attach media by URL on create. Upload files to POST /v1/media/upload first, then pass the returned URLs here.",
-			),
 	})
-	.describe("Create an idea");
+	.describe(
+		"Create an Idea. Upload owned attachments through POST /v1/ideas/{id}/media after creation.",
+	);
 
 export const UpdateIdeaBody = z
 	.object({
 		title: z.string().max(500).nullable().optional().describe("Short title"),
-		content: z.string().max(10000).nullable().optional().describe("Content/copy"),
+		content: z
+			.string()
+			.max(10000)
+			.nullable()
+			.optional()
+			.describe("Content/copy"),
 		assigned_to: z.string().nullable().optional().describe("User ID to assign"),
 		tag_ids: z
 			.array(z.string())
 			.max(20)
 			.optional()
 			.describe("Replace all tag associations"),
+		expected_revision: z
+			.number()
+			.int()
+			.nonnegative()
+			.describe("Revision returned by the last read"),
 	})
 	.describe("Update an idea");
 
@@ -102,12 +123,22 @@ export const MoveIdeaBody = z
 			.describe("Target group ID. Omit to reorder within current group."),
 		position: z
 			.number()
+			.int()
+			.nonnegative()
 			.optional()
-			.describe("Target position (float). Omit to place at end."),
+			.describe("Target 0-based position. Omit to place at end."),
 		after_idea_id: z
 			.string()
+			.nullable()
 			.optional()
-			.describe("Place after this idea. Takes precedence over position."),
+			.describe(
+				"Place after this Idea; null means first. Takes precedence over position.",
+			),
+		expected_revision: z
+			.number()
+			.int()
+			.nonnegative()
+			.describe("Revision returned by the last read"),
 	})
 	.describe("Move an idea to a different group or position");
 
@@ -115,28 +146,25 @@ export const MoveIdeaBody = z
 
 export const ConvertIdeaBody = z
 	.object({
-		targets: z
-			.array(
-				z.object({
-					account_id: z.string().describe("Social account ID"),
-				}),
-			)
-			.min(1)
-			.describe("Target social accounts"),
-		scheduled_at: z
+		idempotency_key: z
 			.string()
-			.optional()
-			.describe('When to publish: ISO 8601 timestamp, "now", "draft", or "auto"'),
-		timezone: z
-			.string()
-			.optional()
-			.describe("IANA timezone for scheduling"),
+			.min(8)
+			.max(200)
+			.describe("Stable key reused for retries of this conversion"),
+		expected_revision: z
+			.number()
+			.int()
+			.nonnegative()
+			.describe("Revision returned by the last read"),
+		timezone: z.string().optional().describe("IANA timezone for scheduling"),
 		content: z
 			.string()
 			.optional()
 			.describe("Override the idea content for the post"),
 	})
-	.describe("Convert an idea to a post. Content and media are pre-filled from the idea.");
+	.describe(
+		"Create exactly one draft from an Idea. Ready originals are copied; scheduling and targets are configured through the Posts API.",
+	);
 
 // ── List Query ───────────────────────────────────────────────────────────────
 
@@ -164,8 +192,16 @@ export const IdeaActivityResponse = z.object({
 	actor_id: z.string().describe("User who performed the action"),
 	action: z
 		.enum([
-			"created", "moved", "assigned", "commented", "converted",
-			"updated", "media_added", "media_removed", "tagged", "untagged",
+			"created",
+			"moved",
+			"assigned",
+			"commented",
+			"converted",
+			"updated",
+			"media_added",
+			"media_removed",
+			"tagged",
+			"untagged",
 		])
 		.describe("Action type"),
 	metadata: z
@@ -177,7 +213,13 @@ export const IdeaActivityResponse = z.object({
 
 export const IdeaActivityListQuery = z.object({
 	cursor: z.string().optional().describe("Pagination cursor"),
-	limit: z.coerce.number().int().min(1).max(100).default(20).describe("Items per page"),
+	limit: z.coerce
+		.number()
+		.int()
+		.min(1)
+		.max(100)
+		.default(20)
+		.describe("Items per page"),
 });
 
 export const IdeaActivityListResponse = paginatedResponse(IdeaActivityResponse);
@@ -222,7 +264,13 @@ export const UpdateIdeaCommentBody = z
 
 export const IdeaCommentListQuery = z.object({
 	cursor: z.string().optional().describe("Pagination cursor"),
-	limit: z.coerce.number().int().min(1).max(100).default(20).describe("Items per page"),
+	limit: z.coerce
+		.number()
+		.int()
+		.min(1)
+		.max(100)
+		.default(20)
+		.describe("Items per page"),
 });
 
 export const IdeaCommentListResponse = paginatedResponse(IdeaCommentResponse);

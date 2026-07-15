@@ -1,76 +1,15 @@
+import { notifications } from "@relayapi/db";
+import type Relay from "@relayapi/sdk";
 import type { APIRoute } from "astro";
-import { apikey, notifications, eq } from "@relayapi/db";
-import { and, count } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 import { API_BASE_URL } from "@/lib/api-base-url";
-import { clearClientCache, getRelayClient } from "@/lib/relay";
+import {
+	dashboardCredentialErrorResponse,
+	ensureDashboardCredential,
+} from "@/lib/dashboard-credential";
+import { getRelayClient } from "@/lib/relay";
 
-async function hashKey(key: string): Promise<string> {
-	const encoded = new TextEncoder().encode(key);
-	const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-	return Array.from(new Uint8Array(hashBuffer))
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-}
-
-export const GET: APIRoute = async (ctx) => {
-	const user = ctx.locals.user;
-	const org = ctx.locals.organization as { id?: string } | null;
-	const kv = ctx.locals.kv;
-
-	if (!user || !org?.id || !kv) {
-		return Response.json(
-			{ error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
-			{ status: 401 },
-		);
-	}
-
-	const orgId = org.id;
-	const rawKeyPromise = kv.get(`dashboard-key:${orgId}`);
-	const clientPromise = getRelayClient(ctx.locals, API_BASE_URL);
-
-	const notifCountPromise = (async () => {
-		try {
-			const userId = (user as { id: string }).id;
-			const [result] = await ctx.locals.db
-				.select({ count: count() })
-				.from(notifications)
-				.where(
-					and(
-						eq(notifications.userId, userId),
-						eq(notifications.read, false),
-					),
-				);
-			return result?.count ?? 0;
-		} catch {
-			return 0;
-		}
-	})();
-
-	const keyStatusPromise = (async () => {
-		const rawKey = await rawKeyPromise;
-		if (!rawKey) return { has_api_key: false };
-
-		// Validate against the DB apikey row, NOT the apikey:* KV auth cache: that
-		// cache has a short TTL and the API re-hydrates it from the DB on use, so
-		// its absence is not revocation. Treating a lapsed cache as revocation
-		// would spuriously delete a valid dashboard key and flash the bootstrap
-		// banner on routine cache expiry.
-		const hashedKey = await hashKey(rawKey);
-		const [row] = await ctx.locals.db
-			.select({ enabled: apikey.enabled })
-			.from(apikey)
-			.where(eq(apikey.key, hashedKey))
-			.limit(1);
-		if (!row?.enabled) {
-			await kv.delete(`dashboard-key:${orgId}`);
-			clearClientCache(orgId);
-			return { has_api_key: false };
-		}
-		return { has_api_key: true };
-	})();
-
-	const apiCallsPromise = (async () => {
-		const client = await clientPromise;
+async function loadDashboardApiCalls(client: Relay | null) {
 		if (!client) return { usage: null, streak: null };
 
 		const [usageResult, streakResult] = await Promise.allSettled([
@@ -93,7 +32,11 @@ export const GET: APIRoute = async (ctx) => {
 		} else {
 			const e = usageResult.reason as {
 				headers?: Headers;
-				error?: { error?: { code?: string; message?: string }; code?: string; message?: string };
+			error?: {
+				error?: { code?: string; message?: string };
+				code?: string;
+				message?: string;
+			};
 				message?: string;
 			};
 			const usageCount = e?.headers?.get("x-usage-count");
@@ -110,7 +53,10 @@ export const GET: APIRoute = async (ctx) => {
 					const msg = body?.error?.message || body?.message || e?.message || "";
 					const match = msg.match(/\((\d+)/);
 					const limit = match ? Number(match[1]) : 200;
-					usage = { plan: "free", api_calls: { used: limit, included: limit } };
+				usage = {
+					plan: "free",
+					api_calls: { used: limit, included: limit },
+				};
 				}
 			}
 		}
@@ -118,17 +64,68 @@ export const GET: APIRoute = async (ctx) => {
 		const streak =
 			streakResult.status === "fulfilled" ? streakResult.value : null;
 		return { usage, streak };
+}
+
+export const GET: APIRoute = async (ctx) => {
+	const user = ctx.locals.user;
+	const org = ctx.locals.organization as { id?: string } | null;
+	const membershipRole = ctx.locals.organizationMembershipRole;
+
+	if (!user || !org?.id) {
+		return Response.json(
+			{ error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+			{ status: 401 },
+		);
+	}
+	if (!membershipRole) {
+		return Response.json(
+			{
+				error: {
+					code: "ORGANIZATION_MEMBERSHIP_REQUIRED",
+					message: "Active organization membership is required.",
+				},
+			},
+			{ status: 403 },
+		);
+	}
+
+	const userId = (user as { id: string }).id;
+	const credentialPromise = ensureDashboardCredential(ctx.locals);
+	const clientPromise = getRelayClient(ctx.locals, API_BASE_URL);
+	const apiCallsPromise = clientPromise.then(loadDashboardApiCalls);
+	const notifCountPromise = (async () => {
+		try {
+			const [result] = await ctx.locals.db
+				.select({ count: count() })
+				.from(notifications)
+				.where(
+					and(eq(notifications.userId, userId), eq(notifications.read, false)),
+				);
+			return result?.count ?? 0;
+		} catch {
+			return 0;
+		}
 	})();
 
-	const [keyStatus, apiCalls, notifCount] = await Promise.all([
-		keyStatusPromise,
+	const [credential, initialApiCalls, notifCount] = await Promise.all([
+		credentialPromise,
 		apiCallsPromise,
 		notifCountPromise,
 	]);
+	if (!credential.ok) return dashboardCredentialErrorResponse(credential);
+
+	// The common valid-key path keeps credential validation, SDK calls, and the
+	// notification query concurrent. Rotation is rare; only that path repeats
+	// the two read-only SDK calls with the newly minted key.
+	const apiCalls = credential.created
+		? await loadDashboardApiCalls(
+				await getRelayClient(ctx.locals, API_BASE_URL),
+			)
+		: initialApiCalls;
 
 	return Response.json(
 		{
-			has_api_key: keyStatus.has_api_key,
+			has_api_key: true,
 			usage: apiCalls.usage,
 			streak: apiCalls.streak,
 			notif_count: notifCount,

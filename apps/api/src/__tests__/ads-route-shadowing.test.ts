@@ -52,10 +52,14 @@ describe("ads route registration order (no /{id} shadowing)", () => {
 	it("routes GET /v1/ads/audiences to listAudiences, not getAd", async () => {
 		const app = await makeApp();
 		const res = await app.request("/v1/ads/audiences?ad_account_id=acc_test");
-		// listAudiences → 200 empty list. If shadowed by getAd → 404 "Ad not found".
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as Record<string, unknown>;
-		expect(Array.isArray(body.data)).toBe(true);
+		// The audience handler now authorizes its explicit ad-account parent first,
+		// so the empty DB returns its distinct "Ad account not found" 404. If the
+		// catch-all shadows it, getAd returns "Ad not found" instead.
+		expect(res.status).toBe(404);
+		const body = (await res.json()) as {
+			error?: { code?: string; message?: string };
+		};
+		expect(body.error?.message).toBe("Ad account not found");
 	});
 
 	it("routes GET /v1/ads/interests to searchInterests, not getAd", async () => {

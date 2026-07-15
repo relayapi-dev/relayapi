@@ -2,7 +2,7 @@
 
 import { APIResource } from '../../../core/resource';
 import * as ProfilesAPI from './profiles';
-import { ProfileListResponse, ProfileSelectParams, ProfileSelectResponse, Profiles } from './profiles';
+import { ProfileListParams, ProfileListResponse, ProfileSelectParams, ProfileSelectResponse, Profiles } from './profiles';
 
 export class Snapchat extends APIResource {
   profiles: ProfilesAPI.Profiles = new ProfilesAPI.Profiles(this._client);
@@ -14,6 +14,7 @@ export declare namespace Snapchat {
   export {
     Profiles as Profiles,
     type ProfileListResponse as ProfileListResponse,
+    type ProfileListParams as ProfileListParams,
     type ProfileSelectResponse as ProfileSelectResponse,
     type ProfileSelectParams as ProfileSelectParams,
   };

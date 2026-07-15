@@ -275,21 +275,26 @@ Set `auto_create_contact: true` to create a new contact when the lookup misses. 
 
 Public endpoint: `POST /v1/webhooks/automation-trigger/{webhook_slug}`
 
-**Signature**: the caller must compute HMAC-SHA256 over the raw request body using the plaintext secret and send it as:
+**Signature**: set `X-Relay-Timestamp` to the current Unix time in seconds, then compute HMAC-SHA256 over `<timestamp>.<raw-request-body>` using the plaintext secret. Send both headers:
 
 ```
 X-Relay-Signature: sha256=<hex>
+X-Relay-Timestamp: <unix-seconds>
 ```
+
+Timestamps more than five minutes from the API server's current time are rejected. Sign the exact body bytes sent on the wire; reformatting the JSON after signing invalidates the signature.
 
 **Example**
 
 ```bash
 BODY='{"order":{"id":"1234","total":42.00},"customer":{"email":"alice@example.com"}}'
-SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
+TIMESTAMP=$(date +%s)
+SIG=$(printf '%s.%s' "$TIMESTAMP" "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
 
 curl -X POST https://api.relayapi.dev/v1/webhooks/automation-trigger/auto-xyz123 \
   -H "Content-Type: application/json" \
   -H "X-Relay-Signature: sha256=$SIG" \
+  -H "X-Relay-Timestamp: $TIMESTAMP" \
   -d "$BODY"
 ```
 

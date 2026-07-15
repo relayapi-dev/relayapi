@@ -8,7 +8,7 @@ import { path } from '../internal/utils/path';
 
 export class Broadcasts extends APIResource {
   /**
-   * Create a new broadcast
+   * Create a broadcast draft
    */
   create(body: BroadcastCreateParams, options?: RequestOptions): APIPromise<BroadcastResponse> {
     return this._client.post('/v1/broadcasts', { body, ...options });
@@ -75,7 +75,7 @@ export class Broadcasts extends APIResource {
   }
 
   /**
-   * Send a broadcast immediately
+   * Queue a broadcast for immediate delivery
    */
   send(id: string, options?: RequestOptions): APIPromise<BroadcastResponse> {
     return this._client.post(path`/v1/broadcasts/${id}/send`, options);
@@ -93,7 +93,7 @@ export class Broadcasts extends APIResource {
   }
 
   /**
-   * Cancel a scheduled broadcast
+   * Cancel a scheduled or sending broadcast
    */
   cancel(id: string, options?: RequestOptions): APIPromise<BroadcastResponse> {
     return this._client.post(path`/v1/broadcasts/${id}/cancel`, options);
@@ -103,7 +103,7 @@ export class Broadcasts extends APIResource {
 export interface BroadcastResponse {
   id: string;
 
-  name: string;
+  name: string | null;
 
   description: string | null;
 
@@ -111,7 +111,15 @@ export interface BroadcastResponse {
 
   account_id: string;
 
-  status: string;
+  status:
+    | 'draft'
+    | 'scheduled'
+    | 'sending'
+    | 'sent'
+    | 'partially_failed'
+    | 'requires_attention'
+    | 'failed'
+    | 'cancelled';
 
   message_text: string | null;
 
@@ -153,7 +161,7 @@ export interface BroadcastRecipientResponse {
 
   contact_identifier: string;
 
-  status: string;
+  status: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled';
 
   message_id: string | null;
 
@@ -173,6 +181,7 @@ export interface BroadcastListRecipientsResponse {
 export interface BroadcastCreateParams {
   account_id: string;
 
+  /** Optional. Omission inherits the account workspace in either policy mode; an explicit value must match it. */
   workspace_id?: string;
 
   name?: string;
@@ -183,16 +192,13 @@ export interface BroadcastCreateParams {
 
   template?: {
     name: string;
-    language: string;
-    components?: Array<{
-      type: string;
-      parameters?: Array<Record<string, unknown>>;
-    }>;
+    language?: string;
+    components?: Array<Record<string, unknown>>;
   };
 }
 
 export interface BroadcastUpdateParams {
-  name?: string;
+  name?: string | null;
 
   description?: string | null;
 
@@ -200,18 +206,23 @@ export interface BroadcastUpdateParams {
 
   template?: {
     name: string;
-    language: string;
-    components?: Array<{
-      type: string;
-      parameters?: Array<Record<string, unknown>>;
-    }>;
+    language?: string;
+    components?: Array<Record<string, unknown>>;
   };
 }
 
 export interface BroadcastListParams {
   account_id?: string;
 
-  status?: string;
+  status?:
+    | 'draft'
+    | 'scheduled'
+    | 'sending'
+    | 'sent'
+    | 'partially_failed'
+    | 'requires_attention'
+    | 'failed'
+    | 'cancelled';
 
   cursor?: string;
 
@@ -233,7 +244,7 @@ export interface BroadcastScheduleParams {
 }
 
 export interface BroadcastListRecipientsParams {
-  status?: string;
+  status?: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled';
 
   cursor?: string;
 

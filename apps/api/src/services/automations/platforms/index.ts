@@ -17,15 +17,15 @@
 //   3. Build a `SendMessageRequest` per block and call `sendMessage`
 //   4. Return a per-block result list for the message handler to persist
 
-import {
-	sendMessage,
-	type SendMessageRequest,
-	type SendMessageResult,
-} from "../../message-sender";
 import type {
 	MessageBlock,
 	QuickReply,
 } from "../../../schemas/automation-graph";
+import {
+	type SendMessageRequest,
+	type SendMessageResult,
+	sendMessage,
+} from "../../message-sender";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -65,6 +65,8 @@ export type AutomationSendInput = {
 		accessToken: string;
 		platformAccountId: string;
 	};
+	/** Stable node-effect key; test/custom transports and future providers may use it. */
+	idempotencyKey?: string;
 	/**
 	 * Optional transport override for tests. When present, used in place of
 	 * the real `sendMessage(req)` call. This is the cleanest way to exercise
@@ -302,6 +304,9 @@ function renderBlockToRequest(
 		accessToken: input.credentials.accessToken,
 		platformAccountId: input.credentials.platformAccountId,
 		recipientId: input.recipient.platformContactId,
+		idempotencyKey: input.idempotencyKey
+			? `${input.idempotencyKey}:block:${encodeURIComponent(block.id)}`
+			: undefined,
 	};
 
 	const qr =

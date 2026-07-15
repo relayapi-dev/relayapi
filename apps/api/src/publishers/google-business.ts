@@ -1,4 +1,10 @@
-import { classifyPublishError, PublishError, type Publisher, type PublishRequest, type PublishResult } from "./types";
+import {
+	classifyPublishError,
+	PublishError,
+	type Publisher,
+	type PublishRequest,
+	type PublishResult,
+} from "./types";
 
 const GBP_API = "https://mybusiness.googleapis.com/v4";
 
@@ -15,9 +21,27 @@ async function gbpFetch(
 			...(options.headers ?? {}),
 		},
 	});
-	if (res.status === 401) throw new PublishError("TOKEN_EXPIRED: Google Business Profile token expired or invalid", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
-	if (res.status === 403) throw new PublishError("TOKEN_EXPIRED: Google Business Profile access forbidden — token may need refresh", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
-	if (res.status === 429) throw new PublishError("RATE_LIMITED: Google Business Profile rate limit exceeded", { statusCode: res.status, detail: `HTTP ${res.status} ${res.statusText}` });
+	if (res.status === 401)
+		throw new PublishError(
+			"TOKEN_EXPIRED: Google Business Profile token expired or invalid",
+			{
+				statusCode: res.status,
+				detail: `HTTP ${res.status} ${res.statusText}`,
+			},
+		);
+	// Official Google API error semantics:
+	// https://google.aip.dev/193
+	// Section "Permission Denied": missing permission must return
+	// PERMISSION_DENIED (HTTP 403). Do not tell the caller to refresh a valid
+	// token when the platform rejected authorization.
+	if (res.status === 429)
+		throw new PublishError(
+			"RATE_LIMITED: Google Business Profile rate limit exceeded",
+			{
+				statusCode: res.status,
+				detail: `HTTP ${res.status} ${res.statusText}`,
+			},
+		);
 	return res;
 }
 
@@ -97,7 +121,17 @@ export const googleBusinessPublisher: Publisher = {
 			// EVENT and OFFER require an event schedule
 			const topicType = postBody.topicType as string;
 			if (topicType === "EVENT" || topicType === "OFFER") {
-				const eventSchedule = opts.event as { title?: string; schedule?: { startDate: unknown; startTime?: unknown; endDate: unknown; endTime?: unknown } } | undefined;
+				const eventSchedule = opts.event as
+					| {
+							title?: string;
+							schedule?: {
+								startDate: unknown;
+								startTime?: unknown;
+								endDate: unknown;
+								endTime?: unknown;
+							};
+					  }
+					| undefined;
 				if (!eventSchedule?.schedule) {
 					return {
 						success: false,
@@ -112,7 +146,13 @@ export const googleBusinessPublisher: Publisher = {
 
 			// OFFER posts can include coupon/redemption details
 			if (topicType === "OFFER") {
-				const offer = opts.offer as { couponCode?: string; redeemOnlineUrl?: string; termsConditions?: string } | undefined;
+				const offer = opts.offer as
+					| {
+							couponCode?: string;
+							redeemOnlineUrl?: string;
+							termsConditions?: string;
+					  }
+					| undefined;
 				if (offer) {
 					postBody.offer = offer;
 				}
@@ -181,7 +221,10 @@ export const googleBusinessPublisher: Publisher = {
 					(err as { error?: { message?: string } }).error?.message ??
 					res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-				throw new PublishError(`Google Business post creation failed: ${detail}`, { statusCode: res.status, detail: raw });
+				throw new PublishError(
+					`Google Business post creation failed: ${detail}`,
+					{ statusCode: res.status, detail: raw },
+				);
 			}
 
 			const result = (await res.json()) as {
@@ -200,7 +243,7 @@ export const googleBusinessPublisher: Publisher = {
 				platform_url: platformUrl,
 			};
 		} catch (err) {
-			return classifyPublishError(err);
+			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}
 	},
 };

@@ -1,10 +1,7 @@
-import type { APIRoute } from "astro";
 import { env } from "cloudflare:workers";
+import { eq, organizationSubscriptions } from "@relayapi/db";
+import type { APIRoute } from "astro";
 import Stripe from "stripe";
-import {
-  organizationSubscriptions,
-  eq,
-} from "@relayapi/db";
 
 export const GET: APIRoute = async (context) => {
   const user = context.locals.user;
@@ -29,7 +26,10 @@ export const GET: APIRoute = async (context) => {
     ? {
         status: sub.status,
         cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
-        currentPeriodEnd: sub.currentPeriodEnd instanceof Date ? sub.currentPeriodEnd.toISOString() : sub.currentPeriodEnd,
+				currentPeriodEnd:
+					sub.currentPeriodEnd instanceof Date
+						? sub.currentPeriodEnd.toISOString()
+						: sub.currentPeriodEnd,
         hasStripeCustomer: !!sub.stripeCustomerId,
         hasStripeSubscription: !!sub.stripeSubscriptionId,
       }
@@ -58,7 +58,9 @@ export const GET: APIRoute = async (context) => {
 
       const [directSub, invoicesResult] = await Promise.all([
         sub.stripeSubscriptionId
-          ? stripe.subscriptions.retrieve(sub.stripeSubscriptionId).catch((err: unknown) => {
+					? stripe.subscriptions
+							.retrieve(sub.stripeSubscriptionId)
+							.catch((err: unknown) => {
               // 404 = subscription deleted in Stripe
               const statusCode =
                 err && typeof err === "object" && "statusCode" in err
@@ -67,10 +69,12 @@ export const GET: APIRoute = async (context) => {
               if (statusCode === 404) return null;
               throw err;
             })
-          : stripe.subscriptions.list({
+					: stripe.subscriptions
+							.list({
               customer: sub.stripeCustomerId,
               limit: 1,
-            }).then((res) => res.data[0] ?? null),
+							})
+							.then((res) => res.data[0] ?? null),
         stripe.invoices.list({
           customer: sub.stripeCustomerId,
           limit: 12,
@@ -87,30 +91,52 @@ export const GET: APIRoute = async (context) => {
           canceled: "cancelled",
           unpaid: "past_due",
           trialing: "trialing",
-          incomplete: "active",
+					incomplete: "cancelled",
           incomplete_expired: "cancelled",
           paused: "cancelled",
         };
         const newStatus: SubStatus = statusMap[stripeSub.status] ?? "cancelled";
 
         const firstItem = stripeSub.items?.data?.[0];
+				const periodStart = firstItem
+					? new Date(firstItem.current_period_start * 1000)
+					: null;
         const periodEnd = firstItem
           ? new Date(firstItem.current_period_end * 1000)
           : null;
-
+				const trialEndsAt = stripeSub.trial_end
+					? new Date(stripeSub.trial_end * 1000)
+					: null;
         // The Stripe Customer Portal uses `cancel_at` (specific timestamp) rather than
         // `cancel_at_period_end` (boolean). Check BOTH to detect scheduled cancellation.
-        const isCancelling = stripeSub.cancel_at_period_end || !!stripeSub.cancel_at;
+				const isCancelling =
+					stripeSub.cancel_at_period_end || !!stripeSub.cancel_at;
 
         // Update DB if state drifted
-        const dbUpdates: Partial<typeof organizationSubscriptions.$inferInsert> =
-          {};
+				const dbUpdates: Partial<
+					typeof organizationSubscriptions.$inferInsert
+				> = {};
         if (sub.status !== newStatus) dbUpdates.status = newStatus;
         if (sub.cancelAtPeriodEnd !== isCancelling)
           dbUpdates.cancelAtPeriodEnd = isCancelling;
         if (sub.stripeSubscriptionId !== stripeSub.id)
           dbUpdates.stripeSubscriptionId = stripeSub.id;
-        if (periodEnd) dbUpdates.currentPeriodEnd = periodEnd;
+				if (
+					periodStart &&
+					new Date(sub.currentPeriodStart ?? 0).getTime() !==
+						periodStart.getTime()
+				)
+					dbUpdates.currentPeriodStart = periodStart;
+				if (
+					periodEnd &&
+					new Date(sub.currentPeriodEnd ?? 0).getTime() !== periodEnd.getTime()
+				)
+					dbUpdates.currentPeriodEnd = periodEnd;
+				if (
+					(sub.trialEndsAt ? new Date(sub.trialEndsAt).getTime() : null) !==
+					(trialEndsAt?.getTime() ?? null)
+				)
+					dbUpdates.trialEndsAt = trialEndsAt;
 
         if (Object.keys(dbUpdates).length > 0) {
           dbUpdates.updatedAt = new Date();
@@ -123,7 +149,11 @@ export const GET: APIRoute = async (context) => {
         subscriptionData = {
           status: newStatus,
           cancelAtPeriodEnd: isCancelling,
-          currentPeriodEnd: periodEnd?.toISOString() ?? (sub.currentPeriodEnd instanceof Date ? sub.currentPeriodEnd.toISOString() : sub.currentPeriodEnd),
+					currentPeriodEnd:
+						periodEnd?.toISOString() ??
+						(sub.currentPeriodEnd instanceof Date
+							? sub.currentPeriodEnd.toISOString()
+							: sub.currentPeriodEnd),
           hasStripeCustomer: true,
           hasStripeSubscription: true,
         };
@@ -144,7 +174,10 @@ export const GET: APIRoute = async (context) => {
         subscriptionData = {
           status: "cancelled" as const,
           cancelAtPeriodEnd: false,
-          currentPeriodEnd: sub.currentPeriodEnd instanceof Date ? sub.currentPeriodEnd.toISOString() : sub.currentPeriodEnd,
+					currentPeriodEnd:
+						sub.currentPeriodEnd instanceof Date
+							? sub.currentPeriodEnd.toISOString()
+							: sub.currentPeriodEnd,
           hasStripeCustomer: true,
           hasStripeSubscription: false,
         };
@@ -152,12 +185,24 @@ export const GET: APIRoute = async (context) => {
 
       stripeInvoices = invoicesResult.data.map((inv) => ({
         id: inv.id,
-        status: inv.status === "paid" ? "paid" : inv.status === "open" ? "finalized" : inv.status || "draft",
+				status:
+					inv.status === "paid"
+						? "paid"
+						: inv.status === "open"
+							? "finalized"
+							: inv.status || "draft",
         periodStart: new Date(inv.period_start * 1000).toISOString(),
         periodEnd: new Date(inv.period_end * 1000).toISOString(),
         totalCents: inv.amount_due,
         stripeHostedUrl: inv.hosted_invoice_url ?? null,
-        paidAt: inv.status === "paid" ? new Date(inv.status_transitions?.paid_at ? inv.status_transitions.paid_at * 1000 : Date.now()).toISOString() : null,
+				paidAt:
+					inv.status === "paid"
+						? new Date(
+								inv.status_transitions?.paid_at
+									? inv.status_transitions.paid_at * 1000
+									: Date.now(),
+							).toISOString()
+						: null,
         createdAt: new Date(inv.created * 1000).toISOString(),
       }));
     } catch (err) {

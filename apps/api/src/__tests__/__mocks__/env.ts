@@ -84,6 +84,7 @@ export function createMockEnv(kvOverride?: MockKV): { env: Env; kv: MockKV } {
 		TOOLS_QUEUE: createMockQueue(),
 		ADS_QUEUE: createMockQueue(),
 		SYNC_QUEUE: createMockQueue(),
+		CUSTOMER_WEBHOOK_QUEUE: createMockQueue(),
 		REALTIME: {} as unknown as DurableObjectNamespace,
 		FREE_RATE_LIMITER: {
 			limit: async () => ({ success: true }),
@@ -94,7 +95,7 @@ export function createMockEnv(kvOverride?: MockKV): { env: Env; kv: MockKV } {
 		STRIPE_SECRET_KEY: "sk_test_mock",
 		STRIPE_WEBHOOK_SECRET: "whsec_test_mock",
 		RESEND_API_KEY: "re_test_mock",
-		ENCRYPTION_KEY: "a".repeat(64),
+		ENCRYPTION_KEY: `test=${"a".repeat(64)}`,
 		API_BASE_URL: "https://api.test.dev",
 		FACEBOOK_WEBHOOK_VERIFY_TOKEN: "test_verify_token",
 		// Platform OAuth credentials

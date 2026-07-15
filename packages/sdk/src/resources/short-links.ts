@@ -26,8 +26,11 @@ export class ShortLinks extends APIResource {
   /**
    * Test the configured provider by shortening a test URL.
    */
-  testConfig(options?: RequestOptions): APIPromise<ShortLinkTestResponse> {
-    return this._client.post('/v1/short-links/test', options);
+  testConfig(
+    query: ShortLinkTestConfigParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<ShortLinkTestResponse> {
+    return this._client.post('/v1/short-links/test', { query, ...options });
   }
 
   /**
@@ -86,6 +89,7 @@ export interface ShortLinkTestResponse {
 
 export interface ShortLinkResponse {
   id: string;
+  workspace_id: string | null;
   original_url: string;
   short_url: string;
   post_id: string | null;
@@ -129,7 +133,20 @@ export interface ShortLinkListParams {
 }
 
 export interface ShortLinkShortenParams {
+  /**
+   * Omit for organization scope when Require Workspace ID is disabled. When the
+   * policy is enabled, independent short-link creation requires this value.
+   */
+  workspace_id?: string;
   url: string;
+}
+
+export interface ShortLinkTestConfigParams {
+  /**
+   * Omit for organization scope when Require Workspace ID is disabled. When the
+   * policy is enabled, the test allocation requires this value.
+   */
+  workspace_id?: string;
 }
 
 export declare namespace ShortLinks {
@@ -144,5 +161,6 @@ export declare namespace ShortLinks {
     type ShortLinkUpdateConfigParams as ShortLinkUpdateConfigParams,
     type ShortLinkListParams as ShortLinkListParams,
     type ShortLinkShortenParams as ShortLinkShortenParams,
+    type ShortLinkTestConfigParams as ShortLinkTestConfigParams,
   };
 }

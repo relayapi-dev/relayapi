@@ -1,5 +1,5 @@
-import type { APIRoute } from "astro";
 import { env } from "cloudflare:workers";
+import type { APIRoute } from "astro";
 import { Resend } from "resend";
 
 /** Escape HTML-significant characters to prevent markup injection into the email. */
@@ -21,6 +21,16 @@ export const POST: APIRoute = async (context) => {
 			{ status: 401 },
 		);
 	}
+	const organizationId =
+		typeof context.locals.organization?.id === "string"
+			? context.locals.organization.id
+			: null;
+	if (!organizationId) {
+		return Response.json(
+			{ error: { message: "Active organization membership required" } },
+			{ status: 403 },
+		);
+	}
 
 	try {
 		const body = await context.request.json();
@@ -33,7 +43,15 @@ export const POST: APIRoute = async (context) => {
 			);
 		}
 
-		const cfEnv = env as Record<string, unknown>;
+		const cfEnv: Cloudflare.Env = env;
+		const requestedIdempotencyKey = context.request.headers
+			.get("Idempotency-Key")
+			?.trim();
+		const emailId =
+			requestedIdempotencyKey &&
+			/^[A-Za-z0-9._:-]{1,200}$/.test(requestedIdempotencyKey)
+				? `on-demand:${organizationId}:${requestedIdempotencyKey}`
+				: crypto.randomUUID();
 
 		const html = `
 			<h2>New On-Demand Platform Request</h2>
@@ -49,21 +67,34 @@ export const POST: APIRoute = async (context) => {
 		`;
 
 		const emailMessage = {
+			id: emailId,
+			organization_id: organizationId,
 			to: "support@relayapi.dev",
 			subject: `[On-Demand] ${platform} platform request from ${email}`,
 			html,
 			from: "RelayAPI <notifications@relayapi.dev>",
 		};
 
-		const queue = cfEnv.EMAIL_QUEUE as
-			| { send(message: unknown): Promise<void> }
-			| undefined;
+		const queue = cfEnv.EMAIL_QUEUE;
 
 		if (queue) {
 			await queue.send(emailMessage);
 		} else if (cfEnv.RESEND_API_KEY) {
-			const resend = new Resend(cfEnv.RESEND_API_KEY as string);
-			await resend.emails.send(emailMessage);
+			const resend = new Resend(cfEnv.RESEND_API_KEY);
+			const { error } = await resend.emails.send(
+				{
+					to: emailMessage.to,
+					subject: emailMessage.subject,
+					html: emailMessage.html,
+					from: emailMessage.from,
+				},
+				{ idempotencyKey: emailMessage.id },
+			);
+			if (error) {
+				throw new Error(
+					`On-demand email provider rejected request: ${error.name}`,
+				);
+			}
 		} else {
 			return Response.json(
 				{ error: { message: "Email service not configured" } },

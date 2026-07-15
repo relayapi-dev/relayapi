@@ -9,16 +9,13 @@
 // "pending_sync" and get reconciled by the platform sync worker later.
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import {
-	automationBindings,
-	automations,
-	socialAccounts,
-} from "@relayapi/db";
+import { automationBindings, automations, socialAccounts } from "@relayapi/db";
 import { and, desc, eq, type SQL } from "drizzle-orm";
 import type { Context } from "hono";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
+	canAccessWorkspaceScope,
 } from "../lib/workspace-scope";
 import {
 	BindingConfigByType,
@@ -241,7 +238,9 @@ app.openapi(listBindings, async (c) => {
 		conditions.push(eq(automationBindings.workspaceId, q.workspace_id));
 	}
 	if (q.social_account_id) {
-		conditions.push(eq(automationBindings.socialAccountId, q.social_account_id));
+		conditions.push(
+			eq(automationBindings.socialAccountId, q.social_account_id),
+		);
 	}
 	if (q.binding_type) {
 		conditions.push(
@@ -361,12 +360,41 @@ app.openapi(createBinding, async (c) => {
 	}
 	const denied = assertWorkspaceScope(c, automation.workspaceId);
 	if (denied) return denied;
+	if (body.channel !== automation.channel) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_CHANNEL",
+					message: "Binding channel must match the automation channel",
+				},
+			},
+			400,
+		);
+	}
 
 	// Verify the social account belongs to this org. Without this, a caller can
 	// bind to another org's account id and then read its handle/display name/
 	// avatar back via GET /{id} (account-identity disclosure).
+	const bindingWorkspaceId =
+		body.workspace_id ?? automation.workspaceId ?? null;
+	if (bindingWorkspaceId !== automation.workspaceId) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_WORKSPACE",
+					message: "Binding workspace must match the automation workspace",
+				},
+			},
+			400,
+		);
+	}
 	const [boundAccount] = await db
-		.select({ id: socialAccounts.id })
+		.select({
+			id: socialAccounts.id,
+			workspaceId: socialAccounts.workspaceId,
+			platform: socialAccounts.platform,
+			lifecycleStatus: socialAccounts.lifecycleStatus,
+		})
 		.from(socialAccounts)
 		.where(
 			and(
@@ -381,13 +409,29 @@ app.openapi(createBinding, async (c) => {
 			404,
 		);
 	}
+	if (
+		boundAccount.workspaceId !== bindingWorkspaceId ||
+		boundAccount.platform !== body.channel ||
+		boundAccount.lifecycleStatus !== "active"
+	) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_ACCOUNT",
+					message:
+						"Social account, channel, and workspace must match the automation",
+				},
+			},
+			400,
+		);
+	}
 
 	try {
 		const [inserted] = await db
 			.insert(automationBindings)
 			.values({
 				organizationId: orgId,
-				workspaceId: body.workspace_id ?? automation.workspaceId ?? null,
+				workspaceId: bindingWorkspaceId,
 				socialAccountId: body.social_account_id,
 				channel: body.channel,
 				bindingType: body.binding_type,
@@ -470,7 +514,10 @@ app.openapi(getBinding, async (c) => {
 			),
 		)
 		.limit(1);
-	return c.json(serializeBinding(scoped.row, { account: account ?? null }), 200);
+	return c.json(
+		serializeBinding(scoped.row, { account: account ?? null }),
+		200,
+	);
 });
 
 const updateBinding = createRoute({
@@ -515,48 +562,9 @@ app.openapi(updateBinding, async (c) => {
 	};
 	if (body.channel !== undefined) patch.channel = body.channel;
 	if (body.binding_type !== undefined) patch.bindingType = body.binding_type;
-	if (body.social_account_id !== undefined) {
-		// Re-validate account ownership on update too — otherwise a PATCH can
-		// repoint a binding at another org's account id and leak its identity.
-		const [acct] = await db
-			.select({ id: socialAccounts.id })
-			.from(socialAccounts)
-			.where(
-				and(
-					eq(socialAccounts.id, body.social_account_id),
-					eq(socialAccounts.organizationId, orgId),
-				),
-			)
-			.limit(1);
-		if (!acct) {
-			return c.json(
-				{ error: { code: "NOT_FOUND", message: "Social account not found" } },
-				404,
-			);
-		}
+	if (body.social_account_id !== undefined)
 		patch.socialAccountId = body.social_account_id;
-	}
-	if (body.automation_id !== undefined) {
-		// Re-validate automation ownership too — the original code patched
-		// automationId straight from the body with no org check.
-		const [auto] = await db
-			.select({ id: automations.id })
-			.from(automations)
-			.where(
-				and(
-					eq(automations.id, body.automation_id),
-					eq(automations.organizationId, orgId),
-				),
-			)
-			.limit(1);
-		if (!auto) {
-			return c.json(
-				{ error: { code: "NOT_FOUND", message: "Automation not found" } },
-				404,
-			);
-		}
-		patch.automationId = body.automation_id;
-	}
+	if (body.automation_id !== undefined) patch.automationId = body.automation_id;
 	if (body.status !== undefined) patch.status = body.status;
 	if (body.workspace_id !== undefined) {
 		patch.workspaceId = body.workspace_id ?? null;
@@ -583,13 +591,116 @@ app.openapi(updateBinding, async (c) => {
 		patch.config = parsed.data as Record<string, unknown>;
 	}
 
-	const [updated] = await db
-		.update(automationBindings)
-		.set(patch)
-		.where(eq(automationBindings.id, id))
-		.returning();
-	if (!updated) return notFound(c);
-	return c.json(serializeBinding(updated, { includeWarnings: true }), 200);
+	const prospective = {
+		automationId: body.automation_id ?? existing.automationId,
+		accountId: body.social_account_id ?? existing.socialAccountId,
+		workspaceId:
+			body.workspace_id !== undefined
+				? (body.workspace_id ?? null)
+				: existing.workspaceId,
+		channel: body.channel ?? existing.channel,
+	};
+	const workspaceScope = c.get("workspaceScope");
+	const result = await db.transaction(async (tx) => {
+		const [automation] = await tx
+			.select({
+				id: automations.id,
+				workspaceId: automations.workspaceId,
+				channel: automations.channel,
+			})
+			.from(automations)
+			.where(
+				and(
+					eq(automations.id, prospective.automationId),
+					eq(automations.organizationId, orgId),
+				),
+			)
+			.limit(1)
+			.for("update");
+		if (!automation) return { kind: "automation_not_found" } as const;
+		if (!canAccessWorkspaceScope(workspaceScope, automation.workspaceId)) {
+			return { kind: "workspace_denied" } as const;
+		}
+
+		const [account] = await tx
+			.select({
+				id: socialAccounts.id,
+				workspaceId: socialAccounts.workspaceId,
+				platform: socialAccounts.platform,
+				lifecycleStatus: socialAccounts.lifecycleStatus,
+			})
+			.from(socialAccounts)
+			.where(
+				and(
+					eq(socialAccounts.id, prospective.accountId),
+					eq(socialAccounts.organizationId, orgId),
+				),
+			)
+			.limit(1)
+			.for("update");
+		if (!account) return { kind: "account_not_found" } as const;
+		if (
+			prospective.workspaceId !== automation.workspaceId ||
+			account.workspaceId !== automation.workspaceId ||
+			prospective.channel !== automation.channel ||
+			account.platform !== automation.channel ||
+			account.lifecycleStatus !== "active"
+		) {
+			return { kind: "invalid_tuple" } as const;
+		}
+
+		const [updated] = await tx
+			.update(automationBindings)
+			.set(patch)
+			.where(
+				and(
+					eq(automationBindings.id, id),
+					eq(automationBindings.organizationId, orgId),
+				),
+			)
+			.returning();
+		return updated
+			? ({ kind: "updated", row: updated } as const)
+			: ({ kind: "not_found" } as const);
+	});
+
+	if (result.kind === "automation_not_found") {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Automation not found" } },
+			404,
+		);
+	}
+	if (result.kind === "account_not_found") {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Social account not found" } },
+			404,
+		);
+	}
+	if (result.kind === "workspace_denied") {
+		return c.json(
+			{
+				error: {
+					code: "WORKSPACE_ACCESS_DENIED",
+					message: "This API key does not have access to this workspace",
+				},
+			} as never,
+			403 as never,
+		);
+	}
+	if (result.kind === "invalid_tuple") {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_BINDING_SCOPE",
+					message:
+						"Binding, automation, account, channel, and workspace must form one scope tuple",
+				},
+			},
+			400,
+		);
+	}
+	if (result.kind === "not_found") return notFound(c);
+	return c.json(serializeBinding(result.row, { includeWarnings: true }), 200);
 });
 
 const deleteBinding = createRoute({

@@ -7,6 +7,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import {
 	automationContactControls,
+	automationEffects,
+	automationNodeExecutions,
 	automationRuns,
 	automationStepRuns,
 	automations,
@@ -18,14 +20,20 @@ import {
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import type { Graph } from "../schemas/automation-graph";
-import { enrollContact, runLoop } from "../services/automations/runner";
+import { handlers } from "../services/automations/manifest";
+import {
+	automationEffectIdempotencyKey,
+	enrollContact,
+	runLoop,
+} from "../services/automations/runner";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
-	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE ??
-	"postgres://relayapi:z9scNsSByxEn8QC6Z6PDQLLSKLum3F@localhost:5433/relayapi?sslmode=disable";
+	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
 
-const db = createDb(CONN);
+const db = CONN
+	? createDb(CONN)
+	: (null as unknown as ReturnType<typeof createDb>);
 
 // Lazily marks whether the tunnel is reachable. If the initial fixture setup
 // throws, the tests themselves skip rather than fail the whole suite, so CI
@@ -98,6 +106,7 @@ async function createContact() {
 }
 
 beforeAll(async () => {
+	if (!CONN) return;
 	try {
 		await seedFixtureOrg();
 		dbAvailable = true;
@@ -254,71 +263,65 @@ describe("automation runner", () => {
 		expect(run.waitingFor).toBe("external_event");
 	});
 
-	it(
-		"caps infinite loops at maxVisits and fails the run",
-		async () => {
-			if (!dbAvailable) {
-				console.warn("skipping: DB fixture unavailable");
-				return;
-			}
+	it("caps infinite loops at maxVisits and fails the run", async () => {
+		if (!dbAvailable) {
+			console.warn("skipping: DB fixture unavailable");
+			return;
+		}
 
-			// The validator would reject a goto → goto cycle, but we're bypassing
-			// it here to exercise the runtime infinite-loop guard directly. Using
-			// a small maxVisits override keeps the DB round-trip count manageable
-			// over a latency-bound SSH tunnel while still proving the guard works.
-			const graph: Graph = {
-				schema_version: 1,
-				root_node_key: "g1",
-				nodes: [
-					{
-						key: "g1",
-						kind: "goto",
-						config: { target_node_key: "g2" },
-						ports: [{ key: "in", direction: "input" }],
-					},
-					{
-						key: "g2",
-						kind: "goto",
-						config: { target_node_key: "g1" },
-						ports: [{ key: "in", direction: "input" }],
-					},
-				],
-				edges: [],
-			};
-			const auto = await createAutomation(graph);
-			const ct = await createContact();
+		// The validator would reject a goto → goto cycle, but we're bypassing
+		// it here to exercise the runtime infinite-loop guard directly. Using
+		// a small maxVisits override keeps the DB round-trip count manageable
+		// over a latency-bound SSH tunnel while still proving the guard works.
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "g1",
+			nodes: [
+				{
+					key: "g1",
+					kind: "goto",
+					config: { target_node_key: "g2" },
+					ports: [{ key: "in", direction: "input" }],
+				},
+				{
+					key: "g2",
+					kind: "goto",
+					config: { target_node_key: "g1" },
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [],
+		};
+		const auto = await createAutomation(graph);
+		const ct = await createContact();
 
-			const { runId } = await enrollContact(db, {
-				automationId: auto.id,
-				organizationId: orgId,
-				contactId: ct.id,
-				conversationId: null,
-				channel: "telegram",
-				entrypointId: null,
-				bindingId: null,
-				env: {},
-				runLoopOptions: { maxVisits: 10 },
-			});
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: {},
+			runLoopOptions: { maxVisits: 10 },
+		});
 
-			const run = await db.query.automationRuns.findFirst({
-				where: eq(automationRuns.id, runId),
-			});
-			if (!run) throw new Error("expected run to exist");
-			expect(run.status).toBe("failed");
-			expect(run.exitReason).toBe("infinite_loop_cap");
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("failed");
+		expect(run.exitReason).toBe("infinite_loop_cap");
 
-			const autoAfter = await db.query.automations.findFirst({
-				where: eq(automations.id, auto.id),
-			});
-			if (!autoAfter) throw new Error("expected autoAfter to exist");
-			expect(autoAfter.totalFailed).toBeGreaterThanOrEqual(1);
-		},
-		30_000,
-	);
+		const autoAfter = await db.query.automations.findFirst({
+			where: eq(automations.id, auto.id),
+		});
+		if (!autoAfter) throw new Error("expected autoAfter to exist");
+		expect(autoAfter.totalFailed).toBeGreaterThanOrEqual(1);
+	}, 30_000);
 
-	it(
-		"exits via graph_changed when the current node is missing from the graph",
-		async () => {
+	it("exits via graph_changed when the current node is missing from the graph", async () => {
 		if (!dbAvailable) {
 			console.warn("skipping: DB fixture unavailable");
 			return;
@@ -384,15 +387,286 @@ describe("automation runner", () => {
 		expect(result.status).toBe("exited");
 		expect(result.exit_reason).toBe("graph_changed");
 
-			run = await db.query.automationRuns.findFirst({
-				where: eq(automationRuns.id, runId),
+		run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("exited");
+		expect(run.exitReason).toBe("graph_changed");
+	}, 30_000);
+
+	it("executes one handler under concurrent runLoop claims", async () => {
+		if (!dbAvailable) {
+			console.warn("skipping: DB fixture unavailable");
+			return;
+		}
+
+		const kind = `test_concurrent_effect_${Date.now()}`;
+		const graph = {
+			schema_version: 1,
+			root_node_key: "effect",
+			nodes: [{ key: "effect", kind, config: {}, ports: [] }],
+			edges: [],
+		} as unknown as Graph;
+		const auto = await createAutomation(graph);
+		const ct = await createContact();
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: {},
+			deferRun: true,
+		});
+
+		let handlerCalls = 0;
+		let enteredResolve: (() => void) | undefined;
+		const entered = new Promise<void>((resolve) => {
+			enteredResolve = resolve;
+		});
+		let releaseResolve: (() => void) | undefined;
+		const release = new Promise<void>((resolve) => {
+			releaseResolve = resolve;
+		});
+		handlers[kind] = {
+			kind,
+			async handle(_node, ctx) {
+				handlerCalls += 1;
+				expect(typeof ctx.effectIdempotencyKey).toBe("string");
+				expect(ctx.env.automationEffectIdempotencyKey).toBe(
+					ctx.effectIdempotencyKey,
+				);
+				enteredResolve?.();
+				await release;
+				return { result: "end", exit_reason: "completed" };
+			},
+		};
+
+		try {
+			const first = runLoop(db, runId, {});
+			await Promise.race([
+				entered,
+				new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error("handler did not start")), 5_000),
+				),
+			]);
+			const second = await runLoop(db, runId, {});
+			expect(second).toEqual({ status: "active", exit_reason: null });
+			releaseResolve?.();
+			expect(await first).toEqual({
+				status: "completed",
+				exit_reason: "completed",
 			});
-			if (!run) throw new Error("expected run to exist");
-			expect(run.status).toBe("exited");
-			expect(run.exitReason).toBe("graph_changed");
-		},
-		30_000,
-	);
+		} finally {
+			releaseResolve?.();
+			delete handlers[kind];
+		}
+
+		expect(handlerCalls).toBe(1);
+		const executions = await db
+			.select()
+			.from(automationNodeExecutions)
+			.where(eq(automationNodeExecutions.runId, runId));
+		expect(executions).toHaveLength(1);
+		expect(executions[0]?.status).toBe("succeeded");
+		expect(executions[0]?.attempts).toBe(1);
+		const effects = await db
+			.select()
+			.from(automationEffects)
+			.where(
+				eq(automationEffects.nodeExecutionId, executions[0]?.id ?? "missing"),
+			);
+		expect(effects).toHaveLength(1);
+		expect(effects[0]?.status).toBe("succeeded");
+	});
+
+	it("never replays an expired post-boundary node claim", async () => {
+		if (!dbAvailable) {
+			console.warn("skipping: DB fixture unavailable");
+			return;
+		}
+
+		const kind = `test_crashed_effect_${Date.now()}`;
+		const graph = {
+			schema_version: 1,
+			root_node_key: "effect",
+			nodes: [{ key: "effect", kind, config: {}, ports: [] }],
+			edges: [],
+		} as unknown as Graph;
+		const auto = await createAutomation(graph);
+		const ct = await createContact();
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: {},
+			deferRun: true,
+		});
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		if (!run) throw new Error("expected deferred run");
+		const boundary = new Date(Date.now() - 10 * 60_000);
+		const [execution] = await db
+			.insert(automationNodeExecutions)
+			.values({
+				runId,
+				organizationId: run.organizationId,
+				scopeKey: run.scopeKey,
+				runRevision: run.revision,
+				visitOrdinal: 0,
+				nodeKey: "effect",
+				status: "in_flight",
+				attempts: 1,
+				leaseToken: 1,
+				leaseExpiresAt: boundary,
+				requestMayHaveBeenSentAt: boundary,
+			})
+			.returning();
+		if (!execution) throw new Error("expected node execution");
+		await db.insert(automationEffects).values({
+			nodeExecutionId: execution.id,
+			organizationId: run.organizationId,
+			scopeKey: run.scopeKey,
+			effectKey: "node-handler:v1",
+			kind,
+			providerIdempotencyKey: automationEffectIdempotencyKey(execution.id),
+			status: "in_flight",
+			attempts: 1,
+			leaseToken: 1,
+			leaseExpiresAt: boundary,
+			requestMayHaveBeenSentAt: boundary,
+		});
+
+		let handlerCalls = 0;
+		handlers[kind] = {
+			kind,
+			async handle() {
+				handlerCalls += 1;
+				return { result: "end", exit_reason: "should_not_execute" };
+			},
+		};
+		try {
+			expect(await runLoop(db, runId, {})).toEqual({
+				status: "failed",
+				exit_reason: "node_effect_unknown",
+			});
+		} finally {
+			delete handlers[kind];
+		}
+
+		expect(handlerCalls).toBe(0);
+		const executionAfter = await db.query.automationNodeExecutions.findFirst({
+			where: eq(automationNodeExecutions.id, execution.id),
+		});
+		expect(executionAfter?.status).toBe("unknown");
+		const runAfter = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		expect(runAfter?.status).toBe("failed");
+		expect(runAfter?.exitReason).toBe("node_effect_unknown");
+		expect(
+			(runAfter?.context as Record<string, unknown> | null)
+				?._automation_manual_reconciliation,
+		).toBeDefined();
+	});
+
+	it("replays a completed HandlerResult without invoking the handler", async () => {
+		if (!dbAvailable) {
+			console.warn("skipping: DB fixture unavailable");
+			return;
+		}
+
+		const kind = `test_replayed_effect_${Date.now()}`;
+		const graph = {
+			schema_version: 1,
+			root_node_key: "effect",
+			nodes: [{ key: "effect", kind, config: {}, ports: [] }],
+			edges: [],
+		} as unknown as Graph;
+		const auto = await createAutomation(graph);
+		const ct = await createContact();
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: {},
+			deferRun: true,
+		});
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		if (!run) throw new Error("expected deferred run");
+		const completion = {
+			version: 1,
+			handlerResult: { result: "end", exit_reason: "replayed_completion" },
+			context: { replayed_context: true },
+			durationMs: 9,
+		};
+		const [execution] = await db
+			.insert(automationNodeExecutions)
+			.values({
+				runId,
+				organizationId: run.organizationId,
+				scopeKey: run.scopeKey,
+				runRevision: run.revision,
+				visitOrdinal: 0,
+				nodeKey: "effect",
+				status: "succeeded",
+				attempts: 1,
+				leaseToken: 1,
+				result: completion,
+				completedAt: new Date(),
+			})
+			.returning();
+		if (!execution) throw new Error("expected node execution");
+		await db.insert(automationEffects).values({
+			nodeExecutionId: execution.id,
+			organizationId: run.organizationId,
+			scopeKey: run.scopeKey,
+			effectKey: "node-handler:v1",
+			kind,
+			providerIdempotencyKey: automationEffectIdempotencyKey(execution.id),
+			status: "succeeded",
+			attempts: 1,
+			leaseToken: 1,
+			result: completion,
+			completedAt: new Date(),
+		});
+
+		let handlerCalls = 0;
+		handlers[kind] = {
+			kind,
+			async handle() {
+				handlerCalls += 1;
+				return { result: "end", exit_reason: "duplicate" };
+			},
+		};
+		try {
+			expect(await runLoop(db, runId, {})).toEqual({
+				status: "completed",
+				exit_reason: "replayed_completion",
+			});
+		} finally {
+			delete handlers[kind];
+		}
+		expect(handlerCalls).toBe(0);
+		const runAfter = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		expect(runAfter?.context).toEqual({ replayed_context: true });
+	});
 
 	it("start_automation fails when the target automation is not active", async () => {
 		if (!dbAvailable) {

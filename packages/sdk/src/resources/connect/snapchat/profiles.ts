@@ -8,8 +8,8 @@ export class Profiles extends APIResource {
   /**
    * List Snapchat Public Profiles after OAuth
    */
-  list(options?: RequestOptions): APIPromise<ProfileListResponse> {
-    return this._client.get('/v1/connect/snapchat/profiles', options);
+  list(query: ProfileListParams, options?: RequestOptions): APIPromise<ProfileListResponse> {
+    return this._client.get('/v1/connect/snapchat/profiles', { query, ...options });
   }
 
   /**
@@ -111,9 +111,15 @@ export interface ProfileSelectParams {
   profile_id: string;
 }
 
+export interface ProfileListParams {
+  /** Operation-scoped token returned by the OAuth callback. */
+  connect_token: string;
+}
+
 export declare namespace Profiles {
   export {
     type ProfileListResponse as ProfileListResponse,
+    type ProfileListParams as ProfileListParams,
     type ProfileSelectResponse as ProfileSelectResponse,
     type ProfileSelectParams as ProfileSelectParams,
   };

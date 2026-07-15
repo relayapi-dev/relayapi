@@ -1,50 +1,8 @@
 /**
- * Media Transformations binding (env.MEDIA) — extracts still frames from video
- * originals stored in R2. Typed minimally here; the official workers-types may
- * not export this binding yet. Optional: absent in tests/local without the beta.
- * Docs: https://developers.cloudflare.com/stream/transform-videos/bindings/
+ * Wrangler generates every configured binding into `Cloudflare.Env`. Keep only
+ * secrets and operator-provided variables here so config drift fails typegen CI.
  */
-export interface MediaTransformResult {
-	response(): Promise<Response>;
-	media(): Promise<ReadableStream<Uint8Array>>;
-	contentType(): Promise<string>;
-}
-export interface MediaTransformInput {
-	transform(opts: { width?: number; height?: number }): MediaTransformInput;
-	output(opts: {
-		mode: "frame" | "video" | "spritesheet" | "audio";
-		time?: string;
-		duration?: string;
-		format?: "jpg" | "png" | "m4a";
-	}): MediaTransformResult;
-}
-export interface MediaTransformBinding {
-	input(stream: ReadableStream<Uint8Array> | null): MediaTransformInput;
-}
-
-export interface Env {
-	KV: KVNamespace;
-	MEDIA_BUCKET: R2Bucket;
-	/** Durable, never-expiring store for hyper-optimized post preview thumbnails. */
-	THUMBNAIL_BUCKET: R2Bucket;
-	/** Cloudflare Images binding for generating tiny WebP thumbnails from R2 bytes. */
-	IMAGES?: ImagesBinding;
-	/** Media Transformations binding for extracting video poster frames. */
-	MEDIA?: MediaTransformBinding;
-	HYPERDRIVE: Hyperdrive;
-	PUBLISH_QUEUE: Queue;
-	EMAIL_QUEUE: Queue;
-	REFRESH_QUEUE: Queue;
-	INBOX_QUEUE: Queue;
-	TOOLS_QUEUE: Queue;
-	ADS_QUEUE: Queue;
-	SYNC_QUEUE: Queue;
-	AUTOMATION_QUEUE: Queue;
-	AI?: Ai; // Optional — Cloudflare Workers AI binding
-	REALTIME: DurableObjectNamespace;
-	FREE_RATE_LIMITER: RateLimit;
-	PRO_RATE_LIMITER: RateLimit;
-
+export interface Env extends Cloudflare.Env {
 	// Downloader service (Python VPS)
 	DOWNLOADER_SERVICE_URL?: string;
 	DOWNLOADER_SERVICE_KEY?: string;
@@ -80,10 +38,9 @@ export interface Env {
 	MASTODON_CLIENT_ID?: string;
 	MASTODON_CLIENT_SECRET?: string;
 	TELEGRAM_BOT_TOKEN?: string;
+	/** Server-held value passed to Telegram setWebhook as secret_token. */
+	TELEGRAM_WEBHOOK_SECRET?: string;
 	ENCRYPTION_KEY: string;
-
-	// Twilio SMS webhook verification
-	TWILIO_AUTH_TOKEN?: string;
 
 	// Telnyx phone number provisioning
 	TELNYX_API_KEY?: string;
@@ -102,17 +59,12 @@ export interface Env {
 	R2_ACCESS_KEY_ID?: string;
 	R2_SECRET_ACCESS_KEY?: string;
 	CF_ACCOUNT_ID?: string;
-
 	// Stripe
 	STRIPE_SECRET_KEY: string;
 	STRIPE_WEBHOOK_SECRET: string;
 
 	// Email (Resend)
 	RESEND_API_KEY: string;
-
-	// Performance instrumentation — set to "1" to emit Server-Timing headers
-	// and structured per-request timing logs (see lib/perf.ts)
-	PERF_LOGS?: string;
 }
 
 import type { Database } from "@relayapi/db";
@@ -122,6 +74,8 @@ export interface Variables {
 	keyId: string;
 	permissions: string[];
 	workspaceScope: "all" | string[];
+	principalType: "service" | "dashboard_user";
+	principalId: string | null;
 	plan: "free" | "pro";
 	callsIncluded: number;
 	aiEnabled: boolean;
@@ -142,6 +96,8 @@ export interface KVKeyData {
 	key_id: string;
 	permissions: string[];
 	workspace_scope?: "all" | string[];
+	principal_type?: "service" | "dashboard_user";
+	principal_id?: string | null;
 	expires_at: string | null;
 	plan: "free" | "pro";
 	calls_included: number;
@@ -155,20 +111,4 @@ export interface KVKeyData {
 	 */
 	period_start?: string | null;
 	period_end?: string | null;
-	/** @deprecated Rate limiting now uses CF Rate Limiting binding */
-	rate_limit_max?: number;
-	/** @deprecated Rate limiting now uses CF Rate Limiting binding */
-	rate_limit_window?: number;
 }
-
-// Pricing is now centralized in @relayapi/config — inline copy for wrangler compatibility
-export const PRICING = {
-	freeCallsIncluded: 200,
-	monthlyPriceCents: 500,
-	proCallsIncluded: 10_000,
-	pricePerThousandCallsCents: 100,
-	freeRateLimitMax: 100,
-	freeRateLimitWindow: 60,
-	proRateLimitMax: 1_000,
-	proRateLimitWindow: 60,
-} as const;

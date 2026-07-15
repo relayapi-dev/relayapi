@@ -9,7 +9,7 @@
 #   3.  Pulls and runs the relayapi-downloader container
 #   4.  Installs Caddy for automatic HTTPS reverse proxy
 #   5.  Configures DNS hostname via Cloudflare API
-#   6.  Sets up auto-update cron (pulls latest image daily)
+#   6.  Installs explicit digest promotion and rollback commands
 #
 # Usage:
 #   chmod +x setup-vps.sh
@@ -50,7 +50,7 @@ echo ""
 read -rsp "Internal API key (shared secret with Cloudflare Workers): " INTERNAL_API_KEY; echo
 read -rp  "Hostname for this service (e.g. dl.relayapi.dev): "         DL_HOSTNAME
 read -rp  "SSH port                  [22]: "                           SSH_PORT; SSH_PORT=${SSH_PORT:-22}
-read -rp  "Docker image              [zanhk/relayapi-downloader:latest]: " DOCKER_IMAGE; DOCKER_IMAGE=${DOCKER_IMAGE:-zanhk/relayapi-downloader:latest}
+read -rp  "Docker image digest (repository@sha256:...): "              DOCKER_IMAGE
 echo ""
 echo "── DNS (optional) ─────────────────────────────────────────────────────"
 echo "If you want this script to create the DNS A record automatically,"
@@ -61,6 +61,8 @@ echo ""
 # Validate inputs
 [[ -z "$INTERNAL_API_KEY" ]] && err "Internal API key cannot be empty"
 [[ -z "$DL_HOSTNAME" ]]      && err "Hostname cannot be empty"
+[[ "$DOCKER_IMAGE" =~ ^[a-zA-Z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] || \
+  err "Docker image must be an immutable repository@sha256:<64 lowercase hex> reference"
 [[ ${#INTERNAL_API_KEY} -lt 16 ]] && warn "API key is short — consider using 32+ hex characters"
 
 info "Starting setup. This will take ~3 minutes..."
@@ -184,6 +186,13 @@ docker pull "$DOCKER_IMAGE"
 
 info "Starting downloader container..."
 
+cat > /etc/relayapi-downloader.env << EOF
+INTERNAL_API_KEY=${INTERNAL_API_KEY}
+PORT=8000
+REQUEST_TIMEOUT=60
+EOF
+chmod 600 /etc/relayapi-downloader.env
+
 # Stop existing container if running
 docker stop relayapi-downloader 2>/dev/null || true
 docker rm relayapi-downloader 2>/dev/null || true
@@ -192,26 +201,35 @@ docker run -d \
   --name relayapi-downloader \
   --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
-  -e INTERNAL_API_KEY="$INTERNAL_API_KEY" \
-  -e PORT=8000 \
-  -e REQUEST_TIMEOUT=60 \
+  --env-file /etc/relayapi-downloader.env \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001 \
   "$DOCKER_IMAGE"
 
-sleep 3
+# Require the service to become ready before installing the public reverse proxy.
+# The bounded poll tolerates a cold start while still making setup fail closed.
+DOWNLOADER_READY=false
+HEALTH=""
+for attempt in {1..30}; do
+  if ! docker ps --filter "name=relayapi-downloader" --filter "status=running" -q | grep -q .; then
+    err "Downloader container stopped before becoming ready — check: docker logs relayapi-downloader"
+  fi
 
-if docker ps --filter "name=relayapi-downloader" --filter "status=running" -q | grep -q .; then
-  log "Downloader container running on localhost:8000"
-else
-  warn "Container failed to start — check: docker logs relayapi-downloader"
-fi
+  if HEALTH=$(curl -fsS http://127.0.0.1:8000/health 2>/dev/null); then
+    DOWNLOADER_READY=true
+    break
+  fi
 
-# Health check
-if curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1; then
-  HEALTH=$(curl -s http://127.0.0.1:8000/health)
-  log "Health check passed: ${HEALTH}"
-else
-  warn "Health check failed — container may still be starting up"
-fi
+  if (( attempt < 30 )); then
+    sleep 2
+  fi
+done
+
+[[ "$DOWNLOADER_READY" = "true" ]] || \
+  err "Downloader health check did not pass within 60 seconds — check: docker logs relayapi-downloader"
+log "Downloader ready on localhost:8000: ${HEALTH}"
 
 # =============================================================================
 # 8. INSTALL CADDY (AUTOMATIC HTTPS REVERSE PROXY)
@@ -316,51 +334,96 @@ else
 fi
 
 # =============================================================================
-# 10. AUTO-UPDATE CRON
-# Pulls latest Docker image daily at 4am and restarts if changed.
+# 10. EXPLICIT DIGEST PROMOTION AND ROLLBACK
 # =============================================================================
-info "Setting up daily auto-update cron..."
+info "Installing explicit downloader promotion and rollback commands..."
 
-cat > /usr/local/bin/update-downloader.sh << 'SCRIPT'
+cat > /usr/local/bin/promote-downloader.sh << 'SCRIPT'
 #!/bin/bash
-IMAGE="DOCKER_IMAGE_PLACEHOLDER"
-docker pull "$IMAGE" 2>/dev/null
+set -euo pipefail
 
-RUNNING=$(docker inspect --format='{{.Image}}' relayapi-downloader 2>/dev/null || echo "")
-LATEST=$(docker inspect --format='{{.Id}}' "$IMAGE" 2>/dev/null || echo "")
+IMAGE=${1:-}
+ENV_FILE=/etc/relayapi-downloader.env
+STATE_DIR=/var/lib/relayapi-downloader
+CURRENT_FILE=${STATE_DIR}/current-image
+PREVIOUS_FILE=${STATE_DIR}/previous-image
 
-if [[ "$RUNNING" != "$LATEST" ]] && [[ -n "$LATEST" ]]; then
-  echo "[$(date)] Updating relayapi-downloader to new image..."
-  docker stop relayapi-downloader
-  docker rm relayapi-downloader
+[[ "$IMAGE" =~ ^[a-zA-Z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] || {
+  echo "usage: promote-downloader.sh repository@sha256:<64 lowercase hex>" >&2
+  exit 2
+}
+[[ -r "$ENV_FILE" ]] || { echo "missing $ENV_FILE" >&2; exit 1; }
+install -d -m 0755 "$STATE_DIR"
+
+run_container() {
+  local name=$1 port=$2 restart=$3 image=$4
   docker run -d \
-    --name relayapi-downloader \
-    --restart unless-stopped \
-    -p 127.0.0.1:8000:8000 \
-    --env-file /etc/relayapi-downloader.env \
-    "$IMAGE"
-  docker image prune -f
-  echo "[$(date)] Update complete"
-else
-  echo "[$(date)] Already on latest image"
+    --name "$name" \
+    --restart "$restart" \
+    -p "127.0.0.1:${port}:8000" \
+    --env-file "$ENV_FILE" \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --tmpfs /tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001 \
+    "$image" >/dev/null
+}
+
+wait_healthy() {
+  local name=$1
+  for _ in $(seq 1 30); do
+    [[ "$(docker inspect --format='{{.State.Health.Status}}' "$name" 2>/dev/null || true)" == "healthy" ]] && return 0
+    sleep 2
+  done
+  return 1
+}
+
+docker pull "$IMAGE"
+docker rm -f relayapi-downloader-candidate >/dev/null 2>&1 || true
+run_container relayapi-downloader-candidate 8001 no "$IMAGE"
+if ! wait_healthy relayapi-downloader-candidate; then
+  docker logs --tail 50 relayapi-downloader-candidate >&2 || true
+  docker rm -f relayapi-downloader-candidate >/dev/null 2>&1 || true
+  echo "candidate failed health checks; active digest was not changed" >&2
+  exit 1
 fi
+docker rm -f relayapi-downloader-candidate >/dev/null
+
+CURRENT=$(cat "$CURRENT_FILE" 2>/dev/null || docker inspect --format='{{.Config.Image}}' relayapi-downloader 2>/dev/null || true)
+if [[ -n "$CURRENT" && "$CURRENT" != "$IMAGE" ]]; then
+  printf '%s\n' "$CURRENT" > "$PREVIOUS_FILE"
+fi
+
+docker rm -f relayapi-downloader >/dev/null 2>&1 || true
+run_container relayapi-downloader 8000 unless-stopped "$IMAGE"
+if ! wait_healthy relayapi-downloader; then
+  docker logs --tail 50 relayapi-downloader >&2 || true
+  docker rm -f relayapi-downloader >/dev/null 2>&1 || true
+  if [[ -n "$CURRENT" && "$CURRENT" =~ @sha256:[a-f0-9]{64}$ ]]; then
+    run_container relayapi-downloader 8000 unless-stopped "$CURRENT"
+    wait_healthy relayapi-downloader || true
+  fi
+  echo "promotion failed; previous digest was restored when available" >&2
+  exit 1
+fi
+
+printf '%s\n' "$IMAGE" > "$CURRENT_FILE"
+echo "promoted relayapi-downloader to $IMAGE"
 SCRIPT
 
-# Replace placeholder with actual image name
-sed -i "s|DOCKER_IMAGE_PLACEHOLDER|${DOCKER_IMAGE}|" /usr/local/bin/update-downloader.sh
-chmod +x /usr/local/bin/update-downloader.sh
+cat > /usr/local/bin/rollback-downloader.sh << 'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+PREVIOUS_FILE=/var/lib/relayapi-downloader/previous-image
+[[ -r "$PREVIOUS_FILE" ]] || { echo "no previous digest is recorded" >&2; exit 1; }
+exec /usr/local/bin/promote-downloader.sh "$(cat "$PREVIOUS_FILE")"
+SCRIPT
 
-# Save env vars for the auto-updater to use
-cat > /etc/relayapi-downloader.env << EOF
-INTERNAL_API_KEY=${INTERNAL_API_KEY}
-PORT=8000
-REQUEST_TIMEOUT=60
-EOF
-chmod 600 /etc/relayapi-downloader.env
-
-# Add cron job (4am daily)
-(crontab -l 2>/dev/null | grep -v update-downloader; echo "0 4 * * * /usr/local/bin/update-downloader.sh >> /var/log/downloader-update.log 2>&1") | crontab -
-log "Auto-update cron set (pulls latest image daily at 4am)"
+chmod 0755 /usr/local/bin/promote-downloader.sh /usr/local/bin/rollback-downloader.sh
+install -d -m 0755 /var/lib/relayapi-downloader
+printf '%s\n' "$DOCKER_IMAGE" > /var/lib/relayapi-downloader/current-image
+(crontab -l 2>/dev/null | grep -v update-downloader || true) | crontab -
+log "Digest-only promotion and rollback commands installed (no image auto-update cron)"
 
 # =============================================================================
 # 11. FINAL SERVICE CHECK
@@ -393,7 +456,7 @@ echo -e "  Downloader      ${BLUE}localhost:8000${NC} (Docker)"
 echo -e "  Caddy HTTPS     ${BLUE}https://${DL_HOSTNAME}${NC} → localhost:8000"
 echo -e "  Docker image    ${BLUE}${DOCKER_IMAGE}${NC}"
 echo -e "  Open ports      ${BLUE}SSH:${SSH_PORT}, HTTP:80, HTTPS:443${NC}"
-echo -e "  Auto-update     ${BLUE}Daily at 4am UTC${NC}"
+echo -e "  Promotion       ${BLUE}Explicit digest only${NC}"
 echo -e "  Env file        ${BLUE}/etc/relayapi-downloader.env${NC} (chmod 600)"
 echo ""
 echo -e "  ${YELLOW}Next steps:${NC}"
@@ -412,7 +475,7 @@ echo -e "  ${YELLOW}Useful commands:${NC}"
 echo ""
 echo "  docker logs relayapi-downloader -f     # Live logs"
 echo "  docker restart relayapi-downloader     # Restart"
-echo "  /usr/local/bin/update-downloader.sh    # Manual update"
+echo "  promote-downloader.sh <image@sha256>   # Health-gated promotion"
+echo "  rollback-downloader.sh                 # Restore previous digest"
 echo "  journalctl -u caddy -f                 # Caddy logs"
-echo "  cat /var/log/downloader-update.log     # Update history"
 echo ""

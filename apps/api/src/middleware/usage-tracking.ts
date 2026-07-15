@@ -1,88 +1,58 @@
-import { apiRequestLogs, usageRecords } from "@relayapi/db";
-import { sql } from "drizzle-orm";
+import { apiRequestLogs } from "@relayapi/db";
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { parseCsv } from "../lib/csv-parser";
 import type { getRequestDb } from "../lib/request-db";
 import { sendNotificationToOrg } from "../services/notification-manager";
+import {
+	finalizeMutationUsage,
+	reserveMutationUsage,
+} from "../services/usage-meter";
 import type { Env, Variables } from "../types";
-import { PRICING } from "../types";
 
-/**
- * Increment the KV usage counter for an org and return the new count.
- * Exported so the scheduler and queue consumer can account for usage too.
- */
+/** KV is a display/notification hint only; PostgreSQL usage buckets are authoritative. */
 export async function incrementUsage(
 	kv: KVNamespace,
 	orgId: string,
-	amount: number = 1,
+	amount = 1,
 ): Promise<number> {
-	const now = new Date();
-	const month = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-	const kvKey = `usage:${orgId}:${month}`;
-
-	// Read current count
-	const current = await kv.get(kvKey, "text");
-	const count = current ? parseInt(current, 10) : 0;
-	const newCount = count + amount;
-
-	// Write incremented value immediately (TTL: 35 days)
-	await kv.put(kvKey, String(newCount), {
-		expirationTtl: 35 * 24 * 60 * 60,
-	});
-
-	return newCount;
+	const current = await getUsageCount(kv, orgId);
+	const projected = current + amount;
+	await putUsageHint(kv, orgId, projected);
+	return projected;
 }
 
-/**
- * Get the current usage count for an org without incrementing.
- */
 export async function getUsageCount(
 	kv: KVNamespace,
 	orgId: string,
 ): Promise<number> {
-	const now = new Date();
-	const month = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-	const kvKey = `usage:${orgId}:${month}`;
-	const current = await kv.get(kvKey, "text");
-	return current ? parseInt(current, 10) : 0;
+	const current = await kv.get(usageHintKey(orgId), "text");
+	return current ? Number.parseInt(current, 10) || 0 : 0;
 }
 
-type ApiLogEntry = {
-	orgId: string;
-	keyId: string;
-	method: string;
-	path: string;
-	statusCode: number;
-	responseTimeMs: number;
-	billable: boolean;
-};
+function usageHintKey(orgId: string, at = new Date()): string {
+	return `usage:${orgId}:${usageMonth(at)}`;
+}
 
-type UsageWrite = {
-	orgId: string;
-	callsIncluded: number;
-	units: number;
-	periodStart: Date;
-	periodEnd: Date;
-};
+function usageMonth(at = new Date()): string {
+	return `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+async function putUsageHint(
+	kv: KVNamespace,
+	orgId: string,
+	count: number,
+): Promise<void> {
+	await kv.put(usageHintKey(orgId), String(count), {
+		expirationTtl: 35 * 24 * 60 * 60,
+	});
+}
 
 type UsageTrackingContext = Context<{
 	Bindings: Env;
 	Variables: Variables;
 }>;
 
-/**
- * Resolve the billing window a usage record belongs to.
- *
- * Pro orgs with a known Stripe subscription period bill on that period (so the
- * included-call allowance resets on the same anniversary the base charge lands,
- * per the maintainer's billing decision). Free orgs — and pro subs missing
- * period bounds — fall back to the calendar month in UTC. The result is stable
- * within a period, so every billable write in that window upserts the same
- * usage_records row (target is organizationId + periodStart).
- *
- * Pass the period bounds from the auth context (c.get("periodStart"/"periodEnd")).
- */
 export function resolveBillingPeriod(
 	periodStartIso?: string | null,
 	periodEndIso?: string | null,
@@ -94,12 +64,11 @@ export function resolveBillingPeriod(
 		if (
 			!Number.isNaN(periodStart.getTime()) &&
 			!Number.isNaN(periodEnd.getTime()) &&
-			periodEnd.getTime() > periodStart.getTime()
+			periodEnd > periodStart
 		) {
 			return { periodStart, periodEnd };
 		}
 	}
-	// Calendar-month fallback (UTC).
 	return {
 		periodStart: new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1)),
 		periodEnd: new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1)),
@@ -120,14 +89,6 @@ function isJsonContentType(contentType: string | undefined): boolean {
 	return mimeType === "application/json" || mimeType.endsWith("+json");
 }
 
-function countBodyItems(
-	body: Record<string, unknown> | null | undefined,
-	field: string,
-): number {
-	const items = body?.[field];
-	return Array.isArray(items) && items.length > 0 ? items.length : 1;
-}
-
 async function readJsonBodyFromClone(
 	c: UsageTrackingContext,
 ): Promise<Record<string, unknown> | null> {
@@ -139,49 +100,45 @@ async function readJsonBodyFromClone(
 	}
 }
 
-async function countBulkCsvUnits(
-	c: UsageTrackingContext,
-): Promise<number> {
+async function countBulkCsvUnits(c: UsageTrackingContext): Promise<number> {
 	try {
 		const formData = await c.req.raw.clone().formData();
 		const file = formData.get("file");
 		if (!(file instanceof File)) return 1;
-		const rows = parseCsv(await file.text());
-		return rows.length > 0 ? rows.length : 1;
+		return Math.max(1, parseCsv(await file.text()).length);
 	} catch {
 		return 1;
 	}
 }
 
-async function getUsageUnits(
-	c: UsageTrackingContext,
-): Promise<number> {
+async function getUsageUnits(c: UsageTrackingContext): Promise<number> {
 	if (c.req.method !== "POST") return 1;
-
-	const bulkField = JSON_BULK_USAGE_FIELDS[c.req.path];
-	if (bulkField) {
-		const cachedBody = c.get("parsedBody") as
-			| Record<string, unknown>
-			| null
-			| undefined;
-		const body = cachedBody ?? (await readJsonBodyFromClone(c));
-		return countBodyItems(body, bulkField);
+	const field = JSON_BULK_USAGE_FIELDS[c.req.path];
+	if (field) {
+		const body =
+			(c.get("parsedBody") as Record<string, unknown> | null | undefined) ??
+			(await readJsonBodyFromClone(c));
+		const items = body?.[field];
+		return Array.isArray(items) ? Math.max(1, items.length) : 1;
 	}
-
-	if (c.req.path === "/v1/posts/bulk-csv") {
-		return countBulkCsvUnits(c);
-	}
-
+	if (c.req.path === "/v1/posts/bulk-csv") return countBulkCsvUnits(c);
 	return 1;
 }
 
-async function persistUsageAndLogs(
+async function persistApiLog(
 	db: ReturnType<typeof getRequestDb>,
-	entry: ApiLogEntry,
-	usage?: UsageWrite,
+	entry: {
+		orgId: string;
+		keyId: string;
+		method: string;
+		path: string;
+		statusCode: number;
+		responseTimeMs: number;
+		billable: boolean;
+	},
 ): Promise<void> {
-	const tasks: Promise<unknown>[] = [
-		db.insert(apiRequestLogs).values({
+	try {
+		await db.insert(apiRequestLogs).values({
 			organizationId: entry.orgId,
 			apiKeyId: entry.keyId,
 			method: entry.method,
@@ -189,49 +146,45 @@ async function persistUsageAndLogs(
 			statusCode: entry.statusCode,
 			responseTimeMs: entry.responseTimeMs,
 			billable: entry.billable,
-		}),
-	];
-
-	if (usage) {
-		tasks.push(
-			db
-				.insert(usageRecords)
-				.values({
-					organizationId: usage.orgId,
-					periodStart: usage.periodStart,
-					periodEnd: usage.periodEnd,
-					postsCount: 0,
-					postsIncluded: usage.callsIncluded,
-					apiCallsCount: usage.units,
-					apiCallsIncluded: usage.callsIncluded,
-					overageCalls: 0,
-					overageCallsCostCents: 0,
-				})
-				.onConflictDoUpdate({
-					target: [usageRecords.organizationId, usageRecords.periodStart],
-					set: {
-						// Refresh apiCallsIncluded on every write so a mid-month plan
-						// change (free<->pro) is reflected immediately instead of being
-						// frozen at whatever the first writer of the month inserted.
-						apiCallsIncluded: usage.callsIncluded,
-						apiCallsCount: sql`${usageRecords.apiCallsCount} + ${usage.units}`,
-						overageCalls: sql`GREATEST(0, ${usageRecords.apiCallsCount} + ${usage.units} - ${usage.callsIncluded})`,
-						// Pro-rated to the cent, matching the amount actually charged
-						// via Stripe (invoice-generator.ts) and GET /v1/usage. The prior
-						// CEIL(.../1000) * 100 rounded every started block up to a full
-						// dollar, overstating owed amounts up to 100x.
-						overageCallsCostCents: sql`CEIL(GREATEST(0, ${usageRecords.apiCallsCount} + ${usage.units} - ${usage.callsIncluded}) * ${PRICING.pricePerThousandCallsCents} / 1000.0)`,
-						updatedAt: new Date(),
-					},
-				}),
-		);
+		});
+	} catch (error) {
+		console.error("API usage log persistence failed:", error);
 	}
+}
 
-	const results = await Promise.allSettled(tasks);
-	for (const result of results) {
-		if (result.status === "rejected") {
-			console.error("Usage tracking persistence failed:", result.reason);
-		}
+async function projectUsageWarning(
+	c: UsageTrackingContext,
+	committedUnits: number,
+	includedUnits: number,
+	unitsJustCommitted: number,
+): Promise<void> {
+	if (includedUnits <= 0) return;
+	const before = Math.max(0, committedUnits - unitsJustCommitted);
+	const percentBefore = Math.floor((before / includedUnits) * 100);
+	const percentNow = Math.floor((committedUnits / includedUnits) * 100);
+	for (const threshold of [80, 100] as const) {
+		if (percentBefore >= threshold || percentNow < threshold) continue;
+		const warningKey = `usage_warning:${c.get("orgId")}:${threshold}:${usageMonth()}`;
+		if (await c.env.KV.get(warningKey)) continue;
+		await sendNotificationToOrg(c.env, {
+			type: "usage_warning",
+			orgId: c.get("orgId"),
+			title:
+				threshold === 100
+					? "API mutation limit reached"
+					: "Approaching API mutation limit",
+			body: `You've used ${committedUnits.toLocaleString()} of ${includedUnits.toLocaleString()} included mutations.`,
+			data: {
+				percentUsed: percentNow,
+				callsUsed: committedUnits,
+				callsIncluded: includedUnits,
+				plan: c.get("plan"),
+			},
+			occurrenceId: warningKey,
+		});
+		await c.env.KV.put(warningKey, "1", {
+			expirationTtl: 35 * 24 * 60 * 60,
+		});
 	}
 }
 
@@ -239,131 +192,57 @@ export const usageTrackingMiddleware = createMiddleware<{
 	Bindings: Env;
 	Variables: Variables;
 }>(async (c, next) => {
-	const start = Date.now();
+	const startedAt = Date.now();
+	const orgId = c.get("orgId");
+	const keyId = c.get("keyId");
+	const isRead =
+		c.req.method === "GET" ||
+		c.req.method === "HEAD" ||
+		c.req.method === "OPTIONS";
 
-	// GET/HEAD: not metered for billing, but logged for abuse detection
-	if (c.req.method === "GET" || c.req.method === "HEAD") {
+	if (isRead) {
 		await next();
-		const orgId = c.get("orgId");
-		const keyId = c.get("keyId");
-		if (orgId) {
-			c.executionCtx.waitUntil(
-				persistUsageAndLogs(c.get("db"), {
-					orgId,
-					keyId,
-					method: c.req.method,
-					path: c.req.path,
-					statusCode: c.res.status,
-					responseTimeMs: Date.now() - start,
-					billable: false,
-				}),
-			);
-		}
+		c.executionCtx.waitUntil(
+			persistApiLog(c.get("db"), {
+				orgId,
+				keyId,
+				method: c.req.method,
+				path: c.req.path,
+				statusCode: c.res.status,
+				responseTimeMs: Date.now() - startedAt,
+				billable: false,
+			}),
+		);
 		return;
 	}
 
-	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
-	const plan = c.get("plan");
-	const callsIncluded = c.get("callsIncluded");
-	// Bill against the org's actual Stripe period when known; calendar month otherwise.
-	const billingPeriod = resolveBillingPeriod(
-		c.get("periodStart"),
-		c.get("periodEnd"),
-	);
+	const units = Math.min(1000, Math.max(1, await getUsageUnits(c)));
+	const period = resolveBillingPeriod(c.get("periodStart"), c.get("periodEnd"));
+	const decision = await reserveMutationUsage(c.get("db"), {
+		organizationId: orgId,
+		// The outer idempotency middleware suppresses active receipt replays. If a
+		// receipt expires, using the same caller-supplied key is a new mutation and
+		// must receive a new charge, so the usage ledger uses an execution identity.
+		idempotencyKey: `request:${crypto.randomUUID()}`,
+		units,
+		includedUnits: c.get("callsIncluded"),
+		periodStart: period.periodStart,
+		periodEnd: period.periodEnd,
+		hardLimit: c.get("plan") === "free",
+	});
 
-	// Determine how many units this request costs.
-	// Multi-item endpoints cost 1 per item, not 1 per request.
-	// Cap per-request units so a single oversized bulk upload can't consume an
-	// entire month's quota in one shot (and can't be used to blow past the free
-	// hard limit by an arbitrary amount). The cap is well above realistic bulk
-	// sizes, so it only bites pathological payloads.
-	const MAX_UNITS_PER_REQUEST = 1000;
-	const units = Math.min(await getUsageUnits(c), MAX_UNITS_PER_REQUEST);
-
-	// Read the counter synchronously (needed for free-plan gate + threshold detection),
-	// then defer the KV write via waitUntil — the handler no longer blocks on it.
-	// Concurrency note: KV get+put has never been atomic here; free-plan overage under
-	// bursts was already tolerated. The DB counter in persistUsageAndLogs
-	// (SQL apiCallsCount + units) remains the source of truth for billing.
-	// TODO: migrate to Durable Objects for atomic per-org counters.
-	const now = new Date();
-	const usageMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-	const usageKvKey = `usage:${orgId}:${usageMonth}`;
-	const current = await c.env.KV.get(usageKvKey, "text");
-	const countBefore = current ? parseInt(current, 10) : 0;
-	const newCount = countBefore + units;
-	c.executionCtx.waitUntil(
-		c.env.KV.put(usageKvKey, String(newCount), {
-			expirationTtl: 35 * 24 * 60 * 60,
-		}),
-	);
-
-	// Usage warning notifications (fire-and-forget, deduplicated via KV)
-	if (callsIncluded > 0) {
-		const percentNow = Math.floor((newCount / callsIncluded) * 100);
-		const percentBefore = Math.floor((countBefore / callsIncluded) * 100);
-
-		const thresholds = [80, 100] as const;
-		for (const threshold of thresholds) {
-			if (percentNow >= threshold && percentBefore < threshold) {
-				const now = new Date();
-				const month = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-				const warningKey = `usage_warning:${orgId}:${threshold}:${month}`;
-
-				c.executionCtx.waitUntil(
-					(async () => {
-						const alreadySent = await c.env.KV.get(warningKey);
-						if (alreadySent) return;
-						try {
-							await sendNotificationToOrg(c.env, {
-								type: "usage_warning",
-								orgId,
-								title:
-									threshold >= 100
-										? "API call limit reached"
-										: "Approaching API call limit",
-								body:
-									threshold >= 100
-										? `You've used ${newCount.toLocaleString()} of ${callsIncluded.toLocaleString()} API calls (${percentNow}%)`
-										: `You've used ${percentNow}% of your included API calls`,
-								data: {
-									percentUsed: percentNow,
-									callsUsed: newCount,
-									callsIncluded,
-									plan,
-								},
-							});
-							// Only set dedup flag after successful notification delivery
-							await c.env.KV.put(warningKey, "1", {
-								expirationTtl: 35 * 24 * 60 * 60,
-							});
-						} catch (err) {
-							console.error("[Notification] Usage warning failed:", err);
-						}
-					})(),
-				);
-			}
-		}
-	}
-
-	// Free plan: hard limit. Account for the in-flight request's full unit cost
-	// (newCount = countBefore + units) so a single bulk request can't slip
-	// under the cap when countBefore is just below it and then process far
-	// beyond the advertised limit in one shot.
-	if (plan === "free" && newCount > callsIncluded) {
-		// Already over limit — don't process. The counter is slightly inflated
-		// but that's safe (it resets monthly).
-		c.header("X-Usage-Count", String(newCount));
-		c.header("X-Usage-Limit", String(callsIncluded));
+	if (!decision.ok) {
+		const used = decision.committedUnits + decision.reservedUnits;
+		c.header("X-Usage-Count", String(used));
+		c.header("X-Usage-Limit", String(decision.includedUnits));
 		c.executionCtx.waitUntil(
-			persistUsageAndLogs(c.get("db"), {
+			persistApiLog(c.get("db"), {
 				orgId,
 				keyId,
 				method: c.req.method,
 				path: c.req.path,
 				statusCode: 403,
-				responseTimeMs: Date.now() - start,
+				responseTimeMs: Date.now() - startedAt,
 				billable: false,
 			}),
 		);
@@ -371,49 +250,60 @@ export const usageTrackingMiddleware = createMiddleware<{
 			{
 				error: {
 					code: "FREE_LIMIT_REACHED",
-					message: `Free plan limit reached (${callsIncluded} API calls/month). Upgrade to Pro to continue.`,
+					message: `Free plan limit reached (${decision.includedUnits} successful mutations per period). Upgrade to Pro to continue.`,
 				},
 			},
 			403,
 		);
 	}
 
-	// Set usage headers
-	const limit = callsIncluded;
-	c.header("X-Usage-Count", String(newCount));
-	c.header("X-Usage-Limit", String(limit));
+	const reservation = decision.reservation;
+	c.header(
+		"X-Usage-Count",
+		String(reservation.committedUnits + reservation.reservedUnits),
+	);
+	c.header("X-Usage-Limit", String(reservation.includedUnits));
 
-	await next();
+	let responseStatus = 500;
+	try {
+		await next();
+		responseStatus = c.res.status;
+	} catch (error) {
+		await finalizeMutationUsage(c.get("db"), reservation, 500);
+		throw error;
+	}
 
-	// Don't bill client/server errors. getUsageUnits counts raw request-body
-	// items before validation, so a rejected bulk payload (400) or a 404 would
-	// otherwise be charged the full unit count for work that never ran. Log the
-	// request for abuse detection but mark it non-billable and skip the usage
-	// record write so quota/overage only reflect successful calls.
-	const statusCode = c.res.status;
-	const isBillable = statusCode < 400;
+	const finalized = await finalizeMutationUsage(
+		c.get("db"),
+		reservation,
+		responseStatus,
+	);
+	const billable = responseStatus < 400;
+	c.header("X-Usage-Count", String(finalized.committedUnits));
+	c.header("X-Usage-Limit", String(finalized.includedUnits));
 
 	c.executionCtx.waitUntil(
-		persistUsageAndLogs(
-			c.get("db"),
-			{
+		Promise.all([
+			persistApiLog(c.get("db"), {
 				orgId,
 				keyId,
 				method: c.req.method,
 				path: c.req.path,
-				statusCode,
-				responseTimeMs: Date.now() - start,
-				billable: isBillable,
-			},
-			isBillable
-				? {
-						orgId,
-						callsIncluded,
-						units,
-						periodStart: billingPeriod.periodStart,
-						periodEnd: billingPeriod.periodEnd,
-					}
-				: undefined,
-		),
+				statusCode: responseStatus,
+				responseTimeMs: Date.now() - startedAt,
+				billable,
+			}),
+			putUsageHint(c.env.KV, orgId, finalized.committedUnits),
+			...(billable
+				? [
+						projectUsageWarning(
+							c,
+							finalized.committedUnits,
+							finalized.includedUnits,
+							reservation.units,
+						),
+					]
+				: []),
+		]),
 	);
 });

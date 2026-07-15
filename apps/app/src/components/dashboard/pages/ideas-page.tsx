@@ -1,22 +1,26 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "motion/react";
 import { Lightbulb, Loader2, Plus, Tags, X } from "lucide-react";
+import { motion } from "motion/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
+import { useFilterQuery } from "@/components/dashboard/filter-context";
+import { IdeaBoard } from "@/components/dashboard/ideas/idea-board";
+import { IdeaDetailDialog } from "@/components/dashboard/ideas/idea-detail-dialog";
+import type {
+	Idea,
+	IdeaGroup,
+	IdeaTag,
+} from "@/components/dashboard/ideas/types";
+import { NewPostDialog } from "@/components/dashboard/new-post-dialog";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
+import { Button } from "@/components/ui/button";
 import {
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import { usePaginatedApi } from "@/hooks/use-api";
-import { PageHeader } from "@/components/dashboard/page-header";
-import { WorkspaceFilterButton } from "@/components/dashboard/workspace-filter-button";
-import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
-import { useFilterQuery } from "@/components/dashboard/filter-context";
-import { IdeaBoard } from "@/components/dashboard/ideas/idea-board";
-import { IdeaDetailDialog } from "@/components/dashboard/ideas/idea-detail-dialog";
-import { NewPostDialog } from "@/components/dashboard/new-post-dialog";
-import type { Idea, IdeaGroup, IdeaTag } from "@/components/dashboard/ideas/types";
+import { cn } from "@/lib/utils";
 
 const stagger = {
 	hidden: {},
@@ -57,7 +61,9 @@ function moveIdeaLocally(
 	if (afterIdeaId === null) {
 		insertIndex = 0;
 	} else if (afterIdeaId) {
-		const targetIndex = targetIdeas.findIndex((idea) => idea.id === afterIdeaId);
+		const targetIndex = targetIdeas.findIndex(
+			(idea) => idea.id === afterIdeaId,
+		);
 		insertIndex = targetIndex === -1 ? targetIdeas.length : targetIndex + 1;
 	}
 
@@ -100,35 +106,6 @@ function applyGroupPositions(
 			? group
 			: { ...group, position: nextPosition };
 	});
-}
-
-function moveGroupIdeasToDefault(
-	list: Idea[],
-	deletedGroupId: string,
-	defaultGroupId: string,
-) {
-	const defaultIdeas = sortIdeasByPosition(
-		list.filter((idea) => idea.group_id === defaultGroupId),
-	);
-	const movedIdeas = sortIdeasByPosition(
-		list.filter((idea) => idea.group_id === deletedGroupId),
-	);
-	if (movedIdeas.length === 0) return list;
-
-	const maxDefaultPosition = defaultIdeas.reduce(
-		(maxPosition, idea) => Math.max(maxPosition, idea.position),
-		-1,
-	);
-	const nextById = new Map<string, Idea>();
-	movedIdeas.forEach((idea, index) => {
-		nextById.set(idea.id, {
-			...idea,
-			group_id: defaultGroupId,
-			position: maxDefaultPosition + index + 1,
-		});
-	});
-
-	return list.map((idea) => nextById.get(idea.id) ?? idea);
 }
 
 export function IdeasPage() {
@@ -265,7 +242,6 @@ export function IdeasPage() {
 
 	const handleCreateGroup = async (name: string, color: string) => {
 		const body: Record<string, string> = { name, color };
-		if (filterQuery.workspace_id) body.workspace_id = filterQuery.workspace_id;
 
 		const res = await fetch("/api/idea-groups", {
 			method: "POST",
@@ -279,10 +255,12 @@ export function IdeasPage() {
 	};
 
 	const handleRenameGroup = async (groupId: string, name: string) => {
+		const group = groups.find((item) => item.id === groupId);
+		if (!group) return;
 		const res = await fetch(`/api/idea-groups/${groupId}`, {
 			method: "PATCH",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ name }),
+			body: JSON.stringify({ name, expected_revision: group.revision }),
 		});
 		if (!res.ok) return;
 
@@ -303,25 +281,15 @@ export function IdeasPage() {
 				: "Delete this group?";
 		if (!window.confirm(confirmMsg)) return;
 
-		const res = await fetch(`/api/idea-groups/${groupId}`, {
-			method: "DELETE",
-		});
-		if (!res.ok && res.status !== 204) return;
-
-		setGroups((prev) => prev.filter((group) => group.id !== groupId));
-
-		const defaultGroup = groups.find(
-			(group) =>
-				group.is_default &&
-				group.workspace_id === deletedGroup?.workspace_id &&
-				group.id !== groupId,
+		if (!deletedGroup) return;
+		const res = await fetch(
+			`/api/idea-groups/${groupId}?expected_revision=${deletedGroup.revision}`,
+			{
+				method: "DELETE",
+			},
 		);
-		if (!defaultGroup) {
-			refetchAll();
-			return;
-		}
-
-		setIdeas((prev) => moveGroupIdeasToDefault(prev, groupId, defaultGroup.id));
+		if (!res.ok && res.status !== 204) return;
+		refetchAll();
 	};
 
 	const handleReorderGroups = async (
@@ -330,12 +298,24 @@ export function IdeasPage() {
 		const previousGroups = groups;
 		setGroups((prev) => applyGroupPositions(prev, reordered));
 
+		const revisionById = new Map(
+			groups.map((group) => [group.id, group.revision]),
+		);
 		const res = await fetch("/api/idea-groups/reorder", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ groups: reordered }),
+			body: JSON.stringify({
+				groups: reordered.map((group) => ({
+					...group,
+					expected_revision: revisionById.get(group.id),
+				})),
+			}),
 		});
-		if (res.ok) return;
+		if (res.ok) {
+			const response = (await res.json()) as { data: IdeaGroup[] };
+			setGroups(response.data);
+			return;
+		}
 
 		setGroups(previousGroups);
 		refetchGroups();
@@ -347,9 +327,14 @@ export function IdeasPage() {
 		afterIdeaId?: string | null,
 	) => {
 		const previousIdeas = ideas;
+		const currentIdea = previousIdeas.find((idea) => idea.id === ideaId);
+		if (!currentIdea) return;
 		setIdeas((prev) => moveIdeaLocally(prev, ideaId, groupId, afterIdeaId));
 
-		const body: Record<string, unknown> = { group_id: groupId };
+		const body: Record<string, unknown> = {
+			group_id: groupId,
+			expected_revision: currentIdea.revision,
+		};
 		if (afterIdeaId === null) {
 			const firstTargetIdea = sortIdeasByPosition(
 				ideas.filter((idea) => idea.group_id === groupId && idea.id !== ideaId),
@@ -374,16 +359,26 @@ export function IdeasPage() {
 		setIdeas((prev) =>
 			prev.map((idea) => (idea.id === ideaId ? updatedIdea : idea)),
 		);
+		refetchIdeas();
 	};
 
 	const handleSaveIdea = async (
 		id: string,
-		data: { title?: string | null; content?: string | null; tag_ids?: string[] },
+		data: {
+			title?: string | null;
+			content?: string | null;
+			tag_ids?: string[];
+		},
 	) => {
+		const currentIdea = ideas.find((idea) => idea.id === id);
+		if (!currentIdea) throw new Error("Idea no longer exists");
 		const res = await fetch(`/api/ideas/${id}`, {
 			method: "PATCH",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(data),
+			body: JSON.stringify({
+				...data,
+				expected_revision: currentIdea.revision,
+			}),
 		});
 		if (!res.ok) {
 			throw new Error(`Failed to save idea (${res.status})`);
@@ -399,11 +394,6 @@ export function IdeasPage() {
 		title?: string;
 		content?: string;
 		group_id?: string;
-		media?: Array<{
-			url: string;
-			type?: "image" | "video" | "gif" | "document";
-			alt?: string;
-		}>;
 		tag_ids?: string[];
 	}) => {
 		const body: Record<string, unknown> = { ...data };
@@ -425,12 +415,17 @@ export function IdeasPage() {
 
 	const handleMoveIdeaToGroup = async (ideaId: string, groupId: string) => {
 		const previousIdeas = ideas;
+		const currentIdea = previousIdeas.find((idea) => idea.id === ideaId);
+		if (!currentIdea) return;
 		setIdeas((prev) => moveIdeaLocally(prev, ideaId, groupId));
 
 		const res = await fetch(`/api/ideas/${ideaId}/move`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ group_id: groupId }),
+			body: JSON.stringify({
+				group_id: groupId,
+				expected_revision: currentIdea.revision,
+			}),
 		});
 		if (!res.ok) {
 			setIdeas(previousIdeas);
@@ -442,6 +437,7 @@ export function IdeasPage() {
 		setIdeas((prev) =>
 			prev.map((idea) => (idea.id === ideaId ? updatedIdea : idea)),
 		);
+		refetchIdeas();
 	};
 
 	const handleIdeaMediaChange = (ideaId: string, media: Idea["media"]) => {
@@ -456,10 +452,9 @@ export function IdeasPage() {
 		setConvertIdea({
 			id: idea.id,
 			content: idea.content,
-			media: idea.media.map((m) => ({
-				url: m.url,
-				...(m.type ? { type: m.type } : {}),
-			})),
+			media: idea.media.flatMap((m) =>
+				m.url ? [{ url: m.url, ...(m.type ? { type: m.type } : {}) }] : [],
+			),
 		});
 		setDetailOpen(false);
 		setConvertDialogOpen(true);
@@ -515,7 +510,8 @@ export function IdeasPage() {
 									>
 										<Tags className="size-3.5" />
 										{filterTagId
-											? tags.find((tag) => tag.id === filterTagId)?.name ?? "Tag"
+											? (tags.find((tag) => tag.id === filterTagId)?.name ??
+												"Tag")
 											: "Tag"}
 									</Button>
 								</PopoverTrigger>
@@ -529,9 +525,7 @@ export function IdeasPage() {
 												filterTagId === tag.id && "bg-accent",
 											)}
 											onClick={() =>
-												setFilterTagId(
-													filterTagId === tag.id ? null : tag.id,
-												)
+												setFilterTagId(filterTagId === tag.id ? null : tag.id)
 											}
 										>
 											<span

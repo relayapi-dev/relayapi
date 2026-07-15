@@ -117,7 +117,7 @@ export const STRIPE = {
 	proPriceId: "price_pro_monthly", // $5/mo flat subscription; overage added as invoice items
 } as const;
 
-/** Flat PRICING object for backward compatibility */
+/** Flat pricing constants shared by applications. */
 export const PRICING = {
 	freeCallsIncluded: PLANS.free.apiCallsIncluded,
 	monthlyPriceCents: PLANS.pro.monthlyPriceCents,
@@ -128,3 +128,111 @@ export const PRICING = {
 	proRateLimitMax: PLANS.pro.rateLimitMax,
 	proRateLimitWindow: PLANS.pro.rateLimitWindow,
 } as const;
+
+/**
+ * Shared API-key cache policy. KV is only a derivative authorization cache;
+ * every writer uses this short backstop so DB revocations and entitlement
+ * changes cannot remain effective at the edge for longer than ten minutes.
+ */
+export const API_KEY_CACHE_TTL_SECONDS = 600;
+export const API_KEY_NEGATIVE_CACHE_TTL_SECONDS = 300;
+
+export function apiKeyCacheTtl(
+	expiresAt: Date | string | null | undefined,
+	now = new Date(),
+): number {
+	if (!expiresAt) return API_KEY_CACHE_TTL_SECONDS;
+	const expiry = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+	const secondsUntilExpiry = Math.floor(
+		(expiry.getTime() - now.getTime()) / 1000,
+	);
+	// Cloudflare KV requires a minimum TTL of 60 seconds. API auth still checks
+	// expires_at on every hit, so this never extends the key's authorization.
+	return Math.max(60, Math.min(API_KEY_CACHE_TTL_SECONDS, secondsUntilExpiry));
+}
+
+export type BillingSubscriptionStatus =
+	| "trialing"
+	| "active"
+	| "past_due"
+	| "cancelled"
+	| null
+	| undefined;
+
+export interface BillingPolicyInput {
+	status: BillingSubscriptionStatus;
+	stripeSubscriptionId?: string | null;
+	trialEndsAt?: Date | string | null;
+	currentPeriodStart?: Date | string | null;
+	currentPeriodEnd?: Date | string | null;
+}
+
+export interface BillingPolicyDecision {
+	/** Product access. Kept separate from whether usage may be invoiced. */
+	entitlement: "free" | "pro";
+	/** The usage window to attribute API calls to, when Stripe is authoritative. */
+	usagePeriod: { start: Date; end: Date } | null;
+	/** Whether metered overage may be sent to Stripe. */
+	billable: boolean;
+	/** Why the decision was made, useful for logs/tests without duplicating policy. */
+	reason:
+		| "active"
+		| "authoritative_trial"
+		| "expired_or_unproven_trial"
+		| "inactive";
+}
+
+function asValidDate(value: Date | string | null | undefined): Date | null {
+	if (!value) return null;
+	const date = value instanceof Date ? value : new Date(value);
+	return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * Single source of truth for entitlement, usage periods, and billability.
+ * A local `trialing` value alone is deliberately insufficient: a Pro trial
+ * must be backed by a Stripe subscription and a future Stripe trial end.
+ */
+export function getBillingPolicy(
+	input: BillingPolicyInput,
+	now = new Date(),
+): BillingPolicyDecision {
+	const periodStart = asValidDate(input.currentPeriodStart);
+	const periodEnd = asValidDate(input.currentPeriodEnd);
+	const validPeriod =
+		periodStart && periodEnd && periodEnd > periodStart
+			? { start: periodStart, end: periodEnd }
+			: null;
+
+	if (input.status === "active") {
+		return {
+			entitlement: "pro",
+			usagePeriod: validPeriod,
+			billable: Boolean(input.stripeSubscriptionId),
+			reason: "active",
+		};
+	}
+
+	if (input.status === "trialing") {
+		const trialEndsAt = asValidDate(input.trialEndsAt);
+		const authoritativeTrial = Boolean(
+			input.stripeSubscriptionId && trialEndsAt && trialEndsAt > now,
+		);
+		return {
+			entitlement: authoritativeTrial ? "pro" : "free",
+			usagePeriod: authoritativeTrial ? validPeriod : null,
+			// Trials have entitlement but are not billed for overage.
+			billable: false,
+			reason: authoritativeTrial
+				? "authoritative_trial"
+				: "expired_or_unproven_trial",
+		};
+	}
+
+	return {
+		entitlement: "free",
+		usagePeriod: null,
+		billable: false,
+		reason: "inactive",
+	};
+}

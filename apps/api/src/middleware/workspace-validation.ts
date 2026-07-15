@@ -5,7 +5,32 @@ import type { Env, Variables } from "../types";
 
 const WS_VALID_TTL_SECONDS = 300; // 5 minutes
 
-export function workspaceValidKvKey(orgId: string, workspaceId: string): string {
+/** Collect workspace IDs only from defined request-envelope locations. */
+export function collectWorkspaceIds(value: unknown): string[] {
+	const ids = new Set<string>();
+	if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+
+	const body = value as Record<string, unknown>;
+	if (typeof body.workspace_id === "string" && body.workspace_id.length > 0) {
+		ids.add(body.workspace_id);
+	}
+	// Bulk posts are the only request contract with per-item workspace IDs.
+	if (Array.isArray(body.posts)) {
+		for (const item of body.posts) {
+			if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+			const workspaceId = (item as Record<string, unknown>).workspace_id;
+			if (typeof workspaceId === "string" && workspaceId.length > 0) {
+				ids.add(workspaceId);
+			}
+		}
+	}
+	return [...ids];
+}
+
+export function workspaceValidKvKey(
+	orgId: string,
+	workspaceId: string,
+): string {
 	return `ws-valid:${orgId}:${workspaceId}`;
 }
 
@@ -27,10 +52,7 @@ export const workspaceValidationMiddleware = createMiddleware<{
 	const queryWorkspaceId = new URL(c.req.url).searchParams.get("workspace_id");
 	if (queryWorkspaceId) workspaceIds.push(queryWorkspaceId);
 
-	const body = c.get("parsedBody");
-	if (typeof body?.workspace_id === "string" && body.workspace_id.length > 0) {
-		workspaceIds.push(body.workspace_id);
-	}
+	workspaceIds.push(...collectWorkspaceIds(c.get("parsedBody")));
 
 	const uniqueWorkspaceIds = [...new Set(workspaceIds)];
 	if (uniqueWorkspaceIds.length === 0) {
@@ -41,7 +63,9 @@ export const workspaceValidationMiddleware = createMiddleware<{
 
 	// Check the KV cache for each id in parallel
 	const cached = await Promise.all(
-		uniqueWorkspaceIds.map((id) => c.env.KV.get(workspaceValidKvKey(orgId, id), "text")),
+		uniqueWorkspaceIds.map((id) =>
+			c.env.KV.get(workspaceValidKvKey(orgId, id), "text"),
+		),
 	);
 
 	const missing = uniqueWorkspaceIds.filter((_, i) => cached[i] !== "1");
