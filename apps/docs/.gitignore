@@ -1,7 +1,7 @@
 out/
 .open-next/
 
-# Generated from the live OpenAPI spec at deploy time (and on demand for local
-# dev) by scripts/generate-docs.ts. Treated as a build artifact, not committed.
-content/docs/api-reference/
+# API reference pages are generated from the pinned OpenAPI spec and committed.
+# Only the generator's transactional working directories are build artifacts.
 .api-reference-tmp/
+.api-reference-backup/

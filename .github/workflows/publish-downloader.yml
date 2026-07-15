@@ -1,23 +1,32 @@
 name: Build & Publish Downloader
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-downloader
+
 on:
   push:
     branches: [main]
     paths:
       - "apps/downloader/**"
+      - ".github/workflows/publish-downloader.yml"
   workflow_dispatch: # manual trigger
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v8
         with:
           version: "0.8.22"
 
@@ -35,25 +44,27 @@ jobs:
           cmp requirements.lock /tmp/relayapi-downloader-requirements.lock
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: apps/downloader
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: zanhk/relayapi-downloader:sha-${{ github.sha }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha
@@ -62,7 +73,8 @@ jobs:
       - name: Record immutable promotion reference
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
           test -n "$DIGEST"
           printf 'Promote exactly: `%s@%s`\n' \
-            'zanhk/relayapi-downloader' "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+            "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

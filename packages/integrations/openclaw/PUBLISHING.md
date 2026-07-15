@@ -44,19 +44,29 @@ clawhub publish ./packages/integrations/openclaw \
 For incremental updates, use `clawhub sync` which auto-detects changes:
 
 ```bash
+PUBLISH_ROOT="$(mktemp -d)"
+cp -R ./packages/integrations/openclaw "$PUBLISH_ROOT/RelayAPI"
+
 clawhub sync \
-  --root ./packages/integrations/openclaw \
+  --root "$PUBLISH_ROOT/RelayAPI" \
   --bump patch \
   --changelog "Description of changes" \
   --tags latest
+
+rm -rf "$PUBLISH_ROOT"
 ```
+
+ClawHub derives the slug and display name used by `sync` from the skill directory name. The temporary `RelayAPI` directory produces the `relayapi` slug with the correct product casing; syncing the repository's `openclaw` directory directly would try to use the reserved `openclaw` slug.
 
 Bump options: `patch` (0.0.x), `minor` (0.x.0), `major` (x.0.0).
 
 Preview before publishing:
 
 ```bash
-clawhub sync --root ./packages/integrations/openclaw --dry-run
+PUBLISH_ROOT="$(mktemp -d)"
+cp -R ./packages/integrations/openclaw "$PUBLISH_ROOT/RelayAPI"
+clawhub sync --root "$PUBLISH_ROOT/RelayAPI" --dry-run
+rm -rf "$PUBLISH_ROOT"
 ```
 
 ### 4. CI/CD automation
@@ -66,7 +76,10 @@ Add `CLAWHUB_TOKEN` as a GitHub Actions secret, then the workflow at `.github/wo
 For non-interactive CI environments, use:
 
 ```bash
-clawhub sync --root ./packages/integrations/openclaw --all --no-input --bump patch --tags latest
+PUBLISH_ROOT="$(mktemp -d)"
+cp -R ./packages/integrations/openclaw "$PUBLISH_ROOT/RelayAPI"
+clawhub --no-input sync --root "$PUBLISH_ROOT/RelayAPI" --all --bump patch --tags latest
+rm -rf "$PUBLISH_ROOT"
 ```
 
 ### 5. Verify publication

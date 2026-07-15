@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/publish-zapier.yml"
       - "packages/integrations/zapier-app/**"
   workflow_dispatch:
 
@@ -30,18 +31,27 @@ jobs:
         working-directory: packages/integrations/zapier-app
         run: bun run test
 
-      - name: Require Zapier deployment key
+      - name: Check for Zapier deployment key
+        id: zapier-key
         env:
           ZAPIER_DEPLOY_KEY: ${{ secrets.ZAPIER_DEPLOY_KEY }}
-        run: test -n "$ZAPIER_DEPLOY_KEY"
+        run: |
+          if test -n "$ZAPIER_DEPLOY_KEY"; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ZAPIER_DEPLOY_KEY is not configured; build and tests passed, but Zapier deployment was skipped."
+          fi
 
       - name: Validate
+        if: steps.zapier-key.outputs.available == 'true'
         working-directory: packages/integrations/zapier-app
         run: bun run zapier:validate
         env:
           ZAPIER_DEPLOY_KEY: ${{ secrets.ZAPIER_DEPLOY_KEY }}
 
       - name: Push to Zapier
+        if: steps.zapier-key.outputs.available == 'true'
         working-directory: packages/integrations/zapier-app
         run: bun run zapier:push
         env:

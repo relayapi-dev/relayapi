@@ -49,18 +49,29 @@ jobs:
           clawhub whoami
 
       - name: Publish OpenClaw skill
-        working-directory: packages/integrations/openclaw
         run: |
           BUMP="${{ inputs.bump || 'patch' }}"
           DRY_RUN="${{ inputs.dry_run || 'false' }}"
 
-          ARGS="--bump $BUMP --tags latest --no-input --all"
+          # ClawHub derives a new skill's slug and display name from its folder.
+          # Stage this integration as "RelayAPI" so it does not try the reserved
+          # "openclaw" slug while retaining the product's display-name casing.
+          PUBLISH_ROOT="$(mktemp -d)"
+          trap 'rm -rf "$PUBLISH_ROOT"' EXIT
+          cp -R packages/integrations/openclaw "$PUBLISH_ROOT/RelayAPI"
+
+          ARGS=(
+            --root "$PUBLISH_ROOT/RelayAPI"
+            --bump "$BUMP"
+            --tags latest
+            --all
+          )
 
           if [ "$DRY_RUN" = "true" ]; then
-            ARGS="$ARGS --dry-run"
+            ARGS+=(--dry-run)
           fi
 
-          clawhub sync $ARGS
+          clawhub --no-input sync "${ARGS[@]}"
         env:
           CLAWHUB_DISABLE_TELEMETRY: "1"
 
