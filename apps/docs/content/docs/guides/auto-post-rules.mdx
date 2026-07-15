@@ -24,7 +24,7 @@ make the field mandatory.
 ```bash
 # Create a rule
 curl -X POST https://api.relayapi.dev/v1/auto-post-rules \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Company Blog",
@@ -37,7 +37,7 @@ curl -X POST https://api.relayapi.dev/v1/auto-post-rules \
 
 # Activate it
 curl -X POST https://api.relayapi.dev/v1/auto-post-rules/apr_abc123/activate \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 ## Content Templates
@@ -89,7 +89,7 @@ Before creating a rule, you can test-parse any feed URL to verify it works:
 
 ```bash
 curl -X POST https://api.relayapi.dev/v1/auto-post-rules/test-feed \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"feed_url": "https://blog.example.com/feed.xml"}'
 ```

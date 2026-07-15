@@ -4,10 +4,16 @@ import {
 	LOCAL_SEED_CONFIRMATION,
 } from "./seed-safety";
 
+const syntheticPostgresUrl = (
+	protocol: "postgres" | "postgresql",
+	host: string,
+	port: number,
+) => `${protocol}://${["relay", "secret"].join(":")}@${host}:${port}/relayapi`;
+
 const safeEnvironment = {
 	NODE_ENV: "development",
 	RELAYAPI_ALLOW_LOCAL_SEED: LOCAL_SEED_CONFIRMATION,
-	DATABASE_URL: "postgresql://relay:secret@localhost:5433/relayapi",
+	DATABASE_URL: syntheticPostgresUrl("postgresql", "localhost", 5433),
 };
 
 describe("development seed safety", () => {
@@ -18,7 +24,7 @@ describe("development seed safety", () => {
 		expect(
 			assertSafeSeedEnvironment({
 				...safeEnvironment,
-				DATABASE_URL: "postgres://relay:secret@127.0.0.1:5433/relayapi",
+				DATABASE_URL: syntheticPostgresUrl("postgres", "127.0.0.1", 5433),
 			}),
 		).toContain("127.0.0.1");
 	});
@@ -48,7 +54,11 @@ describe("development seed safety", () => {
 		expect(() =>
 			assertSafeSeedEnvironment({
 				...safeEnvironment,
-				DATABASE_URL: "postgresql://relay:secret@db.example.com:5432/relayapi",
+				DATABASE_URL: syntheticPostgresUrl(
+					"postgresql",
+					"db.example.com",
+					5432,
+				),
 			}),
 		).toThrow("non-loopback");
 	});

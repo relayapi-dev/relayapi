@@ -272,10 +272,13 @@ The current pre-launch baseline supports a virgin PostgreSQL 18 database only. I
 
 For local development, you need to tell Wrangler how to reach your database without Hyperdrive.
 
-Set the local connection string as an environment variable:
+Read the runtime password without saving it in shell history, then set the local connection string as an environment variable:
 
 ```bash
-export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgresql://relayapi_runtime:password@localhost:5433/relayapi?sslmode=verify-full"
+read -rsp "PostgreSQL runtime password: " PG_PASSWORD && echo
+export DB_AUTHORITY="relayapi_runtime:${PG_PASSWORD}"
+export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgresql://${DB_AUTHORITY}@localhost:5433/relayapi?sslmode=verify-full"
+unset PG_PASSWORD DB_AUTHORITY
 ```
 
 Then start the dev servers:

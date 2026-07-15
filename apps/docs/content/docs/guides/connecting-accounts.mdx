@@ -34,7 +34,7 @@ Start an OAuth connection with `GET /v1/connect/{platform}`. Include `workspace_
 
 ```bash
 curl "https://api.relayapi.dev/v1/connect/twitter?workspace_id=ws_example" \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 The response contains `auth_url`. Redirect the user to that URL; RelayAPI binds the organization, initiating key, initial workspace grant, selected workspace, and callback configuration into a one-time OAuth state. Do not construct or reuse state values yourself.
@@ -43,7 +43,7 @@ To start an organization-scoped flow while **Require Workspace ID** is disabled,
 
 ```bash
 curl "https://api.relayapi.dev/v1/connect/twitter" \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 Credential-based connection request bodies and `POST /v1/connect/telegram` use the same optional `workspace_id` contract.
@@ -56,7 +56,7 @@ Facebook, LinkedIn, Pinterest, Google Business, and Snapchat require a secondary
 
 ```bash
 curl "https://api.relayapi.dev/v1/connect/facebook/pages?connect_token=OPERATION_TOKEN" \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 Pending OAuth data and Telegram challenge codes are short-lived and one-time. If authorization changes before completion, start a new connection flow after correcting the key or workspace policy.
