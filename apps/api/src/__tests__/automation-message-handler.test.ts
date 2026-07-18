@@ -5,8 +5,8 @@
 // transport. We inject a fake `sendTransport` via `ctx.env.sendTransport` so
 // the test never hits a real platform API.
 //
-// Requires the SSH tunnel to localhost:5433 (see .vscode/tasks.json). On CI
-// or when the tunnel is down, the tests skip rather than fail.
+// Run the isolated suite through the root `db:with-tunnel` wrapper to include
+// DB-backed cases. On CI or without the tunnel, the tests skip rather than fail.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import {
@@ -23,8 +23,8 @@ import {
 import { eq } from "drizzle-orm";
 import { encryptAccountToken } from "../lib/account-token-crypto";
 import type { Graph } from "../schemas/automation-graph";
-import type { SendMessageRequest } from "../services/message-sender";
 import { enrollContact } from "../services/automations/runner";
+import type { SendMessageRequest } from "../services/message-sender";
 
 const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 

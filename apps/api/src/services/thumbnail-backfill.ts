@@ -1,6 +1,7 @@
 import { createDb, media, queueFailures } from "@relayapi/db";
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Env } from "../types";
+import { backfillExternalPostPreviews } from "./external-post-sync/previews";
 import {
 	isMediaEventMessage,
 	processMediaEvent,
@@ -25,6 +26,7 @@ export async function backfillMissingThumbnails(
 	await replayMediaDeadLetters(db, env, limit);
 	await reconcileDirectUploads(db, env, limit);
 	await retryDueThumbnails(db, env, limit);
+	await backfillExternalPostPreviews(env, limit);
 }
 
 async function replayMediaDeadLetters(

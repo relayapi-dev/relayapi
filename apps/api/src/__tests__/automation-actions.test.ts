@@ -1,8 +1,8 @@
 // apps/api/src/__tests__/automation-actions.test.ts
 //
 // Integration tests for the action dispatcher hitting a real PostgreSQL
-// database. Requires the SSH tunnel to localhost:5433 (see .vscode/tasks.json).
-// On CI or when the tunnel is down, the tests skip rather than fail.
+// database. Run the isolated suite through the root `db:with-tunnel` wrapper to
+// include DB cases; on CI or without the tunnel, they skip rather than fail.
 //
 // We test the two most-exercised actions — tag_add (array column mutation)
 // and field_set (custom field upsert) — and let the unit-level action_group

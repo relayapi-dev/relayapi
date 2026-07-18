@@ -1,0 +1,15 @@
+# Local HTTPS proxy for frontend debugging against the deployed dashboard/API.
+# Better Auth cookies returned through the development proxy stay scoped to
+# dev.relayapi.dev, while the local Astro process never receives database
+# credentials.
+#
+# One-time setup:
+#   1. echo "127.0.0.1 dev.relayapi.dev" | sudo tee -a /etc/hosts
+#   2. brew install caddy
+#
+# The VS Code "Debug App" configuration starts this task automatically.
+
+dev.relayapi.dev {
+	tls internal
+	reverse_proxy 127.0.0.1:4321
+}

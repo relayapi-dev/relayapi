@@ -4,6 +4,10 @@
     "0000_baseline": {
       "phase": "baseline",
       "summary": "Pre-launch virgin PostgreSQL 18 baseline; old development ledgers are unsupported"
+    },
+    "0001_external_post_previews": {
+      "phase": "expand",
+      "summary": "Add durable external-post preview state and retry scheduling"
     }
   }
 }

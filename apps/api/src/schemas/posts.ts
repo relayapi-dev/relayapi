@@ -327,7 +327,14 @@ export const ExternalPostItem = z.object({
 	content: z.string().nullable(),
 	media_urls: z.array(z.string()),
 	media_type: z.string().nullable(),
-	thumbnail_url: z.string().nullable(),
+	thumbnail_url: z
+		.string()
+		.nullable()
+		.describe(
+			"Durable RelayAPI preview URL when generated; otherwise the latest provider thumbnail URL",
+		),
+	account_name: z.string().nullable(),
+	account_avatar_url: z.string().nullable(),
 	metrics: z.object({
 		impressions: z.number().optional(),
 		reach: z.number().optional(),
@@ -341,6 +348,11 @@ export const ExternalPostItem = z.object({
 	published_at: z.string().datetime(),
 	created_at: z.string().datetime(),
 });
+
+/** Timeline/list responses may merge RelayAPI-authored and platform-native posts. */
+export const PostTimelineResponse = paginatedResponse(
+	z.union([PostResponse, ExternalPostItem]),
+);
 
 // --- Update metadata (published video) ---
 

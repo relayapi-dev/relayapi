@@ -61,6 +61,7 @@ import {
 	CreatePostBody,
 	PostListResponse,
 	PostResponse,
+	PostTimelineResponse,
 	RecyclingConfigResponse,
 	RecyclingInput,
 	UpdateMetadataBody,
@@ -302,7 +303,7 @@ const listPosts = createRoute({
 	responses: {
 		200: {
 			description: "List of posts",
-			content: { "application/json": { schema: PostListResponse } },
+			content: { "application/json": { schema: PostTimelineResponse } },
 		},
 		400: {
 			description: "Invalid pagination cursor",
@@ -1061,6 +1062,7 @@ app.openapi(listPosts, async (c) => {
 					mediaUrls: externalPosts.mediaUrls,
 					mediaType: externalPosts.mediaType,
 					thumbnailUrl: externalPosts.thumbnailUrl,
+					previewThumbnailUrl: externalPosts.previewThumbnailUrl,
 				})
 				.from(externalPosts)
 				.where(
@@ -1072,20 +1074,22 @@ app.openapi(listPosts, async (c) => {
 			for (const row of extRows) {
 				const items: MediaItem[] = [];
 				const urls = row.mediaUrls as string[] | null;
+				const previewUrl =
+					row.previewThumbnailUrl ?? row.thumbnailUrl ?? undefined;
 				if (urls && urls.length > 0) {
 					for (const url of urls) {
 						items.push({
 							url,
 							type: responseMediaType(row.mediaType),
-							thumbnail: row.thumbnailUrl ?? undefined,
+							thumbnail: previewUrl,
 						});
 					}
-				} else if (row.thumbnailUrl) {
+				} else if (previewUrl) {
 					// Fallback to thumbnail only when no full media URLs exist (e.g. video poster)
 					items.push({
-						url: row.thumbnailUrl,
+						url: previewUrl,
 						type: responseMediaType(row.mediaType),
-						thumbnail: row.thumbnailUrl,
+						thumbnail: previewUrl,
 					});
 				}
 				if (items.length > 0) {
@@ -1180,7 +1184,7 @@ app.openapi(listPosts, async (c) => {
 				internalItems.length + extPage.length > merged.length;
 			return c.json(
 				{
-					data: merged as unknown as z.infer<typeof PostListResponse>["data"],
+					data: merged as z.infer<typeof PostTimelineResponse>["data"],
 					next_cursor:
 						more && last
 							? encodeTimestampIdCursor(
@@ -1198,7 +1202,7 @@ app.openapi(listPosts, async (c) => {
 		return c.json(
 			{
 				data: internalItems as unknown as z.infer<
-					typeof PostListResponse
+					typeof PostTimelineResponse
 				>["data"],
 				next_cursor: hasMore
 					? lastInternal
@@ -1292,7 +1296,7 @@ app.openapi(listPosts, async (c) => {
 			leanItems.length + extPage.length > merged.length;
 		return c.json(
 			{
-				data: merged as unknown as z.infer<typeof PostListResponse>["data"],
+				data: merged as z.infer<typeof PostTimelineResponse>["data"],
 				next_cursor:
 					more && last
 						? encodeTimestampIdCursor(
@@ -1309,7 +1313,7 @@ app.openapi(listPosts, async (c) => {
 	const lastInternal = data.at(-1);
 	return c.json(
 		{
-			data: leanItems as unknown as z.infer<typeof PostListResponse>["data"],
+			data: leanItems as z.infer<typeof PostTimelineResponse>["data"],
 			next_cursor: hasMore
 				? lastInternal
 					? encodeTimestampIdCursor(
@@ -1387,6 +1391,7 @@ async function fetchExternalPostItems(
 			mediaUrls: externalPosts.mediaUrls,
 			mediaType: externalPosts.mediaType,
 			thumbnailUrl: externalPosts.thumbnailUrl,
+			previewThumbnailUrl: externalPosts.previewThumbnailUrl,
 			metrics: externalPosts.metrics,
 			publishedAt: externalPosts.publishedAt,
 			createdAt: externalPosts.createdAt,
@@ -1414,7 +1419,7 @@ async function fetchExternalPostItems(
 		content: ep.content,
 		media_urls: (ep.mediaUrls as string[]) ?? [],
 		media_type: ep.mediaType,
-		thumbnail_url: ep.thumbnailUrl,
+		thumbnail_url: ep.previewThumbnailUrl ?? ep.thumbnailUrl,
 		account_name: ep.accountDisplayName || ep.accountUsername || null,
 		account_avatar_url: ep.accountAvatarUrl || null,
 		metrics: (ep.metrics as Record<string, number>) ?? {},
@@ -2308,6 +2313,7 @@ app.openapi(getPost, async (c) => {
 					mediaUrls: externalPosts.mediaUrls,
 					mediaType: externalPosts.mediaType,
 					thumbnailUrl: externalPosts.thumbnailUrl,
+					previewThumbnailUrl: externalPosts.previewThumbnailUrl,
 				})
 				.from(externalPosts)
 				.where(
@@ -2319,19 +2325,21 @@ app.openapi(getPost, async (c) => {
 			for (const row of extRows) {
 				const items: MediaItem[] = [];
 				const urls = row.mediaUrls as string[] | null;
+				const previewUrl =
+					row.previewThumbnailUrl ?? row.thumbnailUrl ?? undefined;
 				if (urls && urls.length > 0) {
 					for (const url of urls) {
 						items.push({
 							url,
 							type: responseMediaType(row.mediaType),
-							thumbnail: row.thumbnailUrl ?? undefined,
+							thumbnail: previewUrl,
 						});
 					}
-				} else if (row.thumbnailUrl) {
+				} else if (previewUrl) {
 					items.push({
-						url: row.thumbnailUrl,
+						url: previewUrl,
 						type: responseMediaType(row.mediaType),
-						thumbnail: row.thumbnailUrl,
+						thumbnail: previewUrl,
 					});
 				}
 				if (items.length > 0) {

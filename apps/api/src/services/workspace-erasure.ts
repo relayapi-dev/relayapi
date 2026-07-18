@@ -1,6 +1,7 @@
 import {
 	accountRevocationJobs,
 	createDb,
+	externalPosts,
 	media,
 	qrCodes,
 	refUrls,
@@ -573,6 +574,9 @@ async function processWorkspaceExternalResources(
 	if (accounts.length === 0) return { kind: "completed" };
 
 	await Promise.all([
+		env.AVATAR_BUCKET.delete(
+			accounts.map((account) => `avatars/${account.id}`),
+		),
 		env.MEDIA_BUCKET.delete(accounts.map((account) => `avatars/${account.id}`)),
 		...accounts.flatMap((account) =>
 			buildAccountCacheKeys({
@@ -696,6 +700,45 @@ async function deleteMediaBatch(
 	return rows.length;
 }
 
+async function deleteExternalPostsBatch(
+	db: ErasureDb,
+	env: Env,
+	job: WorkspaceJob,
+): Promise<number> {
+	const rows = await db
+		.select({
+			id: externalPosts.id,
+			previewThumbnailKey: externalPosts.previewThumbnailKey,
+		})
+		.from(externalPosts)
+		.where(
+			and(
+				eq(externalPosts.organizationId, job.organizationId),
+				eq(externalPosts.workspaceId, job.workspaceId),
+			),
+		)
+		.orderBy(externalPosts.id)
+		.limit(DELETE_BATCH_SIZE);
+	if (rows.length === 0) return 0;
+
+	const previewKeys = rows.flatMap((row) =>
+		row.previewThumbnailKey ? [row.previewThumbnailKey] : [],
+	);
+	if (previewKeys.length > 0) {
+		await env.THUMBNAIL_BUCKET.delete(previewKeys);
+	}
+	await db.delete(externalPosts).where(
+		and(
+			eq(externalPosts.organizationId, job.organizationId),
+			inArray(
+				externalPosts.id,
+				rows.map(({ id }) => id),
+			),
+		),
+	);
+	return rows.length;
+}
+
 async function deleteWorkspaceTableBatch(
 	db: ErasureDb,
 	env: Env,
@@ -703,6 +746,9 @@ async function deleteWorkspaceTableBatch(
 	table: (typeof WORKSPACE_PURGE_TABLES)[number],
 ): Promise<number> {
 	if (table === "media") return deleteMediaBatch(db, env, job);
+	if (table === "external_posts") {
+		return deleteExternalPostsBatch(db, env, job);
+	}
 	const rows = await db.execute<{ deleted: number }>(sql`
 		WITH candidates AS (
 			SELECT target.ctid

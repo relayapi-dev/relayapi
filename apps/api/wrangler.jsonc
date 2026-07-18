@@ -72,6 +72,12 @@
 			"bucket_name": "relayapi-media"
 		},
 		{
+			// Durable social-account avatars. Separate from relayapi-media so its
+			// finite lifecycle never removes connection profile pictures.
+			"binding": "AVATAR_BUCKET",
+			"bucket_name": "relayapi-avatars"
+		},
+		{
 			// Durable, hyper-optimized post previews. Separate bucket so the
 			// ~30-day lifecycle rule on relayapi-media never deletes thumbnails.
 			// Serve publicly via a custom domain (thumbs.relayapi.dev) for

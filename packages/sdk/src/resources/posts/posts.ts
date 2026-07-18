@@ -72,7 +72,7 @@ export class Posts extends APIResource {
   list(
     query: PostListParams | null | undefined = {},
     options?: RequestOptions,
-  ): APIPromise<PostListResponse> {
+  ): APIPromise<PostTimelineResponse> {
     return this._client.get('/v1/posts', { query, ...options });
   }
 
@@ -875,6 +875,19 @@ export namespace PostListResponse {
   }
 }
 
+/**
+ * A posts timeline can include platform-native posts when `include_external=true`.
+ */
+export interface PostTimelineResponse {
+  data: Array<PostListResponse.Data | ExternalPost>;
+
+  /** Whether more items exist */
+  has_more: boolean;
+
+  /** Cursor for next page */
+  next_cursor: string | null;
+}
+
 export interface PostBulkCreateResponse {
   data: Array<PostBulkCreateResponse.Data>;
 
@@ -1675,14 +1688,20 @@ export namespace PostBulkCreateParams {
 export interface ExternalPost {
   id: string;
   source: 'external';
-  platform: string;
+  platform: PostTargetPlatform;
   social_account_id: string;
   platform_post_id: string;
   platform_url: string | null;
   content: string | null;
   media_urls: string[];
   media_type: string | null;
+  /**
+   * Durable RelayAPI preview URL when generated; otherwise the latest provider
+   * thumbnail URL.
+   */
   thumbnail_url: string | null;
+  account_name: string | null;
+  account_avatar_url: string | null;
   metrics: {
     impressions?: number;
     reach?: number;
@@ -1711,6 +1730,7 @@ export declare namespace Posts {
     type PostRetrieveResponse as PostRetrieveResponse,
     type PostUpdateResponse as PostUpdateResponse,
     type PostListResponse as PostListResponse,
+    type PostTimelineResponse as PostTimelineResponse,
     type PostBulkCreateResponse as PostBulkCreateResponse,
     type PostBulkCsvUploadResponse as PostBulkCsvUploadResponse,
     type PostRetryResponse as PostRetryResponse,

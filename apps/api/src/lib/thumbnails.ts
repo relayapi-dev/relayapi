@@ -3,7 +3,7 @@ import type { Env } from "../types";
 /**
  * Hyper-optimized post preview thumbnails.
  *
- * We keep ONE tiny WebP per media item in a separate, never-expiring R2 bucket
+ * We keep ONE tiny AVIF per media item in a separate, never-expiring R2 bucket
  * (THUMBNAIL_BUCKET) so card/list/calendar previews survive after the full-res
  * original is purged by the relayapi-media lifecycle rule. Generation runs
  * off the request path in the R2-event queue consumer (covers both the direct
@@ -31,7 +31,7 @@ const THUMBNAIL_WIDTH = 320;
 /** Encoder quality (1-100). Low — visually fine at thumbnail scale, minimal bytes. */
 const THUMBNAIL_QUALITY = 45;
 /** Images binding input ceiling (raw bytes). Larger originals are skipped. */
-const IMAGES_MAX_INPUT_BYTES = 20 * 1024 * 1024;
+export const THUMBNAIL_SOURCE_MAX_BYTES = 20 * 1024 * 1024;
 
 export function isImageMime(mime: string | null | undefined): boolean {
 	if (!mime) return false;
@@ -81,6 +81,114 @@ function transientFailure(error: unknown): ThumbnailGenerationResult {
 	};
 }
 
+async function transformAndStoreThumbnail(
+	env: Env,
+	storageKey: string,
+	mimeType: string | null | undefined,
+	body: ReadableStream<Uint8Array>,
+	sourceSize?: number,
+): Promise<ThumbnailGenerationResult> {
+	if (!isThumbnailable(mimeType)) {
+		return {
+			status: "unsupported",
+			reason: `No thumbnail pipeline for MIME type ${mimeType ?? "unknown"}`,
+		};
+	}
+	if (!env.IMAGES) {
+		return transientFailure("Cloudflare Images binding is unavailable");
+	}
+
+	try {
+		let thumbBody: ReadableStream<Uint8Array> | null;
+
+		if (isVideoMime(mimeType)) {
+			if (!env.MEDIA) {
+				return transientFailure(
+					"Cloudflare Media Transformations binding is unavailable",
+				);
+			}
+			const frame = await env.MEDIA.input(body)
+				.transform({ width: THUMBNAIL_WIDTH })
+				.output({ mode: "frame", time: "0s", format: "jpg" })
+				.response();
+			if (!frame.ok || !frame.body) {
+				return transientFailure(
+					`Video frame extraction failed with HTTP ${frame.status}`,
+				);
+			}
+			const thumb = await env.IMAGES.input(frame.body)
+				.transform({ width: THUMBNAIL_WIDTH })
+				.output({
+					format: THUMBNAIL_FORMAT,
+					quality: THUMBNAIL_QUALITY,
+					anim: false,
+				});
+			thumbBody = thumb.response().body;
+		} else {
+			if (sourceSize !== undefined && sourceSize > THUMBNAIL_SOURCE_MAX_BYTES) {
+				return {
+					status: "unsupported",
+					reason: `Original exceeds the ${THUMBNAIL_SOURCE_MAX_BYTES}-byte Images input limit`,
+				};
+			}
+			const thumb = await env.IMAGES.input(body)
+				.transform({ width: THUMBNAIL_WIDTH })
+				.output({
+					format: THUMBNAIL_FORMAT,
+					quality: THUMBNAIL_QUALITY,
+					anim: false,
+				});
+			thumbBody = thumb.response().body;
+		}
+
+		if (!thumbBody) {
+			return transientFailure("Thumbnail transform returned an empty body");
+		}
+
+		const thumbnailKey = thumbnailKeyFor(storageKey);
+		await env.THUMBNAIL_BUCKET.put(thumbnailKey, thumbBody, {
+			httpMetadata: { contentType: THUMBNAIL_FORMAT },
+		});
+
+		return {
+			status: "generated",
+			thumbnailKey,
+			thumbnailUrl: thumbnailUrlFor(storageKey),
+		};
+	} catch (err) {
+		console.error(`[Thumbnail] Generation failed for ${storageKey}:`, err);
+		return transientFailure(err);
+	}
+}
+
+/** Generate a durable preview directly from a bounded public response stream. */
+export async function generateAndStoreThumbnailFromResponse(
+	env: Env,
+	storageKey: string,
+	response: Response,
+	fallbackMimeType?: string | null,
+): Promise<ThumbnailGenerationResult> {
+	if (!response.ok || !response.body) {
+		return {
+			status: "source_missing",
+			reason: `Preview source returned HTTP ${response.status}`,
+		};
+	}
+	const rawDeclaredSize = response.headers.get("content-length");
+	const declaredSize =
+		rawDeclaredSize === null ? Number.NaN : Number(rawDeclaredSize);
+	const responseMimeType = response.headers.get("content-type");
+	return transformAndStoreThumbnail(
+		env,
+		storageKey,
+		isThumbnailable(responseMimeType) ? responseMimeType : fallbackMimeType,
+		response.body,
+		Number.isSafeInteger(declaredSize) && declaredSize >= 0
+			? declaredSize
+			: undefined,
+	);
+}
+
 /**
  * Generate and store a tiny, aggressively-optimized AVIF preview for an uploaded
  * original. The typed result deliberately distinguishes terminal outcomes from
@@ -110,67 +218,13 @@ export async function generateAndStoreThumbnail(
 			};
 		}
 
-		let thumbBody: ReadableStream<Uint8Array> | null;
-
-		if (isVideoMime(mimeType)) {
-			if (!env.MEDIA) {
-				return transientFailure(
-					"Cloudflare Media Transformations binding is unavailable",
-				);
-			}
-			// 1) Extract a still poster frame from the video original.
-			const frame = await env.MEDIA.input(original.body)
-				.transform({ width: THUMBNAIL_WIDTH })
-				.output({ mode: "frame", time: "0s", format: "jpg" })
-				.response();
-			if (!frame.ok || !frame.body) {
-				return transientFailure(
-					`Video frame extraction failed with HTTP ${frame.status}`,
-				);
-			}
-			// 2) Re-encode the frame into a hyper-optimized AVIF.
-			const thumb = await env.IMAGES.input(frame.body)
-				.transform({ width: THUMBNAIL_WIDTH })
-				.output({
-					format: THUMBNAIL_FORMAT,
-					quality: THUMBNAIL_QUALITY,
-					anim: false,
-				});
-			thumbBody = thumb.response().body;
-		} else {
-			// The Images binding has a hard input ceiling. This source cannot become
-			// transformable through retries, so record a terminal unsupported result.
-			if (original.size > IMAGES_MAX_INPUT_BYTES) {
-				return {
-					status: "unsupported",
-					reason: `Original exceeds the ${IMAGES_MAX_INPUT_BYTES}-byte Images input limit`,
-				};
-			}
-			const thumb = await env.IMAGES.input(original.body)
-				.transform({ width: THUMBNAIL_WIDTH })
-				// anim:false flattens animated GIF/WebP to a single still frame.
-				.output({
-					format: THUMBNAIL_FORMAT,
-					quality: THUMBNAIL_QUALITY,
-					anim: false,
-				});
-			thumbBody = thumb.response().body;
-		}
-
-		if (!thumbBody) {
-			return transientFailure("Thumbnail transform returned an empty body");
-		}
-
-		const thumbnailKey = thumbnailKeyFor(storageKey);
-		await env.THUMBNAIL_BUCKET.put(thumbnailKey, thumbBody, {
-			httpMetadata: { contentType: THUMBNAIL_FORMAT },
-		});
-
-		return {
-			status: "generated",
-			thumbnailKey,
-			thumbnailUrl: thumbnailUrlFor(storageKey),
-		};
+		return transformAndStoreThumbnail(
+			env,
+			storageKey,
+			mimeType,
+			original.body,
+			original.size,
+		);
 	} catch (err) {
 		console.error(`[Thumbnail] Generation failed for ${storageKey}:`, err);
 		return transientFailure(err);

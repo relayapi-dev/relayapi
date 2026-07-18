@@ -20,7 +20,7 @@ import type {
 	InboundEvent,
 	InboundEventKind,
 } from "./automations/trigger-matcher";
-import { rehostAvatar } from "./avatar-store";
+import { rehostTransientAvatar } from "./avatar-store";
 import { ensureContactForAuthor } from "./contact-linker";
 import {
 	insertMessage,
@@ -787,12 +787,16 @@ async function enrichMetaParticipantProfile(
 					},
 				};
 
-			// Re-host the profile picture to R2 (served durably by the public
-			// /avatars/:id route) so it survives Meta's short-lived signed-CDN
-			// expiry. Keyed by conversation id — one participant per DM. Falls
-			// back to the raw URL so we never regress to no avatar.
+			// Re-host the profile picture to MEDIA_BUCKET and serve it through the
+			// public /avatars/:id route. Keyed by conversation id — one participant
+			// per DM — and intentionally governed by the media retention lifecycle.
+			// Falls back to the raw URL so we never regress to no avatar.
 			const storedAvatarUrl =
-				(await rehostAvatar(env, conversation.id, profile.avatarUrl)) ??
+				(await rehostTransientAvatar(
+					env,
+					conversation.id,
+					profile.avatarUrl,
+				)) ??
 				profile.avatarUrl ??
 				null;
 

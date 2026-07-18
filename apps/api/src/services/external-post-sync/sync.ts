@@ -13,11 +13,15 @@ import {
 import { and, inArray, sql } from "drizzle-orm";
 import { PLATFORMS, type Platform } from "../../schemas/common";
 import type { Env } from "../../types";
-import { rehostAvatar } from "../avatar-store";
+import { hasStoredAvatar, rehostAvatar } from "../avatar-store";
 import { fetchAvatarUrl } from "../token-refresh";
 import { refreshTokenIfNeeded } from "../token-refresh-coordinator";
 import { getExternalPostFetcher } from "./index";
-import type { RefreshMetricsMessage, SyncPostsMessage } from "./types";
+import type {
+	GenerateExternalPreviewMessage,
+	RefreshMetricsMessage,
+	SyncPostsMessage,
+} from "./types";
 import { RateLimitError } from "./types";
 
 type Database = ReturnType<typeof createDb>;
@@ -53,7 +57,6 @@ export async function syncExternalPosts(
 			accessToken: socialAccounts.accessToken,
 			refreshToken: socialAccounts.refreshToken,
 			tokenExpiresAt: socialAccounts.tokenExpiresAt,
-			avatarUrl: socialAccounts.avatarUrl,
 		})
 		.from(socialAccounts)
 		.where(
@@ -141,6 +144,29 @@ export async function syncExternalPosts(
 		return;
 	}
 
+	// A RelayAPI URL in the database does not prove its backing object still
+	// exists. Verify the durable bucket on every account sync and repair missing
+	// objects before post fetching, so a platform-post failure cannot block the
+	// avatar migration. Best-effort: sync continues if the provider/avatar fails.
+	if (!(await hasStoredAvatar(env, account.id))) {
+		try {
+			const fresh = await fetchAvatarUrl(
+				account.platform as Platform,
+				accessToken,
+				account.platformAccountId,
+			);
+			if (fresh) {
+				const stable = await rehostAvatar(env, account.id, fresh);
+				await db
+					.update(socialAccounts)
+					.set({ avatarUrl: stable ?? fresh, updatedAt: new Date() })
+					.where(eq(socialAccounts.id, account.id));
+			}
+		} catch (err) {
+			console.warn(`[Sync] Avatar re-host failed for ${account.id}:`, err);
+		}
+	}
+
 	// 5. Fetch posts (paginate up to MAX_PAGES_PER_RUN)
 	let pagesProcessed = 0;
 	let totalNewPosts = 0;
@@ -176,7 +202,7 @@ export async function syncExternalPosts(
 
 				// 7. Upsert into external_posts
 				if (newPosts.length > 0) {
-					await upsertExternalPosts(
+					const previewRows = await upsertExternalPosts(
 						db,
 						account.organizationId,
 						account.workspaceId,
@@ -184,6 +210,20 @@ export async function syncExternalPosts(
 						account.platform,
 						newPosts,
 					);
+					const previewMessages = previewRows
+						.filter((row) => row.previewStatus === "pending")
+						.map((row): { body: GenerateExternalPreviewMessage } => ({
+							body: {
+								type: "generate_external_preview",
+								external_post_id: row.id,
+								organization_id: account.organizationId,
+								social_account_id: account.id,
+								platform: account.platform,
+							},
+						}));
+					if (previewMessages.length > 0) {
+						await env.SYNC_QUEUE.sendBatch(previewMessages);
+					}
 					totalNewPosts += newPosts.length;
 				}
 			}
@@ -225,28 +265,6 @@ export async function syncExternalPosts(
 				updatedAt: now,
 			})
 			.where(eq(socialAccountSyncState.id, syncState.id));
-
-		// Keep the stored avatar durable: re-host the platform CDN avatar to R2
-		// once per account. After the first run avatar_url points at /avatars/…,
-		// so this is skipped on later runs — no extra platform API calls. Best-effort.
-		if (!account.avatarUrl?.includes("/avatars/")) {
-			try {
-				const fresh = await fetchAvatarUrl(
-					account.platform as Platform,
-					accessToken,
-					account.platformAccountId,
-				);
-				if (fresh) {
-					const stable = await rehostAvatar(env, account.id, fresh);
-					await db
-						.update(socialAccounts)
-						.set({ avatarUrl: stable ?? fresh, updatedAt: new Date() })
-						.where(eq(socialAccounts.id, account.id));
-				}
-			} catch (err) {
-				console.warn(`[Sync] Avatar re-host failed for ${account.id}:`, err);
-			}
-		}
 
 		// 9. If more pages remain, re-enqueue
 		if (cursor && pagesProcessed >= MAX_PAGES_PER_RUN) {
@@ -408,15 +426,15 @@ async function upsertExternalPosts(
 	socialAccountId: string,
 	platform: string,
 	posts: import("./types").ExternalPostData[],
-): Promise<void> {
-	if (posts.length === 0) return;
+): Promise<Array<{ id: string; previewStatus: string }>> {
+	if (posts.length === 0) return [];
 
 	// Single multi-row upsert instead of one INSERT per post: the per-row SET
 	// columns reference the rejected row via `excluded.*`, so a page of posts is
 	// written in one statement (≤25 rows/page) rather than ~25 sequential round
 	// trips capped at the pool's max:5 concurrency.
 	const now = new Date();
-	await db
+	return db
 		.insert(externalPosts)
 		.values(
 			posts.map((post) => ({
@@ -447,8 +465,39 @@ async function upsertExternalPosts(
 				platformData: sql`excluded.platform_data`,
 				metrics: sql`excluded.metrics`,
 				metricsUpdatedAt: now,
+				previewStatus: sql`CASE
+					WHEN ${externalPosts.previewThumbnailUrl} IS NULL
+					 AND (
+						${externalPosts.thumbnailUrl} IS DISTINCT FROM excluded.thumbnail_url
+						OR ${externalPosts.mediaUrls} IS DISTINCT FROM excluded.media_urls
+					 )
+					THEN 'pending'
+					ELSE ${externalPosts.previewStatus}
+				END`,
+				previewNextRetryAt: sql`CASE
+					WHEN ${externalPosts.previewThumbnailUrl} IS NULL
+					 AND (
+						${externalPosts.thumbnailUrl} IS DISTINCT FROM excluded.thumbnail_url
+						OR ${externalPosts.mediaUrls} IS DISTINCT FROM excluded.media_urls
+					 )
+					THEN NULL
+					ELSE ${externalPosts.previewNextRetryAt}
+				END`,
+				previewLastError: sql`CASE
+					WHEN ${externalPosts.previewThumbnailUrl} IS NULL
+					 AND (
+						${externalPosts.thumbnailUrl} IS DISTINCT FROM excluded.thumbnail_url
+						OR ${externalPosts.mediaUrls} IS DISTINCT FROM excluded.media_urls
+					 )
+					THEN NULL
+					ELSE ${externalPosts.previewLastError}
+				END`,
 				updatedAt: now,
 			},
+		})
+		.returning({
+			id: externalPosts.id,
+			previewStatus: externalPosts.previewStatus,
 		});
 }
 

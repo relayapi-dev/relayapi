@@ -5,6 +5,7 @@ declare namespace Cloudflare {
 	// Secrets are intentionally absent from wrangler.jsonc and merge in here.
 	interface Env {
 		DATABASE_URL?: string;
+		REMOTE_DASHBOARD_ORIGIN?: string;
 		BETTER_AUTH_SECRET: string;
 		BETTER_AUTH_URL?: string;
 		GOOGLE_CLIENT_ID?: string;
@@ -22,9 +23,9 @@ declare module "cloudflare:workers" {
 }
 
 declare namespace App {
-  interface Locals {
-    db: import("@relayapi/db").Database;
-    auth: ReturnType<typeof import("@relayapi/auth").createAuth>;
+	interface Locals {
+		db: import("@relayapi/db").Database;
+		auth: ReturnType<typeof import("@relayapi/auth").createAuth>;
 		user: Record<string, unknown> | null;
 		session: Record<string, unknown> | null;
 		organization: Record<string, unknown> | null;

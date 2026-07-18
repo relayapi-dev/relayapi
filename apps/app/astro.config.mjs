@@ -57,8 +57,22 @@ export default defineConfig({
 	],
 	adapter: cloudflare({
 		persistState: { path: "../../.wrangler/state" },
+		// Keep the app Worker inspector separate from the API Wrangler inspector.
+		// This must match the workerd attach target in .vscode/launch.json.
+		inspectorPort: 9230,
 	}),
 	integrations: [react()],
+	server: {
+		host: "127.0.0.1",
+		allowedHosts: ["dev.relayapi.dev"],
+	},
+	security: {
+		// Caddy terminates HTTPS before forwarding to Astro over loopback HTTP, so
+		// Astro's development origin comparison sees different schemes. The local
+		// remote-dashboard proxy enforces exact browser-origin matching itself.
+		// Production keeps Astro's origin protection enabled.
+		checkOrigin: process.env.NODE_ENV === "production",
+	},
 	vite: {
 		plugins: [tailwindcss()],
 		resolve: {

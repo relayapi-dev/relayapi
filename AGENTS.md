@@ -55,15 +55,13 @@ bun run --filter api export-openapi   # Export OpenAPI spec (requires dev server
 - **Do not couple the API to the dashboard**: Avoid app-specific assumptions, auth flows, response shapes, or infrastructure requirements leaking into `apps/api` unless the user explicitly asks for that tradeoff.
 - **Fix dashboard overhead in the dashboard first**: When the problem is dashboard performance or UX, prefer reducing `apps/app` middleware, bootstrap, proxy, and hydration cost before proposing changes that make the API depend on the app.
 
-### SSH Tunnel (required for local dev)
+### Remote App Development and Command-Scoped Database Tunnel
 
-The database runs on a remote server. You **must** create an SSH tunnel before running the dev server, connecting to the database, or running migrations.
+The database runs on a remote server, but routine dashboard development does **not** connect to it. `bun run dev:app` runs the local Astro frontend against the deployed dashboard/auth backend and `https://api.relayapi.dev`; local `/api/*` requests are delegated to the deployed app, which continues to use the SDK and enforce its normal session, membership, and dashboard-credential checks. Deploy the dashboard once with `/api/dashboard-context` before using this mode; session resolution fails closed until that endpoint exists upstream. VS Code's **Debug App** uses `https://dev.relayapi.dev` through `apps/app/Caddyfile.local` so secure auth cookies work; complete the one-time hosts/Caddy setup documented in the README.
 
-**VS Code:** Run the "SSH Tunnel to Database" task (Terminal > Run Task). It forwards `localhost:5433` to remote Postgres on port 5432.
+Commands that genuinely need PostgreSQL own the tunnel for their lifetime. `bun run dev:api`, `bun run db:migrate`, `bun run db:studio`, `bun run db:verify`, and the live migration-history commands open `127.0.0.1:5433`, run the child command, and close the tunnel on success, failure, or interruption. For another database command, use `bun run db:with-tunnel -- <command>`. Do not restore a persistent/background database tunnel task.
 
-**Manual:** See `.vscode/tasks.json` for the SSH tunnel command.
-
-The `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` env var (set in `.vscode/settings.json`) points wrangler at `localhost:5433` to emulate Hyperdrive locally.
+The ignored `apps/api/.dev.vars` supplies `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE`, which must point to the loopback tunnel port, and the required `RELAYAPI_DB_SSH_TARGET`. Use an SSH config alias for the target so the real database host remains in `~/.ssh/config` outside the repository. The wrapper has no built-in host and refuses missing targets, non-loopback/mismatched database URLs, and an already-occupied local port.
 
 ### Cloudflare Bindings (apps/api)
 
@@ -94,7 +92,7 @@ GitHub Actions deploy each app independently on push to `main` when relevant pat
 
 Biome config (`biome.json`): recommended ruleset; respects `.gitignore`; the generated `packages/sdk` (Stainless) is excluded from linting; Tailwind v4 CSS directives are enabled for the CSS parser.
 
-**API tests must be run via `bun run test` in `apps/api`** (the `run-tests-isolated.ts` runner): plain `bun test src/__tests__` executes all files in one process, where `mock.module("@relayapi/db", …)` calls from the billing suites poison the automation suites with false failures. DB-fixture suites skip themselves when the SSH tunnel is down, so the suite passes without a database.
+**API tests must be run via `bun run test` in `apps/api`** (the `run-tests-isolated.ts` runner): plain `bun test src/__tests__` executes all files in one process, where `mock.module("@relayapi/db", …)` calls from the billing suites poison the automation suites with false failures. DB-fixture suites skip themselves when the SSH tunnel is down, so the suite passes without a database. To include those fixtures, run `bun run db:with-tunnel -- bun run --cwd apps/api test` from the repository root.
 
 ### SDK Releases
 
@@ -107,9 +105,9 @@ Other prefixes (`chore:`, `docs:`, `refactor:`, etc.) are included in the next r
 
 ## Dev Credentials
 
-- **Dashboard login**: with the localhost SSH tunnel running, provide `NODE_ENV=development`, `SEED_USER_EMAIL`, `SEED_USER_PASSWORD`, and `RELAYAPI_ALLOW_LOCAL_SEED=I_UNDERSTAND_THIS_MODIFIES_MY_LOCAL_DATABASE` before running `scripts/seed.ts`; the idempotent seed rejects production/non-loopback databases and creates no active paid entitlement
-- **Dashboard URL**: `http://localhost:4321/app` (requires `bun run dev:app`)
-- **API URL**: `http://localhost:8789` (requires `bun run dev:api`)
+- **Dashboard login**: provide `NODE_ENV=development`, `SEED_USER_EMAIL`, `SEED_USER_PASSWORD`, and `RELAYAPI_ALLOW_LOCAL_SEED=I_UNDERSTAND_THIS_MODIFIES_MY_LOCAL_DATABASE`, then run `bun run db:with-tunnel -- bun run scripts/seed.ts`; the wrapper owns the tunnel and the idempotent seed rejects production/non-loopback URLs and creates no active paid entitlement
+- **Dashboard URL**: `https://dev.relayapi.dev/app` (VS Code **Debug App**; one-time hosts/Caddy setup required). Port 4321 is the HTTP upstream, but authenticated remote-backend debugging should use the HTTPS hostname so secure cookies work.
+- **API URL**: `http://localhost:8789` (`bun run dev:api` owns its database tunnel)
 
 ## Dashboard App Rules (`apps/app`)
 

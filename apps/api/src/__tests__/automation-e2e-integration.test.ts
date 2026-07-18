@@ -17,9 +17,8 @@
 // action-registry level so the suite never touches real APIs. DB state for
 // every scenario is torn down in afterAll.
 //
-// Requires the SSH tunnel at localhost:5433 (see .vscode/tasks.json). When
-// the tunnel is down the whole suite skips gracefully — mirroring the other
-// real-DB suites in this folder.
+// Run the isolated suite through the root `db:with-tunnel` wrapper to include
+// these DB-backed cases. Without the tunnel, the whole suite skips gracefully.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import {
@@ -47,14 +46,16 @@ import { encryptToken } from "../lib/crypto";
 import type { Graph } from "../schemas/automation-graph";
 import { actionRegistry } from "../services/automations/actions";
 import { matchAndEnrollOrBinding } from "../services/automations/binding-router";
-import { computeSpecificity } from "../services/automations/trigger-matcher";
 import { enrollContact } from "../services/automations/runner";
 import { processScheduledJobs } from "../services/automations/scheduler";
 import {
 	buildGraphFromTemplate,
 	type TemplateKind,
 } from "../services/automations/templates";
-import { matchAndEnroll } from "../services/automations/trigger-matcher";
+import {
+	computeSpecificity,
+	matchAndEnroll,
+} from "../services/automations/trigger-matcher";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
 import type { SendMessageRequest } from "../services/message-sender";
 

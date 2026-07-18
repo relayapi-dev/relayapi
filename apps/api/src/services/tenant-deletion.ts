@@ -811,6 +811,7 @@ async function processTenantExternalResources(
 		0,
 		MAX_AVATARS_PER_TICK,
 	);
+	const avatarKeys = avatarBatch.map((id) => `avatars/${id}`);
 	const [mediaComplete, thumbnailComplete, queueRescueComplete] =
 		await Promise.all([
 			payload.media_prefix_complete
@@ -825,8 +826,11 @@ async function processTenantExternalResources(
 						env.QUEUE_RESCUE_BUCKET,
 						`queue-rescue/by-organization/${job.organizationId}/`,
 					),
-			avatarBatch.length > 0
-				? env.MEDIA_BUCKET.delete(avatarBatch.map((id) => `avatars/${id}`))
+			avatarKeys.length > 0
+				? Promise.all([
+						env.AVATAR_BUCKET.delete(avatarKeys),
+						env.MEDIA_BUCKET.delete(avatarKeys),
+					])
 				: Promise.resolve(),
 		]);
 	payload.media_prefix_complete = mediaComplete;

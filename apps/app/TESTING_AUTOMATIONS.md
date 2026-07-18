@@ -9,9 +9,11 @@ surfaces.
 
 ## Prerequisites
 
-1. SSH tunnel to the DB is up (VS Code task **"SSH Tunnel to Database"**, or
-   the equivalent manual `ssh -L 5433:…` command from `.vscode/tasks.json`).
-2. `bun run dev:api` is running (API on `http://localhost:8789`).
+1. `bun run dev:api` is running (API on `http://localhost:8789`); that command
+   owns and closes its database tunnel automatically.
+2. Set `REMOTE_DASHBOARD_ORIGIN=off` and
+   `API_BASE_URL=http://localhost:8789` in `apps/app/.dev.vars` for this fully
+   local app/API smoke test.
 3. `bun run dev:app` is running (dashboard on `http://localhost:4321`).
 4. You are logged in via `SEED_USER_EMAIL` / `SEED_USER_PASSWORD` and
    `scripts/seed.ts` has been run, so your workspace has at least one

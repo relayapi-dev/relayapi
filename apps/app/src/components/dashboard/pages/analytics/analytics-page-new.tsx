@@ -250,8 +250,8 @@ export function AnalyticsPageNew({
             Upgrade to the Pro plan to access cross-platform analytics,
             engagement metrics, and performance insights.
           </p>
-          <Button type="button" className="mt-4">
-            Upgrade to Pro
+          <Button asChild className="mt-4">
+            <a href="/app/billing">Upgrade to Pro</a>
           </Button>
         </div>
       </div>

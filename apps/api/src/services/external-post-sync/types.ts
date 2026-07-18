@@ -29,7 +29,18 @@ export interface RefreshMetricsMessage {
 	external_post_ids: string[];
 }
 
-export type SyncQueueMessage = SyncPostsMessage | RefreshMetricsMessage;
+export interface GenerateExternalPreviewMessage {
+	type: "generate_external_preview";
+	external_post_id: string;
+	organization_id: string;
+	social_account_id: string;
+	platform: string;
+}
+
+export type SyncQueueMessage =
+	| SyncPostsMessage
+	| RefreshMetricsMessage
+	| GenerateExternalPreviewMessage;
 
 // ---------------------------------------------------------------------------
 // Platform fetcher interface
@@ -85,6 +96,16 @@ export interface ExternalPostFetcher {
 			limit?: number;
 		},
 	): Promise<FetchPostsResult>;
+
+	/**
+	 * Refresh one post by its platform ID. Platforms with expiring media URLs
+	 * implement this so the durable-preview backfill can obtain a fresh source.
+	 */
+	fetchPost?(
+		accessToken: string,
+		platformAccountId: string,
+		platformPostId: string,
+	): Promise<ExternalPostData | null>;
 
 	/**
 	 * Fetch updated metrics for specific posts.

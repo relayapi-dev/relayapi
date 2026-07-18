@@ -56,12 +56,12 @@ export function InboxReviewsPage() {
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
             Upgrade to the Pro plan to access your unified social media inbox with comments, messages, and reviews.
           </p>
-          <button
-            type="button"
+          <a
+            href="/app/billing"
             className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
           >
             Upgrade to Pro
-          </button>
+          </a>
         </div>
       </div>
     );

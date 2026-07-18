@@ -1,10 +1,11 @@
 import { useState, useRef, useContext, useCallback } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { Play, Settings, Film, ImageIcon, ExternalLink, Loader2, ThumbsUp, MessageSquare, Eye, TrendingUp } from "lucide-react";
+import { Play, Settings, Film, ImageIcon, ImageOff, ExternalLink, Loader2, ThumbsUp, MessageSquare, Eye, TrendingUp } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { platformIcons } from "@/lib/platform-icons";
 import { platformColors, platformLabels } from "@/lib/platform-maps";
+import { useMediaPreview } from "@/lib/media-preview";
 import { PostDetailPopover, formatDateTime, formatNumber } from "./post-detail-popover";
 import { PostDetailModal } from "./post-detail-modal";
 import { CalendarPopoverContext, CALENDAR_CARD_ATTR, handleCalendarPreviewInteractOutside } from "./calendar-popover-context";
@@ -13,10 +14,12 @@ import type { CalendarPost } from "./use-calendar-posts";
 /** Simple popover for external (synced) posts — no API fetch needed, data is already on the card */
 function ExternalPostPopover({ post }: { post: CalendarPost }) {
   const dateStr = post.published_at || post.created_at;
-  // Detail popover prefers the full-res original, falling back to the durable thumbnail.
-  const thumbUrl = post.media?.[0]?.url ?? post.media?.[0]?.thumbnail ?? null;
+  const originalUrl = post.media?.[0]?.url ?? null;
+  const thumbnailUrl = post.media?.[0]?.thumbnail ?? null;
+  const preview = useMediaPreview(thumbnailUrl, originalUrl);
   const thumbType = post.media?.[0]?.type ?? "";
-  const popoverIsVideo = thumbType === "video" || thumbType.startsWith("video/") || (() => { try { return /\.(mp4|mov|webm|avi)$/i.test(new URL(thumbUrl ?? "").pathname); } catch { return /\.(mp4|mov|webm|avi)$/i.test(thumbUrl ?? ""); } })();
+  const popoverIsVideo = thumbType === "video" || thumbType.startsWith("video/") || (() => { try { return /\.(mp4|mov|webm|avi)$/i.test(new URL(originalUrl ?? "").pathname); } catch { return /\.(mp4|mov|webm|avi)$/i.test(originalUrl ?? ""); } })();
+  const renderVideo = popoverIsVideo && preview.src === originalUrl && preview.src !== thumbnailUrl;
   const accountName = post.accountName || platformLabels[post.platform] || post.platform || "Account";
   return (
     <PopoverContent className="w-80 p-0" side="right" align="start" onInteractOutside={handleCalendarPreviewInteractOutside}>
@@ -48,13 +51,17 @@ function ExternalPostPopover({ post }: { post: CalendarPost }) {
         {post.content && (
           <p className="text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap line-clamp-6">{post.content}</p>
         )}
-        {thumbUrl && (
+        {preview.hasCandidates && (
           <a href={post.platformUrl || undefined} target="_blank" rel="noopener noreferrer" onClick={(e) => { if (!post.platformUrl) e.preventDefault(); e.stopPropagation(); }} className={post.platformUrl ? "cursor-pointer hover:opacity-90 transition-opacity" : ""}>
-            {popoverIsVideo ? (
-              <video src={thumbUrl} muted preload="metadata" onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }} className="mt-2 w-full max-h-48 rounded-md object-cover" onError={(e) => { const vid = e.target as HTMLVideoElement; const img = document.createElement("img"); img.src = thumbUrl; img.alt = ""; img.className = vid.className; img.onerror = () => { img.style.display = "none"; }; vid.replaceWith(img); }} />
-            ) : (
-              <img src={thumbUrl} alt="" className="mt-2 w-full max-h-48 rounded-md object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-            )}
+            {preview.failed ? (
+              <div className="mt-2 flex h-32 w-full items-center justify-center rounded-md bg-muted text-muted-foreground">
+                <ImageOff className="size-6" aria-label="Preview unavailable" />
+              </div>
+            ) : renderVideo && preview.src ? (
+              <video src={preview.src} muted preload="metadata" onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }} className="mt-2 w-full max-h-48 rounded-md object-cover" onError={preview.fail} />
+            ) : preview.src ? (
+              <img src={preview.src} alt="" className="mt-2 w-full max-h-48 rounded-md object-cover" onError={preview.fail} />
+            ) : null}
           </a>
         )}
       </div>
@@ -155,7 +162,6 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
     [popoverCtx, post.id],
   );
   const [modalOpen, setModalOpen] = useState(false);
-  const [imgError, setImgError] = useState(false);
   const didDrag = useRef(false);
 
   const isDraggable = post.status === "scheduled" || post.status === "draft";
@@ -177,11 +183,12 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
   const thumbnailUrl = media0?.thumbnail ?? null;
   // Cards prefer the durable, hyper-optimized thumbnail — it survives after the
   // full-res original is purged by the R2 lifecycle rule.
-  const thumbUrl = thumbnailUrl ?? originalUrl;
+  const preview = useMediaPreview(thumbnailUrl, originalUrl);
+  const thumbUrl = preview.src;
   const thumbType = media0?.type ?? "";
   const isVideo = thumbType === "video" || thumbType.startsWith("video/") || (() => { try { return /\.(mp4|mov|webm|avi)$/i.test(new URL(originalUrl ?? "").pathname); } catch { return /\.(mp4|mov|webm|avi)$/i.test(originalUrl ?? ""); } })();
-  const [videoError, setVideoError] = useState(false);
-  const hasMedia = thumbUrl && !imgError;
+  const hasMedia = Boolean(thumbUrl);
+  const renderVideo = isVideo && thumbUrl === originalUrl && thumbUrl !== thumbnailUrl;
 
   const handlePointerDown = () => { didDrag.current = false; };
   const handlePointerMove = () => { didDrag.current = true; };
@@ -271,40 +278,31 @@ export function CalendarPostCard({ post, overlay, compact, onEdit, onDelete, tim
             </div>
 
             {/* Media thumbnail (right side, like Buffer) */}
-            {hasMedia && thumbUrl && (
+            {preview.hasCandidates && (
               <div className={cn("relative shrink-0", compact ? "w-10" : "w-12")}>
-                {isVideo && !thumbnailUrl ? (
-                  // No durable poster yet — fall back to seeking the original video,
-                  // then to the original frame as an image if the video element fails.
-                  videoError ? (
-                    <img
-                      src={originalUrl ?? ""}
-                      alt=""
-                      className="h-full w-full object-cover"
-                      loading="lazy"
-                      onError={() => setImgError(true)}
-                    />
-                  ) : (
-                    <video
-                      src={originalUrl ?? ""}
-                      muted
-                      preload="metadata"
-                      onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
-                      className="h-full w-full object-cover"
-                      onError={() => setVideoError(true)}
-                    />
-                  )
-                ) : (
-                  // Durable thumbnail (or a still image) — always a plain <img>.
+                {preview.failed ? (
+                  <div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
+                    <ImageOff className="size-4" aria-label="Preview unavailable" />
+                  </div>
+                ) : renderVideo && thumbUrl ? (
+                  <video
+                    src={thumbUrl}
+                    muted
+                    preload="metadata"
+                    onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
+                    className="h-full w-full object-cover"
+                    onError={preview.fail}
+                  />
+                ) : thumbUrl ? (
                   <img
                     src={thumbUrl}
                     alt=""
                     className="h-full w-full object-cover"
                     loading="lazy"
-                    onError={() => setImgError(true)}
+                    onError={preview.fail}
                   />
-                )}
-                {isVideo && (
+                ) : null}
+                {isVideo && !preview.failed && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/30">
                     <Play className="size-3.5 text-white fill-white" />
                   </div>

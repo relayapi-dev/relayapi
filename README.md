@@ -225,48 +225,85 @@ git checkout -b feat/my-feature
 
 ### 2. Running the stack locally
 
-**Prerequisites**: [Bun](https://bun.sh) v1.0+, Node.js 20+, SSH access to the dev database host (request from a maintainer).
+**Prerequisites**: [Bun](https://bun.sh) v1.0+, Node.js 20+, and SSH access to the database host for API/database work. VS Code dashboard debugging also uses Caddy for local HTTPS.
 
 ```bash
 bun install
 ```
 
-**Open an SSH tunnel to the database before starting any dev server.** The Postgres instance is not exposed publicly — the tunnel forwards `localhost:5433` to the remote Postgres on port 5432.
+Dashboard development is remote-backend by default: the Astro UI runs locally,
+while authentication and same-origin `/api/*` calls are delegated to the
+deployed dashboard, which calls `https://api.relayapi.dev` through the SDK. The
+local app therefore needs neither PostgreSQL nor a long-running API process.
+Deploy the dashboard once with `/api/dashboard-context` before using this mode;
+until that endpoint exists upstream, local session resolution fails closed.
 
-- In VS Code: run the `SSH Tunnel to Database` task (Terminal → Run Task).
-- Manual command lives in `.vscode/tasks.json`.
+For the VS Code **Debug App** configuration, complete this one-time HTTPS setup:
 
-Wrangler picks up the tunnel via `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` (set in `.vscode/settings.json`), which makes Hyperdrive emulate locally against `localhost:5433`.
+```bash
+echo "127.0.0.1 dev.relayapi.dev" | sudo tee -a /etc/hosts
+brew install caddy
+```
+
+`apps/app/Caddyfile.local` maps `https://dev.relayapi.dev` to Astro on port
+4321 so secure authentication cookies work. This mode uses deployed data and
+side effects; use the dedicated development organization and do not perform
+destructive production testing.
+
+PostgreSQL remains private. Commands that need it automatically open an SSH
+forward on `127.0.0.1:5433`, run the child command, and close the forward. The
+connection comes from the ignored `apps/api/.dev.vars`; there is no persistent
+VS Code tunnel task.
+
+Keep the database host outside the repository by defining an alias in
+`~/.ssh/config`:
+
+```sshconfig
+Host relayapi-db
+  HostName YOUR_PRIVATE_DATABASE_HOST
+  User YOUR_SSH_USER
+```
+
+Then set only the alias in the git-ignored `apps/api/.dev.vars`:
+
+```dotenv
+RELAYAPI_DB_SSH_TARGET=relayapi-db
+```
+
+The tunnel wrapper has no built-in SSH host and fails closed when this variable
+is absent.
 
 Then start the app(s) you are working on:
 
 | Command | What it runs | URL |
 |---------|--------------|-----|
-| `bun run dev:api` | Hono API on Wrangler | `http://localhost:8789` |
-| `bun run dev:app` | Astro dashboard | `http://localhost:4321` |
+| `bun run dev:api` | Hono API on Wrangler; tunnel lives for this command | `http://localhost:8789` |
+| VS Code `Debug App` | Local Astro dashboard against deployed app/API | `https://dev.relayapi.dev` |
+| `bun run dev:app` | Remote-backend Astro upstream; use Caddy for authenticated pages | `http://localhost:4321` |
 | `bun run dev:docs` | Next.js docs site | `http://localhost:3000` |
 | `bun run dev:cli` | CLI tool in watch mode | — |
 
 ### 3. Seeding a dev user
 
-The seed is local-only, idempotent, and creates no active paid entitlement. It
-refuses production and non-loopback database URLs. With the SSH tunnel running,
-set `SEED_USER_EMAIL`, `SEED_USER_PASSWORD`, and the explicit safety confirmation:
+The development seed is idempotent and creates no active paid entitlement. It
+refuses production mode and non-loopback connection URLs. Set
+`SEED_USER_EMAIL`, `SEED_USER_PASSWORD`, and the explicit safety confirmation;
+the wrapper owns the tunnel and supplies the loopback URL as `DATABASE_URL`:
 
 ```bash
 NODE_ENV=development \
   RELAYAPI_ALLOW_LOCAL_SEED=I_UNDERSTAND_THIS_MODIFIES_MY_LOCAL_DATABASE \
-  bun run scripts/seed.ts
+  bun run db:with-tunnel -- bun run scripts/seed.ts
 ```
 
-Sign in at `http://localhost:4321/app` with those credentials.
+Sign in at `https://dev.relayapi.dev/app` with those credentials.
 
 ### 4. Database workflow
 
 ```bash
 bun run db:generate   # Generate a Drizzle migration from schema changes
-bun run db:migrate    # Apply pending migrations to the tunnelled DB
-bun run db:studio     # Open Drizzle Studio against the tunnelled DB
+bun run db:migrate    # Open tunnel, apply migrations, close tunnel
+bun run db:studio     # Keep a tunnel only while Drizzle Studio runs
 ```
 
 ### 5. Debugging
@@ -274,7 +311,7 @@ bun run db:studio     # Open Drizzle Studio against the tunnelled DB
 - **API requests**: hit `http://localhost:8789/docs` for Swagger UI, or use `curl` with a `rlay_test_*` API key.
 - **Wrangler logs**: `bun run dev:api` streams Worker logs, including `console.log`, bindings, and queue activity.
 - **Database state**: `bun run db:studio` opens a browser UI for inspecting rows.
-- **Dashboard**: the Astro dev server supports hot reload; use browser devtools for client state and the terminal for SSR logs.
+- **Dashboard**: VS Code `Debug App` attaches to workerd for SSR breakpoints and launches Chrome against the local HTTPS hostname; browser source maps cover client code.
 - **OAuth flows**: test locally by setting `APP_URL=http://localhost:4321` and registering `http://localhost:8789/v1/connect/<platform>/callback` in the platform's developer console.
 - **Queues**: Wrangler emulates queues locally; check terminal output for `PUBLISH_QUEUE` consumer runs.
 - **Type errors**: `bun run typecheck` runs all packages. Use `bun run typecheck:api` (or `:app`, `:db`, etc.) to narrow down.

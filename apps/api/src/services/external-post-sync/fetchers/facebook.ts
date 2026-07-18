@@ -3,15 +3,12 @@
 // Docs: https://developers.facebook.com/docs/graph-api/reference/page/feed/
 // ---------------------------------------------------------------------------
 
-import type {
-	ExternalPostFetcher,
-	ExternalPostData,
-} from "../types";
-import { RateLimitError } from "../types";
+import { GRAPH_BASE } from "../../../config/api-versions";
 import { parseRateLimitHeaders } from "../rate-limits";
+import type { ExternalPostData, ExternalPostFetcher } from "../types";
+import { RateLimitError } from "../types";
 
-const API_VERSION = "v25.0";
-const BASE = `https://graph.facebook.com/${API_VERSION}`;
+const BASE = GRAPH_BASE.facebook;
 const DEFAULT_LIMIT = 25;
 
 const POST_FIELDS = [
@@ -72,7 +69,8 @@ function parsePost(raw: FacebookRawPost): ExternalPostData {
 	const attachment = raw.attachments?.data?.[0];
 	const attachmentMediaType = attachment?.media_type?.toLowerCase();
 	if (attachmentMediaType === "video") mediaType = "video";
-	else if (attachmentMediaType === "photo" || attachmentMediaType === "image") mediaType = "image";
+	else if (attachmentMediaType === "photo" || attachmentMediaType === "image")
+		mediaType = "image";
 	else if (attachmentMediaType === "album") mediaType = "carousel";
 	else if (raw.status_type === "added_video") mediaType = "video";
 	else if (raw.status_type === "added_photos") mediaType = "image";
@@ -86,7 +84,10 @@ function parsePost(raw: FacebookRawPost): ExternalPostData {
 		mediaType,
 		thumbnailUrl,
 		publishedAt: raw.created_time ? new Date(raw.created_time) : new Date(),
-		platformData: { status_type: raw.status_type, media_type: attachmentMediaType },
+		platformData: {
+			status_type: raw.status_type,
+			media_type: attachmentMediaType,
+		},
 		metrics: {},
 	};
 }
@@ -123,6 +124,14 @@ export const facebookPostFetcher: ExternalPostFetcher = {
 			hasMore: nextCursor != null,
 			rateLimit,
 		};
+	},
+
+	async fetchPost(accessToken, _platformAccountId, platformPostId) {
+		const { data } = await fbFetch<FacebookRawPost>(
+			`${BASE}/${encodeURIComponent(platformPostId)}?fields=${POST_FIELDS}`,
+			accessToken,
+		);
+		return data.id ? parsePost(data) : null;
 	},
 
 	async fetchPostMetrics(accessToken, _platformAccountId, platformPostIds) {

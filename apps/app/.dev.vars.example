@@ -1,0 +1,11 @@
+# Local frontend development delegates authentication and same-origin /api/*
+# requests to the deployed dashboard, which calls the deployed API via the SDK.
+# No database connection is required for `bun run dev:app` in this mode.
+REMOTE_DASHBOARD_ORIGIN=https://relayapi.dev
+API_BASE_URL=https://api.relayapi.dev
+
+# To run the old fully-local dashboard/backend flow instead, copy this file to
+# .dev.vars, set REMOTE_DASHBOARD_ORIGIN=off, point API_BASE_URL at the local API,
+# and provide the existing local Hyperdrive and Better Auth variables.
+# REMOTE_DASHBOARD_ORIGIN=off
+# API_BASE_URL=http://localhost:8789

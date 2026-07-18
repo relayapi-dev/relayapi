@@ -26,9 +26,10 @@ function getEdgeCache(): WorkersCache | null {
 	return g?.default ?? null;
 }
 
-// Public: serve a re-hosted social-account avatar from R2. No auth — <img> tags
-// cannot send a Bearer key, and avatars are public profile pictures. The key is
-// derived from the account id (avatars/{id}); content-type lives in R2 metadata.
+// Public: serve a re-hosted avatar from R2. No auth — <img> tags cannot send a
+// Bearer key, and avatars are public profile pictures. Social-account ids use
+// the durable bucket; the media fallback preserves objects written before the
+// binding migration. Inbox conversation avatars retain MEDIA_BUCKET's lifecycle.
 app.get("/:id", async (c) => {
 	const id = c.req.param("id");
 	if (!id) return new Response("Not found", { status: 404 });
@@ -39,7 +40,11 @@ app.get("/:id", async (c) => {
 	const cached = await edgeCache?.match(c.req.raw);
 	if (cached) return cached;
 
-	const object = await c.env.MEDIA_BUCKET.get(`avatars/${id}`);
+	const key = `avatars/${id}`;
+	const object = id.startsWith("acc_")
+		? ((await c.env.AVATAR_BUCKET.get(key)) ??
+			(await c.env.MEDIA_BUCKET.get(key)))
+		: await c.env.MEDIA_BUCKET.get(key);
 	if (!object) return new Response("Not found", { status: 404 });
 
 	const etag = object.httpEtag;

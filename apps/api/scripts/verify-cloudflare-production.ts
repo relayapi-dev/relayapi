@@ -486,6 +486,14 @@ async function verifyProduction(): Promise<void> {
 				),
 		},
 		{
+			label: "avatar R2 bucket",
+			run: async () =>
+				assertBucket(
+					resources.avatarBucket,
+					await result<Bucket>(`${base}/r2/buckets/${resources.avatarBucket}`),
+				),
+		},
+		{
 			label: "thumbnail R2 bucket",
 			run: async () =>
 				assertBucket(
@@ -511,6 +519,16 @@ async function verifyProduction(): Promise<void> {
 				assertMediaLifecycle(
 					await result<Lifecycle>(
 						`${base}/r2/buckets/${resources.mediaBucket}/lifecycle`,
+					),
+				),
+		},
+		{
+			label: "avatar R2 lifecycle",
+			run: async () =>
+				assertDurableBucketLifecycle(
+					resources.avatarBucket,
+					await result<Lifecycle>(
+						`${base}/r2/buckets/${resources.avatarBucket}/lifecycle`,
 					),
 				),
 		},

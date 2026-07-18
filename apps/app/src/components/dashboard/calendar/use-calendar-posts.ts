@@ -146,7 +146,15 @@ export function useCalendarPosts(
               scheduled_at: null,
               published_at: raw.published_at || null,
               created_at: raw.created_at || raw.published_at || "",
-              media: raw.thumbnail_url ? [{ url: raw.thumbnail_url, type: raw.media_type === "video" ? "video/mp4" : "image/jpeg", thumbnail: raw.thumbnail_url }] : (raw.media_urls?.length ? raw.media_urls.map((u: string) => ({ url: u, thumbnail: raw.thumbnail_url ?? undefined })) : null),
+              media: raw.media_urls?.length
+                ? raw.media_urls.map((url: string) => ({
+                    url,
+                    type: ["video", "reel", "story"].includes(raw.media_type ?? "") ? "video/mp4" : "image/jpeg",
+                    thumbnail: raw.thumbnail_url ?? undefined,
+                  }))
+                : raw.thumbnail_url
+                  ? [{ url: raw.thumbnail_url, type: "image/jpeg", thumbnail: raw.thumbnail_url }]
+                  : null,
               isExternal: true,
               platformUrl: raw.platform_url || null,
               accountName: raw.account_name || null,

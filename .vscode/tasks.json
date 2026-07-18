@@ -1,0 +1,34 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "caddy-proxy",
+			"type": "shell",
+			"command": "sudo /opt/homebrew/bin/caddy run --config Caddyfile.local",
+			"options": {
+				"cwd": "${workspaceFolder}/apps/app"
+			},
+			"isBackground": true,
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"echo": false,
+				"showReuseMessage": false,
+				"clear": false,
+				"group": "dev"
+			},
+			"problemMatcher": {
+				"owner": "caddy",
+				"pattern": {
+					"regexp": "^Error:\\s+(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "using config from file",
+					"endsPattern": "serving initial configuration"
+				}
+			}
+		}
+	]
+}

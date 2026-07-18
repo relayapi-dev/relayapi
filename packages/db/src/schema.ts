@@ -5788,7 +5788,28 @@ export const externalPosts = pgTable(
 		content: text("content"),
 		mediaUrls: jsonb("media_urls").$type<string[]>().default([]),
 		mediaType: text("media_type"), // "image" | "video" | "carousel" | "text" | "reel" | "story"
+		// Provider media URLs are ephemeral (Meta CDN URLs commonly expire). Keep
+		// them as source/fallback data, but render the durable preview below first.
 		thumbnailUrl: text("thumbnail_url"),
+		previewThumbnailKey: text("preview_thumbnail_key"),
+		previewThumbnailUrl: text("preview_thumbnail_url"),
+		previewStatus: text("preview_status", {
+			enum: [
+				"pending",
+				"processing",
+				"generated",
+				"unsupported",
+				"source_missing",
+				"transient_failure",
+			],
+		})
+			.notNull()
+			.default("pending"),
+		previewAttempts: integer("preview_attempts").notNull().default(0),
+		previewNextRetryAt: timestamp("preview_next_retry_at", {
+			withTimezone: true,
+		}),
+		previewLastError: text("preview_last_error"),
 
 		// Platform-specific raw data
 		platformData: jsonb("platform_data")
@@ -5877,6 +5898,18 @@ export const externalPosts = pgTable(
 		index("external_posts_account_published_idx").on(
 			table.socialAccountId,
 			table.publishedAt,
+		),
+		index("external_posts_preview_retry_idx").on(
+			table.previewStatus,
+			table.previewNextRetryAt,
+		),
+		check(
+			"external_posts_preview_status_check",
+			sql`${table.previewStatus} IN ('pending', 'processing', 'generated', 'unsupported', 'source_missing', 'transient_failure')`,
+		),
+		check(
+			"external_posts_preview_attempts_nonnegative_check",
+			sql`${table.previewAttempts} >= 0`,
 		),
 	],
 );

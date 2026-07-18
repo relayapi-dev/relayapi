@@ -14,6 +14,7 @@
 		"test:baseline-builder": "bun test scripts/rebuild-baseline.test.ts",
 		"test:migration-contracts": "bun test scripts/migration-history-contract.test.ts scripts/migration-policy-contract.test.ts",
 		"generate": "drizzle-kit generate",
+		"studio": "drizzle-kit studio",
 		"render:baseline-preamble-sql": "bun run scripts/render-baseline-preamble-sql.ts",
 		"render:custom-migration-sql": "bun run scripts/render-custom-migration-sql.ts",
 		"migrate": "bun run migration:manifest:check && bun run migration:policy:check && bun run migration:history && bun run scripts/migrate.ts",

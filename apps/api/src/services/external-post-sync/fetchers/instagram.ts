@@ -3,15 +3,12 @@
 // Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/content-publishing
 // ---------------------------------------------------------------------------
 
-import type {
-	ExternalPostFetcher,
-	ExternalPostData,
-} from "../types";
-import { RateLimitError } from "../types";
+import { GRAPH_BASE } from "../../../config/api-versions";
 import { parseRateLimitHeaders } from "../rate-limits";
+import type { ExternalPostData, ExternalPostFetcher } from "../types";
+import { RateLimitError } from "../types";
 
-const API_VERSION = "v25.0";
-const BASE = `https://graph.instagram.com/${API_VERSION}`;
+const BASE = GRAPH_BASE.instagram;
 const DEFAULT_LIMIT = 25;
 
 const MEDIA_FIELDS = [
@@ -131,6 +128,14 @@ export const instagramPostFetcher: ExternalPostFetcher = {
 		const rateLimit = parseRateLimitHeaders(headers) ?? undefined;
 
 		return { posts, nextCursor, hasMore: nextCursor != null, rateLimit };
+	},
+
+	async fetchPost(accessToken, _platformAccountId, platformPostId) {
+		const { data } = await igFetch<InstagramRawPost>(
+			`${BASE}/${encodeURIComponent(platformPostId)}?fields=${MEDIA_FIELDS}`,
+			accessToken,
+		);
+		return data.id ? parsePost(data) : null;
 	},
 
 	async fetchPostMetrics(accessToken, _platformAccountId, platformPostIds) {

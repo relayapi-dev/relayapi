@@ -19,9 +19,7 @@ export class MockKV {
 		this.store.delete(key);
 	}
 
-	async list(
-		_opts?: unknown,
-	): Promise<{
+	async list(_opts?: unknown): Promise<{
 		keys: Array<{ name: string }>;
 		list_complete: boolean;
 		cacheStatus: null;
@@ -37,7 +35,11 @@ export class MockKV {
 		key: string,
 		_opts?: unknown,
 	): Promise<{ value: string | null; metadata: unknown; cacheStatus: null }> {
-		return { value: this.store.get(key) ?? null, metadata: null, cacheStatus: null };
+		return {
+			value: this.store.get(key) ?? null,
+			metadata: null,
+			cacheStatus: null,
+		};
 	}
 
 	/** Test helper: inspect raw store */
@@ -59,6 +61,9 @@ export class MockR2Bucket {
 	async put(_key: string, _body: unknown, _opts?: unknown) {
 		return {};
 	}
+	async head(_key: string) {
+		return null;
+	}
 	async get(_key: string) {
 		return null;
 	}
@@ -73,6 +78,7 @@ export function createMockEnv(kvOverride?: MockKV): { env: Env; kv: MockKV } {
 	const env = {
 		KV: kv as unknown as KVNamespace,
 		MEDIA_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
+		AVATAR_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
 		THUMBNAIL_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
 		HYPERDRIVE: {
 			connectionString: "postgresql://mock:mock@localhost:5432/mock",

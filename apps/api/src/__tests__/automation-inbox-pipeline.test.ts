@@ -12,9 +12,9 @@
 // This suite calls `processInboxEvent` with synthetic `InboxQueueMessage`
 // payloads that mirror what `platform-webhooks.ts` enqueues in production.
 //
-// Requires the SSH tunnel at localhost:5433 (see .vscode/tasks.json); the
-// suite skips gracefully when the tunnel is down, matching the convention
-// used by the other DB-backed integration suites.
+// DB-backed cases require the command-scoped tunnel at localhost:5433; run the
+// isolated suite through `bun run db:with-tunnel -- bun run --cwd apps/api test`
+// to include them. Otherwise they skip gracefully.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import {
@@ -33,12 +33,12 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
-import type { Graph } from "../schemas/automation-graph";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
-import { processInboxEvent } from "../services/inbox-event-processor";
+import type { Graph } from "../schemas/automation-graph";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
-import type { Env } from "../types";
+import { processInboxEvent } from "../services/inbox-event-processor";
 import type { SendMessageRequest } from "../services/message-sender";
+import type { Env } from "../types";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??

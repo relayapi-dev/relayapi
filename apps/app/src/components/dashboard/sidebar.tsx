@@ -15,8 +15,8 @@ import {
 	Link2,
 	Loader2,
 	LogOut,
-	MoreHorizontal,
 	Moon,
+	MoreHorizontal,
 	PenSquare,
 	Plus,
 	Settings,
@@ -47,6 +47,10 @@ import { useUsage } from "@/hooks/use-usage";
 import { fetchDashboardBootstrap } from "@/lib/dashboard-bootstrap";
 import { scheduleIdleTask } from "@/lib/idle";
 import { isModifiedClick } from "@/lib/link-nav";
+import {
+	type OrganizationMenuItem,
+	reconcileOrganizationMenuItems,
+} from "@/lib/organization-menu";
 import { cn } from "@/lib/utils";
 
 async function loadAuthClient() {
@@ -188,12 +192,7 @@ interface SidebarProps {
 	organization?: AppOrganization | null;
 }
 
-interface OrgListItem {
-	id: string;
-	name: string;
-	slug: string;
-	logo?: string | null;
-}
+type OrgListItem = OrganizationMenuItem;
 
 export function Sidebar({
 	currentPage,
@@ -325,19 +324,23 @@ export function Sidebar({
 	const menuRef = useRef<HTMLDivElement>(null);
 	const orgSearchRef = useRef<HTMLInputElement>(null);
 
+	const initialOrganization: OrgListItem | null = organization
+		? {
+				id: organization.id,
+				name: organization.name,
+				slug: organization.slug,
+				logo: organization.logo,
+			}
+		: null;
 	const [currentOrg, setCurrentOrg] = useState<OrgListItem | null>(
-		organization
-			? {
-					id: organization.id,
-					name: organization.name,
-					slug: organization.slug,
-					logo: organization.logo,
-				}
-			: null,
+		initialOrganization,
 	);
-	const [orgs, setOrgs] = useState<OrgListItem[]>([]);
+	const [orgs, setOrgs] = useState<OrgListItem[]>(() =>
+		reconcileOrganizationMenuItems(initialOrganization, []),
+	);
 	const [orgsLoading, setOrgsLoading] = useState(false);
 	const [orgsLoaded, setOrgsLoaded] = useState(false);
+	const [orgsError, setOrgsError] = useState<string | null>(null);
 	const [orgSearch, setOrgSearch] = useState("");
 	const [createOrgOpen, setCreateOrgOpen] = useState(false);
 	const [newOrgName, setNewOrgName] = useState("");
@@ -348,33 +351,36 @@ export function Sidebar({
 
 	const loadOrganizations = useCallback(async () => {
 		setOrgsLoading(true);
+		setOrgsError(null);
 		try {
 			const { organization: orgClient } = await loadAuthClient();
-			const { data } = await orgClient.list();
-			if (data) {
-				const items: OrgListItem[] = data.map(
-					(o: {
-						id: string;
-						name: string;
-						slug: string;
-						logo?: string | null;
-					}) => ({
-						id: o.id,
-						name: o.name,
-						slug: o.slug,
-						logo: o.logo,
-					}),
-				);
-				setOrgs(items);
-				setCurrentOrg((prev) =>
-					prev ? (items.find((o) => o.id === prev.id) ?? prev) : (items[0] ?? null),
-				);
-				if (!currentOrg && items[0]) {
-					void orgClient.setActive({ organizationId: items[0].id });
-				}
+			const { data, error } = await orgClient.list();
+			if (error) {
+				throw new Error(error.message || "Organization list request failed");
+			}
+			if (!data) {
+				throw new Error("Organization list response was empty");
+			}
+
+			const items: OrgListItem[] = data.map((o) => ({
+				id: o.id,
+				name: o.name,
+				slug: o.slug,
+				logo: o.logo,
+			}));
+			setOrgs(reconcileOrganizationMenuItems(currentOrg, items));
+			setCurrentOrg((prev) =>
+				prev
+					? (items.find((o) => o.id === prev.id) ?? prev)
+					: (items[0] ?? null),
+			);
+			if (!currentOrg && items[0]) {
+				void orgClient.setActive({ organizationId: items[0].id });
 			}
 		} catch (e) {
 			console.error("Failed to fetch organizations:", e);
+			setOrgs((items) => reconcileOrganizationMenuItems(currentOrg, items));
+			setOrgsError("Couldn’t load all organizations.");
 		} finally {
 			setOrgsLoading(false);
 			setOrgsLoaded(true);
@@ -394,11 +400,20 @@ export function Sidebar({
 		if (plan === "pro" && !billingStatusLoaded) {
 			fetch("/api/billing/status")
 				.then((r) => (r.ok ? r.json() : null))
-				.then((data) => setIsCancelling(!!data?.subscription?.cancelAtPeriodEnd))
+				.then((data) =>
+					setIsCancelling(!!data?.subscription?.cancelAtPeriodEnd),
+				)
 				.catch(() => {})
 				.finally(() => setBillingStatusLoaded(true));
 		}
-	}, [menuOpen, orgsLoaded, orgsLoading, loadOrganizations, plan, billingStatusLoaded]);
+	}, [
+		menuOpen,
+		orgsLoaded,
+		orgsLoading,
+		loadOrganizations,
+		plan,
+		billingStatusLoaded,
+	]);
 
 	// Click-outside handler for the account menu.
 	useEffect(() => {
@@ -605,17 +620,13 @@ export function Sidebar({
 								</div>
 								<div className="flex items-center gap-1 text-[11px] text-muted-foreground">
 									<span className="truncate">
-										{currentOrg?.name ||
-											organization?.name ||
-											"Personal"}
+										{currentOrg?.name || organization?.name || "Personal"}
 									</span>
 									{plan === "pro" && (
 										<Gem
 											className="size-3 shrink-0 text-foreground"
 											strokeWidth={1.8}
-											aria-label={
-												isCancelling ? "Pro (ending)" : "Pro"
-											}
+											aria-label={isCancelling ? "Pro (ending)" : "Pro"}
 										/>
 									)}
 								</div>
@@ -644,11 +655,21 @@ export function Sidebar({
 											exit="exit"
 											className="absolute right-0 top-full z-[70] mt-1.5 w-60 origin-top-right rounded-md border border-border bg-popover p-1.5 shadow-[var(--shadow-popover)] md:right-auto md:left-0 md:origin-top-left"
 										>
-											<button type="button" className={menuRow} onClick={toggleTheme}>
+											<button
+												type="button"
+												className={menuRow}
+												onClick={toggleTheme}
+											>
 												{isDark ? (
-													<Sun className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+													<Sun
+														className="size-[15px] shrink-0 text-muted-foreground"
+														strokeWidth={1.6}
+													/>
 												) : (
-													<Moon className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+													<Moon
+														className="size-[15px] shrink-0 text-muted-foreground"
+														strokeWidth={1.6}
+													/>
 												)}
 												<span>{isDark ? "Light mode" : "Dark mode"}</span>
 											</button>
@@ -660,7 +681,10 @@ export function Sidebar({
 													setMenuOpen(false);
 												}}
 											>
-												<Settings className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												<Settings
+													className="size-[15px] shrink-0 text-muted-foreground"
+													strokeWidth={1.6}
+												/>
 												<span>Account settings</span>
 											</button>
 											<button
@@ -671,7 +695,10 @@ export function Sidebar({
 													setMenuOpen(false);
 												}}
 											>
-												<User className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												<User
+													className="size-[15px] shrink-0 text-muted-foreground"
+													strokeWidth={1.6}
+												/>
 												<span>Profile</span>
 											</button>
 
@@ -679,66 +706,87 @@ export function Sidebar({
 											<div className="px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
 												Organizations
 											</div>
-											{orgsLoading ? (
-												<div className="flex items-center justify-center py-3">
-													<Loader2 className="size-4 animate-spin text-muted-foreground" />
+											{orgs.length > 5 && (
+												<div className="px-1 pb-1">
+													<input
+														ref={orgSearchRef}
+														type="text"
+														placeholder="Search organizations..."
+														value={orgSearch}
+														onChange={(e) => setOrgSearch(e.target.value)}
+														className="w-full rounded border border-border bg-background px-2 py-1 text-[12px] outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+													/>
 												</div>
-											) : (
-												<>
-													{orgs.length > 5 && (
-														<div className="px-1 pb-1">
-															<input
-																ref={orgSearchRef}
-																type="text"
-																placeholder="Search organizations..."
-																value={orgSearch}
-																onChange={(e) => setOrgSearch(e.target.value)}
-																className="w-full rounded border border-border bg-background px-2 py-1 text-[12px] outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
-															/>
-														</div>
-													)}
-													<div className="max-h-[180px] overflow-y-auto">
-														{orgs
-															.filter(
-																(org) =>
-																	!orgSearch ||
-																	org.name
-																		.toLowerCase()
-																		.includes(orgSearch.toLowerCase()),
-															)
-															.map((org) => (
-																<button
-																	type="button"
-																	key={org.id}
-																	onClick={() => handleSwitchOrg(org)}
-																	className={menuRow}
+											)}
+											<div className="max-h-[180px] overflow-y-auto">
+												{orgs
+													.filter(
+														(org) =>
+															!orgSearch ||
+															org.name
+																.toLowerCase()
+																.includes(orgSearch.toLowerCase()),
+													)
+													.map((org) => (
+														<button
+															type="button"
+															key={org.id}
+															onClick={() => handleSwitchOrg(org)}
+															className={menuRow}
+														>
+															{org.logo ? (
+																<img
+																	src={org.logo}
+																	alt={org.name}
+																	className="size-5 shrink-0 rounded object-cover"
+																/>
+															) : (
+																<div
+																	className={cn(
+																		"flex size-5 shrink-0 items-center justify-center rounded text-[10px] font-bold text-white",
+																		getOrgColor(org.id),
+																	)}
 																>
-																	{org.logo ? (
-																		<img
-																			src={org.logo}
-																			alt={org.name}
-																			className="size-5 shrink-0 rounded object-cover"
-																		/>
-																	) : (
-																		<div
-																			className={cn(
-																				"flex size-5 shrink-0 items-center justify-center rounded text-[10px] font-bold text-white",
-																				getOrgColor(org.id),
-																			)}
-																		>
-																			{org.name.charAt(0).toUpperCase()}
-																		</div>
-																	)}
-																	<span className="flex-1 truncate text-left">
-																		{org.name}
-																	</span>
-																	{org.id === currentOrg?.id && (
-																		<Check className="size-3.5 shrink-0 text-foreground" />
-																	)}
-																</button>
-															))}
-													</div>
-												</>
+																	{org.name.charAt(0).toUpperCase()}
+																</div>
+															)}
+															<span className="flex-1 truncate text-left">
+																{org.name}
+															</span>
+															{org.id === currentOrg?.id && (
+																<Check className="size-3.5 shrink-0 text-foreground" />
+															)}
+														</button>
+													))}
+											</div>
+											{orgsLoading && (
+												<div
+													className="flex items-center justify-center gap-2 px-2.5 py-2 text-[12px] text-muted-foreground"
+													aria-live="polite"
+												>
+													<Loader2 className="size-3.5 animate-spin" />
+													<span>Loading organizations…</span>
+												</div>
+											)}
+											{orgsError && (
+												<div
+													className="mx-1 mt-1 flex items-center justify-between gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive"
+													role="alert"
+												>
+													<span>{orgsError}</span>
+													<button
+														type="button"
+														onClick={() => void loadOrganizations()}
+														className="shrink-0 rounded px-1.5 py-0.5 font-medium text-foreground hover:bg-destructive/10"
+													>
+														Retry
+													</button>
+												</div>
+											)}
+											{!orgsLoading && !orgsError && orgs.length === 0 && (
+												<div className="px-2.5 py-2 text-[12px] text-muted-foreground">
+													No organizations found.
+												</div>
 											)}
 											<button
 												type="button"
@@ -748,7 +796,10 @@ export function Sidebar({
 												}}
 												className={cn(menuRow, "text-muted-foreground")}
 											>
-												<Plus className="size-[15px] shrink-0" strokeWidth={1.6} />
+												<Plus
+													className="size-[15px] shrink-0"
+													strokeWidth={1.6}
+												/>
 												<span>Create organization</span>
 											</button>
 
@@ -773,7 +824,10 @@ export function Sidebar({
 												rel="noopener noreferrer"
 												className={menuRow}
 											>
-												<BookOpen className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												<BookOpen
+													className="size-[15px] shrink-0 text-muted-foreground"
+													strokeWidth={1.6}
+												/>
 												<span>Documentation</span>
 											</a>
 											<button
@@ -793,7 +847,10 @@ export function Sidebar({
 												}}
 												className={menuRow}
 											>
-												<BellDot className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+												<BellDot
+													className="size-[15px] shrink-0 text-muted-foreground"
+													strokeWidth={1.6}
+												/>
 												<span>Notification preferences</span>
 											</button>
 											{user?.role === "admin" && (
@@ -805,14 +862,24 @@ export function Sidebar({
 													}}
 													className={menuRow}
 												>
-													<Shield className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+													<Shield
+														className="size-[15px] shrink-0 text-muted-foreground"
+														strokeWidth={1.6}
+													/>
 													<span>Admin</span>
 												</button>
 											)}
 
 											<div className="my-1.5 h-px bg-border" />
-											<button type="button" onClick={handleSignOut} className={menuRow}>
-												<LogOut className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={1.6} />
+											<button
+												type="button"
+												onClick={handleSignOut}
+												className={menuRow}
+											>
+												<LogOut
+													className="size-[15px] shrink-0 text-muted-foreground"
+													strokeWidth={1.6}
+												/>
 												<span>Sign out</span>
 											</button>
 										</motion.div>
@@ -856,8 +923,7 @@ export function Sidebar({
 								<Flame
 									className={cn(
 										"size-4 shrink-0",
-										streak.hours_remaining != null &&
-											streak.hours_remaining < 2
+										streak.hours_remaining != null && streak.hours_remaining < 2
 											? "animate-pulse text-red-400"
 											: "text-amber-500",
 									)}
@@ -865,8 +931,7 @@ export function Sidebar({
 								<span
 									className={cn(
 										"font-semibold",
-										streak.hours_remaining != null &&
-											streak.hours_remaining < 2
+										streak.hours_remaining != null && streak.hours_remaining < 2
 											? "text-red-400"
 											: "text-amber-500",
 									)}

@@ -133,7 +133,10 @@ describe("production Cloudflare configuration policy", () => {
 		).not.toThrow();
 		expect(() => assertQueueRescueLifecycle({ rules: [] })).toThrow();
 		expect(() =>
-			assertDurableBucketLifecycle("thumbnail bucket", {
+			assertDurableBucketLifecycle(resources.avatarBucket, { rules: [] }),
+		).not.toThrow();
+		expect(() =>
+			assertDurableBucketLifecycle(resources.avatarBucket, {
 				rules: [
 					{
 						id: "dangerous-delete",
@@ -191,10 +194,15 @@ describe("production Cloudflare configuration policy", () => {
 		).toThrow();
 	});
 
-	it("requires all three reviewed R2 buckets to exist", () => {
-		expect(() =>
-			assertBucket(resources.mediaBucket, { name: resources.mediaBucket }),
-		).not.toThrow();
+	it("requires all four reviewed R2 buckets to exist", () => {
+		for (const bucket of [
+			resources.mediaBucket,
+			resources.avatarBucket,
+			resources.thumbnailBucket,
+			resources.queueRescueBucket,
+		]) {
+			expect(() => assertBucket(bucket, { name: bucket })).not.toThrow();
+		}
 		expect(() =>
 			assertBucket(resources.mediaBucket, { name: "wrong-bucket" }),
 		).toThrow();

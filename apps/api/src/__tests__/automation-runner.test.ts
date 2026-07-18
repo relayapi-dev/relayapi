@@ -1,8 +1,8 @@
 // apps/api/src/__tests__/automation-runner.test.ts
 //
-// Integration tests for the automation runner. Requires the SSH tunnel to
-// localhost:5433 to be up (see .vscode/tasks.json). Each test seeds and tears
-// down its own organization so the tests are hermetic.
+// Integration tests for the automation runner. Run the isolated suite through
+// the root `db:with-tunnel` wrapper to include these DB-backed cases. Each test
+// seeds and tears down its own organization so the tests are hermetic.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import {

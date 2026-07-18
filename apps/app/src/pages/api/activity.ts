@@ -45,6 +45,7 @@ export const GET: APIRoute = async (ctx) => {
 
     if (postsRes.status === "fulfilled") {
       for (const p of postsRes.value.data) {
+        if ("source" in p) continue;
         if (!p.published_at) continue;
         const platforms = p.targets
 					? [

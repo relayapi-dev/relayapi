@@ -3,53 +3,55 @@
 	"configurations": [
 		{
 			"command": "bun run dev:api",
-			"name": "API",
+			"name": "API (command-scoped DB tunnel)",
 			"request": "launch",
 			"type": "node-terminal",
 			"cwd": "${workspaceFolder}",
-			"internalConsoleOptions": "neverOpen",
-			"preLaunchTask": "SSH Tunnel to Database"
+			"internalConsoleOptions": "neverOpen"
 		},
 		{
 			"command": "bun run dev:app",
-			"name": "App Server",
+			"name": "app-server",
 			"request": "launch",
 			"type": "node-terminal",
 			"cwd": "${workspaceFolder}",
 			"internalConsoleOptions": "neverOpen",
-			"preLaunchTask": "SSH Tunnel to Database"
+			"preLaunchTask": "caddy-proxy"
+		},
+		{
+			"name": "workerd",
+			"type": "node",
+			"request": "attach",
+			"websocketAddress": "ws://127.0.0.1:9230/core:user:relayapi-app",
+			"cwd": "${workspaceFolder}/apps/app",
+			"attachExistingChildren": false,
+			"autoAttachChildProcesses": false,
+			"restart": true,
+			"resolveSourceMapLocations": [
+				"${workspaceFolder}/apps/app/**",
+				"${workspaceFolder}/packages/**",
+				"!**/node_modules/**"
+			],
+			"skipFiles": ["<node_internals>/**", "**/node_modules/**"]
 		},
 		{
 			"type": "chrome",
 			"request": "launch",
-			"name": "App Client",
-			"url": "http://localhost:4321",
+			"name": "app-client",
+			"url": "https://dev.relayapi.dev",
 			"webRoot": "${workspaceFolder}/apps/app/src",
 			"sourceMapPathOverrides": {
-				"vite:///src/*": "${workspaceFolder}/apps/app/src/*"
+				"vite:///src/*": "${workspaceFolder}/apps/app/src/*",
+				"vite:///*": "${workspaceFolder}/apps/app/*",
+				"/@fs/*": "/*"
 			},
-			"skipFiles": [
-				"**/node_modules/**"
-			]
+			"skipFiles": ["**/node_modules/**"]
 		}
 	],
 	"compounds": [
 		{
 			"name": "Debug App",
-			"configurations": [
-				"App Server",
-				"App Client"
-			],
-			"stopAll": true
-		},
-		{
-			"name": "Debug All",
-			"configurations": [
-				"API",
-				"App Server",
-				"App Client"
-			],
-			"preLaunchTask": "Start Docs",
+			"configurations": ["app-server", "workerd", "app-client"],
 			"stopAll": true
 		}
 	]

@@ -6,7 +6,7 @@ const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
 const FETCH_TIMEOUT_MS = 5_000;
 const DEFAULT_API_BASE = "https://api.relayapi.dev";
 
-/** R2 object key for an account's re-hosted avatar. */
+/** R2 object key for a re-hosted avatar. */
 function avatarKey(accountId: string): string {
 	return `${AVATAR_KEY_PREFIX}${accountId}`;
 }
@@ -18,22 +18,23 @@ export function avatarPublicUrl(env: Env, accountId: string): string {
 }
 
 /**
- * Download a platform CDN avatar and re-host it in R2 (MEDIA_BUCKET) under a
- * stable key, returning a permanent RelayAPI URL. Platform CDN URLs (Facebook,
- * Instagram, Threads, …) are signed and expire over time; re-hosting makes the
- * avatar durable and stops the dashboard from hitting third-party CDNs directly.
+ * Download an avatar and re-host it in the provided R2 bucket under a stable
+ * key, returning a RelayAPI URL. The caller chooses the storage lifecycle.
  *
  * Best-effort: returns null on any failure so callers can fall back to storing
  * the raw CDN URL (never worse than before).
  */
-export async function rehostAvatar(
+async function rehostAvatarInBucket(
 	env: Env,
+	bucket: R2Bucket,
 	accountId: string,
 	sourceUrl: string | null | undefined,
 ): Promise<string | null> {
 	if (!sourceUrl) return null;
 	try {
-		const res = await fetchWithTimeout(sourceUrl, { timeout: FETCH_TIMEOUT_MS });
+		const res = await fetchWithTimeout(sourceUrl, {
+			timeout: FETCH_TIMEOUT_MS,
+		});
 		if (!res.ok) return null;
 
 		const contentType =
@@ -41,9 +42,10 @@ export async function rehostAvatar(
 		if (!contentType.startsWith("image/")) return null;
 
 		const bytes = await res.arrayBuffer();
-		if (bytes.byteLength === 0 || bytes.byteLength > MAX_AVATAR_BYTES) return null;
+		if (bytes.byteLength === 0 || bytes.byteLength > MAX_AVATAR_BYTES)
+			return null;
 
-		await env.MEDIA_BUCKET.put(avatarKey(accountId), bytes, {
+		await bucket.put(avatarKey(accountId), bytes, {
 			httpMetadata: { contentType },
 		});
 
@@ -54,13 +56,55 @@ export async function rehostAvatar(
 	}
 }
 
-/** Best-effort delete of an account's re-hosted avatar object (on disconnect). */
+/**
+ * Re-host a social-account avatar in the durable, non-expiring avatar bucket.
+ * Platform CDN URLs are commonly signed and short-lived, so the database stores
+ * the stable RelayAPI URL returned here instead.
+ */
+export async function rehostAvatar(
+	env: Env,
+	accountId: string,
+	sourceUrl: string | null | undefined,
+): Promise<string | null> {
+	return rehostAvatarInBucket(env, env.AVATAR_BUCKET, accountId, sourceUrl);
+}
+
+/**
+ * Re-host a transient inbox participant avatar in MEDIA_BUCKET. These objects
+ * intentionally retain the media bucket's finite lifecycle.
+ */
+export async function rehostTransientAvatar(
+	env: Env,
+	avatarId: string,
+	sourceUrl: string | null | undefined,
+): Promise<string | null> {
+	return rehostAvatarInBucket(env, env.MEDIA_BUCKET, avatarId, sourceUrl);
+}
+
+/** True only when the durable account-avatar object currently exists. */
+export async function hasStoredAvatar(
+	env: Env,
+	accountId: string,
+): Promise<boolean> {
+	try {
+		return (await env.AVATAR_BUCKET.head(avatarKey(accountId))) !== null;
+	} catch (err) {
+		console.warn(`[Avatar] Head failed for account ${accountId}:`, err);
+		return false;
+	}
+}
+
+/** Best-effort delete of durable and legacy account-avatar objects. */
 export async function deleteStoredAvatar(
 	env: Env,
 	accountId: string,
 ): Promise<void> {
 	try {
-		await env.MEDIA_BUCKET.delete(avatarKey(accountId));
+		const key = avatarKey(accountId);
+		await Promise.all([
+			env.AVATAR_BUCKET.delete(key),
+			env.MEDIA_BUCKET.delete(key),
+		]);
 	} catch (err) {
 		console.warn(`[Avatar] Delete failed for account ${accountId}:`, err);
 	}

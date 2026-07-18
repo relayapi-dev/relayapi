@@ -10,6 +10,7 @@ import { decryptAccountToken } from "../lib/account-token-crypto";
 import { readResponseBytes } from "../lib/fetch-public-url";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
 import type { Env } from "../types";
+import { deleteStoredAvatar } from "./avatar-store";
 
 const LEASE_MS = 5 * 60_000;
 const REVOCATION_TIMEOUT_MS = 10_000;
@@ -253,7 +254,7 @@ export async function processAccountRevocations(env: Env): Promise<void> {
 		}
 
 		const completedAt = new Date();
-		await db.transaction(async (tx) => {
+		const disconnected = await db.transaction(async (tx) => {
 			const finalizedJobs = await tx
 				.update(accountRevocationJobs)
 				.set({
@@ -280,7 +281,7 @@ export async function processAccountRevocations(env: Env): Promise<void> {
 					),
 				)
 				.returning({ id: accountRevocationJobs.id });
-			if (finalizedJobs.length === 0) return;
+			if (finalizedJobs.length === 0) return false;
 
 			const clearedAccounts = await tx
 				.update(socialAccounts)
@@ -301,7 +302,7 @@ export async function processAccountRevocations(env: Env): Promise<void> {
 					),
 				)
 				.returning({ id: socialAccounts.id });
-			if (clearedAccounts.length === 0) return;
+			if (clearedAccounts.length === 0) return false;
 			await tx.insert(connectionLogs).values({
 				organizationId: job.organizationId,
 				socialAccountId: job.accountId,
@@ -317,6 +318,8 @@ export async function processAccountRevocations(env: Env): Promise<void> {
 					completed_at: completedAt.toISOString(),
 				},
 			});
+			return true;
 		});
+		if (disconnected) await deleteStoredAvatar(env, job.accountId);
 	}
 }

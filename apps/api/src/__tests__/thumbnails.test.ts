@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	generateAndStoreThumbnailFromResponse,
 	isImageMime,
 	isThumbnailable,
 	isVideoMime,
@@ -7,6 +8,10 @@ import {
 	thumbnailKeyFor,
 	thumbnailUrlFor,
 } from "../lib/thumbnails";
+
+function fixture<T>(value: unknown): T {
+	return value as T;
+}
 
 describe("thumbnail mime classification", () => {
 	it("recognizes raster image types", () => {
@@ -57,5 +62,40 @@ describe("thumbnail keys & urls", () => {
 		);
 		// No raw spaces survive into the URL.
 		expect(url).not.toContain(" ");
+	});
+});
+
+describe("external response thumbnails", () => {
+	it("streams a bounded provider response through Images into durable R2", async () => {
+		const stored: string[] = [];
+		const output = fixture<ImageTransformationResult>({
+			response: () => new Response("tiny-avif"),
+		});
+		let transformer: ImageTransformer;
+		transformer = fixture<ImageTransformer>({
+			transform: () => transformer,
+			output: async () => output,
+		});
+		const env = fixture<import("../types").Env>({
+			IMAGES: fixture<ImagesBinding>({ input: () => transformer }),
+			THUMBNAIL_BUCKET: fixture<R2Bucket>({
+				put: async (key: string) => {
+					stored.push(key);
+					return fixture<R2Object>({ key });
+				},
+			}),
+		});
+
+		const result = await generateAndStoreThumbnailFromResponse(
+			env,
+			"org_1/external-posts/xp_1/preview",
+			new Response("provider-image", {
+				headers: { "content-type": "application/octet-stream" },
+			}),
+			"image/jpeg",
+		);
+
+		expect(result.status).toBe("generated");
+		expect(stored).toEqual(["org_1/external-posts/xp_1/preview.avif"]);
 	});
 });

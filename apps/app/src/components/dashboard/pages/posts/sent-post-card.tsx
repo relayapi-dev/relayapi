@@ -14,10 +14,12 @@ import {
   Undo2,
   Copy,
   Link,
+  ImageOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { platformIcons } from "@/lib/platform-icons";
 import { platformColors, platformLabels } from "@/lib/platform-maps";
+import { useMediaPreview } from "@/lib/media-preview";
 import {
   Popover,
   PopoverContent,
@@ -113,8 +115,9 @@ export function SentPostCard({
   const hasVideo = media ? isVideo(media) : false;
   // Small card prefers the durable poster (rendered as a plain image); the
   // full-screen overlay prefers the original for playback / full quality.
-  const cardThumb = posterUrl ?? thumbUrl;
-  const showVideoInCard = hasVideo && !posterUrl;
+  const cardPreview = useMediaPreview(posterUrl, thumbUrl);
+  const cardThumb = cardPreview.src;
+  const showVideoInCard = hasVideo && cardThumb === thumbUrl && cardThumb !== posterUrl;
   const overlayUrl = thumbUrl ?? posterUrl;
   const overlayIsVideo = hasVideo && !!thumbUrl;
   const accountName = target.displayName || target.username || "Unknown";
@@ -199,7 +202,7 @@ export function SentPostCard({
                 </p>
               </div>
             )}
-            {cardThumb && (
+            {cardPreview.hasCandidates && (
               <button
                 type="button"
                 onClick={() => {
@@ -214,23 +217,28 @@ export function SentPostCard({
                   target.platformUrl ? "cursor-pointer" : "cursor-zoom-in",
                 )}
               >
-                {showVideoInCard ? (
+                {cardPreview.failed ? (
+                  <div className="flex w-full aspect-[4/3] sm:aspect-auto sm:size-52 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                    <ImageOff className="size-6" aria-label="Preview unavailable" />
+                  </div>
+                ) : showVideoInCard && cardThumb ? (
                   <video
                     src={cardThumb}
                     muted
                     preload="metadata"
                     onLoadedMetadata={(e) => { (e.target as HTMLVideoElement).currentTime = 0.001; }}
                     className="w-full aspect-[4/3] sm:aspect-auto sm:size-52 rounded-md object-cover"
+                    onError={cardPreview.fail}
                   />
-                ) : (
+                ) : cardThumb ? (
                   <img
                     src={cardThumb}
                     alt=""
                     className="w-full aspect-[4/3] sm:aspect-auto sm:size-52 rounded-md object-cover"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    onError={cardPreview.fail}
                   />
-                )}
-                {hasVideo && (
+                ) : null}
+                {hasVideo && !cardPreview.failed && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="size-10 sm:size-12 rounded-full bg-black/60 flex items-center justify-center">
                       <svg aria-hidden="true" viewBox="0 0 24 24" fill="white" className="size-4 sm:size-5 ml-0.5">

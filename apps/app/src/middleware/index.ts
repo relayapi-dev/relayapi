@@ -10,6 +10,12 @@ import {
 import { getCookieCache } from "better-auth/cookies";
 import { and, eq } from "drizzle-orm";
 import { revokeDashboardPrincipal } from "../lib/dashboard-principal-revocation";
+import {
+	fetchRemoteDashboardContext,
+	proxyRemoteDashboardRequest,
+	type RemoteDashboardContext,
+	resolveRemoteDashboardOrigin,
+} from "../lib/remote-dashboard";
 import { prepareUserDeletion } from "../lib/user-deletion";
 
 const PROTECTED_PATHS = ["/app"];
@@ -288,6 +294,30 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	}
 
 	const cfEnv: CfEnv = env;
+	const remoteDashboardOrigin = resolveRemoteDashboardOrigin(
+		cfEnv.REMOTE_DASHBOARD_ORIGIN,
+		import.meta.env.DEV,
+	);
+	if (remoteDashboardOrigin && path.startsWith("/api/")) {
+		try {
+			return await proxyRemoteDashboardRequest(
+				context.request,
+				remoteDashboardOrigin,
+			);
+		} catch (error) {
+			console.error("Remote dashboard proxy failed", error);
+			return Response.json(
+				{
+					error: {
+						code: "REMOTE_DASHBOARD_UNAVAILABLE",
+						message: "The remote dashboard is unavailable.",
+					},
+				},
+				{ status: 502 },
+			);
+		}
+	}
+
 	let db: Database | undefined;
 	let auth: AuthInstance | undefined;
 	const cfContext = (
@@ -299,8 +329,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	let session: AuthSessionRecord | null = null;
 	let organization: OrganizationSummary | null = null;
 	let organizationMembershipRole: string | null = null;
+	let remoteContext: RemoteDashboardContext | null = null;
 
 	const getDb = () => {
+		if (remoteDashboardOrigin) {
+			throw new Error(
+				"Database access is disabled while using the remote dashboard backend",
+			);
+		}
 		if (!db) {
 			const connectionString =
 				cfEnv.HYPERDRIVE?.connectionString || cfEnv.DATABASE_URL;
@@ -360,65 +396,87 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	};
 
 	if (shouldResolveSession(path)) {
-		let sessionState: SessionState | null = null;
-
-		// Fast path: resolve the session from the signed cookie cache (HMAC
-		// verify, no DB round trip or auth-instance construction) for ALL
-		// session-resolving paths, including /app/* page views. The fallback
-		// to getSession() below still runs whenever the 5-minute cookie cache
-		// is absent or expired, preserving cookie refresh and revocation.
-		if (cfEnv.BETTER_AUTH_SECRET) {
-			const cached = (await getCookieCache(context.request, {
-				secret: cfEnv.BETTER_AUTH_SECRET,
-			})) as SessionState | null;
-			if (cached) sessionState = cached;
-		}
-
-		if (!sessionState) {
-			const sessionResult = (await getAuth().api.getSession({
-				headers: context.request.headers,
-				returnHeaders: true,
-			})) as {
-				headers?: Headers | null;
-				response: SessionState | null;
-			};
-			authHeaders = sessionResult.headers ?? null;
-			sessionState = sessionResult.response;
-		}
-
-		if (sessionState) {
-			user = sessionState.user;
-			session = sessionState.session;
-
-			const activeOrganizationId = session.activeOrganizationId ?? null;
-			if (activeOrganizationId) {
-				// SECURITY: re-verify the user is still a member of the active org.
-				// The session (and the signed cookie cache for internal /api/* routes)
-				// can outlive a removeMember, so trusting activeOrganizationId blindly
-				// lets a removed member keep reading/writing the org's tenant data.
-				const membershipRole = await getOrganizationMembershipRole(
-					getDb(),
-					user.id,
-					activeOrganizationId,
+		if (remoteDashboardOrigin) {
+			try {
+				const result = await fetchRemoteDashboardContext(
+					context.request,
+					remoteDashboardOrigin,
 				);
+				remoteContext = result.context;
+				authHeaders = result.cookieHeaders;
+				if (remoteContext) {
+					user = remoteContext.user as AuthUser;
+					session = remoteContext.session as AuthSessionRecord;
+					organization =
+						remoteContext.organization as OrganizationSummary | null;
+					organizationMembershipRole = remoteContext.organizationMembershipRole;
+				}
+			} catch (error) {
+				// Fail closed: an unavailable or malformed remote session must never
+				// become an authenticated local dashboard request.
+				console.error("Remote dashboard session resolution failed", error);
+			}
+		} else {
+			let sessionState: SessionState | null = null;
 
-				if (membershipRole) {
-					organizationMembershipRole = membershipRole;
-					organization = {
-						id: activeOrganizationId,
-						name: null,
-						slug: null,
-						logo: null,
-					};
+			// Fast path: resolve the session from the signed cookie cache (HMAC
+			// verify, no DB round trip or auth-instance construction) for ALL
+			// session-resolving paths, including /app/* page views. The fallback
+			// to getSession() below still runs whenever the 5-minute cookie cache
+			// is absent or expired, preserving cookie refresh and revocation.
+			if (cfEnv.BETTER_AUTH_SECRET) {
+				const cached = (await getCookieCache(context.request, {
+					secret: cfEnv.BETTER_AUTH_SECRET,
+				})) as SessionState | null;
+				if (cached) sessionState = cached;
+			}
 
-					if (shouldLoadOrganizationSummary(path)) {
-						organization =
-							(await getOrganizationSummary(
-								getDb(),
-								cfEnv.KV,
-								waitUntil,
-								activeOrganizationId,
-							)) ?? organization;
+			if (!sessionState) {
+				const sessionResult = (await getAuth().api.getSession({
+					headers: context.request.headers,
+					returnHeaders: true,
+				})) as {
+					headers?: Headers | null;
+					response: SessionState | null;
+				};
+				authHeaders = sessionResult.headers ?? null;
+				sessionState = sessionResult.response;
+			}
+
+			if (sessionState) {
+				user = sessionState.user;
+				session = sessionState.session;
+
+				const activeOrganizationId = session.activeOrganizationId ?? null;
+				if (activeOrganizationId) {
+					// SECURITY: re-verify the user is still a member of the active org.
+					// The session (and the signed cookie cache for internal /api/* routes)
+					// can outlive a removeMember, so trusting activeOrganizationId blindly
+					// lets a removed member keep reading/writing the org's tenant data.
+					const membershipRole = await getOrganizationMembershipRole(
+						getDb(),
+						user.id,
+						activeOrganizationId,
+					);
+
+					if (membershipRole) {
+						organizationMembershipRole = membershipRole;
+						organization = {
+							id: activeOrganizationId,
+							name: null,
+							slug: null,
+							logo: null,
+						};
+
+						if (shouldLoadOrganizationSummary(path)) {
+							organization =
+								(await getOrganizationSummary(
+									getDb(),
+									cfEnv.KV,
+									waitUntil,
+									activeOrganizationId,
+								)) ?? organization;
+						}
 					}
 				}
 			}
@@ -448,11 +506,15 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	// activeOrganizationId. Its five-minute cookie cache can still name an
 	// organization that was just deleted or that the user was removed from.
 	if (user && shouldCheckOnboarding(path) && !organization) {
-		const db = getDb();
-		const [hasOrganizations, hasPendingInvitations] = await Promise.all([
-			userHasOrganizations(db, user.id),
-			userHasPendingInvitations(db, user.email),
-		]);
+		const [hasOrganizations, hasPendingInvitations] = remoteDashboardOrigin
+			? [
+					remoteContext?.hasOrganizations ?? false,
+					remoteContext?.hasPendingInvitations ?? false,
+				]
+			: await Promise.all([
+					userHasOrganizations(getDb(), user.id),
+					userHasPendingInvitations(getDb(), user.email),
+				]);
 
 		if (!hasOrganizations) {
 			if (hasPendingInvitations) {

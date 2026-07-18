@@ -9,7 +9,6 @@ drizzle/meta
 .astro
 .source
 .vscode/settings.json
-.vscode/tasks.json
 .DS_Store
 /.playwright-mcp
 /.superpowers

@@ -3,6 +3,7 @@ import {
 	refreshExternalPostMetricsBatch,
 	refreshInternalPostMetrics,
 } from "../services/analytics-refresh";
+import { processExternalPostPreview } from "../services/external-post-sync/previews";
 import {
 	refreshExternalPostMetrics,
 	syncExternalPosts,
@@ -30,6 +31,9 @@ export async function consumeSyncQueue(
 					break;
 				case "refresh_metrics":
 					await refreshExternalPostMetrics(env, body);
+					break;
+				case "generate_external_preview":
+					await processExternalPostPreview(env, body);
 					break;
 				case "refresh_internal_metrics":
 					await refreshInternalPostMetrics(env, body);

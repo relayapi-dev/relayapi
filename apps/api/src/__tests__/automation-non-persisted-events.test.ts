@@ -20,9 +20,8 @@
 // parent's triggering social account so a later resume (after a delay)
 // resolves the right outbound channel in multi-account workspaces.
 //
-// Requires the SSH tunnel at localhost:5433 (see .vscode/tasks.json); the
-// suite skips gracefully when the tunnel is down, matching the convention
-// used by the other DB-backed integration suites.
+// Run the isolated suite through the root `db:with-tunnel` wrapper to include
+// these DB-backed cases. Without the tunnel, the suite skips gracefully.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import {
@@ -41,13 +40,13 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
-import type { Graph } from "../schemas/automation-graph";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
-import { processInboxEvent } from "../services/inbox-event-processor";
-import { computeSpecificity } from "../services/automations/trigger-matcher";
+import type { Graph } from "../schemas/automation-graph";
 import { enrollContact } from "../services/automations/runner";
-import type { Env } from "../types";
+import { computeSpecificity } from "../services/automations/trigger-matcher";
+import { processInboxEvent } from "../services/inbox-event-processor";
 import type { SendMessageRequest } from "../services/message-sender";
+import type { Env } from "../types";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
