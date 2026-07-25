@@ -17,7 +17,7 @@ Content templates let you save reusable post content that can be applied when cr
 ```bash
 # Create a template
 curl -X POST https://api.relayapi.dev/v1/content-templates \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Weekly Product Update",
@@ -64,7 +64,7 @@ Tags help organize templates. Filter by tag when listing:
 ```bash
 # List templates tagged "promo"
 curl "https://api.relayapi.dev/v1/content-templates?tag=promo" \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 ## SDK Usage

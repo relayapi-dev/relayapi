@@ -133,11 +133,29 @@ const post = await client.posts.create({
 
 **Upload first (more reliable):**
 ```typescript
+import { readFile } from "node:fs/promises";
+
 const presign = await client.media.getPresignURL({
   filename: "photo.jpg",
   content_type: "image/jpeg",
 });
-// Upload to presign.url, then use the media URL in a post
+const photoBytes = await readFile("photo.jpg");
+const upload = await fetch(presign.upload_url, {
+  method: "PUT",
+  headers: presign.upload_headers, // Exact Content-Type + create-only precondition
+  body: photoBytes,
+});
+if (!upload.ok) throw new Error(`Upload failed: ${upload.status}`);
+
+const storageKey = decodeURIComponent(new URL(presign.url).pathname.slice(1));
+await client.media.confirm({ storage_key: storageKey }); // Mandatory
+
+const post = await client.posts.create({
+  content: "Check this out!",
+  targets: ["instagram"],
+  scheduled_at: "now",
+  media: [{ url: presign.url, type: "image" }],
+});
 ```
 
 ### Post Statuses
@@ -787,7 +805,7 @@ Common codes: `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `VALIDATION_ERROR`, `RAT
 - Use `target_options` to customize content per platform — different limits and conventions.
 - Use workspace IDs (`ws_*`) when the user refers to a collection of accounts by name.
 - Use validation tools before publishing to catch issues early.
-- Upload media via presigned URLs for reliability.
+- Complete the presign -> exact returned-header PUT -> confirm flow before attaching the canonical media URL.
 - Set up webhooks for real-time notifications instead of polling.
 - When the user says "post to X", first check `accounts.list()` or `workspaces.list()` to resolve "X".
 - For stats, use `analytics.getPlatformOverview()` for live data, `analytics.retrieve()` for historical.

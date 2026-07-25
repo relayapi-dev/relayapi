@@ -5,6 +5,7 @@ import {
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
 } from "./types";
 
 /**
@@ -23,8 +24,130 @@ function wrapInHtml(text: string): string {
 		.join("");
 }
 
+interface ListmonkCampaignState {
+	id?: number;
+	status?: string;
+}
+
+function listmonkCampaignResult(
+	instanceUrl: string,
+	campaign: ListmonkCampaignState,
+): PublishResult {
+	const campaignId = campaign.id;
+	if (!Number.isSafeInteger(campaignId) || !campaignId) {
+		return {
+			success: false,
+			provider_outcome: {
+				disposition: "outcome_unknown",
+				provider_state: campaign.status ?? "missing_campaign_id",
+			},
+			error: {
+				code: "PLATFORM_ERROR",
+				message: "Listmonk campaign response did not include a valid ID.",
+			},
+		};
+	}
+	const id = String(campaignId);
+	const state = campaign.status?.toLowerCase() ?? "unknown";
+	const shared = {
+		provider_operation_id: id,
+		platform_post_id: id,
+		platform_url: `${instanceUrl}/campaigns/${id}`,
+		provider_state: state,
+	};
+	if (state === "finished") {
+		return {
+			success: true,
+			platform_post_id: id,
+			platform_url: shared.platform_url,
+			provider_outcome: { disposition: "sent", ...shared },
+		};
+	}
+	if (state === "scheduled") {
+		return {
+			success: true,
+			platform_post_id: id,
+			platform_url: shared.platform_url,
+			provider_outcome: { disposition: "scheduled", ...shared },
+		};
+	}
+	if (state === "running") {
+		return {
+			success: true,
+			platform_post_id: id,
+			platform_url: shared.platform_url,
+			provider_outcome: { disposition: "processing", ...shared },
+		};
+	}
+	if (state === "draft" || state === "paused") {
+		return {
+			success: true,
+			platform_post_id: id,
+			platform_url: shared.platform_url,
+			provider_outcome: { disposition: "accepted", ...shared },
+		};
+	}
+	if (state === "cancelled" || state === "canceled") {
+		return {
+			success: false,
+			platform_post_id: id,
+			provider_outcome: { disposition: "failed", ...shared },
+			error: {
+				code: "PUBLISH_FAILED",
+				message: `Listmonk campaign ended with status ${state}.`,
+			},
+		};
+	}
+	return {
+		success: false,
+		platform_post_id: id,
+		provider_outcome: { disposition: "outcome_unknown", ...shared },
+		error: {
+			code: "PUBLISH_OUTCOME_UNKNOWN",
+			message: `Listmonk returned an unrecognized campaign status: ${state}`,
+		},
+	};
+}
+
 export const listmonkPublisher: Publisher = {
 	platform: "listmonk",
+
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		try {
+			const campaignId =
+				request.platform_post_id ?? request.provider_operation_id;
+			const instanceUrl =
+				(request.account.metadata?.instance_url as string | undefined) ?? "";
+			if (!campaignId || !instanceUrl || !request.account.access_token) {
+				throw new Error(
+					"CONTENT_ERROR: Listmonk reconciliation requires a campaign ID, instance URL, and credentials.",
+				);
+			}
+			if (await isBlockedUrlWithDns(instanceUrl)) {
+				throw new Error(
+					"CONTENT_ERROR: ListMonk instance URL points to a blocked address.",
+				);
+			}
+			const response = await fetch(
+				`${instanceUrl}/api/campaigns/${encodeURIComponent(campaignId)}`,
+				{
+					headers: { Authorization: `Basic ${request.account.access_token}` },
+					redirect: "error",
+				},
+			);
+			if (!response.ok) {
+				const body = await response.text();
+				throw new PublishError(
+					`Listmonk campaign status failed (${response.status})`,
+					{ statusCode: response.status, detail: body },
+				);
+			}
+			const data = (await response.json()) as { data?: ListmonkCampaignState };
+			return listmonkCampaignResult(instanceUrl, data.data ?? {});
+		} catch (err) {
+			return classifyPublishError(err);
+		}
+	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
@@ -191,6 +314,14 @@ export const listmonkPublisher: Publisher = {
 				success: true,
 				platform_post_id: String(campaignId),
 				platform_url: `${instanceUrl}/campaigns/${campaignId}`,
+				provider_outcome: {
+					disposition: sendAt ? "scheduled" : "processing",
+					provider_operation_id: String(campaignId),
+					platform_post_id: String(campaignId),
+					platform_url: `${instanceUrl}/campaigns/${campaignId}`,
+					provider_state: targetStatus,
+					next_reconcile_at: sendAt,
+				},
 			};
 		} catch (err) {
 			return classifyPublishError(err, { definitiveHttpRejection: true });

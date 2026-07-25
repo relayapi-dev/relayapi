@@ -17,6 +17,7 @@ import {
 	automationBindings,
 	automationContactControls,
 	automationEffects,
+	automationEntrypointDailyCounts,
 	automationEntrypoints,
 	automationNodeExecutions,
 	automationRuns,
@@ -62,6 +63,12 @@ type StoredHandlerResult =
 			payload?: unknown;
 	  }
 	| { result: "wait_delay"; resume_at: string; payload?: unknown }
+	| {
+			result: "wait_event";
+			event_kinds: string[];
+			timeout_at?: string;
+			payload?: unknown;
+	  }
 	| { result: "end"; exit_reason: string; payload?: unknown }
 	| {
 			result: "fail";
@@ -97,6 +104,26 @@ type NodeExecutionClaim =
 	  };
 
 class LostNodeExecutionClaimError extends Error {}
+
+export type EnrollmentBlockedReason =
+	| "active_run"
+	| "reentry_disabled"
+	| "reentry_cooldown"
+	| "daily_cap";
+
+export class EnrollmentBlockedError extends Error {
+	constructor(public readonly reason: EnrollmentBlockedReason) {
+		super(`automation enrollment blocked: ${reason}`);
+		this.name = "EnrollmentBlockedError";
+	}
+}
+
+class TriggerOccurrenceConflictError extends Error {
+	constructor() {
+		super("automation trigger occurrence already enrolled");
+		this.name = "TriggerOccurrenceConflictError";
+	}
+}
 
 function toJsonSafe(value: unknown): unknown {
 	if (value === undefined) return null;
@@ -143,6 +170,13 @@ export function serializeAutomationHandlerResult(
 				resume_at: result.resume_at.toISOString(),
 				payload,
 			};
+		case "wait_event":
+			return {
+				result: "wait_event",
+				event_kinds: result.event_kinds,
+				timeout_at: result.timeout_at?.toISOString(),
+				payload,
+			};
 		case "end":
 			return {
 				result: "end",
@@ -178,6 +212,13 @@ export function deserializeAutomationHandlerResult(
 			return {
 				result: "wait_delay",
 				resume_at: new Date(stored.resume_at),
+				payload: stored.payload,
+			};
+		case "wait_event":
+			return {
+				result: "wait_event",
+				event_kinds: stored.event_kinds,
+				timeout_at: stored.timeout_at ? new Date(stored.timeout_at) : undefined,
 				payload: stored.payload,
 			};
 		case "end":
@@ -229,6 +270,10 @@ function storedNodeCompletion(value: unknown): StoredNodeCompletion | null {
 
 function leaseIsExpired(leaseExpiresAt: Date | null, now: Date): boolean {
 	return !leaseExpiresAt || leaseExpiresAt <= now;
+}
+
+function nodeExecutionLeaseExpirySql() {
+	return sql`CURRENT_TIMESTAMP + (${NODE_EXECUTION_LEASE_MS} * INTERVAL '1 millisecond')`;
 }
 
 export function automationExecutionRecoveryDisposition(
@@ -292,7 +337,6 @@ async function markNodeExecutionUnknown(
 	reason: string,
 	requireExpiredLease = false,
 ): Promise<boolean> {
-	const now = new Date();
 	try {
 		await db.transaction(async (tx) => {
 			// Keep lock order aligned with persistNodeCompletion (effect, then node)
@@ -304,8 +348,8 @@ async function markNodeExecutionUnknown(
 					status: "unknown",
 					leaseExpiresAt: null,
 					lastError: reason,
-					completedAt: now,
-					updatedAt: now,
+					completedAt: sql`CURRENT_TIMESTAMP`,
+					updatedAt: sql`CURRENT_TIMESTAMP`,
 				})
 				.where(
 					and(
@@ -319,8 +363,8 @@ async function markNodeExecutionUnknown(
 					status: "unknown",
 					leaseExpiresAt: null,
 					error: { message: reason },
-					completedAt: now,
-					updatedAt: now,
+					completedAt: sql`CURRENT_TIMESTAMP`,
+					updatedAt: sql`CURRENT_TIMESTAMP`,
 				})
 				.where(
 					and(
@@ -330,7 +374,10 @@ async function markNodeExecutionUnknown(
 						requireExpiredLease
 							? or(
 									isNull(automationNodeExecutions.leaseExpiresAt),
-									lte(automationNodeExecutions.leaseExpiresAt, now),
+									lte(
+										automationNodeExecutions.leaseExpiresAt,
+										sql`CURRENT_TIMESTAMP`,
+									),
 								)
 							: undefined,
 					),
@@ -368,7 +415,7 @@ async function claimNodeEffect(
 			providerIdempotencyKey,
 			status: "claimed",
 			leaseToken: 1,
-			leaseExpiresAt: new Date(now.getTime() + NODE_EXECUTION_LEASE_MS),
+			leaseExpiresAt: nodeExecutionLeaseExpirySql(),
 		})
 		.onConflictDoNothing()
 		.returning();
@@ -407,9 +454,9 @@ async function claimNodeEffect(
 		.update(automationEffects)
 		.set({
 			leaseToken: sql`${automationEffects.leaseToken} + 1`,
-			leaseExpiresAt: new Date(now.getTime() + NODE_EXECUTION_LEASE_MS),
+			leaseExpiresAt: nodeExecutionLeaseExpirySql(),
 			lastError: null,
-			updatedAt: now,
+			updatedAt: sql`CURRENT_TIMESTAMP`,
 		})
 		.where(
 			and(
@@ -447,7 +494,7 @@ async function claimNodeExecution(
 				nodeKey,
 				status: "claimed",
 				leaseToken: 1,
-				leaseExpiresAt: new Date(now.getTime() + NODE_EXECUTION_LEASE_MS),
+				leaseExpiresAt: nodeExecutionLeaseExpirySql(),
 			})
 			.onConflictDoNothing()
 			.returning();
@@ -525,9 +572,9 @@ async function claimNodeExecution(
 			.update(automationNodeExecutions)
 			.set({
 				leaseToken: sql`${automationNodeExecutions.leaseToken} + 1`,
-				leaseExpiresAt: new Date(now.getTime() + NODE_EXECUTION_LEASE_MS),
+				leaseExpiresAt: nodeExecutionLeaseExpirySql(),
 				error: null,
-				updatedAt: now,
+				updatedAt: sql`CURRENT_TIMESTAMP`,
 			})
 			.where(
 				and(
@@ -565,7 +612,6 @@ async function armNodeExecution(
 	nodeKey: string,
 	claim: Extract<NodeExecutionClaim, { state: "owned" }>,
 ): Promise<boolean> {
-	const startedAt = new Date();
 	try {
 		await db.transaction(async (tx) => {
 			const [fencedRun] = await tx
@@ -588,11 +634,9 @@ async function armNodeExecution(
 				.set({
 					status: "in_flight",
 					attempts: sql`${automationNodeExecutions.attempts} + 1`,
-					requestMayHaveBeenSentAt: startedAt,
-					leaseExpiresAt: new Date(
-						startedAt.getTime() + NODE_EXECUTION_LEASE_MS,
-					),
-					updatedAt: startedAt,
+					requestMayHaveBeenSentAt: sql`CURRENT_TIMESTAMP`,
+					leaseExpiresAt: nodeExecutionLeaseExpirySql(),
+					updatedAt: sql`CURRENT_TIMESTAMP`,
 				})
 				.where(
 					and(
@@ -609,11 +653,9 @@ async function armNodeExecution(
 				.set({
 					status: "in_flight",
 					attempts: sql`${automationEffects.attempts} + 1`,
-					requestMayHaveBeenSentAt: startedAt,
-					leaseExpiresAt: new Date(
-						startedAt.getTime() + NODE_EXECUTION_LEASE_MS,
-					),
-					updatedAt: startedAt,
+					requestMayHaveBeenSentAt: sql`CURRENT_TIMESTAMP`,
+					leaseExpiresAt: nodeExecutionLeaseExpirySql(),
+					updatedAt: sql`CURRENT_TIMESTAMP`,
 				})
 				.where(
 					and(
@@ -645,7 +687,6 @@ async function persistNodeCompletion(
 	durationMs: number,
 	step: StepRunValues,
 ): Promise<boolean> {
-	const completedAt = new Date();
 	const safeContext = toJsonSafe(context);
 	const completion: StoredNodeCompletion = {
 		version: 1,
@@ -672,8 +713,8 @@ async function persistNodeCompletion(
 					leaseExpiresAt: null,
 					result: completion,
 					lastError: result.result === "fail" ? result.error.message : null,
-					completedAt,
-					updatedAt: completedAt,
+					completedAt: sql`CURRENT_TIMESTAMP`,
+					updatedAt: sql`CURRENT_TIMESTAMP`,
 				})
 				.where(
 					and(
@@ -692,8 +733,8 @@ async function persistNodeCompletion(
 					leaseExpiresAt: null,
 					result: completion,
 					error: errorPayload,
-					completedAt,
-					updatedAt: completedAt,
+					completedAt: sql`CURRENT_TIMESTAMP`,
+					updatedAt: sql`CURRENT_TIMESTAMP`,
 				})
 				.where(
 					and(
@@ -706,7 +747,7 @@ async function persistNodeCompletion(
 			if (!completedExecution) throw new LostNodeExecutionClaimError();
 			await tx.insert(automationStepRuns).values({
 				...step,
-				executedAt: completedAt,
+				executedAt: sql`CURRENT_TIMESTAMP`,
 				payload: step.payload == null ? null : toJsonSafe(step.payload),
 				error: step.error == null ? null : toJsonSafe(step.error),
 			});
@@ -814,15 +855,15 @@ export async function runLoop(
 
 		// Load graph fresh on every iteration so edits take effect immediately.
 		if (!auto) {
-			const exited = await exitRun(
+			const exited = await transitionRunTerminal(
 				db,
 				run.id,
 				run.revision,
+				run.automationId,
 				"exited",
 				"automation_deleted",
 			);
 			if (exited) {
-				await incrementCounter(db, run.automationId, "total_exited");
 				return { status: "exited", exit_reason: "automation_deleted" };
 			}
 			return { status: "active", exit_reason: null };
@@ -837,15 +878,15 @@ export async function runLoop(
 		// 3. Locate current node.
 		const currentKey = run.currentNodeKey;
 		if (!currentKey) {
-			const completed = await exitRun(
+			const completed = await transitionRunTerminal(
 				db,
 				run.id,
 				run.revision,
+				run.automationId,
 				"completed",
 				"completed",
 			);
 			if (!completed) return { status: "active", exit_reason: null };
-			await incrementCounter(db, run.automationId, "total_completed");
 			return { status: "completed", exit_reason: "completed" };
 		}
 		const node = graph.nodes.find((n) => n.key === currentKey);
@@ -862,15 +903,15 @@ export async function runLoop(
 				payload: { reason: "current_node_missing" },
 				error: null,
 			});
-			const exited = await exitRun(
+			const exited = await transitionRunTerminal(
 				db,
 				run.id,
 				run.revision,
+				run.automationId,
 				"exited",
 				"graph_changed",
 			);
 			if (exited) {
-				await incrementCounter(db, run.automationId, "total_exited");
 				return { status: "exited", exit_reason: "graph_changed" };
 			}
 			return { status: "active", exit_reason: null };
@@ -900,14 +941,16 @@ export async function runLoop(
 					detected_at: new Date().toISOString(),
 				},
 			};
-			const failed = await updateRunOptimistic(db, run.id, run.revision, {
-				status: "failed",
-				exitReason: "node_effect_unknown",
-				completedAt: new Date(),
-				context: manualContext,
-			});
+			const failed = await transitionRunTerminal(
+				db,
+				run.id,
+				run.revision,
+				run.automationId,
+				"failed",
+				"node_effect_unknown",
+				{ context: manualContext },
+			);
 			if (failed) {
-				await incrementCounter(db, run.automationId, "total_failed");
 				return { status: "failed", exit_reason: "node_effect_unknown" };
 			}
 			return { status: "active", exit_reason: null };
@@ -1021,14 +1064,16 @@ export async function runLoop(
 		// 5. Apply the persisted/replayed HandlerResult with the same run revision
 		// CAS that identified the node execution. Exactly one replay can advance.
 		if (result.result === "end") {
-			const ok = await updateRunOptimistic(db, run.id, run.revision, {
-				status: "completed",
-				exitReason: result.exit_reason,
-				completedAt: new Date(),
-				context: ctx.context,
-			});
+			const ok = await transitionRunTerminal(
+				db,
+				run.id,
+				run.revision,
+				run.automationId,
+				"completed",
+				result.exit_reason,
+				{ context: ctx.context },
+			);
 			if (!ok) return { status: "active", exit_reason: null };
-			await incrementCounter(db, run.automationId, "total_completed");
 			return { status: "completed", exit_reason: result.exit_reason };
 		}
 
@@ -1046,14 +1091,16 @@ export async function runLoop(
 				if (!ok) return { status: "active", exit_reason: null };
 				continue;
 			}
-			const ok = await updateRunOptimistic(db, run.id, run.revision, {
-				status: "failed",
-				exitReason: "handler_failure",
-				completedAt: new Date(),
-				context: ctx.context,
-			});
+			const ok = await transitionRunTerminal(
+				db,
+				run.id,
+				run.revision,
+				run.automationId,
+				"failed",
+				"handler_failure",
+				{ context: ctx.context },
+			);
 			if (!ok) return { status: "active", exit_reason: null };
-			await incrementCounter(db, run.automationId, "total_failed");
 			return { status: "failed", exit_reason: "handler_failure" };
 		}
 
@@ -1117,21 +1164,55 @@ export async function runLoop(
 			return { status: "waiting", exit_reason: null };
 		}
 
+		if (result.result === "wait_event") {
+			const ok = await db.transaction(async (tx) => {
+				const updated = await updateRunOptimistic(tx, run.id, run.revision, {
+					status: "waiting",
+					waitingFor: "inbound_event",
+					waitingUntil: result.timeout_at ?? null,
+					context: {
+						...ctx.context,
+						_wait_event_kinds: result.event_kinds,
+					},
+				});
+				if (!updated) return false;
+				if (result.timeout_at) {
+					await tx
+						.insert(automationScheduledJobs)
+						.values({
+							occurrenceId: `node-execution:${executionClaim.execution.id}:event-timeout`,
+							runId: run.id,
+							jobType: "event_timeout",
+							automationId: run.automationId,
+							runAt: result.timeout_at,
+							payload: {
+								...((result.payload as Record<string, unknown> | null) ?? {}),
+								_timeout_node_key: node.key,
+							},
+						})
+						.onConflictDoNothing();
+				}
+				return true;
+			});
+			if (!ok) return { status: "active", exit_reason: null };
+			return { status: "waiting", exit_reason: null };
+		}
+
 		// result.result === "advance"
 		// Special _goto signal: jump straight to target_node_key, no edge lookup.
 		if (result.via_port === "_goto") {
 			const target = (result.payload as { target_node_key?: string } | null)
 				?.target_node_key;
 			if (!target) {
-				const failed = await exitRun(
+				const failed = await transitionRunTerminal(
 					db,
 					run.id,
 					run.revision,
+					run.automationId,
 					"failed",
 					"goto_missing_target",
 				);
 				if (!failed) return { status: "active", exit_reason: null };
-				await incrementCounter(db, run.automationId, "total_failed");
 				return { status: "failed", exit_reason: "goto_missing_target" };
 			}
 			const ok = await updateRunOptimistic(db, run.id, run.revision, {
@@ -1146,14 +1227,16 @@ export async function runLoop(
 		const edge = findOutgoingEdge(graph, node.key, result.via_port);
 		if (!edge) {
 			// No outgoing edge → treat as graceful completion (operator choice).
-			const ok = await updateRunOptimistic(db, run.id, run.revision, {
-				status: "completed",
-				exitReason: "completed",
-				completedAt: new Date(),
-				context: ctx.context,
-			});
+			const ok = await transitionRunTerminal(
+				db,
+				run.id,
+				run.revision,
+				run.automationId,
+				"completed",
+				"completed",
+				{ context: ctx.context },
+			);
 			if (!ok) return { status: "active", exit_reason: null };
-			await incrementCounter(db, run.automationId, "total_completed");
 			return { status: "completed", exit_reason: "completed" };
 		}
 
@@ -1171,12 +1254,14 @@ export async function runLoop(
 		where: eq(automationRuns.id, runId),
 	});
 	if (runAtCap) {
-		const ok = await updateRunOptimistic(db, runId, runAtCap.revision, {
-			status: "failed",
-			exitReason: "infinite_loop_cap",
-			completedAt: new Date(),
-		});
-		if (ok) await incrementCounter(db, runAtCap.automationId, "total_failed");
+		await transitionRunTerminal(
+			db,
+			runId,
+			runAtCap.revision,
+			runAtCap.automationId,
+			"failed",
+			"infinite_loop_cap",
+		);
 	}
 	return { status: "failed", exit_reason: "infinite_loop_cap" };
 }
@@ -1226,6 +1311,12 @@ export async function enrollContact(
 			tags: string[];
 			fields: Record<string, string>;
 		};
+		/** Authoritative admission policy, rechecked under a DB advisory lock. */
+		admission?: {
+			allowReentry: boolean;
+			reentryCooldownMin: number;
+			dailyCap: number | null;
+		};
 	},
 ): Promise<{ runId: string }> {
 	const auto = await db.query.automations.findFirst({
@@ -1235,6 +1326,9 @@ export async function enrollContact(
 		),
 	});
 	if (!auto) throw new Error(`automation ${args.automationId} not found`);
+	if (auto.channel !== args.channel) {
+		throw new Error("enrollment channel does not match automation channel");
+	}
 
 	// Every related id must resolve inside the same tenant. Opaque ids are not
 	// authorization: without these predicates a caller could hydrate a foreign
@@ -1245,9 +1339,9 @@ export async function enrollContact(
 				where: and(
 					eq(contacts.id, args.contactId),
 					eq(contacts.organizationId, args.organizationId),
-					...(auto.workspaceId
-						? [eq(contacts.workspaceId, auto.workspaceId)]
-						: []),
+					auto.workspaceId
+						? eq(contacts.workspaceId, auto.workspaceId)
+						: isNull(contacts.workspaceId),
 				),
 			}),
 			args.entrypointId
@@ -1273,9 +1367,10 @@ export async function enrollContact(
 							eq(socialAccounts.id, args.socialAccountId),
 							eq(socialAccounts.organizationId, args.organizationId),
 							eq(socialAccounts.lifecycleStatus, "active"),
-							...(auto.workspaceId
-								? [eq(socialAccounts.workspaceId, auto.workspaceId)]
-								: []),
+							eq(socialAccounts.platform, auto.channel),
+							auto.workspaceId
+								? eq(socialAccounts.workspaceId, auto.workspaceId)
+								: isNull(socialAccounts.workspaceId),
 						),
 					})
 				: Promise.resolve(null),
@@ -1284,9 +1379,14 @@ export async function enrollContact(
 						where: and(
 							eq(inboxConversations.id, args.conversationId),
 							eq(inboxConversations.organizationId, args.organizationId),
-							...(auto.workspaceId
-								? [eq(inboxConversations.workspaceId, auto.workspaceId)]
-								: []),
+							eq(inboxConversations.contactId, args.contactId),
+							eq(inboxConversations.platform, auto.channel),
+							args.socialAccountId
+								? eq(inboxConversations.accountId, args.socialAccountId)
+								: undefined,
+							auto.workspaceId
+								? eq(inboxConversations.workspaceId, auto.workspaceId)
+								: isNull(inboxConversations.workspaceId),
 						),
 					})
 				: Promise.resolve(null),
@@ -1322,59 +1422,157 @@ export async function enrollContact(
 		...hydrated,
 		// Persist the triggering social account on context so later
 		// resume paths can rebuild env.socialAccountId even when the
-		// caller of runLoop didn't pass it through. Overrides win if
-		// the caller explicitly supplied this key.
-		_triggering_social_account_id:
-			(args.contextOverrides?._triggering_social_account_id as
-				| string
-				| null
-				| undefined) ??
-			args.socialAccountId ??
-			null,
+		// caller of runLoop didn't pass it through. This is a reserved runtime
+		// key: never trust context_overrides (manual API input or webhook payload
+		// mappings) to replace the account that was validated above.
+		_triggering_social_account_id: args.socialAccountId ?? null,
 	};
 
-	const insertQuery = db.insert(automationRuns).values({
-		automationId: args.automationId,
-		organizationId: args.organizationId,
-		entrypointId: args.entrypointId,
-		bindingId: args.bindingId,
-		contactId: args.contactId,
-		conversationId: args.conversationId,
-		triggerOccurrenceId: args.triggerOccurrenceId ?? null,
-		status: "active",
-		currentNodeKey: rootKey,
-		currentPortKey: null,
-		context: initialContext,
-	});
-	const insertedRows = args.triggerOccurrenceId
-		? await insertQuery
+	let admissionResult: {
+		row: typeof automationRuns.$inferSelect;
+		created: boolean;
+	};
+	try {
+		admissionResult = await db.transaction(async (tx) => {
+			// Serialize admission for one contact+automation pair. Unlike a row lock,
+			// this also protects the first-ever enrollment where no run row exists yet.
+			await tx.execute(
+				sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${args.organizationId}:${args.automationId}:${args.contactId}`}, 0))`,
+			);
+
+			if (args.triggerOccurrenceId) {
+				const [existingOccurrence] = await tx
+					.select()
+					.from(automationRuns)
+					.where(
+						and(
+							eq(automationRuns.automationId, args.automationId),
+							eq(automationRuns.triggerOccurrenceId, args.triggerOccurrenceId),
+						),
+					)
+					.limit(1);
+				if (existingOccurrence) {
+					return { row: existingOccurrence, created: false };
+				}
+			}
+
+			if (args.admission) {
+				const priorRuns = await tx
+					.select({
+						status: automationRuns.status,
+						completedAt: automationRuns.completedAt,
+					})
+					.from(automationRuns)
+					.where(
+						and(
+							eq(automationRuns.automationId, args.automationId),
+							eq(automationRuns.contactId, args.contactId),
+						),
+					);
+				if (
+					priorRuns.some(
+						(run) => run.status === "active" || run.status === "waiting",
+					)
+				) {
+					throw new EnrollmentBlockedError("active_run");
+				}
+				if (!args.admission.allowReentry && priorRuns.length > 0) {
+					throw new EnrollmentBlockedError("reentry_disabled");
+				}
+				if (
+					args.admission.allowReentry &&
+					args.admission.reentryCooldownMin > 0
+				) {
+					const cutoff =
+						Date.now() - args.admission.reentryCooldownMin * 60_000;
+					if (
+						priorRuns.some(
+							(run) => run.completedAt && run.completedAt.getTime() >= cutoff,
+						)
+					) {
+						throw new EnrollmentBlockedError("reentry_cooldown");
+					}
+				}
+				if (args.admission.dailyCap && args.entrypointId) {
+					const day = new Date().toISOString().slice(0, 10);
+					const incremented = await tx
+						.insert(automationEntrypointDailyCounts)
+						.values({
+							organizationId: args.organizationId,
+							entrypointId: args.entrypointId,
+							day,
+							count: 1,
+						})
+						.onConflictDoUpdate({
+							target: [
+								automationEntrypointDailyCounts.entrypointId,
+								automationEntrypointDailyCounts.day,
+							],
+							set: {
+								count: sql`${automationEntrypointDailyCounts.count} + 1`,
+								updatedAt: sql`CURRENT_TIMESTAMP`,
+							},
+							setWhere: sql`${automationEntrypointDailyCounts.count} < ${args.admission.dailyCap}`,
+						})
+						.returning({ id: automationEntrypointDailyCounts.id });
+					if (incremented.length === 0) {
+						throw new EnrollmentBlockedError("daily_cap");
+					}
+				}
+			}
+
+			const [inserted] = await tx
+				.insert(automationRuns)
+				.values({
+					automationId: args.automationId,
+					organizationId: args.organizationId,
+					entrypointId: args.entrypointId,
+					bindingId: args.bindingId,
+					contactId: args.contactId,
+					conversationId: args.conversationId,
+					triggerOccurrenceId: args.triggerOccurrenceId ?? null,
+					status: "active",
+					currentNodeKey: rootKey,
+					currentPortKey: null,
+					context: initialContext,
+				})
 				.onConflictDoNothing({
 					target: [
 						automationRuns.automationId,
 						automationRuns.triggerOccurrenceId,
 					],
 				})
-				.returning()
-		: await insertQuery.returning();
-	let inserted = insertedRows[0];
-	const createdNewRun = Boolean(inserted);
-	if (!inserted && args.triggerOccurrenceId) {
-		inserted = await db.query.automationRuns.findFirst({
+				.returning();
+			if (!inserted && args.triggerOccurrenceId) {
+				// A duplicate for another contact uses a different admission lock. Throw
+				// so the transaction rolls back any daily-cap increment before resolving
+				// the winning run outside the transaction.
+				throw new TriggerOccurrenceConflictError();
+			}
+			if (!inserted) throw new Error("failed to create automation run");
+			await tx
+				.update(automations)
+				.set({ totalEnrolled: sql`${automations.totalEnrolled} + 1` })
+				.where(eq(automations.id, args.automationId));
+			return { row: inserted, created: true };
+		});
+	} catch (error) {
+		if (
+			!(error instanceof TriggerOccurrenceConflictError) ||
+			!args.triggerOccurrenceId
+		) {
+			throw error;
+		}
+		const existingOccurrence = await db.query.automationRuns.findFirst({
 			where: and(
 				eq(automationRuns.automationId, args.automationId),
 				eq(automationRuns.triggerOccurrenceId, args.triggerOccurrenceId),
 			),
 		});
+		if (!existingOccurrence) throw error;
+		admissionResult = { row: existingOccurrence, created: false };
 	}
-
-	if (!inserted) throw new Error("failed to create automation run");
-
-	if (createdNewRun) {
-		await db
-			.update(automations)
-			.set({ totalEnrolled: sql`${automations.totalEnrolled} + 1` })
-			.where(eq(automations.id, args.automationId));
-	}
+	const inserted = admissionResult.row;
 
 	// Ensure downstream handlers invoked from runLoop can still find `db` on
 	// ctx.env if they haven't been migrated yet — but the canonical source is
@@ -1787,6 +1985,8 @@ function stepOutcomeFromResult(result: HandlerResult): string {
 			return "wait_input";
 		case "wait_delay":
 			return "wait_delay";
+		case "wait_event":
+			return "wait_event";
 		case "end":
 			return "end";
 		case "fail":
@@ -1823,7 +2023,7 @@ export async function updateRunOptimistic(
 ): Promise<boolean> {
 	const setPayload: Record<string, unknown> = {
 		revision: sql`${automationRuns.revision} + 1`,
-		updatedAt: new Date(),
+		updatedAt: sql`CURRENT_TIMESTAMP`,
 	};
 	if (patch.status !== undefined) setPayload.status = patch.status;
 	if (patch.currentNodeKey !== undefined)
@@ -1835,8 +2035,10 @@ export async function updateRunOptimistic(
 	if (patch.waitingUntil !== undefined)
 		setPayload.waitingUntil = patch.waitingUntil;
 	if (patch.exitReason !== undefined) setPayload.exitReason = patch.exitReason;
-	if (patch.completedAt !== undefined)
-		setPayload.completedAt = patch.completedAt;
+	if (patch.completedAt !== undefined) {
+		setPayload.completedAt =
+			patch.completedAt === null ? null : sql`CURRENT_TIMESTAMP`;
+	}
 
 	const rows = await db
 		.update(automationRuns)
@@ -1851,22 +2053,36 @@ export async function updateRunOptimistic(
 	return rows.length > 0;
 }
 
-async function exitRun(
+export async function transitionRunTerminal(
 	db: Db,
 	runId: string,
 	expectedRevision: number,
+	automationId: string,
 	status: Extract<RunStatus, "completed" | "exited" | "failed">,
 	exitReason: string,
+	patch: Omit<RunUpdate, "status" | "exitReason" | "completedAt"> = {},
 ): Promise<boolean> {
-	return updateRunOptimistic(db, runId, expectedRevision, {
-		status,
-		exitReason,
-		completedAt: new Date(),
+	const counter =
+		status === "completed"
+			? "total_completed"
+			: status === "failed"
+				? "total_failed"
+				: "total_exited";
+	return db.transaction(async (tx) => {
+		const updated = await updateRunOptimistic(tx, runId, expectedRevision, {
+			...patch,
+			status,
+			exitReason,
+			completedAt: new Date(),
+		});
+		if (!updated) return false;
+		await incrementCounter(tx, automationId, counter);
+		return true;
 	});
 }
 
 export async function incrementCounter(
-	db: Db,
+	db: Pick<Db, "update">,
 	automationId: string,
 	column: "total_completed" | "total_failed" | "total_exited",
 ): Promise<void> {
@@ -1914,6 +2130,6 @@ async function writeStepRun(
 		durationMs: row.durationMs,
 		payload: row.payload ?? null,
 		error: row.error ?? null,
-		executedAt: new Date(),
+		executedAt: sql`CURRENT_TIMESTAMP`,
 	});
 }

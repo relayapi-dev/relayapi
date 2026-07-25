@@ -8,8 +8,8 @@ import type { Graph } from "../../../schemas/automation-graph";
 import { buildBlank } from "./blank";
 import { buildCommentToDm } from "./comment-to-dm";
 import { buildFaqBot } from "./faq-bot";
-import { buildFollowerGrowth } from "./follower-growth";
 import { buildFollowToDm } from "./follow-to-dm";
+import { buildFollowerGrowth } from "./follower-growth";
 import { buildLeadCapture } from "./lead-capture";
 import { buildStoryLeads } from "./story-leads";
 import { buildWelcomeFlow } from "./welcome-flow";
@@ -31,6 +31,7 @@ export type TemplateEntrypoint = {
 	filters?: Record<string, unknown> | null;
 	allowReentry?: boolean;
 	reentryCooldownMin?: number;
+	dailyCap?: number | null;
 	priority?: number;
 };
 
@@ -48,7 +49,9 @@ export type TemplateBuildOutput = {
 	description?: string;
 };
 
-export type TemplateBuilder = (input: TemplateBuildInput) => TemplateBuildOutput;
+export type TemplateBuilder = (
+	input: TemplateBuildInput,
+) => TemplateBuildOutput;
 
 const TEMPLATE_BUILDERS: Record<TemplateKind, TemplateBuilder> = {
 	blank: buildBlank,

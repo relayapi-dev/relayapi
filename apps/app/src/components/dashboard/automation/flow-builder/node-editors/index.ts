@@ -8,3 +8,5 @@ export { RandomizerEditor } from "./randomizer";
 export { StartAutomationEditor } from "./start-automation";
 export { GotoEditor, type NodeSummary } from "./goto";
 export { EndEditor } from "./end";
+export { WaitEventEditor } from "./wait-event";
+export { SocialProfileCheckEditor } from "./social-profile-check";

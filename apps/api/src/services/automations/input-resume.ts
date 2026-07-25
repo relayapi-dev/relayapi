@@ -13,7 +13,7 @@
 import { automationRuns, automations, type Database } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import type { Graph } from "../../schemas/automation-graph";
-import { runLoop, updateRunOptimistic } from "./runner";
+import { runLoop, transitionRunTerminal, updateRunOptimistic } from "./runner";
 import { testSafeAutomationRegex } from "./safe-regex";
 
 export type InputResumeOutcome =
@@ -299,15 +299,20 @@ export async function resumeWaitingRunOnInput(
 	if (!edge) {
 		// Operator didn't wire this port — graceful completion. Matches the
 		// runner's behavior when an advance port has no outgoing edge.
-		const ok = await updateRunOptimistic(db, runId, run.revision, {
-			status: "completed",
-			exitReason: "completed",
-			completedAt: new Date(),
-			context: updatedContext,
-			currentPortKey: outcome.port,
-			waitingFor: null,
-			waitingUntil: null,
-		});
+		const ok = await transitionRunTerminal(
+			db,
+			runId,
+			run.revision,
+			run.automationId,
+			"completed",
+			"completed",
+			{
+				context: updatedContext,
+				currentPortKey: outcome.port,
+				waitingFor: null,
+				waitingUntil: null,
+			},
+		);
 		// Lost the race to the timeout job / a duplicate inbound — report a race.
 		if (!ok) return "race";
 		return "completed";

@@ -9,6 +9,7 @@ import type { APIRoute } from "astro";
 import { and, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import Stripe from "stripe";
 import { requireBillingAdmin } from "@/lib/api-utils";
+import { isSelfHostedDeployment } from "@/lib/deployment-mode";
 
 const CHECKOUT_LEASE_MS = 2 * 60 * 1_000;
 const BLOCKING_SUBSCRIPTION_STATUSES = new Set<Stripe.Subscription.Status>([
@@ -56,6 +57,13 @@ function errorResponse(
 }
 
 export const POST: APIRoute = async (context) => {
+	if (isSelfHostedDeployment(env)) {
+		return errorResponse(
+			"BILLING_DISABLED",
+			"Billing is disabled in self-hosted community mode",
+			404,
+		);
+	}
   const forbidden = await requireBillingAdmin(context);
   if (forbidden) return forbidden;
 

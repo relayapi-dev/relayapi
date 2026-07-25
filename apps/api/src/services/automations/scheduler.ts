@@ -1,7 +1,7 @@
 // apps/api/src/services/automations/scheduler.ts
 //
 // Cron-driven job processor for automation_scheduled_jobs (spec §8.7).
-// Supports job_types: resume_run, input_timeout, scheduled_trigger,
+// Supports job_types: resume_run, input_timeout, event_timeout, scheduled_trigger,
 // webhook_reception_failure. Uses row-level locking (FOR UPDATE SKIP LOCKED)
 // to allow multiple workers to share the queue safely.
 
@@ -18,7 +18,11 @@ import {
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Env } from "../../types";
 import { matchAndEnrollOrBinding } from "./binding-router";
-import { incrementCounter, runLoop, updateRunOptimistic } from "./runner";
+import { runLoop, transitionRunTerminal, updateRunOptimistic } from "./runner";
+import {
+	isValidAutomationTimezone,
+	parseAutomationCron,
+} from "./schedule-expression";
 import type { InboundEvent } from "./trigger-matcher";
 
 type Db = Database;
@@ -103,7 +107,7 @@ export async function processScheduledJobs(
 
 	// 2. Batch-claim pending rows whose run_at is due.
 	//    FOR UPDATE SKIP LOCKED lets multiple workers share the queue.
-	const claimed = (await db.execute(sql`
+	const claimedRows = (await db.execute(sql`
 		WITH claimed AS (
 			SELECT id
 			  FROM automation_scheduled_jobs
@@ -132,12 +136,16 @@ export async function processScheduledJobs(
 		job_type: string;
 		automation_id: string | null;
 		entrypoint_id: string | null;
-		run_at: Date;
+		run_at: Date | string;
 		occurrence_id: string;
 		lease_token: number;
 		attempts: number;
 		payload: unknown;
 	}>;
+	const claimed = claimedRows.map((job) => ({
+		...job,
+		run_at: job.run_at instanceof Date ? job.run_at : new Date(job.run_at),
+	}));
 
 	let processed = 0;
 	let failed = 0;
@@ -148,7 +156,7 @@ export async function processScheduledJobs(
 			if (effectStarted) return;
 			const [armed] = await db
 				.update(automationScheduledJobs)
-				.set({ effectStartedAt: new Date() })
+				.set({ effectStartedAt: sql`CURRENT_TIMESTAMP` })
 				.where(
 					and(
 						eq(automationScheduledJobs.id, job.id),
@@ -205,7 +213,7 @@ export async function processScheduledJobs(
 								),
 					claimedAt: null,
 					leaseExpiresAt: null,
-					effectStartedAt: unknown ? new Date() : null,
+					effectStartedAt: unknown ? sql`CURRENT_TIMESTAMP` : null,
 					error: err instanceof Error ? err.message : String(err),
 				})
 				.where(
@@ -281,36 +289,28 @@ async function dispatchJob(
 								e.from_port === "next",
 						)
 					: undefined;
-				const advanced = await updateRunOptimistic(
-					db,
-					delayRun.id,
-					delayRun.revision,
-					nextEdge
-						? {
-								status: "active",
-								currentNodeKey: nextEdge.to_node,
-								currentPortKey: nextEdge.to_port,
-								waitingFor: null,
-								waitingUntil: null,
-							}
-						: {
-								// Delay node has no outgoing edge — graceful completion,
-								// matching runLoop's no-outgoing-edge behavior.
-								status: "completed",
-								exitReason: "completed",
-								completedAt: new Date(),
-								waitingFor: null,
-								waitingUntil: null,
-							},
-				);
+				const advanced = nextEdge
+					? await updateRunOptimistic(db, delayRun.id, delayRun.revision, {
+							status: "active",
+							currentNodeKey: nextEdge.to_node,
+							currentPortKey: nextEdge.to_port,
+							waitingFor: null,
+							waitingUntil: null,
+						})
+					: await transitionRunTerminal(
+							db,
+							delayRun.id,
+							delayRun.revision,
+							delayRun.automationId,
+							"completed",
+							"completed",
+							{ waitingFor: null, waitingUntil: null },
+						);
 				if (!advanced) {
 					// Another worker advanced this run first — no-op.
 					return "done";
 				}
 				if (!nextEdge) {
-					// Completed via the no-outgoing-edge path — mirror runLoop and
-					// bump the completion counter (it would otherwise undercount).
-					await incrementCounter(db, delayRun.automationId, "total_completed");
 					return "done"; // completed, no further work
 				}
 			}
@@ -390,16 +390,75 @@ async function dispatchJob(
 				if (!ok) return "done";
 				await runLoop(db, run.id, env);
 			} else {
+				await transitionRunTerminal(
+					db,
+					run.id,
+					run.revision,
+					run.automationId,
+					"exited",
+					"input_timeout",
+					{ waitingFor: null, waitingUntil: null },
+				);
+			}
+			return "done";
+		}
+
+		case "event_timeout": {
+			if (!job.run_id) return { failed: true, error: "missing run_id" };
+			await markEffectStarted();
+			const run = await db.query.automationRuns.findFirst({
+				where: eq(automationRuns.id, job.run_id),
+			});
+			if (!run) return "done";
+			if (run.status !== "waiting" || run.waitingFor !== "inbound_event") {
+				return "done";
+			}
+			if (run.waitingUntil && run.waitingUntil > new Date()) return "done";
+
+			const timeoutPayload = (job.payload ?? {}) as Record<string, unknown>;
+			const scheduledNodeKey =
+				typeof timeoutPayload._timeout_node_key === "string"
+					? timeoutPayload._timeout_node_key
+					: null;
+			if (scheduledNodeKey && run.currentNodeKey !== scheduledNodeKey) {
+				return "done";
+			}
+
+			const auto = await db.query.automations.findFirst({
+				where: (t, { eq: eqOp }) => eqOp(t.id, run.automationId),
+			});
+			const graph = (auto?.graph ?? { edges: [] }) as {
+				edges?: Array<{
+					from_node: string;
+					from_port: string;
+					to_node: string;
+					to_port: string;
+				}>;
+			};
+			const timeoutEdge = (graph.edges ?? []).find(
+				(edge) =>
+					edge.from_node === run.currentNodeKey && edge.from_port === "timeout",
+			);
+			if (timeoutEdge) {
 				const ok = await updateRunOptimistic(db, run.id, run.revision, {
-					status: "exited",
-					exitReason: "input_timeout",
-					completedAt: new Date(),
+					status: "active",
+					currentNodeKey: timeoutEdge.to_node,
+					currentPortKey: timeoutEdge.to_port,
 					waitingFor: null,
 					waitingUntil: null,
 				});
-				if (ok) {
-					await incrementCounter(db, run.automationId, "total_exited");
-				}
+				if (!ok) return "done";
+				await runLoop(db, run.id, env);
+			} else {
+				await transitionRunTerminal(
+					db,
+					run.id,
+					run.revision,
+					run.automationId,
+					"exited",
+					"event_timeout",
+					{ waitingFor: null, waitingUntil: null },
+				);
 			}
 			return "done";
 		}
@@ -672,7 +731,7 @@ async function dispatchScheduledTrigger(
  * overlapping workers cannot create duplicate successors regardless of state.
  */
 async function insertNextScheduledJobIfNotExists(
-	db: Db,
+	db: Pick<Db, "insert">,
 	entrypointId: string,
 	runAt: Date,
 	automationId: string,
@@ -723,6 +782,12 @@ class InvalidScheduleFilterError extends Error {}
 function parseScheduleFilter(
 	filters: Record<string, unknown>,
 ): ParsedScheduleFilter | null {
+	const none = filters.none;
+	if (none !== undefined && (!Array.isArray(none) || none.length > 0)) {
+		throw new InvalidScheduleFilterError(
+			"schedule filters support only all/any tag or segment predicates",
+		);
+	}
 	const parseGroup = (name: "all" | "any"): ScheduleFilterPredicate[] => {
 		const rawGroup = filters[name];
 		if (rawGroup === undefined) return [];
@@ -741,9 +806,12 @@ function parseScheduleFilter(
 				value?: unknown;
 			};
 			const field =
-				predicate.field === "tag"
+				predicate.field === "tag" || predicate.field === "contact.tags"
 					? "tags"
-					: predicate.field === "segment" || predicate.field === "segments"
+					: predicate.field === "segment" ||
+							predicate.field === "segments" ||
+							predicate.field === "contact.segments" ||
+							predicate.field === "contact.segment_ids"
 						? "segment_ids"
 						: predicate.field;
 			if (field !== "tags" && field !== "segment_ids") {
@@ -779,6 +847,33 @@ function parseScheduleFilter(
 
 	const parsed = { all: parseGroup("all"), any: parseGroup("any") };
 	return parsed.all.length === 0 && parsed.any.length === 0 ? null : parsed;
+}
+
+/** Validate the bounded filter subset a schedule can enumerate efficiently. */
+export function validateScheduleEntrypointFilters(
+	filters: unknown,
+): { valid: true } | { valid: false; error: string } {
+	if (!filters || typeof filters !== "object" || Array.isArray(filters)) {
+		return {
+			valid: false,
+			error: "schedule entrypoint requires an all/any tag or segment filter",
+		};
+	}
+	try {
+		const parsed = parseScheduleFilter(filters as Record<string, unknown>);
+		return parsed
+			? { valid: true }
+			: {
+					valid: false,
+					error:
+						"schedule entrypoint requires an all/any tag or segment filter",
+				};
+	} catch (error) {
+		return {
+			valid: false,
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
 }
 
 export function combineSchedulePredicateSets(
@@ -888,17 +983,7 @@ export function computeNextCronRun(
 	timezone?: string,
 ): Date | null {
 	const tz = timezone && timezone.length > 0 ? timezone : "UTC";
-	if (tz === "UTC") {
-		return computeNextCronRunInZone(cron, from, "UTC");
-	}
-	// Validate the zone — `Intl.DateTimeFormat` throws `RangeError` on an
-	// unknown IANA id. Catching here keeps the error surface consistent
-	// with other unsupported-cron returns (null rather than throw).
-	try {
-		new Intl.DateTimeFormat("en-US", { timeZone: tz });
-	} catch {
-		return null;
-	}
+	if (!isValidAutomationTimezone(tz)) return null;
 	return computeNextCronRunInZone(cron, from, tz);
 }
 
@@ -960,11 +1045,8 @@ function computeNextCronRunInZone(
 	from: Date,
 	tz: string,
 ): Date | null {
-	const parts = cron.trim().split(/\s+/);
-	if (parts.length !== 5) return null;
-	const [mStr, hStr, dom, mon, dow] = parts;
-	if (mStr === undefined || hStr === undefined) return null;
-	if (dom !== "*" || mon !== "*" || dow !== "*") return null;
+	const expression = parseAutomationCron(cron);
+	if (!expression) return null;
 
 	// Seed with the zone-local wall-clock components of `from`, zero
 	// seconds/milliseconds for cleanliness.
@@ -974,9 +1056,8 @@ function computeNextCronRunInZone(
 	// hand ticks the same in every zone), but we still round to the
 	// next boundary using the wall-clock minute to preserve intuition
 	// when the operator expects firings at ":00 / :15 / :30 / :45".
-	if (hStr === "*" && /^\*\/\d+$/.test(mStr)) {
-		const n = Number(mStr.slice(2));
-		if (!Number.isFinite(n) || n < 1 || n > 59) return null;
+	if (expression.kind === "interval") {
+		const n = expression.minutes;
 		const minutes = fromZoned.minute;
 		const rem = minutes % n;
 		const add = rem === 0 ? n : n - rem;
@@ -985,7 +1066,7 @@ function computeNextCronRunInZone(
 	}
 
 	// `0 * * * *` — hourly at the top of the hour.
-	if (hStr === "*" && mStr === "0") {
+	if (expression.kind === "hourly") {
 		const next = {
 			...fromZoned,
 			hour: fromZoned.hour + 1,
@@ -996,16 +1077,8 @@ function computeNextCronRunInZone(
 	}
 
 	// `M H * * *` — daily at H:M in the target timezone.
-	const minute = Number(mStr);
-	const hour = Number(hStr);
-	if (
-		Number.isInteger(minute) &&
-		minute >= 0 &&
-		minute <= 59 &&
-		Number.isInteger(hour) &&
-		hour >= 0 &&
-		hour <= 23
-	) {
+	if (expression.kind === "daily") {
+		const { hour, minute } = expression;
 		const candidate = {
 			...fromZoned,
 			hour,
@@ -1131,35 +1204,48 @@ export async function armScheduleEntrypoint(
 	db: Db,
 	entrypointId: string,
 ): Promise<{ queued: boolean; runAt?: Date; reason?: string }> {
-	const ep = await db.query.automationEntrypoints.findFirst({
-		where: eq(automationEntrypoints.id, entrypointId),
+	return db.transaction(async (tx) => {
+		// Lock both definitions through the insert. A concurrent pause/config edit
+		// then either lands first (and is observed here) or lands second and removes
+		// the pending row, so no stale firing can survive a lifecycle transition.
+		const [ep] = await tx
+			.select()
+			.from(automationEntrypoints)
+			.where(eq(automationEntrypoints.id, entrypointId))
+			.limit(1)
+			.for("update");
+		if (!ep) return { queued: false, reason: "entrypoint_not_found" };
+		if (ep.kind !== "schedule") {
+			return { queued: false, reason: "not_schedule" };
+		}
+		if (ep.status !== "active") {
+			return { queued: false, reason: "entrypoint_not_active" };
+		}
+
+		const [automation] = await tx
+			.select()
+			.from(automationsTable)
+			.where(eq(automationsTable.id, ep.automationId))
+			.limit(1)
+			.for("update");
+		if (automation?.status !== "active") {
+			return { queued: false, reason: "automation_not_active" };
+		}
+
+		const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
+		if (!cfg.cron) return { queued: false, reason: "no_cron" };
+
+		const nextRun = computeNextCronRun(cfg.cron, new Date(), cfg.timezone);
+		if (!nextRun) return { queued: false, reason: "invalid_cron" };
+
+		await insertNextScheduledJobIfNotExists(
+			tx,
+			entrypointId,
+			nextRun,
+			ep.automationId,
+		);
+		return { queued: true, runAt: nextRun };
 	});
-	if (!ep) return { queued: false, reason: "entrypoint_not_found" };
-	if (ep.kind !== "schedule") return { queued: false, reason: "not_schedule" };
-	if (ep.status !== "active") {
-		return { queued: false, reason: "entrypoint_not_active" };
-	}
-
-	const automation = await db.query.automations.findFirst({
-		where: eq(automationsTable.id, ep.automationId),
-	});
-	if (automation?.status !== "active") {
-		return { queued: false, reason: "automation_not_active" };
-	}
-
-	const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
-	if (!cfg.cron) return { queued: false, reason: "no_cron" };
-
-	const nextRun = computeNextCronRun(cfg.cron, new Date(), cfg.timezone);
-	if (!nextRun) return { queued: false, reason: "invalid_cron" };
-
-	await insertNextScheduledJobIfNotExists(
-		db,
-		entrypointId,
-		nextRun,
-		ep.automationId,
-	);
-	return { queued: true, runAt: nextRun };
 }
 
 /**

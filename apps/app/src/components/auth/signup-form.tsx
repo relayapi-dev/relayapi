@@ -57,6 +57,7 @@ export function SignupForm() {
 				email,
 				password,
 				name,
+				callbackURL: inviteId ? `/invite/${inviteId}` : "/app",
 			});
 
 			if (authError) {
@@ -75,7 +76,8 @@ export function SignupForm() {
 			}
 
 			rememberMethod("email");
-			window.location.href = inviteId ? `/invite/${inviteId}` : "/app";
+			const destination = inviteId ? `/invite/${inviteId}` : "/app";
+			window.location.href = `/login?verification=sent&redirect=${encodeURIComponent(destination)}`;
 		} catch {
 			setError("Something went wrong. Please try again.");
 			setLoading(false);

@@ -1,7 +1,7 @@
 // Per-account detail page — Plan 3 Unit C3, Task T6.
 //
-// Hosts the new binding tabs (default reply, welcome message, main menu,
-// conversation starter, ice breaker). Channel-filtered by the account's
+// Hosts the supported binding tabs (default reply and welcome message).
+// Channel-filtered by the account's
 // platform per spec §13.5. `?tab=X` deep-links into the right tab and
 // replaceState keeps the URL in sync as the operator clicks around.
 //

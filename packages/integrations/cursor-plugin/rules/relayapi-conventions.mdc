@@ -15,7 +15,7 @@ When working with the RelayAPI SDK (`@relayapi/sdk`):
   - Workspace ID (e.g. `"ws_xyz"`) → all accounts in the group
 - Use `target_options` to customize content per platform (different hashtags, character limits, etc.)
 - Use validation tools (`client.tools.validate.validatePost()`) before publishing to catch issues early
-- Upload media via `client.media.getPresignURL()` for reliable attachments
+- Upload media with the complete `getPresignURL()` -> PUT with every exact returned header -> `confirm()` flow before attaching `presign.url`
 - Handle errors with specific error classes: `AuthenticationError`, `RateLimitError`, `NotFoundError`
 - Platform character limits: Twitter (280), LinkedIn (3000), Instagram (2200), Bluesky (300), Threads (500), Pinterest (500), Mastodon (500), Reddit (40000), Facebook (63206), Google Business (1500), Snapchat (250), Telegram (4096), WhatsApp (4096), Discord (2000), SMS (1600), Beehiiv / ConvertKit / Mailchimp / Listmonk (email, ~100000)
 - All list endpoints use cursor-based pagination: `{ data, next_cursor, has_more }`

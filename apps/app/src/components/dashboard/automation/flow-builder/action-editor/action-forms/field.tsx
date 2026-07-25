@@ -50,7 +50,10 @@ export function FieldActionForm({ action, onChange, errors }: Props) {
 		};
 	}, []);
 
-	const fieldOptions = useMemo(() => fields.map((f) => f.slug).sort(), [fields]);
+	const fieldOptions = useMemo(
+		() => fields.map((f) => f.slug).sort(),
+		[fields],
+	);
 
 	return (
 		<FormShell>
@@ -76,11 +79,7 @@ export function FieldActionForm({ action, onChange, errors }: Props) {
 			</Field>
 
 			{action.type === "field_set" ? (
-				<ValueField
-					action={action}
-					onChange={onChange}
-					error={errors?.value}
-				/>
+				<ValueField action={action} onChange={onChange} error={errors?.value} />
 			) : null}
 		</FormShell>
 	);
@@ -102,7 +101,7 @@ function ValueField({
 		<Field
 			label="Value"
 			required
-			description="Merge tags supported — e.g. `{{contact.first_name}}`."
+			description="Merge tags supported — e.g. `{{contact.name}}`."
 			error={error}
 			right={<MergeTagPicker onPick={merge.insertAtCursor} />}
 		>

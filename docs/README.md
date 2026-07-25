@@ -15,6 +15,7 @@ It exists to capture stable repository-level decisions that are awkward to infer
 
 - `architecture.md` — system model, tenancy, auth, infrastructure, and local development constraints
 - `capabilities.md` — supported platforms, connection model, and the major API domains currently present in the codebase
+- `PRODUCTION_LAUNCH_READINESS_2026-07-18.md` — current go/no-go decision, external stop conditions, and protected launch sequence
 
 ## Guardrails
 

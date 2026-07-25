@@ -51,6 +51,10 @@ for (const file of files) {
 	if (proc.exitCode !== 0 || fail > 0) {
 		failed.push(file);
 		console.error(`\n✗ ${file} (${pass} pass, ${fail} fail)`);
+		if (process.env.RELAYAPI_TEST_VERBOSE_FAILURES === "1") {
+			console.error(out.trim());
+			continue;
+		}
 		// Surface the failing assertions without dumping full output
 		const lines = out.split("\n");
 		const interesting = lines.filter(
@@ -71,6 +75,8 @@ console.log(
 	`\n${files.length} files, ${totalPass} pass, ${totalFail} fail in ${secs}s`,
 );
 if (failed.length > 0) {
-	console.error(`\nFailing files:\n${failed.map((f) => `  - ${f}`).join("\n")}`);
+	console.error(
+		`\nFailing files:\n${failed.map((f) => `  - ${f}`).join("\n")}`,
+	);
 	process.exit(1);
 }

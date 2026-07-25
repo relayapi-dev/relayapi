@@ -28,21 +28,28 @@ import {
 	generateId,
 	inboxConversations,
 	inboxMessages,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
+import { encryptAccountToken } from "../lib/account-token-crypto";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Graph } from "../schemas/automation-graph";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
+import { recordContactConsent } from "../services/contact-consent";
 import { processInboxEvent } from "../services/inbox-event-processor";
 import type { SendMessageRequest } from "../services/message-sender";
 import type { Env } from "../types";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -77,7 +84,7 @@ function resetSendCalls() {
  */
 const testEnv = {
 	HYPERDRIVE: { connectionString: CONN },
-	ENCRYPTION_KEY: "00000000000000000000000000000000",
+	ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
 	REALTIME: {
 		idFromName: (_name: string) => ({ toString: () => "noop" }),
 		get: () => ({
@@ -91,7 +98,7 @@ const testEnv = {
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "inbox-pipeline-org",
 		slug: `ip-${orgId.slice(-8)}`,
@@ -104,32 +111,46 @@ async function seedFixture() {
 	workspaceId = ws.id;
 
 	tgPlatformAccountId = `tg_${generateId("acc_")}`;
+	const telegramAccountId = generateId("acc_");
 	const [sa] = await db
 		.insert(socialAccounts)
 		.values({
+			id: telegramAccountId,
 			organizationId: orgId,
 			workspaceId,
 			platform: "telegram",
 			platformAccountId: tgPlatformAccountId,
 			displayName: "Pipeline Bot",
 			username: "pipeline_bot",
-			accessToken: "test-token-plaintext",
+			accessToken: await encryptAccountToken(
+				"test-token-plaintext",
+				TEST_ENCRYPTION_KEY,
+				telegramAccountId,
+				"access_token",
+			),
 		})
 		.returning();
 	if (!sa) throw new Error("social account insert failed");
 	socialAccountId = sa.id;
 
 	igPlatformAccountId = `ig_${generateId("acc_")}`;
+	const instagramAccountId = generateId("acc_");
 	const [igSa] = await db
 		.insert(socialAccounts)
 		.values({
+			id: instagramAccountId,
 			organizationId: orgId,
 			workspaceId,
 			platform: "instagram",
 			platformAccountId: igPlatformAccountId,
 			displayName: "Pipeline IG",
 			username: "pipeline_ig",
-			accessToken: "test-token-plaintext",
+			accessToken: await encryptAccountToken(
+				"test-token-plaintext",
+				TEST_ENCRYPTION_KEY,
+				instagramAccountId,
+				"access_token",
+			),
 		})
 		.returning();
 	if (!igSa) throw new Error("IG social account insert failed");
@@ -172,8 +193,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 beforeAll(async () => {
@@ -277,6 +298,17 @@ async function createContactWithChannel(identifier: string) {
 		platform: "telegram",
 		identifier,
 	});
+	await recordContactConsent(db, {
+		organizationId: orgId,
+		workspaceId,
+		contactId: ct.id,
+		channel: "telegram",
+		purpose: "automation",
+		identifier,
+		status: "granted",
+		source: "automation-inbox-pipeline-test",
+		occurredAt: new Date(),
+	});
 	return ct;
 }
 
@@ -363,6 +395,17 @@ async function createIgContactWithChannel(identifier: string) {
 		socialAccountId: igSocialAccountId,
 		platform: "instagram",
 		identifier,
+	});
+	await recordContactConsent(db, {
+		organizationId: orgId,
+		workspaceId,
+		contactId: ct.id,
+		channel: "instagram",
+		purpose: "automation",
+		identifier,
+		status: "granted",
+		source: "automation-inbox-pipeline-test",
+		occurredAt: new Date(),
 	});
 	return ct;
 }
@@ -613,7 +656,11 @@ describe("3.2 button postback resumes waiting run (pipeline)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		let run = await db.query.automationRuns.findFirst({
@@ -715,7 +762,11 @@ describe("3.3 quick-reply resumes waiting run (pipeline)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		// Telegram delivers quick replies as callback_query.data in practice
@@ -797,7 +848,11 @@ describe("3.4 text reply to input node (pipeline regression)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		let run = await db.query.automationRuns.findFirst({
@@ -970,7 +1025,11 @@ describe("3.6 Meta quick-reply payload resumes waiting run (pipeline)", () => {
 			channel: "instagram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		// Meta IG DM with `message.quick_reply.payload = "qr_yes"` — the
@@ -1007,16 +1066,23 @@ describe("3.7 multi-account: run pins socialAccountId of triggering account (F2)
 		// row under account B would — without F2 — resolveRecipient to
 		// whichever channel row is newest, not the one that triggered.
 		const igPlatformAccountB = `ig_${generateId("acc_")}`;
+		const igAccountBId = generateId("acc_");
 		const [igSaB] = await db
 			.insert(socialAccounts)
 			.values({
+				id: igAccountBId,
 				organizationId: orgId,
 				workspaceId,
 				platform: "instagram",
 				platformAccountId: igPlatformAccountB,
 				displayName: "Pipeline IG B",
 				username: "pipeline_ig_b",
-				accessToken: "token-account-B",
+				accessToken: await encryptAccountToken(
+					"token-account-B",
+					TEST_ENCRYPTION_KEY,
+					igAccountBId,
+					"access_token",
+				),
 			})
 			.returning();
 		if (!igSaB) throw new Error("IG account B insert failed");
@@ -1025,7 +1091,14 @@ describe("3.7 multi-account: run pins socialAccountId of triggering account (F2)
 		// account the outbound send used in our capture.
 		await db
 			.update(socialAccounts)
-			.set({ accessToken: "token-account-A" })
+			.set({
+				accessToken: await encryptAccountToken(
+					"token-account-A",
+					TEST_ENCRYPTION_KEY,
+					igSocialAccountId,
+					"access_token",
+				),
+			})
 			.where(eq(socialAccounts.id, igSocialAccountId));
 
 		const graph: Graph = {
@@ -1232,7 +1305,11 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		let run = await db.query.automationRuns.findFirst({
@@ -1284,7 +1361,11 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 		const { runId: bobRunId } = await enrollContact(db, {
 			automationId: bobAuto.id,
@@ -1294,7 +1375,11 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		// Both runs are waiting on the same `button.yes` port.
@@ -1349,7 +1434,11 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		// Ensure startedAt gap so ordering is deterministic.
@@ -1367,7 +1456,11 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		// Both parked; fire a single yes callback.
@@ -1378,12 +1471,8 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		});
 		await processInboxEvent(cbq, testEnv, db);
 
-		// Policy: because the port key matches BOTH runs, both resume on the
-		// single inbound — there's no cross-automation filter in that case
-		// (same port key, same button id). The ordering contract
-		// (`started_at ASC`) still guarantees the older run advances first,
-		// which is what `started_at ASC` on the lookup ensures. We assert
-		// both completed here to document the chosen behavior.
+		// One callback is consumed exactly once. The oldest compatible run wins;
+		// the younger flow remains parked for a later reply.
 		const older = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, olderRunId),
 		});
@@ -1393,7 +1482,7 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 		if (!older) throw new Error("expected the older run");
 		if (!younger) throw new Error("expected the younger run");
 		expect(older.status).toBe("completed");
-		expect(younger.status).toBe("completed");
+		expect(younger.status).toBe("waiting");
 	}, 60_000);
 
 	it("port-mismatch: button payload resumes only the run whose node has that port", async () => {
@@ -1462,7 +1551,11 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 		const { runId: fooRunId } = await enrollContact(db, {
 			automationId: fooAuto.id,
@@ -1472,7 +1565,11 @@ describe("3.8 cross-thread resume (Plan 7)", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		const cbq = buildTelegramCallbackQuery({

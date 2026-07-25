@@ -9,6 +9,16 @@ import {
 const CONNECTION_ENV =
 	"CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE";
 const TUNNEL_ENV = { RELAYAPI_DB_SSH_TARGET: "relayapi-db" };
+const LOOPBACK_DATABASE_URL = [
+	"postgresql://developer:",
+	"synthetic-password",
+	"@localhost:5433/relayapi?sslmode=disable",
+].join("");
+const REMOTE_DATABASE_URL = [
+	"postgresql://developer:",
+	"synthetic-password",
+	"@db.example.com:5432/relayapi?sslmode=verify-full",
+].join("");
 
 describe("command-scoped database tunnel", () => {
 	it("uses a loopback-only listener and the configured SSH target", () => {
@@ -33,8 +43,7 @@ describe("command-scoped database tunnel", () => {
 		expect(() =>
 			assertTunnelConnectionString(
 				{
-					[CONNECTION_ENV]:
-						"postgresql://developer:secret@localhost:5433/relayapi?sslmode=disable",
+					[CONNECTION_ENV]: LOOPBACK_DATABASE_URL,
 				},
 				config,
 			),
@@ -46,8 +55,7 @@ describe("command-scoped database tunnel", () => {
 		expect(() =>
 			assertTunnelConnectionString(
 				{
-					[CONNECTION_ENV]:
-						"postgresql://developer:secret@db.example.com:5432/relayapi?sslmode=verify-full",
+					[CONNECTION_ENV]: REMOTE_DATABASE_URL,
 				},
 				config,
 			),
@@ -58,8 +66,7 @@ describe("command-scoped database tunnel", () => {
 		const config = resolveDatabaseTunnelConfig(TUNNEL_ENV);
 		const normalized = normalizedTunnelConnectionString(
 			{
-				[CONNECTION_ENV]:
-					"postgresql://developer:secret@localhost:5433/relayapi?sslmode=disable",
+				[CONNECTION_ENV]: LOOPBACK_DATABASE_URL,
 			},
 			config,
 		);

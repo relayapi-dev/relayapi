@@ -14,7 +14,6 @@ import {
 	contacts,
 	createDb,
 	generateId,
-	organization,
 	segments,
 	socialAccounts,
 	workspaces,
@@ -26,7 +25,13 @@ import {
 	armScheduleEntrypoint,
 	computeNextCronRun,
 	processScheduledJobs,
+	validateScheduleEntrypointFilters,
 } from "../services/automations/scheduler";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -42,7 +47,7 @@ let workspaceId = "";
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "sched-trigger-org",
 		slug: `st-${orgId.slice(-8)}`,
@@ -61,10 +66,10 @@ async function teardownFixture() {
 		.delete(automationRuns)
 		.where(eq(automationRuns.organizationId, orgId));
 	await db.delete(automationScheduledJobs).where(
-			sql`${automationScheduledJobs.automationId} IN (
+		sql`${automationScheduledJobs.automationId} IN (
 				SELECT id FROM automations WHERE organization_id = ${orgId}
 			)`,
-		);
+	);
 	await db.delete(automations).where(eq(automations.organizationId, orgId));
 	await db
 		.delete(contactSegmentMemberships)
@@ -74,8 +79,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 const END_GRAPH: Graph = {
@@ -91,6 +96,38 @@ const END_GRAPH: Graph = {
 	],
 	edges: [],
 };
+
+describe("validateScheduleEntrypointFilters", () => {
+	it("accepts documented contact tag and segment paths", () => {
+		expect(
+			validateScheduleEntrypointFilters({
+				all: [{ field: "contact.tags", op: "contains", value: "vip" }],
+			}),
+		).toEqual({ valid: true });
+		expect(
+			validateScheduleEntrypointFilters({
+				any: [
+					{
+						field: "contact.segments",
+						op: "contains",
+						value: ["seg_a", "seg_b"],
+					},
+				],
+			}),
+		).toEqual({ valid: true });
+	});
+
+	it("rejects missing, unsupported, and none-only filters before scheduling", () => {
+		for (const filters of [
+			null,
+			{},
+			{ all: [{ field: "contact.name", op: "eq", value: "Alice" }] },
+			{ none: [{ field: "contact.tags", op: "contains", value: "blocked" }] },
+		]) {
+			expect(validateScheduleEntrypointFilters(filters).valid).toBe(false);
+		}
+	});
+});
 
 async function makeAutomation(name: string) {
 	const [auto] = await db
@@ -252,7 +289,7 @@ describe("scheduled_trigger dispatch", () => {
 		const ep = await makeEntrypoint(
 			auto.id,
 			{ cron: "0 9 * * *" },
-			{ all: [{ field: "tags", op: "contains", value: "vip" }] },
+			{ all: [{ field: "contact.tags", op: "contains", value: "vip" }] },
 		);
 		const matchCt = await makeTaggedContact("vip");
 		const skipCt = await makeTaggedContact("regular");
@@ -372,88 +409,88 @@ describe("scheduled_trigger dispatch", () => {
 	});
 
 	it("queues the next run BEFORE enrollment, so the schedule survives a failure (§B4)", async () => {
-			if (!dbAvailable) return;
+		if (!dbAvailable) return;
 
-			// A valid tag filter — enumeration will succeed (0 contacts) and the
-			// enrollment loop is a no-op. The key property: the next-run job is
-			// inserted before the loop runs, so even a wholesale enrollment
-			// failure can't kill the schedule.
-			const auto = await makeAutomation("sched-survive-failure");
-			const ep = await makeEntrypoint(
-				auto.id,
-				{ cron: "*/15 * * * *" },
-				{ all: [{ field: "tags", op: "contains", value: "never-matches" }] },
+		// A valid tag filter — enumeration will succeed (0 contacts) and the
+		// enrollment loop is a no-op. The key property: the next-run job is
+		// inserted before the loop runs, so even a wholesale enrollment
+		// failure can't kill the schedule.
+		const auto = await makeAutomation("sched-survive-failure");
+		const ep = await makeEntrypoint(
+			auto.id,
+			{ cron: "*/15 * * * *" },
+			{ all: [{ field: "tags", op: "contains", value: "never-matches" }] },
+		);
+
+		await db.insert(automationScheduledJobs).values({
+			jobType: "scheduled_trigger",
+			automationId: auto.id,
+			entrypointId: ep.id,
+			runAt: new Date(Date.now() - 60_000),
+			status: "pending",
+		});
+
+		await processScheduledJobs(db, {});
+
+		// The next-run job must exist regardless of enrollment outcome.
+		const pending = await db
+			.select({ runAt: automationScheduledJobs.runAt })
+			.from(automationScheduledJobs)
+			.where(
+				and(
+					eq(automationScheduledJobs.entrypointId, ep.id),
+					eq(automationScheduledJobs.status, "pending"),
+				),
 			);
+		expect(pending.length).toBe(1);
+		const pending0 = pending[0];
+		if (!pending0) throw new Error("expected a pending job");
+		expect(pending0.runAt.getTime()).toBeGreaterThan(Date.now());
+	});
 
-			await db.insert(automationScheduledJobs).values({
+	it("is idempotent — running the same scheduled_trigger twice doesn't double-queue the next run (§B4)", async () => {
+		if (!dbAvailable) return;
+
+		const auto = await makeAutomation("sched-idempotent");
+		const ep = await makeEntrypoint(
+			auto.id,
+			{ cron: "*/15 * * * *" },
+			{ all: [{ field: "tags", op: "contains", value: "vip" }] },
+		);
+
+		// Seed two due jobs for the SAME entrypoint. Both will fire against
+		// the same cron, computing the same nextRunAt — the insert-if-not-
+		// exists guard must skip the second insert.
+		await db.insert(automationScheduledJobs).values([
+			{
+				jobType: "scheduled_trigger",
+				automationId: auto.id,
+				entrypointId: ep.id,
+				runAt: new Date(Date.now() - 120_000),
+				status: "pending",
+			},
+			{
 				jobType: "scheduled_trigger",
 				automationId: auto.id,
 				entrypointId: ep.id,
 				runAt: new Date(Date.now() - 60_000),
 				status: "pending",
-			});
+			},
+		]);
 
-			await processScheduledJobs(db, {});
+		await processScheduledJobs(db, {});
 
-			// The next-run job must exist regardless of enrollment outcome.
-			const pending = await db
-				.select({ runAt: automationScheduledJobs.runAt })
-				.from(automationScheduledJobs)
-				.where(
-					and(
-						eq(automationScheduledJobs.entrypointId, ep.id),
-						eq(automationScheduledJobs.status, "pending"),
-					),
-				);
-			expect(pending.length).toBe(1);
-			const pending0 = pending[0];
-			if (!pending0) throw new Error("expected a pending job");
-			expect(pending0.runAt.getTime()).toBeGreaterThan(Date.now());
-	});
-
-	it("is idempotent — running the same scheduled_trigger twice doesn't double-queue the next run (§B4)", async () => {
-			if (!dbAvailable) return;
-
-			const auto = await makeAutomation("sched-idempotent");
-			const ep = await makeEntrypoint(
-				auto.id,
-				{ cron: "*/15 * * * *" },
-				{ all: [{ field: "tags", op: "contains", value: "vip" }] },
+		const pending = await db
+			.select({ runAt: automationScheduledJobs.runAt })
+			.from(automationScheduledJobs)
+			.where(
+				and(
+					eq(automationScheduledJobs.entrypointId, ep.id),
+					eq(automationScheduledJobs.status, "pending"),
+				),
 			);
-
-			// Seed two due jobs for the SAME entrypoint. Both will fire against
-			// the same cron, computing the same nextRunAt — the insert-if-not-
-			// exists guard must skip the second insert.
-			await db.insert(automationScheduledJobs).values([
-				{
-					jobType: "scheduled_trigger",
-					automationId: auto.id,
-					entrypointId: ep.id,
-					runAt: new Date(Date.now() - 120_000),
-					status: "pending",
-				},
-				{
-					jobType: "scheduled_trigger",
-					automationId: auto.id,
-					entrypointId: ep.id,
-					runAt: new Date(Date.now() - 60_000),
-					status: "pending",
-				},
-			]);
-
-			await processScheduledJobs(db, {});
-
-			const pending = await db
-				.select({ runAt: automationScheduledJobs.runAt })
-				.from(automationScheduledJobs)
-				.where(
-					and(
-						eq(automationScheduledJobs.entrypointId, ep.id),
-						eq(automationScheduledJobs.status, "pending"),
-					),
-				);
-			// Exactly one pending successor — not two.
-			expect(pending.length).toBe(1);
+		// Exactly one pending successor — not two.
+		expect(pending.length).toBe(1);
 	});
 });
 

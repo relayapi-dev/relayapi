@@ -15,7 +15,9 @@ trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
 # Assemble the fixture at runtime so a credential-shaped string is never
 # committed merely to test the scanner. The values are synthetic.
 fixture_password="relayapi_secret_scan_fixture"
-mkdir -p "$tmp/unsafe/.github/workflows" "$tmp/safe/.github/workflows"
+mkdir -p \
+	"$tmp/unsafe/.github/workflows" \
+	"$tmp/safe/apps/api/src/__tests__/__mocks__"
 printf '%s%s%s\n' \
 	'postgresql://fixture_user:' \
 	"$fixture_password" \
@@ -24,9 +26,10 @@ printf '%s%s%s\n' \
 # The prior configuration trusted this whole workflow path. It must now catch
 # an unknown credential there while retaining the exact mock fixture.
 printf '%s%s%s\n' \
-	'postgresql://mock:' \
+	'            connectionString: "postgresql://mock:' \
 	'mock' \
-	'@localhost:5432/mock' >"$tmp/safe/.github/workflows/deploy-api.yml"
+	'@localhost:5432/mock",' \
+	>"$tmp/safe/apps/api/src/__tests__/__mocks__/env.ts"
 
 set +e
 output="$($GITLEAKS_BIN dir --no-banner --redact=100 \

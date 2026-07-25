@@ -28,18 +28,22 @@ import {
 	contacts,
 	createDb,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
-import type { Graph } from "../schemas/automation-graph";
 import { validateEntrypointConfig } from "../schemas/automation-entrypoints";
+import type { Graph } from "../schemas/automation-graph";
 import {
 	type InboundEvent,
 	type InboundEventKind,
 	matchAndEnroll,
 } from "../services/automations/trigger-matcher";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -56,7 +60,7 @@ let socialAccountId = "";
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "entrypoint-filter-test-org",
 		slug: `epf-test-${orgId.slice(-8)}`,
@@ -101,8 +105,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 async function makeAutomation(name: string) {
@@ -207,6 +211,42 @@ describe("entrypoint config schema — post key-drift fix", () => {
 		expect(parsed.success).toBe(true);
 	});
 
+	it("textual Instagram event configs expose the matcher keyword controls", () => {
+		for (const kind of [
+			"comment_created",
+			"story_reply",
+			"story_mention",
+			"live_comment",
+		]) {
+			const parsed = validateEntrypointConfig(kind, {
+				keywords: ["^help$"],
+				match_mode: "regex",
+				case_sensitive: false,
+				...(kind === "comment_created" ? { post_ids: null } : {}),
+				...(kind === "story_reply" || kind === "story_mention"
+					? { story_ids: null }
+					: {}),
+			});
+			expect(parsed.success).toBe(true);
+		}
+	});
+
+	it("rejects unsafe regexes for every keyword-capable event", () => {
+		for (const kind of [
+			"dm_received",
+			"comment_created",
+			"story_reply",
+			"story_mention",
+			"live_comment",
+		]) {
+			const parsed = validateEntrypointConfig(kind, {
+				keywords: ["(a+)+$"],
+				match_mode: "regex",
+			});
+			expect(parsed.success).toBe(false);
+		}
+	});
+
 	it("field_changed: canonical `field_keys` passes validation", () => {
 		const parsed = validateEntrypointConfig("field_changed", {
 			field_keys: ["lifecycle_stage"],
@@ -256,18 +296,11 @@ describe("entrypoint config schema — post key-drift fix", () => {
 		expect(parsed.success).toBe(false);
 	});
 
-	it("conversion_event: canonical `event_names` passes validation", () => {
+	it("conversion_event: durable conversion trigger config passes validation", () => {
 		const parsed = validateEntrypointConfig("conversion_event", {
 			event_names: ["purchase"],
 		});
 		expect(parsed.success).toBe(true);
-	});
-
-	it("conversion_event: legacy `event_name` alone fails validation", () => {
-		const parsed = validateEntrypointConfig("conversion_event", {
-			event_name: "purchase",
-		});
-		expect(parsed.success).toBe(false);
 	});
 });
 
@@ -553,7 +586,7 @@ describe("matchAndEnroll — per-kind filter key alignment", () => {
 		expect(miss.matched).toBe(false);
 	});
 
-	it("conversion_event: matches when event.eventName is in event_names, rejects otherwise", async () => {
+	it("legacy conversion_event rows retain matcher compatibility", async () => {
 		if (!dbAvailable) return;
 		const auto = await makeAutomation("conv-auto");
 		const ct = await makeContact();

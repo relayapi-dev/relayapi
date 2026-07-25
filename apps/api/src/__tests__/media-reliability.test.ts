@@ -8,7 +8,11 @@ import mediaRouter, {
 	MAX_MEDIA_UPLOAD_BYTES,
 } from "../routes/media";
 import {
+	isManagedMediaStorageKey,
 	isMediaEventMessage,
+	MEDIA_DELETION_LATE_WRITE_GRACE_MS,
+	MEDIA_DIRECT_UPLOAD_STALE_MS,
+	MEDIA_PRESIGNED_UPLOAD_STALE_MS,
 	mediaDeletionRetryDelaySeconds,
 	processMediaDeletion,
 	processMediaEvent,
@@ -127,6 +131,24 @@ describe("typed thumbnail outcomes", () => {
 });
 
 describe("media retry and lifecycle state", () => {
+	it("reconciles stale presigned-upload intents as well as direct uploads", () => {
+		const source = readFileSync(
+			new URL("../services/media-reliability.ts", import.meta.url),
+			"utf8",
+		);
+		const reconciler = source.slice(
+			source.indexOf("export async function reconcileMediaUploads"),
+			source.indexOf("export function isMediaEventMessage"),
+		);
+		expect(reconciler).toContain('eq(media.status, "pending")');
+		expect(reconciler).toContain(
+			'inArray(media.status, ["uploading", "upload_failed"])',
+		);
+		expect(MEDIA_DIRECT_UPLOAD_STALE_MS).toBe(10 * 60 * 1000);
+		expect(MEDIA_PRESIGNED_UPLOAD_STALE_MS).toBeGreaterThan(60 * 60 * 1000);
+		expect(reconciler).toContain('"presigned_upload_expired"');
+	});
+
 	it("refuses to tombstone media still referenced by an active post", () => {
 		const source = readFileSync(
 			new URL("../routes/media.ts", import.meta.url),
@@ -139,6 +161,10 @@ describe("media retry and lifecycle state", () => {
 		expect(source.slice(guard - 1_000, guard)).toContain(
 			'inArray(posts.status, ["draft", "scheduled", "publishing"])',
 		);
+		expect(source.slice(guard - 1_000, guard)).toContain(
+			"jsonb_build_array(jsonb_build_object('url'",
+		);
+		expect(source.slice(guard - 1_000, guard)).not.toContain("::text LIKE");
 	});
 
 	it("uses bounded exponential retry delays", () => {
@@ -154,6 +180,7 @@ describe("media retry and lifecycle state", () => {
 			id: "med_delete_1",
 			storageKey: "org_1/file_1/photo.png",
 			thumbnailKey: "org_1/file_1/photo.png.avif",
+			createdAt: new Date("2026-07-01T10:00:00Z"),
 			deletionRequestedAt: new Date("2026-07-13T10:00:00Z"),
 			originalDeletionConfirmedAt: null,
 			thumbnailDeletionConfirmedAt: null,
@@ -210,7 +237,7 @@ describe("media retry and lifecycle state", () => {
 		expect(updates[0]?.deletionLastError).toBe("thumbnail_delete_unconfirmed");
 	});
 
-	it("retries only an unfinished phase and removes the row after both confirmations", async () => {
+	it("performs a final unconditional sweep before removing the tombstone", async () => {
 		let rowDeleted = false;
 		let originalDeleteCalls = 0;
 		let thumbnailDeleteCalls = 0;
@@ -218,6 +245,7 @@ describe("media retry and lifecycle state", () => {
 			id: "med_delete_2",
 			storageKey: "org_1/file_2/photo.png",
 			thumbnailKey: "org_1/file_2/photo.png.avif",
+			createdAt: new Date("2026-07-01T10:00:00Z"),
 			deletionRequestedAt: new Date("2026-07-13T10:00:00Z"),
 			originalDeletionConfirmedAt: new Date("2026-07-13T10:01:00Z"),
 			thumbnailDeletionConfirmedAt: null,
@@ -255,9 +283,67 @@ describe("media retry and lifecycle state", () => {
 		);
 
 		expect(result).toEqual({ status: "complete" });
-		expect(originalDeleteCalls).toBe(0);
+		expect(originalDeleteCalls).toBe(1);
 		expect(thumbnailDeleteCalls).toBe(1);
 		expect(rowDeleted).toBe(true);
+	});
+
+	it("retains a recent tombstone until late presigned writes are impossible", async () => {
+		const updates: Array<Record<string, unknown>> = [];
+		let rowDeleted = false;
+		const createdAt = new Date("2026-07-18T10:00:00Z");
+		const now = new Date("2026-07-18T10:05:00Z");
+		const row = {
+			id: "med_delete_recent",
+			organizationId: "org_1",
+			storageKey: "org_1/media/file_1/photo.png",
+			thumbnailKey: "org_1/media/file_1/photo.png.avif",
+			createdAt,
+			deletionRequestedAt: now,
+			originalDeletionConfirmedAt: null,
+			thumbnailDeletionConfirmedAt: null,
+			deletionAttempts: 0,
+		};
+		const query = {
+			from: () => query,
+			where: () => query,
+			limit: async () => [row],
+		};
+		const db = fixture<Database>({
+			select: () => query,
+			update: () => ({
+				set: (value: Record<string, unknown>) => {
+					updates.push(value);
+					return { where: async () => [] };
+				},
+			}),
+			delete: () => ({
+				where: async () => {
+					rowDeleted = true;
+				},
+			}),
+		});
+
+		const result = await processMediaDeletion(
+			db,
+			envFixture({
+				MEDIA_BUCKET: fixture<R2Bucket>({ delete: async () => {} }),
+				THUMBNAIL_BUCKET: fixture<R2Bucket>({ delete: async () => {} }),
+			}),
+			row.id,
+			now,
+		);
+
+		expect(result).toEqual({
+			status: "pending",
+			attempts: 0,
+			originalPending: false,
+			thumbnailPending: false,
+		});
+		expect(rowDeleted).toBe(false);
+		expect(updates[0]?.deletionNextRetryAt).toEqual(
+			new Date(createdAt.getTime() + MEDIA_DELETION_LATE_WRITE_GRACE_MS),
+		);
 	});
 
 	it("bounds deletion retry backoff", () => {
@@ -409,6 +495,42 @@ describe("media retry and lifecycle state", () => {
 });
 
 describe("media event and read-path guards", () => {
+	it("recognizes only the dedicated media object namespace", () => {
+		expect(isManagedMediaStorageKey("org_1/media/file_abc/photo.png")).toBe(
+			true,
+		);
+		expect(isManagedMediaStorageKey("org_1/ideas/file_abc/photo.png")).toBe(
+			false,
+		);
+		expect(isManagedMediaStorageKey("org_1/file_abc/photo.png")).toBe(false);
+	});
+
+	it("deletes a late namespaced object after its tombstone is gone", async () => {
+		const deleted: string[] = [];
+		const query = {
+			from: () => query,
+			where: () => query,
+			limit: async () => [],
+		};
+		await processMediaEvent(
+			fixture<Database>({ select: () => query }),
+			envFixture({
+				MEDIA_BUCKET: fixture<R2Bucket>({
+					delete: async (key: string) => {
+						deleted.push(key);
+					},
+				}),
+			}),
+			{
+				account: "account",
+				bucket: "relayapi-media",
+				action: "PutObject",
+				object: { key: "org_1/media/file_late/photo.png" },
+			},
+		);
+		expect(deleted).toEqual(["org_1/media/file_late/photo.png"]);
+	});
+
 	it("validates the R2 event fields used by the consumer", () => {
 		expect(
 			isMediaEventMessage(
@@ -610,19 +732,26 @@ describe("media event and read-path guards", () => {
 	});
 
 	it("returns the durable thumbnail after the original is gone", async () => {
-		const url = await getMediaReadUrl(envFixture({}), {
+		const readDb = fixture<Database>({});
+		const url = await getMediaReadUrl(readDb, envFixture({}), {
+			organizationId: "org_1",
+			status: "ready",
 			storageKey: "org_1/file_1/photo.png",
 			url: null,
 			thumbnailUrl: "https://thumbs.relayapi.dev/org_1/file_1/photo.png.avif",
 			originalDeletedAt: new Date(),
+			deletionRequestedAt: null,
 		});
 		expect(url).toBe("https://thumbs.relayapi.dev/org_1/file_1/photo.png.avif");
 
-		const missing = await getMediaReadUrl(envFixture({}), {
+		const missing = await getMediaReadUrl(readDb, envFixture({}), {
+			organizationId: "org_1",
+			status: "ready",
 			storageKey: "org_1/file_2/photo.png",
 			url: null,
 			thumbnailUrl: null,
 			originalDeletedAt: new Date(),
+			deletionRequestedAt: null,
 		});
 		expect(missing).toBeNull();
 	});

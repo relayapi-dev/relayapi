@@ -78,6 +78,8 @@ export interface AuditEvaluation {
 	allowed: AuditFinding[];
 }
 
+const MAX_LOCKFILE_PACKAGE_LINE_LENGTH = 256 * 1024;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -221,25 +223,87 @@ export function evaluateAudit(
 	return { unmatched, expired, stale, policyErrors, allowed };
 }
 
+interface LockfilePackageLine {
+	key: string;
+	value: string;
+}
+
+function isInlineJsonWhitespace(value: string | undefined): boolean {
+	return value === " " || value === "\t" || value === "\r";
+}
+
+/** Parse one single-line Bun package entry in bounded linear time. */
+function parseLockfilePackageLine(
+	line: string,
+	lineNumber: number,
+): LockfilePackageLine | undefined {
+	if (!line.startsWith('    "')) return undefined;
+	if (line.length > MAX_LOCKFILE_PACKAGE_LINE_LENGTH) {
+		throw new Error(
+			`bun.lock package entry at line ${lineNumber} exceeds ${MAX_LOCKFILE_PACKAGE_LINE_LENGTH} characters.`,
+		);
+	}
+
+	let keyEnd = -1;
+	for (let index = 5; index < line.length; index += 1) {
+		if (line[index] === "\\") {
+			index += 1;
+			continue;
+		}
+		if (line[index] === '"') {
+			keyEnd = index;
+			break;
+		}
+	}
+	if (keyEnd < 0 || line[keyEnd + 1] !== ":") {
+		throw new Error(`Cannot parse bun.lock entry at line ${lineNumber}.`);
+	}
+
+	let valueStart = keyEnd + 2;
+	while (isInlineJsonWhitespace(line[valueStart])) valueStart += 1;
+	if (line[valueStart] !== "[") return undefined;
+
+	let valueEnd = line.length;
+	while (isInlineJsonWhitespace(line[valueEnd - 1])) valueEnd -= 1;
+	if (line[valueEnd - 1] === ",") {
+		valueEnd -= 1;
+		while (isInlineJsonWhitespace(line[valueEnd - 1])) valueEnd -= 1;
+	}
+	if (line[valueEnd - 1] !== "]") {
+		throw new Error(
+			`Cannot parse bun.lock package entry at line ${lineNumber}.`,
+		);
+	}
+
+	return {
+		key: line.slice(4, keyEnd + 1),
+		value: line.slice(valueStart, valueEnd),
+	};
+}
+
 export function parseLockfile(text: string): Map<string, LockInstance> {
 	const instances = new Map<string, LockInstance>();
-	for (const line of text.split("\n")) {
-		const match = line.match(/^ {4}("(?:\\.|[^"])+"):\s*(\[.*\]),?$/);
-		if (!match) continue;
+	for (const [index, line] of text.split("\n").entries()) {
+		const entry = parseLockfilePackageLine(line, index + 1);
+		if (!entry) continue;
 
-		let parsed: Record<string, unknown>;
+		let key: unknown;
+		let rawValue: unknown;
 		try {
-			parsed = JSON.parse(`{${match[1]}:${match[2]}}`) as Record<
-				string,
-				unknown
-			>;
+			key = JSON.parse(entry.key);
+			rawValue = JSON.parse(entry.value);
 		} catch (error) {
-			throw new Error(`Cannot parse bun.lock package entry: ${line}`, {
-				cause: error,
-			});
+			throw new Error(
+				`Cannot parse bun.lock package entry at line ${index + 1}.`,
+				{ cause: error },
+			);
 		}
-		const [key, rawValue] = Object.entries(parsed)[0] ?? [];
-		if (!key || !Array.isArray(rawValue) || typeof rawValue[0] !== "string")
+		if (
+			typeof key !== "string" ||
+			!key ||
+			!Array.isArray(rawValue) ||
+			typeof rawValue[0] !== "string"
+		)
 			continue;
 
 		const resolution = rawValue[0];

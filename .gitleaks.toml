@@ -7,15 +7,35 @@ description = "Database URL containing inline username and password"
 regex = '''(?i)(?:postgres(?:ql)?|mysql|mariadb)://[^/\s@:\"]+:[^/\s@\"]+@'''
 keywords = ["postgres://", "postgresql://", "mysql://", "mariadb://"]
 
-[rules.allowlist]
-description = "Exact synthetic database URLs used by CI, mocks, and documentation"
+[[rules.allowlists]]
+description = "Exact PostgreSQL 18 service URL in migration replay workflows"
+condition = "AND"
 regexTarget = "line"
 regexes = [
-	'''postgresql://postgres:postgres@127\.0\.0\.1:5432/relayapi_migration_test(?:["'\s]|$)''',
-	'''postgres://x:x@localhost:5433/x(?:["'\s]|$)''',
-	'''postgresql://mock:mock@localhost:5432/mock(?:["'\s]|$)''',
-	'''postgresql://user:password@host:5432/relayapi(?:["'\s]|$)''',
-	'''postgresql://user:password@localhost:5432/relayapi(?:["'\s]|$)''',
-	'''postgres://\$\{PG_USER\}:<pass>@\$\{CF_DB_HOSTNAME\}:5432/\$\{PG_DB\}(?:\\"|["'\s]|$)''',
-	'''postgres://\$\{PG_USER\}:<pass>@localhost:5432/\$\{PG_DB\}\?sslmode=require(?:["'\s]|$)''',
+	'''^\s*CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE:\s+postgresql://postgres:postgres@127\.0\.0\.1:5432/relayapi_migration_test\s*$''',
+]
+paths = [
+	'''(^|/)\.github/workflows/(ci-db-migrations|deploy-api)\.yml$''',
+]
+
+[[rules.allowlists]]
+description = "Exact loopback-only dummy URL used for the dashboard build"
+condition = "AND"
+regexTarget = "line"
+regexes = [
+	'''^\s*CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE:\s+"postgres://x:x@localhost:5433/x"\s*$''',
+]
+paths = [
+	'''(^|/)\.github/workflows/deploy-app\.yml$''',
+]
+
+[[rules.allowlists]]
+description = "Exact database client mock URL"
+condition = "AND"
+regexTarget = "line"
+regexes = [
+	'''^\s*connectionString:\s+"postgresql://mock:mock@localhost:5432/mock",\s*$''',
+]
+paths = [
+	'''(^|/)apps/api/src/__tests__/__mocks__/env\.ts$''',
 ]

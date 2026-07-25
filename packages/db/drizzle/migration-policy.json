@@ -1,13 +1,37 @@
 {
-  "schemaVersion": 1,
-  "migrations": {
-    "0000_baseline": {
-      "phase": "baseline",
-      "summary": "Pre-launch virgin PostgreSQL 18 baseline; old development ledgers are unsupported"
-    },
-    "0001_external_post_previews": {
-      "phase": "expand",
-      "summary": "Add durable external-post preview state and retry scheduling"
-    }
-  }
+	"schemaVersion": 1,
+	"migrations": {
+		"0000_baseline": {
+			"phase": "baseline",
+			"summary": "Pre-launch virgin PostgreSQL 18 baseline; old development ledgers are unsupported"
+		},
+		"0001_external_post_previews": {
+			"phase": "expand",
+			"summary": "Add durable external-post preview state and retry scheduling"
+		},
+		"0002_aspiring_lake": {
+			"phase": "expand",
+			"summary": "Persist truthful provider lifecycle outcomes and allow durable nonterminal reconciliation"
+		},
+		"0003_fine_blazing_skull": {
+			"phase": "expand",
+			"summary": "Add Better Auth verification and invitation lookup indexes for atomic auth flows"
+		},
+		"0004_amused_shaman": {
+			"phase": "expand",
+			"summary": "Constrain persisted provider disposition values to RelayAPI's truthful lifecycle vocabulary"
+		},
+		"0005_atomic_identity_deletion": {
+			"phase": "contract",
+			"summary": "Make identity deletion atomic and enforce that active organizations retain an owner"
+		},
+		"0006_automation_runtime_integrity": {
+			"phase": "expand",
+			"summary": "Add durable automation admission, conversion facts, event wait storage, and provider binding synchronization state"
+		},
+		"0007_automation_binding_rollout": {
+			"phase": "contract",
+			"summary": "Enable new automation wait states, normalize legacy provider bindings, and queue their first revisioned synchronization"
+		}
+	}
 }

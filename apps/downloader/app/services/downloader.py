@@ -62,7 +62,7 @@ async def extract_info(
         ydl_opts["proxy"] = settings.PROXY_URL
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         info = await loop.run_in_executor(None, _sync_extract, url, ydl_opts)
     except DownloadError as exc:
         return {

@@ -8,12 +8,12 @@
 import {
 	automationBindings,
 	automations,
+	type Database,
 	inboxConversations,
 	inboxMessages,
-	type Database,
 } from "@relayapi/db";
-import { and, desc, eq, sql } from "drizzle-orm";
-import { enrollContact } from "./runner";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { EnrollmentBlockedError, enrollContact } from "./runner";
 import type { InboundEvent, MatchResult } from "./trigger-matcher";
 import { matchAndEnroll } from "./trigger-matcher";
 
@@ -80,10 +80,7 @@ async function findBinding(
 	const rows = await db
 		.select({ binding: automationBindings, automation: automations })
 		.from(automationBindings)
-		.innerJoin(
-			automations,
-			eq(automationBindings.automationId, automations.id),
-		)
+		.innerJoin(automations, eq(automationBindings.automationId, automations.id))
 		.where(
 			and(
 				eq(automationBindings.organizationId, params.organizationId),
@@ -97,6 +94,110 @@ async function findBinding(
 		.orderBy(desc(automationBindings.updatedAt))
 		.limit(1);
 	return rows[0] ?? null;
+}
+
+type InteractiveBindingType = "get_started" | "main_menu" | "ice_breaker";
+
+function bindingAcceptsPayload(
+	type: InteractiveBindingType,
+	config: Record<string, unknown>,
+	payload: string,
+): boolean {
+	if (type === "get_started") return config.payload === payload;
+	if (type === "ice_breaker") {
+		return (
+			(config.questions as Array<Record<string, unknown>> | undefined) ?? []
+		).some((question) => question.payload === payload);
+	}
+	return (
+		(config.items as Array<Record<string, unknown>> | undefined) ?? []
+	).some((item) => item.action === "postback" && item.payload === payload);
+}
+
+/** Route Meta get-started, persistent-menu, and ice-breaker postbacks. */
+export async function routeInteractiveBinding(
+	db: Db,
+	event: InboundEvent,
+	env: Record<string, unknown>,
+): Promise<MatchResult> {
+	if (
+		event.kind !== "dm_received" ||
+		!event.socialAccountId ||
+		event.payload?.interactive_kind !== "postback" ||
+		typeof event.payload.interactive_payload !== "string"
+	) {
+		return { matched: false, reason: "no_candidates" };
+	}
+	const payload = event.payload.interactive_payload;
+	const rows = await db
+		.select({ binding: automationBindings, automation: automations })
+		.from(automationBindings)
+		.innerJoin(automations, eq(automationBindings.automationId, automations.id))
+		.where(
+			and(
+				eq(automationBindings.organizationId, event.organizationId),
+				eq(automationBindings.socialAccountId, event.socialAccountId),
+				eq(automationBindings.channel, event.channel),
+				inArray(automationBindings.bindingType, [
+					"get_started",
+					"main_menu",
+					"ice_breaker",
+				]),
+				eq(automationBindings.status, "active"),
+				eq(automationBindings.desiredActive, true),
+				eq(automations.status, "active"),
+			),
+		)
+		.orderBy(desc(automationBindings.updatedAt));
+
+	// Prefer the dedicated surface bindings over the broader main-menu payload
+	// namespace if an operator accidentally reuses a payload string.
+	rows.sort((a, b) => {
+		const rank = (type: string) => (type === "main_menu" ? 1 : 0);
+		return rank(a.binding.bindingType) - rank(b.binding.bindingType);
+	});
+	const selected = rows.find((row) =>
+		bindingAcceptsPayload(
+			row.binding.bindingType as InteractiveBindingType,
+			(row.binding.config as Record<string, unknown>) ?? {},
+			payload,
+		),
+	);
+	if (!selected) return { matched: false, reason: "no_candidates" };
+
+	try {
+		const { runId } = await enrollContact(db, {
+			automationId: selected.automation.id,
+			organizationId: event.organizationId,
+			contactId: event.contactId,
+			conversationId: event.conversationId,
+			channel: event.channel,
+			entrypointId: null,
+			bindingId: selected.binding.id,
+			socialAccountId: event.socialAccountId,
+			contextOverrides: {
+				triggerEvent: event,
+				binding_payload: payload,
+			},
+			admission: {
+				allowReentry: true,
+				reentryCooldownMin: 0,
+				dailyCap: null,
+			},
+			env,
+		});
+		return {
+			matched: true,
+			entrypointId: selected.binding.id,
+			automationId: selected.automation.id,
+			runId,
+		};
+	} catch (error) {
+		if (error instanceof EnrollmentBlockedError) {
+			return { matched: false, reason: "reentry_blocked" };
+		}
+		throw error;
+	}
 }
 
 /**
@@ -148,6 +249,13 @@ export async function routeBinding(
 						// the account that received the inbound, pin it.
 						socialAccountId: event.socialAccountId ?? null,
 						contextOverrides: { triggerEvent: event },
+						admission: {
+							// Welcome is a once-ever surface. This authoritative runner
+							// check also closes the concurrent first-message race.
+							allowReentry: false,
+							reentryCooldownMin: 0,
+							dailyCap: null,
+						},
 						env,
 					});
 					return {
@@ -156,8 +264,11 @@ export async function routeBinding(
 						automationId: welcome.automation.id,
 						runId,
 					};
-				} catch {
-					// fall through — treat as no-match
+				} catch (error) {
+					if (error instanceof EnrollmentBlockedError) {
+						return { matched: false, reason: "reentry_blocked" };
+					}
+					throw error;
 				}
 			}
 		}
@@ -186,6 +297,11 @@ export async function routeBinding(
 					// landed on.
 					socialAccountId: event.socialAccountId ?? null,
 					contextOverrides: { triggerEvent: event },
+					admission: {
+						allowReentry: true,
+						reentryCooldownMin: 0,
+						dailyCap: null,
+					},
 					env,
 				});
 				return {
@@ -194,8 +310,11 @@ export async function routeBinding(
 					automationId: defaultReply.automation.id,
 					runId,
 				};
-			} catch {
-				// fall through
+			} catch (error) {
+				if (error instanceof EnrollmentBlockedError) {
+					return { matched: false, reason: "reentry_blocked" };
+				}
+				throw error;
 			}
 		}
 	}
@@ -214,6 +333,10 @@ export async function matchAndEnrollOrBinding(
 	event: InboundEvent,
 	env: Record<string, unknown>,
 ): Promise<MatchResult> {
+	const interactive = await routeInteractiveBinding(db, event, env);
+	if (interactive.matched || interactive.reason !== "no_candidates") {
+		return interactive;
+	}
 	const first = await matchAndEnroll(db, event, env);
 	if (first.matched) return first;
 	if (first.reason === "no_candidates" || first.reason === "all_filtered") {

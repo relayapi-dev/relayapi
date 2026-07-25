@@ -8,6 +8,7 @@ name: Deploy API
 # Required repository secrets:
 # - CLOUDFLARE_API_TOKEN
 # - CLOUDFLARE_ACCOUNT_ID  (relay account: 3496f40fcd55a91da50ded8abea2cf7a)
+# - DOTENVX_ARMOR_TOKEN (required after apps/api/.production.secrets.vault is configured)
 #
 # Required `production` environment configuration:
 # - PRODUCTION_DATABASE_URL (migration role, protected TCP host, port 5433,
@@ -30,6 +31,11 @@ on:
       - "bun.lock"
       - ".github/workflows/deploy-api.yml"
   workflow_dispatch:
+    inputs:
+      compatible_app_version_id:
+        description: Active relayapi-app version reviewed for identity deletion contract 0005
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -44,11 +50,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          bun-version: latest
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -74,11 +82,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          bun-version: latest
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -96,11 +106,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          bun-version: latest
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -113,9 +125,12 @@ jobs:
         working-directory: apps/docs
         run: bun run docs:check
 
-      - name: Build TypeScript SDK
+      - name: Verify TypeScript SDK package
         working-directory: packages/sdk
-        run: bun run build
+        run: |
+          bun run typecheck
+          bun test
+          bun run test:package
 
       - name: Test n8n contract
         working-directory: packages/integrations/n8n-node
@@ -139,7 +154,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:18-alpine
+        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
         env:
           POSTGRES_DB: relayapi_migration_test
           POSTGRES_PASSWORD: postgres
@@ -154,9 +169,10 @@ jobs:
     env:
       CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: postgresql://postgres:postgres@127.0.0.1:5432/relayapi_migration_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve migration history comparison base
         id: migration_base
@@ -171,9 +187,9 @@ jobs:
           [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
           printf 'sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: "1.3.14"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -199,16 +215,16 @@ jobs:
         run: bun run db:verify-schema-contracts
 
       - name: Apply migrations to a clean database
-        run: bun run db:migrate
+        run: bun run --cwd packages/db migrate
 
       - name: Verify migration replay is idempotent
-        run: bun run db:migrate
+        run: bun run --cwd packages/db migrate
 
       - name: Verify migrated database catalog
-        run: bun run db:verify
+        run: bun run --cwd packages/db verify:migrations
 
       - name: Verify exact applied migration hashes
-        run: bun run db:migration-history:current
+        run: bun run --cwd packages/db migration:history:current
 
   deploy:
     name: Deploy API (migrate only on a reviewed manual run)
@@ -219,11 +235,18 @@ jobs:
     environment:
       name: production
     steps:
-      - uses: actions/checkout@v4
+      - name: Require a protected production branch
+        env:
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: test "$REF_PROTECTED" = "true"
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          bun-version: latest
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -275,7 +298,7 @@ jobs:
             --name "relayapi-db-access-${GITHUB_RUN_ID}" \
             --env TUNNEL_SERVICE_TOKEN_ID \
             --env TUNNEL_SERVICE_TOKEN_SECRET \
-            cloudflare/cloudflared:2026.6.0 \
+            cloudflare/cloudflared:2026.6.0@sha256:ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f \
             access tcp \
             --hostname "$PRODUCTION_DATABASE_HOSTNAME" \
             --url 127.0.0.1:5433 \
@@ -302,6 +325,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Verify live API secrets are safe to converge to vault intent
+        run: bun run secrets:cf:preflight -- api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+
       - name: Verify reviewed migration manifest
         run: bun run db:migration-manifest
 
@@ -312,7 +342,7 @@ jobs:
         run: bun run db:verify-schema-contracts
 
       - name: Verify production migration history preflight
-        run: bun run db:migration-history
+        run: bun run --cwd packages/db migration:history
         env:
           CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
 
@@ -332,42 +362,90 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Apply reviewed production migrations
+      - name: Verify active dashboard supports identity deletion contract 0005
         if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: bun run db:migrate
-        env:
-          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
-
-      - name: Verify production catalog
-        run: bun run db:verify
-        env:
-          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
-
-      - name: Verify production migration hashes are current
-        run: bun run db:migration-history:current
-        env:
-          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
-
-      - name: Deploy API
-        id: deploy_worker
-        run: bunx wrangler deploy --keep-vars --strict --message "GitHub release ${GITHUB_SHA}"
-        working-directory: apps/api
+        run: |
+          set -euo pipefail
+          test -n "${{ inputs.compatible_app_version_id }}"
+          EXPECTED_WORKER_VERSION_ID="${{ inputs.compatible_app_version_id }}" \
+            bun scripts/verify-cloudflare-worker-deployment.ts app
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Capture deployed Worker version
+      - name: Apply reviewed production migrations
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: bun run --cwd packages/db migrate
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: Verify production catalog
+        run: bun run --cwd packages/db verify:migrations
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: Verify production migration hashes are current
+        run: bun run --cwd packages/db migration:history:current
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: Attempt API deploy
+        id: deploy_attempt
+        run: |
+          set -euo pipefail
+          output_file="$RUNNER_TEMP/relayapi-api-deploy.jsonl"
+          : > "$output_file"
+          set +e
+          WRANGLER_OUTPUT_FILE_PATH="$output_file" \
+            bun run secrets:cf:deploy -- api -- \
+              --keep-vars --strict \
+              --tag "${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --message "GitHub release ${GITHUB_SHA} run ${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          deploy_exit_code=$?
+          set -e
+          printf 'exit_code=%s\n' "$deploy_exit_code" >> "$GITHUB_OUTPUT"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+
+      - name: Resolve the active API release after the deploy attempt
         id: deployed_worker
         run: |
           set -euo pipefail
-          version_id="$(bunx wrangler deployments status --json | jq -er '
+          output_version_id="$(jq -sr '
+            [.[] | select(.type == "deploy" and .worker_name == "relayapi") | .version_id]
+            | if length == 0 then ""
+              elif length == 1 and .[0] != null then .[0]
+              else error("expected at most one relayapi deploy event")
+              end
+          ' "$RUNNER_TEMP/relayapi-api-deploy.jsonl")"
+          active_version="$(bunx wrangler deployments status --json | jq -er '
             if (.versions | length) == 1 and .versions[0].percentage == 100
             then .versions[0].version_id
             else error("expected one Worker version at 100% traffic")
             end
           ')"
-          test "$version_id" != "${{ steps.previous_worker.outputs.version_id }}"
-          printf 'version_id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
+          if [ "$active_version" = "${{ steps.previous_worker.outputs.version_id }}" ]; then
+            echo "::error::API deploy attempt did not promote a new Worker version (Wrangler exit ${{ steps.deploy_attempt.outputs.exit_code }})"
+            exit 1
+          fi
+          version_json="$(bunx wrangler versions view "$active_version" --json)"
+          release_tag="$(printf '%s' "$version_json" | jq -er '.annotations["workers/tag"]')"
+          release_message="$(printf '%s' "$version_json" | jq -er '.annotations["workers/message"]')"
+          if [ "$release_tag" != "${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" ] || \
+             [ "$release_message" != "GitHub release ${GITHUB_SHA} run ${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" ]; then
+            echo "::error::Active API version is not the exact release attempted by this job"
+            exit 1
+          fi
+          if [ -n "$output_version_id" ] && [ "$output_version_id" != "$active_version" ]; then
+            echo "::error::Wrangler output disagrees with the active API release"
+            exit 1
+          fi
+          if [ "${{ steps.deploy_attempt.outputs.exit_code }}" != "0" ]; then
+            echo "::warning::Wrangler exited nonzero after promoting the exact tagged API release; continuing with post-deploy verification"
+          fi
+          printf 'version_id=%s\n' "$active_version" >> "$GITHUB_OUTPUT"
         working-directory: apps/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -377,6 +455,16 @@ jobs:
         run: bun run cloudflare:smoke-production
         working-directory: apps/api
 
+      - name: Re-verify API secrets after deploy
+        run: bun run secrets:cf:verify -- api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+
+      - name: Verify API HTTPS edge policy
+        run: bun run edge:verify-production -- api
+
       - name: Verify deployed Cloudflare resources and Worker version
         run: bun run cloudflare:verify-production
         working-directory: apps/api
@@ -385,17 +473,49 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           EXPECTED_WORKER_VERSION_ID: ${{ steps.deployed_worker.outputs.version_id }}
 
-      - name: Roll back Worker after a failed post-deploy gate
+      - name: Roll back API code version and verify non-versioned configuration
         # Push deploys run only after the catalog is already current, so code-only
         # rollback is safe there. A manual run can apply a forward-only migration;
         # restoring old code against that new schema would require compatibility
         # shims we intentionally do not carry, so manual failures need reviewed
         # forward recovery instead of automatic rollback.
-        if: ${{ failure() && github.event_name == 'push' && steps.deploy_worker.outcome == 'success' && steps.previous_worker.outputs.version_id != '' }}
-        run: >-
-          bunx wrangler rollback "${{ steps.previous_worker.outputs.version_id }}"
-          --message "Automated rollback after failed release gate for ${GITHUB_SHA}"
-          --yes
+        if: ${{ failure() && github.event_name == 'push' && steps.previous_worker.outputs.version_id != '' }}
+        run: |
+          set -euo pipefail
+          active_version="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one Worker version at 100% traffic")
+            end
+          ')"
+          if [ "$active_version" = "${{ steps.previous_worker.outputs.version_id }}" ]; then
+            EXPECTED_WORKER_VERSION_ID="$active_version" bun run cloudflare:verify-production
+            echo "API already serves the pre-release version; no rollback is needed"
+            exit 0
+          fi
+          version_json="$(bunx wrangler versions view "$active_version" --json)"
+          release_tag="$(printf '%s' "$version_json" | jq -er '.annotations["workers/tag"]')"
+          if [ "$release_tag" != "${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" ]; then
+            echo "::error::Refusing rollback because the active API version changed after this release"
+            exit 1
+          fi
+          set +e
+          bunx wrangler rollback "${{ steps.previous_worker.outputs.version_id }}" \
+            --message "Automated rollback after failed release gate for ${GITHUB_SHA}" \
+            --yes
+          rollback_exit_code=$?
+          set -e
+          restored_version="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one Worker version at 100% traffic")
+            end
+          ')"
+          if [ "$restored_version" != "${{ steps.previous_worker.outputs.version_id }}" ]; then
+            echo "::error::API rollback did not restore the captured version (Wrangler exit $rollback_exit_code)"
+            exit 1
+          fi
+          EXPECTED_WORKER_VERSION_ID="$restored_version" bun run cloudflare:verify-production
         working-directory: apps/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

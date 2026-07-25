@@ -15,7 +15,6 @@ import {
 	contacts,
 	createDb,
 	generateId,
-	organization,
 	workspaces,
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
@@ -26,6 +25,11 @@ import {
 	enrollContact,
 	runLoop,
 } from "../services/automations/runner";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -44,7 +48,7 @@ let workspaceId = "";
 
 async function seedFixtureOrg() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "runner-test-org",
 		slug: `runner-test-${orgId.slice(-8)}`,
@@ -72,8 +76,8 @@ async function teardownFixtureOrg() {
 		.where(eq(automationContactControls.organizationId, orgId));
 	await db.delete(automations).where(eq(automations.organizationId, orgId));
 	await db.delete(contacts).where(eq(contacts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 async function createAutomation(graph: Graph, channel = "telegram") {
@@ -528,6 +532,7 @@ describe("automation runner", () => {
 				leaseToken: 1,
 				leaseExpiresAt: boundary,
 				requestMayHaveBeenSentAt: boundary,
+				claimedAt: boundary,
 			})
 			.returning();
 		if (!execution) throw new Error("expected node execution");
@@ -543,6 +548,7 @@ describe("automation runner", () => {
 			leaseToken: 1,
 			leaseExpiresAt: boundary,
 			requestMayHaveBeenSentAt: boundary,
+			createdAt: boundary,
 		});
 
 		let handlerCalls = 0;
@@ -614,6 +620,8 @@ describe("automation runner", () => {
 			context: { replayed_context: true },
 			durationMs: 9,
 		};
+		const claimedAt = new Date(Date.now() - 1_000);
+		const completedAt = new Date();
 		const [execution] = await db
 			.insert(automationNodeExecutions)
 			.values({
@@ -627,7 +635,8 @@ describe("automation runner", () => {
 				attempts: 1,
 				leaseToken: 1,
 				result: completion,
-				completedAt: new Date(),
+				claimedAt,
+				completedAt,
 			})
 			.returning();
 		if (!execution) throw new Error("expected node execution");
@@ -642,7 +651,8 @@ describe("automation runner", () => {
 			attempts: 1,
 			leaseToken: 1,
 			result: completion,
-			completedAt: new Date(),
+			createdAt: claimedAt,
+			completedAt,
 		});
 
 		let handlerCalls = 0;

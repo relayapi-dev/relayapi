@@ -31,7 +31,7 @@ import {
 } from "drizzle-orm";
 import { maybeDecrypt, maybeEncrypt } from "../../lib/crypto";
 import type { Env } from "../../types";
-import { enrollContact } from "./runner";
+import { type InboundEvent, matchAndEnroll } from "./trigger-matcher";
 
 export type Db = Database;
 
@@ -47,6 +47,7 @@ export type WebhookReceptionResult =
 	| { status: "unknown_slug" }
 	| { status: "bad_payload"; error: string }
 	| { status: "contact_lookup_failed"; reason?: string }
+	| { status: "enrollment_blocked"; reason: string }
 	| { status: "enrollment_failed"; error: string };
 
 // Max accepted clock skew (seconds) between the caller-supplied
@@ -447,23 +448,34 @@ async function processAcceptedWebhook(
 	}
 
 	try {
-		const { runId } = await enrollContact(db, {
-			automationId: match.automation.id,
-			organizationId: match.automation.organizationId,
-			contactId,
-			conversationId: null,
-			channel: match.automation.channel,
-			entrypointId: match.entrypoint.id,
-			bindingId: null,
-			socialAccountId: match.entrypoint.socialAccountId ?? null,
-			triggerOccurrenceId,
-			contextOverrides,
+		const matched = await matchAndEnroll(
+			db,
+			{
+				kind: "webhook_inbound",
+				channel: match.automation.channel as InboundEvent["channel"],
+				organizationId: match.automation.organizationId,
+				socialAccountId: match.entrypoint.socialAccountId ?? null,
+				contactId,
+				conversationId: null,
+				triggerOccurrenceId,
+				payload: {
+					source: "webhook",
+					entrypoint_id: match.entrypoint.id,
+				},
+			},
 			env,
-			deferRun: true,
-		});
+			{
+				pinnedEntrypointId: match.entrypoint.id,
+				contextOverrides,
+				deferRun: true,
+			},
+		);
+		if (!matched.matched) {
+			return { status: "enrollment_blocked", reason: matched.reason };
+		}
 		return {
 			status: "ok",
-			runId,
+			runId: matched.runId,
 			automationId: match.automation.id,
 		};
 	} catch (err) {
@@ -611,14 +623,13 @@ export async function receiveAutomationWebhook(
 		};
 	}
 
-	const claimNow = new Date();
 	const [claimed] = await db
 		.update(automationWebhookReceipts)
 		.set({
 			status: "processing",
 			attempts: sql`${automationWebhookReceipts.attempts} + 1`,
 			leaseToken: sql`${automationWebhookReceipts.leaseToken} + 1`,
-			leaseExpiresAt: new Date(claimNow.getTime() + WEBHOOK_RECEIPT_LEASE_MS),
+			leaseExpiresAt: sql`CURRENT_TIMESTAMP + (${WEBHOOK_RECEIPT_LEASE_MS} * INTERVAL '1 millisecond')`,
 			lastError: null,
 		})
 		.where(
@@ -627,11 +638,17 @@ export async function receiveAutomationWebhook(
 				or(
 					and(
 						inArray(automationWebhookReceipts.status, ["pending", "failed"]),
-						lte(automationWebhookReceipts.nextAttemptAt, claimNow),
+						lte(
+							automationWebhookReceipts.nextAttemptAt,
+							sql`CURRENT_TIMESTAMP`,
+						),
 					),
 					and(
 						eq(automationWebhookReceipts.status, "processing"),
-						lte(automationWebhookReceipts.leaseExpiresAt, claimNow),
+						lte(
+							automationWebhookReceipts.leaseExpiresAt,
+							sql`CURRENT_TIMESTAMP`,
+						),
 					),
 				),
 			),
@@ -660,14 +677,16 @@ export async function receiveAutomationWebhook(
 			lastError:
 				result.status === "enrollment_failed"
 					? result.error
-					: result.status === "contact_lookup_failed"
-						? (result.reason ?? "contact_lookup_failed")
-						: null,
+					: result.status === "enrollment_blocked"
+						? result.reason
+						: result.status === "contact_lookup_failed"
+							? (result.reason ?? "contact_lookup_failed")
+							: null,
 			nextAttemptAt: retryable
 				? new Date(Date.now() + Math.min(60_000, 2 ** claimed.attempts * 1_000))
 				: claimed.nextAttemptAt,
 			leaseExpiresAt: null,
-			completedAt: retryable ? null : new Date(),
+			completedAt: retryable ? null : sql`CURRENT_TIMESTAMP`,
 		})
 		.where(
 			and(
@@ -689,21 +708,26 @@ export async function reconcileAutomationWebhookReceipts(
 	limit = 25,
 ): Promise<number> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const now = new Date();
 	const candidates = await db
 		.select()
 		.from(automationWebhookReceipts)
 		.where(
 			and(
-				gt(automationWebhookReceipts.expiresAt, now),
+				gt(automationWebhookReceipts.expiresAt, sql`CURRENT_TIMESTAMP`),
 				or(
 					and(
 						inArray(automationWebhookReceipts.status, ["pending", "failed"]),
-						lte(automationWebhookReceipts.nextAttemptAt, now),
+						lte(
+							automationWebhookReceipts.nextAttemptAt,
+							sql`CURRENT_TIMESTAMP`,
+						),
 					),
 					and(
 						eq(automationWebhookReceipts.status, "processing"),
-						lte(automationWebhookReceipts.leaseExpiresAt, now),
+						lte(
+							automationWebhookReceipts.leaseExpiresAt,
+							sql`CURRENT_TIMESTAMP`,
+						),
 					),
 				),
 			),
@@ -713,14 +737,13 @@ export async function reconcileAutomationWebhookReceipts(
 
 	let completed = 0;
 	for (const candidate of candidates) {
-		const claimNow = new Date();
 		const [claimed] = await db
 			.update(automationWebhookReceipts)
 			.set({
 				status: "processing",
 				attempts: sql`${automationWebhookReceipts.attempts} + 1`,
 				leaseToken: sql`${automationWebhookReceipts.leaseToken} + 1`,
-				leaseExpiresAt: new Date(claimNow.getTime() + WEBHOOK_RECEIPT_LEASE_MS),
+				leaseExpiresAt: sql`CURRENT_TIMESTAMP + (${WEBHOOK_RECEIPT_LEASE_MS} * INTERVAL '1 millisecond')`,
 				lastError: null,
 			})
 			.where(
@@ -730,11 +753,17 @@ export async function reconcileAutomationWebhookReceipts(
 					or(
 						and(
 							inArray(automationWebhookReceipts.status, ["pending", "failed"]),
-							lte(automationWebhookReceipts.nextAttemptAt, claimNow),
+							lte(
+								automationWebhookReceipts.nextAttemptAt,
+								sql`CURRENT_TIMESTAMP`,
+							),
 						),
 						and(
 							eq(automationWebhookReceipts.status, "processing"),
-							lte(automationWebhookReceipts.leaseExpiresAt, claimNow),
+							lte(
+								automationWebhookReceipts.leaseExpiresAt,
+								sql`CURRENT_TIMESTAMP`,
+							),
 						),
 					),
 				),
@@ -799,16 +828,18 @@ export async function reconcileAutomationWebhookReceipts(
 				lastError:
 					result.status === "enrollment_failed"
 						? result.error
-						: result.status === "contact_lookup_failed"
-							? (result.reason ?? "contact_lookup_failed")
-							: null,
+						: result.status === "enrollment_blocked"
+							? result.reason
+							: result.status === "contact_lookup_failed"
+								? (result.reason ?? "contact_lookup_failed")
+								: null,
 				nextAttemptAt: retryable
 					? new Date(
 							Date.now() + Math.min(60_000, 2 ** claimed.attempts * 1_000),
 						)
 					: claimed.nextAttemptAt,
 				leaseExpiresAt: null,
-				completedAt: terminal ? new Date() : null,
+				completedAt: terminal ? sql`CURRENT_TIMESTAMP` : null,
 			})
 			.where(
 				and(

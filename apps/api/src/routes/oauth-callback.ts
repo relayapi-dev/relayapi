@@ -2,6 +2,7 @@ import { createDb } from "@relayapi/db";
 import { Hono } from "hono";
 import { parseApiKeyWorkspaceScope } from "../lib/api-key-workspace-scope";
 import { isAllowedCustomerRedirectUrl } from "../lib/customer-redirect";
+import { appPublicOrigin } from "../lib/deployment-mode";
 import { validatePersistedOperationalScope } from "../lib/request-access";
 import { claimOneTimeCapability } from "../services/one-time-capability";
 import type { Env } from "../types";
@@ -69,7 +70,12 @@ app.get("/callback", async (c) => {
 		code_verifier,
 		headless,
 	} = stateData;
-	if (!isAllowedCustomerRedirectUrl(redirect_url)) {
+	if (
+		!isAllowedCustomerRedirectUrl(
+			redirect_url,
+			new URL(appPublicOrigin(c.env)).hostname,
+		)
+	) {
 		return c.text("Invalid redirect target", 400);
 	}
 	const redirectUrl = new URL(redirect_url);

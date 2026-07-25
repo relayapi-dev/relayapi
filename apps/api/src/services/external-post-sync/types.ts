@@ -37,10 +37,18 @@ export interface GenerateExternalPreviewMessage {
 	platform: string;
 }
 
+export interface SyncAutomationBindingMessage {
+	type: "sync_automation_binding";
+	binding_id: string;
+	organization_id: string;
+	revision: number;
+}
+
 export type SyncQueueMessage =
 	| SyncPostsMessage
 	| RefreshMetricsMessage
-	| GenerateExternalPreviewMessage;
+	| GenerateExternalPreviewMessage
+	| SyncAutomationBindingMessage;
 
 // ---------------------------------------------------------------------------
 // Platform fetcher interface

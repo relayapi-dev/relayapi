@@ -21,7 +21,7 @@ export function buildWelcomeFlow(
 							{
 								id: "txt_welcome",
 								type: "text",
-								text: "Hi {{contact.first_name}}! Thanks for reaching out.",
+								text: "Hi {{contact.name}}! Thanks for reaching out.",
 							},
 						],
 					},

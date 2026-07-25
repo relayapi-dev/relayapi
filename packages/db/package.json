@@ -12,7 +12,7 @@
 		"baseline:rebuild:check": "bun run scripts/rebuild-baseline.ts --check",
 		"baseline:sealed:check": "bun run scripts/verify-baseline-sealed.ts",
 		"test:baseline-builder": "bun test scripts/rebuild-baseline.test.ts",
-		"test:migration-contracts": "bun test scripts/migration-history-contract.test.ts scripts/migration-policy-contract.test.ts",
+		"test:migration-contracts": "bun test scripts/migration-history-contract.test.ts scripts/migration-policy-contract.test.ts scripts/verify-migration-append-only.test.ts",
 		"generate": "drizzle-kit generate",
 		"studio": "drizzle-kit studio",
 		"render:baseline-preamble-sql": "bun run scripts/render-baseline-preamble-sql.ts",

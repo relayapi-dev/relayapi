@@ -296,6 +296,8 @@ describe("official publisher contract validation", () => {
 		expect(Date.parse(String(sentBody?.send_at))).toBeGreaterThan(
 			Date.now() + 50_000,
 		);
+		expect(result.provider_outcome?.disposition).toBe("scheduled");
+		expect(result.provider_outcome?.provider_operation_id).toBe("42");
 	});
 
 	it("puts listmonk send_at on campaign creation and only status on transition", async () => {
@@ -324,6 +326,48 @@ describe("official publisher contract validation", () => {
 			headers: [{ "X-Campaign": "relay" }],
 		});
 		expect(bodies[1]).toEqual({ status: "scheduled" });
+		expect(result.provider_outcome?.disposition).toBe("scheduled");
+		expect(result.provider_outcome?.provider_operation_id).toBe("7");
+	});
+
+	it("keeps accepted message jobs nonterminal and preserves partial recipient outcomes", async () => {
+		globalThis.fetch = (async () =>
+			Response.json({
+				messaging_product: "whatsapp",
+				messages: [],
+			})) as unknown as typeof fetch;
+		const whatsapp = await whatsappPublisher.publish(
+			request("whatsapp", { targetOptions: { to: "15551234567" } }),
+		);
+		expect(whatsapp.success).toBe(false);
+		expect(whatsapp.platform_post_id).toBeUndefined();
+		expect(whatsapp.provider_outcome?.disposition).toBe("outcome_unknown");
+
+		let call = 0;
+		globalThis.fetch = (async () => {
+			call++;
+			return call === 1
+				? Response.json({ sid: "SM123", status: "queued" }, { status: 201 })
+				: Response.json(
+						{ code: 21211, message: "Invalid recipient" },
+						{ status: 400 },
+					);
+		}) as unknown as typeof fetch;
+		const sms = await smsPublisher.publish(
+			request("sms", {
+				targetOptions: {
+					from_number: "+15550000000",
+					phone_numbers: ["+15551111111", "+15552222222"],
+				},
+			}),
+		);
+		expect(sms.success).toBe(false);
+		expect(sms.platform_post_id).toBe("SM123");
+		expect(sms.provider_outcome?.disposition).toBe("partial");
+		expect(sms.provider_outcome?.effects).toEqual([
+			expect.objectContaining({ status: "succeeded", provider_id: "SM123" }),
+			expect.objectContaining({ status: "failed" }),
+		]);
 	});
 
 	it("counts Threads emoji by UTF-8 bytes and rejects over-limit text before I/O", async () => {

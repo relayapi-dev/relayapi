@@ -4,6 +4,7 @@ import {
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
 } from "./types";
 
 const GBP_API = "https://mybusiness.googleapis.com/v4";
@@ -59,8 +60,113 @@ const VALID_CTA_TYPES = [
 	"CALL",
 ];
 
+interface GoogleLocalPostResult {
+	name?: string;
+	searchUrl?: string;
+	state?: string;
+}
+
+function googleLocalPostResult(result: GoogleLocalPostResult): PublishResult {
+	const postId = result.name?.trim();
+	if (!postId) {
+		return {
+			success: false,
+			provider_outcome: {
+				disposition: "outcome_unknown",
+				provider_state: result.state ?? "MISSING_NAME",
+			},
+			error: {
+				code: "GOOGLE_BUSINESS_INVALID_SUCCESS_RESPONSE",
+				message:
+					"Google Business Profile accepted the request but omitted the LocalPost resource name.",
+			},
+		};
+	}
+	const common = {
+		provider_operation_id: postId,
+		platform_post_id: postId,
+		platform_url: result.searchUrl,
+		provider_state: result.state ?? "LOCAL_POST_STATE_UNSPECIFIED",
+	};
+	if (result.state === "LIVE" || result.state === "RECURRING") {
+		return {
+			success: true,
+			platform_post_id: postId,
+			platform_url: result.searchUrl,
+			provider_outcome: { disposition: "published", ...common },
+		};
+	}
+	if (result.state === "PROCESSING") {
+		return {
+			success: true,
+			platform_post_id: postId,
+			provider_outcome: { disposition: "processing", ...common },
+		};
+	}
+	if (result.state === "SCHEDULED") {
+		return {
+			success: true,
+			platform_post_id: postId,
+			provider_outcome: { disposition: "scheduled", ...common },
+		};
+	}
+	if (result.state === "REJECTED") {
+		return {
+			success: false,
+			platform_post_id: postId,
+			provider_outcome: { disposition: "failed", ...common },
+			error: {
+				code: "GOOGLE_BUSINESS_POST_REJECTED",
+				message: "Google Business Profile rejected the LocalPost.",
+			},
+		};
+	}
+	return {
+		success: false,
+		platform_post_id: postId,
+		provider_outcome: { disposition: "outcome_unknown", ...common },
+		error: {
+			code: "GOOGLE_BUSINESS_UNKNOWN_STATE",
+			message: `Google Business Profile returned an unrecognized LocalPost state: ${result.state ?? "missing"}.`,
+		},
+	};
+}
+
 export const googleBusinessPublisher: Publisher = {
 	platform: "googlebusiness",
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		const postName = request.platform_post_id ?? request.provider_operation_id;
+		if (!postName) {
+			return {
+				success: false,
+				provider_outcome: { disposition: "outcome_unknown" },
+				error: {
+					code: "MISSING_PROVIDER_OPERATION_ID",
+					message:
+						"Google Business reconciliation requires the LocalPost resource name.",
+				},
+			};
+		}
+		try {
+			const res = await gbpFetch(
+				`${GBP_API}/${postName.replace(/^\/+/, "")}`,
+				request.account.access_token,
+			);
+			if (!res.ok) {
+				const detail = await res.text();
+				throw new PublishError(
+					`Google Business LocalPost lookup failed: ${res.statusText}`,
+					{
+						statusCode: res.status,
+						detail: `HTTP ${res.status}\n${detail}`,
+					},
+				);
+			}
+			return googleLocalPostResult((await res.json()) as GoogleLocalPostResult);
+		} catch (error) {
+			return classifyPublishError(error);
+		}
+	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
@@ -227,21 +333,7 @@ export const googleBusinessPublisher: Publisher = {
 				);
 			}
 
-			const result = (await res.json()) as {
-				name?: string;
-				searchUrl?: string;
-			};
-
-			// The post name is the resource identifier
-			const postId = result.name;
-			// Google Business posts don't have a direct public URL, but searchUrl may be available
-			const platformUrl = result.searchUrl;
-
-			return {
-				success: true,
-				platform_post_id: postId,
-				platform_url: platformUrl,
-			};
+			return googleLocalPostResult((await res.json()) as GoogleLocalPostResult);
 		} catch (err) {
 			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}

@@ -1,4 +1,4 @@
-import type { MessageBlock, QuickReply } from "../../../schemas/automation-graph";
+import type { MessageBlock } from "../../../schemas/automation-graph";
 import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
@@ -6,208 +6,224 @@ type FollowerGrowthConfig = {
 	post_ids?: string[];
 	trigger_keyword?: string;
 	public_reply?: string;
-	dm_message?: { blocks: MessageBlock[]; quick_replies?: QuickReply[] };
+	dm_message?: { blocks: MessageBlock[] };
 	entry_requirements?: {
 		must_tag_friends?: number;
 		must_share_story?: boolean;
 	};
 	winner_tag?: string;
 	social_account_id?: string;
+	daily_cap?: number;
 };
 
 export function buildFollowerGrowth(
 	input: TemplateBuildInput,
 ): TemplateBuildOutput {
+	if (input.channel !== "instagram") {
+		throw new Error("follower_growth is only available for Instagram");
+	}
 	const cfg = (input.config ?? {}) as FollowerGrowthConfig;
 	const socialAccountId = input.socialAccountId ?? cfg.social_account_id;
-	const winnerTag = cfg.winner_tag ?? "contest_winner";
+	const winnerTag = cfg.winner_tag ?? "contest_qualified";
 	const triggerKeyword = cfg.trigger_keyword ?? "enter";
 	const mustTagCount = cfg.entry_requirements?.must_tag_friends ?? 0;
+	const mustShareStory = cfg.entry_requirements?.must_share_story === true;
 	const publicReply = cfg.public_reply?.trim();
+	const rulesBlocks: MessageBlock[] = cfg.dm_message?.blocks?.length
+		? cfg.dm_message.blocks
+		: [
+				{
+					id: "txt_rules",
+					type: "text",
+					text: `Thanks for entering!${
+						mustTagCount > 0
+							? ` Tag at least ${mustTagCount} friend${mustTagCount === 1 ? "" : "s"} in your comment.`
+							: ""
+					}${
+						mustShareStory
+							? " Mention us in a story to complete your entry."
+							: " You're entered."
+					}`,
+				},
+			];
 
-	const rulesBlocks: MessageBlock[] =
-		cfg.dm_message?.blocks && cfg.dm_message.blocks.length > 0
-			? cfg.dm_message.blocks
-			: [
+	const firstNode = publicReply
+		? "public_reply"
+		: mustTagCount > 0
+			? "check_tags"
+			: "private_reply";
+	const afterPrivateReply = mustShareStory
+		? "wait_for_story"
+		: "mark_qualified";
+	const nodes: TemplateBuildOutput["graph"]["nodes"] = [
+		...(publicReply
+			? [
 					{
-						id: "txt_rules",
-						type: "text",
-						text: `Welcome to the contest! To qualify${
-							mustTagCount > 0
-								? `, tag at least ${mustTagCount} friend${mustTagCount === 1 ? "" : "s"} in the original post`
-								: ""
-						}${
-							cfg.entry_requirements?.must_share_story
-								? " and share this to your story"
-								: ""
-						}.`,
+						key: "public_reply",
+						kind: "action_group",
+						title: "Reply publicly",
+						config: {
+							actions: [
+								{
+									id: "act_public_reply",
+									type: "reply_to_comment",
+									text: publicReply,
+									on_error: "continue",
+								},
+							],
+						},
+						ports: [],
 					},
-				];
+				]
+			: []),
+		...(mustTagCount > 0
+			? [
+					{
+						key: "check_tags",
+						kind: "condition",
+						title: "Enough friends tagged?",
+						config: {
+							predicates: {
+								all: [
+									{
+										field: "state.triggerEvent.payload.mention_count",
+										op: "gte",
+										value: mustTagCount,
+									},
+								],
+							},
+						},
+						ports: [],
+					},
+				]
+			: []),
+		{
+			key: "private_reply",
+			kind: "message",
+			title: "Send contest private reply",
+			config: { blocks: rulesBlocks, delivery: "comment_private_reply" },
+			ports: [],
+		},
+		...(mustShareStory
+			? [
+					{
+						key: "wait_for_story",
+						kind: "wait_event",
+						title: "Wait for story mention",
+						config: { event_kinds: ["story_mention"], timeout_min: 10_080 },
+						ports: [],
+					},
+				]
+			: []),
+		{
+			key: "mark_qualified",
+			kind: "action_group",
+			title: "Mark qualified",
+			config: {
+				actions: [
+					{
+						id: "act_tag_qualified",
+						type: "tag_add",
+						tag: winnerTag,
+						on_error: "abort",
+					},
+				],
+			},
+			ports: [],
+		},
+		{
+			key: "done",
+			kind: "end",
+			title: "Qualified",
+			config: { reason: "contest_qualified" },
+			ports: [],
+		},
+		{
+			key: "incomplete",
+			kind: "end",
+			title: "Requirements not met",
+			config: { reason: "contest_requirements_not_met" },
+			ports: [],
+		},
+	];
 
-	// Predicate — the public comment's friend-tag count (sourced from the
-	// entrypoint payload) meets the contest rule.
-	const qualifyPredicates = {
-		all: [
-			...(mustTagCount > 0
-				? [
-						{
-							field: "state.mention_count",
-							op: "gte",
-							value: mustTagCount,
-						},
-					]
-				: []),
-			...(cfg.entry_requirements?.must_share_story
-				? [
-						{
-							field: "state.shared_to_story",
-							op: "eq",
-							value: true,
-						},
-					]
-				: []),
-		],
-	};
+	const edges: TemplateBuildOutput["graph"]["edges"] = [
+		...(publicReply
+			? [
+					{
+						from_node: "public_reply",
+						from_port: "next",
+						to_node: mustTagCount > 0 ? "check_tags" : "private_reply",
+						to_port: "in",
+					},
+				]
+			: []),
+		...(mustTagCount > 0
+			? [
+					{
+						from_node: "check_tags",
+						from_port: "true",
+						to_node: "private_reply",
+						to_port: "in",
+					},
+					{
+						from_node: "check_tags",
+						from_port: "false",
+						to_node: "incomplete",
+						to_port: "in",
+					},
+				]
+			: []),
+		{
+			from_node: "private_reply",
+			from_port: "next",
+			to_node: afterPrivateReply,
+			to_port: "in",
+		},
+		...(mustShareStory
+			? [
+					{
+						from_node: "wait_for_story",
+						from_port: "received",
+						to_node: "mark_qualified",
+						to_port: "in",
+					},
+					{
+						from_node: "wait_for_story",
+						from_port: "timeout",
+						to_node: "incomplete",
+						to_port: "in",
+					},
+				]
+			: []),
+		{
+			from_node: "mark_qualified",
+			from_port: "next",
+			to_node: "done",
+			to_port: "in",
+		},
+	];
 
 	return {
 		name: "Follower growth contest",
 		description:
-			"Matches contest comments on the selected posts. Confirms winners via DM.",
+			"Qualifies Instagram contest comments and optionally waits for a story mention as proof.",
 		graph: autoLayoutGraph({
 			schema_version: 1,
-			root_node_key: publicReply ? "public_reply" : "rules",
-			nodes: [
-				...(publicReply
-					? [
-							{
-								key: "public_reply",
-								kind: "action_group",
-								title: "Reply publicly",
-								config: {
-									actions: [
-										{
-											id: "act_public_reply",
-											type: "reply_to_comment",
-											text: publicReply,
-											on_error: "continue",
-										},
-									],
-								},
-								ports: [],
-							},
-						]
-					: []),
-				{
-					key: "rules",
-					kind: "message",
-					title: "Explain contest rules",
-					config: {
-						blocks: rulesBlocks,
-						quick_replies: cfg.dm_message?.quick_replies,
-					},
-					ports: [],
-				},
-				{
-					key: "check",
-					kind: "condition",
-					title: "Does the entry qualify?",
-					config: { predicates: qualifyPredicates },
-					ports: [],
-				},
-				{
-					key: "mark_winner",
-					kind: "action_group",
-					title: "Tag as winner",
-					config: {
-						actions: [
-							{
-								id: "act_tag_winner",
-								type: "tag_add",
-								tag: winnerTag,
-								on_error: "continue",
-							},
-						],
-					},
-					ports: [],
-				},
-				{
-					key: "winner_dm",
-					kind: "message",
-					title: "Congrats DM",
-					config: {
-						blocks: [
-							{
-								id: "txt_winner",
-								type: "text",
-								text: "Congratulations — you're qualified for the contest!",
-							},
-						],
-					},
-					ports: [],
-				},
-				{
-					key: "reminder_dm",
-					kind: "message",
-					title: "Entry reminder",
-					config: {
-						blocks: [
-							{
-								id: "txt_reminder",
-								type: "text",
-								text: "Thanks for entering! You haven't met the entry rules yet — check the rules above and try again.",
-							},
-						],
-					},
-					ports: [],
-				},
-			],
-			edges: [
-				...(publicReply
-					? [
-							{
-								from_node: "public_reply",
-								from_port: "next",
-								to_node: "rules",
-								to_port: "in",
-							},
-						]
-					: []),
-				{
-					from_node: "rules",
-					from_port: "next",
-					to_node: "check",
-					to_port: "in",
-				},
-				{
-					from_node: "check",
-					from_port: "true",
-					to_node: "mark_winner",
-					to_port: "in",
-				},
-				{
-					from_node: "mark_winner",
-					from_port: "next",
-					to_node: "winner_dm",
-					to_port: "in",
-				},
-				{
-					from_node: "check",
-					from_port: "false",
-					to_node: "reminder_dm",
-					to_port: "in",
-				},
-			],
+			root_node_key: firstNode,
+			nodes,
+			edges,
 		}),
 		entrypoints: [
 			{
 				kind: "comment_created",
 				config: {
-					post_ids: Array.isArray(cfg.post_ids) ? cfg.post_ids : null,
-					// Entrypoint key is `keywords` — matcher reads config.keywords
-					// (trigger-matcher.ts:190).
+					post_ids: cfg.post_ids?.length ? cfg.post_ids : null,
 					keywords: [triggerKeyword],
+					include_replies: false,
 				},
 				socialAccountId: socialAccountId ?? null,
+				dailyCap: cfg.daily_cap ?? null,
 			},
 		],
 	};

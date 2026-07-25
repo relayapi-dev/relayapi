@@ -53,6 +53,7 @@ import {
 	CornerDownRight,
 	GitBranch,
 	Globe,
+	Hourglass,
 	LayoutGrid,
 	Link2,
 	MessageSquare,
@@ -61,6 +62,7 @@ import {
 	RefreshCw,
 	Shuffle,
 	StopCircle,
+	UserCheck,
 	Zap,
 	ZoomIn,
 	ZoomOut,
@@ -125,6 +127,7 @@ export interface AutomationEntrypoint {
 	filters: Record<string, unknown> | null;
 	allow_reentry: boolean;
 	reentry_cooldown_min: number;
+	daily_cap: number | null;
 	priority: number;
 	specificity: number;
 	created_at: string;
@@ -301,6 +304,8 @@ const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 	start_automation: CornerDownRight,
 	goto: CornerDownRight,
 	end: StopCircle,
+	wait_event: Hourglass,
+	social_profile_check: UserCheck,
 };
 
 // Manychat-style operation labels shown in bold at the top of each card.
@@ -317,6 +322,8 @@ const NODE_OPERATION_LABELS: Record<string, string> = {
 	start_automation: "Start Automation",
 	goto: "Go To",
 	end: "End",
+	wait_event: "Wait for Event",
+	social_profile_check: "Check Follow Status",
 };
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -446,6 +453,25 @@ function nodePreview(node: AutomationNode): string | null {
 		return null;
 	}
 
+	if (kind === "wait_event") {
+		const kinds = Array.isArray(config.event_kinds)
+			? config.event_kinds.filter(
+					(value): value is string => typeof value === "string",
+				)
+			: [];
+		const timeout =
+			typeof config.timeout_min === "number"
+				? ` · ${config.timeout_min} min timeout`
+				: "";
+		return kinds.length > 0
+			? `Wait for ${kinds.map((value) => titleize(value)).join(", ")}${timeout}`
+			: "Select an event";
+	}
+
+	if (kind === "social_profile_check") {
+		return "Is this Instagram user following the business?";
+	}
+
 	if (kind === "input") {
 		const field =
 			typeof config.field === "string"
@@ -489,7 +515,7 @@ function nodePreview(node: AutomationNode): string | null {
 	}
 
 	if (kind === "randomizer") {
-		const branches = Array.isArray(config.branches) ? config.branches : [];
+		const branches = Array.isArray(config.variants) ? config.variants : [];
 		if (branches.length > 0) {
 			return `${branches.length} branch${branches.length === 1 ? "" : "es"}`;
 		}
@@ -497,7 +523,9 @@ function nodePreview(node: AutomationNode): string | null {
 	}
 
 	if (kind === "end") {
-		return null;
+		return typeof config.reason === "string" && config.reason
+			? `Exit: ${config.reason}`
+			: null;
 	}
 
 	// Generic fallback: first string-valued config field.
@@ -670,7 +698,6 @@ const ENTRYPOINT_KIND_LABELS: Record<string, string> = {
 	ad_click: "User clicks your Ad",
 	ref_link_click: "User clicks a referral link",
 	share_to_dm: "User shares to DM",
-	follow: "User follows your account",
 	schedule: "Scheduled time",
 	field_changed: "Contact field changed",
 	tag_applied: "Tag applied to contact",

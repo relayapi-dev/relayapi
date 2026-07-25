@@ -1,4 +1,4 @@
-import { FileText, Loader2, MessageCircle, Settings } from "lucide-react";
+import { FileText, Loader2, Settings } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
 import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
@@ -33,16 +33,8 @@ interface WaTemplate {
 	created_at: string;
 }
 
-interface WaGroup {
-	id: string;
-	name: string;
-	member_count: number;
-	created_at: string;
-}
-
 const tabs = [
 	{ value: "templates", label: "Templates", icon: FileText },
-	{ value: "groups", label: "Groups", icon: MessageCircle },
 	{ value: "settings", label: "Settings", icon: Settings },
 ] as const;
 
@@ -59,7 +51,7 @@ const statusColors: Record<string, string> = {
 export function WhatsAppPage({
 	initialTab = "templates",
 }: {
-	initialTab?: "templates" | "groups" | "settings";
+	initialTab?: "templates" | "settings";
 } = {}) {
 	const filterQuery = useFilterQuery();
 	const [activeTab, setActiveTab] = useState(initialTab);
@@ -83,19 +75,7 @@ export function WhatsAppPage({
 		{ query: filterQuery },
 	);
 
-	const {
-		data: groups,
-		loading: groupsLoading,
-		error: groupsError,
-		hasMore: groupsHasMore,
-		loadMore: groupsLoadMore,
-		loadingMore: groupsLoadingMore,
-	} = usePaginatedApi<WaGroup>(
-		activeTab === "groups" ? "whatsapp/groups" : null,
-		{ query: filterQuery },
-	);
-
-	const activeError = templatesError || groupsError;
+	const activeError = templatesError;
 
 	return (
 		<div className="space-y-5 pb-16">
@@ -204,66 +184,6 @@ export function WhatsAppPage({
 							loading={templatesLoadingMore}
 							onLoadMore={templatesLoadMore}
 							count={templates.length}
-						/>
-					</>
-				))}
-
-			{/* Groups tab */}
-			{activeTab === "groups" &&
-				(groupsLoading ? (
-					<div className="flex items-center justify-center py-20">
-						<Loader2 className="size-5 animate-spin text-muted-foreground" />
-					</div>
-				) : groups.length === 0 ? (
-					<div className="rounded-[12px] border border-dashed border-border p-12 text-center">
-						<MessageCircle className="size-8 text-muted-foreground/40 mx-auto mb-2" />
-						<p className="text-sm text-muted-foreground">No groups</p>
-						<p className="text-xs text-muted-foreground mt-1">
-							WhatsApp groups linked to your account will appear here
-						</p>
-					</div>
-				) : (
-					<>
-						<motion.div
-							className="space-y-3"
-							variants={stagger}
-							initial="hidden"
-							animate="visible"
-						>
-							{groups.map((group) => (
-								<motion.div
-									key={group.id}
-									variants={fadeUp}
-									className="rounded-[12px] border border-border bg-card p-5 hover:bg-accent/20 transition-colors"
-								>
-									<div className="flex items-center justify-between">
-										<div className="flex items-center gap-3">
-											<div className="rounded-md bg-success/10 p-1.5">
-												<MessageCircle className="size-4 text-success" />
-											</div>
-											<div>
-												<h3 className="text-sm font-medium">{group.name}</h3>
-												<p className="text-xs text-muted-foreground">
-													{group.member_count} member
-													{group.member_count !== 1 ? "s" : ""}
-												</p>
-											</div>
-										</div>
-										<span className="text-xs text-muted-foreground">
-											{new Date(group.created_at).toLocaleDateString("en-US", {
-												month: "short",
-												day: "numeric",
-											})}
-										</span>
-									</div>
-								</motion.div>
-							))}
-						</motion.div>
-						<LoadMore
-							hasMore={groupsHasMore}
-							loading={groupsLoadingMore}
-							onLoadMore={groupsLoadMore}
-							count={groups.length}
 						/>
 					</>
 				))}

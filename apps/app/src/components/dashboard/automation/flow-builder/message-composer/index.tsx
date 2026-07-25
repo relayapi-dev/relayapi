@@ -11,29 +11,29 @@
 // returns a *new* config object. The parent (PropertyPanel / graph store) is
 // responsible for persisting it.
 
-import { useMemo, useState } from "react";
 import { Eye, EyeOff, Plus } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
+	type BlockType,
 	channelDisplayName,
 	channelSupportsBlock,
 	channelSupportsButtons,
 	channelSupportsQuickReplies,
-	type BlockType,
 } from "../channel-capabilities";
 import type { AutomationNode } from "../graph-types";
-import { useAutomationCatalog, type ChannelCapabilities } from "../use-catalog";
-import { BlockList } from "./block-list";
+import { type ChannelCapabilities, useAutomationCatalog } from "../use-catalog";
 import { blockLabel } from "./block-editors";
+import { BlockList } from "./block-list";
 import { Preview } from "./preview";
 import { QuickReplyEditor } from "./quick-reply-editor";
 import {
 	hasInteractiveElements,
-	newBlock,
 	type MessageBlock,
 	type MessageBlockType,
 	type MessageConfig,
+	newBlock,
 	type QuickReply,
 } from "./types";
 
@@ -254,7 +254,7 @@ function MessageSettings({
 	interactive: boolean;
 	onChange(patch: Partial<MessageConfig>): void;
 }) {
-	const waitForReply = interactive ? true : config.wait_for_reply ?? false;
+	const waitForReply = interactive ? true : (config.wait_for_reply ?? false);
 	const timeout = config.no_response_timeout_min;
 	const typingDelay = config.typing_indicator_seconds ?? 0;
 
@@ -295,13 +295,13 @@ function MessageSettings({
 					<input
 						id="mc-no-response-timeout"
 						type="number"
-						min={0}
+						min={1}
 						value={timeout ?? ""}
 						onChange={(e) => {
 							const v = e.target.value;
 							onChange({
 								no_response_timeout_min:
-									v === "" ? undefined : Math.max(0, Number(v)),
+									v === "" ? undefined : Math.max(1, Number(v)),
 							});
 						}}
 						className="h-9 w-full rounded-lg border border-[#d9dde6] bg-white px-3 text-[12px]"

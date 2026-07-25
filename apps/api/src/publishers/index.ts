@@ -57,9 +57,13 @@ export function isSupportedPlatform(platform: Platform): boolean {
 export type {
 	EngagementAccount,
 	EngagementActionResult,
+	ProviderDisposition,
+	ProviderEffect,
+	ProviderOutcome,
 	PublishErrorCode,
 	Publisher,
 	PublishRequest,
 	PublishResult,
+	ReconcileRequest,
 } from "./types";
 export { classifyPublishError } from "./types";

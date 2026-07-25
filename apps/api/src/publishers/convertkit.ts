@@ -4,6 +4,7 @@ import {
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
 } from "./types";
 
 /**
@@ -30,6 +31,86 @@ function wrapInHtml(text: string): string {
 
 export const convertkitPublisher: Publisher = {
 	platform: "convertkit",
+
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		try {
+			const broadcastId =
+				request.platform_post_id ?? request.provider_operation_id;
+			if (!broadcastId || !request.account.access_token) {
+				throw new Error(
+					"CONTENT_ERROR: Kit reconciliation requires a broadcast ID and API key.",
+				);
+			}
+			// Official docs: https://developers.kit.com/api-reference/broadcasts/get-stats-for-a-broadcast
+			// GET /v4/broadcasts/{broadcast_id}/stats returns `stats.status` and
+			// send progress without creating or updating the broadcast.
+			const response = await fetch(
+				`${KIT_API}/broadcasts/${encodeURIComponent(broadcastId)}/stats`,
+				{
+					headers: { "X-Kit-Api-Key": request.account.access_token },
+				},
+			);
+			if (!response.ok) {
+				const body = await response.text();
+				throw new PublishError(
+					`Kit broadcast status failed (${response.status})`,
+					{ statusCode: response.status, detail: body },
+				);
+			}
+			const data = (await response.json()) as {
+				broadcast?: {
+					id?: number;
+					stats?: { status?: string; progress?: number };
+				};
+			};
+			const id = data.broadcast?.id?.toString() ?? broadcastId;
+			const status = data.broadcast?.stats?.status?.toLowerCase() ?? "unknown";
+			const shared = {
+				provider_operation_id: id,
+				platform_post_id: id,
+				provider_state: status,
+			};
+			if (["sent", "finished", "completed"].includes(status)) {
+				return {
+					success: true,
+					platform_post_id: id,
+					provider_outcome: { disposition: "sent", ...shared },
+				};
+			}
+			if (status === "sending") {
+				return {
+					success: true,
+					platform_post_id: id,
+					provider_outcome: { disposition: "processing", ...shared },
+				};
+			}
+			if (status === "scheduled") {
+				return {
+					success: true,
+					platform_post_id: id,
+					provider_outcome: { disposition: "scheduled", ...shared },
+				};
+			}
+			if (status === "draft") {
+				return {
+					success: true,
+					platform_post_id: id,
+					provider_outcome: { disposition: "accepted", ...shared },
+				};
+			}
+			return {
+				success: false,
+				platform_post_id: id,
+				provider_outcome: { disposition: "outcome_unknown", ...shared },
+				error: {
+					code: "PUBLISH_OUTCOME_UNKNOWN",
+					message: `Kit returned an unrecognized broadcast status: ${status}`,
+				},
+			};
+		} catch (err) {
+			return classifyPublishError(err);
+		}
+	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
@@ -123,19 +204,34 @@ export const convertkitPublisher: Publisher = {
 
 			const created = (await createRes.json()) as {
 				// Official response schema, field `broadcast.public_url`.
-				broadcast?: { id?: number; public_url?: string | null };
+				broadcast?: {
+					id?: number;
+					public_url?: string | null;
+					status?: string;
+					send_at?: string | null;
+				};
 			};
 			const broadcastId = created.broadcast?.id;
 			if (!broadcastId) {
 				throw new Error("Kit: No broadcast ID returned");
 			}
 
+			const platformUrl =
+				created.broadcast?.public_url ??
+				`https://app.kit.com/broadcasts/${broadcastId}`;
 			return {
 				success: true,
 				platform_post_id: String(broadcastId),
-				platform_url:
-					created.broadcast?.public_url ??
-					`https://app.kit.com/broadcasts/${broadcastId}`,
+				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: "scheduled",
+					provider_operation_id: String(broadcastId),
+					platform_post_id: String(broadcastId),
+					platform_url: platformUrl,
+					provider_state: created.broadcast?.status ?? "scheduled",
+					next_reconcile_at:
+						created.broadcast?.send_at ?? String(createBody.send_at),
+				},
 			};
 		} catch (err) {
 			return classifyPublishError(err, { safeToRetryRateLimit: true });

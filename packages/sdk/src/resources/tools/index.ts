@@ -5,7 +5,20 @@ export {
   type InstagramCheckHashtagSafetyResponse,
   type InstagramCheckHashtagSafetyParams,
 } from './instagram';
-export { Tools } from './tools';
+export {
+  Tools,
+  type ToolsDownloadPlatform,
+  type ToolsResolveLinkedInMentionParams,
+  type ToolsResolveLinkedInMentionResponse,
+  type ToolsDownloadParams,
+  type ToolsJobAcceptedResponse,
+  type ToolsDownloadResult,
+  type ToolsDownloadResponse,
+  type ToolsYoutubeTranscriptParams,
+  type ToolsYoutubeTranscriptResult,
+  type ToolsYoutubeTranscriptResponse,
+  type ToolsJobStatusResponse,
+} from './tools';
 export {
   Validate,
   type ValidateCheckPostLengthResponse,

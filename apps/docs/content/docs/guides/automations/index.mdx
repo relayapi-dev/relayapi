@@ -16,7 +16,7 @@ An automation has four moving parts:
 
 1. **Graph** — the flow itself. Stored as a single JSONB document on the automation row (`nodes`, `edges`, `root_node_key`). Nodes have typed input and output **ports**; edges connect one node's output port to another node's input port. No label fallbacks, no implicit wiring — if a port has no outgoing edge, the run ends there.
 2. **Entrypoints** — the events that start a run. A flow can have multiple entrypoints (several keywords, a DM kind, a webhook) and the matcher picks the most specific one on each event.
-3. **Bindings** — channel-surface attachments on a social account. There are five: `default_reply`, `welcome_message`, `conversation_starter`, `main_menu`, and `ice_breaker`. Bindings run a flow when an entrypoint doesn't match.
+3. **Bindings** — runtime or provider-profile attachments on a social account: `default_reply`, `welcome_message`, Facebook Get Started, Instagram/Facebook persistent menus, and Instagram ice breakers.
 4. **Runs** — execution instances. One row per enrolled contact per flow, with append-only per-node logs in `automation_step_runs` for inspection.
 
 ## Edges are port-based
@@ -48,7 +48,7 @@ The fastest path is a template. One POST creates the flow, generates the graph, 
 
 ```bash
 curl -X POST https://api.relayapi.dev/v1/automations \
-  -H "Authorization: Bearer rlay_live_..." \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Link-in-bio giveaway",
@@ -57,9 +57,9 @@ curl -X POST https://api.relayapi.dev/v1/automations \
       "kind": "comment_to_dm",
       "config": {
         "post_ids": ["17895..."],
-        "keywords": ["link", "giveaway"],
+        "keyword_filter": ["link", "giveaway"],
         "public_reply": "Sent!",
-        "dm_message": { "blocks": [{ "id": "b1", "type": "text", "text": "Here you go, {{contact.first_name}}!" }] },
+        "dm_message": { "blocks": [{ "id": "b1", "type": "text", "text": "Here you go, {{contact.name}}!" }] },
         "once_per_user": true
       }
     }
@@ -90,7 +90,7 @@ PUT /v1/automations/{id}/graph
         "key": "greet",
         "kind": "message",
         "config": {
-          "blocks": [{ "id": "b1", "type": "text", "text": "Hey {{contact.first_name}}! Want my free guide?" }],
+          "blocks": [{ "id": "b1", "type": "text", "text": "Hey {{contact.name}}! Want my free guide?" }],
           "wait_for_reply": false
         },
         "ports": []
@@ -98,7 +98,7 @@ PUT /v1/automations/{id}/graph
       {
         "key": "ask_email",
         "kind": "input",
-        "config": { "prompt": "Drop your email and I'll send it over.", "input_type": "email", "save_to_field": "email" },
+        "config": { "field": "email", "input_type": "email", "max_retries": 2, "timeout_min": 60 },
         "ports": []
       }
     ],
@@ -120,24 +120,24 @@ On save, the server derives each node's `ports` array, runs the validator, and s
 
 ## Merge tags
 
-Text blocks, button labels, input prompts, and webhook bodies all support `{{...}}` substitution:
+Message text/captions, button labels, HTTP request fields, and selected action values support `{{...}}` substitution:
 
-- `{{contact.first_name}}`, `{{contact.email}}`, `{{contact.phone}}`, `{{contact.custom_fields.<slug>}}`
-- `{{context.<key>}}` — values captured earlier in the same run (input replies, HTTP response extracts, webhook payload mappings)
-- `{{run.id}}`, `{{run.started_at}}`
-- `{{account.name}}`, `{{account.handle}}`
+- `{{contact.name}}`, `{{contact.email}}`, `{{contact.phone}}`
+- `{{context.<key>}}` — values captured earlier in the run, including input fields and webhook mappings
+- `{{context.fields.<slug>}}` — a hydrated contact custom-field value
+- `{{state.<key>}}` — compatibility alias for the same run context
+- `{{name}}` — shorthand for `{{contact.name}}`
 
-Unknown paths surface as warnings at save time; unresolved tags at runtime render as an empty string.
+Unresolved paths render as an empty string.
 
 ## Availability notes
 
 - **AI nodes** — dropped from v1. `ai_step`, `ai_agent`, and `ai_intent_router` are archived and will return in a later release.
-- **Stubbed bindings** — `conversation_starter`, `main_menu`, and `ice_breaker` are stored and configurable in the UI in v1 but do not yet push to the platform. Platform sync lands in v1.1.
 - **Broadcasts** are a separate system and are not part of automations.
 
 ## Related
 
-- [Nodes](./nodes) — the 10 node kinds, ports, config shapes, action catalog.
+- [Nodes](./nodes) — the 12 node kinds, ports, config shapes, and action catalog.
 - [Triggers](./triggers) — entrypoint kinds, bindings, conflict resolution, webhook entrypoints.
 - [Runs](./runs) — run lifecycle, step-run inspection, stopping a run.
 - [Templates](./templates) — the 8 starter templates and their config shapes.

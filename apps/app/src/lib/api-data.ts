@@ -1,4 +1,3 @@
-
 export interface ApiData {
 	slug: string;
 	name: string;
@@ -160,7 +159,7 @@ print(post["id"], post["status"])`,
 			{
 				question: "What media formats are supported for posts?",
 				answer:
-					"Images: JPEG, PNG, WebP, GIF (up to 20 MB). Videos: MP4, MOV, WebM (up to 500 MB). RelayAPI automatically converts and resizes media to meet each platform's requirements, so you only need to upload once.",
+					"RelayAPI's media upload API accepts the documented image, video, audio, and PDF MIME types up to 50 MiB. Posts attach media objects with an HTTP(S) URL and optional image, video, GIF, or document type. Platforms can impose stricter limits, and RelayAPI does not promise automatic conversion or resizing.",
 			},
 			{
 				question:
@@ -183,144 +182,166 @@ print(post["id"], post["status"])`,
 		name: "Media API",
 		heroTitle: "Media API for Developers",
 		heroDescription:
-			"Upload, optimize, and manage media files for social publishing. Automatic format conversion and platform-specific optimization.",
+			"Upload and manage media for social publishing through durable direct or pre-signed upload flows.",
 		features: [
 			{
-				title: "Direct File Upload",
+				title: "Pre-Signed Direct Uploads",
 				description:
-					"Upload images and videos directly via multipart form data. Receive a stable media ID you can reference in any number of future posts across all platforms.",
+					"Create a pending upload intent, PUT bytes directly to R2, then confirm the object. The API returns an intent ID and a canonical URL for post media objects.",
 			},
 			{
-				title: "URL-Based Upload",
+				title: "Raw-Body Uploads",
 				description:
-					"Pass a public URL and RelayAPI fetches, validates, and stores the file for you. Ideal for pulling assets from your CMS, DAM, or CDN without an extra download step.",
+					"Send raw file bytes to the authenticated upload endpoint with a filename query parameter and the file's actual Content-Type.",
 			},
 			{
-				title: "Automatic Resizing & Optimization",
+				title: "Strict Upload Validation",
 				description:
-					"Every upload is automatically resized and compressed to meet each target platform's requirements — Instagram's square crops, Twitter's aspect ratios, LinkedIn's resolution limits — all handled server-side.",
+					"Reject unsupported MIME types, empty bodies, and files over 50 MiB. Confirmation checks the stored object's actual size and Content-Type.",
 			},
 			{
-				title: "Format Conversion",
+				title: "Durable Upload Intents",
 				description:
-					"Upload in any common format and RelayAPI converts as needed. WebP to JPEG for platforms that don't support it, MOV to MP4 for broader compatibility, and animated GIF to video where required.",
+					"The database intent is written before object storage. Background reconciliation can finish accepted uploads after an interrupted request or event delivery.",
 			},
 			{
-				title: "Thumbnail Generation",
+				title: "Durable Preview Thumbnails",
 				description:
-					"Video uploads automatically generate multiple thumbnail options at key frames. Select a thumbnail via the API or let the platform choose the best one.",
+					"Off-request processing creates compact AVIF previews for images and video poster frames. Preview URLs remain available after original-file lifecycle deletion.",
 			},
 			{
 				title: "Media Library Management",
 				description:
-					"Browse, search, tag, and organize all uploaded media through the API. Filter by type, upload date, usage status, or custom tags to keep your asset library under control.",
+					"List ready media with cursor pagination, retrieve details by ID, and delete items not referenced by a draft, scheduled, or publishing post.",
 			},
 			{
-				title: "Global CDN Delivery",
+				title: "Workspace-Aware Access",
 				description:
-					"All media is served from Cloudflare's global CDN with edge caching across 300+ locations. Your assets load fast regardless of where your audience is.",
+					"Associate uploads with an optional workspace. Organization, workspace-grant, and active-post checks protect reads and deletion.",
 			},
 			{
-				title: "Metadata Extraction",
+				title: "Private Original Delivery",
 				description:
-					"Automatically extract EXIF data, dimensions, duration, codec information, and color profiles. Use metadata to build smart media selectors or audit your library.",
+					"Canonical Relay media URLs are resolved to short-lived signed reads when the API or publisher needs the private original.",
 			},
 		],
 		benefits: [
 			{
-				title: "One Upload Endpoint, Every Format",
+				title: "Bytes Bypass the API Worker",
 				description:
-					"Building a media pipeline that handles format conversion, resizing for 21 platforms, and CDN delivery is a massive undertaking. RelayAPI gives you all of it through a single upload endpoint.",
+					"The pre-signed path sends file bytes directly to R2 while RelayAPI retains an auditable pending-to-ready media record.",
 			},
 			{
-				title: "Enterprise-Grade Reliability",
+				title: "Recoverable State Transitions",
 				description:
-					"Media is stored on Cloudflare R2 with 99.999999999% durability and served from a global CDN with 99.9% uptime. Your files are safe and always accessible.",
+					"Durable intents, object events, and scheduled reconciliation make upload completion and cleanup retryable instead of relying on one request finishing perfectly.",
 			},
 			{
 				title: "Developer-First Experience",
 				description:
-					"Simple multipart upload, presigned URL support, comprehensive SDKs, and detailed API docs. Handle media in your app the way it should work — without fighting platform quirks.",
+					"Typed presign and confirmation methods, a raw-body fallback, explicit MIME rules, and OpenAPI documentation make the lifecycle unambiguous.",
 			},
 		],
 		codeExamples: [
 			{
 				language: "bash",
 				label: "cURL",
-				code: `curl -X POST https://api.relayapi.dev/v1/media \\
-  -H "Authorization: Bearer rlay_live_xxxxxxxx" \\
-  -F "file=@./product-hero.png" \\
-  -F "alt_text=Product hero image showing the new dashboard" \\
-  -F "tags=product,launch,2026"`,
+				code: `presign="$(curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/media/presign \\
+  -H "Authorization: Bearer $RELAYAPI_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"filename":"product-hero.png","content_type":"image/png"}')"
+
+upload_url="$(printf '%s' "$presign" | jq -r '.upload_url')"
+upload_content_type="$(printf '%s' "$presign" | jq -r '.upload_headers["Content-Type"]')"
+upload_precondition="$(printf '%s' "$presign" | jq -r '.upload_headers["If-None-Match"]')"
+media_url="$(printf '%s' "$presign" | jq -r '.url')"
+storage_key="$(printf '%s' "$media_url" | sed 's#^https://media.relayapi.dev/##')"
+
+curl --fail-with-body -X PUT "$upload_url" \\
+  -H "Content-Type: $upload_content_type" \\
+  -H "If-None-Match: $upload_precondition" \\
+  --data-binary @product-hero.png
+
+jq -n --arg storage_key "$storage_key" '{storage_key: $storage_key}' | \\
+  curl --fail-with-body -X POST https://api.relayapi.dev/v1/media/confirm \\
+    -H "Authorization: Bearer $RELAYAPI_API_KEY" \\
+    -H "Content-Type: application/json" \\
+    --data-binary @-`,
 			},
 			{
 				language: "typescript",
 				label: "TypeScript",
-				code: `const formData = new FormData();
-formData.append("file", fileInput.files[0]);
-formData.append("alt_text", "Product hero image showing the new dashboard");
-formData.append("tags", "product,launch,2026");
-
-const response = await fetch("https://api.relayapi.dev/v1/media", {
-  method: "POST",
-  headers: {
-    Authorization: "Bearer rlay_live_xxxxxxxx",
-  },
-  body: formData,
+				code: `const presign = await client.media.getPresignURL({
+  filename: file.name,
+  content_type: file.type,
 });
 
-const media = await response.json();
-console.log(media.id);        // "med_a1b2c3d4e5"
-console.log(media.url);       // CDN URL for the optimized file
-console.log(media.variants);  // platform-specific versions`,
+const upload = await fetch(presign.upload_url, {
+  method: "PUT",
+  headers: presign.upload_headers,
+  body: file,
+});
+if (!upload.ok) throw new Error("Upload failed");
+
+const storageKey = decodeURIComponent(new URL(presign.url).pathname.slice(1));
+const media = await client.media.confirm({ storage_key: storageKey });
+
+await client.posts.create({
+  content: "Product launch",
+  targets: ["instagram"],
+  scheduled_at: "now",
+  media: [{ url: presign.url, type: "image" }],
+});`,
 			},
 			{
 				language: "python",
 				label: "Python",
 				code: `import requests
+from urllib.parse import unquote, urlsplit
 
-with open("product-hero.png", "rb") as f:
-    response = requests.post(
-        "https://api.relayapi.dev/v1/media",
-        headers={"Authorization": "Bearer rlay_live_xxxxxxxx"},
-        files={"file": ("product-hero.png", f, "image/png")},
-        data={
-            "alt_text": "Product hero image showing the new dashboard",
-            "tags": "product,launch,2026",
-        },
+presign = client.media.presign(
+    filename="product-hero.png",
+    content_type="image/png",
+)
+
+with open("product-hero.png", "rb") as file:
+    upload = requests.put(
+        presign.upload_url,
+        data=file,
+        headers={"Content-Type": "image/png", "If-None-Match": "*"},
     )
+upload.raise_for_status()
 
-media = response.json()
-print(media["id"])        # "med_a1b2c3d4e5"
-print(media["url"])       # CDN URL for the optimized file
-print(media["variants"])  # platform-specific versions`,
+storage_key = unquote(urlsplit(presign.url).path.lstrip("/"))
+media = client.media.confirm(storage_key=storage_key)`,
 			},
 		],
 		faq: [
 			{
 				question: "What media formats are supported?",
 				answer:
-					"Images: JPEG, PNG, WebP, GIF, BMP, TIFF, SVG, and HEIC. Videos: MP4, MOV, WebM, AVI, and MKV. Audio: MP3, AAC, WAV, and OGG. If you upload a format a specific platform doesn't support, RelayAPI automatically converts it to a compatible format.",
+					"Allowed MIME types are image/jpeg, image/png, image/gif, image/webp, image/heic, image/heif, image/avif, video/mp4, video/webm, video/quicktime, video/mpeg, audio/mpeg, audio/mp4, audio/webm, audio/wav, audio/ogg, and application/pdf. Other types, including SVG and application/octet-stream, are rejected.",
 			},
 			{
 				question: "What are the file size limits?",
 				answer:
-					"Images up to 20 MB, videos up to 1 GB, and audio up to 50 MB per file. If your video exceeds 100 MB, use the resumable upload endpoint which supports chunked uploads with automatic retry on interrupted connections.",
+					"All media uploads are limited to 50 MiB (52,428,800 bytes). RelayAPI does not currently expose a resumable or chunked media-upload endpoint.",
 			},
 			{
-				question: "How does automatic optimization work?",
+				question:
+					"Does RelayAPI automatically convert media for each platform?",
 				answer:
-					"When you upload a file, RelayAPI generates platform-optimized variants in the background. For example, an uploaded 4K image might produce a 1080x1080 Instagram variant, a 1600x900 Twitter card variant, and a 1200x627 LinkedIn variant — each compressed to the ideal quality/size balance for that platform.",
+					"No. RelayAPI preserves the full-resolution original and generates a compact preview thumbnail, but it does not promise platform-specific transcoding or resizing. Prepare files for each target platform's limits before publishing.",
 			},
 			{
-				question: "How long are uploaded files stored?",
+				question: "Why must a pre-signed upload be confirmed?",
 				answer:
-					"Media files are stored indefinitely on active plans. Files are served from Cloudflare R2 with 11 nines of durability. If you delete a media item via the API, it is permanently removed within 24 hours including all generated variants.",
+					"Confirmation verifies the object in R2, enforces the 50 MiB and MIME rules, records its actual size, and changes the pending media intent to ready. A PUT without POST /v1/media/confirm is not a completed upload.",
 			},
 			{
-				question: "Is there a CDN for serving uploaded media?",
+				question: "How long are uploaded files retained?",
 				answer:
-					"Yes. Every uploaded file is automatically served through Cloudflare's global CDN with edge caching in 300+ cities. Media URLs support cache-control headers and you can purge the cache for any file instantly via the API.",
+					"Full-resolution originals are subject to the media bucket's approximately 30-day lifecycle policy. Durable preview thumbnails do not expire, and API responses fall back to a thumbnail after the original is removed.",
 			},
 		],
 	},

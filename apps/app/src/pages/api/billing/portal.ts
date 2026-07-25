@@ -3,9 +3,21 @@ import { env } from "cloudflare:workers";
 import Stripe from "stripe";
 import { organizationSubscriptions, eq } from "@relayapi/db";
 import { requireBillingAdmin } from "@/lib/api-utils";
+import { isSelfHostedDeployment } from "@/lib/deployment-mode";
 
 export const POST: APIRoute = async (context) => {
   try {
+		if (isSelfHostedDeployment(env)) {
+			return Response.json(
+				{
+					error: {
+						code: "BILLING_DISABLED",
+						message: "Billing is disabled in self-hosted community mode",
+					},
+				},
+				{ status: 404 },
+			);
+		}
     const forbidden = await requireBillingAdmin(context);
     if (forbidden) return forbidden;
 

@@ -15,9 +15,12 @@ import {
 	type Database,
 	generateId,
 } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
-import { emitInternalEvent } from "../internal-events";
+import {
+	emitInternalEvent,
+	resolveTriggeringSocialAccountId,
+} from "../internal-events";
 import { applyMergeTags } from "../merge-tags";
 import type { InboundEvent } from "../trigger-matcher";
 import type { RunContext } from "../types";
@@ -49,7 +52,7 @@ function internalFieldEvent(
 		kind: "field_changed",
 		channel: (ctx.channel ?? "instagram") as InboundEvent["channel"],
 		organizationId: ctx.organizationId,
-		socialAccountId: null,
+		socialAccountId: resolveTriggeringSocialAccountId(ctx),
 		contactId: ctx.contactId,
 		conversationId: ctx.conversationId ?? null,
 		fieldKey,
@@ -65,35 +68,52 @@ function internalFieldEvent(
 	};
 }
 
-async function resolveDefinitionId(
+async function resolveDefinition(
 	db: Database,
 	organizationId: string,
+	workspaceId: string | null | undefined,
 	slug: string,
-): Promise<string | null> {
-	const row = await db.query.customFieldDefinitions.findFirst({
-		where: and(
-			eq(customFieldDefinitions.organizationId, organizationId),
-			eq(customFieldDefinitions.slug, slug),
-		),
-	});
-	return row?.id ?? null;
+): Promise<{ id: string; scopeKey: string } | null> {
+	const [row] = await db
+		.select({
+			id: customFieldDefinitions.id,
+			scopeKey: customFieldDefinitions.scopeKey,
+		})
+		.from(customFieldDefinitions)
+		.where(
+			and(
+				eq(customFieldDefinitions.organizationId, organizationId),
+				eq(customFieldDefinitions.slug, slug),
+				workspaceId
+					? or(
+							eq(customFieldDefinitions.workspaceId, workspaceId),
+							isNull(customFieldDefinitions.workspaceId),
+						)
+					: isNull(customFieldDefinitions.workspaceId),
+			),
+		)
+		// Prefer an exact workspace definition over the organization fallback.
+		.orderBy(desc(customFieldDefinitions.workspaceId))
+		.limit(1);
+	return row ?? null;
 }
 
 const fieldSet: ActionHandler<FieldSetAction> = async (action, ctx) => {
 	const db = ctx.db;
 	if (!db) throw new Error("field_set: db binding missing");
-	const definitionId = await resolveDefinitionId(
+	const definition = await resolveDefinition(
 		db,
 		ctx.organizationId,
+		ctx.workspaceId,
 		action.field,
 	);
-	if (!definitionId) {
+	if (!definition) {
 		throw new Error(`field_set: custom field "${action.field}" not found`);
 	}
 	const value = applyMergeTags(action.value, buildMergeCtx(ctx));
 	const existing = await db.query.customFieldValues.findFirst({
 		where: and(
-			eq(customFieldValues.definitionId, definitionId),
+			eq(customFieldValues.definitionId, definition.id),
 			eq(customFieldValues.contactId, ctx.contactId),
 		),
 	});
@@ -106,9 +126,11 @@ const fieldSet: ActionHandler<FieldSetAction> = async (action, ctx) => {
 	} else {
 		await db.insert(customFieldValues).values({
 			id: generateId("cfv_"),
-			definitionId,
+			definitionId: definition.id,
 			contactId: ctx.contactId,
 			organizationId: ctx.organizationId,
+			scopeKey: ctx.workspaceId ? `ws/${ctx.workspaceId}` : "org",
+			definitionScopeKey: definition.scopeKey,
 			value,
 		});
 	}
@@ -139,18 +161,19 @@ const fieldSet: ActionHandler<FieldSetAction> = async (action, ctx) => {
 const fieldClear: ActionHandler<FieldClearAction> = async (action, ctx) => {
 	const db = ctx.db;
 	if (!db) throw new Error("field_clear: db binding missing");
-	const definitionId = await resolveDefinitionId(
+	const definition = await resolveDefinition(
 		db,
 		ctx.organizationId,
+		ctx.workspaceId,
 		action.field,
 	);
-	if (!definitionId) {
+	if (!definition) {
 		// Treat unknown field as a no-op on clear: nothing to erase.
 		return;
 	}
 	const existing = await db.query.customFieldValues.findFirst({
 		where: and(
-			eq(customFieldValues.definitionId, definitionId),
+			eq(customFieldValues.definitionId, definition.id),
 			eq(customFieldValues.contactId, ctx.contactId),
 		),
 	});
@@ -159,7 +182,7 @@ const fieldClear: ActionHandler<FieldClearAction> = async (action, ctx) => {
 		.delete(customFieldValues)
 		.where(
 			and(
-				eq(customFieldValues.definitionId, definitionId),
+				eq(customFieldValues.definitionId, definition.id),
 				eq(customFieldValues.contactId, ctx.contactId),
 			),
 		);

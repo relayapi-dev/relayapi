@@ -16,19 +16,27 @@ import {
 	contacts,
 	createDb,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
+import { encryptAccountToken } from "../lib/account-token-crypto";
 import type { Graph } from "../schemas/automation-graph";
 import { resumeWaitingRunOnInteractive } from "../services/automations/interactive-resume";
+import { resumeWaitingMessageOnReply } from "../services/automations/message-reply-resume";
 import { enrollContact } from "../services/automations/runner";
+import { recordContactConsent } from "../services/contact-consent";
 import type { SendMessageRequest } from "../services/message-sender";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -50,7 +58,7 @@ function resetSendCalls() {
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "interactive-resume-org",
 		slug: `ir-${orgId.slice(-8)}`,
@@ -62,16 +70,23 @@ async function seedFixture() {
 	if (!ws) throw new Error("workspace insert failed");
 	workspaceId = ws.id;
 
+	const accountId = generateId("acc_");
 	const [sa] = await db
 		.insert(socialAccounts)
 		.values({
+			id: accountId,
 			organizationId: orgId,
 			workspaceId,
 			platform: "telegram",
 			platformAccountId: `tg_${generateId("acc_")}`,
 			displayName: "IR Bot",
 			username: "ir_bot",
-			accessToken: "test-token-plaintext",
+			accessToken: await encryptAccountToken(
+				"test-token-plaintext",
+				TEST_ENCRYPTION_KEY,
+				accountId,
+				"access_token",
+			),
 		})
 		.returning();
 	if (!sa) throw new Error("social account insert failed");
@@ -91,8 +106,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 beforeAll(async () => {
@@ -144,6 +159,17 @@ async function createContactWithChannel(identifier: string) {
 		socialAccountId,
 		platform: "telegram",
 		identifier,
+	});
+	await recordContactConsent(db, {
+		organizationId: orgId,
+		workspaceId,
+		contactId: ct.id,
+		channel: "telegram",
+		purpose: "automation",
+		identifier,
+		status: "granted",
+		source: "automation-interactive-resume-test",
+		occurredAt: new Date(),
 	});
 	return ct;
 }
@@ -272,6 +298,140 @@ function quickRepliesGraph(): Graph {
 }
 
 describe("resumeWaitingRunOnInteractive", () => {
+	it("advances a plain message wait through next on an ordinary reply", async () => {
+		if (!dbAvailable) return;
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "ask",
+			nodes: [
+				{
+					key: "ask",
+					kind: "message",
+					config: {
+						blocks: [{ id: "b1", type: "text", text: "Tell me more" }],
+						wait_for_reply: true,
+					},
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+					],
+				},
+				{
+					key: "done",
+					kind: "end",
+					config: { reason: "replied" },
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [
+				{
+					from_node: "ask",
+					from_port: "next",
+					to_node: "done",
+					to_port: "in",
+				},
+			],
+		};
+		const auto = await createAutomation("plain-message-reply", graph);
+		const contact = await createContactWithChannel("tg_ir_plain_reply");
+		const [seededRun] = await db
+			.insert(automationRuns)
+			.values({
+				automationId: auto.id,
+				organizationId: orgId,
+				scopeKey: auto.scopeKey,
+				contactId: contact.id,
+				status: "waiting",
+				currentNodeKey: "ask",
+				waitingFor: "input",
+				context: {},
+			})
+			.returning();
+		if (!seededRun) throw new Error("expected a seeded waiting run");
+		await db
+			.update(automations)
+			.set({ totalEnrolled: 1 })
+			.where(eq(automations.id, auto.id));
+
+		const outcome = await resumeWaitingMessageOnReply(
+			db,
+			seededRun.id,
+			"Here is my answer",
+			null,
+			{ db },
+		);
+		expect(outcome).toBe("resumed");
+
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, seededRun.id),
+		});
+		if (!run) throw new Error("expected run after reply resume");
+		expect(run.status).toBe("completed");
+		expect(run.currentNodeKey).toBe("done");
+		expect(run.exitReason).toBe("replied");
+		const context = (run.context as Record<string, unknown>) ?? {};
+		expect(context.last_input_value).toBe("Here is my answer");
+		expect(context.last_reply).toEqual({
+			text: "Here is my answer",
+			attachment: null,
+		});
+	}, 30_000);
+
+	it("counts completion when a plain reply has no outgoing next edge", async () => {
+		if (!dbAvailable) return;
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "ask",
+			nodes: [
+				{
+					key: "ask",
+					kind: "message",
+					config: { wait_for_reply: true },
+					ports: [
+						{ key: "in", direction: "input" },
+						{ key: "next", direction: "output", role: "default" },
+					],
+				},
+			],
+			edges: [],
+		};
+		const auto = await createAutomation("plain-reply-no-edge", graph);
+		const contact = await createContactWithChannel("tg_ir_plain_no_edge");
+		const [seededRun] = await db
+			.insert(automationRuns)
+			.values({
+				automationId: auto.id,
+				organizationId: orgId,
+				scopeKey: auto.scopeKey,
+				contactId: contact.id,
+				status: "waiting",
+				currentNodeKey: "ask",
+				waitingFor: "input",
+				context: {},
+			})
+			.returning();
+		if (!seededRun) throw new Error("expected a seeded waiting run");
+		await db
+			.update(automations)
+			.set({ totalEnrolled: 1 })
+			.where(eq(automations.id, auto.id));
+
+		expect(
+			await resumeWaitingMessageOnReply(db, seededRun.id, "Answer", null, {
+				db,
+			}),
+		).toBe("resumed");
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, seededRun.id),
+		});
+		expect(run?.status).toBe("completed");
+		expect(run?.currentPortKey).toBe("next");
+		const counted = await db.query.automations.findFirst({
+			where: eq(automations.id, auto.id),
+		});
+		expect(counted?.totalCompleted).toBe(1);
+	}, 30_000);
+
 	it("advances a run via button.<id> port on a button-payload resume", async () => {
 		if (!dbAvailable) return;
 		resetSendCalls();
@@ -287,7 +447,11 @@ describe("resumeWaitingRunOnInteractive", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		// After enrollment the run should be parked at `ask` waiting on the
@@ -304,6 +468,7 @@ describe("resumeWaitingRunOnInteractive", () => {
 		const outcome = await resumeWaitingRunOnInteractive(db, runId, "yes", {
 			db,
 			sendTransport: fakeSendTransport,
+			ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
 		});
 		expect(outcome).toBe("resumed");
 
@@ -333,7 +498,11 @@ describe("resumeWaitingRunOnInteractive", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		let run = await db.query.automationRuns.findFirst({
@@ -346,7 +515,11 @@ describe("resumeWaitingRunOnInteractive", () => {
 			db,
 			runId,
 			"topic_support",
-			{ db, sendTransport: fakeSendTransport },
+			{
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		);
 		expect(outcome).toBe("resumed");
 
@@ -375,14 +548,22 @@ describe("resumeWaitingRunOnInteractive", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		const outcome = await resumeWaitingRunOnInteractive(
 			db,
 			runId,
 			"bogus_payload",
-			{ db, sendTransport: fakeSendTransport },
+			{
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		);
 		expect(outcome).toBe("no_match");
 
@@ -411,18 +592,23 @@ describe("resumeWaitingRunOnInteractive", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
-		// Simulate another worker completing the run first.
+		// Simulate another worker taking ownership of the run first.
 		await db
 			.update(automationRuns)
-			.set({ status: "completed", completedAt: new Date() })
+			.set({ status: "active", waitingFor: null })
 			.where(eq(automationRuns.id, runId));
 
 		const outcome = await resumeWaitingRunOnInteractive(db, runId, "yes", {
 			db,
 			sendTransport: fakeSendTransport,
+			ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
 		});
 		expect(outcome).toBe("race");
 	}, 30_000);
@@ -470,12 +656,17 @@ describe("resumeWaitingRunOnInteractive", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		const outcome = await resumeWaitingRunOnInteractive(db, runId, "maybe", {
 			db,
 			sendTransport: fakeSendTransport,
+			ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
 		});
 		expect(outcome).toBe("resumed");
 
@@ -485,5 +676,9 @@ describe("resumeWaitingRunOnInteractive", () => {
 		if (!run) throw new Error("expected run to exist");
 		expect(run.status).toBe("completed");
 		expect(run.currentPortKey).toBe("button.maybe");
+		const counted = await db.query.automations.findFirst({
+			where: eq(automations.id, auto.id),
+		});
+		expect(counted?.totalCompleted).toBe(1);
 	}, 30_000);
 });

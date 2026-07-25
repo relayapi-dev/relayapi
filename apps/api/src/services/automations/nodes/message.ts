@@ -11,9 +11,16 @@
 //   §8.3 (runner)
 //   §11 (message composer)
 
-import { contactChannels, contacts, socialAccounts } from "@relayapi/db";
-import { and, desc, eq } from "drizzle-orm";
+import {
+	contactChannels,
+	contacts,
+	type inboxMessages,
+	socialAccounts,
+} from "@relayapi/db";
+import { and, desc, eq, isNull } from "drizzle-orm";
+import { GRAPH_BASE } from "../../../config/api-versions";
 import { decryptAccountToken } from "../../../lib/account-token-crypto";
+import { workspaceScopeKey } from "../../../lib/request-access";
 import type {
 	MessageBlock,
 	QuickReply,
@@ -22,6 +29,7 @@ import {
 	getAllowedRecipientHashes,
 	hashRecipientIdentifier,
 } from "../../contact-consent";
+import { authorizeConversationReply } from "../../conversation-reply-authorization";
 import type {
 	SendMessageRequest,
 	SendMessageResult,
@@ -44,6 +52,7 @@ type MessageConfig = {
 	wait_for_reply?: boolean;
 	no_response_timeout_min?: number;
 	typing_indicator_seconds?: number;
+	delivery?: "direct" | "comment_private_reply";
 };
 
 export function automationMessageDeliveryError(result: {
@@ -72,13 +81,14 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 		// to render and nothing to wait for. Skip recipient resolution so we
 		// don't fail runs whose message node is still a placeholder.
 		if (blocks.length === 0 && quickReplies.length === 0) {
-			// Only park when there's a timeout to eventually wake the run — an
-			// empty message with no interactive ports and no timeout has no resume
-			// path and would wedge the run (see §4 below for the same reasoning).
-			if (cfg.wait_for_reply && cfg.no_response_timeout_min) {
-				const timeoutAt = new Date(
-					ctx.now.getTime() + cfg.no_response_timeout_min * 60_000,
-				);
+			// An explicit reply wait is also useful as a wait-only step after a
+			// previous prompt. Ordinary inbound text/attachments resume it through
+			// `next`, so the timeout remains optional just as it is for non-empty
+			// messages.
+			if (cfg.wait_for_reply) {
+				const timeoutAt = cfg.no_response_timeout_min
+					? new Date(ctx.now.getTime() + cfg.no_response_timeout_min * 60_000)
+					: undefined;
 				return {
 					result: "wait_input",
 					timeout_at: timeoutAt,
@@ -101,12 +111,57 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 		}));
 
 		// 2. Recipient resolution ------------------------------------------------
-		const recipient = await resolveRecipient(ctx);
+		const recipient = await resolveRecipient(
+			ctx,
+			cfg.delivery === "comment_private_reply",
+		);
 		if (!recipient) {
 			return {
 				result: "fail",
 				error: new Error("could not resolve recipient for contact"),
 			};
+		}
+
+		if (cfg.delivery === "comment_private_reply") {
+			if (renderedQuickReplies.length > 0 || renderedBlocks.length !== 1) {
+				return {
+					result: "fail",
+					error: new Error(
+						"comment private replies require exactly one text block and no quick replies",
+					),
+				};
+			}
+			const block = renderedBlocks[0];
+			if (block?.type !== "text" || block.buttons?.length) {
+				return {
+					result: "fail",
+					error: new Error(
+						"comment private replies support one button-free text block",
+					),
+				};
+			}
+			try {
+				const providerReference = await dispatchCommentPrivateReply(
+					ctx,
+					recipient,
+					block.text,
+				);
+				return {
+					result: "advance",
+					via_port: "next",
+					payload: {
+						sent_count: 1,
+						skipped_count: 0,
+						errors: [],
+						provider_reference: providerReference,
+					},
+				};
+			} catch (error) {
+				return {
+					result: "fail",
+					error: error instanceof Error ? error : new Error(String(error)),
+				};
+			}
 		}
 
 		// 3. Dispatch ------------------------------------------------------------
@@ -156,8 +211,7 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 		// dispatcher silently skips branch buttons / quick replies on channels
 		// that don't support them (e.g. WhatsApp has no quick replies and no
 		// card/gallery), so waiting for a tap on UI that was never sent would
-		// wedge the run forever — the contact can't produce a button./quick_reply
-		// port event, and a plain text reply can't resume a message-kind wait.
+		// wedge the run forever — the contact can't produce that interactive port.
 		const channel = ctx.channel as AutomationChannel;
 		const channelCaps = CHANNEL_CAPABILITIES[channel];
 		const deliverableBranchButton =
@@ -169,15 +223,11 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 			CHANNEL_SUPPORTS_QUICK_REPLIES[channel];
 		const hasInteractive = deliverableBranchButton || deliverableQuickReply;
 
-		// A plain `wait_for_reply` (no interactive elements) is only honored when
-		// the operator also set a `no_response_timeout_min` — without a timeout
-		// AND without any resumable interactive port, the run would never advance
-		// (no text-reply resume path exists for message-kind waits in v1). Parking
-		// indefinitely on a plain reply just wedges the run, so fall through to
-		// `next` instead.
-		const plainWaitWithTimeout =
-			!!cfg.wait_for_reply && !!cfg.no_response_timeout_min;
-		const shouldWait = hasInteractive || plainWaitWithTimeout;
+		// An explicit plain-text wait resumes through the message node's `next`
+		// port when the next ordinary inbound DM arrives. Interactive payloads
+		// continue to use their derived button/quick-reply ports. A timeout is
+		// optional; when present, the scheduler advances through `no_response`.
+		const shouldWait = hasInteractive || cfg.wait_for_reply === true;
 
 		if (shouldWait) {
 			const timeoutAt = cfg.no_response_timeout_min
@@ -306,6 +356,86 @@ type ResolvedRecipient = {
 	accountPlatformId: string;
 };
 
+export function buildCommentPrivateReplyRequest(
+	channel: "instagram" | "facebook",
+	input: {
+		commentId: string;
+		accountPlatformId: string;
+		accessToken: string;
+		text: string;
+	},
+): { url: string; body: Record<string, unknown> } {
+	if (channel === "instagram") {
+		const base = input.accessToken.startsWith("IGAA")
+			? GRAPH_BASE.instagram
+			: GRAPH_BASE.facebook;
+		return {
+			url: `${base}/${input.accountPlatformId}/messages`,
+			body: {
+				recipient: { comment_id: input.commentId },
+				message: { text: input.text },
+			},
+		};
+	}
+	return {
+		url: `${GRAPH_BASE.facebook}/${input.commentId}/private_replies`,
+		body: { message: input.text },
+	};
+}
+
+async function dispatchCommentPrivateReply(
+	ctx: RunContext,
+	recipient: ResolvedRecipient,
+	text: string,
+): Promise<string | null> {
+	const triggerEvent = ctx.context.triggerEvent as
+		| { payload?: { comment_id?: unknown } }
+		| undefined;
+	const commentId =
+		typeof triggerEvent?.payload?.comment_id === "string"
+			? triggerEvent.payload.comment_id
+			: typeof ctx.context.comment_id === "string"
+				? ctx.context.comment_id
+				: null;
+	if (!commentId) throw new Error("comment private reply requires comment_id");
+	if (ctx.channel !== "instagram" && ctx.channel !== "facebook") {
+		throw new Error("comment private replies require Instagram or Facebook");
+	}
+
+	const fetchImpl =
+		(ctx.env.privateReplyFetch as typeof fetch | undefined) ?? globalThis.fetch;
+	// Meta Instagram API, “Private Replies”: POST /{ig-user-id}/messages with
+	// recipient.comment_id and message.text. Messenger Page comments use the
+	// comment's /private_replies edge.
+	const request = buildCommentPrivateReplyRequest(ctx.channel, {
+		commentId,
+		accountPlatformId: recipient.accountPlatformId,
+		accessToken: recipient.accessToken,
+		text,
+	});
+	const response = await fetchImpl(request.url, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${recipient.accessToken}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(request.body),
+	});
+	const raw = await response.text();
+	if (!response.ok) {
+		throw new Error(
+			`comment private reply failed (${response.status})${raw ? `: ${raw.slice(0, 500)}` : ""}`,
+		);
+	}
+	let parsed: { message_id?: string; id?: string } = {};
+	try {
+		parsed = raw ? (JSON.parse(raw) as typeof parsed) : {};
+	} catch {
+		// A successful response with an empty/non-JSON body is still successful.
+	}
+	return parsed.message_id ?? parsed.id ?? null;
+}
+
 /**
  * Resolve which `(social_account, contact_channel)` pair this message should
  * be delivered through. Order of precedence:
@@ -318,6 +448,7 @@ type ResolvedRecipient = {
  */
 async function resolveRecipient(
 	ctx: RunContext,
+	allowCommentPrivateReply = false,
 ): Promise<ResolvedRecipient | null> {
 	const db = ctx.db;
 	if (!db) return null;
@@ -351,18 +482,64 @@ async function resolveRecipient(
 		.limit(1);
 
 	if (!channelRow) return null;
-	const allowed = await getAllowedRecipientHashes(
-		db,
-		ctx.organizationId,
-		ctx.channel,
-		"automation",
-		[{ identifier: channelRow.identifier, contactId: ctx.contactId }],
-	);
 	const recipientHash = await hashRecipientIdentifier(
 		ctx.channel,
 		channelRow.identifier,
 	);
-	if (!allowed.has(recipientHash)) return null;
+	const recipient = [
+		{ identifier: channelRow.identifier, contactId: ctx.contactId },
+	];
+	const triggerEvent = ctx.context.triggerEvent as
+		| { kind?: unknown; payload?: { comment_id?: unknown } }
+		| undefined;
+	const commentPrivateReplyAuthorized =
+		allowCommentPrivateReply &&
+		(triggerEvent?.kind === "comment_created" ||
+			triggerEvent?.kind === "live_comment") &&
+		typeof triggerEvent.payload?.comment_id === "string";
+	const [explicitAutomationGrant, notAutomationSuppressed, serviceReply] =
+		await Promise.all([
+			getAllowedRecipientHashes(
+				db,
+				ctx.organizationId,
+				ctx.channel,
+				"automation",
+				recipient,
+			),
+			getAllowedRecipientHashes(
+				db,
+				ctx.organizationId,
+				ctx.channel,
+				"automation",
+				recipient,
+				{ requireGrant: false },
+			),
+			ctx.conversationId
+				? authorizeConversationReply(db, {
+						organizationId: ctx.organizationId,
+						scopeKey: workspaceScopeKey(ctx.workspaceId ?? null),
+						conversationId: ctx.conversationId,
+						accountId: channelRow.socialAccountId,
+						platform: ctx.channel as typeof inboxMessages.$inferSelect.platform,
+						recipientIdentifier: channelRow.identifier,
+						now: ctx.now,
+					})
+				: Promise.resolve({
+						authorized: false as const,
+						reason: "no_inbound" as const,
+					}),
+		]);
+	// Automation suppression is an absolute veto. Otherwise a durable explicit
+	// grant or the exact, bounded inbound-conversation service capability may
+	// authorize this send. Inbound discovery never becomes broad consent.
+	if (
+		!notAutomationSuppressed.has(recipientHash) ||
+		(!explicitAutomationGrant.has(recipientHash) &&
+			!serviceReply.authorized &&
+			!commentPrivateReplyAuthorized)
+	) {
+		return null;
+	}
 
 	const [acc] = await db
 		.select({
@@ -376,9 +553,9 @@ async function resolveRecipient(
 				eq(socialAccounts.id, channelRow.socialAccountId),
 				eq(socialAccounts.organizationId, ctx.organizationId),
 				eq(socialAccounts.lifecycleStatus, "active"),
-				...(ctx.workspaceId
-					? [eq(socialAccounts.workspaceId, ctx.workspaceId)]
-					: []),
+				ctx.workspaceId
+					? eq(socialAccounts.workspaceId, ctx.workspaceId)
+					: isNull(socialAccounts.workspaceId),
 			),
 		)
 		.limit(1);

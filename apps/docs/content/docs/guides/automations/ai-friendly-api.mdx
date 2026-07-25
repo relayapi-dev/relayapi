@@ -10,7 +10,7 @@ The automation API is designed so an AI agent — calling the REST endpoints dir
 
 1. **One call creates the full automation.** `POST /v1/automations` with a `template` field generates the whole graph + entrypoints server-side. For custom flows, `POST` to create an empty automation and follow up with `PUT /v1/automations/{id}/graph` containing the full node/edge structure.
 2. **Human-chosen string keys instead of generated IDs.** You choose `"welcome"`, `"ask_email"`, `"send_guide"`. Edges reference those keys directly. No ID dance, no second round-trip to learn what the server assigned.
-3. **Compact node vocabulary.** 10 node kinds (not 90). A single `message` node hosts all content variants via typed `blocks`. A single `action_group` node hosts all side-effect actions. The JSON schema is small enough for an LLM to keep fully in context.
+3. **Compact node vocabulary.** 12 node kinds (not 90). A single `message` node hosts all content variants via typed `blocks`. A single `action_group` node hosts all side-effect actions. The JSON schema is small enough for an LLM to keep fully in context.
 4. **Free-text kinds, not enums.** Node `kind`, entrypoint `kind`, port `key`, action `type`, and exit reasons are all plain strings with app-level validation. Adding a kind is a code change, not a DB migration — and an AI that invents an unknown kind gets a suggestion in the 422 response rather than a cryptic enum error.
 
 ## Catalog endpoint
@@ -19,33 +19,33 @@ The automation API is designed so an AI agent — calling the REST endpoints dir
 GET /v1/automations/catalog
 ```
 
-Returns the full self-describing catalog the builder and external clients use to stay in sync:
+Returns the stable vocabulary and channel capability catalog the builder and external clients use to stay in sync. Detailed request shapes remain in OpenAPI and the node, trigger, binding, and template guides.
 
 ```json
 {
   "node_kinds": [
     {
       "kind": "input",
-      "description": "Prompt the contact and capture their reply into run context or a contact custom field",
-      "config_schema": { /* JSON Schema */ },
-      "port_derivation": "captured / invalid / timeout / skip"
+      "label": "Input",
+      "category": "content",
+      "description": "Wait for a user reply and capture it into the run context"
     },
     { "kind": "message", "…": "…" }
   ],
   "entrypoint_kinds": [
-    { "kind": "keyword", "channels": ["instagram", "facebook", "whatsapp", "telegram"], "config_schema": { … } },
+    { "kind": "dm_received", "label": "DM Received", "channels": ["instagram", "facebook", "whatsapp", "telegram"] },
     { "kind": "webhook_inbound", "…": "…" }
   ],
   "binding_types": [ … ],
   "action_types": [ … ],
-  "channel_capabilities": { "instagram": { "buttons": true, "quick_replies": 13, "gallery": true, … } },
+  "channel_capabilities": { "instagram": { "buttons": true, "quick_replies": true, "quick_replies_max": 13, "gallery": true, … } },
   "template_kinds": [
-    { "kind": "comment_to_dm", "channels": ["instagram", "facebook"], "config_schema": { … } }
+    "blank", "welcome_flow", "faq_bot", "lead_capture", "comment_to_dm", "story_leads", "follower_growth", "follow_to_dm"
   ]
 }
 ```
 
-The response is ETag-cached — agents can cache the catalog once per session and re-use it across many create/update calls. An MCP client typically fetches it at session start and treats subsequent enum validation entirely from memory.
+The response is ETag-cached — agents can cache the catalog once per session and re-use it across many create/update calls. Use the OpenAPI document for exact field validation and this catalog for deployed vocabulary and channel availability.
 
 ## Validation errors
 
@@ -70,7 +70,7 @@ If the graph is invalid, the server **still saves it** and forces `status = "pau
 
 ## Templates for one-shot flows
 
-Templates collapse the common cases to a single call. Eight template kinds ship in v1 (`blank`, `welcome_flow`, `faq_bot`, `lead_capture`, `comment_to_dm`, `story_leads`, `follower_growth`, `follow_to_dm`). An agent looking at `/v1/automations/catalog` → `template_kinds[*].config_schema` can pick the right template and fill its config in one pass. See [Templates](./templates) for the catalog and config shapes.
+Templates collapse the common cases to a single call. Eight template kinds ship in v1 (`blank`, `welcome_flow`, `faq_bot`, `lead_capture`, `comment_to_dm`, `story_leads`, `follower_growth`, `follow_to_dm`). Use `/v1/automations/catalog` to confirm a kind is deployed, then use [Templates](./templates) or OpenAPI for its strict config shape.
 
 ## Port-based edges
 
@@ -86,7 +86,7 @@ An AI generating a graph from scratch connects nodes via explicit `(from_node, f
 }
 ```
 
-No labels to guess. Every node kind's port keys are listed in the catalog, and ports on `message` / `action_group` nodes derive deterministically from config — so an agent that sets `blocks[0].buttons[0].id = "btn_large"` knows the port will be `button.btn_large` without asking the server.
+No labels to guess. Port keys are documented in [Nodes](./nodes), and ports on `message` / `action_group` nodes derive deterministically from config — so an agent that sets `blocks[0].buttons[0].id = "btn_large"` knows the port will be `button.btn_large` without asking the server.
 
 ## SDK surface
 

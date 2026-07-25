@@ -3,6 +3,8 @@ import {
 	automationEffects,
 	automationNodeExecutions,
 	automationRuns,
+	automations,
+	type Database,
 } from "@relayapi/db";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import {
@@ -10,7 +12,58 @@ import {
 	automationExecutionRecoveryDisposition,
 	deserializeAutomationHandlerResult,
 	serializeAutomationHandlerResult,
+	transitionRunTerminal,
 } from "../services/automations/runner";
+
+function terminalTransitionDb(options: {
+	casWins: boolean;
+	counterFails?: boolean;
+}) {
+	let state = { revision: 7, status: "active", completed: 0 };
+	const tx = {
+		update(table: unknown) {
+			return {
+				set(patch: Record<string, unknown>) {
+					return {
+						where() {
+							if (table === automationRuns) {
+								return {
+									returning: async () => {
+										if (!options.casWins) return [];
+										state.revision += 1;
+										state.status = String(patch.status);
+										return [{ id: "arun_atomic" }];
+									},
+								};
+							}
+							if (table === automations) {
+								return Promise.resolve().then(() => {
+									if (options.counterFails) {
+										throw new Error("counter write failed");
+									}
+									state.completed += 1;
+								});
+							}
+							throw new Error("unexpected table update");
+						},
+					};
+				},
+			};
+		},
+	};
+	const db = {
+		async transaction<T>(callback: (transaction: typeof tx) => Promise<T>) {
+			const before = { ...state };
+			try {
+				return await callback(tx);
+			} catch (error) {
+				state = before;
+				throw error;
+			}
+		},
+	} as unknown as Database;
+	return { db, state: () => ({ ...state }) };
+}
 
 function uniqueIndexColumns(
 	table: Parameters<typeof getTableConfig>[0],
@@ -26,6 +79,63 @@ function uniqueIndexColumns(
 }
 
 describe("automation runner durable execution fence", () => {
+	it("commits a terminal CAS and its aggregate counter together", async () => {
+		const fixture = terminalTransitionDb({ casWins: true });
+		expect(
+			await transitionRunTerminal(
+				fixture.db,
+				"arun_atomic",
+				7,
+				"auto_atomic",
+				"completed",
+				"completed",
+			),
+		).toBe(true);
+		expect(fixture.state()).toEqual({
+			revision: 8,
+			status: "completed",
+			completed: 1,
+		});
+	});
+
+	it("rolls back a terminal run transition when its counter write fails", async () => {
+		const fixture = terminalTransitionDb({ casWins: true, counterFails: true });
+		await expect(
+			transitionRunTerminal(
+				fixture.db,
+				"arun_atomic",
+				7,
+				"auto_atomic",
+				"completed",
+				"completed",
+			),
+		).rejects.toThrow("counter write failed");
+		expect(fixture.state()).toEqual({
+			revision: 7,
+			status: "active",
+			completed: 0,
+		});
+	});
+
+	it("does not increment a terminal counter when the run CAS loses", async () => {
+		const fixture = terminalTransitionDb({ casWins: false });
+		expect(
+			await transitionRunTerminal(
+				fixture.db,
+				"arun_atomic",
+				7,
+				"auto_atomic",
+				"completed",
+				"completed",
+			),
+		).toBe(false);
+		expect(fixture.state()).toEqual({
+			revision: 7,
+			status: "active",
+			completed: 0,
+		});
+	});
+
 	it("has one exclusive ledger identity per run revision and node effect", () => {
 		expect(uniqueIndexColumns(automationNodeExecutions)).toContainEqual([
 			"run_id",
@@ -152,7 +262,9 @@ describe("automation runner durable execution fence", () => {
 		expect(handler).toBeGreaterThan(arm);
 		expect(completion).toBeGreaterThan(handler);
 		expect(resultCas).toBeGreaterThan(completion);
-		expect(source).toContain("requestMayHaveBeenSentAt: startedAt");
+		expect(source).toContain(
+			"requestMayHaveBeenSentAt: sql`CURRENT_TIMESTAMP`",
+		);
 		expect(source).toContain("eq(automationRuns.revision, expectedRevision)");
 		expect(source).toMatch(
 			/revision: sql`\$\{automationRuns\.revision\} \+ 1`/,

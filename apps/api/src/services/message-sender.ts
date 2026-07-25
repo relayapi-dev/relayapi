@@ -97,6 +97,19 @@ export interface SendMessageResult {
 	error?: string;
 }
 
+function confirmedMessageResult(
+	provider: string,
+	messageId: string | number | null | undefined,
+): SendMessageResult {
+	const normalized = messageId?.toString().trim();
+	return normalized
+		? { success: true, messageId: normalized }
+		: {
+				success: false,
+				error: `${provider} returned a successful response without a message ID.`,
+			};
+}
+
 export async function sendMessage(
 	request: SendMessageRequest,
 ): Promise<SendMessageResult> {
@@ -160,7 +173,7 @@ async function sendWhatsApp(
 	}
 
 	const data = (await res.json()) as { messages?: Array<{ id: string }> };
-	return { success: true, messageId: data.messages?.[0]?.id };
+	return confirmedMessageResult("WhatsApp", data.messages?.[0]?.id);
 }
 
 /**
@@ -259,10 +272,7 @@ async function sendTelegram(
 	}
 
 	const data = (await res.json()) as { result?: { message_id?: number } };
-	return {
-		success: true,
-		messageId: data.result?.message_id?.toString(),
-	};
+	return confirmedMessageResult("Telegram", data.result?.message_id);
 }
 
 /**
@@ -436,7 +446,7 @@ async function sendTwitterDM(
 	}
 
 	const data = (await res.json()) as { data?: { dm_event_id?: string } };
-	return { success: true, messageId: data.data?.dm_event_id };
+	return confirmedMessageResult("X", data.data?.dm_event_id);
 }
 
 async function sendInstagramDM(
@@ -471,7 +481,7 @@ async function sendInstagramDM(
 	}
 
 	const data = (await res.json()) as { message_id?: string };
-	return { success: true, messageId: data.message_id };
+	return confirmedMessageResult("Instagram", data.message_id);
 }
 
 async function sendFacebookMessage(
@@ -507,7 +517,7 @@ async function sendFacebookMessage(
 	}
 
 	const data = (await res.json()) as { message_id?: string };
-	return { success: true, messageId: data.message_id };
+	return confirmedMessageResult("Facebook", data.message_id);
 }
 
 /**
@@ -651,5 +661,24 @@ async function sendRedditMessage(
 		return { success: false, error: `HTTP ${res.status}` };
 	}
 
+	const data = (await res.json().catch(() => null)) as {
+		json?: { errors?: Array<[string, string, string]> };
+	} | null;
+	const errors = data?.json?.errors ?? [];
+	if (errors.length > 0) {
+		return {
+			success: false,
+			error: errors.map((error) => `${error[0]}: ${error[1]}`).join("; "),
+		};
+	}
+	if (!data?.json) {
+		return {
+			success: false,
+			error: "Reddit returned an unreadable compose response.",
+		};
+	}
+
+	// Reddit confirms semantic success through an empty `json.errors` array;
+	// this endpoint does not return a message resource ID.
 	return { success: true };
 }

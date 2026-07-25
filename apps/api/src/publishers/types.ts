@@ -46,10 +46,123 @@ export type PublishErrorCode =
 	| "PUBLISH_FAILED"
 	| string;
 
+export type ProviderDisposition =
+	| "published"
+	| "sent"
+	| "delivered"
+	| "scheduled"
+	| "accepted"
+	| "processing"
+	| "pending_review"
+	| "awaiting_user_action"
+	| "partial"
+	| "failed"
+	| "outcome_unknown";
+
+export interface ProviderEffect {
+	name: string;
+	status: "succeeded" | "failed" | "unsupported" | "outcome_unknown";
+	provider_id?: string;
+	error?: {
+		code: PublishErrorCode;
+		message: string;
+	};
+}
+
+interface ProviderOutcomeEvidence {
+	/** Provider job/request/upload identifier. Never expose this as a post ID. */
+	provider_operation_id?: string;
+	/** Provider-native, publicly addressable content/message identifier. */
+	platform_post_id?: string;
+	/**
+	 * Explicit exception for APIs that confirm terminal creation but intentionally
+	 * withhold a resource ID (for example a non-public TikTok post). Never set this
+	 * merely because a documented ID field was absent.
+	 */
+	resource_id_unavailable?: boolean;
+	platform_url?: string;
+	/** Raw documented provider lifecycle value (for example PROCESSING or queued). */
+	provider_state?: string;
+	/** ISO-8601 instant at which durable reconciliation should next be attempted. */
+	next_reconcile_at?: string;
+	effects?: ProviderEffect[];
+}
+
+type TerminalProviderOutcome = ProviderOutcomeEvidence & {
+	disposition: "published" | "sent" | "delivered";
+};
+
+type NonTerminalProviderOutcome = ProviderOutcomeEvidence & {
+	disposition:
+		| "scheduled"
+		| "accepted"
+		| "processing"
+		| "pending_review"
+		| "awaiting_user_action";
+};
+
+type NonSuccessProviderOutcome = ProviderOutcomeEvidence & {
+	disposition: "partial" | "failed" | "outcome_unknown";
+};
+
+/**
+ * Truthful provider lifecycle result. `success` remains on PublishResult as a
+ * compatibility projection for existing callers, but the runner persists and
+ * terminalizes from this discriminant whenever it is present.
+ */
+export type ProviderOutcome =
+	| TerminalProviderOutcome
+	| NonTerminalProviderOutcome
+	| NonSuccessProviderOutcome;
+
+export const TERMINAL_PROVIDER_SUCCESS_DISPOSITIONS: ReadonlySet<ProviderDisposition> =
+	new Set(["published", "sent", "delivered"]);
+
+export const NONTERMINAL_PROVIDER_DISPOSITIONS: ReadonlySet<ProviderDisposition> =
+	new Set([
+		"scheduled",
+		"accepted",
+		"processing",
+		"pending_review",
+		"awaiting_user_action",
+	]);
+
+export function isTerminalProviderSuccess(outcome: ProviderOutcome): boolean {
+	return TERMINAL_PROVIDER_SUCCESS_DISPOSITIONS.has(outcome.disposition);
+}
+
+export function isNonTerminalProviderOutcome(
+	outcome: ProviderOutcome,
+): boolean {
+	return NONTERMINAL_PROVIDER_DISPOSITIONS.has(outcome.disposition);
+}
+
+/** A terminal success needs a real resource/message ID, or per-effect IDs. */
+export function hasTerminalProviderEvidence(outcome: ProviderOutcome): boolean {
+	if (!isTerminalProviderSuccess(outcome)) return false;
+	if (outcome.platform_post_id?.trim()) return true;
+	if (
+		outcome.resource_id_unavailable === true &&
+		outcome.provider_operation_id?.trim() &&
+		outcome.provider_state?.trim()
+	) {
+		return true;
+	}
+	return Boolean(
+		outcome.effects?.length &&
+			outcome.effects.every(
+				(effect) =>
+					effect.status === "succeeded" && !!effect.provider_id?.trim(),
+			),
+	);
+}
+
 export interface PublishResult {
 	success: boolean;
 	platform_post_id?: string;
 	platform_url?: string;
+	/** Canonical provider lifecycle result. New/updated publishers must set this. */
+	provider_outcome?: ProviderOutcome;
 	/** The provider explicitly rejected the request before a visible effect. */
 	outcome?: { disposition: "definitive_rejection" };
 	/**
@@ -116,6 +229,11 @@ export interface EngagementActionResult {
 export interface Publisher {
 	platform: Platform;
 	publish(request: PublishRequest): Promise<PublishResult>;
+	/**
+	 * Poll a previously accepted provider operation. Implementations must be
+	 * read-only: reconciliation may observe state but must never create content.
+	 */
+	reconcile?(request: ReconcileRequest): Promise<PublishResult>;
 	repost?(
 		account: EngagementAccount,
 		platformPostId: string,
@@ -130,6 +248,14 @@ export interface Publisher {
 		platformPostId: string,
 		text: string,
 	): Promise<EngagementActionResult>;
+}
+
+export interface ReconcileRequest {
+	account: PublishRequest["account"];
+	provider_operation_id: string | null;
+	platform_post_id: string | null;
+	provider_state: string | null;
+	effects: ProviderEffect[];
 }
 
 const MAX_DETAIL_LENGTH = 4096;

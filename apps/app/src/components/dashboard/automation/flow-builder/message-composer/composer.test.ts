@@ -12,19 +12,16 @@ import {
 	channelSupportsButtons,
 	channelSupportsQuickReplies,
 } from "../channel-capabilities";
+import { PREVIEW_MERGE_CONTEXT, resolveMergeTags } from "./merge-tags";
 import {
 	generateBlockId,
 	hasInteractiveElements,
+	type MessageConfig,
 	newBlock,
 	newButton,
 	newQuickReply,
 	reorder,
-	type MessageConfig,
 } from "./types";
-import {
-	PREVIEW_MERGE_CONTEXT,
-	resolveMergeTags,
-} from "./merge-tags";
 
 // ---------------------------------------------------------------------------
 // newBlock
@@ -238,26 +235,32 @@ describe("channel capabilities", () => {
 describe("resolveMergeTags", () => {
 	it("resolves contact.* tags", () => {
 		expect(
-			resolveMergeTags("Hi {{contact.first_name}}!", PREVIEW_MERGE_CONTEXT),
-		).toBe("Hi John!");
+			resolveMergeTags("Hi {{contact.name}}!", PREVIEW_MERGE_CONTEXT),
+		).toBe("Hi John Doe!");
 	});
 
 	it("resolves the bare-name shorthand as contact.<name>", () => {
-		expect(resolveMergeTags("{{first_name}}", PREVIEW_MERGE_CONTEXT)).toBe(
-			"John",
+		expect(resolveMergeTags("{{name}}", PREVIEW_MERGE_CONTEXT)).toBe(
+			"John Doe",
 		);
 	});
 
-	it("resolves run.* tags", () => {
-		expect(resolveMergeTags("{{run.id}}", PREVIEW_MERGE_CONTEXT)).toBe(
-			"run_preview",
+	it("resolves context.* tags", () => {
+		expect(
+			resolveMergeTags("{{context.order_id}}", PREVIEW_MERGE_CONTEXT),
+		).toBe("order_preview");
+	});
+
+	it("resolves state.* as an alias for context", () => {
+		expect(resolveMergeTags("{{state.order_id}}", PREVIEW_MERGE_CONTEXT)).toBe(
+			"order_preview",
 		);
 	});
 
-	it("resolves account.* tags", () => {
-		expect(resolveMergeTags("{{account.name}}", PREVIEW_MERGE_CONTEXT)).toBe(
-			"Your Account",
-		);
+	it("resolves hydrated custom fields from run context", () => {
+		expect(
+			resolveMergeTags("{{context.fields.shirt_size}}", PREVIEW_MERGE_CONTEXT),
+		).toBe("Large");
 	});
 
 	it("returns empty string for missing paths", () => {
@@ -279,9 +282,9 @@ describe("resolveMergeTags", () => {
 	it("handles multiple tags in one string", () => {
 		expect(
 			resolveMergeTags(
-				"Hi {{contact.first_name}}! Run {{run.id}}.",
+				"Hi {{contact.name}}! Order {{context.order_id}}.",
 				PREVIEW_MERGE_CONTEXT,
 			),
-		).toBe("Hi John! Run run_preview.");
+		).toBe("Hi John Doe! Order order_preview.");
 	});
 });

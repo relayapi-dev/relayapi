@@ -40,8 +40,6 @@ import {
   FlowUploadJsonResponse,
   Flows,
 } from './flows';
-import * as GroupsAPI from './groups';
-import { GroupCreateParams, GroupCreateResponse, GroupListParams, GroupListResponse, Groups } from './groups';
 import * as PhoneNumbersAPI from './phone-numbers';
 import {
   PhoneNumberListParams,
@@ -73,7 +71,6 @@ import { RequestOptions } from '../../internal/request-options';
 
 export class Whatsapp extends APIResource {
   templates: TemplatesAPI.Templates = new TemplatesAPI.Templates(this._client);
-  groups: GroupsAPI.Groups = new GroupsAPI.Groups(this._client);
   flows: FlowsAPI.Flows = new FlowsAPI.Flows(this._client);
   businessProfile: BusinessProfileAPI.BusinessProfile = new BusinessProfileAPI.BusinessProfile(this._client);
   phoneNumbers: PhoneNumbersAPI.PhoneNumbers = new PhoneNumbersAPI.PhoneNumbers(this._client);
@@ -238,7 +235,6 @@ export interface WhatsappListPhoneNumbersParams {
 }
 
 Whatsapp.Templates = Templates;
-Whatsapp.Groups = Groups;
 Whatsapp.BusinessProfile = BusinessProfile;
 Whatsapp.PhoneNumbers = PhoneNumbers;
 
@@ -259,14 +255,6 @@ export declare namespace Whatsapp {
     type TemplateRetrieveParams as TemplateRetrieveParams,
     type TemplateListParams as TemplateListParams,
     type TemplateDeleteParams as TemplateDeleteParams,
-  };
-
-  export {
-    Groups as Groups,
-    type GroupCreateResponse as GroupCreateResponse,
-    type GroupListResponse as GroupListResponse,
-    type GroupCreateParams as GroupCreateParams,
-    type GroupListParams as GroupListParams,
   };
 
   export {

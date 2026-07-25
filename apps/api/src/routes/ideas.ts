@@ -27,12 +27,17 @@ import {
 	lt,
 	sql,
 } from "drizzle-orm";
+import { mediaPublicHost } from "../lib/deployment-mode";
 import {
 	decodeTimestampIdCursor,
 	encodeTimestampIdCursor,
 	INVALID_CURSOR_BODY,
 } from "../lib/pagination-cursor";
 import { presignRelayMediaUrls } from "../lib/r2-presign";
+import {
+	loadRelayMediaPolicy,
+	type RelayMediaPolicy,
+} from "../lib/relay-media-policy";
 import {
 	resolveOperationalCreateScope,
 	workspaceScopeKey,
@@ -158,14 +163,22 @@ function serializeIdea(
 // before a browser <img>/<video> can fetch them (same as posts.ts). presignRelay-
 // MediaUrls preserves every other row field, so serializeIdea reads them unchanged.
 async function serializeIdeaWithMedia(
+	db: ReturnType<typeof createDb>,
 	env: Env,
 	row: typeof ideas.$inferSelect,
 	tagRows: (typeof tags.$inferSelect)[],
 	mediaRows: IdeaMediaView[],
+	preloadedPolicy?: RelayMediaPolicy,
 ) {
 	const presigned =
-		(await presignRelayMediaUrls(env, mediaRows, 3600, row.organizationId)) ??
-		mediaRows;
+		(await presignRelayMediaUrls(
+			db,
+			env,
+			mediaRows,
+			3600,
+			row.organizationId,
+			preloadedPolicy,
+		)) ?? mediaRows;
 	return serializeIdea(row, tagRows, presigned);
 }
 
@@ -548,16 +561,24 @@ app.openapi(listIdeas, async (c) => {
 		}
 		group.push(row);
 	}
+	const pageRelayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		allMediaRows,
+		mediaPublicHost(c.env),
+	);
 
 	return c.json(
 		{
 			data: await Promise.all(
 				data.map((row) =>
 					serializeIdeaWithMedia(
+						db,
 						c.env,
 						row,
 						tagsByIdeaId.get(row.id) ?? [],
 						mediaByIdeaId.get(row.id) ?? [],
+						pageRelayMediaPolicy,
 					),
 				),
 			),
@@ -624,7 +645,7 @@ app.openapi(getIdea, async (c) => {
 	]);
 
 	return c.json(
-		await serializeIdeaWithMedia(c.env, row, tagRows, mediaRows),
+		await serializeIdeaWithMedia(db, c.env, row, tagRows, mediaRows),
 		200,
 	);
 });
@@ -763,7 +784,7 @@ app.openapi(createIdea, async (c) => {
 			: [];
 
 	return c.json(
-		await serializeIdeaWithMedia(c.env, result.row, tagRows, []),
+		await serializeIdeaWithMedia(db, c.env, result.row, tagRows, []),
 		201,
 	);
 });
@@ -853,7 +874,7 @@ app.openapi(updateIdea, async (c) => {
 			fetchIdeaMedia(db, id, orgId),
 		]);
 		return c.json(
-			await serializeIdeaWithMedia(c.env, current, tagRows, mediaRows),
+			await serializeIdeaWithMedia(db, c.env, current, tagRows, mediaRows),
 			200,
 		);
 	}
@@ -982,7 +1003,7 @@ app.openapi(updateIdea, async (c) => {
 	]);
 
 	return c.json(
-		await serializeIdeaWithMedia(c.env, updatedRow, tagRows, mediaRows),
+		await serializeIdeaWithMedia(db, c.env, updatedRow, tagRows, mediaRows),
 		200,
 	);
 });
@@ -1370,7 +1391,7 @@ app.openapi(moveIdea, async (c) => {
 	]);
 
 	return c.json(
-		await serializeIdeaWithMedia(c.env, updatedRow, tagRows, mediaRows),
+		await serializeIdeaWithMedia(db, c.env, updatedRow, tagRows, mediaRows),
 		200,
 	);
 });
@@ -1694,7 +1715,13 @@ app.openapi(convertIdea, async (c) => {
 
 	return c.json(
 		{
-			idea: await serializeIdeaWithMedia(c.env, result.row, tagRows, mediaRows),
+			idea: await serializeIdeaWithMedia(
+				db,
+				c.env,
+				result.row,
+				tagRows,
+				mediaRows,
+			),
 			post_id: result.postId,
 			media_copied: result.mediaCopied,
 		},
@@ -1832,7 +1859,7 @@ app.openapi(uploadIdeaMedia, async (c) => {
 		.replace(/[%#?]/g, "_");
 	const coreMediaId = generateId("med_");
 	const storageKey = `${orgId}/ideas/${id}/${generateId("file_")}/${safeFilename}`;
-	const canonicalUrl = `https://media.relayapi.dev/${storageKey}`;
+	const canonicalUrl = `https://${mediaPublicHost(c.env)}/${storageKey}`;
 
 	const arrayBuffer = await file.arrayBuffer();
 	const intent = await db.transaction(async (tx) => {
@@ -1950,6 +1977,7 @@ app.openapi(uploadIdeaMedia, async (c) => {
 	);
 	if (!uploaded) throw new Error("Uploaded Idea media relation disappeared");
 	const [presigned] = (await presignRelayMediaUrls(
+		db,
 		c.env,
 		[uploaded],
 		3600,

@@ -9,6 +9,7 @@ import {
 } from "@relayapi/db";
 import { getCookieCache } from "better-auth/cookies";
 import { and, eq } from "drizzle-orm";
+import { normalizeAuthRedirect } from "../lib/auth-redirect";
 import { revokeDashboardPrincipal } from "../lib/dashboard-principal-revocation";
 import {
 	fetchRemoteDashboardContext,
@@ -16,10 +17,13 @@ import {
 	type RemoteDashboardContext,
 	resolveRemoteDashboardOrigin,
 } from "../lib/remote-dashboard";
-import { prepareUserDeletion } from "../lib/user-deletion";
+import { applyAppSecurityHeaders } from "../lib/security-headers";
+import { isSelfHostedDeployment } from "../lib/deployment-mode";
+import { deleteUserAtomically } from "../lib/user-deletion";
 
 const PROTECTED_PATHS = ["/app"];
 const AUTH_PAGES = new Set(["/login", "/signup"]);
+const DEFAULT_PRODUCTION_APP_ORIGIN = "https://relayapi.dev";
 const STATIC_ASSET_EXTENSIONS =
 	/^(js|css|woff2?|svg|png|jpg|jpeg|gif|ico|webp|map|ttf|eot)$/;
 
@@ -82,6 +86,15 @@ function shouldCheckOnboarding(path: string): boolean {
 		path.startsWith("/app") &&
 		path !== "/app/onboarding" &&
 		path !== "/app/invitations"
+	);
+}
+
+function requiresAuthoritativeSession(url: URL): boolean {
+	return (
+		url.pathname.startsWith("/app/admin") ||
+		url.pathname.startsWith("/api/admin") ||
+		(url.pathname === "/api/dashboard-context" &&
+			url.searchParams.get("authoritative") === "1")
 	);
 }
 
@@ -173,6 +186,101 @@ function createInvitationEmailSender(
 		console.warn(
 			JSON.stringify({ event: "invitation_email_delivery_unconfigured" }),
 		);
+	};
+}
+
+function createAccountEmailSender(
+	cfEnv: CfEnv,
+): NonNullable<AuthEnv["sendAccountEmail"]> {
+	return async (data) => {
+		if (!cfEnv.RESEND_API_KEY) {
+			console.error(
+				JSON.stringify({ event: "account_email_delivery_unconfigured" }),
+			);
+			throw new Error("Account email delivery is unavailable.");
+		}
+
+		const send = async () => {
+			const [{ render }, { Resend }, { AccountActionEmail }] =
+				await Promise.all([
+					import("@react-email/render"),
+					import("resend"),
+					import("../lib/emails/account-action-email"),
+				]);
+			const content = {
+				"verify-email": {
+					preview: "Verify your RelayAPI email address",
+					title: "Verify your email",
+					message:
+						"Confirm this email address to finish creating your RelayAPI account.",
+					actionLabel: "Verify email",
+					expiresIn: "one hour",
+					subject: "Verify your RelayAPI email",
+				},
+				"reset-password": {
+					preview: "Reset your RelayAPI password",
+					title: "Reset your password",
+					message: "Use this secure link to choose a new RelayAPI password.",
+					actionLabel: "Reset password",
+					expiresIn: "one hour",
+					subject: "Reset your RelayAPI password",
+				},
+				"delete-account": {
+					preview: "Confirm deletion of your RelayAPI account",
+					title: "Confirm account deletion",
+					message:
+						"Confirm that you want to permanently delete your RelayAPI account.",
+					actionLabel: "Delete my account",
+					expiresIn: "30 minutes",
+					subject: "Confirm RelayAPI account deletion",
+				},
+			}[data.kind];
+			const html = await render(
+				AccountActionEmail({
+					...content,
+					actionUrl: data.url,
+				}),
+			);
+			const tokenDigest = Array.from(
+				new Uint8Array(
+					await crypto.subtle.digest(
+						"SHA-256",
+						new TextEncoder().encode(data.token),
+					),
+				),
+				(byte) => byte.toString(16).padStart(2, "0"),
+			).join("");
+			const { error } = await new Resend(cfEnv.RESEND_API_KEY).emails.send(
+				{
+					from: "RelayAPI <notifications@relayapi.dev>",
+					to: data.email,
+					subject: content.subject,
+					html,
+				},
+				{ idempotencyKey: `account:${data.kind}:${tokenDigest}` },
+			);
+			if (error) {
+				throw new Error(
+					`Account email provider rejected request: ${error.name}`,
+				);
+			}
+			console.info(
+				JSON.stringify({ event: "account_email_sent", kind: data.kind }),
+			);
+		};
+
+		try {
+			await send();
+		} catch (error) {
+			console.error(
+				JSON.stringify({
+					event: "account_email_failed",
+					kind: data.kind,
+					error: error instanceof Error ? error.name : "UnknownError",
+				}),
+			);
+			throw new Error("Account email delivery failed.");
+		}
 	};
 }
 
@@ -288,32 +396,52 @@ async function userHasPendingInvitations(
 
 export const onRequest = defineMiddleware(async (context, next) => {
 	const path = context.url.pathname;
-
-	if (isStaticAssetPath(path)) {
-		return next();
+	const cfEnv: CfEnv = env;
+	const productionAppOrigin =
+		cfEnv.BETTER_AUTH_URL?.trim() || DEFAULT_PRODUCTION_APP_ORIGIN;
+	if (import.meta.env.PROD && context.url.protocol === "http:") {
+		const secureUrl = `${productionAppOrigin}${context.url.pathname}${context.url.search}`;
+		return applyAppSecurityHeaders(Response.redirect(secureUrl, 308), true);
 	}
 
-	const cfEnv: CfEnv = env;
+	if (isStaticAssetPath(path)) {
+		return applyAppSecurityHeaders(await next(), import.meta.env.PROD);
+	}
+
+	const publicAppOrigin =
+		cfEnv.BETTER_AUTH_URL?.trim() ||
+		(import.meta.env.PROD ? productionAppOrigin : context.url.origin);
 	const remoteDashboardOrigin = resolveRemoteDashboardOrigin(
 		cfEnv.REMOTE_DASHBOARD_ORIGIN,
 		import.meta.env.DEV,
 	);
 	if (remoteDashboardOrigin && path.startsWith("/api/")) {
 		try {
-			return await proxyRemoteDashboardRequest(
-				context.request,
-				remoteDashboardOrigin,
+			return applyAppSecurityHeaders(
+				await proxyRemoteDashboardRequest(
+					context.request,
+					remoteDashboardOrigin,
+				),
+				import.meta.env.PROD,
 			);
 		} catch (error) {
-			console.error("Remote dashboard proxy failed", error);
-			return Response.json(
-				{
-					error: {
-						code: "REMOTE_DASHBOARD_UNAVAILABLE",
-						message: "The remote dashboard is unavailable.",
+			console.error(
+				JSON.stringify({
+					event: "remote_dashboard_proxy_failed",
+					error: error instanceof Error ? error.name : "UnknownError",
+				}),
+			);
+			return applyAppSecurityHeaders(
+				Response.json(
+					{
+						error: {
+							code: "REMOTE_DASHBOARD_UNAVAILABLE",
+							message: "The remote dashboard is unavailable.",
+						},
 					},
-				},
-				{ status: 502 },
+					{ status: 502 },
+				),
+				import.meta.env.PROD,
 			);
 		}
 	}
@@ -347,19 +475,28 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
 	const getAuth = () => {
 		if (!auth) {
+			const selfHosted = isSelfHostedDeployment(cfEnv);
+			const selfHostedEmailEnabled =
+				selfHosted && cfEnv.SELF_HOSTED_FEATURE_EMAIL === "1";
 			auth = createAuth(getDb(), {
 				BETTER_AUTH_SECRET: cfEnv.BETTER_AUTH_SECRET,
-				BETTER_AUTH_URL: cfEnv.BETTER_AUTH_URL || context.url.origin,
+				BETTER_AUTH_URL: publicAppOrigin,
 				GOOGLE_CLIENT_ID: cfEnv.GOOGLE_CLIENT_ID,
 				GOOGLE_CLIENT_SECRET: cfEnv.GOOGLE_CLIENT_SECRET,
-				sendInvitationEmail: createInvitationEmailSender(
-					cfEnv,
-					cfEnv.BETTER_AUTH_URL || context.url.origin,
-				),
-				beforeRemoveMember: ({ userId, organizationId }) =>
+				sendInvitationEmail:
+					!selfHosted || selfHostedEmailEnabled
+						? createInvitationEmailSender(cfEnv, publicAppOrigin)
+						: undefined,
+				requireInvitationForSignUp: true,
+				requireEmailVerification: !selfHosted || selfHostedEmailEnabled,
+				sendAccountEmail:
+					!selfHosted || selfHostedEmailEnabled
+						? createAccountEmailSender(cfEnv)
+						: undefined,
+				afterRemoveMember: ({ userId, organizationId }) =>
 					revokeDashboardPrincipal(getDb(), cfEnv.KV, organizationId, userId),
-				beforeDeleteUser: ({ userId }) =>
-					prepareUserDeletion(getDb(), cfEnv.KV, userId),
+				deleteUserAtomically: ({ userId }) =>
+					deleteUserAtomically(getDb(), cfEnv.KV, userId),
 			});
 		}
 		return auth;
@@ -392,7 +529,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			);
 		}
 
-		return response;
+		return applyAppSecurityHeaders(response, import.meta.env.PROD);
 	};
 
 	if (shouldResolveSession(path)) {
@@ -414,7 +551,12 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			} catch (error) {
 				// Fail closed: an unavailable or malformed remote session must never
 				// become an authenticated local dashboard request.
-				console.error("Remote dashboard session resolution failed", error);
+				console.error(
+					JSON.stringify({
+						event: "remote_dashboard_session_resolution_failed",
+						error: error instanceof Error ? error.name : "UnknownError",
+					}),
+				);
 			}
 		} else {
 			let sessionState: SessionState | null = null;
@@ -424,7 +566,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			// session-resolving paths, including /app/* page views. The fallback
 			// to getSession() below still runs whenever the 5-minute cookie cache
 			// is absent or expired, preserving cookie refresh and revocation.
-			if (cfEnv.BETTER_AUTH_SECRET) {
+			if (
+				cfEnv.BETTER_AUTH_SECRET &&
+				!requiresAuthoritativeSession(context.url)
+			) {
 				const cached = (await getCookieCache(context.request, {
 					secret: cfEnv.BETTER_AUTH_SECRET,
 				})) as SessionState | null;
@@ -434,6 +579,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			if (!sessionState) {
 				const sessionResult = (await getAuth().api.getSession({
 					headers: context.request.headers,
+					query: {
+						disableCookieCache: requiresAuthoritativeSession(context.url),
+					},
 					returnHeaders: true,
 				})) as {
 					headers?: Headers | null;
@@ -530,7 +678,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	}
 
 	if (user && AUTH_PAGES.has(path)) {
-		const redirectParam = context.url.searchParams.get("redirect");
+		const redirectParam = normalizeAuthRedirect(
+			context.url.searchParams.get("redirect"),
+			"/app",
+		);
 		if (redirectParam?.startsWith("/invite/")) {
 			return redirect(redirectParam);
 		}

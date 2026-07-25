@@ -246,6 +246,7 @@ async function authorizedResponse(
 
 describe("F-04 direct-id route matrix", () => {
 	for (const testCase of routeMatrix) {
+		const authorizedStatus = testCase.name === "media get" ? "ready" : "draft";
 		it(`permits an all-workspace key to pass authorization: ${testCase.name}`, async () => {
 			const app = makeRouteApp(
 				testCase.router,
@@ -253,7 +254,7 @@ describe("F-04 direct-id route matrix", () => {
 					id: "resource",
 					organizationId: "org_a",
 					workspaceId: "ws_a",
-					status: "draft",
+					status: authorizedStatus,
 				},
 				"all",
 			);
@@ -269,7 +270,7 @@ describe("F-04 direct-id route matrix", () => {
 					id: "resource",
 					organizationId: "org_a",
 					workspaceId: "ws_allowed",
-					status: "draft",
+					status: authorizedStatus,
 				},
 				["ws_allowed"],
 			);

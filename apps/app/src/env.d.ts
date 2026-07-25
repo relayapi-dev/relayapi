@@ -4,6 +4,10 @@ declare namespace Cloudflare {
 	// Wrangler generates configured bindings in worker-configuration.d.ts.
 	// Secrets are intentionally absent from wrangler.jsonc and merge in here.
 	interface Env {
+		IDENTITY_DELETION_CONTRACT_VERSION: "0005";
+		DEPLOYMENT_MODE?: "hosted" | "self_hosted";
+		SELF_HOSTED_FEATURE_AI?: "0" | "1";
+		SELF_HOSTED_FEATURE_EMAIL?: "0" | "1";
 		DATABASE_URL?: string;
 		REMOTE_DASHBOARD_ORIGIN?: string;
 		BETTER_AUTH_SECRET: string;
@@ -11,8 +15,8 @@ declare namespace Cloudflare {
 		GOOGLE_CLIENT_ID?: string;
 		GOOGLE_CLIENT_SECRET?: string;
 		RESEND_API_KEY?: string;
-		STRIPE_SECRET_KEY: string;
-		STRIPE_PRO_PRICE_ID: string;
+		STRIPE_SECRET_KEY?: string;
+		STRIPE_PRO_PRICE_ID?: string;
 	}
 }
 

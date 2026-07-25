@@ -37,11 +37,11 @@ import {
 	generateId,
 	inboxConversations,
 	inboxMessages,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
+import { encryptAccountToken } from "../lib/account-token-crypto";
 import { encryptToken } from "../lib/crypto";
 import type { Graph } from "../schemas/automation-graph";
 import { actionRegistry } from "../services/automations/actions";
@@ -57,7 +57,13 @@ import {
 	matchAndEnroll,
 } from "../services/automations/trigger-matcher";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
+import { recordContactConsent } from "../services/contact-consent";
 import type { SendMessageRequest } from "../services/message-sender";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -85,7 +91,7 @@ function resetSendCalls() {
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "e2e-integration-org",
 		slug: `e2ei-${orgId.slice(-8)}`,
@@ -97,16 +103,23 @@ async function seedFixture() {
 	if (!ws) throw new Error("workspace insert failed");
 	workspaceId = ws.id;
 
+	const accountId = generateId("acc_");
 	const [sa] = await db
 		.insert(socialAccounts)
 		.values({
+			id: accountId,
 			organizationId: orgId,
 			workspaceId,
 			platform: "telegram",
 			platformAccountId: `tg_${generateId("acc_")}`,
 			displayName: "E2EI Bot",
 			username: "e2ei_bot",
-			accessToken: "test-token-plaintext",
+			accessToken: await encryptAccountToken(
+				"test-token-plaintext",
+				TEST_ENCRYPTION_KEY,
+				accountId,
+				"access_token",
+			),
 		})
 		.returning();
 	if (!sa) throw new Error("social account insert failed");
@@ -183,8 +196,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 beforeAll(async () => {
@@ -251,6 +264,17 @@ async function createContactWithChannel(params: {
 		platform: (params.channel ??
 			"telegram") as typeof contactChannels.$inferInsert.platform,
 		identifier: params.identifier,
+	});
+	await recordContactConsent(db, {
+		organizationId: orgId,
+		workspaceId,
+		contactId: ct.id,
+		channel: params.channel ?? "telegram",
+		purpose: "automation",
+		identifier: params.identifier,
+		status: "granted",
+		source: "automation-e2e-integration-test",
+		occurredAt: new Date(),
 	});
 	return ct;
 }
@@ -443,7 +467,11 @@ describe("11.1 lead capture flow", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		// After enrollContact, the run should be parked waiting for input
@@ -470,7 +498,11 @@ describe("11.1 lead capture flow", () => {
 			runId,
 			"alice@example.com",
 			null,
-			{ db, sendTransport: fakeSendTransport },
+			{
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		);
 		expect(outcome).toBe("advanced");
 
@@ -578,7 +610,11 @@ describe("11.2 keyword DM trigger", () => {
 				conversationId: null,
 				text: "I want PIZZA please!",
 			},
-			{ db, sendTransport: fakeSendTransport },
+			{
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		);
 		expect(hit.matched).toBe(true);
 		if (!hit.matched) throw new Error("expected match");
@@ -607,7 +643,11 @@ describe("11.2 keyword DM trigger", () => {
 				conversationId: null,
 				text: "burger please",
 			},
-			{ db, sendTransport: fakeSendTransport },
+			{
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		);
 		expect(miss.matched).toBe(false);
 		if (miss.matched) throw new Error("expected no match");
@@ -626,20 +666,26 @@ describe("11.3 comment-to-DM template", () => {
 		resetSendCalls();
 
 		// Use an instagram scope for this scenario since comment_to_dm is ig.
+		const igAccountId = generateId("acc_");
 		const [igAcc] = await db
 			.insert(socialAccounts)
 			.values({
+				id: igAccountId,
 				organizationId: orgId,
 				workspaceId,
 				platform: "instagram",
 				platformAccountId: `ig_${generateId("acc_")}`,
 				displayName: "E2EI IG",
 				username: "e2ei_ig",
-				accessToken: "test-token-plaintext",
+				accessToken: await encryptAccountToken(
+					"test-token-plaintext",
+					TEST_ENCRYPTION_KEY,
+					igAccountId,
+					"access_token",
+				),
 			})
 			.returning();
 		if (!igAcc) throw new Error("ig social_account insert failed");
-		const igAccountId = igAcc.id;
 
 		const built = buildGraphFromTemplate({
 			kind: "comment_to_dm" as TemplateKind,
@@ -706,6 +752,34 @@ describe("11.3 comment-to-DM template", () => {
 			platform: "instagram",
 			identifier: "ig_user_42",
 		});
+		await recordContactConsent(db, {
+			organizationId: orgId,
+			workspaceId,
+			contactId: ct.id,
+			channel: "instagram",
+			purpose: "automation",
+			identifier: "ig_user_42",
+			status: "granted",
+			source: "automation-e2e-integration-test",
+			occurredAt: new Date(),
+		});
+		const privateReplyCalls: Array<{
+			url: string;
+			body: Record<string, unknown>;
+		}> = [];
+		const privateReplyFetch = async (
+			input: string | URL | Request,
+			init?: RequestInit,
+		) => {
+			privateReplyCalls.push({
+				url: String(input),
+				body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+			});
+			return new Response(JSON.stringify({ message_id: "mid_private_1" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		};
 
 		const match = await matchAndEnrollOrBinding(
 			db,
@@ -718,8 +792,14 @@ describe("11.3 comment-to-DM template", () => {
 				conversationId: null,
 				postId: "post_xyz",
 				text: "info please",
+				payload: { comment_id: "ig_comment_42" },
 			},
-			{ db, sendTransport: fakeSendTransport },
+			{
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+				privateReplyFetch: privateReplyFetch as typeof fetch,
+			},
 		);
 		expect(match.matched).toBe(true);
 		if (!match.matched) throw new Error("expected match");
@@ -737,8 +817,13 @@ describe("11.3 comment-to-DM template", () => {
 			.where(eq(automationStepRuns.runId, match.runId));
 		expect(steps.some((s) => s.nodeKind === "message")).toBe(true);
 
-		// Mocked send was called with the rendered text.
-		expect(sendCalls.some((c) => c.text === "Here you go!")).toBe(true);
+		// Comment-to-DM uses Meta's private-reply endpoint, not the ordinary
+		// direct-message transport.
+		expect(privateReplyCalls).toHaveLength(1);
+		expect(privateReplyCalls[0]?.body).toEqual({
+			recipient: { comment_id: "ig_comment_42" },
+			message: { text: "Here you go!" },
+		});
 	}, 30_000);
 });
 
@@ -812,7 +897,11 @@ describe("11.4 welcome_message binding (first inbound only)", () => {
 				conversationId: null,
 				text: "hi",
 			},
-			{ db, sendTransport: fakeSendTransport },
+			{
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		);
 		expect(first.matched).toBe(true);
 		if (!first.matched) throw new Error("expected welcome to fire");
@@ -861,7 +950,11 @@ describe("11.4 welcome_message binding (first inbound only)", () => {
 				conversationId: conv.id,
 				text: "hello again",
 			},
-			{ db, sendTransport: fakeSendTransport },
+			{
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		);
 		// No default_reply binding exists AND welcome should not fire twice, so
 		// the fallback returns no_candidates.
@@ -893,7 +986,11 @@ describe("11.4 welcome_message binding (first inbound only)", () => {
 				postId: "some_post",
 				text: "nice",
 			},
-			{ db, sendTransport: fakeSendTransport },
+			{
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		);
 		expect(result.matched).toBe(false);
 		// No welcome send.
@@ -1019,7 +1116,11 @@ describe("11.4b interactive button resume", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		let run = await db.query.automationRuns.findFirst({
@@ -1038,6 +1139,7 @@ describe("11.4b interactive button resume", () => {
 		const outcome = await resumeWaitingRunOnInteractive(db, runId, "yes", {
 			db,
 			sendTransport: fakeSendTransport,
+			ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
 		});
 		expect(outcome).toBe("resumed");
 
@@ -1411,7 +1513,11 @@ describe("11.7 condition branching on tags", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 		await enrollContact(db, {
 			automationId: auto.id,
@@ -1421,7 +1527,11 @@ describe("11.7 condition branching on tags", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		const runs = await db
@@ -1531,7 +1641,11 @@ describe("11.8 per-action error handling (continue)", () => {
 				channel: "telegram",
 				entrypointId: null,
 				bindingId: null,
-				env: { db, sendTransport: fakeSendTransport },
+				env: {
+					db,
+					sendTransport: fakeSendTransport,
+					ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+				},
 			});
 
 			const run = await db.query.automationRuns.findFirst({
@@ -1650,7 +1764,11 @@ describe("11.9 internal event cross-flow enrollment", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		// A run should exist for each automation for this contact.
@@ -1744,7 +1862,11 @@ describe("11.10 cycle protection", () => {
 			channel: "telegram",
 			entrypointId: null,
 			bindingId: null,
-			env: { db, sendTransport: fakeSendTransport },
+			env: {
+				db,
+				sendTransport: fakeSendTransport,
+				ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+			},
 		});
 
 		const runs = await db

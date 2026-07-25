@@ -4,7 +4,7 @@
 // `contact_segment_memberships` (composite PK: contact_id + segment_id).
 
 import { contactSegmentMemberships, segments } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
 import type { ActionHandler, ActionRegistry } from "./types";
 
@@ -19,7 +19,9 @@ async function assertSegmentScope(
 		where: and(
 			eq(segments.id, action.segment_id),
 			eq(segments.organizationId, ctx.organizationId),
-			...(ctx.workspaceId ? [eq(segments.workspaceId, ctx.workspaceId)] : []),
+			ctx.workspaceId
+				? eq(segments.workspaceId, ctx.workspaceId)
+				: isNull(segments.workspaceId),
 		),
 	});
 	if (!segment) throw new Error("segment does not belong to automation tenant");
@@ -35,6 +37,7 @@ const segmentAdd: ActionHandler<SegmentAddAction> = async (action, ctx) => {
 			contactId: ctx.contactId,
 			segmentId: action.segment_id,
 			organizationId: ctx.organizationId,
+			scopeKey: ctx.workspaceId ? `ws/${ctx.workspaceId}` : "org",
 			source: "automation",
 		})
 		.onConflictDoNothing();

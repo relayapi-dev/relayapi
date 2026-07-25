@@ -14,8 +14,10 @@ import { notifyRealtime } from "../lib/notify-post-update";
 import type { NormalizedInboxQueueMessage as InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
 import { matchAndEnrollOrBinding } from "./automations/binding-router";
+import { resumeWaitingRunOnEvent } from "./automations/event-resume";
 import { resumeWaitingRunOnInput } from "./automations/input-resume";
 import { resumeWaitingRunOnInteractive } from "./automations/interactive-resume";
+import { resumeWaitingMessageOnReply } from "./automations/message-reply-resume";
 import type {
 	InboundEvent,
 	InboundEventKind,
@@ -877,7 +879,7 @@ const AUTOMATION_CHANNELS = new Set([
 function deriveInboundEventKind(
 	event: NormalizedInboxEvent,
 ): InboundEventKind | null {
-	if (event.type === "follow") return "follow";
+	if (event.type === "follow") return null;
 	if (event.type === "ad_click") return "ad_click";
 	if (event.type === "comment") {
 		if (event.is_live_comment) return "live_comment";
@@ -943,22 +945,49 @@ async function dispatchAutomationMatch(
 		}
 		if (!contactId) return;
 
+		// Conversation persistence happens before contact auto-creation so the
+		// current inbound message is never lost. When ensureContactForAuthor
+		// creates that contact, link the just-persisted conversation before
+		// enrollment; automation_runs.conversation_id is tenant-checked against
+		// the same contact and must never point at an unlinked conversation.
+		let internalConversationId = meta?.internal_conversation_id ?? null;
+		if (internalConversationId) {
+			const [linkedConversation] = await db
+				.update(inboxConversations)
+				.set({ contactId })
+				.where(
+					and(
+						eq(inboxConversations.id, internalConversationId),
+						eq(inboxConversations.organizationId, event.organization_id),
+						eq(inboxConversations.accountId, event.account_id),
+						sql`(${inboxConversations.contactId} IS NULL OR ${inboxConversations.contactId} = ${contactId})`,
+					),
+				)
+				.returning({ contactId: inboxConversations.contactId });
+			// Comment-thread conversations can aggregate several commenters under
+			// one post. Never attach another contact's shared thread to this run.
+			if (linkedConversation?.contactId !== contactId) {
+				internalConversationId = null;
+			}
+		}
+
 		const envAsRecord = env as unknown as Record<string, unknown>;
 
 		// Resume a waiting user_input run before firing new triggers.
 		//
-		// Only inbound MESSAGES should satisfy a user_input wait — a comment
-		// on a post must never be captured as input to a DM flow.
+		// Only ordinary inbound DMs should satisfy a user_input wait. Meta also
+		// represents story replies, story mentions, shares, and ad responses as
+		// messages; those specialized events must reach wait_event before an
+		// unrelated input run can consume them.
 		//
 		// We deliberately do NOT filter by conversation_id on the resume
 		// lookup. Comment-triggered flows park their run on the comment
 		// thread's conversation, but the button-tap that resumes them arrives
 		// on the DM-thread conversation — filtering on conversation would miss
 		// those runs. Port-key matching in interactive resume and the current
-		// input node's kind check in text resume provide the natural
-		// cross-automation filter: a button payload won't match another
-		// automation's ports, and text-input resume only advances runs whose
-		// current node is actually an `input` node.
+		// input node's kind check in text resume narrow compatible waits. When
+		// multiple runs are compatible (for example, both expose `button.yes`),
+		// the oldest consumes the inbound exactly once.
 		//
 		// Interactive payloads (button taps, quick replies, WhatsApp button_reply,
 		// Telegram callback_query) are checked FIRST — runs parked on a
@@ -966,7 +995,7 @@ async function dispatchAutomationMatch(
 		// `button.<id>` / `quick_reply.<id>` ports that must resolve before
 		// we fall through to plain-text input resumption. See
 		// `./automations/interactive-resume.ts`.
-		if (event.type === "message") {
+		if (event.type === "message" && kind === "dm_received") {
 			const resumed = await resumeWaitingRunForInput(
 				db,
 				env,
@@ -993,7 +1022,7 @@ async function dispatchAutomationMatch(
 			// "no_active_automation" miss for every follow / standalone ad_click
 			// trigger. Persisted events (`comment`, `message`) always have
 			// `internal_conversation_id` set above; non-persisted events never do.
-			conversationId: meta?.internal_conversation_id ?? null,
+			conversationId: internalConversationId,
 			text: event.text,
 			// story_reply/story_mention match on story_id (falls back to post_id
 			// for platforms that don't distinguish the two surfaces).
@@ -1007,6 +1036,10 @@ async function dispatchAutomationMatch(
 				ad_id: event.ad_id,
 				comment_id:
 					event.type === "comment" ? event.platform_event_id : undefined,
+				mention_count:
+					event.type === "comment"
+						? (event.text?.match(/(^|\s)@[A-Za-z0-9._]+/g) ?? []).length
+						: undefined,
 				message_id:
 					event.type === "message" ? event.platform_event_id : undefined,
 				interactive_payload: event.interactive_payload,
@@ -1022,6 +1055,8 @@ async function dispatchAutomationMatch(
 			},
 		};
 
+		if (await resumeWaitingRunOnEvent(db, inboundEvent, envAsRecord)) return;
+
 		await matchAndEnrollOrBinding(db, inboundEvent, envAsRecord);
 	} catch (err) {
 		console.error("[inbox-processor] automation dispatch failed:", err);
@@ -1032,8 +1067,9 @@ async function dispatchAutomationMatch(
 /**
  * Look for `waiting-for-input` runs on this contact and hand the inbound
  * message off to the interactive + text resume helpers, which validate it
- * against each run's current node (port match for interactive, input node
- * config for text) and either advance or leave the run parked.
+ * against waiting runs oldest-first (port match for interactive, node config
+ * for text). The first compatible run consumes the inbound; all others remain
+ * parked.
  *
  * The lookup filters by `(organization, contact, status=waiting,
  * waiting_for=input)` ONLY — we deliberately do NOT filter by
@@ -1105,8 +1141,10 @@ async function resumeWaitingRunForInput(
 	const attachment = event.attachment ?? null;
 	const inboundText = event.text ?? "";
 	const interactivePayload = event.interactive_payload ?? null;
-	let consumed = false;
 
+	// One inbound reply belongs to exactly one waiting flow. Walk oldest-first
+	// until a compatible run atomically consumes it, then stop; continuing would
+	// fan one user message out across every concurrent input wait for the contact.
 	for (const waiting of waitingRuns) {
 		// 1. Interactive resume — button / quick-reply taps. Runs parked on a
 		//    `message` node with branch buttons or quick replies wait on input;
@@ -1123,14 +1161,31 @@ async function resumeWaitingRunForInput(
 				envAsRecord,
 			);
 			if (outcome === "resumed") {
-				consumed = true;
-				continue;
+				return true;
 			}
 			if (outcome === "race") continue;
 			// "no_match" → fall through to the text-input resume below.
 		}
 
-		// 2. Text-input resume — runs parked on an `input` node.
+		// 2. Plain message wait — a message node with `wait_for_reply: true`
+		// advances through its canonical `next` port on an ordinary text or
+		// attachment reply. Never use this fallback for an unmatched interactive
+		// payload: a button intended for a different flow must not take `next`.
+		if (!interactivePayload) {
+			const messageOutcome = await resumeWaitingMessageOnReply(
+				db,
+				waiting.id,
+				inboundText,
+				attachment,
+				envAsRecord,
+			);
+			if (messageOutcome === "resumed") {
+				return true;
+			}
+			if (messageOutcome === "race") continue;
+		}
+
+		// 3. Text-input resume — runs parked on an `input` node.
 		//    `resumeWaitingRunOnInput` returns "race" when the run's current
 		//    node is not an `input` node, so this naturally skips runs parked
 		//    on a message-node wait (already handled above by interactive).
@@ -1144,10 +1199,10 @@ async function resumeWaitingRunForInput(
 		// Anything other than "race" means the inbound was consumed by this run
 		// — whether it advanced, retried, or completed. Suppress entrypoint
 		// matching in all those cases.
-		if (outcome !== "race") consumed = true;
+		if (outcome !== "race") return true;
 	}
 
-	return consumed;
+	return false;
 }
 
 // ---------------------------------------------------------------------------

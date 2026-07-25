@@ -34,7 +34,7 @@ export interface CatalogBindingType {
 	type: string;
 	label: string;
 	channels: string[];
-	v1_status: "wired" | "stubbed";
+	v1_status: "wired" | "provider_synced" | "stubbed";
 	[extra: string]: unknown;
 }
 
@@ -42,6 +42,9 @@ export interface CatalogActionType {
 	type: string;
 	label: string;
 	category: string;
+	channels?: string[];
+	enabled?: boolean;
+	unavailable_reason?: string;
 	[extra: string]: unknown;
 }
 
@@ -147,7 +150,9 @@ export function useAutomationCatalog(): UseAutomationCatalogResult {
 		const cached = readCache();
 		return cached ?? undefined;
 	});
-	const [isLoading, setIsLoading] = useState<boolean>(() => readCache() === null);
+	const [isLoading, setIsLoading] = useState<boolean>(
+		() => readCache() === null,
+	);
 	const [error, setError] = useState<unknown>(null);
 	const mountedRef = useRef(true);
 

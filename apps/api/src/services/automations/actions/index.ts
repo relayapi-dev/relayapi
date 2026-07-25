@@ -7,12 +7,12 @@
 import type { Action } from "../../../schemas/automation-actions";
 import type { RunContext } from "../types";
 import { automationControlHandlers } from "./automation-controls";
-import { changeMainMenuHandlers } from "./change-main-menu";
 import { commentHandlers } from "./comment";
 import { contactHandlers } from "./contact";
 import { conversationHandlers } from "./conversation";
 import { conversionHandlers } from "./conversion";
 import { fieldHandlers } from "./field";
+import { mainMenuHandlers } from "./main-menu";
 import { notifyHandlers } from "./notify";
 import { segmentHandlers } from "./segment";
 import { subscriptionHandlers } from "./subscription";
@@ -32,7 +32,7 @@ export const actionRegistry: ActionRegistry = {
 	...automationControlHandlers,
 	...contactHandlers,
 	...conversionHandlers,
-	...changeMainMenuHandlers,
+	...mainMenuHandlers,
 };
 
 export async function dispatchAction(

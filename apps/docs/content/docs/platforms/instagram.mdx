@@ -775,69 +775,94 @@ All fields go inside `target_options.instagram` on your post request.
 
 ## Automations
 
-The automations engine supports Instagram as a Tier 1 platform — both inbound conversational events (DMs, comments, mentions) and outbound send actions.
+The automations engine supports Instagram as a Tier 1 channel for inbound conversational events, message flows, live relationship checks, and Meta profile bindings.
 
-### Triggers
+### Entrypoints
 
-| Type | Fires on | Notes |
+| Kind | Fires on | Notes |
 | --- | --- | --- |
-| `instagram_dm` | Inbound direct message | Requires Instagram Login app + Messaging API permission |
-| `instagram_comment` | New comment on a post or reel | Payload includes `comment_id`, `post_id`, `parent_id`, `text` |
-| `instagram_story_reply` | Reserved for story replies | Not runtime-supported yet |
-| `instagram_story_mention` | Account @-mentioned in a story | |
-| `instagram_mention` | Account @-mentioned in post/comment | |
-| `instagram_reaction` | Message reaction added/removed | |
-| `instagram_live_comment` | Comment during a Live | Time-sensitive |
-| `instagram_postback` | Structured button / ice-breaker postback | |
-| `instagram_referral` | User arrives via an IG Ref URL | |
+| `dm_received` | Ordinary inbound DM | Optional keywords, match mode, case sensitivity, and first-message-only filter |
+| `comment_created` | New post or reel comment | Optional post IDs, keywords, and reply inclusion |
+| `story_reply` | Reply to a story | Optional story IDs and keywords |
+| `story_mention` | Account mentioned in a story | Can also resume a `wait_event` node |
+| `live_comment` | Comment during a Live | Time-sensitive |
+| `ad_click` | Click-to-message ad event | Optional ad IDs |
+| `ref_link_click` | Instagram referral link | Match selected referral IDs |
+| `share_to_dm` | Content shared into DM | Instagram-only |
+
+Instagram automations also support channel-independent `schedule`, `field_changed`, `tag_applied`, `tag_removed`, `conversion_event`, and `webhook_inbound` entrypoints. Button, quick-reply, ice-breaker, and menu postbacks resume the exact waiting run or route through the configured binding; they are not separate generic trigger kinds.
 
 <Callout type="warn">
-Instagram does not expose a follower webhook via the public Graph API. The `follow-to-dm` template uses a `manual` trigger — you enroll new followers explicitly via the API or a separate polling job.
+Instagram does not expose a public follower webhook. The `follow_to_dm` preset therefore starts on a contact's first inbound DM and performs a live `is_user_follow_business` check before sending the welcome message. It never invents a follow event or sends an unsolicited follower DM.
 </Callout>
 
-### Send nodes
+### Messages and actions
 
-All Instagram send nodes hit `https://graph.instagram.com/v25.0/{ig-user-id}/messages` (or the associated comment endpoints). See the [Instagram Messaging API](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api).
+Outbound content uses the channel-neutral `message` node. Its ordered `blocks` can contain text, images, videos, cards, galleries, and short in-message delays. Instagram supports branch buttons and up to 13 quick replies; audio and file blocks are rejected by validation or skipped with an explicit delivery result. See the [Instagram Messaging API](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api).
 
-| Node | Purpose | Required fields |
-| --- | --- | --- |
-| `instagram_send_text` | Plain text DM | `text` (supports merge tags) |
-| `instagram_send_media` | Image / video / audio DM | `url`, `media_type` (default `image`) |
-| `instagram_send_buttons` | Button template (≤3 buttons) | `text`, `buttons[]` with `type: postback | web_url` |
-| `instagram_send_quick_replies` | Text + quick-reply chips (≤13) | `text`, `quick_replies[]` with `title`, `payload?` |
-| `instagram_send_generic_template` | Carousel of cards (≤10) | `elements[]` with `title`, optional `subtitle`, `image_url`, `buttons[]` |
-| `instagram_typing` | Sender action | `off: boolean` — true sends `typing_off`, false sends `typing_on` |
-| `instagram_mark_seen` | Sender action | — |
-| `instagram_reply_to_comment` | Public comment reply | `text` (+ optional `comment_id`; defaults to the trigger's `comment_id`) |
-| `instagram_hide_comment` | Hide a comment | `comment_id` (+ falls back to trigger's `comment_id`) |
+| Surface | Instagram behavior |
+| --- | --- |
+| `message` node | Sends rendered blocks through the exact triggering account |
+| Comment private reply | Used by `comment_to_dm` and `follower_growth`; provider shape is one button-free text block |
+| `reply_to_comment` action | Posts a public reply to the triggering comment |
+| `social_profile_check` node | Live Instagram-only follow relationship branch |
+| Merge tags | `contact.name/email/phone`, `context.*` (or `state.*`), and bare contact-field shorthand |
+
+### Profile bindings
+
+Instagram exposes two provider-synchronized automation bindings:
+
+- `main_menu` — one or more postback or URL items.
+- `ice_breaker` — up to four starter questions with postback payloads.
+
+Creating or updating either binding records desired state and queues provider synchronization. The dashboard reports `pending`, `synced`, or `failed`; deleting waits for Meta's delete acknowledgement before removing the local row. Runtime-only `default_reply` and `welcome_message` bindings are also available and do not modify the Instagram profile.
 
 ### Quick example: comment → DM
 
 <Tabs items={['TypeScript', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
-await client.automations.templates.commentToDm({
+await client.automations.create({
   name: 'Spring launch comment → DM',
-  account_id: 'acc_instagram_xyz',
-  keywords: ['LINK', 'INFO'],
-  match_mode: 'contains',
-  dm_message: 'Hey {{first_name}}, here is the link you asked for: https://example.com/offer',
-  public_reply: 'Check your DMs! 📨',
-  once_per_user: true,
+  channel: 'instagram',
+  template: {
+    kind: 'comment_to_dm',
+    config: {
+      social_account_id: 'acc_instagram_xyz',
+      post_ids: ['17895...'],
+      keyword_filter: ['LINK', 'INFO'],
+      dm_message: {
+        blocks: [{ id: 'reply', type: 'text', text: 'Hey {{contact.name}}, here is the link you asked for.' }],
+      },
+      public_reply: 'Check your DMs! 📨',
+      once_per_user: true,
+      daily_cap: 500,
+    },
+  },
 });
 ```
 </Tab>
 <Tab value="curl">
 ```bash
-curl -X POST https://api.relayapi.dev/v1/automations/templates/comment-to-dm \
+curl -X POST https://api.relayapi.dev/v1/automations \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Spring launch comment → DM",
-    "account_id": "acc_instagram_xyz",
-    "keywords": ["LINK", "INFO"],
-    "dm_message": "Here is the link: https://example.com/offer",
-    "public_reply": "Check your DMs!"
+    "channel": "instagram",
+    "template": {
+      "kind": "comment_to_dm",
+      "config": {
+        "social_account_id": "acc_instagram_xyz",
+        "post_ids": ["17895..."],
+        "keyword_filter": ["LINK", "INFO"],
+        "dm_message": {
+          "blocks": [{ "id": "reply", "type": "text", "text": "Here is the link you requested." }]
+        },
+        "public_reply": "Check your DMs!",
+        "once_per_user": true
+      }
+    }
   }'
 ```
 </Tab>
@@ -845,6 +870,8 @@ curl -X POST https://api.relayapi.dev/v1/automations/templates/comment-to-dm \
 
 ### Rate limits + constraints
 
-- **Messaging**: Instagram enforces the 24-hour customer-service window. Inside 24h of the contact's last message you may DM freely; outside it, only `HUMAN_AGENT`-tagged messages are allowed (and those require a human-agent UX — not fully automated flows).
-- **Comment reply cap**: Graph API limits reply volume per post; avoid high-frequency reply bursts.
-- **Token routing**: Instagram Login tokens (IGAA prefix) route through `graph.instagram.com`; Facebook-auth legacy tokens use `graph.facebook.com`. The node handlers use `graph.instagram.com` by default — reconnect via Instagram Login if you hit a `#100` scope error.
+- **Messaging admission**: reactive sends require explicit automation consent or a bounded inbound customer-service conversation. A suppression or opt-out veto always wins.
+- **Daily caps**: quick-start presets accept `daily_cap`; admission is enforced atomically per entrypoint and UTC day.
+- **Account scope**: a preset's `social_account_id` must be active and match the automation's organization, workspace, and Instagram channel.
+- **Comment replies**: Meta controls private/public reply eligibility and volume. Wire the message node's `error` port when you need a fallback.
+- **Provider sync**: menus and ice breakers are asynchronous. Treat local `pending` state as not yet live on Instagram.

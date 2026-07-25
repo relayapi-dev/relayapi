@@ -1,18 +1,15 @@
 // apps/api/src/services/automations/actions/conversion.ts
 //
-// log_conversion_event — v1 placeholder. There is no dedicated
-// `conversion_events` table in the current schema (only an `objective` enum
-// value and aggregated `conversions` counters on posts). Until a follow-up
-// migration introduces one, this handler just logs to stderr so operators
-// can observe that the action fired without blowing up the automation run.
-//
-// Even without a persistence layer we still emit an internal
-// `conversion_event` so entrypoints listening for conversions (e.g. a
-// "purchase → send thank-you DM" flow) can fire. A future persistence
-// layer will write the row before dispatching the event.
+// log_conversion_event persists an immutable conversion fact before emitting
+// the corresponding internal trigger event.
 
+import { automationConversionEvents } from "@relayapi/db";
 import type { Action } from "../../../schemas/automation-actions";
-import { emitInternalEvent } from "../internal-events";
+import {
+	emitInternalEvent,
+	resolveTriggeringSocialAccountId,
+} from "../internal-events";
+import { applyMergeTags } from "../merge-tags";
 import type { InboundEvent } from "../trigger-matcher";
 import type { ActionHandler, ActionRegistry } from "./types";
 
@@ -25,41 +22,57 @@ const logConversionEvent: ActionHandler<LogConversionEventAction> = async (
 	action,
 	ctx,
 ) => {
-	// TODO(v1.1): persist to a real conversion_events table with (org, contact,
-	// automation_id, run_id, event_name, value, currency, created_at).
-	console.info(
-		"[automation log_conversion_event]",
-		JSON.stringify({
-			organization_id: ctx.organizationId,
-			automation_id: ctx.automationId,
-			run_id: ctx.runId,
-			contact_id: ctx.contactId,
-			event_name: action.event_name,
-			value: action.value,
-			currency: action.currency,
-		}),
-	);
+	const mergeContext = {
+		contact:
+			(ctx.context.contact as Record<string, unknown> | undefined) ?? null,
+		state: ctx.context,
+	};
+	const eventName = applyMergeTags(action.event_name, mergeContext).trim();
+	if (!eventName)
+		throw new Error("log_conversion_event: event_name is required");
+	const value = action.value
+		? applyMergeTags(action.value, mergeContext).trim()
+		: null;
+	const currency = action.currency?.trim().toUpperCase() || null;
+	const occurrenceId =
+		ctx.effectIdempotencyKeyFor?.(`conversion:${action.id}`) ??
+		`${ctx.runId}:${action.id}`;
 
-	const triggerEvent = (ctx.context as Record<string, unknown>)?.triggerEvent as
+	await ctx.db
+		.insert(automationConversionEvents)
+		.values({
+			organizationId: ctx.organizationId,
+			scopeKey: ctx.workspaceId ? `ws/${ctx.workspaceId}` : "org",
+			automationId: ctx.automationId,
+			runId: ctx.runId,
+			contactId: ctx.contactId,
+			occurrenceId,
+			eventName,
+			value,
+			currency,
+			metadata: { action_id: action.id },
+		})
+		.onConflictDoNothing({ target: automationConversionEvents.occurrenceId });
+
+	const triggerEvent = ctx.context.triggerEvent as
 		| { payload?: { _event_depth?: number } }
 		| undefined;
-	const depth = triggerEvent?.payload?._event_depth ?? 0;
 	const event: InboundEvent = {
 		kind: "conversion_event",
-		channel: (ctx.channel ?? "instagram") as InboundEvent["channel"],
+		channel: ctx.channel as InboundEvent["channel"],
 		organizationId: ctx.organizationId,
-		socialAccountId: null,
+		socialAccountId: resolveTriggeringSocialAccountId(ctx),
 		contactId: ctx.contactId,
-		conversationId: ctx.conversationId ?? null,
-		eventName: action.event_name,
+		conversationId: ctx.conversationId,
+		eventName,
 		payload: {
-			value: action.value,
-			currency: action.currency,
+			value,
+			currency,
 			source: "automation",
 			automation_id: ctx.automationId,
 			run_id: ctx.runId,
 			action_id: action.id,
-			_event_depth: depth,
+			_event_depth: triggerEvent?.payload?._event_depth ?? 0,
 		},
 	};
 	await emitInternalEvent(ctx.db, event, ctx.env);

@@ -35,6 +35,19 @@ type State = {
 	enrollmentArgs: EnrollmentArgs[];
 };
 
+class EnrollmentBlockedError extends Error {
+	constructor(
+		public readonly reason:
+			| "active_run"
+			| "reentry_disabled"
+			| "reentry_cooldown"
+			| "daily_cap",
+	) {
+		super(`automation enrollment blocked: ${reason}`);
+		this.name = "EnrollmentBlockedError";
+	}
+}
+
 const ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 const NOW = new Date();
 const WEBHOOK_ENTRYPOINT_ID = "aep_webhook";
@@ -129,11 +142,19 @@ class Chain<T> implements PromiseLike<T> {
 		return this;
 	}
 
+	leftJoin(_table: unknown, _condition: unknown): this {
+		return this;
+	}
+
 	where(_condition: unknown): this {
 		return this;
 	}
 
 	orderBy(..._columns: unknown[]): this {
+		return this;
+	}
+
+	groupBy(..._columns: unknown[]): this {
 		return this;
 	}
 
@@ -162,6 +183,9 @@ class Chain<T> implements PromiseLike<T> {
 function makeDb() {
 	return {
 		query: {
+			automationRuns: {
+				findFirst: async () => null,
+			},
 			automationWebhookReceipts: {
 				findFirst: async () => state.receipts[0],
 			},
@@ -298,6 +322,7 @@ mock.module("@relayapi/db", () => ({
 }));
 
 mock.module("../services/automations/runner", () => ({
+	EnrollmentBlockedError,
 	enrollContact: async (_db: unknown, args: EnrollmentArgs) => {
 		state.enrollmentArgs.push(args);
 		return enrollmentImpl(args);

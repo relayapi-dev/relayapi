@@ -8,6 +8,7 @@ import { apikey, eq, organizationSubscriptions } from "@relayapi/db";
 import type { APIRoute } from "astro";
 import Stripe from "stripe";
 import { requireBillingAdmin } from "@/lib/api-utils";
+import { isSelfHostedDeployment } from "@/lib/deployment-mode";
 
 type LocalSubscriptionStatus = "trialing" | "active" | "past_due" | "cancelled";
 
@@ -47,6 +48,17 @@ async function findEntitledSubscription(
 }
 
 export const POST: APIRoute = async (context) => {
+	if (isSelfHostedDeployment(env)) {
+		return Response.json(
+			{
+				error: {
+					code: "BILLING_DISABLED",
+					message: "Billing is disabled in self-hosted community mode",
+				},
+			},
+			{ status: 404 },
+		);
+	}
   const forbidden = await requireBillingAdmin(context);
   if (forbidden) return forbidden;
 

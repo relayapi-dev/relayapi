@@ -7,12 +7,12 @@
 // canonical consent ledger used by send-time enforcement.
 
 import {
-	contactSubscriptions,
 	contactChannels,
+	contactSubscriptions,
 	contacts,
 	subscriptionLists,
 } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
 import {
 	normalizeRecipientIdentifier,
@@ -33,9 +33,9 @@ async function assertListScope(
 		where: and(
 			eq(subscriptionLists.id, action.list_id),
 			eq(subscriptionLists.organizationId, ctx.organizationId),
-			...(ctx.workspaceId
-				? [eq(subscriptionLists.workspaceId, ctx.workspaceId)]
-				: []),
+			ctx.workspaceId
+				? eq(subscriptionLists.workspaceId, ctx.workspaceId)
+				: isNull(subscriptionLists.workspaceId),
 		),
 	});
 	if (!list)
@@ -68,6 +68,7 @@ const subscribeList: ActionHandler<SubscribeListAction> = async (
 	} else {
 		await db.insert(contactSubscriptions).values({
 			organizationId: ctx.organizationId,
+			scopeKey: ctx.workspaceId ? `ws/${ctx.workspaceId}` : "org",
 			contactId: ctx.contactId,
 			listId: action.list_id,
 			source: "automation",

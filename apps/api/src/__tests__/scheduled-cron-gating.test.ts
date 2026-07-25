@@ -39,6 +39,9 @@ mock.module("../services/automations/webhook-receiver", () => ({
 		"reconcileAutomationWebhookReceipts",
 	),
 }));
+mock.module("../services/automations/binding-sync", () => ({
+	reconcileAutomationBindingSyncs: counter("reconcileAutomationBindingSyncs"),
+}));
 mock.module("../services/automation-wait-reconciler", () => ({
 	reconcileAutomationWaits: counter("reconcileAutomationWaits"),
 }));
@@ -71,6 +74,9 @@ mock.module("../services/media-reliability", () => ({
 }));
 mock.module("../services/post-publish-reconciler", () => ({
 	reconcilePostPublishExecutions: counter("reconcilePostPublishExecutions"),
+}));
+mock.module("../services/provider-outcome-reconciler", () => ({
+	reconcileProviderOutcomes: counter("reconcileProviderOutcomes"),
 }));
 mock.module("../services/thread-execution-reconciler", () => ({
 	reconcileThreadExecutions: counter("reconcileThreadExecutions"),
@@ -168,6 +174,7 @@ const EVERY_MINUTE_TASKS = [
 	"processCrossPostActions",
 	"processAutomationSchedule",
 	"processAutomationInputTimeouts",
+	"reconcileAutomationBindingSyncs",
 	"reconcileAutomationWaits",
 	"processPendingStripeEvents",
 	"processBillingOutbox",
@@ -182,6 +189,7 @@ const EVERY_MINUTE_TASKS = [
 	"reconcileInboxEventEffects",
 	"reconcileMediaDeletions",
 	"reconcileMediaUploads",
+	"reconcileProviderOutcomes",
 	"reconcilePostPublishExecutions",
 	"reconcileThreadExecutions",
 	"reconcileAutomationWebhookReceipts",

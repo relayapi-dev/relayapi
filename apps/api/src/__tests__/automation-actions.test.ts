@@ -23,7 +23,6 @@ import {
 	customFieldDefinitions,
 	customFieldValues,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
@@ -31,6 +30,11 @@ import { and, eq } from "drizzle-orm";
 import { encryptAccountToken } from "../lib/account-token-crypto";
 import { dispatchAction } from "../services/automations/actions";
 import type { RunContext } from "../services/automations/types";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
@@ -42,6 +46,7 @@ const db = CONN
 	? createDb(CONN)
 	: (null as unknown as ReturnType<typeof createDb>);
 const originalFetch = globalThis.fetch;
+const originalWarn = console.warn;
 
 let dbAvailable = false;
 let orgId = "";
@@ -49,7 +54,7 @@ let workspaceId = "";
 
 async function seedFixtureOrg() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "actions-test-org",
 		slug: `actions-test-${orgId.slice(-8)}`,
@@ -77,8 +82,8 @@ async function teardownFixtureOrg() {
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
 	await db.delete(contacts).where(eq(contacts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 async function createContact(name = "actions-test-contact") {
@@ -99,6 +104,7 @@ function makeCtx(contactId: string): RunContext {
 		runId: "arun_actions_test",
 		automationId: "auto_actions_test",
 		organizationId: orgId,
+		workspaceId,
 		contactId,
 		conversationId: null,
 		channel: "telegram",
@@ -152,9 +158,67 @@ afterAll(async () => {
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
+	console.warn = originalWarn;
 });
 
 describe("action dispatcher", () => {
+	it("persists a durable conversion fact before emitting the internal event", async () => {
+		let persisted: Record<string, unknown> | undefined;
+		let conflictTarget: unknown;
+		const durableDb = {
+			insert: () => ({
+				values: (values: Record<string, unknown>) => {
+					persisted = values;
+					return {
+						onConflictDoNothing: async (options: { target: unknown }) => {
+							conflictTarget = options.target;
+						},
+					};
+				},
+			}),
+		} as unknown as RunContext["db"];
+		const ctx: RunContext = {
+			...makeCtx("ct_conversion_test"),
+			organizationId: "org_conversion_test",
+			workspaceId: "ws_conversion_test",
+			db: durableDb,
+			env: { db: durableDb, ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
+			context: {
+				contact: { name: "alice" },
+				// Stop the best-effort internal trigger at the cycle guard. This unit
+				// test is concerned with the durable write that precedes emission.
+				triggerEvent: { payload: { _event_depth: 5 } },
+			},
+		};
+		console.warn = mock(() => {});
+
+		await dispatchAction(
+			{
+				id: "conversion_1",
+				type: "log_conversion_event",
+				event_name: "purchase",
+				value: "49.00",
+				currency: "gbp",
+				on_error: "abort",
+			} as never,
+			ctx,
+		);
+
+		expect(persisted).toMatchObject({
+			organizationId: "org_conversion_test",
+			scopeKey: "ws/ws_conversion_test",
+			automationId: "auto_actions_test",
+			runId: "arun_actions_test",
+			contactId: "ct_conversion_test",
+			occurrenceId: "arun_actions_test:conversion_1",
+			eventName: "purchase",
+			value: "49.00",
+			currency: "GBP",
+			metadata: { action_id: "conversion_1" },
+		});
+		expect(conflictTarget).toBeDefined();
+	});
+
 	it("tag_add appends to contacts.tags (idempotent)", async () => {
 		if (!dbAvailable) {
 			console.warn("skipping: DB fixture unavailable");

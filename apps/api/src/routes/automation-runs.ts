@@ -10,10 +10,11 @@
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { automationRuns, automationStepRuns, automations } from "@relayapi/db";
-import { and, asc, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { and, asc, desc, eq, type SQL, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
 import { ErrorResponse } from "../schemas/common";
+import { transitionRunTerminal } from "../services/automations/runner";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -423,24 +424,16 @@ app.openapi(stopRun, async (c) => {
 	}
 
 	const db = c.get("db");
-	const [updated] = await db
-		.update(automationRuns)
-		.set({
-			status: "exited",
-			exitReason: "admin_stopped",
-			completedAt: new Date(),
-			revision: sql`${automationRuns.revision} + 1`,
-			updatedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(automationRuns.id, id),
-				eq(automationRuns.revision, run.revision),
-				inArray(automationRuns.status, ["active", "waiting"]),
-			),
-		)
-		.returning();
-	if (!updated) {
+	const stopped = await transitionRunTerminal(
+		db,
+		id,
+		run.revision,
+		run.automationId,
+		"exited",
+		"admin_stopped",
+		{ waitingFor: null, waitingUntil: null },
+	);
+	if (!stopped) {
 		return c.json(
 			{
 				error: {
@@ -451,6 +444,10 @@ app.openapi(stopRun, async (c) => {
 			422,
 		);
 	}
+	const updated = await db.query.automationRuns.findFirst({
+		where: eq(automationRuns.id, id),
+	});
+	if (!updated) return notFound(c);
 	return c.json(serializeRun(updated), 200);
 });
 

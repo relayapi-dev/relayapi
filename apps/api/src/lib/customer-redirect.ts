@@ -9,12 +9,17 @@ const ALLOWED_REDIRECT_HOSTS = new Set([
 	"localhost",
 ]);
 
-export function isAllowedCustomerRedirectUrl(url: string): boolean {
+export function isAllowedCustomerRedirectUrl(
+	url: string,
+	instanceAppHost?: string,
+): boolean {
 	try {
 		const parsed = new URL(url);
 		const host = parsed.hostname.toLowerCase();
 		const hostAllowed =
-			ALLOWED_REDIRECT_HOSTS.has(host) || host.endsWith(".localhost");
+			ALLOWED_REDIRECT_HOSTS.has(host) ||
+			host.endsWith(".localhost") ||
+			(instanceAppHost !== undefined && host === instanceAppHost.toLowerCase());
 
 		if (!hostAllowed) return false;
 

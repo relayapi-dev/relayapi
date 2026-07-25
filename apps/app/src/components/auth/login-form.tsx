@@ -2,6 +2,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import { signIn } from "../../lib/auth-client";
+import { normalizeAuthRedirect } from "../../lib/auth-redirect";
 import {
 	AuthDivider,
 	AuthShell,
@@ -39,7 +40,13 @@ export function LoginForm() {
 	const redirect = useMemo(() => {
 		if (typeof window === "undefined") return "/app";
 		const params = new URLSearchParams(window.location.search);
-		return params.get("redirect") || "/app";
+		return normalizeAuthRedirect(params.get("redirect"));
+	}, []);
+	const verificationSent = useMemo(() => {
+		if (typeof window === "undefined") return false;
+		return (
+			new URLSearchParams(window.location.search).get("verification") === "sent"
+		);
 	}, []);
 
 	const handleSubmit = async (e: React.FormEvent) => {
@@ -51,6 +58,7 @@ export function LoginForm() {
 			const { error: authError } = await signIn.email({
 				email,
 				password,
+				callbackURL: redirect,
 			});
 
 			if (authError) {
@@ -100,6 +108,11 @@ export function LoginForm() {
 				<AuthDivider />
 
 				<form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
+					{verificationSent && !error && (
+						<div className="rounded-[10px] border border-emerald-700/20 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-800">
+							Check your inbox and verify your email before signing in.
+						</div>
+					)}
 					{error && (
 						<motion.div
 							initial={{ opacity: 0, y: -8 }}
@@ -130,12 +143,20 @@ export function LoginForm() {
 					</div>
 
 					<div className="flex flex-col gap-1.5">
-						<label
-							htmlFor="password"
-							className="text-[0.8125rem] font-medium text-[#6e6a62]"
-						>
-							Password
-						</label>
+						<div className="flex items-center justify-between">
+							<label
+								htmlFor="password"
+								className="text-[0.8125rem] font-medium text-[#6e6a62]"
+							>
+								Password
+							</label>
+							<a
+								href="/forgot-password"
+								className="text-[0.75rem] font-medium text-[#1a1815] hover:underline"
+							>
+								Forgot password?
+							</a>
+						</div>
 						<div className="relative">
 							<input
 								id="password"

@@ -7,10 +7,12 @@ import {
 } from "../lib/fetch-public-url";
 import {
 	classifyPublishError,
+	type ProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
 } from "./types";
 
 const YOUTUBE_API = "https://www.googleapis.com/youtube/v3";
@@ -362,7 +364,7 @@ async function uploadVideo(
 	// resumable 5xx, query the session before sending only the uncommitted suffix.
 	// Never replay the whole body to an existing session based on an assumption.
 	// https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol
-	let uploadData: { id: string } | undefined;
+	let uploadData: { id?: string } | undefined;
 	const maxRetries = 3;
 	const resumableStatuses = new Set([500, 502, 503, 504]);
 	let resumeOffset = 0;
@@ -533,7 +535,7 @@ async function uploadVideo(
 			if (completionOutcome.status === "rejected") {
 				throw completionOutcome.reason;
 			}
-			uploadData = (await uploadRes.json()) as { id: string };
+			uploadData = (await uploadRes.json()) as { id?: string };
 			break;
 		}
 
@@ -578,8 +580,15 @@ async function uploadVideo(
 	if (!uploadData) {
 		throw new Error("YouTube video upload failed after retries");
 	}
+	const videoId = uploadData.id?.trim();
+	if (!videoId) {
+		throw new PublishError(
+			"YouTube accepted the upload but did not return a video ID; the remote outcome requires reconciliation.",
+			{ code: "PUBLISH_OUTCOME_UNKNOWN" },
+		);
+	}
 
-	return uploadData.id;
+	return videoId;
 }
 
 /**
@@ -685,7 +694,7 @@ export async function addToPlaylist(
 	auth: YouTubeAuth,
 	playlistId: string,
 	videoId: string,
-): Promise<void> {
+): Promise<string> {
 	const res = await fetch(`${YOUTUBE_API}/playlistItems?part=snippet`, {
 		method: "POST",
 		headers: {
@@ -701,14 +710,144 @@ export async function addToPlaylist(
 	});
 	if (!res.ok) {
 		const text = await res.text().catch(() => "");
-		console.warn(
-			`Failed to add video ${videoId} to playlist ${playlistId}: ${res.status} ${text}`,
+		throw new PublishError(
+			`Failed to add video ${videoId} to playlist ${playlistId}`,
+			{ statusCode: res.status, detail: text },
 		);
 	}
+	const data = (await res.json()) as { id?: string };
+	if (!data.id) {
+		throw new Error("YouTube playlist item response did not include an ID");
+	}
+	return data.id;
+}
+
+interface YouTubeVideoState {
+	id?: string;
+	processingDetails?: {
+		processingStatus?: string;
+		processingFailureReason?: string;
+	};
+	status?: {
+		uploadStatus?: string;
+		failureReason?: string;
+		rejectionReason?: string;
+		privacyStatus?: string;
+		publishAt?: string;
+	};
+}
+
+function youtubeVideoStateResult(
+	video: YouTubeVideoState,
+	effects: ProviderEffect[] = [],
+): PublishResult {
+	const videoId = video.id?.trim();
+	if (!videoId) {
+		return {
+			success: false,
+			provider_outcome: {
+				disposition: "outcome_unknown",
+				provider_state: "video_not_found",
+				effects,
+			},
+			error: {
+				code: "PUBLISH_OUTCOME_UNKNOWN",
+				message:
+					"YouTube did not return the uploaded video during reconciliation.",
+			},
+		};
+	}
+	const processing = video.processingDetails?.processingStatus?.toLowerCase();
+	const upload = video.status?.uploadStatus?.toLowerCase();
+	const providerState =
+		[upload, processing].filter(Boolean).join(":") || "unknown";
+	const shared = {
+		provider_operation_id: videoId,
+		platform_post_id: videoId,
+		platform_url: `https://www.youtube.com/watch?v=${videoId}`,
+		provider_state: providerState,
+		effects,
+	};
+	if (
+		processing === "failed" ||
+		processing === "terminated" ||
+		upload === "failed" ||
+		upload === "rejected" ||
+		upload === "deleted"
+	) {
+		const reason =
+			video.processingDetails?.processingFailureReason ??
+			video.status?.failureReason ??
+			video.status?.rejectionReason ??
+			providerState;
+		return {
+			success: false,
+			platform_post_id: videoId,
+			provider_outcome: { disposition: "failed", ...shared },
+			error: {
+				code: "CONTENT_ERROR",
+				message: `YouTube processing failed: ${reason}`,
+			},
+		};
+	}
+	if (processing === "succeeded" || upload === "processed") {
+		const publishAt = video.status?.publishAt;
+		const scheduled =
+			video.status?.privacyStatus === "private" &&
+			Boolean(publishAt && Date.parse(publishAt) > Date.now());
+		return {
+			success: true,
+			platform_post_id: videoId,
+			platform_url: shared.platform_url,
+			provider_outcome: scheduled
+				? {
+						disposition: "scheduled",
+						...shared,
+						next_reconcile_at: publishAt,
+					}
+				: { disposition: "published", ...shared },
+		};
+	}
+	return {
+		success: true,
+		platform_post_id: videoId,
+		platform_url: shared.platform_url,
+		provider_outcome: { disposition: "processing", ...shared },
+	};
 }
 
 export const youtubePublisher: Publisher = {
 	platform: "youtube",
+
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		try {
+			const videoId = request.platform_post_id ?? request.provider_operation_id;
+			if (!videoId) {
+				throw new Error(
+					"CONTENT_ERROR: YouTube reconciliation requires a video ID.",
+				);
+			}
+			// Official docs: https://developers.google.com/youtube/v3/docs/videos/list
+			// `part=processingDetails,status` returns the upload/processing lifecycle.
+			const response = await fetch(
+				`${YOUTUBE_API}/videos?part=processingDetails%2Cstatus&id=${encodeURIComponent(videoId)}`,
+				{
+					headers: { Authorization: `Bearer ${request.account.access_token}` },
+				},
+			);
+			if (!response.ok) {
+				const body = await response.text();
+				throw new PublishError(
+					`YouTube status lookup failed (${response.status})`,
+					{ statusCode: response.status, detail: body },
+				);
+			}
+			const data = (await response.json()) as { items?: YouTubeVideoState[] };
+			return youtubeVideoStateResult(data.items?.[0] ?? {}, request.effects);
+		} catch (err) {
+			return classifyPublishError(err);
+		}
+	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
@@ -797,15 +936,30 @@ export const youtubePublisher: Publisher = {
 				publishAt,
 				notifySubscribers,
 			});
+			const effects: ProviderEffect[] = [];
 
 			// Set custom thumbnail if provided in media item
 			const thumbnailItem = imageItems[0];
 			if (thumbnailItem) {
 				try {
 					await setThumbnail(auth, videoId, thumbnailItem.url);
-				} catch {
-					// Thumbnail failure should not fail the entire publish
-					// Shorts do not support custom thumbnails via API
+					effects.push({
+						name: "thumbnail",
+						status: "succeeded",
+						provider_id: videoId,
+					});
+				} catch (error) {
+					effects.push({
+						name: "thumbnail",
+						status: "failed",
+						error: {
+							code: "PLATFORM_ERROR",
+							message:
+								error instanceof Error
+									? error.message
+									: "Thumbnail upload failed",
+						},
+					});
 				}
 			}
 
@@ -813,14 +967,29 @@ export const youtubePublisher: Publisher = {
 			const firstComment = opts.first_comment as string | undefined;
 			if (firstComment) {
 				try {
-					await postFirstComment(
+					const commentId = await postFirstComment(
 						auth,
 						videoId,
 						request.account.platform_account_id,
 						firstComment,
 					);
-				} catch {
-					// First comment failure should not fail the entire publish
+					effects.push({
+						name: "first_comment",
+						status: "succeeded",
+						provider_id: commentId,
+					});
+				} catch (error) {
+					effects.push({
+						name: "first_comment",
+						status: "failed",
+						error: {
+							code: "PLATFORM_ERROR",
+							message:
+								error instanceof Error
+									? error.message
+									: "Comment creation failed",
+						},
+					});
 				}
 			}
 
@@ -828,9 +997,24 @@ export const youtubePublisher: Publisher = {
 			const playlistId = opts.playlist_id as string | undefined;
 			if (playlistId) {
 				try {
-					await addToPlaylist(auth, playlistId, videoId);
-				} catch {
-					// Playlist failure should not fail the entire publish
+					const playlistItemId = await addToPlaylist(auth, playlistId, videoId);
+					effects.push({
+						name: "playlist_item",
+						status: "succeeded",
+						provider_id: playlistItemId,
+					});
+				} catch (error) {
+					effects.push({
+						name: "playlist_item",
+						status: "failed",
+						error: {
+							code: "PLATFORM_ERROR",
+							message:
+								error instanceof Error
+									? error.message
+									: "Playlist insertion failed",
+						},
+					});
 				}
 			}
 
@@ -840,6 +1024,14 @@ export const youtubePublisher: Publisher = {
 				success: true,
 				platform_post_id: videoId,
 				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: "processing",
+					provider_operation_id: videoId,
+					platform_post_id: videoId,
+					platform_url: platformUrl,
+					provider_state: "uploaded:processing",
+					effects,
+				},
 			};
 		} catch (err) {
 			return classifyPublishError(err, { safeToRetryRateLimit: true });

@@ -1,5 +1,6 @@
 import {
 	classifyPublishError,
+	type ProviderEffect,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
@@ -83,9 +84,9 @@ export const smsPublisher: Publisher = {
 			const results: Array<{
 				phone: string;
 				sid: string | null;
+				status: string | null;
 				error: string | null;
 			}> = [];
-			let lastSid: string | null = null;
 
 			for (const phone of phoneNumbers) {
 				const params = new URLSearchParams({
@@ -117,9 +118,22 @@ export const smsPublisher: Publisher = {
 				);
 
 				if (res.ok) {
-					const data = (await res.json()) as { sid: string };
-					lastSid = data.sid;
-					results.push({ phone, sid: data.sid, error: null });
+					const data = (await res.json()) as { sid?: string; status?: string };
+					if (data.sid?.trim()) {
+						results.push({
+							phone,
+							sid: data.sid,
+							status: data.status ?? "accepted",
+							error: null,
+						});
+					} else {
+						results.push({
+							phone,
+							sid: null,
+							status: data.status ?? "accepted_without_sid",
+							error: "Twilio response did not include a Message SID",
+						});
+					}
 				} else {
 					const err = (await res.json().catch(() => ({}))) as {
 						code?: number;
@@ -128,6 +142,7 @@ export const smsPublisher: Publisher = {
 					results.push({
 						phone,
 						sid: null,
+						status: "rejected",
 						error: err.code
 							? `[${err.code}] ${err.message ?? "Unknown error"}`
 							: (err.message ?? `HTTP ${res.status}`),
@@ -136,10 +151,51 @@ export const smsPublisher: Publisher = {
 			}
 
 			const sent = results.filter((r) => r.sid !== null).length;
+			const unknown = results.filter(
+				(result) => result.status === "accepted_without_sid",
+			).length;
+			const effects: ProviderEffect[] = results.map((result, index) => ({
+				name: `recipient_${index + 1}`,
+				status: result.sid
+					? "succeeded"
+					: result.status === "accepted_without_sid"
+						? "outcome_unknown"
+						: "failed",
+				...(result.sid ? { provider_id: result.sid } : {}),
+				...(result.error
+					? {
+							error: {
+								code: "SMS_DELIVERY_REJECTED",
+								message: result.error,
+							},
+						}
+					: {}),
+			}));
+
+			if (sent === 0 && unknown > 0) {
+				return {
+					success: false,
+					provider_outcome: {
+						disposition: "outcome_unknown",
+						provider_state: `${unknown}_accepted_without_sid`,
+						effects,
+					},
+					error: {
+						code: "PUBLISH_OUTCOME_UNKNOWN",
+						message:
+							"Twilio accepted at least one message without returning its Message SID.",
+					},
+				};
+			}
 
 			if (sent === 0) {
 				return {
 					success: false,
+					provider_outcome: {
+						disposition: "failed",
+						provider_state: "all_rejected",
+						effects,
+					},
 					error: {
 						code: "SMS_DELIVERY_REJECTED",
 						message: `All SMS failed. First error: ${results[0]?.error ?? "Unknown"}`,
@@ -147,10 +203,50 @@ export const smsPublisher: Publisher = {
 				};
 			}
 
+			const successful = results.filter(
+				(result): result is typeof result & { sid: string } =>
+					result.sid !== null,
+			);
+			const onlyId = successful.length === 1 ? successful[0]?.sid : undefined;
+			if (sent !== results.length) {
+				return {
+					success: false,
+					platform_post_id: onlyId,
+					provider_outcome: {
+						disposition: "partial",
+						platform_post_id: onlyId,
+						provider_state: `${sent}_accepted_${results.length - sent}_rejected`,
+						effects,
+					},
+					error: {
+						code: "PARTIAL_DELIVERY",
+						message: `${sent} of ${results.length} Twilio messages were accepted.`,
+					},
+				};
+			}
+
+			const statuses = successful.map((result) =>
+				(result.status ?? "accepted").toLowerCase(),
+			);
+			const disposition = statuses.every((status) => status === "delivered")
+				? ("delivered" as const)
+				: statuses.every(
+							(status) => status === "sent" || status === "delivered",
+						)
+					? ("sent" as const)
+					: ("accepted" as const);
+
 			return {
 				success: true,
-				platform_post_id: lastSid ?? undefined,
+				platform_post_id: onlyId,
 				platform_url: undefined,
+				provider_outcome: {
+					disposition,
+					platform_post_id: onlyId,
+					provider_operation_id: onlyId,
+					provider_state: [...new Set(statuses)].join(","),
+					effects,
+				},
 			};
 		} catch (err) {
 			return classifyPublishError(err);

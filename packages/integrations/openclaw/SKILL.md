@@ -157,18 +157,33 @@ You can also key by account ID or workspace ID:
 
 **Option 2 — Upload first, then reference** (more reliable):
 ```bash
-# Get a presigned upload URL
-curl -X POST https://api.relayapi.dev/v1/media/presign \
+# Create a pending upload intent
+presign="$(curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/media/presign \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{ "filename": "photo.jpg", "content_type": "image/jpeg" }'
+  -d '{"filename":"photo.jpg","content_type":"image/jpeg"}')"
 
-# Upload the file to the presigned URL (returned in response)
-curl -X PUT "<presigned_url>" \
-  -H "Content-Type: image/jpeg" \
+upload_url="$(printf '%s' "$presign" | jq -r '.upload_url')"
+upload_content_type="$(printf '%s' "$presign" | jq -r '.upload_headers["Content-Type"]')"
+upload_precondition="$(printf '%s' "$presign" | jq -r '.upload_headers["If-None-Match"]')"
+media_url="$(printf '%s' "$presign" | jq -r '.url')"
+storage_key="${media_url#https://media.relayapi.dev/}"
+
+# PUT once using every exact header returned above
+curl --fail-with-body -sS -X PUT "$upload_url" \
+  -H "Content-Type: $upload_content_type" \
+  -H "If-None-Match: $upload_precondition" \
   --data-binary @photo.jpg
 
-# Use the media URL in a post
+# Confirm the object before attaching it (mandatory)
+jq -n --arg storage_key "$storage_key" '{storage_key: $storage_key}' | \
+  curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/media/confirm \
+    -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+    -H "Content-Type: application/json" \
+    --data-binary @-
+
+# Use media: [{"url": media_url, "type": "image"}] in the post body.
+# The presign response also contains the pending intent id and expires_in.
 ```
 
 **Option 3 — Direct upload:**
@@ -979,7 +994,7 @@ Headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
 - Use `target_options` to customize content per platform — different character limits and conventions require different text.
 - Use workspace IDs (`grp_*`) when the user refers to a collection of accounts by name.
 - Use validation tools before publishing to catch issues early.
-- Upload media via presigned URLs for reliability.
+- Complete the presign -> PUT with every exact returned header -> confirm flow before attaching the canonical media URL.
 - Set up webhooks for real-time notifications instead of polling.
 - When the user says "post to X", first check `GET /v1/accounts` or `GET /v1/workspaces` to resolve what "X" means.
 - When the user wants stats, use `/v1/analytics/platform/overview` for live data or `/v1/analytics` for historical data.

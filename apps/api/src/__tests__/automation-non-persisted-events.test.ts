@@ -35,22 +35,29 @@ import {
 	generateId,
 	inboxConversations,
 	inboxMessages,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
+import { encryptAccountToken } from "../lib/account-token-crypto";
 import type { InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Graph } from "../schemas/automation-graph";
 import { enrollContact } from "../services/automations/runner";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
+import { recordContactConsent } from "../services/contact-consent";
 import { processInboxEvent } from "../services/inbox-event-processor";
 import type { SendMessageRequest } from "../services/message-sender";
 import type { Env } from "../types";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -75,7 +82,7 @@ function resetSendCalls() {
 
 const testEnv = {
 	HYPERDRIVE: { connectionString: CONN },
-	ENCRYPTION_KEY: "00000000000000000000000000000000",
+	ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
 	REALTIME: {
 		idFromName: (_name: string) => ({ toString: () => "noop" }),
 		get: () => ({
@@ -88,7 +95,7 @@ const testEnv = {
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "non-persisted-org",
 		slug: `np-${orgId.slice(-8)}`,
@@ -101,32 +108,46 @@ async function seedFixture() {
 	workspaceId = ws.id;
 
 	igPlatformAccountId = `ig_${generateId("acc_")}`;
+	const instagramAccountId = generateId("acc_");
 	const [igSa] = await db
 		.insert(socialAccounts)
 		.values({
+			id: instagramAccountId,
 			organizationId: orgId,
 			workspaceId,
 			platform: "instagram",
 			platformAccountId: igPlatformAccountId,
 			displayName: "NP IG",
 			username: "np_ig",
-			accessToken: "ig-token",
+			accessToken: await encryptAccountToken(
+				"ig-token",
+				TEST_ENCRYPTION_KEY,
+				instagramAccountId,
+				"access_token",
+			),
 		})
 		.returning();
 	if (!igSa) throw new Error("IG social account insert failed");
 	igSocialAccountId = igSa.id;
 
 	fbPlatformAccountId = `fb_${generateId("acc_")}`;
+	const facebookAccountId = generateId("acc_");
 	const [fbSa] = await db
 		.insert(socialAccounts)
 		.values({
+			id: facebookAccountId,
 			organizationId: orgId,
 			workspaceId,
 			platform: "facebook",
 			platformAccountId: fbPlatformAccountId,
 			displayName: "NP FB",
 			username: "np_fb",
-			accessToken: "fb-token",
+			accessToken: await encryptAccountToken(
+				"fb-token",
+				TEST_ENCRYPTION_KEY,
+				facebookAccountId,
+				"access_token",
+			),
 		})
 		.returning();
 	if (!fbSa) throw new Error("FB social account insert failed");
@@ -171,8 +192,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 beforeAll(async () => {
@@ -255,11 +276,11 @@ function replyGraph(text: string): Graph {
 }
 
 // ---------------------------------------------------------------------------
-// G1: `follow` trigger enrolls (no FK violation)
+// G1: provider follow notifications never initiate unsolicited automations
 // ---------------------------------------------------------------------------
 
-describe("G1: follow trigger creates a valid run with conversation_id=null", () => {
-	it("Instagram follow event enrolls the contact and produces a clean run", async () => {
+describe("G1: follow notifications are intentionally ignored", () => {
+	it("Instagram follow event does not enroll or message the follower", async () => {
 		if (!dbAvailable) return;
 		resetSendCalls();
 
@@ -302,8 +323,9 @@ describe("G1: follow trigger creates a valid run with conversation_id=null", () 
 
 		await processInboxEvent(msg, testEnv, db);
 
-		// Pick up the run by automation id (contact id was auto-created by
-		// `ensureContactForAuthor`).
+		// Follow is not a public entrypoint kind. The supported follow_to_dm
+		// preset starts on the first inbound DM and checks the live relationship,
+		// so this webhook must never initiate an unsolicited message.
 		const runs = await db
 			.select({
 				id: automationRuns.id,
@@ -312,14 +334,8 @@ describe("G1: follow trigger creates a valid run with conversation_id=null", () 
 			})
 			.from(automationRuns)
 			.where(eq(automationRuns.automationId, auto.id));
-		expect(runs.length).toBe(1);
-		const run0 = runs[0];
-		if (!run0) throw new Error("expected a run");
-		expect(run0.conversationId).toBeNull();
-		// The message-node handler ran (via fake transport).
-		expect(sendCalls.some((c) => c.text === "Thanks for the follow!")).toBe(
-			true,
-		);
+		expect(runs.length).toBe(0);
+		expect(sendCalls).toHaveLength(0);
 
 		// Because it's a non-persisted event, no inbox conversation / message
 		// rows should have been created.
@@ -330,7 +346,7 @@ describe("G1: follow trigger creates a valid run with conversation_id=null", () 
 		expect(inboxConvs.length).toBe(0);
 	}, 45_000);
 
-	it("Facebook follow event enrolls the contact and produces a clean run", async () => {
+	it("Facebook follow event does not enroll or message the follower", async () => {
 		if (!dbAvailable) return;
 		resetSendCalls();
 
@@ -376,11 +392,8 @@ describe("G1: follow trigger creates a valid run with conversation_id=null", () 
 			})
 			.from(automationRuns)
 			.where(eq(automationRuns.automationId, auto.id));
-		expect(runs.length).toBe(1);
-		const run0 = runs[0];
-		if (!run0) throw new Error("expected a run");
-		expect(run0.conversationId).toBeNull();
-		expect(sendCalls.some((c) => c.text === "Welcome!")).toBe(true);
+		expect(runs.length).toBe(0);
+		expect(sendCalls).toHaveLength(0);
 	}, 45_000);
 });
 
@@ -411,6 +424,17 @@ describe("G2: standalone ad_click / referral creates a valid run", () => {
 		});
 
 		const clickerId = `igad_${generateId("").slice(-8)}`;
+		await recordContactConsent(db, {
+			organizationId: orgId,
+			workspaceId,
+			contactId: null,
+			channel: "instagram",
+			purpose: "automation",
+			identifier: clickerId,
+			status: "granted",
+			source: "automation-non-persisted-events-test",
+			occurredAt: new Date(),
+		});
 		const msg: InboxQueueMessage = {
 			type: "instagram_webhook",
 			platform: "instagram",
@@ -472,6 +496,17 @@ describe("G2: standalone ad_click / referral creates a valid run", () => {
 		});
 
 		const clickerId = `fbad_${generateId("").slice(-8)}`;
+		await recordContactConsent(db, {
+			organizationId: orgId,
+			workspaceId,
+			contactId: null,
+			channel: "facebook",
+			purpose: "automation",
+			identifier: clickerId,
+			status: "granted",
+			source: "automation-non-persisted-events-test",
+			occurredAt: new Date(),
+		});
 		const msg: InboxQueueMessage = {
 			type: "facebook_webhook",
 			platform: "facebook",

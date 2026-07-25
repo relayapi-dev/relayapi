@@ -219,9 +219,7 @@ export const discordPublisher: Publisher = {
 			if (media.length > 0) {
 				if (media.length > 10) {
 					// Official docs: https://docs.discord.com/developers/resources/webhook#execute-webhook
-					// Section "Execute Webhook" permits up to 10 embed objects. Media
-					// fetch failures fall back to one embed per item, so cap the input
-					// instead of silently losing attachments in that documented path.
+					// Section "Execute Webhook" permits at most 10 attachments.
 					return {
 						success: false,
 						error: {
@@ -286,12 +284,18 @@ export const discordPublisher: Publisher = {
 								pendingFileResponses.push(mediaRes);
 							} else {
 								void mediaRes.body?.cancel().catch(() => {});
-								// Fallback to embed URL
-								embeds.push({ image: { url: item.url } });
+								throw new PublishError(
+									`Discord attachment fetch failed (${mediaRes.status})`,
+									{
+										statusCode: mediaRes.status,
+										detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}`,
+									},
+								);
 							}
-						} catch {
-							// Fallback to embed URL
-							embeds.push({ image: { url: item.url } });
+						} catch (error) {
+							throw error instanceof Error
+								? error
+								: new Error("Discord attachment fetch failed");
 						}
 					}
 				}
@@ -409,9 +413,14 @@ export const discordPublisher: Publisher = {
 			}
 
 			const result = (await res.json()) as {
-				id: string;
-				channel_id: string;
+				id?: string;
+				channel_id?: string;
 			};
+			if (!result.id?.trim()) {
+				throw new Error(
+					"Discord returned a successful webhook response without a message ID.",
+				);
+			}
 
 			// Try to get guild_id from the webhook info to build a jump URL
 			// The unauthenticated endpoint requires both webhook ID and token in the URL
@@ -428,7 +437,9 @@ export const discordPublisher: Publisher = {
 					if (webhookInfo.ok) {
 						const info = (await webhookInfo.json()) as { guild_id?: string };
 						if (info.guild_id) {
-							platformUrl = `https://discord.com/channels/${info.guild_id}/${result.channel_id}/${result.id}`;
+							if (result.channel_id) {
+								platformUrl = `https://discord.com/channels/${info.guild_id}/${result.channel_id}/${result.id}`;
+							}
 						}
 					}
 				}
@@ -440,6 +451,12 @@ export const discordPublisher: Publisher = {
 				success: true,
 				platform_post_id: result.id,
 				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: "published",
+					platform_post_id: result.id,
+					platform_url: platformUrl,
+					provider_state: "created",
+				},
 			};
 		} catch (err) {
 			await cancelPendingFiles();

@@ -13,6 +13,7 @@ import {
 	type SyncQueueMessage,
 } from "../services/external-post-sync/types";
 import type { Env } from "../types";
+import { syncAutomationBinding } from "../services/automations/binding-sync";
 import { recordQueueFailure } from "./failures";
 
 type SyncMessage = SyncQueueMessage | AnalyticsQueueMessage;
@@ -34,6 +35,9 @@ export async function consumeSyncQueue(
 					break;
 				case "generate_external_preview":
 					await processExternalPostPreview(env, body);
+					break;
+				case "sync_automation_binding":
+					await syncAutomationBinding(env, body);
 					break;
 				case "refresh_internal_metrics":
 					await refreshInternalPostMetrics(env, body);

@@ -14,11 +14,14 @@ import {
 	createDb,
 	eq,
 	generateId,
-	organization,
 } from "@relayapi/db";
 import { Hono } from "hono";
 import usageApp from "../routes/usage";
 import type { Env, Variables } from "../types";
+import {
+	deleteOwnedFixtureOrganization,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -61,7 +64,7 @@ function logRow(method: string, path: string, createdAt: Date) {
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "timeseries-test-org",
 		slug: `ts-test-${orgId.slice(-8)}`,
@@ -81,7 +84,7 @@ async function seedFixture() {
 async function teardownFixture() {
 	if (!orgId) return;
 	await db.delete(apiRequestLogs).where(eq(apiRequestLogs.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 function makeApp() {

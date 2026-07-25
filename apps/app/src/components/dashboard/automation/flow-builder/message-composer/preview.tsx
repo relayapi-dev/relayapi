@@ -4,9 +4,12 @@
 // in using `PREVIEW_MERGE_CONTEXT`. No backend call — pure client render.
 
 import { cn } from "@/lib/utils";
-import { channelDisplayName, channelSupportsBlock } from "../channel-capabilities";
+import {
+	channelDisplayName,
+	channelSupportsBlock,
+} from "../channel-capabilities";
 import type { ChannelCapabilities } from "../use-catalog";
-import { resolveMergeTags, PREVIEW_MERGE_CONTEXT } from "./merge-tags";
+import { PREVIEW_MERGE_CONTEXT, resolveMergeTags } from "./merge-tags";
 import type { MessageBlock, MessageConfig, QuickReply } from "./types";
 
 interface Props {
@@ -46,8 +49,8 @@ export function Preview({ config, channel, channelCapabilities }: Props) {
 				</div>
 			</div>
 			<p className="mt-2 text-center text-[10px] text-[#94a3b8]">
-				Merge tags use placeholder values (e.g. {"{{"}contact.first_name{"}} "}
-				= John).
+				Merge tags use placeholder values (e.g. {"{{"}contact.name{"}} "}= John
+				Doe).
 			</p>
 		</div>
 	);

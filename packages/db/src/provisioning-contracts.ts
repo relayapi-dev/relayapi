@@ -18,6 +18,34 @@ export const ORGANIZATION_PROVISIONING_CONTRACT = {
 	defaultIdeaGroupName: "Unassigned",
 } as const;
 
+/** Atomic identity and organization-ownership invariants in the auth schema. */
+export const AUTH_IDENTITY_INVARIANT_CONTRACTS = {
+	activeOrganizationOwner: {
+		functionSchema: "auth",
+		functionName: "enforce_active_organization_owner",
+		triggerName: "enforce_active_organization_owner_at_commit",
+		tableSchema: "auth",
+		tableName: "organization",
+		watchedColumns: ["lifecycle_status"],
+	},
+	memberOwnerAndCredentialExit: {
+		functionSchema: "auth",
+		functionName: "enforce_organization_owner_invariant",
+		triggerName: "enforce_organization_owner_before_write",
+		tableSchema: "auth",
+		tableName: "member",
+		watchedColumns: ["role", "organizationId"],
+	},
+	userDashboardPrincipalCleanup: {
+		functionSchema: "auth",
+		functionName: "delete_dashboard_principals_before_user",
+		triggerName: "delete_dashboard_principals_before_user",
+		tableSchema: "auth",
+		tableName: "user",
+		watchedColumns: [],
+	},
+} as const;
+
 /**
  * Scope/workspace copies on child rows are database projections, not caller
  * authority. PostgreSQL fills these fields before NOT NULL, generated-column,
@@ -183,6 +211,12 @@ export const PARENT_IDENTITY_PROJECTIONS = [
 		scopeProjection,
 	),
 	projection(
+		"automation_entrypoint_daily_counts",
+		"automation_entrypoints",
+		"entrypoint_id",
+		scopeProjection,
+	),
+	projection(
 		"automation_bindings",
 		"automations",
 		"automation_id",
@@ -192,6 +226,12 @@ export const PARENT_IDENTITY_PROJECTIONS = [
 		"automation_runs",
 		"automations",
 		"automation_id",
+		scopeProjection,
+	),
+	projection(
+		"automation_conversion_events",
+		"automation_runs",
+		"run_id",
 		scopeProjection,
 	),
 	projection(

@@ -16,15 +16,21 @@ import {
 	contacts,
 	createDb,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import { encryptAccountToken } from "../lib/account-token-crypto";
 import type { Graph } from "../schemas/automation-graph";
+import { buildCommentPrivateReplyRequest } from "../services/automations/nodes/message";
 import { enrollContact } from "../services/automations/runner";
+import { recordContactConsent } from "../services/contact-consent";
 import type { SendMessageRequest } from "../services/message-sender";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
 
@@ -42,7 +48,7 @@ let workspaceId = "";
 
 async function seedFixtureOrg() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "message-handler-test-org",
 		slug: `msg-handler-${orgId.slice(-8)}`,
@@ -65,8 +71,8 @@ async function teardownFixtureOrg() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 async function createAutomation(graph: Graph, channel = "telegram") {
@@ -105,6 +111,17 @@ async function createContactWithChannel(
 		socialAccountId,
 		platform: platform as typeof contactChannels.$inferInsert.platform,
 		identifier,
+	});
+	await recordContactConsent(db, {
+		organizationId: orgId,
+		workspaceId,
+		contactId: ct.id,
+		channel: platform,
+		purpose: "automation",
+		identifier,
+		status: "granted",
+		source: "automation-message-handler-test",
+		occurredAt: new Date(),
 	});
 	return ct;
 }
@@ -150,6 +167,34 @@ afterAll(async () => {
 });
 
 describe("automation message handler", () => {
+	it("builds official Instagram and Facebook private-reply requests", () => {
+		expect(
+			buildCommentPrivateReplyRequest("instagram", {
+				commentId: "comment_ig",
+				accountPlatformId: "ig_business_1",
+				accessToken: "IGAA-token",
+				text: "Thanks!",
+			}),
+		).toEqual({
+			url: expect.stringContaining("/ig_business_1/messages"),
+			body: {
+				recipient: { comment_id: "comment_ig" },
+				message: { text: "Thanks!" },
+			},
+		});
+		expect(
+			buildCommentPrivateReplyRequest("facebook", {
+				commentId: "comment_fb",
+				accountPlatformId: "page_1",
+				accessToken: "page-token",
+				text: "Thanks!",
+			}),
+		).toEqual({
+			url: expect.stringContaining("/comment_fb/private_replies"),
+			body: { message: "Thanks!" },
+		});
+	});
+
 	it("renders a text block with buttons and parks the run on wait_input", async () => {
 		if (!dbAvailable) {
 			console.warn("skipping: DB fixture unavailable");

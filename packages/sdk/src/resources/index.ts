@@ -164,7 +164,25 @@ export {
   type ContentTemplateUpdateParams,
   type ContentTemplateListParams,
 } from './content-templates';
-export { Inbox } from './inbox/inbox';
+export {
+  Inbox,
+  type InboxPlatform,
+  type InboxConversationType,
+  type InboxConversationStatus,
+  type InboxClassifyParams,
+  type InboxClassifyResponse,
+  type InboxSuggestReplyParams,
+  type InboxSuggestReplyResponse,
+  type InboxSummarizeParams,
+  type InboxSummarizeResponse,
+  type InboxFeedConversation,
+  type InboxPrioritiesParams,
+  type InboxPrioritiesResponse,
+  type InboxSearchParams,
+  type InboxSearchResponse,
+  type InboxStatsParams,
+  type InboxStatsResponse,
+} from './inbox/inbox';
 export {
   Media,
   type MediaListResponse,
@@ -285,6 +303,8 @@ export {
   type AutomationInsightsParams,
   type AutomationGlobalInsightsParams,
   type AutomationTemplateInput,
+  type AutomationTemplateKind,
+  type FollowToDmTemplateConfig,
   type AutomationChannel,
   type AutomationStatus,
   type AutomationGraph,

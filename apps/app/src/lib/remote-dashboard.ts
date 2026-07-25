@@ -223,7 +223,11 @@ export async function fetchRemoteDashboardContext(
 	const userAgent = request.headers.get("user-agent");
 	if (userAgent) headers.set("user-agent", userAgent);
 
-	const response = await fetch(new URL(REMOTE_CONTEXT_PATH, remoteOrigin), {
+	const contextUrl = new URL(REMOTE_CONTEXT_PATH, remoteOrigin);
+	if (new URL(request.url).pathname.startsWith("/app/admin")) {
+		contextUrl.searchParams.set("authoritative", "1");
+	}
+	const response = await fetch(contextUrl, {
 		headers,
 		cache: "no-store",
 	});

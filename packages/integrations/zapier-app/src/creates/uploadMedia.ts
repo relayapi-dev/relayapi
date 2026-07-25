@@ -18,7 +18,11 @@ const perform = async (z: ZObject, bundle: Bundle) => {
     }),
   });
 
-  const presign = presignResponse.data as { upload_url: string; url: string };
+  const presign = presignResponse.data as {
+    upload_url: string;
+    upload_headers: { 'Content-Type': string; 'If-None-Match': '*' };
+    url: string;
+  };
 
   // Zapier file fields contain a temporary, authenticated download URL. Stream
   // that response into R2 so large files are not copied into an extra Buffer.
@@ -33,7 +37,7 @@ const perform = async (z: ZObject, bundle: Bundle) => {
     url: presign.upload_url,
     method: 'PUT',
     headers: {
-      'Content-Type': contentType,
+      ...presign.upload_headers,
       ...(contentLength && /^\d+$/.test(contentLength)
         ? { 'Content-Length': contentLength }
         : {}),

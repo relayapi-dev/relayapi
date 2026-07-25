@@ -38,9 +38,7 @@ async function resolveRoundRobinUserId(
 	return row?.userId ?? null;
 }
 
-async function requireConversationId(
-	ctx: RunContext,
-): Promise<string | null> {
+async function requireConversationId(ctx: RunContext): Promise<string | null> {
 	return ctx.conversationId ?? null;
 }
 

@@ -18,6 +18,7 @@ export function derivePorts(node: NodeLike): AutomationPort[] {
 		case "message": {
 			const ports: AutomationPort[] = [{ key: "in", direction: "input" }];
 			ports.push({ key: "next", direction: "output", role: "default" });
+			ports.push({ key: "error", direction: "output", role: "error" });
 
 			const blocks = Array.isArray(cfg.blocks)
 				? (cfg.blocks as Array<Record<string, unknown>>)
@@ -35,22 +36,12 @@ export function derivePorts(node: NodeLike): AutomationPort[] {
 						}
 					}
 				}
-				if (b?.type === "card" && Array.isArray(b?.buttons)) {
-					for (const btn of b.buttons as Array<Record<string, unknown>>) {
-						if (btn?.type === "branch" && typeof btn.id === "string") {
-							ports.push({
-								key: `button.${btn.id}`,
-								direction: "output",
-								role: "interactive",
-								label: typeof btn.label === "string" ? btn.label : undefined,
-							});
-						}
-					}
-				}
 				if (b?.type === "gallery" && Array.isArray(b?.cards)) {
 					for (const card of b.cards as Array<Record<string, unknown>>) {
 						if (Array.isArray(card?.buttons)) {
-							for (const btn of card.buttons as Array<Record<string, unknown>>) {
+							for (const btn of card.buttons as Array<
+								Record<string, unknown>
+							>) {
 								if (btn?.type === "branch" && typeof btn.id === "string") {
 									ports.push({
 										key: `button.${btn.id}`,
@@ -80,8 +71,14 @@ export function derivePorts(node: NodeLike): AutomationPort[] {
 				}
 			}
 
-			if (cfg.wait_for_reply && cfg.no_response_timeout_min) {
-				ports.push({ key: "no_response", direction: "output", role: "timeout" });
+			// Mirrors the server: interactive messages wait implicitly, therefore a
+			// configured timeout always derives the `no_response` port.
+			if (cfg.no_response_timeout_min) {
+				ports.push({
+					key: "no_response",
+					direction: "output",
+					role: "timeout",
+				});
 			}
 			return ports;
 		}
@@ -99,6 +96,32 @@ export function derivePorts(node: NodeLike): AutomationPort[] {
 			return [
 				{ key: "in", direction: "input" },
 				{ key: "next", direction: "output", role: "default" },
+			];
+
+		case "wait_event":
+			return [
+				{ key: "in", direction: "input" },
+				{ key: "received", direction: "output", role: "success" },
+				{ key: "timeout", direction: "output", role: "timeout" },
+				{ key: "error", direction: "output", role: "error" },
+			];
+
+		case "social_profile_check":
+			return [
+				{ key: "in", direction: "input" },
+				{
+					key: "follows",
+					direction: "output",
+					role: "branch",
+					label: "Follows",
+				},
+				{
+					key: "not_follows",
+					direction: "output",
+					role: "branch",
+					label: "Does not follow",
+				},
+				{ key: "error", direction: "output", role: "error" },
 			];
 
 		case "condition":
@@ -119,10 +142,7 @@ export function derivePorts(node: NodeLike): AutomationPort[] {
 						key: `variant.${v.key}`,
 						direction: "output",
 						role: "branch",
-						label:
-							typeof v.label === "string"
-								? v.label
-								: (v.key as string),
+						label: typeof v.label === "string" ? v.label : (v.key as string),
 					});
 				}
 			}

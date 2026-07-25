@@ -1,39 +1,41 @@
 {
-  "name": "@relayapi/docs",
-  "version": "0.0.1",
-  "scripts": {
-    "dev": "bun run generate-docs && next dev",
-    "docs:check": "bun ./scripts/generate-docs.ts --check",
-    "build": "opennextjs-cloudflare build",
-    "build:next": "bun run generate-docs && fumadocs-mdx && next build",
-    "build:worker": "bun run build",
-    "start": "next start",
-    "generate-docs": "bun ./scripts/generate-docs.ts",
-    "postinstall": "fumadocs-mdx"
-  },
-  "dependencies": {
-    "@radix-ui/react-popover": "catalog:",
-    "@tailwindcss/postcss": "catalog:",
-    "class-variance-authority": "catalog:",
-    "fumadocs-core": "catalog:",
-    "fumadocs-mdx": "catalog:",
-    "fumadocs-openapi": "catalog:",
-    "fumadocs-ui": "catalog:",
-    "lucide-react": "catalog:",
-    "next": "catalog:",
-    "react": "catalog:",
-    "react-dom": "catalog:",
-    "shiki": "catalog:",
-    "tailwind-merge": "catalog:",
-    "tailwindcss": "catalog:"
-  },
-  "devDependencies": {
-    "@opennextjs/cloudflare": "catalog:",
-    "@types/mdx": "catalog:",
-    "@types/node": "catalog:",
-    "@types/react": "catalog:",
-    "@types/react-dom": "catalog:",
-    "json-schema-typed": "catalog:",
-    "typescript": "catalog:"
-  }
+	"name": "@relayapi/docs",
+	"version": "0.0.1",
+	"scripts": {
+		"dev": "bun run generate-docs && next dev",
+		"docs:check": "bun ./scripts/generate-docs.ts --check",
+		"build": "opennextjs-cloudflare build",
+		"build:next": "bun run generate-docs && fumadocs-mdx && next build",
+		"build:worker": "bun run build",
+		"deploy": "wrangler deploy --config wrangler.jsonc",
+		"deploy:dry-run": "wrangler deploy --config wrangler.jsonc --dry-run",
+		"start": "next start",
+		"generate-docs": "bun ./scripts/generate-docs.ts",
+		"postinstall": "fumadocs-mdx"
+	},
+	"dependencies": {
+		"@radix-ui/react-popover": "catalog:",
+		"@tailwindcss/postcss": "catalog:",
+		"class-variance-authority": "catalog:",
+		"fumadocs-core": "catalog:",
+		"fumadocs-mdx": "catalog:",
+		"fumadocs-openapi": "catalog:",
+		"fumadocs-ui": "catalog:",
+		"lucide-react": "catalog:",
+		"next": "catalog:",
+		"react": "catalog:",
+		"react-dom": "catalog:",
+		"shiki": "catalog:",
+		"tailwind-merge": "catalog:",
+		"tailwindcss": "catalog:"
+	},
+	"devDependencies": {
+		"@opennextjs/cloudflare": "catalog:",
+		"@types/mdx": "catalog:",
+		"@types/node": "catalog:",
+		"@types/react": "catalog:",
+		"@types/react-dom": "catalog:",
+		"json-schema-typed": "catalog:",
+		"typescript": "catalog:"
+	}
 }

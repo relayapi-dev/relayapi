@@ -1,19 +1,23 @@
-import type { MessageBlock, QuickReply } from "../../../schemas/automation-graph";
+import type { MessageBlock } from "../../../schemas/automation-graph";
 import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
 type StoryLeadsConfig = {
 	story_ids?: string[] | null;
 	keyword_filter?: string[];
-	dm_message?: { blocks: MessageBlock[]; quick_replies?: QuickReply[] };
+	dm_message?: { blocks: MessageBlock[] };
 	capture_field?: "email" | "phone";
 	success_tag?: string;
 	social_account_id?: string;
+	daily_cap?: number;
 };
 
 export function buildStoryLeads(
 	input: TemplateBuildInput,
 ): TemplateBuildOutput {
+	if (input.channel !== "instagram") {
+		throw new Error("story_leads is only available for Instagram");
+	}
 	const cfg = (input.config ?? {}) as StoryLeadsConfig;
 	const socialAccountId = input.socialAccountId ?? cfg.social_account_id;
 	const captureField = cfg.capture_field ?? "email";
@@ -45,7 +49,6 @@ export function buildStoryLeads(
 					title: "Ask for the lead info",
 					config: {
 						blocks: promptBlocks,
-						quick_replies: cfg.dm_message?.quick_replies,
 					},
 					ports: [],
 				},
@@ -74,7 +77,7 @@ export function buildStoryLeads(
 							},
 							{
 								id: "act_field",
-								type: "field_set",
+								type: "contact_field_set",
 								field: captureField,
 								value: `{{state.${captureField}}}`,
 								on_error: "continue",
@@ -143,6 +146,7 @@ export function buildStoryLeads(
 					keywords: cfg.keyword_filter,
 				},
 				socialAccountId: socialAccountId ?? null,
+				dailyCap: cfg.daily_cap ?? null,
 			},
 		],
 	};

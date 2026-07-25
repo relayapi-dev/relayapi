@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 type Manifest = {
 	schemaVersion: 2;
@@ -41,10 +42,20 @@ const current = JSON.parse(
 	),
 ) as Manifest;
 
+// Git pathspecs are relative to Git's process cwd, while this package script is
+// intentionally callable from either the monorepo root or packages/db. Anchor
+// every repository read so a cwd change can never turn an existing protected
+// history into the one-time bootstrap path.
+const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
+
 try {
-	execFileSync("git", ["cat-file", "-e", `${baseSha}^{commit}`], {
-		stdio: ["ignore", "pipe", "pipe"],
-	});
+	execFileSync(
+		"git",
+		["-C", repositoryRoot, "cat-file", "-e", `${baseSha}^{commit}`],
+		{
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
 } catch (error) {
 	throw new Error(
 		`MIGRATION_BASE_SHA ${baseSha} is not an available commit; fetch the comparison history before running the append-only gate`,
@@ -55,7 +66,7 @@ try {
 const manifestPath = "packages/db/drizzle/migration-manifest.json";
 const baseTreePath = execFileSync(
 	"git",
-	["ls-tree", "--name-only", baseSha, "--", manifestPath],
+	["-C", repositoryRoot, "ls-tree", "--name-only", baseSha, "--", manifestPath],
 	{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
 ).trim();
 if (!baseTreePath) {
@@ -74,10 +85,14 @@ if (baseTreePath !== manifestPath) {
 
 let baseText: string;
 try {
-	baseText = execFileSync("git", ["show", `${baseSha}:${manifestPath}`], {
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "pipe"],
-	});
+	baseText = execFileSync(
+		"git",
+		["-C", repositoryRoot, "show", `${baseSha}:${manifestPath}`],
+		{
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
 } catch (error) {
 	throw new Error(
 		`Could not read the protected migration manifest from ${baseSha}`,

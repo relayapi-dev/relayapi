@@ -33,5 +33,23 @@ export {
   type NoteCreateParams,
   type NoteUpdateParams,
 } from './conversations';
-export { Inbox } from './inbox';
+export {
+  Inbox,
+  type InboxPlatform,
+  type InboxConversationType,
+  type InboxConversationStatus,
+  type InboxClassifyParams,
+  type InboxClassifyResponse,
+  type InboxSuggestReplyParams,
+  type InboxSuggestReplyResponse,
+  type InboxSummarizeParams,
+  type InboxSummarizeResponse,
+  type InboxFeedConversation,
+  type InboxPrioritiesParams,
+  type InboxPrioritiesResponse,
+  type InboxSearchParams,
+  type InboxSearchResponse,
+  type InboxStatsParams,
+  type InboxStatsResponse,
+} from './inbox';
 export { Reviews, type ReviewListResponse, type ReviewListParams } from './reviews/index';

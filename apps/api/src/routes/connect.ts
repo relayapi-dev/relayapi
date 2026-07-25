@@ -19,6 +19,7 @@ import { encryptAccountToken } from "../lib/account-token-crypto";
 import { parseApiKeyWorkspaceScope } from "../lib/api-key-workspace-scope";
 import { maybeDecrypt, maybeEncrypt } from "../lib/crypto";
 import { isAllowedCustomerRedirectUrl } from "../lib/customer-redirect";
+import { appPublicOrigin } from "../lib/deployment-mode";
 import { sha256Hex } from "../lib/durable-operation";
 import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
 import { buildMailchimpApiUrl, getMailchimpDatacenter } from "../lib/mailchimp";
@@ -3645,13 +3646,17 @@ app.openapi(startOAuth, async (c) => {
 	const method = query.method ?? undefined;
 	const headless = query.headless === "true";
 	// Customer's redirect URL — where we redirect after the OAuth exchange completes.
-	// Default to app.relayapi.dev (which is in the redirect allowlist); api.relayapi.dev
-	// is intentionally NOT allowlisted, so it cannot be used as a fallback.
+	const instanceAppOrigin = appPublicOrigin(c.env);
 	const customerRedirectUrl =
-		query.redirect_url ?? "https://app.relayapi.dev/connect/callback";
+		query.redirect_url ?? `${instanceAppOrigin}/connect/callback`;
 
 	// SECURITY: Validate redirect_url against allowed domains and protocols.
-	if (!isAllowedCustomerRedirectUrl(customerRedirectUrl)) {
+	if (
+		!isAllowedCustomerRedirectUrl(
+			customerRedirectUrl,
+			new URL(instanceAppOrigin).hostname,
+		)
+	) {
 		return c.json(
 			{
 				error: {
@@ -3761,13 +3766,17 @@ app.openapi(completeOAuth, async (c) => {
 	const { platform } = c.req.valid("param");
 	const body = c.req.valid("json");
 
-	// Default to app.relayapi.dev (allowlisted); api.relayapi.dev is intentionally
-	// not in the redirect allowlist, so it cannot be used as a fallback.
+	const instanceAppOrigin = appPublicOrigin(c.env);
 	const customerRedirectUrl =
-		body.redirect_url ?? "https://app.relayapi.dev/connect/callback";
+		body.redirect_url ?? `${instanceAppOrigin}/connect/callback`;
 
 	// SECURITY: Validate redirect_url against allowed domains and protocols.
-	if (!isAllowedCustomerRedirectUrl(customerRedirectUrl)) {
+	if (
+		!isAllowedCustomerRedirectUrl(
+			customerRedirectUrl,
+			new URL(instanceAppOrigin).hostname,
+		)
+	) {
 		return c.json(
 			{
 				error: {

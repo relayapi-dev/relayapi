@@ -20,7 +20,7 @@ Actions are defined at post creation time via the `cross_post_actions` array and
 ```bash
 # Create a post with cross-post actions
 curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "content": "Check out this announcement!",
@@ -80,7 +80,7 @@ You can cancel a pending cross-post action before it executes:
 
 ```bash
 curl -X DELETE https://api.relayapi.dev/v1/cross-post-actions/cpa_xyz789 \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 Once an action has been executed or has already failed, it cannot be cancelled.

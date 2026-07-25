@@ -33,8 +33,7 @@ export const actionGroupHandler: NodeHandler<ActionGroupConfig> = {
 				await dispatchAction(action, ctx);
 				results.push({ id: action.id, ok: true });
 			} catch (err: unknown) {
-				const message =
-					err instanceof Error ? err.message : String(err);
+				const message = err instanceof Error ? err.message : String(err);
 				results.push({ id: action.id, ok: false, error: message });
 				const onError = action.on_error ?? "abort";
 				if (onError === "abort") {

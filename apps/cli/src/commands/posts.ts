@@ -1,5 +1,5 @@
-import type { Command } from "commander";
 import * as prompts from "@clack/prompts";
+import type { Command } from "commander";
 import { createClient } from "../client.js";
 import {
 	isTableMode,
@@ -22,8 +22,14 @@ export function registerPostCommands(program: Command): void {
 		.command("create")
 		.description("Create a post")
 		.option("--content <text>", "Post content")
-		.option("--targets <ids>", "Account IDs or platform names (comma-separated)")
-		.option("--schedule <when>", 'Publish timing: "now", "draft", or ISO timestamp')
+		.option(
+			"--targets <ids>",
+			"Account IDs or platform names (comma-separated)",
+		)
+		.option(
+			"--schedule <when>",
+			'Publish timing: "now", "draft", or ISO timestamp',
+		)
 		.option("--media <urls>", "Media URLs (comma-separated)")
 		.option("--timezone <tz>", "IANA timezone for scheduling")
 		.action(async (opts) => {
@@ -117,13 +123,29 @@ export function registerPostCommands(program: Command): void {
 
 				if (isTableMode(program.opts())) {
 					outputTable(
-						result.data.map((p) => ({
-							id: p.id,
-							status: p.status,
-							content: truncate(p.content ?? "", 40),
-							scheduled_at: p.scheduled_at ?? "-",
-							targets: Object.keys(p.targets).join(", "),
-						})),
+						result.data.map((p) =>
+							"source" in p && p.source === "external"
+								? {
+										id: p.id,
+										status: "external",
+										content: truncate(p.content ?? "", 40),
+										scheduled_at: p.published_at,
+										targets: p.platform,
+									}
+								: (() => {
+										const relayPost = p as Exclude<
+											typeof p,
+											{ source: "external" }
+										>;
+										return {
+											id: relayPost.id,
+											status: relayPost.status,
+											content: truncate(relayPost.content ?? "", 40),
+											scheduled_at: relayPost.scheduled_at ?? "-",
+											targets: Object.keys(relayPost.targets).join(", "),
+										};
+									})(),
+						),
 					);
 					if (result.has_more && result.next_cursor) {
 						console.log(`\nNext: --cursor ${result.next_cursor}`);
@@ -152,7 +174,10 @@ export function registerPostCommands(program: Command): void {
 		.argument("<id>", "Post ID")
 		.option("--content <text>", "Updated content")
 		.option("--targets <ids>", "Updated targets (comma-separated)")
-		.option("--schedule <when>", 'Updated schedule: "now", "draft", or ISO timestamp')
+		.option(
+			"--schedule <when>",
+			'Updated schedule: "now", "draft", or ISO timestamp',
+		)
 		.option("--timezone <tz>", "IANA timezone")
 		.action(async (id: string, opts) => {
 			await withErrorHandler(async () => {

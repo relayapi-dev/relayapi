@@ -24,7 +24,6 @@ import type {
 
 export type AutomationEntrypointKind =
 	| "dm_received"
-	| "keyword"
 	| "comment_created"
 	| "story_reply"
 	| "story_mention"
@@ -32,7 +31,6 @@ export type AutomationEntrypointKind =
 	| "ad_click"
 	| "ref_link_click"
 	| "share_to_dm"
-	| "follow"
 	| "schedule"
 	| "field_changed"
 	| "tag_applied"
@@ -51,6 +49,7 @@ export interface AutomationEntrypointResponse {
 	filters: Record<string, unknown> | null;
 	allow_reentry: boolean;
 	reentry_cooldown_min: number;
+	daily_cap: number | null;
 	priority: number;
 	specificity: number;
 	created_at: string;
@@ -65,6 +64,10 @@ export interface AutomationEntrypointResponse {
 export interface AutomationEntrypointCreateResponse
 	extends AutomationEntrypointResponse {
 	webhook_secret_plaintext?: string;
+	scheduling?: {
+		queued: boolean;
+		reason?: string;
+	};
 }
 
 export interface AutomationEntrypointListResponse {
@@ -79,7 +82,9 @@ export interface AutomationEntrypointCreateParams {
 	filters?: Record<string, unknown>;
 	allow_reentry?: boolean;
 	reentry_cooldown_min?: number;
+	daily_cap?: number | null;
 	priority?: number;
+	status?: "active" | "paused";
 }
 
 export interface AutomationEntrypointUpdateParams
@@ -143,7 +148,7 @@ export class AutomationEntrypoints extends APIResource {
 		id: string,
 		body: AutomationEntrypointUpdateParams,
 		options?: RequestOptions,
-	): APIPromise<AutomationEntrypointResponse> {
+	): APIPromise<AutomationEntrypointCreateResponse> {
 		return this._client.patch(path`/v1/automation-entrypoints/${id}`, {
 			body,
 			...options,

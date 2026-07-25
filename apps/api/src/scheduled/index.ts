@@ -1,4 +1,5 @@
 import { mapConcurrently } from "../lib/concurrency";
+import { isSelfHosted } from "../lib/deployment-mode";
 import { processPendingStripeEvents } from "../routes/stripe-webhooks";
 import { processAccountRevocations } from "../services/account-revocation";
 import { reconcileAdCreationOperations } from "../services/ad-creation-operations";
@@ -11,6 +12,7 @@ import {
 	processAutomationSchedule,
 } from "../services/automations/scheduler";
 import { reconcileAutomationWebhookReceipts } from "../services/automations/webhook-receiver";
+import { reconcileAutomationBindingSyncs } from "../services/automations/binding-sync";
 import { processBillingOutbox } from "../services/billing-outbox";
 import { processScheduledBroadcasts } from "../services/broadcast-processor";
 import { processCrossPostActions } from "../services/cross-post-processor";
@@ -33,6 +35,7 @@ import {
 	reconcilePhoneProvisioningOperations,
 } from "../services/phone-number-operations";
 import { reconcilePostPublishExecutions } from "../services/post-publish-reconciler";
+import { reconcileProviderOutcomes } from "../services/provider-outcome-reconciler";
 import { dispatchPublishOutbox } from "../services/publish-outbox";
 import { reconcileQueueReplayClaims } from "../services/queue-replay";
 import { processRecyclingPosts } from "../services/recycling-processor";
@@ -120,8 +123,18 @@ export async function handleScheduled(
 					run: () => processAutomationInputTimeouts(env),
 				},
 				{ name: "automation_waits", run: () => reconcileAutomationWaits(env) },
-				{ name: "stripe_events", run: () => processPendingStripeEvents(env) },
-				{ name: "billing_outbox", run: () => processBillingOutbox(env) },
+				...(!isSelfHosted(env)
+					? [
+							{
+								name: "stripe_events",
+								run: () => processPendingStripeEvents(env),
+							},
+							{
+								name: "billing_outbox",
+								run: () => processBillingOutbox(env),
+							},
+						]
+					: []),
 				{
 					name: "account_revocations",
 					run: () => processAccountRevocations(env),
@@ -149,6 +162,10 @@ export async function handleScheduled(
 				{ name: "media_deletions", run: () => reconcileMediaDeletions(env) },
 				{ name: "media_uploads", run: () => reconcileMediaUploads(env) },
 				{
+					name: "provider_outcomes",
+					run: () => reconcileProviderOutcomes(env),
+				},
+				{
 					name: "post_publish",
 					run: () => reconcilePostPublishExecutions(env),
 				},
@@ -156,6 +173,10 @@ export async function handleScheduled(
 				{
 					name: "automation_webhooks",
 					run: () => reconcileAutomationWebhookReceipts(env),
+				},
+				{
+					name: "automation_binding_sync",
+					run: () => reconcileAutomationBindingSyncs(env),
 				},
 			]),
 		);
@@ -169,8 +190,12 @@ export async function handleScheduled(
 	if (event.cron === "0 9 * * *") {
 		ctx.waitUntil(
 			runScheduledTasks([
-				{ name: "invoices", run: () => generateInvoices(env) },
-				{ name: "dunning", run: () => processDunning(env) },
+				...(!isSelfHosted(env)
+					? [
+							{ name: "invoices", run: () => generateInvoices(env) },
+							{ name: "dunning", run: () => processDunning(env) },
+						]
+					: []),
 				{
 					name: "expiring_token_refresh",
 					run: () => enqueueExpiringTokenRefresh(env),

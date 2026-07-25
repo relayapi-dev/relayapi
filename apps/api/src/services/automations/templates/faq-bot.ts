@@ -1,7 +1,11 @@
 import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
-const DEFAULT_KEYWORDS: Array<{ label: string; keyword: string; reply: string }> = [
+const DEFAULT_KEYWORDS: Array<{
+	label: string;
+	keyword: string;
+	reply: string;
+}> = [
 	{
 		label: "hours",
 		keyword: "hours",
@@ -10,7 +14,8 @@ const DEFAULT_KEYWORDS: Array<{ label: string; keyword: string; reply: string }>
 	{
 		label: "price",
 		keyword: "price",
-		reply: "Our pricing is available at our website. I can send a link if you like!",
+		reply:
+			"Our pricing is available at our website. I can send a link if you like!",
 	},
 	{
 		label: "location",
@@ -51,10 +56,9 @@ export function buildFaqBot(input: TemplateBuildInput): TemplateBuildOutput {
 					{
 						id: "txt_intro",
 						type: "text",
-						text: "Hi {{contact.first_name}}! Ask me about our hours, price, or location.",
+						text: "Hi {{contact.name}}! Ask me about our hours, price, or location.",
 					},
 				],
-				wait_for_reply: true,
 			},
 			ports: [],
 		},
@@ -85,8 +89,11 @@ export function buildFaqBot(input: TemplateBuildInput): TemplateBuildOutput {
 	let prevPort = "captured";
 
 	kws.forEach((kw, idx) => {
-		const condKey = `match_${kw.label}`;
-		const replyKey = `reply_${kw.label}`;
+		// User labels need not be identifier-safe or unique. Stable index-based
+		// keys prevent duplicate/invalid graph keys while preserving the label in
+		// the operator-facing title.
+		const condKey = `match_${idx + 1}`;
+		const replyKey = `reply_${idx + 1}`;
 
 		nodes.push({
 			key: condKey,
@@ -99,6 +106,7 @@ export function buildFaqBot(input: TemplateBuildInput): TemplateBuildOutput {
 							field: "state.faq_question",
 							op: "contains",
 							value: kw.keyword.toLowerCase(),
+							case_sensitive: false,
 						},
 					],
 				},
@@ -111,7 +119,7 @@ export function buildFaqBot(input: TemplateBuildInput): TemplateBuildOutput {
 			kind: "message",
 			title: `Reply: ${kw.label}`,
 			config: {
-				blocks: [{ id: `txt_${kw.label}`, type: "text", text: kw.reply }],
+				blocks: [{ id: `txt_reply_${idx + 1}`, type: "text", text: kw.reply }],
 			},
 			ports: [],
 		});
@@ -137,7 +145,6 @@ export function buildFaqBot(input: TemplateBuildInput): TemplateBuildOutput {
 
 		prevKey = condKey;
 		prevPort = "false";
-		void idx;
 	});
 
 	// Fallback leg — last condition's `false` → fallback message → done.

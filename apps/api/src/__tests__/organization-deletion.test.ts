@@ -4,7 +4,9 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "../../../../packages/db/src/schema";
 import { canRequestTenantDeletion } from "../routes/organizations";
 import {
+	requestTenantDeletion,
 	TENANT_PURGE_TABLES,
+	TenantDeletionNotFoundError,
 	tenantDeletionStepKeys,
 } from "../services/tenant-deletion";
 
@@ -118,6 +120,90 @@ describe("organization deletion ownership boundary", () => {
 		expect(source).toContain("FOR UPDATE OF target SKIP LOCKED");
 		expect(source).toContain("organization_ids @> ARRAY[");
 		expect(source).not.toContain("ANY(organization_ids)");
+	});
+
+	it("uses the database-enforceable member-to-advisory-to-organization lock order", async () => {
+		const source = await Bun.file(
+			`${new URL("../../../../", import.meta.url).pathname}apps/api/src/services/tenant-deletion.ts`,
+		).text();
+		const memberLock = source.indexOf("const lockedMemberships = await tx");
+		const ownerAdvisoryLock = source.indexOf(
+			"select pg_advisory_xact_lock(hashtext(",
+			memberLock,
+		);
+		const organizationLock = source.indexOf(
+			"const [org] = await tx",
+			ownerAdvisoryLock,
+		);
+		const membershipRecheck = source.indexOf(
+			"const currentMemberships = await tx",
+			organizationLock,
+		);
+
+		expect(memberLock).toBeGreaterThan(-1);
+		expect(ownerAdvisoryLock).toBeGreaterThan(memberLock);
+		expect(organizationLock).toBeGreaterThan(ownerAdvisoryLock);
+		expect(membershipRecheck).toBeGreaterThan(organizationLock);
+		expect(source).toContain('isolationLevel: "read committed"');
+		expect(source).toContain("TenantMembershipSetChangedError");
+	});
+
+	it("retries before mutation when the locked membership set changes", async () => {
+		let transactionCalls = 0;
+		let memberSelects = 0;
+		let organizationSelects = 0;
+		let advisoryLocks = 0;
+		const query = (rows: Array<{ id: string }>) => {
+			const promise = Promise.resolve(rows) as Promise<
+				Array<{ id: string }>
+			> & {
+				for: () => unknown;
+				limit: () => unknown;
+				orderBy: () => unknown;
+			};
+			promise.for = () => promise;
+			promise.limit = () => promise;
+			promise.orderBy = () => promise;
+			return promise;
+		};
+		const tx = {
+			select: () => ({
+				from: (table: unknown) => ({
+					where: () => {
+						if (table === schema.member) {
+							memberSelects += 1;
+							return query(
+								memberSelects === 1
+									? [{ id: "member_1" }]
+									: [{ id: "member_1" }, { id: "member_2" }],
+							);
+						}
+						if (table === schema.organization) {
+							organizationSelects += 1;
+							return query(organizationSelects === 1 ? [{ id: "org_1" }] : []);
+						}
+						return query([]);
+					},
+				}),
+			}),
+			execute: async () => {
+				advisoryLocks += 1;
+			},
+		};
+		const db = {
+			transaction: async (
+				callback: (transaction: typeof tx) => Promise<unknown>,
+			) => {
+				transactionCalls += 1;
+				return callback(tx);
+			},
+		};
+
+		await expect(
+			requestTenantDeletion(db as never, "org_1", "user_1"),
+		).rejects.toBeInstanceOf(TenantDeletionNotFoundError);
+		expect(transactionCalls).toBe(2);
+		expect(advisoryLocks).toBe(2);
 	});
 
 	it("reaches automation step history through its tenant-owned run", () => {

@@ -255,6 +255,12 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		scopeParent: "automations",
 	},
 	{
+		tableName: "automation_entrypoint_daily_counts",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "automation_entrypoints",
+	},
+	{
 		tableName: "automation_bindings",
 		class: "scoped_child",
 		requireWorkspacePolicy: false,
@@ -265,6 +271,12 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		class: "scoped_child",
 		requireWorkspacePolicy: false,
 		scopeParent: "automations",
+	},
+	{
+		tableName: "automation_conversion_events",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "automation_runs",
 	},
 	{
 		tableName: "automation_node_executions",
@@ -399,5 +411,19 @@ export const SCHEMA_INVARIANT_EXCEPTIONS = [
 		category: "high_risk_numeric",
 		rationale:
 			"Priority is intentionally signed and unbounded; lower values sort before higher values and negative priorities are valid.",
+	},
+	{
+		tableName: "post_targets",
+		columnName: "provider_state",
+		category: "workflow_state",
+		rationale:
+			"Provider lifecycle strings are retained verbatim as diagnostic evidence; RelayAPI's closed lifecycle is provider_disposition.",
+	},
+	{
+		tableName: "publish_attempts",
+		columnName: "provider_state",
+		category: "workflow_state",
+		rationale:
+			"Attempt evidence preserves the provider's raw status vocabulary while provider_disposition owns the constrained local lifecycle.",
 	},
 ] as const satisfies readonly SchemaInvariantException[];

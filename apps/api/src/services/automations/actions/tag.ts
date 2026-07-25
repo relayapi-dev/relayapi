@@ -12,7 +12,10 @@
 import { contacts } from "@relayapi/db";
 import { and, eq, sql } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
-import { emitInternalEvent } from "../internal-events";
+import {
+	emitInternalEvent,
+	resolveTriggeringSocialAccountId,
+} from "../internal-events";
 import type { InboundEvent } from "../trigger-matcher";
 import type { RunContext } from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
@@ -34,7 +37,7 @@ function internalEventFromCtx(
 		kind,
 		channel: (ctx.channel ?? "instagram") as InboundEvent["channel"],
 		organizationId: ctx.organizationId,
-		socialAccountId: null,
+		socialAccountId: resolveTriggeringSocialAccountId(ctx),
 		contactId: ctx.contactId,
 		conversationId: ctx.conversationId ?? null,
 		tagId: tag,

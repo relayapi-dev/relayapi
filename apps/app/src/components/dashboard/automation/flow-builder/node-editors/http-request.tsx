@@ -149,7 +149,7 @@ export function HttpRequestEditor({
 					value={cfg.body ?? ""}
 					onChange={(e) => patch({ body: e.target.value || undefined })}
 					rows={4}
-					placeholder='{"event": "reply", "name": "{{contact.first_name}}"}'
+					placeholder='{"event": "reply", "name": "{{contact.name}}"}'
 					className="w-full resize-y rounded-xl border border-[#d9dde6] bg-white px-3 py-2 font-mono text-[12px] outline-none focus:border-[#c0c6d0]"
 				/>
 			</Field>
@@ -159,6 +159,7 @@ export function HttpRequestEditor({
 					<input
 						type="number"
 						min={1}
+						max={30000}
 						value={cfg.timeout_ms ?? ""}
 						onChange={(e) =>
 							patch({ timeout_ms: numberOrUndefined(e.target.value) })

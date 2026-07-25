@@ -5,7 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, fontProviders } from "astro/config";
 
 export default defineConfig({
-	site: "https://relayapi.dev",
+	site: process.env.APP_BASE_URL || "https://relayapi.dev",
 	output: "server",
 	// Geist is served via Astro's Fonts API (not @fontsource @import) so we can
 	// use font-display:"optional" + preload: the metric-matched fallback shows

@@ -26,15 +26,22 @@ on:
         default: false
         type: boolean
 
+permissions: {}
+
 jobs:
   publish-openclaw:
+    if: ${{ github.ref == 'refs/heads/main' && github.ref_protected }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          node-version: "22"
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.12.0"
 
       - name: Install ClawHub CLI
         run: npm install -g clawhub@0.23.1
@@ -77,11 +84,19 @@ jobs:
 
   validate-claude-plugin:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.12.0"
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g @anthropic-ai/claude-code@2.1.214
 
       - name: Validate plugin structure
         run: claude plugin validate ./packages/integrations/claude-plugin

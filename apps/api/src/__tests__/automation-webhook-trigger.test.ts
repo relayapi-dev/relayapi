@@ -21,7 +21,6 @@ import {
 	customFieldDefinitions,
 	customFieldValues,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
@@ -29,6 +28,11 @@ import { eq } from "drizzle-orm";
 import { encryptToken } from "../lib/crypto";
 import type { Graph } from "../schemas/automation-graph";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -45,7 +49,7 @@ let workspaceId = "";
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "webhook-trigger-test-org",
 		slug: `wh-test-${orgId.slice(-8)}`,
@@ -85,8 +89,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 async function makeAutomation(name: string) {
@@ -258,7 +262,7 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 		}
 	});
 
-	it("platform_id lookup scopes to the entrypoint's org and ignores other-org contacts", async () => {
+	it("platform_id lookup scopes to the entrypoint account and ignores other-org contacts", async () => {
 		if (!dbAvailable) return;
 
 		// Set up a second org with its own contact sharing the same platform_id
@@ -266,7 +270,7 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 		// against the primary org's automation) must only ever return the
 		// primary-org contact — even though both contacts have identifier="abc123".
 		const otherOrgId = generateId("org_");
-		await db.insert(organization).values({
+		await insertOwnedFixtureOrganization(db, {
 			id: otherOrgId,
 			name: "other-org",
 			slug: `other-${otherOrgId.slice(-8)}`,
@@ -343,7 +347,7 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				channel: "telegram",
 				kind: "webhook_inbound",
 				status: "active",
-				socialAccountId: null,
+				socialAccountId: primarySa.id,
 				config: {
 					webhook_slug: slug,
 					webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
@@ -392,18 +396,15 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			await db
 				.delete(socialAccounts)
 				.where(eq(socialAccounts.organizationId, otherOrgId));
-			await db
-				.delete(workspaces)
-				.where(eq(workspaces.organizationId, otherOrgId));
-			await db.delete(organization).where(eq(organization.id, otherOrgId));
+			await deleteOwnedFixtureWorkspaces(db, otherOrgId);
+			await deleteOwnedFixtureOrganization(db, otherOrgId);
 		}
 	});
 
-	it("auto_create_contact enrolls a brand-new contact into the default workspace", async () => {
-		// Plan 6 Unit RR11 / Task 6 (F3): before the fix,
-		// `auto_create_contact: true` silently returned null because
-		// `default_workspace_id` was never injected. The receiver now resolves
-		// the org's oldest workspace and uses it to anchor the new contact.
+	it("auto_create_contact enrolls a brand-new contact in the automation workspace", async () => {
+		// Auto-created contacts inherit the authoritative automation scope. This
+		// keeps the contact, entrypoint, automation, and run on the same composite
+		// organization/workspace identity.
 		if (!dbAvailable) return;
 
 		const auto = await makeAutomation("webhook-auto-create");
@@ -460,27 +461,28 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			});
 			expect(created).toBeTruthy();
 			expect(created?.email).toBe(email);
-			// The new row lives under the default (oldest) workspace.
+			// The new row lives under this automation's workspace.
 			expect(created?.workspaceId).toBe(workspaceId);
 		}
 	});
 
-	it("returns contact_lookup_failed with no_default_workspace when org has no workspace", async () => {
-		// Plan 6 Unit RR11 / Task 6 (F3): an org without any workspace row
-		// cannot auto-create a contact — there's nothing to anchor it to.
-		// The receiver must surface this as a distinct failure reason so
-		// operators can debug.
+	it("auto_create_contact preserves organization scope when the automation has no workspace", async () => {
+		// Organization-scoped automations are valid when workspace enforcement is
+		// disabled. Their auto-created contacts must stay organization-scoped;
+		// borrowing another workspace would violate the run's composite scope FKs.
 		if (!dbAvailable) return;
 
-		// Second isolated org with NO workspace rows — we still need an
-		// automation + entrypoint for the slug lookup, but both sit directly
-		// on the org (no workspace FK).
+		// Second isolated org with no workspace rows. The automation and
+		// entrypoint both sit directly on the organization.
 		const emptyOrgId = generateId("org_");
-		await db.insert(organization).values({
+		await insertOwnedFixtureOrganization(db, {
 			id: emptyOrgId,
 			name: "no-workspace-org",
 			slug: `no-ws-${emptyOrgId.slice(-8)}`,
 		});
+		// Organization provisioning creates a default workspace. Remove it so
+		// this fixture genuinely exercises the no-default-workspace boundary.
+		await deleteOwnedFixtureWorkspaces(db, emptyOrgId);
 		try {
 			const [auto] = await db
 				.insert(automations)
@@ -533,7 +535,8 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				specificity: 30,
 			});
 
-			const body = JSON.stringify({ email: "nobody@example.com" });
+			const email = `org-scoped-${generateId("").slice(-8)}@example.com`;
+			const body = JSON.stringify({ email });
 			const timestamp = Math.floor(Date.now() / 1000).toString();
 			const sig = await hmacHex(secret, `${timestamp}.${body}`);
 			const result = await receiveAutomationWebhook(
@@ -547,9 +550,19 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 			);
 
-			expect(result.status).toBe("contact_lookup_failed");
-			if (result.status === "contact_lookup_failed") {
-				expect(result.reason).toBe("no_default_workspace");
+			expect(result.status).toBe("ok");
+			if (result.status === "ok") {
+				const run = await db.query.automationRuns.findFirst({
+					where: eq(automationRuns.id, result.runId),
+				});
+				expect(run?.scopeKey).toBe("org");
+				if (!run?.contactId) throw new Error("expected an enrolled contact");
+				const created = await db.query.contacts.findFirst({
+					where: eq(contacts.id, run.contactId),
+				});
+				expect(created?.email).toBe(email);
+				expect(created?.workspaceId).toBeNull();
+				expect(created?.scopeKey).toBe("org");
 			}
 		} finally {
 			await db.delete(automationEntrypoints).where(
@@ -565,7 +578,9 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			await db
 				.delete(automations)
 				.where(eq(automations.organizationId, emptyOrgId));
-			await db.delete(organization).where(eq(organization.id, emptyOrgId));
+			await db.delete(contacts).where(eq(contacts.organizationId, emptyOrgId));
+			await deleteOwnedFixtureWorkspaces(db, emptyOrgId);
+			await deleteOwnedFixtureOrganization(db, emptyOrgId);
 		}
 	});
 

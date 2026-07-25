@@ -85,6 +85,9 @@ function compare(left: unknown, right: unknown): number {
 const automationBindings = table("automationBindings");
 const automationContactControls = table("automationContactControls");
 const automationEffects = table("automationEffects");
+const automationEntrypointDailyCounts = table(
+	"automationEntrypointDailyCounts",
+);
 const automationEntrypoints = table("automationEntrypoints");
 const automationNodeExecutions = table("automationNodeExecutions");
 const automationRuns = table("automationRuns");
@@ -292,6 +295,7 @@ mock.module("@relayapi/db", () => ({
 	automationBindings,
 	automationContactControls,
 	automationEffects,
+	automationEntrypointDailyCounts,
 	automationEntrypoints,
 	automationNodeExecutions,
 	automationRuns,

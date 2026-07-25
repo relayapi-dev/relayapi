@@ -19,7 +19,7 @@ Each organization can have multiple signatures, but only one can be the **defaul
 ```bash
 # Create a signature and set it as default
 curl -X POST https://api.relayapi.dev/v1/signatures \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Company Footer",
@@ -47,7 +47,7 @@ Only one signature per organization can be the default. When you set a signature
 ```bash
 # Set a specific signature as default
 curl -X POST https://api.relayapi.dev/v1/signatures/sig_abc123/set-default \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 You can also set `is_default: true` when creating or updating a signature — the mutex is enforced automatically.

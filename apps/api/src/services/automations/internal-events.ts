@@ -1,7 +1,7 @@
 // apps/api/src/services/automations/internal-events.ts
 //
 // Helper for emitting internal automation events from action handlers
-// (tag_add, field_set, log_conversion_event) and other internal sources
+// (tag_add, field_set) and other internal sources
 // (ref-url click tracker, manual tagging in the inbox). These events flow
 // through the same `matchAndEnrollOrBinding` pipeline used by inbound
 // platform webhooks.
@@ -15,8 +15,32 @@
 import type { Database } from "@relayapi/db";
 import { matchAndEnrollOrBinding } from "./binding-router";
 import type { InboundEvent } from "./trigger-matcher";
+import type { RunContext } from "./types";
 
 const MAX_EVENT_DEPTH = 5;
+
+/**
+ * Resolve the account that admitted the current run. Internal events must
+ * preserve this value so account-scoped listeners match and any child run
+ * keeps outbound delivery pinned to the same connected account.
+ */
+export function resolveTriggeringSocialAccountId(
+	ctx: Pick<RunContext, "context" | "env">,
+): string | null {
+	const fromEnv = ctx.env.socialAccountId;
+	if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
+
+	const persisted = ctx.context._triggering_social_account_id;
+	if (typeof persisted === "string" && persisted.length > 0) return persisted;
+
+	const triggerEvent = ctx.context.triggerEvent as
+		| { socialAccountId?: unknown }
+		| undefined;
+	return typeof triggerEvent?.socialAccountId === "string" &&
+		triggerEvent.socialAccountId.length > 0
+		? triggerEvent.socialAccountId
+		: null;
+}
 
 /**
  * Enrolls automations that listen for an internal event (tag_applied,

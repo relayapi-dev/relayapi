@@ -27,6 +27,7 @@ import {
 import { and, count, eq, inArray, lte, ne, or, sql } from "drizzle-orm";
 import Stripe from "stripe";
 import { buildAccountCacheKeys } from "../lib/delete-account";
+import { isSelfHosted } from "../lib/deployment-mode";
 import type { Env } from "../types";
 import {
 	countIncompletePhoneReleases,
@@ -41,6 +42,24 @@ const MAX_R2_OBJECTS_PER_BUCKET = 1000;
 const MAX_AVATARS_PER_TICK = 100;
 const TENANT_DELETE_BATCH_SIZE = 250;
 const MAX_WORK_UNITS_PER_JOB = 8;
+const TENANT_MEMBERSHIP_LOCK_RETRIES = 3;
+
+class TenantMembershipSetChangedError extends Error {
+	constructor() {
+		super("Tenant membership set changed while acquiring deletion locks");
+		this.name = "TenantMembershipSetChangedError";
+	}
+}
+
+function sameSortedIds(
+	left: ReadonlyArray<{ id: string }>,
+	right: ReadonlyArray<{ id: string }>,
+): boolean {
+	return (
+		left.length === right.length &&
+		left.every((row, index) => row.id === right[index]?.id)
+	);
+}
 
 /**
  * Explicit child-first deletion graph for every auth/public table that carries
@@ -78,12 +97,14 @@ export const TENANT_PURGE_TABLES = [
 	tenantPurgeTable("public", "auto_post_feed_items"),
 	tenantPurgeTable("public", "auto_post_rules"),
 	tenantPurgeTable("public", "automation_contact_controls"),
+	tenantPurgeTable("public", "automation_conversion_events"),
 	tenantPurgeTable("public", "automation_effects"),
 	tenantPurgeTable("public", "automation_node_executions"),
 	tenantPurgeTable("public", "automation_runs"),
 	tenantPurgeTable("public", "automation_bindings"),
 	tenantPurgeTable("public", "automation_secrets"),
 	tenantPurgeTable("public", "automation_webhook_receipts"),
+	tenantPurgeTable("public", "automation_entrypoint_daily_counts"),
 	tenantPurgeTable("public", "automation_entrypoints"),
 	tenantPurgeTable("public", "billing_operations"),
 	tenantPurgeTable("public", "billing_outbox"),
@@ -217,314 +238,378 @@ export async function requestTenantDeletion(
 	organizationId: string,
 	requestedBy: string,
 ): Promise<TenantDeletionRequestResult> {
-	return db.transaction(async (tx) => {
-		const [org] = await tx
-			.select({
-				id: organization.id,
-				name: organization.name,
-				slug: organization.slug,
-				lifecycleStatus: organization.lifecycleStatus,
-			})
-			.from(organization)
-			.where(eq(organization.id, organizationId))
-			.for("update")
-			.limit(1);
-		if (!org) throw new TenantDeletionNotFoundError();
+	for (
+		let attempt = 1;
+		attempt <= TENANT_MEMBERSHIP_LOCK_RETRIES;
+		attempt += 1
+	) {
+		try {
+			return await db.transaction(
+				async (tx) => {
+					// PostgreSQL locks a member tuple before its row-level BEFORE trigger
+					// runs. Use that universally enforceable order everywhere:
+					// member tuple(s) -> owner advisory lock -> organization row. Locking
+					// the tenant's complete membership set first prevents a concurrent
+					// identity deletion or raw member mutation from forming an org/member
+					// cycle with tenant erasure.
+					const lockedMemberships = await tx
+						.select({ id: member.id })
+						.from(member)
+						.where(eq(member.organizationId, organizationId))
+						.orderBy(member.id)
+						.for("update");
+					await tx.execute(
+						sql`select pg_advisory_xact_lock(hashtext(${`relayapi:org-owner:${organizationId}`}))`,
+					);
 
-		const [keyRows, workspaceRows] = await Promise.all([
-			tx
-				.select({ key: apikey.key, referenceId: apikey.referenceId })
-				.from(apikey)
-				.where(eq(apikey.organizationId, organizationId)),
-			tx
-				.select({ id: workspaces.id })
-				.from(workspaces)
-				.where(eq(workspaces.organizationId, organizationId)),
-		]);
+					const [org] = await tx
+						.select({
+							id: organization.id,
+							name: organization.name,
+							slug: organization.slug,
+							lifecycleStatus: organization.lifecycleStatus,
+						})
+						.from(organization)
+						.where(eq(organization.id, organizationId))
+						.for("update")
+						.limit(1);
+					if (!org) throw new TenantDeletionNotFoundError();
 
-		const accounts = await tx
-			.select()
-			.from(socialAccounts)
-			.where(eq(socialAccounts.organizationId, organizationId))
-			.for("update");
+					// A member insert can commit between the first row scan and the parent
+					// lock. READ COMMITTED gives this recheck a fresh snapshot; retrying the
+					// whole transaction then locks the expanded set before any mutation.
+					// Once the parent FOR UPDATE lock is held, FK validation blocks further
+					// member inserts until this transaction finishes.
+					const currentMemberships = await tx
+						.select({ id: member.id })
+						.from(member)
+						.where(eq(member.organizationId, organizationId))
+						.orderBy(member.id);
+					if (!sameSortedIds(lockedMemberships, currentMemberships)) {
+						throw new TenantMembershipSetChangedError();
+					}
 
-		const result: TenantDeletionRequestResult = {
-			status: "tombstoned",
-			apiKeyHashes: keyRows.map(({ key }) => key),
-			dashboardPrincipalIds: [
-				...new Set(
-					keyRows.flatMap(({ referenceId }) =>
-						referenceId ? [referenceId] : [],
-					),
-				),
-			],
-			workspaceIds: workspaceRows.map(({ id }) => id),
-			accountCacheKeys: accounts.flatMap((account) =>
-				buildAccountCacheKeys({
-					accountId: account.id,
-					platform: account.platform,
-					platformAccountId: account.platformAccountId,
-					webhookAccountId: account.webhookAccountId,
-				}),
-			),
-		};
-		if (org.lifecycleStatus === "tombstoned") return result;
-		const [subscription] = await tx
-			.select({
-				stripeSubscriptionId: organizationSubscriptions.stripeSubscriptionId,
-				stripeCustomerId: organizationSubscriptions.stripeCustomerId,
-			})
-			.from(organizationSubscriptions)
-			.where(eq(organizationSubscriptions.organizationId, organizationId))
-			.limit(1);
+					const [keyRows, workspaceRows] = await Promise.all([
+						tx
+							.select({ key: apikey.key, referenceId: apikey.referenceId })
+							.from(apikey)
+							.where(eq(apikey.organizationId, organizationId)),
+						tx
+							.select({ id: workspaces.id })
+							.from(workspaces)
+							.where(eq(workspaces.organizationId, organizationId)),
+					]);
 
-		await tx
-			.insert(tenantDeletionJobs)
-			.values({
-				organizationId,
-				status: "pending",
-				requestedBy,
-				auditSnapshot: {
-					organization_id: org.id,
-					name: org.name,
-					slug: org.slug,
-					account_ids: accounts.map((account) => account.id),
-					requested_at: new Date().toISOString(),
+					const accounts = await tx
+						.select()
+						.from(socialAccounts)
+						.where(eq(socialAccounts.organizationId, organizationId))
+						.for("update");
+
+					const result: TenantDeletionRequestResult = {
+						status: "tombstoned",
+						apiKeyHashes: keyRows.map(({ key }) => key),
+						dashboardPrincipalIds: [
+							...new Set(
+								keyRows.flatMap(({ referenceId }) =>
+									referenceId ? [referenceId] : [],
+								),
+							),
+						],
+						workspaceIds: workspaceRows.map(({ id }) => id),
+						accountCacheKeys: accounts.flatMap((account) =>
+							buildAccountCacheKeys({
+								accountId: account.id,
+								platform: account.platform,
+								platformAccountId: account.platformAccountId,
+								webhookAccountId: account.webhookAccountId,
+							}),
+						),
+					};
+					if (org.lifecycleStatus === "tombstoned") return result;
+					const [subscription] = await tx
+						.select({
+							stripeSubscriptionId:
+								organizationSubscriptions.stripeSubscriptionId,
+							stripeCustomerId: organizationSubscriptions.stripeCustomerId,
+						})
+						.from(organizationSubscriptions)
+						.where(eq(organizationSubscriptions.organizationId, organizationId))
+						.limit(1);
+
+					await tx
+						.insert(tenantDeletionJobs)
+						.values({
+							organizationId,
+							status: "pending",
+							requestedBy,
+							auditSnapshot: {
+								organization_id: org.id,
+								name: org.name,
+								slug: org.slug,
+								account_ids: accounts.map((account) => account.id),
+								requested_at: new Date().toISOString(),
+							},
+							cleanupPayload: {
+								stripe_subscription_id:
+									subscription?.stripeSubscriptionId ?? null,
+								stripe_customer_id: subscription?.stripeCustomerId ?? null,
+								r2_prefix: `${organizationId}/`,
+								provider_accounts: accounts.map((account) => account.id),
+							},
+							nextAttemptAt: new Date(),
+						})
+						.onConflictDoUpdate({
+							target: tenantDeletionJobs.organizationId,
+							set: {
+								status: "pending",
+								requestedBy,
+								attempts: 0,
+								nextAttemptAt: new Date(),
+								leaseExpiresAt: null,
+								lastError: null,
+								completedAt: null,
+								updatedAt: new Date(),
+							},
+						});
+					await tx
+						.insert(tenantDeletionSteps)
+						.values(
+							tenantDeletionStepKeys().map((stepKey) => ({
+								organizationId,
+								stepKey,
+							})),
+						)
+						.onConflictDoNothing({
+							target: [
+								tenantDeletionSteps.organizationId,
+								tenantDeletionSteps.stepKey,
+							],
+						});
+
+					// Snapshot every paid phone-provider resource while its exact provisioning
+					// grant is still available. Nested transactions are savepoints on Postgres.
+					await stageTenantPhoneReleases(
+						tx as unknown as Database,
+						organizationId,
+					);
+
+					const now = new Date();
+					await tx
+						.update(organization)
+						.set({ lifecycleStatus: "deleting", deletionRequestedAt: now })
+						.where(eq(organization.id, organizationId));
+					await tx
+						.update(apikey)
+						.set({ enabled: false, updatedAt: now })
+						.where(eq(apikey.organizationId, organizationId));
+
+					for (const account of accounts) {
+						if (account.lifecycleStatus === "disconnected") continue;
+						await tx
+							.insert(accountRevocationJobs)
+							.values({
+								accountId: account.id,
+								organizationId,
+								platform: account.platform,
+								accessTokenCiphertext: account.accessToken,
+								refreshTokenCiphertext: account.refreshToken,
+								sourceTokenVersion: account.tokenVersion,
+								status: "pending",
+								nextAttemptAt: now,
+							})
+							.onConflictDoUpdate({
+								target: accountRevocationJobs.accountId,
+								set: {
+									accessTokenCiphertext: account.accessToken,
+									refreshTokenCiphertext: account.refreshToken,
+									sourceTokenVersion: account.tokenVersion,
+									status: "pending",
+									attempts: 0,
+									nextAttemptAt: now,
+									leaseExpiresAt: null,
+									lastError: null,
+									providerResponse: null,
+									completedAt: null,
+									updatedAt: now,
+								},
+							});
+						if (account.lifecycleStatus === "active") {
+							await tx.insert(connectionLogs).values({
+								organizationId,
+								socialAccountId: account.id,
+								platform: account.platform,
+								event: "disconnecting",
+								message: "Tenant deletion requested",
+								snapshot: {
+									account_id: account.id,
+									reason: "tenant_deleted",
+									requested_at: now.toISOString(),
+								},
+							});
+						}
+					}
+
+					await tx
+						.update(socialAccounts)
+						.set({
+							lifecycleStatus: "disconnecting",
+							disconnectRequestedAt: now,
+							disconnectReason: "tenant_deleted",
+							tokenExpiresAt: null,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								eq(socialAccounts.organizationId, organizationId),
+								ne(socialAccounts.lifecycleStatus, "disconnected"),
+							),
+						);
+					await tx
+						.update(posts)
+						.set({
+							status: "failed",
+							revision: sql`${posts.revision} + 1`,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								eq(posts.organizationId, organizationId),
+								inArray(posts.status, ["scheduled", "publishing"]),
+							),
+						);
+					await tx
+						.update(postRecyclingConfigs)
+						.set({ enabled: false, updatedAt: now })
+						.where(eq(postRecyclingConfigs.organizationId, organizationId));
+					await tx
+						.update(autoPostRules)
+						.set({ status: "paused", leaseExpiresAt: null, updatedAt: now })
+						.where(eq(autoPostRules.organizationId, organizationId));
+					await tx
+						.update(broadcasts)
+						.set({
+							status: "cancelled",
+							completedAt: now,
+							leaseExpiresAt: null,
+							revision: sql`${broadcasts.revision} + 1`,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								eq(broadcasts.organizationId, organizationId),
+								inArray(broadcasts.status, ["draft", "scheduled", "sending"]),
+							),
+						);
+					await tx
+						.update(webhookEndpoints)
+						.set({ enabled: false, updatedAt: now })
+						.where(eq(webhookEndpoints.organizationId, organizationId));
+					await tx
+						.update(crossPostActions)
+						.set({
+							status: "cancelled",
+							leaseExpiresAt: null,
+							completedAt: now,
+							error: "Tenant deletion requested",
+						})
+						.where(
+							and(
+								inArray(
+									crossPostActions.postId,
+									tx
+										.select({ id: posts.id })
+										.from(posts)
+										.where(eq(posts.organizationId, organizationId)),
+								),
+								inArray(crossPostActions.status, [
+									"pending",
+									"processing",
+									"retry",
+								]),
+							),
+						);
+					await tx
+						.update(automations)
+						.set({ status: "paused", updatedAt: now })
+						.where(eq(automations.organizationId, organizationId));
+					await tx
+						.update(automationBindings)
+						.set({ status: "inactive", updatedAt: now })
+						.where(eq(automationBindings.organizationId, organizationId));
+					const tenantAutomationIds = tx
+						.select({ id: automations.id })
+						.from(automations)
+						.where(eq(automations.organizationId, organizationId));
+					await tx
+						.update(automationRuns)
+						.set({
+							status: "exited",
+							exitReason: "tenant_deleted",
+							waitingFor: null,
+							waitingUntil: null,
+							completedAt: now,
+							revision: sql`${automationRuns.revision} + 1`,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								inArray(automationRuns.automationId, tenantAutomationIds),
+								inArray(automationRuns.status, ["active", "waiting"]),
+							),
+						);
+					await tx
+						.update(automationScheduledJobs)
+						.set({ status: "failed", error: "Tenant deletion requested" })
+						.where(
+							and(
+								inArray(
+									automationScheduledJobs.automationId,
+									tenantAutomationIds,
+								),
+								eq(automationScheduledJobs.status, "pending"),
+							),
+						);
+					await tx
+						.update(session)
+						.set({ activeOrganizationId: null, updatedAt: now })
+						.where(eq(session.activeOrganizationId, organizationId));
+					await tx
+						.delete(invitation)
+						.where(eq(invitation.organizationId, organizationId));
+					await tx
+						.delete(member)
+						.where(eq(member.organizationId, organizationId));
+					await tx
+						.update(organization)
+						.set({ lifecycleStatus: "tombstoned", tombstonedAt: now })
+						.where(eq(organization.id, organizationId));
+					await tx
+						.update(tenantDeletionJobs)
+						.set({
+							status: "tombstoned",
+							nextAttemptAt: now,
+							leaseExpiresAt: null,
+							completedAt: null,
+							updatedAt: now,
+						})
+						.where(eq(tenantDeletionJobs.organizationId, organizationId));
+
+					return result;
 				},
-				cleanupPayload: {
-					stripe_subscription_id: subscription?.stripeSubscriptionId ?? null,
-					stripe_customer_id: subscription?.stripeCustomerId ?? null,
-					r2_prefix: `${organizationId}/`,
-					provider_accounts: accounts.map((account) => account.id),
-				},
-				nextAttemptAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: tenantDeletionJobs.organizationId,
-				set: {
-					status: "pending",
-					requestedBy,
-					attempts: 0,
-					nextAttemptAt: new Date(),
-					leaseExpiresAt: null,
-					lastError: null,
-					completedAt: null,
-					updatedAt: new Date(),
-				},
-			});
-		await tx
-			.insert(tenantDeletionSteps)
-			.values(
-				tenantDeletionStepKeys().map((stepKey) => ({
-					organizationId,
-					stepKey,
-				})),
-			)
-			.onConflictDoNothing({
-				target: [
-					tenantDeletionSteps.organizationId,
-					tenantDeletionSteps.stepKey,
-				],
-			});
-
-		// Snapshot every paid phone-provider resource while its exact provisioning
-		// grant is still available. Nested transactions are savepoints on Postgres.
-		await stageTenantPhoneReleases(tx as unknown as Database, organizationId);
-
-		const now = new Date();
-		await tx
-			.update(organization)
-			.set({ lifecycleStatus: "deleting", deletionRequestedAt: now })
-			.where(eq(organization.id, organizationId));
-		await tx
-			.update(apikey)
-			.set({ enabled: false, updatedAt: now })
-			.where(eq(apikey.organizationId, organizationId));
-
-		for (const account of accounts) {
-			if (account.lifecycleStatus === "disconnected") continue;
-			await tx
-				.insert(accountRevocationJobs)
-				.values({
-					accountId: account.id,
-					organizationId,
-					platform: account.platform,
-					accessTokenCiphertext: account.accessToken,
-					refreshTokenCiphertext: account.refreshToken,
-					sourceTokenVersion: account.tokenVersion,
-					status: "pending",
-					nextAttemptAt: now,
-				})
-				.onConflictDoUpdate({
-					target: accountRevocationJobs.accountId,
-					set: {
-						accessTokenCiphertext: account.accessToken,
-						refreshTokenCiphertext: account.refreshToken,
-						sourceTokenVersion: account.tokenVersion,
-						status: "pending",
-						attempts: 0,
-						nextAttemptAt: now,
-						leaseExpiresAt: null,
-						lastError: null,
-						providerResponse: null,
-						completedAt: null,
-						updatedAt: now,
-					},
-				});
-			if (account.lifecycleStatus === "active") {
-				await tx.insert(connectionLogs).values({
-					organizationId,
-					socialAccountId: account.id,
-					platform: account.platform,
-					event: "disconnecting",
-					message: "Tenant deletion requested",
-					snapshot: {
-						account_id: account.id,
-						reason: "tenant_deleted",
-						requested_at: now.toISOString(),
-					},
-				});
+				{ isolationLevel: "read committed" },
+			);
+		} catch (error) {
+			if (
+				!(error instanceof TenantMembershipSetChangedError) ||
+				attempt === TENANT_MEMBERSHIP_LOCK_RETRIES
+			) {
+				throw error;
 			}
 		}
+	}
 
-		await tx
-			.update(socialAccounts)
-			.set({
-				lifecycleStatus: "disconnecting",
-				disconnectRequestedAt: now,
-				disconnectReason: "tenant_deleted",
-				tokenExpiresAt: null,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(socialAccounts.organizationId, organizationId),
-					ne(socialAccounts.lifecycleStatus, "disconnected"),
-				),
-			);
-		await tx
-			.update(posts)
-			.set({
-				status: "failed",
-				revision: sql`${posts.revision} + 1`,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(posts.organizationId, organizationId),
-					inArray(posts.status, ["scheduled", "publishing"]),
-				),
-			);
-		await tx
-			.update(postRecyclingConfigs)
-			.set({ enabled: false, updatedAt: now })
-			.where(eq(postRecyclingConfigs.organizationId, organizationId));
-		await tx
-			.update(autoPostRules)
-			.set({ status: "paused", leaseExpiresAt: null, updatedAt: now })
-			.where(eq(autoPostRules.organizationId, organizationId));
-		await tx
-			.update(broadcasts)
-			.set({
-				status: "cancelled",
-				completedAt: now,
-				leaseExpiresAt: null,
-				revision: sql`${broadcasts.revision} + 1`,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(broadcasts.organizationId, organizationId),
-					inArray(broadcasts.status, ["draft", "scheduled", "sending"]),
-				),
-			);
-		await tx
-			.update(webhookEndpoints)
-			.set({ enabled: false, updatedAt: now })
-			.where(eq(webhookEndpoints.organizationId, organizationId));
-		await tx
-			.update(crossPostActions)
-			.set({
-				status: "cancelled",
-				leaseExpiresAt: null,
-				completedAt: now,
-				error: "Tenant deletion requested",
-			})
-			.where(
-				and(
-					inArray(
-						crossPostActions.postId,
-						tx
-							.select({ id: posts.id })
-							.from(posts)
-							.where(eq(posts.organizationId, organizationId)),
-					),
-					inArray(crossPostActions.status, ["pending", "processing", "retry"]),
-				),
-			);
-		await tx
-			.update(automations)
-			.set({ status: "paused", updatedAt: now })
-			.where(eq(automations.organizationId, organizationId));
-		await tx
-			.update(automationBindings)
-			.set({ status: "inactive", updatedAt: now })
-			.where(eq(automationBindings.organizationId, organizationId));
-		const tenantAutomationIds = tx
-			.select({ id: automations.id })
-			.from(automations)
-			.where(eq(automations.organizationId, organizationId));
-		await tx
-			.update(automationRuns)
-			.set({
-				status: "exited",
-				exitReason: "tenant_deleted",
-				waitingFor: null,
-				waitingUntil: null,
-				completedAt: now,
-				revision: sql`${automationRuns.revision} + 1`,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					inArray(automationRuns.automationId, tenantAutomationIds),
-					inArray(automationRuns.status, ["active", "waiting"]),
-				),
-			);
-		await tx
-			.update(automationScheduledJobs)
-			.set({ status: "failed", error: "Tenant deletion requested" })
-			.where(
-				and(
-					inArray(automationScheduledJobs.automationId, tenantAutomationIds),
-					eq(automationScheduledJobs.status, "pending"),
-				),
-			);
-		await tx
-			.update(session)
-			.set({ activeOrganizationId: null, updatedAt: now })
-			.where(eq(session.activeOrganizationId, organizationId));
-		await tx
-			.delete(invitation)
-			.where(eq(invitation.organizationId, organizationId));
-		await tx.delete(member).where(eq(member.organizationId, organizationId));
-		await tx
-			.update(organization)
-			.set({ lifecycleStatus: "tombstoned", tombstonedAt: now })
-			.where(eq(organization.id, organizationId));
-		await tx
-			.update(tenantDeletionJobs)
-			.set({
-				status: "tombstoned",
-				nextAttemptAt: now,
-				leaseExpiresAt: null,
-				completedAt: null,
-				updatedAt: now,
-			})
-			.where(eq(tenantDeletionJobs.organizationId, organizationId));
-
-		return result;
-	});
+	throw new TenantMembershipSetChangedError();
 }
 
 async function deleteBucketPrefixPage(
@@ -757,7 +842,7 @@ async function persistTenantStepResult(
 async function processTenantExternalResources(
 	db: TenantDeletionDb,
 	env: Env,
-	stripe: Stripe,
+	stripe: Stripe | undefined,
 	job: TenantDeletionJob,
 ): Promise<TenantStepResult> {
 	await processDuePhoneReleases(env, {
@@ -785,6 +870,13 @@ async function processTenantExternalResources(
 
 	const payload = { ...((job.cleanupPayload ?? {}) as CleanupPayload) };
 	if (payload.stripe_subscription_id) {
+		if (!stripe) {
+			return {
+				kind: "manual_review",
+				reason:
+					"A Stripe subscription is attached, but billing is disabled for this self-hosted deployment",
+			};
+		}
 		try {
 			await stripe.subscriptions.cancel(
 				payload.stripe_subscription_id,
@@ -1034,7 +1126,7 @@ async function completeTenantDeletion(
 async function processClaimedTenantJob(
 	db: TenantDeletionDb,
 	env: Env,
-	stripe: Stripe,
+	stripe: Stripe | undefined,
 	job: TenantDeletionJob,
 ): Promise<void> {
 	await ensureTenantDeletionSteps(db, job.organizationId);
@@ -1165,7 +1257,9 @@ async function failTenantDeletionJob(
 
 export async function processTenantDeletionJobs(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const stripe = new Stripe(env.STRIPE_SECRET_KEY);
+	const stripe = isSelfHosted(env)
+		? undefined
+		: new Stripe(env.STRIPE_SECRET_KEY);
 	const now = new Date();
 	const candidates = await db
 		.select({ organizationId: tenantDeletionJobs.organizationId })

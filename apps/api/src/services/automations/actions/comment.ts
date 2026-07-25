@@ -1,6 +1,6 @@
 import { socialAccounts } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
-import { API_VERSIONS, GRAPH_BASE } from "../../../config/api-versions";
+import { and, eq, isNull } from "drizzle-orm";
+import { GRAPH_BASE } from "../../../config/api-versions";
 import { decryptAccountToken } from "../../../lib/account-token-crypto";
 import type { Action } from "../../../schemas/automation-actions";
 import { applyMergeTags } from "../merge-tags";
@@ -61,7 +61,7 @@ const replyToComment: ActionHandler<ReplyToCommentAction> = async (
 			break;
 		case "instagram":
 			res = await fetch(
-				`https://${igGraphHost(account.accessToken)}/${API_VERSIONS.meta_graph}/${commentId}/replies`,
+				`${instagramGraphBase(account.accessToken)}/${commentId}/replies`,
 				{
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -100,6 +100,14 @@ async function loadSocialAccount(
 			and(
 				eq(socialAccounts.id, accountId),
 				eq(socialAccounts.organizationId, ctx.organizationId),
+				eq(
+					socialAccounts.platform,
+					ctx.channel as typeof socialAccounts.$inferSelect.platform,
+				),
+				eq(socialAccounts.lifecycleStatus, "active"),
+				ctx.workspaceId
+					? eq(socialAccounts.workspaceId, ctx.workspaceId)
+					: isNull(socialAccounts.workspaceId),
 			),
 		)
 		.limit(1);
@@ -152,10 +160,8 @@ function resolveCommentId(ctx: RunContext): string | null {
 		: null;
 }
 
-function igGraphHost(token: string): string {
-	return token.startsWith("IGAA")
-		? "graph.instagram.com"
-		: "graph.facebook.com";
+function instagramGraphBase(token: string): string {
+	return token.startsWith("IGAA") ? GRAPH_BASE.instagram : GRAPH_BASE.facebook;
 }
 
 async function summarizeErrorResponse(res: Response): Promise<string> {

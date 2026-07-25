@@ -1,0 +1,30 @@
+{
+	"name": "@relayapi/self-host",
+	"version": "0.1.0",
+	"description": "Provision and update a self-hosted RelayAPI instance on Cloudflare",
+	"license": "Apache-2.0",
+	"type": "module",
+	"bin": {
+		"relayapi-self-host": "./dist/index.js"
+	},
+	"files": [
+		"dist/**",
+		"README.md"
+	],
+	"engines": {
+		"node": ">=22.12.0"
+	},
+	"scripts": {
+		"dev": "bun run src/index.ts",
+		"build": "bun build src/index.ts --target=node --format=esm --packages=external --outfile=dist/index.js",
+		"prepack": "bun run build",
+		"test": "bun test",
+		"test:package": "bun run build && node tests/package-smoke.mjs",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.3.14",
+		"@types/node": "^26.1.1",
+		"typescript": "^7.0.2"
+	}
+}

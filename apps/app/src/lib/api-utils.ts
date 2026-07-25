@@ -136,7 +136,14 @@ export async function requireClient(ctx: {
  * Convert SDK errors into JSON responses.
  */
 export function handleSdkError(err: unknown): Response {
-  console.error("SDK error:", err);
+  const status =
+    err && typeof err === "object" && "status" in err
+      ? Number((err as { status?: unknown }).status)
+      : undefined;
+  console.error("[dashboard-api] SDK request failed", {
+    error_type: err instanceof Error ? err.name : typeof err,
+    ...(Number.isInteger(status) ? { status } : {}),
+  });
 
   if (err && typeof err === "object" && "status" in err) {
     const apiErr = err as { status: number; message?: string; error?: unknown };
@@ -211,7 +218,7 @@ export function handleSdkError(err: unknown): Response {
         code: isConnectionError ? "API_UNREACHABLE" : "PROXY_ERROR",
         message: isConnectionError
           ? "Cannot reach the API server. Make sure it is running."
-          : message,
+          : "The API request could not be completed.",
       },
     },
     { status: 502 },

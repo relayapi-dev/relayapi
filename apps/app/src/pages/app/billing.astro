@@ -4,6 +4,9 @@ import { BillingRouteApp } from "../../components/dashboard/route-apps/billing-r
 import { getDashboardRouteContext } from "../../lib/dashboard-page";
 
 const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
+if (import.meta.env.PUBLIC_DEPLOYMENT_MODE === "self_hosted") {
+	return Astro.redirect("/app/usage");
+}
 ---
 
 <DashboardLayout>

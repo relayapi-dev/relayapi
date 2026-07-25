@@ -3,6 +3,13 @@
  * secrets and operator-provided variables here so config drift fails typegen CI.
  */
 export interface Env extends Cloudflare.Env {
+	DEPLOYMENT_MODE?: "hosted" | "self_hosted";
+	SELF_HOSTED_FEATURE_AI?: "0" | "1";
+	SELF_HOSTED_FEATURE_EMAIL?: "0" | "1";
+	SELF_HOSTED_FEATURE_DOWNLOADER?: "0" | "1";
+	APP_BASE_URL?: string;
+	MEDIA_PUBLIC_HOST?: string;
+	THUMBNAIL_PUBLIC_HOST?: string;
 	// Downloader service (Python VPS)
 	DOWNLOADER_SERVICE_URL?: string;
 	DOWNLOADER_SERVICE_KEY?: string;

@@ -145,7 +145,13 @@ export interface AutomationSimulateStep {
 	node_kind: string;
 	entered_via_port_key: string | null;
 	exited_via_port_key: string | null;
-	outcome: "advance" | "wait_input" | "wait_delay" | "end" | "fail";
+	outcome:
+		| "advance"
+		| "wait_input"
+		| "wait_delay"
+		| "wait_event"
+		| "end"
+		| "fail";
 	payload?: unknown;
 }
 
@@ -213,10 +219,89 @@ export interface AutomationListParams {
 	q?: string;
 }
 
-export interface AutomationTemplateInput {
-	kind: string;
-	config?: Record<string, unknown>;
+export type AutomationTemplateKind =
+	| "blank"
+	| "welcome_flow"
+	| "faq_bot"
+	| "lead_capture"
+	| "comment_to_dm"
+	| "story_leads"
+	| "follower_growth"
+	| "follow_to_dm";
+
+export interface TemplateMessageConfig {
+	blocks: Array<Record<string, unknown>>;
 }
+
+export interface FaqBotTemplateConfig {
+	keywords?: Array<{ label: string; keyword: string; reply: string }>;
+	fallback_reply?: string;
+}
+
+export interface LeadCaptureTemplateConfig {
+	tag?: string;
+	capture_field?: "email" | "phone";
+}
+
+export interface CommentToDmTemplateConfig {
+	social_account_id?: string;
+	post_ids?: string[];
+	keyword_filter?: string[];
+	public_reply?: string;
+	dm_message?: TemplateMessageConfig;
+	once_per_user?: boolean;
+	fallback_message?: string;
+	daily_cap?: number;
+}
+
+export interface StoryLeadsTemplateConfig {
+	social_account_id?: string;
+	story_ids?: string[] | null;
+	keyword_filter?: string[];
+	dm_message?: TemplateMessageConfig;
+	capture_field?: "email" | "phone";
+	success_tag?: string;
+	daily_cap?: number;
+}
+
+export interface FollowerGrowthTemplateConfig {
+	social_account_id?: string;
+	post_ids?: string[];
+	trigger_keyword?: string;
+	public_reply?: string;
+	dm_message?: TemplateMessageConfig;
+	entry_requirements?: {
+		must_tag_friends?: number;
+		must_share_story?: boolean;
+	};
+	winner_tag?: string;
+	daily_cap?: number;
+}
+
+export interface FollowToDmTemplateConfig {
+	social_account_id?: string;
+	dm_message?: TemplateMessageConfig;
+	daily_cap?: number;
+	cooldown_hours?: number;
+}
+
+/**
+ * Template input accepted by the API. Follow-to-DM starts on the contact's
+ * first inbound DM, verifies the live follow relationship, and applies its
+ * admission cap/cooldown before enrollment.
+ */
+export type AutomationTemplateInput =
+	| { kind: "blank"; config?: Record<string, never> }
+	| { kind: "welcome_flow"; config?: Record<string, never> }
+	| { kind: "faq_bot"; config?: FaqBotTemplateConfig }
+	| { kind: "lead_capture"; config?: LeadCaptureTemplateConfig }
+	| { kind: "comment_to_dm"; config?: CommentToDmTemplateConfig }
+	| { kind: "story_leads"; config?: StoryLeadsTemplateConfig }
+	| { kind: "follower_growth"; config?: FollowerGrowthTemplateConfig }
+	| {
+			kind: "follow_to_dm";
+			config?: FollowToDmTemplateConfig;
+	  };
 
 export interface AutomationCreateParams {
 	name: string;

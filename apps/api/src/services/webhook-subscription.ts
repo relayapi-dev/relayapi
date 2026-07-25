@@ -218,7 +218,11 @@ export async function subscribeInstagramAccount(
 				method: "POST",
 				headers: { "Content-Type": "application/x-www-form-urlencoded" },
 				body: new URLSearchParams({
-					subscribed_fields: "comments,messages",
+					// `messaging_postbacks` delivers get-started, persistent-menu,
+					// ice-breaker, and automation button payloads. `mentions` is
+					// required for story-mention wait nodes and follower-growth flows.
+					subscribed_fields:
+						"comments,messages,messaging_postbacks,mentions",
 					access_token: accessToken,
 				}).toString(),
 			},
@@ -277,12 +281,10 @@ export async function verifyInstagramWebhookSubscription(
 				}>;
 			};
 			const existing = checkJson.data?.find((s) => s.object === "instagram");
-			if (existing?.active && existing.callback_url === callbackUrl) {
-				console.log(
-					"[webhook-sub] Instagram webhook subscription already active",
-				);
-				return { success: true };
-			}
+			// Even when the callback is already active, POST the desired field set
+			// below. Callback equality alone does not prove that newly required
+			// fields (postbacks/mentions) are subscribed.
+			void existing;
 		}
 
 		// Create/update subscription
@@ -293,7 +295,7 @@ export async function verifyInstagramWebhookSubscription(
 				object: "instagram",
 				callback_url: callbackUrl,
 				verify_token: verifyToken,
-				fields: "messages,comments",
+				fields: "messages,comments,messaging_postbacks,mentions",
 				access_token: appAccessToken,
 			}).toString(),
 		});

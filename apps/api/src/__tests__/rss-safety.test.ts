@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { ResponseTooLargeError } from "../lib/fetch-public-url";
 import autoPostRouter from "../routes/auto-post-rules";
-import { parseFeed, RSS_FEED_MAX_BYTES } from "../services/feed-parser";
+import {
+	htmlToSafePlainText,
+	parseFeed,
+	RSS_FEED_MAX_BYTES,
+} from "../services/feed-parser";
 import type { Env, Variables } from "../types";
 
 const originalFetch = globalThis.fetch;
@@ -66,6 +70,39 @@ describe("RSS resource bounds", () => {
 		expect(parsed).toHaveLength(itemCount);
 		expect(parsed[0]?.sourceId).toBe(String(itemCount - 1));
 		expect(parsed.some((item) => item.sourceId === "0")).toBe(true);
+	});
+});
+
+describe("RSS description sanitization", () => {
+	it("keeps readable text while removing markup in one pass", () => {
+		expect(
+			htmlToSafePlainText(
+				'<p>Tom &amp; Jerry</p><p title=">">Second&nbsp;line</p>',
+			),
+		).toBe("Tom & Jerry Second line");
+	});
+
+	it("never leaves ASCII angle brackets from malformed or encoded tags", () => {
+		for (const value of [
+			"<<script>alert(1)</script>",
+			"<scr<script>ipt>alert(1)</scr<script>ipt>",
+			"&lt;img src=x onerror=alert(1)&gt;",
+			"&#60;svg onload=alert(1)&#62;",
+			"&amp;lt;script&amp;gt;",
+			"plain 2 < 3 and 4 > 1",
+		]) {
+			const result = htmlToSafePlainText(value);
+			expect(result).not.toContain("<");
+			expect(result).not.toContain(">");
+		}
+	});
+
+	it("bounds malformed tags and decodes entities at most once", () => {
+		const unterminated = `<script ${"x".repeat(5_000)}`;
+		expect(htmlToSafePlainText(unterminated)).toStartWith("‹script ");
+		expect(htmlToSafePlainText("&amp;lt;script&amp;gt;")).toBe(
+			"&lt;script&gt;",
+		);
 	});
 });
 

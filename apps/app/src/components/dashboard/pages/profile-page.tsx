@@ -88,6 +88,7 @@ export function ProfilePage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [deleteVerificationSent, setDeleteVerificationSent] = useState(false);
 
   useEffect(() => {
     if (user?.name) setName(user.name);
@@ -291,18 +292,28 @@ export function ProfilePage() {
   };
 
   const handleDeleteAccount = async () => {
-    if (!deletePassword) return;
+    const hasPasswordAccount = accounts.some(
+      (linkedAccount) => linkedAccount.providerId === "credential",
+    );
+    if (accountsLoading || (hasPasswordAccount && !deletePassword)) return;
     setDeleteLoading(true);
     setDeleteError("");
     try {
-      const res = await authClient.deleteUser({ password: deletePassword });
+      const res = await authClient.deleteUser(
+        hasPasswordAccount
+          ? { password: deletePassword }
+          : { callbackURL: "/" },
+      );
       if (res.error) {
         setDeleteError(res.error.message || "Failed to delete account");
       } else {
-        window.location.href = "/login";
+        // Better Auth sends the configured deletion-verification email for every
+        // sign-in method. Credential accounts validate the password first;
+        // OAuth-only accounts can still self-delete without a password.
+        setDeleteVerificationSent(true);
       }
     } catch {
-      setDeleteError("Failed to delete account. Check your password and try again.");
+      setDeleteError("Account deletion is temporarily unavailable. Please try again.");
     } finally {
       setDeleteLoading(false);
     }
@@ -753,17 +764,39 @@ export function ProfilePage() {
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Enter your password to confirm account deletion. This action is
-                irreversible.
-              </p>
-              <input
-                type="password"
-                value={deletePassword}
-                onChange={(e) => setDeletePassword(e.target.value)}
-                placeholder="Enter your password"
-                className="w-full rounded-md border border-destructive/30 bg-background px-3 py-2 text-[13px] outline-none focus:ring-1 focus:ring-destructive/50 placeholder:text-muted-foreground/50"
-              />
+              {deleteVerificationSent ? (
+                <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                  Check your inbox for a confirmation link. Your account will
+                  remain active until you approve the deletion.
+                </p>
+              ) : accountsLoading ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Checking your sign-in methods…
+                </div>
+              ) : accounts.some(
+                  (linkedAccount) => linkedAccount.providerId === "credential",
+                ) ? (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Enter your password, then confirm the short-lived deletion
+                    link we email you. This action is irreversible.
+                  </p>
+                  <input
+                    type="password"
+                    value={deletePassword}
+                    onChange={(e) => setDeletePassword(e.target.value)}
+                    placeholder="Enter your password"
+                    autoComplete="current-password"
+                    className="w-full rounded-md border border-destructive/30 bg-background px-3 py-2 text-[13px] outline-none focus:ring-1 focus:ring-destructive/50 placeholder:text-muted-foreground/50"
+                  />
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  We&apos;ll email you a short-lived confirmation link before
+                  deleting your OAuth account. This action is irreversible.
+                </p>
+              )}
               {deleteError && (
                 <p className="text-xs text-destructive">{deleteError}</p>
               )}
@@ -776,6 +809,7 @@ export function ProfilePage() {
                     setDeleteConfirmOpen(false);
                     setDeletePassword("");
                     setDeleteError("");
+                    setDeleteVerificationSent(false);
                   }}
                 >
                   Cancel
@@ -785,12 +819,24 @@ export function ProfilePage() {
                   variant="destructive"
                   className="h-8 text-xs"
                   onClick={handleDeleteAccount}
-                  disabled={deleteLoading || !deletePassword}
+                  disabled={
+                    deleteLoading ||
+                    accountsLoading ||
+                    deleteVerificationSent ||
+                    (accounts.some(
+                      (linkedAccount) => linkedAccount.providerId === "credential",
+                    ) &&
+                      !deletePassword)
+                  }
                 >
                   {deleteLoading ? (
                     <Loader2 className="size-3.5 animate-spin" />
                   ) : (
-                    "Confirm Delete"
+                    accounts.some(
+                      (linkedAccount) => linkedAccount.providerId === "credential",
+                    )
+                      ? "Email deletion link"
+                      : "Send confirmation email"
                   )}
                 </Button>
               </div>

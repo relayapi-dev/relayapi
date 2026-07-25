@@ -1,0 +1,20 @@
+# Copy with `bun run secrets:init development`, then replace non-empty placeholders.
+# Provider groups are optional, but each configured group must be complete.
+
+CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgresql://<credentials>@localhost:5433/relayapi"
+RELAYAPI_DB_SSH_TARGET="relayapi-db"
+ENCRYPTION_KEY="change-me-64-hex-characters"
+BETTER_AUTH_SECRET=""
+
+FACEBOOK_APP_ID=""
+FACEBOOK_APP_SECRET=""
+INSTAGRAM_APP_ID=""
+INSTAGRAM_APP_SECRET=""
+THREADS_APP_ID=""
+THREADS_APP_SECRET=""
+WHATSAPP_APP_ID=""
+WHATSAPP_APP_SECRET=""
+
+# Phone provider group.
+TELNYX_API_KEY=""
+STRIPE_WA_PHONE_PRICE_ID=""

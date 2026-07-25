@@ -26,7 +26,6 @@ import {
 	contacts,
 	createDb,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
@@ -39,10 +38,15 @@ import {
 } from "../services/automations/templates";
 import {
 	computeSpecificity,
-	matchAndEnroll,
 	type InboundEvent,
+	matchAndEnroll,
 } from "../services/automations/trigger-matcher";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -61,7 +65,7 @@ let contactId = "";
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "e2e-test-org",
 		slug: `e2e-test-${orgId.slice(-8)}`,
@@ -114,8 +118,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 beforeAll(async () => {
@@ -151,7 +155,7 @@ async function createCommentToDmAutomation() {
 					{
 						id: "blk_1",
 						type: "text",
-						text: "Hi {{contact.first_name}}!",
+						text: "Hi {{contact.name}}!",
 					},
 				],
 				quick_replies: [],

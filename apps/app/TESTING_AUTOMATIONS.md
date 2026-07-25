@@ -1,11 +1,8 @@
 # Automation builder — manual smoke-test checklist
 
-This checklist covers the happy-path for the Plan 2 automation builder
-**and** the Plan 3 surfaces (run inspector, binding tabs, canvas
-overlays, inbox integration). Playwright is not installed in
-`apps/app`, so until it is, this is the smoke-test source of truth for
-the list / detail / create-automation flow and the surrounding
-surfaces.
+This checklist covers the automation builder, preset creation, run inspector,
+provider bindings, canvas overlays, and inbox integration. Playwright is not
+installed in `apps/app`, so this remains the manual smoke-test source of truth.
 
 ## Prerequisites
 
@@ -60,12 +57,11 @@ On `/app/automation/{id}`:
 
 - [ ] The left rail / canvas area renders a port-driven graph:
     - [ ] A **trigger** node (entrypoint) at the top.
-    - [ ] A **message** node (the DM body) connected beneath it.
     - [ ] An **action_group** node that posts the public comment reply.
-    - [ ] An **end** node.
+    - [ ] A **message** node (the provider private reply) connected after it.
 - [ ] The right rail shows the **Entrypoint panel** with the IG account
-      picked during create, the comment-reply keyword/public-reply config,
-      and a Save button.
+      picked during create, the post/keyword filters, admission controls, and
+      status. The public reply is edited on the action node, not the trigger.
 
 ### 5. Selecting the message node
 
@@ -140,19 +136,18 @@ From a run-inspector drawer or the flow's bindings panel, click
     - [ ] Select a flow → **Save** → toast + the tab lists the flow as
           the active binding.
     - [ ] Clear the binding → tab returns to an empty state.
-- [ ] **Main Menu** tab (Facebook or Instagram account only):
-    - [ ] Add at least one item (title + flow).
-    - [ ] **Save** → the binding is persisted.
-    - [ ] Confirm the banner reads `pending_sync` with a note that
-          platform sync lands in v1.1.
-- [ ] **Conversation Starter** tab (Facebook Messenger only):
-    - [ ] Add a starter label bound to a flow → **Save** → persists.
-- [ ] **Ice Breaker** tab (WhatsApp only):
-    - [ ] Add one question + bound flow → **Save** → persists.
+- [ ] **Welcome Message** tab:
+    - [ ] Select a flow → **Save** → the tab lists the active binding.
+    - [ ] Pause and resume the binding; the status label follows the change.
 
-For any account that doesn't support a binding, the corresponding tab
-should show a friendly stubbed-shell explaining the channel doesn't
-support that feature.
+- [ ] **Get Started** is offered only for Facebook. Save a payload and confirm
+      its status moves from `pending_sync` to `active` after provider sync.
+- [ ] **Main Menu** is offered for Instagram and Facebook. Facebook requires a
+      synchronized Get Started binding first and allows at most three items.
+- [ ] **Ice Breakers** is offered only for Instagram and accepts at most four
+      question/payload pairs.
+- [ ] Pause/resume provider bindings and confirm the desired state is applied
+      only after the matching sync revision is acknowledged.
 
 ### 11. Canvas overlays (observability)
 
@@ -200,13 +195,10 @@ All app-to-API calls should go through `/api/*` proxies in
 
 ## Known gaps
 
-- No Playwright / automated browser coverage yet — once RTL + Playwright
-  are installed, the steps in sections 1–12 should be replaced by
-  scripted assertions.
+- No repository Playwright suite yet; retain these checks until equivalent
+  browser assertions run in CI.
 - The simulator panel (right rail "Simulate" button) is covered by unit
   tests only; smoke-testing it is optional here.
-- Main Menu / Conversation Starter / Ice Breaker bindings persist but do
-  **not** yet push to the platform. Deferred to v1.1.
 
 ## Integration repair — 2026-04-22
 

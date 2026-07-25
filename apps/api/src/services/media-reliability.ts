@@ -17,6 +17,7 @@ import {
 	or,
 	sql,
 } from "drizzle-orm";
+import { validateStoredMediaObject } from "../lib/media-storage-policy";
 import { purgePresignedViewCache } from "../lib/r2-presign";
 import {
 	generateAndStoreThumbnail,
@@ -45,9 +46,16 @@ const CREATE_ACTIONS = new Set([
 const DELETE_ACTIONS = new Set(["DeleteObject", "LifecycleDeletion"]);
 const MEDIA_DELETION_BATCH_SIZE = 25;
 const MEDIA_UPLOAD_RECONCILIATION_BATCH_SIZE = 25;
-const MEDIA_UPLOAD_STALE_MS = 10 * 60 * 1000;
+export const MEDIA_DIRECT_UPLOAD_STALE_MS = 10 * 60 * 1000;
+// PUT presigns live for one hour. Allow an additional five minutes for a PUT
+// that began just before expiry and its R2 notification to settle.
+export const MEDIA_PRESIGNED_UPLOAD_STALE_MS = 65 * 60 * 1000;
 const MEDIA_DELETION_ALERT_ATTEMPTS = 8;
 const THUMBNAIL_CLAIM_MS = 5 * 60 * 1000;
+// Upload URLs expire after one hour, but a request that started before expiry or
+// its R2 event can finish later. Keep a hidden tombstone long enough to absorb
+// those late writes, then perform one final unconditional object sweep.
+export const MEDIA_DELETION_LATE_WRITE_GRACE_MS = 24 * 60 * 60 * 1000;
 
 export class RetryableMediaError extends Error {
 	readonly delaySeconds: number;
@@ -67,6 +75,49 @@ export function thumbnailRetryDelaySeconds(attempts: number): number {
 export function mediaDeletionRetryDelaySeconds(attempts: number): number {
 	const exponent = Math.max(0, Math.min(attempts - 1, 8));
 	return Math.min(6 * 60 * 60, 30 * 2 ** exponent);
+}
+
+/**
+ * Retire an upload whose persisted R2 metadata violates the media policy. The
+ * durable deletion tombstone absorbs a late/replayed presigned PUT instead of
+ * deleting the row and creating an unowned object race.
+ */
+export async function retireRejectedMediaUpload(
+	db: Database,
+	env: Env,
+	mediaId: string,
+	now: Date = new Date(),
+	reason: string = "stored_object_policy_rejected",
+): Promise<void> {
+	const claimed = await db.transaction(async (tx) => {
+		await tx.delete(ideaMedia).where(eq(ideaMedia.mediaId, mediaId));
+		return tx
+			.update(media)
+			.set({
+				status: "deleting",
+				url: null,
+				thumbnailKey: sql<string>`COALESCE(${media.thumbnailKey}, ${media.storageKey} || '.avif')`,
+				deletionRequestedAt: sql<Date>`COALESCE(${media.deletionRequestedAt}, ${now})`,
+				deletionNextRetryAt: now,
+				deletionLastError: reason,
+			})
+			.where(
+				and(
+					eq(media.id, mediaId),
+					inArray(media.status, [
+						"pending",
+						"uploading",
+						"upload_failed",
+						"ready",
+					]),
+					isNull(media.deletionRequestedAt),
+				),
+			)
+			.returning({ id: media.id });
+	});
+	if (claimed.length > 0) {
+		await processMediaDeletion(db, env, mediaId, now);
+	}
 }
 
 export type MediaDeletionResult =
@@ -95,6 +146,7 @@ export async function processMediaDeletion(
 			organizationId: media.organizationId,
 			storageKey: media.storageKey,
 			thumbnailKey: media.thumbnailKey,
+			createdAt: media.createdAt,
 			deletionRequestedAt: media.deletionRequestedAt,
 			originalDeletionConfirmedAt: media.originalDeletionConfirmedAt,
 			thumbnailDeletionConfirmedAt: media.thumbnailDeletionConfirmedAt,
@@ -107,15 +159,19 @@ export async function processMediaDeletion(
 	if (!row.deletionRequestedAt) {
 		throw new Error("media deletion tombstone is not initialized");
 	}
+	const retainUntil = new Date(
+		row.createdAt.getTime() + MEDIA_DELETION_LATE_WRITE_GRACE_MS,
+	);
+	const finalSweep = now.getTime() >= retainUntil.getTime();
 
 	const deleteObject = async (bucket: R2Bucket, key: string): Promise<void> => {
 		await bucket.delete(key);
 	};
 	const [originalResult, thumbnailResult] = await Promise.allSettled([
-		row.originalDeletionConfirmedAt
+		row.originalDeletionConfirmedAt && !finalSweep
 			? Promise.resolve()
 			: deleteObject(env.MEDIA_BUCKET, row.storageKey),
-		row.thumbnailDeletionConfirmedAt
+		row.thumbnailDeletionConfirmedAt && !finalSweep
 			? Promise.resolve()
 			: deleteObject(
 					env.THUMBNAIL_BUCKET,
@@ -130,8 +186,8 @@ export async function processMediaDeletion(
 	}
 
 	if (originalComplete && thumbnailComplete) {
-		// Resolve a previously surfaced operator alert before removing the only
-		// retry source. If this write fails, the tombstone remains and retries.
+		// Resolve a previously surfaced operator alert once both providers accept
+		// deletion. If this write fails, the tombstone remains and retries.
 		if (row.deletionAttempts >= MEDIA_DELETION_ALERT_ATTEMPTS) {
 			await db
 				.update(queueFailures)
@@ -142,6 +198,24 @@ export async function processMediaDeletion(
 						eq(queueFailures.messageId, row.id),
 					),
 				);
+		}
+		if (!finalSweep) {
+			await db
+				.update(media)
+				.set({
+					status: "deleting",
+					deletionNextRetryAt: retainUntil,
+					deletionLastError: null,
+					originalDeletionConfirmedAt: row.originalDeletionConfirmedAt ?? now,
+					thumbnailDeletionConfirmedAt: row.thumbnailDeletionConfirmedAt ?? now,
+				})
+				.where(and(eq(media.id, row.id), isNotNull(media.deletionRequestedAt)));
+			return {
+				status: "pending",
+				attempts: row.deletionAttempts,
+				originalPending: false,
+				thumbnailPending: false,
+			};
 		}
 		await db
 			.delete(media)
@@ -266,11 +340,14 @@ export async function reconcileMediaDeletions(env: Env): Promise<number> {
  */
 export async function reconcileMediaUploads(env: Env): Promise<number> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const staleBefore = new Date(Date.now() - MEDIA_UPLOAD_STALE_MS);
+	const now = Date.now();
+	const directStaleBefore = new Date(now - MEDIA_DIRECT_UPLOAD_STALE_MS);
+	const presignedStaleBefore = new Date(now - MEDIA_PRESIGNED_UPLOAD_STALE_MS);
 	const rows = await db
 		.select({
 			id: media.id,
 			storageKey: media.storageKey,
+			status: media.status,
 			mimeType: media.mimeType,
 			thumbnailUrl: media.thumbnailUrl,
 			thumbnailStatus: media.thumbnailStatus,
@@ -281,8 +358,16 @@ export async function reconcileMediaUploads(env: Env): Promise<number> {
 		.from(media)
 		.where(
 			and(
-				inArray(media.status, ["uploading", "upload_failed"]),
-				lt(media.createdAt, staleBefore),
+				or(
+					and(
+						eq(media.status, "pending"),
+						lt(media.createdAt, presignedStaleBefore),
+					),
+					and(
+						inArray(media.status, ["uploading", "upload_failed"]),
+						lt(media.createdAt, directStaleBefore),
+					),
+				),
 				isNull(media.deletionRequestedAt),
 			),
 		)
@@ -294,35 +379,58 @@ export async function reconcileMediaUploads(env: Env): Promise<number> {
 		try {
 			const object = await env.MEDIA_BUCKET.head(row.storageKey);
 			if (object) {
+				const validation = validateStoredMediaObject(object);
+				if (!validation.ok) {
+					await retireRejectedMediaUpload(db, env, row.id);
+					processed++;
+					continue;
+				}
 				const updated = await db
 					.update(media)
-					.set({ status: "ready", size: object.size })
+					.set({
+						status: "ready",
+						size: validation.size,
+						mimeType: validation.mimeType,
+					})
 					.where(
 						and(
 							eq(media.id, row.id),
-							inArray(media.status, ["uploading", "upload_failed"]),
+							inArray(media.status, ["pending", "uploading", "upload_failed"]),
 							isNull(media.deletionRequestedAt),
 						),
 					)
 					.returning({ id: media.id });
 				if (updated.length > 0) {
-					await processThumbnailForMedia(db, env, row).catch((error) => {
+					await processThumbnailForMedia(db, env, {
+						...row,
+						mimeType: validation.mimeType,
+					}).catch((error) => {
 						if (!(error instanceof RetryableMediaError)) throw error;
 					});
 				}
 			} else {
-				await db.transaction(async (tx) => {
-					await tx.delete(ideaMedia).where(eq(ideaMedia.mediaId, row.id));
-					await tx
-						.delete(media)
-						.where(
-							and(
-								eq(media.id, row.id),
-								inArray(media.status, ["uploading", "upload_failed"]),
-								isNull(media.deletionRequestedAt),
-							),
-						);
-				});
+				if (row.status === "pending") {
+					await retireRejectedMediaUpload(
+						db,
+						env,
+						row.id,
+						new Date(now),
+						"presigned_upload_expired",
+					);
+				} else {
+					await db.transaction(async (tx) => {
+						await tx.delete(ideaMedia).where(eq(ideaMedia.mediaId, row.id));
+						await tx
+							.delete(media)
+							.where(
+								and(
+									eq(media.id, row.id),
+									inArray(media.status, ["uploading", "upload_failed"]),
+									isNull(media.deletionRequestedAt),
+								),
+							);
+					});
+				}
 			}
 			processed++;
 		} catch (error) {
@@ -543,7 +651,7 @@ export async function processMediaEvent(
 ): Promise<void> {
 	const key = event.object.key;
 	if (CREATE_ACTIONS.has(event.action)) {
-		await handleMediaCreated(db, env, key, event.object.size);
+		await handleMediaCreated(db, env, key);
 		return;
 	}
 	if (event.action === "LifecycleDeletion") {
@@ -559,7 +667,6 @@ async function handleMediaCreated(
 	db: Database,
 	env: Env,
 	key: string,
-	objectSize?: number,
 ): Promise<void> {
 	const [row] = await db
 		.select({
@@ -577,19 +684,71 @@ async function handleMediaCreated(
 		.where(eq(media.storageKey, key))
 		.limit(1);
 
-	// Other features share this bucket. A missing media-library row is not an
-	// error, and direct uploads now create their row before the R2 PUT begins.
-	if (!row) return;
+	// Direct and presigned uploads create their row before R2 can receive bytes.
+	// A namespaced object without a row is therefore a late or abandoned write;
+	// delete it instead of leaving an unowned object until lifecycle expiry.
+	if (!row) {
+		if (isManagedMediaStorageKey(key)) {
+			await env.MEDIA_BUCKET.delete(key);
+			await purgePresignedViewCache(env, key);
+		}
+		return;
+	}
+
+	// A PUT may complete after the browser abandoned its intent. Reset the
+	// original-object checkpoint and run the durable deletion state machine. If
+	// a concurrent final sweep removed the row, issue the idempotent delete here.
+	if (inArrayValue(row.status, ["deleting", "deletion_failed"])) {
+		const now = new Date();
+		const claimed = await db
+			.update(media)
+			.set({
+				status: "deleting",
+				originalDeletionConfirmedAt: null,
+				deletionNextRetryAt: now,
+				deletionLastError: "late_upload_arrived",
+			})
+			.where(
+				and(
+					eq(media.id, row.id),
+					inArray(media.status, ["deleting", "deletion_failed"]),
+				),
+			)
+			.returning({ id: media.id });
+		if (claimed.length > 0) {
+			await processMediaDeletion(db, env, row.id, now);
+		} else {
+			await env.MEDIA_BUCKET.delete(key);
+			await purgePresignedViewCache(env, key);
+		}
+		return;
+	}
 
 	// A direct upload that crashed after R2 accepted the object is recoverable
 	// from the create event. Presigned rows remain `pending` until the confirm
 	// endpoint validates their actual MIME type and size.
+	let storedObjectValidated = false;
 	if (inArrayValue(row.status, ["uploading", "upload_failed"])) {
+		const storedObject = await env.MEDIA_BUCKET.head(key);
+		if (!storedObject) {
+			throw new RetryableMediaError(
+				`Stored media object ${key} was not visible during create-event validation`,
+				30,
+			);
+		}
+		const validation = validateStoredMediaObject(storedObject);
+		if (!validation.ok) {
+			await retireRejectedMediaUpload(db, env, row.id);
+			return;
+		}
+		storedObjectValidated = true;
+		row.mimeType = validation.mimeType;
 		await db
 			.update(media)
 			.set({
 				status: "ready",
-				...(typeof objectSize === "number" ? { size: objectSize } : {}),
+				size: validation.size,
+				mimeType: validation.mimeType,
 			})
 			.where(
 				and(
@@ -601,6 +760,23 @@ async function handleMediaCreated(
 	}
 
 	if (row.status !== "ready") return;
+	// A still-valid presigned PUT URL can overwrite an already-confirmed key. Re-
+	// validate every ready-row create notification so a later active-content or
+	// oversized overwrite is retired instead of remaining publishable.
+	if (!storedObjectValidated) {
+		const readyObject = await env.MEDIA_BUCKET.head(key);
+		if (!readyObject) {
+			throw new RetryableMediaError(
+				`Stored media object ${key} was not visible during ready-event validation`,
+				30,
+			);
+		}
+		const readyValidation = validateStoredMediaObject(readyObject);
+		if (!readyValidation.ok) {
+			await retireRejectedMediaUpload(db, env, row.id);
+			return;
+		}
+	}
 	if (
 		row.thumbnailStatus === "generated" ||
 		row.thumbnailStatus === "unsupported" ||
@@ -614,6 +790,17 @@ async function handleMediaCreated(
 
 function inArrayValue(value: string, allowed: readonly string[]): boolean {
 	return allowed.includes(value);
+}
+
+export function isManagedMediaStorageKey(key: string): boolean {
+	const parts = key.split("/");
+	return (
+		parts.length >= 4 &&
+		parts[0] !== "" &&
+		parts[1] === "media" &&
+		parts[2]?.startsWith("file_") === true &&
+		parts.slice(3).every((part) => part !== "")
+	);
 }
 
 async function handleLifecycleDeletion(

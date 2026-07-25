@@ -1,10 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { VERSION } from "./version.js";
 
-// The MCP SDK's registerTool<OutputArgs, InputArgs> uses nested conditional
-// generics that compound across tools; participating in the full inference
-// graph with 14 registrations OOMs tsc. `tool()` below is a typed wrapper
-// that casts through `unknown` so each registration is type-checked locally.
 type LooseServer = {
 	registerTool: (
 		name: string,
@@ -12,11 +9,11 @@ type LooseServer = {
 			description?: string;
 			inputSchema?: Record<string, unknown>;
 		},
-		cb: (args: Record<string, unknown>) => unknown,
+		callback: (args: Record<string, unknown>) => unknown,
 	) => unknown;
 };
 
-type ToolResult = {
+export type ToolResult = {
 	content: Array<{ type: "text"; text: string }>;
 	isError?: boolean;
 };
@@ -30,39 +27,37 @@ function tool<Args>(
 	inputSchema: Record<string, z.ZodType>,
 	handler: ToolHandler<Args>,
 ): void {
-	const loose = mcp as unknown as LooseServer;
-	loose.registerTool(
+	(mcp as unknown as LooseServer).registerTool(
 		name,
 		{ description, inputSchema: inputSchema as Record<string, unknown> },
 		handler as (args: Record<string, unknown>) => unknown,
 	);
 }
 
-// The SDK's generic type surface interacts badly with the MCP SDK's tool
-// inference — use a loose local shape instead of importing the full Relay type.
-type RelayLike = {
+/** The exact SDK methods used by this MCP server. */
+export type RelayLike = {
 	automations: {
-		schema: () => Promise<unknown>;
-		list: (query: unknown) => Promise<unknown>;
+		catalog: () => Promise<unknown>;
+		list: (query: Record<string, unknown>) => Promise<unknown>;
 		retrieve: (id: string) => Promise<unknown>;
-		create: (body: unknown) => Promise<unknown>;
-		update: (id: string, body: unknown) => Promise<unknown>;
+		create: (body: Record<string, unknown>) => Promise<unknown>;
+		update: (id: string, body: Record<string, unknown>) => Promise<unknown>;
 		delete: (id: string) => Promise<unknown>;
-		publish: (id: string) => Promise<unknown>;
+		activate: (id: string) => Promise<unknown>;
 		pause: (id: string) => Promise<unknown>;
 		resume: (id: string) => Promise<unknown>;
 		archive: (id: string) => Promise<unknown>;
-		listEnrollments: (id: string, query: unknown) => Promise<unknown>;
-		listRuns: (id: string, enrollmentId: string) => Promise<unknown>;
-		simulate: (id: string, body: unknown) => Promise<unknown>;
-		templates: {
-			commentToDm: (input: unknown) => Promise<unknown>;
-			welcomeDm: (input: unknown) => Promise<unknown>;
-			keywordReply: (input: unknown) => Promise<unknown>;
-			followToDm: (input: unknown) => Promise<unknown>;
-			storyReply: (input: unknown) => Promise<unknown>;
-			giveaway: (input: unknown) => Promise<unknown>;
-		};
+		simulate: (id: string, body: Record<string, unknown>) => Promise<unknown>;
+	};
+	automationRuns: {
+		list: (
+			automationId: string,
+			query: Record<string, unknown>,
+		) => Promise<unknown>;
+		listSteps: (
+			runId: string,
+			query: Record<string, unknown>,
+		) => Promise<unknown>;
 	};
 };
 
@@ -71,85 +66,55 @@ const AUTOMATION_CHANNELS = [
 	"facebook",
 	"whatsapp",
 	"telegram",
-	"discord",
-	"sms",
-	"twitter",
-	"bluesky",
-	"threads",
-	"youtube",
-	"linkedin",
-	"mastodon",
-	"reddit",
-	"googlebusiness",
-	"beehiiv",
-	"kit",
-	"mailchimp",
-	"listmonk",
-	"pinterest",
-	"multi",
 ] as const;
-
 const AUTOMATION_STATUSES = ["draft", "active", "paused", "archived"] as const;
-
-const ENROLLMENT_STATUSES = [
+const RUN_STATUSES = [
 	"active",
 	"waiting",
 	"completed",
 	"exited",
 	"failed",
 ] as const;
-
-const TEMPLATE_IDS = [
-	"comment-to-dm",
-	"welcome-dm",
-	"keyword-reply",
-	"follow-to-dm",
-	"story-reply",
-	"giveaway",
+const TEMPLATE_KINDS = [
+	"blank",
+	"welcome_flow",
+	"faq_bot",
+	"lead_capture",
+	"comment_to_dm",
+	"story_leads",
+	"follower_growth",
+	"follow_to_dm",
 ] as const;
 
 function asText(data: unknown): ToolResult {
-	return {
-		content: [
-			{ type: "text", text: JSON.stringify(data, null, 2) },
-		],
-	};
+	return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
-function asError(err: unknown): ToolResult {
-	const msg = err instanceof Error ? err.message : String(err);
+function asError(error: unknown): ToolResult {
+	const message = error instanceof Error ? error.message : String(error);
 	return {
 		isError: true,
-		content: [{ type: "text", text: `Error: ${msg}` }],
+		content: [{ type: "text", text: `Error: ${message}` }],
 	};
 }
 
-/**
- * Registers every RelayAPI automation tool. Each tool is a thin wrapper over
- * the SDK — the tool description tells the LLM which SDK method it maps to.
- */
-export function registerTools(mcp: McpServer, client: RelayLike): void {
-	// --------------------------------------------------------------------- //
-	// Schema introspection — primary entry point for agents
-	// --------------------------------------------------------------------- //
+async function call(operation: () => Promise<unknown>): Promise<ToolResult> {
+	try {
+		return asText(await operation());
+	} catch (error) {
+		return asError(error);
+	}
+}
 
+/** Register tools that map one-to-one to methods present in @relayapi/sdk. */
+export function registerTools(mcp: McpServer, client: RelayLike): void {
 	tool<Record<string, never>>(
 		mcp,
 		"relayapi_get_automation_schema",
-		"Fetch the self-describing catalog of automation trigger types, node types, templates, and merge tags. Call this first when creating or updating automations so enums are never guessed. Maps to sdk.automations.schema().",
+		"Fetch the automation catalog of node, entrypoint, binding, action, channel, and template definitions. Call this before creating an automation. Maps to sdk.automations.catalog().",
 		{},
-		async () => {
-			try {
-				return asText(await client.automations.schema());
-			} catch (e) {
-				return asError(e);
-			}
-		},
+		async () => call(() => client.automations.catalog()),
 	);
-
-	// --------------------------------------------------------------------- //
-	// Automation CRUD
-	// --------------------------------------------------------------------- //
 
 	tool<{
 		cursor?: string;
@@ -157,7 +122,8 @@ export function registerTools(mcp: McpServer, client: RelayLike): void {
 		workspace_id?: string;
 		status?: (typeof AUTOMATION_STATUSES)[number];
 		channel?: (typeof AUTOMATION_CHANNELS)[number];
-		trigger_type?: string;
+		created_from_template?: string;
+		q?: string;
 	}>(
 		mcp,
 		"relayapi_list_automations",
@@ -168,297 +134,162 @@ export function registerTools(mcp: McpServer, client: RelayLike): void {
 			workspace_id: z.string().optional(),
 			status: z.enum(AUTOMATION_STATUSES).optional(),
 			channel: z.enum(AUTOMATION_CHANNELS).optional(),
-			trigger_type: z.string().optional(),
+			created_from_template: z.string().optional(),
+			q: z.string().optional(),
 		},
-		async (args) => {
-			try {
-				return asText(await client.automations.list(args));
-			} catch (e) {
-				return asError(e);
-			}
-		},
+		async (args) => call(() => client.automations.list(args)),
 	);
 
 	tool<{ id: string }>(
 		mcp,
 		"relayapi_get_automation",
-		"Retrieve an automation with its full graph (nodes + edges). Maps to sdk.automations.retrieve(id).",
+		"Retrieve an automation and its full graph. Maps to sdk.automations.retrieve(id).",
 		{ id: z.string() },
-		async ({ id }) => {
-			try {
-				return asText(await client.automations.retrieve(id));
-			} catch (e) {
-				return asError(e);
-			}
-		},
+		async ({ id }) => call(() => client.automations.retrieve(id)),
 	);
 
-	tool<Record<string, unknown>>(
+	tool<{
+		name: string;
+		description?: string;
+		channel: (typeof AUTOMATION_CHANNELS)[number];
+		workspace_id?: string;
+	}>(
 		mcp,
 		"relayapi_create_automation",
-		"Create an automation from a single-blob spec (trigger + nodes + edges). Always call relayapi_get_automation_schema first to learn the valid trigger/node types and field shapes. Maps to sdk.automations.create(body).",
+		"Create a blank automation. Add its graph through the RelayAPI dashboard or SDK updateGraph method. Maps to sdk.automations.create(body).",
 		{
-			name: z.string(),
-			description: z.string().optional(),
-			workspace_id: z.string().optional(),
+			name: z.string().min(1).max(200),
+			description: z.string().max(1000).optional(),
 			channel: z.enum(AUTOMATION_CHANNELS),
-			status: z.enum(AUTOMATION_STATUSES).optional(),
-			trigger: z
-				.object({
-					type: z.string(),
-					account_id: z.string().optional(),
-					config: z.record(z.string(), z.unknown()).optional(),
-					filters: z.record(z.string(), z.unknown()).optional(),
-				})
-				.describe(
-					"Trigger spec. type must be from the catalog returned by relayapi_get_automation_schema.",
-				),
-			nodes: z
-				.array(z.record(z.string(), z.unknown()))
-				.describe(
-					"Array of node objects. Each node has flat fields: {type, key, ...type-specific fields}.",
-				),
-			edges: z
-				.array(
-					z.object({
-						from: z.string(),
-						to: z.string(),
-						label: z.string().optional(),
-						order: z.number().int().optional(),
-						condition_expr: z.unknown().optional(),
-					}),
-				)
-				.optional(),
-			exit_on_reply: z.boolean().optional(),
-			allow_reentry: z.boolean().optional(),
-			reentry_cooldown_min: z.number().int().optional(),
+			workspace_id: z.string().optional(),
 		},
-		async (args) => {
-			try {
-				return asText(await client.automations.create(args));
-			} catch (e) {
-				return asError(e);
-			}
-		},
+		async (args) => call(() => client.automations.create(args)),
 	);
 
-	tool<{ id: string; body: Record<string, unknown> }>(
+	tool<{ id: string; name?: string; description?: string }>(
 		mcp,
 		"relayapi_update_automation",
-		"Update automation metadata, trigger, or body. Partial — only send fields you want to change. Maps to sdk.automations.update(id, body).",
+		"Update automation name or description. Maps to sdk.automations.update(id, body).",
 		{
 			id: z.string(),
-			body: z.record(z.string(), z.unknown()),
+			name: z.string().min(1).max(200).optional(),
+			description: z.string().max(1000).optional(),
 		},
-		async ({ id, body }) => {
-			try {
-				return asText(await client.automations.update(id, body));
-			} catch (e) {
-				return asError(e);
-			}
-		},
+		async ({ id, ...body }) => call(() => client.automations.update(id, body)),
 	);
 
 	tool<{ id: string }>(
 		mcp,
 		"relayapi_delete_automation",
-		"Delete an automation. Maps to sdk.automations.delete(id).",
+		"Permanently delete an automation. Maps to sdk.automations.delete(id).",
 		{ id: z.string() },
-		async ({ id }) => {
-			try {
+		async ({ id }) =>
+			call(async () => {
 				await client.automations.delete(id);
-				return asText({ deleted: true, id });
-			} catch (e) {
-				return asError(e);
-			}
-		},
+				return { deleted: true, id };
+			}),
 	);
 
-	// --------------------------------------------------------------------- //
-	// Lifecycle
-	// --------------------------------------------------------------------- //
-
-	tool<{ id: string }>(
-		mcp,
-		"relayapi_publish_automation",
-		"Publish the current graph as a new version snapshot. Maps to sdk.automations.publish(id).",
-		{ id: z.string() },
-		async ({ id }) => {
-			try {
-				return asText(await client.automations.publish(id));
-			} catch (e) {
-				return asError(e);
-			}
-		},
-	);
-
-	tool<{ id: string }>(
-		mcp,
-		"relayapi_pause_automation",
-		"Pause an active automation. Maps to sdk.automations.pause(id).",
-		{ id: z.string() },
-		async ({ id }) => {
-			try {
-				return asText(await client.automations.pause(id));
-			} catch (e) {
-				return asError(e);
-			}
-		},
-	);
-
-	tool<{ id: string }>(
-		mcp,
-		"relayapi_resume_automation",
-		"Resume a paused automation (auto-publishes if no version exists). Maps to sdk.automations.resume(id).",
-		{ id: z.string() },
-		async ({ id }) => {
-			try {
-				return asText(await client.automations.resume(id));
-			} catch (e) {
-				return asError(e);
-			}
-		},
-	);
-
-	tool<{ id: string }>(
-		mcp,
-		"relayapi_archive_automation",
-		"Archive an automation. Maps to sdk.automations.archive(id).",
-		{ id: z.string() },
-		async ({ id }) => {
-			try {
-				return asText(await client.automations.archive(id));
-			} catch (e) {
-				return asError(e);
-			}
-		},
-	);
-
-	// --------------------------------------------------------------------- //
-	// Observability
-	// --------------------------------------------------------------------- //
+	for (const lifecycle of ["activate", "pause", "resume", "archive"] as const) {
+		tool<{ id: string }>(
+			mcp,
+			`relayapi_${lifecycle}_automation`,
+			`${lifecycle[0]?.toUpperCase()}${lifecycle.slice(1)} an automation. Maps to sdk.automations.${lifecycle}(id).`,
+			{ id: z.string() },
+			async ({ id }) => call(() => client.automations[lifecycle](id)),
+		);
+	}
 
 	tool<{
 		id: string;
 		cursor?: string;
 		limit?: number;
-		status?: (typeof ENROLLMENT_STATUSES)[number];
+		status?: (typeof RUN_STATUSES)[number];
+		contact_id?: string;
+		started_after?: string;
+		started_before?: string;
 	}>(
 		mcp,
-		"relayapi_list_automation_enrollments",
-		"List enrollments for an automation (contacts currently running through it). Maps to sdk.automations.listEnrollments(id, query).",
+		"relayapi_list_automation_runs",
+		"List automation runs, newest first. Maps to sdk.automationRuns.list(automationId, query).",
 		{
 			id: z.string(),
 			cursor: z.string().optional(),
 			limit: z.number().int().min(1).max(100).optional(),
-			status: z.enum(ENROLLMENT_STATUSES).optional(),
+			status: z.enum(RUN_STATUSES).optional(),
+			contact_id: z.string().optional(),
+			started_after: z.string().optional(),
+			started_before: z.string().optional(),
 		},
-		async ({ id, ...query }) => {
-			try {
-				return asText(await client.automations.listEnrollments(id, query));
-			} catch (e) {
-				return asError(e);
-			}
-		},
+		async ({ id, ...query }) =>
+			call(() => client.automationRuns.list(id, query)),
 	);
 
-	tool<{ id: string; enrollment_id: string }>(
+	tool<{ run_id: string; cursor?: string; limit?: number }>(
 		mcp,
-		"relayapi_list_automation_runs",
-		"Get the per-node execution log for a specific enrollment. Maps to sdk.automations.listRuns(id, enrollmentId).",
+		"relayapi_list_automation_run_steps",
+		"List the append-only node execution log for one run. Maps to sdk.automationRuns.listSteps(runId, query).",
 		{
-			id: z.string(),
-			enrollment_id: z.string(),
+			run_id: z.string(),
+			cursor: z.string().optional(),
+			limit: z.number().int().min(1).max(100).optional(),
 		},
-		async ({ id, enrollment_id }) => {
-			try {
-				return asText(await client.automations.listRuns(id, enrollment_id));
-			} catch (e) {
-				return asError(e);
-			}
-		},
+		async ({ run_id, ...query }) =>
+			call(() => client.automationRuns.listSteps(run_id, query)),
 	);
 
 	tool<{
 		id: string;
-		version?: number;
+		start_node_key?: string;
+		test_context?: Record<string, unknown>;
 		branch_choices?: Record<string, string>;
-		max_steps?: number;
+		execute_side_effects?: boolean;
 	}>(
 		mcp,
 		"relayapi_simulate_automation",
-		"Dry-run the graph without executing handlers or side effects. Returns the predicted node path. Use branch_choices to force a branch on condition / randomizer / intent-router nodes. Maps to sdk.automations.simulate(id, body).",
+		"Simulate an automation graph. Side effects are disabled unless explicitly requested. Maps to sdk.automations.simulate(id, body).",
 		{
 			id: z.string(),
-			version: z.number().int().optional(),
+			start_node_key: z.string().optional(),
+			test_context: z.record(z.string(), z.unknown()).optional(),
 			branch_choices: z.record(z.string(), z.string()).optional(),
-			max_steps: z.number().int().min(1).max(200).optional(),
+			execute_side_effects: z.boolean().optional(),
 		},
-		async ({ id, ...body }) => {
-			try {
-				return asText(await client.automations.simulate(id, body));
-			} catch (e) {
-				return asError(e);
-			}
-		},
+		async ({ id, ...body }) =>
+			call(() => client.automations.simulate(id, body)),
 	);
 
-	// --------------------------------------------------------------------- //
-	// Templates (quick-create)
-	// --------------------------------------------------------------------- //
-
 	tool<{
-		template_id: (typeof TEMPLATE_IDS)[number];
-		input: Record<string, unknown>;
+		name: string;
+		description?: string;
+		channel: (typeof AUTOMATION_CHANNELS)[number];
+		workspace_id?: string;
+		template_kind: (typeof TEMPLATE_KINDS)[number];
+		config?: Record<string, unknown>;
 	}>(
 		mcp,
 		"relayapi_create_automation_from_template",
-		"Create an automation from a built-in template. Call relayapi_get_automation_schema first to see the input shape for each template. Maps to sdk.automations.templates.<template>(input).",
+		"Create an automation from a built-in server template. Use relayapi_get_automation_schema first for template configuration. Maps to sdk.automations.create({ template }).",
 		{
-			template_id: z.enum(TEMPLATE_IDS),
-			input: z
-				.record(z.string(), z.unknown())
-				.describe(
-					"Template-specific input. Shape differs per template — use the schema catalog.",
-				),
+			name: z.string().min(1).max(200),
+			description: z.string().max(1000).optional(),
+			channel: z.enum(AUTOMATION_CHANNELS),
+			workspace_id: z.string().optional(),
+			template_kind: z.enum(TEMPLATE_KINDS),
+			config: z.record(z.string(), z.unknown()).optional(),
 		},
-		async ({ template_id, input }) => {
-			try {
-				const t = client.automations.templates;
-				let result: unknown;
-				switch (template_id) {
-					case "comment-to-dm":
-						result = await t.commentToDm(input);
-						break;
-					case "welcome-dm":
-						result = await t.welcomeDm(input);
-						break;
-					case "keyword-reply":
-						result = await t.keywordReply(input);
-						break;
-					case "follow-to-dm":
-						result = await t.followToDm(input);
-						break;
-					case "story-reply":
-						result = await t.storyReply(input);
-						break;
-					case "giveaway":
-						result = await t.giveaway(input);
-						break;
-				}
-				return asText(result);
-			} catch (e) {
-				return asError(e);
-			}
-		},
+		async ({ template_kind, config, ...body }) =>
+			call(() =>
+				client.automations.create({
+					...body,
+					template: { kind: template_kind, config: config ?? {} },
+				}),
+			),
 	);
 }
 
 export function createServer(client: RelayLike): McpServer {
-	const server = new McpServer({
-		name: "relayapi",
-		version: "0.1.0",
-	});
+	const server = new McpServer({ name: "relayapi", version: VERSION });
 	registerTools(server, client);
 	return server;
 }

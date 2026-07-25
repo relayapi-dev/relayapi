@@ -20,14 +20,20 @@ const NODE_KINDS = [
 		kind: "input",
 		label: "Input",
 		category: "content",
-		description:
-			"Wait for a user reply and capture it into the run context",
+		description: "Wait for a user reply and capture it into the run context",
 	},
 	{
 		kind: "delay",
 		label: "Delay",
 		category: "content",
 		description: "Pause the flow for a duration before the next step",
+	},
+	{
+		kind: "wait_event",
+		label: "Wait for event",
+		category: "content",
+		description:
+			"Wait for a compatible inbound event, with an optional timeout branch",
 	},
 	{
 		kind: "condition",
@@ -61,6 +67,13 @@ const NODE_KINDS = [
 		label: "Start automation",
 		category: "flow",
 		description: "Enroll the current contact into another automation",
+	},
+	{
+		kind: "social_profile_check",
+		label: "Social profile check",
+		category: "logic",
+		description:
+			"Read live platform relationship data and branch on the result",
 	},
 	{
 		kind: "goto",
@@ -127,11 +140,6 @@ const ENTRYPOINT_KINDS = [
 		channels: ["instagram"],
 	},
 	{
-		kind: "follow",
-		label: "Follow",
-		channels: ["instagram", "facebook"],
-	},
-	{
 		kind: "schedule",
 		label: "Schedule",
 		channels: ["instagram", "facebook", "whatsapp", "telegram"],
@@ -177,22 +185,22 @@ const BINDING_TYPES = [
 		v1_status: "wired",
 	},
 	{
-		type: "conversation_starter",
-		label: "Conversation Starter",
+		type: "get_started",
+		label: "Get Started",
 		channels: ["facebook"],
-		v1_status: "stubbed",
+		v1_status: "provider_synced",
 	},
 	{
 		type: "main_menu",
 		label: "Main Menu",
-		channels: ["facebook", "instagram"],
-		v1_status: "stubbed",
+		channels: ["instagram", "facebook"],
+		v1_status: "provider_synced",
 	},
 	{
 		type: "ice_breaker",
-		label: "Ice Breaker",
-		channels: ["whatsapp"],
-		v1_status: "stubbed",
+		label: "Ice Breakers",
+		channels: ["instagram"],
+		v1_status: "provider_synced",
 	},
 ];
 
@@ -202,6 +210,11 @@ const ACTION_TYPES = [
 	{ type: "tag_remove", label: "Remove tag", category: "contact_data" },
 	{ type: "field_set", label: "Set field", category: "contact_data" },
 	{ type: "field_clear", label: "Clear field", category: "contact_data" },
+	{
+		type: "contact_field_set",
+		label: "Set contact field",
+		category: "contact_data",
+	},
 	// Segments + subscriptions
 	{ type: "segment_add", label: "Add to segment", category: "subscriptions" },
 	{
@@ -281,15 +294,11 @@ const ACTION_TYPES = [
 		label: "Log conversion event",
 		category: "conversion",
 	},
-	// v1.1 stubs
 	{
 		type: "change_main_menu",
-		label: "Change main menu",
-		category: "v1_1_stubs",
-		// Blocked in the validator (spec §B10 fix) — the action handler throws
-		// unconditionally because main-menu platform sync lands in v1.1. The
-		// dashboard action picker should grey this out until sync is wired.
-		disabled: true,
+		label: "Change Messenger menu",
+		category: "conversation",
+		channels: ["facebook"],
 	},
 ];
 
@@ -308,6 +317,7 @@ const CHANNEL_CAPABILITIES: Record<string, Record<string, boolean | number>> = {
 		audio: false,
 		file: false,
 		delay: true,
+		social_profile_check: true,
 	},
 	facebook: {
 		buttons: true,
@@ -322,6 +332,7 @@ const CHANNEL_CAPABILITIES: Record<string, Record<string, boolean | number>> = {
 		audio: true,
 		file: true,
 		delay: true,
+		social_profile_check: false,
 	},
 	whatsapp: {
 		buttons: true,
@@ -334,6 +345,7 @@ const CHANNEL_CAPABILITIES: Record<string, Record<string, boolean | number>> = {
 		audio: true,
 		file: true,
 		delay: true,
+		social_profile_check: false,
 	},
 	telegram: {
 		buttons: true,
@@ -346,6 +358,7 @@ const CHANNEL_CAPABILITIES: Record<string, Record<string, boolean | number>> = {
 		audio: true,
 		file: true,
 		delay: true,
+		social_profile_check: false,
 	},
 };
 

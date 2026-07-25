@@ -1,18 +1,25 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { generateId, media, posts } from "@relayapi/db";
+import { type Database, generateId, media, posts } from "@relayapi/db";
 import type { AwsClient } from "aws4fetch";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { mediaPublicHost } from "../lib/deployment-mode";
 import {
 	createBoundedReadableBody,
 	parseContentLength,
 	ResponseTooLargeError,
 } from "../lib/fetch-public-url";
 import {
+	isAllowedMediaMimeType,
+	MAX_MEDIA_UPLOAD_BYTES,
+	normalizeMediaMimeType,
+	validateStoredMediaObject,
+} from "../lib/media-storage-policy";
+import {
 	getCachedR2Client,
 	presignR2Url,
-	presignViewUrlWithCache,
-	RELAY_MEDIA_HOST,
+	presignRelayMediaUrls,
 } from "../lib/r2-presign";
+import { relayMediaReferenceFromUrl } from "../lib/relay-media-policy";
 import { resolveOperationalCreateScope } from "../lib/request-access";
 import { thumbnailKeyFor } from "../lib/thumbnails";
 import {
@@ -29,34 +36,17 @@ import {
 	MediaResponse,
 	MediaUploadResponse,
 } from "../schemas/media";
-import { processMediaDeletion } from "../services/media-reliability";
+import {
+	processMediaDeletion,
+	retireRejectedMediaUpload,
+} from "../services/media-reliability";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
 const PRESIGN_GET_EXPIRES = 3600; // 1 hour
-export const MAX_MEDIA_UPLOAD_BYTES = 50 * 1024 * 1024;
 
-// SECURITY: Allowed MIME types to prevent stored XSS via SVG/HTML uploads
-const ALLOWED_MIME_TYPES = new Set([
-	"image/jpeg",
-	"image/png",
-	"image/gif",
-	"image/webp",
-	"image/heic",
-	"image/heif",
-	"image/avif",
-	"video/mp4",
-	"video/webm",
-	"video/quicktime",
-	"video/mpeg",
-	"audio/mpeg",
-	"audio/mp4",
-	"audio/webm",
-	"audio/wav",
-	"audio/ogg",
-	"application/pdf",
-]);
+export { MAX_MEDIA_UPLOAD_BYTES } from "../lib/media-storage-policy";
 
 function requireR2Client(env: Env): AwsClient {
 	const client = getCachedR2Client(env);
@@ -68,33 +58,62 @@ function requireR2Client(env: Env): AwsClient {
 	return client;
 }
 
-// View URLs go through the shared KV presign cache (50-min TTL); on list
-// endpoints this replaces up to `limit` fresh SigV4 signing chains per request
-// with warm KV reads.
-async function getPresignedViewUrl(
-	env: Env,
-	client: AwsClient,
-	storageKey: string,
-): Promise<string> {
-	return presignViewUrlWithCache(env, client, storageKey, PRESIGN_GET_EXPIRES);
-}
-
 type MediaReadSource = {
+	organizationId: string;
+	status: string;
 	storageKey: string;
 	url: string | null;
 	thumbnailUrl: string | null;
 	originalDeletedAt: Date | null;
+	deletionRequestedAt: Date | null;
 };
 
-/** Never mint a fresh URL for an original R2 object known to be gone. */
+/**
+ * Never mint a fresh URL unless the current DB row is ready and available. The
+ * batch policy query also prevents historical or URL-derived keys from being
+ * signed merely because they share the tenant prefix.
+ */
+async function getMediaReadUrls(
+	db: Database,
+	env: Env,
+	records: MediaReadSource[],
+): Promise<Array<string | null>> {
+	if (records.length === 0) return [];
+	const organizationId = records[0]?.organizationId;
+	if (!organizationId) return records.map(() => null);
+	const candidates = records.map((record) => ({
+		url:
+			record.status === "ready" &&
+			!record.deletionRequestedAt &&
+			!record.originalDeletedAt &&
+			record.url
+				? record.url
+				: record.thumbnailUrl,
+	}));
+	const resolved =
+		(await presignRelayMediaUrls(
+			db,
+			env,
+			candidates,
+			PRESIGN_GET_EXPIRES,
+			organizationId,
+		)) ?? candidates;
+	return resolved.map((item, index) => {
+		if (!item.url) return null;
+		// An unchanged canonical URL means the row failed the DB readiness policy
+		// or signing is unavailable. Do not expose it as if it were fetchable.
+		return relayMediaReferenceFromUrl(item.url, mediaPublicHost(env))
+			? (records[index]?.thumbnailUrl ?? null)
+			: item.url;
+	});
+}
+
 export async function getMediaReadUrl(
+	db: Database,
 	env: Env,
 	record: MediaReadSource,
 ): Promise<string | null> {
-	if (record.originalDeletedAt || record.url === null) {
-		return record.thumbnailUrl || null;
-	}
-	return getPresignedViewUrl(env, requireR2Client(env), record.storageKey);
+	return (await getMediaReadUrls(db, env, [record]))[0] ?? null;
 }
 
 // --- Route definitions ---
@@ -221,7 +240,7 @@ const presignMedia = createRoute({
 	tags: ["Media"],
 	summary: "Get a pre-signed upload URL",
 	description:
-		"Generate a pre-signed URL for direct upload to R2. The client can PUT the file to the returned URL.",
+		"Create a pending media upload intent and generate a create-only pre-signed R2 PUT URL. Send every header in upload_headers exactly as returned, including Content-Type and If-None-Match, then call POST /v1/media/confirm; confirmation is mandatory before using the canonical media URL.",
 	security: [{ Bearer: [] }],
 	request: {
 		body: {
@@ -304,7 +323,7 @@ const confirmMedia = createRoute({
 	tags: ["Media"],
 	summary: "Confirm a presigned upload completed",
 	description:
-		"After uploading a file to the presigned URL, call this endpoint to mark the media as ready.",
+		"Mandatory final step for a presigned upload. Verifies the stored object and marks the pending media intent ready.",
 	security: [{ Bearer: [] }],
 	request: {
 		body: {
@@ -313,7 +332,9 @@ const confirmMedia = createRoute({
 					schema: z.object({
 						storage_key: z
 							.string()
-							.describe("The storage key from the presign response URL"),
+							.describe(
+								"The path portion of the canonical url returned by POST /v1/media/presign, without the leading slash",
+							),
 					}),
 				},
 			},
@@ -378,10 +399,13 @@ app.openapi(listMedia, async (c) => {
 	const records = await db
 		.select({
 			id: media.id,
+			organizationId: media.organizationId,
+			status: media.status,
 			storageKey: media.storageKey,
 			url: media.url,
 			thumbnailUrl: media.thumbnailUrl,
 			originalDeletedAt: media.originalDeletedAt,
+			deletionRequestedAt: media.deletionRequestedAt,
 			filename: media.filename,
 			mimeType: media.mimeType,
 			size: media.size,
@@ -398,7 +422,7 @@ app.openapi(listMedia, async (c) => {
 	const hasMore = records.length > limit;
 	const data = records.slice(0, limit);
 
-	const urls = await Promise.all(data.map((r) => getMediaReadUrl(c.env, r)));
+	const urls = await getMediaReadUrls(db, c.env, data);
 
 	return c.json(
 		{
@@ -427,13 +451,10 @@ app.openapi(uploadMedia, async (c) => {
 	if (!scope.ok) return scope.response as never;
 	const contentType =
 		c.req.header("content-type") ?? "application/octet-stream";
+	const normalizedContentType = normalizeMediaMimeType(contentType);
 
 	// SECURITY: Validate MIME type against allowlist to prevent stored XSS
-	if (
-		!ALLOWED_MIME_TYPES.has(
-			(contentType.split(";")[0] ?? "").trim().toLowerCase(),
-		)
-	) {
+	if (!isAllowedMediaMimeType(contentType)) {
 		return c.json(
 			{
 				error: {
@@ -485,8 +506,8 @@ app.openapi(uploadMedia, async (c) => {
 		.replace(/\0/g, "")
 		.replace(/[<>"'&]/g, "_")
 		.replace(/[%#?]/g, "_");
-	const storageKey = `${orgId}/${generateId("file_")}/${safeFilename}`;
-	const url = `https://media.relayapi.dev/${storageKey}`;
+	const storageKey = `${orgId}/media/${generateId("file_")}/${safeFilename}`;
+	const url = `https://${mediaPublicHost(c.env)}/${storageKey}`;
 	const db = c.get("db");
 	const mediaId = generateId("med_");
 
@@ -498,7 +519,7 @@ app.openapi(uploadMedia, async (c) => {
 		organizationId: orgId,
 		workspaceId: scope.workspaceId,
 		filename: safeFilename,
-		mimeType: contentType,
+		mimeType: normalizedContentType,
 		size: contentLength ?? 0,
 		storageKey,
 		url,
@@ -586,15 +607,12 @@ app.openapi(uploadMedia, async (c) => {
 app.openapi(presignMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { filename, content_type, workspace_id } = c.req.valid("json");
+	const normalizedContentType = normalizeMediaMimeType(content_type);
 	const scope = await resolveOperationalCreateScope(c, workspace_id, "media");
 	if (!scope.ok) return scope.response as never;
 
 	// SECURITY: Validate MIME type against allowlist to prevent stored XSS
-	if (
-		!ALLOWED_MIME_TYPES.has(
-			(content_type.split(";")[0] ?? "").trim().toLowerCase(),
-		)
-	) {
+	if (!isAllowedMediaMimeType(content_type)) {
 		return c.json(
 			{
 				error: {
@@ -628,7 +646,7 @@ app.openapi(presignMedia, async (c) => {
 		.replace(/\.\./g, "_")
 		.replace(/\0/g, "")
 		.replace(/[%#?]/g, "_");
-	const storageKey = `${orgId}/${generateId("file_")}/${safeFilename}`;
+	const storageKey = `${orgId}/media/${generateId("file_")}/${safeFilename}`;
 	const expiresIn = 3600; // 1 hour
 
 	const client = requireR2Client(c.env);
@@ -639,27 +657,38 @@ app.openapi(presignMedia, async (c) => {
 		storageKey,
 		"PUT",
 		expiresIn,
-		content_type,
+		normalizedContentType,
 	);
 
-	const url = `https://media.relayapi.dev/${storageKey}`;
+	const url = `https://${mediaPublicHost(c.env)}/${storageKey}`;
 
 	// Create a pending DB record so the file is tracked before upload
 	const db = c.get("db");
-	await db.insert(media).values({
-		organizationId: orgId,
-		workspaceId: scope.workspaceId,
-		filename,
-		mimeType: content_type,
-		size: 0,
-		storageKey,
-		url,
-		status: "pending",
-	});
+	const [pendingMedia] = await db
+		.insert(media)
+		.values({
+			organizationId: orgId,
+			workspaceId: scope.workspaceId,
+			filename,
+			mimeType: normalizedContentType,
+			size: 0,
+			storageKey,
+			url,
+			status: "pending",
+		})
+		.returning({ id: media.id });
+	if (!pendingMedia) {
+		throw new Error("Failed to persist the media upload intent");
+	}
 
 	return c.json(
 		{
+			id: pendingMedia.id,
 			upload_url: uploadUrl,
+			upload_headers: {
+				"Content-Type": normalizedContentType,
+				"If-None-Match": "*" as const,
+			},
 			url,
 			expires_in: expiresIn,
 		},
@@ -694,7 +723,14 @@ app.openapi(getMedia, async (c) => {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
-	const url = await getMediaReadUrl(c.env, record);
+	if (record.status !== "ready" || record.deletionRequestedAt) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Media not found" } },
+			404,
+		);
+	}
+
+	const url = await getMediaReadUrl(db, c.env, record);
 
 	return c.json(
 		{
@@ -739,7 +775,7 @@ app.openapi(deleteMedia, async (c) => {
 
 	// Preserve accepted draft/scheduled/publishing posts: the durable deletion
 	// flow must not tombstone media that one of those posts still references.
-	const canonicalUrl = `https://${RELAY_MEDIA_HOST}/${record.storageKey}`;
+	const canonicalUrl = `https://${mediaPublicHost(c.env)}/${record.storageKey}`;
 	const referencing = await db
 		.select({ id: posts.id })
 		.from(posts)
@@ -747,7 +783,10 @@ app.openapi(deleteMedia, async (c) => {
 			and(
 				eq(posts.organizationId, orgId),
 				inArray(posts.status, ["draft", "scheduled", "publishing"]),
-				sql`${posts.platformOverrides}::text LIKE ${`%${canonicalUrl}%`}`,
+				sql`COALESCE(${posts.platformOverrides}, '{}'::jsonb) @> jsonb_build_object(
+					'_media',
+					jsonb_build_array(jsonb_build_object('url', ${canonicalUrl}::text))
+				)`,
 			),
 		)
 		.limit(1);
@@ -799,85 +838,21 @@ app.openapi(confirmMedia, async (c) => {
 		);
 	}
 
-	// Verify the object exists in R2
-	const r2Object = await c.env.MEDIA_BUCKET.head(storage_key);
-	if (!r2Object) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Upload not found in storage" } },
-			404,
-		);
-	}
-
-	// SEC-02: Re-verify MIME type at confirm time (presigned uploads can bypass declared type)
-	const actualContentType = r2Object.httpMetadata?.contentType;
-	if (
-		actualContentType &&
-		!ALLOWED_MIME_TYPES.has(
-			(actualContentType.split(";")[0] ?? "").trim().toLowerCase(),
-		)
-	) {
-		await c.env.MEDIA_BUCKET.delete(storage_key);
-		return c.json(
-			{
-				error: {
-					code: "INVALID_FILE_TYPE",
-					message: `File type '${actualContentType}' is not allowed`,
-				},
-			},
-			400 as never,
-		);
-	}
-
-	// SEC-11: Enforce size limit on presigned uploads (direct uploads already enforce 50MB)
-	if (r2Object.size > MAX_MEDIA_UPLOAD_BYTES) {
-		await c.env.MEDIA_BUCKET.delete(storage_key);
-		return c.json(
-			{
-				error: {
-					code: "FILE_TOO_LARGE",
-					message: `File size ${r2Object.size} exceeds maximum of ${MAX_MEDIA_UPLOAD_BYTES / 1024 / 1024}MB`,
-				},
-			},
-			400 as never,
-		);
-	}
-
-	// Update the pending record with actual size and mark as ready
-	const [updated] = await db
-		.update(media)
-		.set({
-			size: r2Object.size,
-			status: "ready",
-		})
+	// Establish ownership and lifecycle state before touching R2. A tenant prefix
+	// alone is not authority to inspect or delete an object.
+	const [intent] = await db
+		.select()
+		.from(media)
 		.where(
 			and(
 				eq(media.storageKey, storage_key),
 				eq(media.organizationId, orgId),
-				eq(media.status, "pending"),
+				inArray(media.status, ["pending", "ready"]),
+				isNull(media.deletionRequestedAt),
 			),
 		)
-		.returning();
-
-	// Idempotency: a retried confirm (after a lost response) finds no pending row
-	// because the first call already marked it ready. Return the already-ready
-	// record as success instead of a misleading 404.
-	let record = updated;
-	if (!record) {
-		const [existing] = await db
-			.select()
-			.from(media)
-			.where(
-				and(
-					eq(media.storageKey, storage_key),
-					eq(media.organizationId, orgId),
-					eq(media.status, "ready"),
-				),
-			)
-			.limit(1);
-		record = existing;
-	}
-
-	if (!record) {
+		.limit(1);
+	if (!intent) {
 		return c.json(
 			{
 				error: {
@@ -889,7 +864,84 @@ app.openapi(confirmMedia, async (c) => {
 		);
 	}
 
-	const viewUrl = await getMediaReadUrl(c.env, record);
+	let record = intent;
+	const r2Object = await c.env.MEDIA_BUCKET.head(storage_key);
+	if (!r2Object) {
+		return c.json(
+			{
+				error: {
+					code: "NOT_FOUND",
+					message: "Upload not found in storage",
+				},
+			},
+			404,
+		);
+	}
+	const validation = validateStoredMediaObject(r2Object);
+	if (!validation.ok) {
+		await retireRejectedMediaUpload(db, c.env, intent.id);
+		return c.json(
+			{
+				error: {
+					code: validation.code,
+					message: validation.message,
+				},
+			},
+			400 as never,
+		);
+	}
+
+	if (intent.status === "pending") {
+		const [updated] = await db
+			.update(media)
+			.set({
+				size: validation.size,
+				mimeType: validation.mimeType,
+				status: "ready",
+			})
+			.where(
+				and(
+					eq(media.id, intent.id),
+					eq(media.organizationId, orgId),
+					eq(media.status, "pending"),
+					isNull(media.deletionRequestedAt),
+				),
+			)
+			.returning();
+
+		// Idempotency: if another confirm won the pending -> ready transition,
+		// return that same ready row rather than a misleading failure.
+		if (updated) {
+			record = updated;
+		} else {
+			const [existing] = await db
+				.select()
+				.from(media)
+				.where(
+					and(
+						eq(media.id, intent.id),
+						eq(media.organizationId, orgId),
+						eq(media.status, "ready"),
+						isNull(media.deletionRequestedAt),
+					),
+				)
+				.limit(1);
+			if (existing) record = existing;
+			else {
+				return c.json(
+					{
+						error: {
+							code: "NOT_FOUND",
+							message: "Media upload is no longer pending",
+						},
+					},
+					404,
+				);
+			}
+		}
+	}
+
+	const viewUrl = await getMediaReadUrl(db, c.env, record);
 
 	return c.json(
 		{

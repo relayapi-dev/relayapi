@@ -11,6 +11,7 @@ import {
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
 } from "./types";
 
 const SNAPCHAT_API = "https://businessapi.snapchat.com/v1";
@@ -287,6 +288,127 @@ type ContentType = "story" | "saved_story" | "spotlight";
 
 export const snapchatPublisher: Publisher = {
 	platform: "snapchat",
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		if (
+			!request.platform_post_id ||
+			!request.provider_state?.startsWith("SPOTLIGHT:")
+		) {
+			return {
+				success: false,
+				provider_outcome: {
+					disposition: "outcome_unknown",
+					provider_operation_id: request.provider_operation_id ?? undefined,
+					platform_post_id: request.platform_post_id ?? undefined,
+					provider_state: request.provider_state ?? undefined,
+				},
+				error: {
+					code: "SNAPCHAT_RECONCILIATION_UNAVAILABLE",
+					message:
+						"Snapchat does not expose a correlation-safe status lookup for this asset type.",
+				},
+			};
+		}
+		try {
+			const res = await snapchatFetch(
+				`${SNAPCHAT_API}/public_profiles/${encodeURIComponent(request.account.platform_account_id)}/spotlights/${encodeURIComponent(request.platform_post_id)}`,
+				request.account.access_token,
+			);
+			if (!res.ok) {
+				throw new PublishError(
+					`Snapchat Spotlight status failed: ${res.statusText}`,
+					{
+						statusCode: res.status,
+						detail: `HTTP ${res.status} ${res.statusText}`,
+					},
+				);
+			}
+			const data = (await res.json()) as {
+				request_status?: string;
+				spotlights?: Array<{
+					sub_request_status?: string;
+					spotlight?: { id?: string; status?: string; share_link?: string };
+				}>;
+			};
+			if (data.request_status !== "SUCCESS") {
+				return {
+					success: false,
+					provider_outcome: {
+						disposition: "outcome_unknown",
+						provider_operation_id: request.provider_operation_id ?? undefined,
+						platform_post_id: request.platform_post_id,
+						provider_state: data.request_status ?? "MISSING_REQUEST_STATUS",
+					},
+					error: {
+						code: "SNAPCHAT_STATUS_ERROR",
+						message: "Snapchat did not return a successful status envelope.",
+					},
+				};
+			}
+			const match = data.spotlights?.[0];
+			const state = match?.spotlight?.status;
+			if (
+				match?.sub_request_status !== "SUCCESS" ||
+				match.spotlight?.id !== request.platform_post_id ||
+				!state
+			) {
+				return {
+					success: false,
+					provider_outcome: {
+						disposition: "outcome_unknown",
+						provider_operation_id: request.provider_operation_id ?? undefined,
+						platform_post_id: request.platform_post_id,
+						provider_state: "SPOTLIGHT:NOT_FOUND",
+					},
+					error: {
+						code: "SNAPCHAT_SPOTLIGHT_NOT_FOUND",
+						message:
+							"The submitted Spotlight was not present in the status listing.",
+					},
+				};
+			}
+			if (state === "LIVE") {
+				return {
+					success: true,
+					platform_post_id: request.platform_post_id,
+					platform_url: match.spotlight?.share_link,
+					provider_outcome: {
+						disposition: "published",
+						provider_operation_id: request.provider_operation_id ?? undefined,
+						platform_post_id: request.platform_post_id,
+						platform_url: match.spotlight?.share_link,
+						provider_state: `SPOTLIGHT:${state}`,
+					},
+				};
+			}
+			if (state === "REJECTED") {
+				return {
+					success: false,
+					provider_outcome: {
+						disposition: "failed",
+						provider_operation_id: request.provider_operation_id ?? undefined,
+						platform_post_id: request.platform_post_id,
+						provider_state: `SPOTLIGHT:${state}`,
+					},
+					error: {
+						code: "SNAPCHAT_SPOTLIGHT_REJECTED",
+						message: "Snapchat rejected the Spotlight during review.",
+					},
+				};
+			}
+			return {
+				success: true,
+				platform_post_id: request.platform_post_id,
+				provider_outcome: {
+					disposition: "pending_review",
+					provider_operation_id: request.provider_operation_id ?? undefined,
+					platform_post_id: request.platform_post_id,
+					provider_state: `SPOTLIGHT:${state}`,
+				},
+			};
+		} catch (error) {
+			return classifyPublishError(error);
+		}
+	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
@@ -464,6 +586,27 @@ export const snapchatPublisher: Publisher = {
 			}
 
 			const postResult = (await postRes.json()) as Record<string, unknown>;
+			const requestStatus = postResult.request_status as string | undefined;
+			if (requestStatus && requestStatus !== "SUCCESS") {
+				const message =
+					(postResult.debug_message as string | undefined) ??
+					(postResult.display_message as string | undefined) ??
+					"Snapchat returned a semantic request failure.";
+				return {
+					success: false,
+					provider_outcome: {
+						disposition: requestStatus === "PARTIAL" ? "partial" : "failed",
+						provider_operation_id: postResult.request_id as string | undefined,
+						provider_state: requestStatus,
+					},
+					error: {
+						code:
+							(postResult.error_code as string | undefined) ??
+							"SNAPCHAT_REQUEST_FAILED",
+						message,
+					},
+				};
+			}
 
 			// Response shape varies per content type:
 			// Story: { request_id, request_status }
@@ -474,19 +617,115 @@ export const snapchatPublisher: Publisher = {
 				postId = postResult.spotlight_id as string | undefined;
 			} else if (contentType === "saved_story") {
 				const savedStories = postResult.saved_stories as
-					| Array<{ saved_story?: { id?: string } }>
+					| Array<{
+							sub_request_status?: string;
+							sub_request_error_reason?: string;
+							saved_story?: { id?: string };
+					  }>
 					| undefined;
-				postId = savedStories?.[0]?.saved_story?.id;
+				const savedStory = savedStories?.[0];
+				if (savedStory?.sub_request_status !== "SUCCESS") {
+					return {
+						success: false,
+						provider_outcome: {
+							disposition:
+								savedStory?.sub_request_status === "PARTIAL"
+									? "partial"
+									: "failed",
+							provider_operation_id: postResult.request_id as
+								| string
+								| undefined,
+							provider_state:
+								savedStory?.sub_request_status ?? "MISSING_SUB_REQUEST_STATUS",
+						},
+						error: {
+							code: "SNAPCHAT_SAVED_STORY_FAILED",
+							message:
+								savedStory?.sub_request_error_reason ??
+								"Snapchat did not confirm saved-story creation.",
+						},
+					};
+				}
+				postId = savedStory.saved_story?.id;
 			} else {
-				postId =
-					(postResult.request_id as string | undefined) ??
-					(postResult.id as string | undefined);
+				postId = postResult.id as string | undefined;
 			}
 
+			const providerOperationId = postResult.request_id as string | undefined;
+			const platformUrl = postResult.url as string | undefined;
+			if (contentType === "spotlight") {
+				if (!postId || !providerOperationId || requestStatus !== "SUCCESS") {
+					return {
+						success: false,
+						provider_outcome: {
+							disposition: "outcome_unknown",
+							provider_operation_id: providerOperationId,
+							platform_post_id: postId,
+							provider_state: requestStatus ?? "MISSING_REQUEST_STATUS",
+						},
+						error: {
+							code: "SNAPCHAT_INVALID_SUCCESS_RESPONSE",
+							message:
+								"Snapchat did not return the required Spotlight and request IDs.",
+						},
+					};
+				}
+				return {
+					success: true,
+					platform_post_id: postId,
+					provider_outcome: {
+						disposition: "pending_review",
+						provider_operation_id: providerOperationId,
+						platform_post_id: postId,
+						provider_state: "SPOTLIGHT:SUBMITTED",
+					},
+				};
+			}
+			if (contentType === "story") {
+				if (!providerOperationId || requestStatus !== "SUCCESS") {
+					return {
+						success: false,
+						provider_outcome: { disposition: "outcome_unknown" },
+						error: {
+							code: "SNAPCHAT_INVALID_SUCCESS_RESPONSE",
+							message: "Snapchat did not confirm the Story request.",
+						},
+					};
+				}
+				return {
+					success: true,
+					provider_outcome: {
+						disposition: "accepted",
+						provider_operation_id: providerOperationId,
+						provider_state: "STORY:SUCCESS",
+					},
+				};
+			}
+			if (!postId) {
+				return {
+					success: false,
+					provider_outcome: {
+						disposition: "outcome_unknown",
+						provider_operation_id: providerOperationId,
+					},
+					error: {
+						code: "SNAPCHAT_MISSING_SAVED_STORY_ID",
+						message:
+							"Snapchat confirmed the request but omitted the saved-story ID.",
+					},
+				};
+			}
 			return {
 				success: true,
 				platform_post_id: postId,
-				platform_url: postResult.url as string | undefined,
+				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: "published",
+					provider_operation_id: providerOperationId,
+					platform_post_id: postId,
+					platform_url: platformUrl,
+					provider_state: "SAVED_STORY:SUCCESS",
+				},
 			};
 		} catch (err) {
 			return classifyPublishError(err, { safeToRetryRateLimit: true });

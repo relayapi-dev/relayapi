@@ -1,4 +1,4 @@
-import type { MessageBlock, QuickReply } from "../../../schemas/automation-graph";
+import type { MessageBlock } from "../../../schemas/automation-graph";
 import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
@@ -6,15 +6,19 @@ type CommentToDmConfig = {
 	post_ids?: string[];
 	keyword_filter?: string[];
 	public_reply?: string;
-	dm_message?: { blocks: MessageBlock[]; quick_replies?: QuickReply[] };
+	dm_message?: { blocks: MessageBlock[] };
 	once_per_user?: boolean;
 	fallback_message?: string;
+	daily_cap?: number;
 	social_account_id?: string;
 };
 
 export function buildCommentToDm(
 	input: TemplateBuildInput,
 ): TemplateBuildOutput {
+	if (input.channel !== "instagram" && input.channel !== "facebook") {
+		throw new Error("comment_to_dm requires Instagram or Facebook");
+	}
 	const cfg = (input.config ?? {}) as CommentToDmConfig;
 	const socialAccountId = input.socialAccountId ?? cfg.social_account_id;
 	const publicReply = cfg.public_reply?.trim();
@@ -61,24 +65,56 @@ export function buildCommentToDm(
 				{
 					key: "send_dm",
 					kind: "message",
-					title: "DM the commenter",
+					title: "Private reply to commenter",
 					config: {
 						blocks,
-						quick_replies: cfg.dm_message?.quick_replies,
+						delivery: "comment_private_reply",
 					},
 					ports: [],
 				},
+				...(cfg.fallback_message
+					? [
+							{
+								key: "fallback",
+								kind: "action_group",
+								title: "Public fallback",
+								config: {
+									actions: [
+										{
+											id: "act_fallback_reply",
+											type: "reply_to_comment",
+											text: cfg.fallback_message,
+											on_error: "continue",
+										},
+									],
+								},
+								ports: [],
+							},
+						]
+					: []),
 			],
-			edges: publicReply
-				? [
-						{
-							from_node: "public_reply",
-							from_port: "next",
-							to_node: "send_dm",
-							to_port: "in",
-						},
-					]
-				: [],
+			edges: [
+				...(publicReply
+					? [
+							{
+								from_node: "public_reply",
+								from_port: "next",
+								to_node: "send_dm",
+								to_port: "in",
+							},
+						]
+					: []),
+				...(cfg.fallback_message
+					? [
+							{
+								from_node: "send_dm",
+								from_port: "error",
+								to_node: "fallback",
+								to_port: "in",
+							},
+						]
+					: []),
+			],
 		}),
 		entrypoints: [
 			{
@@ -93,6 +129,7 @@ export function buildCommentToDm(
 				},
 				socialAccountId: socialAccountId ?? null,
 				allowReentry: cfg.once_per_user !== true,
+				dailyCap: cfg.daily_cap ?? null,
 			},
 		],
 	};

@@ -172,6 +172,27 @@ describe("URL validation hardening", () => {
 		).toBe(true);
 	});
 
+	it("allows only the exact configured self-hosted app origin", () => {
+		expect(
+			isAllowedCustomerRedirectUrl(
+				"https://app.example.com/connect/callback",
+				"app.example.com",
+			),
+		).toBe(true);
+		expect(
+			isAllowedCustomerRedirectUrl(
+				"https://evil.app.example.com/connect/callback",
+				"app.example.com",
+			),
+		).toBe(false);
+		expect(
+			isAllowedCustomerRedirectUrl(
+				"http://app.example.com/connect/callback",
+				"app.example.com",
+			),
+		).toBe(false);
+	});
+
 	it("rejects non-http post media URLs", () => {
 		expect(
 			CreatePostBody.safeParse({

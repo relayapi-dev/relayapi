@@ -1,0 +1,58 @@
+export const CLI_VERSION = "0.1.0"; // x-release-please-version
+export const CONFIG_FILENAME = "relayapi.selfhost.json";
+export const LOCK_FILENAME = "relayapi.lock.json";
+export const DEFAULT_SOURCE_REPOSITORY = "relayapi-dev/relayapi";
+export const RELEASE_TAG_PREFIX = "self-host-v";
+
+export const RESOURCE_NAMES = {
+	kv: "relayapi-selfhost-kv",
+	hyperdrive: "relayapi-selfhost-db",
+	workers: {
+		api: "relayapi-selfhost-api",
+		app: "relayapi-selfhost-app",
+	},
+	buckets: {
+		media: "relayapi-selfhost-media",
+		avatars: "relayapi-selfhost-avatars",
+		thumbnails: "relayapi-selfhost-thumbnails",
+		publicAssets: "relayapi-selfhost-public-assets",
+		queueRescue: "relayapi-selfhost-queue-rescue-ledger",
+	},
+} as const;
+
+export const QUEUE_NAMES = [
+	"media-cleanup",
+	"publish",
+	"email",
+	"refresh",
+	"inbox",
+	"tools",
+	"ads",
+	"sync",
+	"customer-webhooks",
+	"media-cleanup-dlq",
+	"publish-dlq",
+	"email-dlq",
+	"refresh-dlq",
+	"inbox-dlq",
+	"tools-dlq",
+	"ads-dlq",
+	"sync-dlq",
+	"customer-webhooks-dlq",
+	"queue-rescue",
+] as const;
+
+export type QueueName = (typeof QUEUE_NAMES)[number];
+
+export function cloudflareQueueName(name: QueueName): string {
+	return `relayapi-selfhost-${name}`;
+}
+
+export const REQUIRED_LOCAL_SECRETS = [
+	"CLOUDFLARE_API_TOKEN",
+	"CLOUDFLARE_ACCOUNT_ID",
+	"RELAYAPI_DATABASE_URL",
+	"RELAYAPI_RUNTIME_DATABASE_URL",
+	"R2_ACCESS_KEY_ID",
+	"R2_SECRET_ACCESS_KEY",
+] as const;

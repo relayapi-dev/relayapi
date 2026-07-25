@@ -22,6 +22,60 @@
       "snapshotSha256": "9e21868b5550fc6ca493a0209d352fe2f93ea7f24bc9fef7c0b1231a2723b009",
       "drizzleVersion": "7",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "tag": "0002_aspiring_lake",
+      "folderMillis": 1784360680570,
+      "sha256": "fc58571a263b2c04621e4bfadf0375cd4d96d543fd3a4f453ea777b76fe8d685",
+      "snapshotSha256": "6610f7669100c30fab66f81515d61978aaf0751f9a49dc5ec7784ac6fff08c14",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "tag": "0003_fine_blazing_skull",
+      "folderMillis": 1784362088619,
+      "sha256": "3649fc3bdc62c52c821b3ae96847c6ed1314f55d397178d2519459cdba8988a9",
+      "snapshotSha256": "6d3523697a2a8a3b98c4351e3c557e91b462a05e10255273684365d8f2b6f543",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "tag": "0004_amused_shaman",
+      "folderMillis": 1784362487412,
+      "sha256": "ef2026664bf47b713717026ec4b504155b68f8254599fa3a8ebee3c8068a4ec2",
+      "snapshotSha256": "fa02f1589fcdc79bdcacc94d4a1b8dbb5beb8f566a4ccbdb5c9e7debfa0a385b",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "tag": "0005_atomic_identity_deletion",
+      "folderMillis": 1784365100749,
+      "sha256": "bb94dc6f48f0e371619843b90a36fdaac3744f696397cd707f043bd6b9fcb324",
+      "snapshotSha256": "a545959d5a98172c98e1a69c26e7f37f87f9b243144fda511b1cfe8b21f80d14",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "tag": "0006_automation_runtime_integrity",
+      "folderMillis": 1784377480200,
+      "sha256": "a7cbc15b38dc4dd660d8f3fa5159771cf17a1b7e42e19fb1da0ed4c950bb9ff5",
+      "snapshotSha256": "22f9a422f96ad2f38337df35361c14da28babf48586770c481e8ed4f626cc861",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "tag": "0007_automation_binding_rollout",
+      "folderMillis": 1784377487117,
+      "sha256": "6f19a27be44fe243443193ef3adad65612e3692e77823ffa85cdd1518d3ba8e5",
+      "snapshotSha256": "d22d5c0b9f187e491632deafdfaac79c5cc5e7f8bf96cad70b0006cb78871948",
+      "drizzleVersion": "7",
+      "breakpoints": true
     }
   ]
 }

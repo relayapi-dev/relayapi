@@ -3,7 +3,7 @@
 //
 // Pure (no JSX) so they can be imported anywhere without pulling in React.
 
-import { BINDING_TABS, bindingTypeToTabKey, type BindingType } from "./types";
+import { BINDING_TABS, type BindingType, bindingTypeToTabKey } from "./types";
 
 /**
  * The binding shape both canvas surfaces consume. Mirrors the API/SDK
@@ -16,10 +16,15 @@ export interface CanvasBindingRow {
 	workspace_id?: string | null;
 	social_account_id: string;
 	channel: string;
-	binding_type: BindingType;
+	/** Responses stay open-ended so unsupported legacy rows can be removed. */
+	binding_type: string;
 	automation_id: string;
 	config: Record<string, unknown> | null;
 	status: string;
+	desired_active?: boolean;
+	delete_after_sync?: boolean;
+	sync_revision?: number;
+	last_synced_revision?: number;
 	last_synced_at?: string | null;
 	sync_error: string | null;
 	created_at?: string;
@@ -33,8 +38,15 @@ export interface CanvasBindingRow {
 }
 
 /** Canonical, title-cased label for a binding type (e.g. "Welcome Message"). */
-export function bindingLabel(type: BindingType): string {
-	return BINDING_TABS.find((t) => t.bindingType === type)?.label ?? type;
+export function isSupportedBindingType(type: string): type is BindingType {
+	return BINDING_TABS.some((tab) => tab.bindingType === type);
+}
+
+export function bindingLabel(type: string): string {
+	return (
+		BINDING_TABS.find((tab) => tab.bindingType === type)?.label ??
+		`Legacy binding (${type})`
+	);
 }
 
 /** Hyphenated URL slug for the per-account Connections tab of a binding type. */
@@ -58,6 +70,9 @@ export function bindingAccountHandle(
 
 /** Deep-link to the per-account Connections page tab for a binding. */
 export function bindingConnectionHref(binding: CanvasBindingRow): string {
+	if (!isSupportedBindingType(binding.binding_type)) {
+		return `/app/connections/${binding.social_account_id}`;
+	}
 	return `/app/connections/${binding.social_account_id}?tab=${bindingTabSlug(
 		binding.binding_type,
 	)}`;
@@ -68,8 +83,7 @@ export function bindingStatusBadge(status: string): {
 	label: string;
 	cls: string;
 } {
-	// Monochrome pills — the label carries the state. Red is kept only for a
-	// genuine sync failure so it still reads as an alarm.
+	// Monochrome pills — the label carries the state.
 	const neutral = "border-[#e6e9ef] bg-[#f4f5f7] text-[#5a6373]";
 	switch (status) {
 		case "active":
@@ -79,11 +93,8 @@ export function bindingStatusBadge(status: string): {
 		case "pending_sync":
 			return { label: "syncing", cls: neutral };
 		case "sync_failed":
-			return {
-				label: "sync failed",
-				cls: "border-destructive/30 bg-destructive/10 text-destructive",
-			};
+			return { label: "sync failed", cls: neutral };
 		default:
-			return { label: status, cls: neutral };
+			return { label: status.replace(/_/g, " "), cls: neutral };
 	}
 }

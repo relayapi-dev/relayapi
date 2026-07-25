@@ -16031,6 +16031,13 @@
             "name": "binding_type",
             "required": false,
             "schema": {
+              "enum": [
+                "default_reply",
+                "welcome_message",
+                "get_started",
+                "main_menu",
+                "ice_breaker"
+              ],
               "type": "string"
             }
           },
@@ -16064,13 +16071,6 @@
                             "type": "string"
                           },
                           "binding_type": {
-                            "enum": [
-                              "default_reply",
-                              "welcome_message",
-                              "conversation_starter",
-                              "main_menu",
-                              "ice_breaker"
-                            ],
                             "type": "string"
                           },
                           "channel": {
@@ -16092,12 +16092,21 @@
                           "created_at": {
                             "type": "string"
                           },
+                          "delete_after_sync": {
+                            "type": "boolean"
+                          },
+                          "desired_active": {
+                            "type": "boolean"
+                          },
                           "id": {
                             "type": "string"
                           },
                           "last_synced_at": {
                             "nullable": true,
                             "type": "string"
+                          },
+                          "last_synced_revision": {
+                            "type": "integer"
                           },
                           "organization_id": {
                             "type": "string"
@@ -16135,30 +16144,18 @@
                           "status": {
                             "type": "string"
                           },
+                          "sync_attempts": {
+                            "type": "integer"
+                          },
                           "sync_error": {
                             "nullable": true,
                             "type": "string"
                           },
+                          "sync_revision": {
+                            "type": "integer"
+                          },
                           "updated_at": {
                             "type": "string"
-                          },
-                          "warnings": {
-                            "items": {
-                              "properties": {
-                                "code": {
-                                  "type": "string"
-                                },
-                                "message": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "code",
-                                "message"
-                              ],
-                              "type": "object"
-                            },
-                            "type": "array"
                           },
                           "workspace_id": {
                             "nullable": true,
@@ -16175,6 +16172,11 @@
                           "automation_id",
                           "config",
                           "status",
+                          "desired_active",
+                          "delete_after_sync",
+                          "sync_revision",
+                          "last_synced_revision",
+                          "sync_attempts",
                           "last_synced_at",
                           "sync_error",
                           "created_at",
@@ -16211,6 +16213,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "automation_id": {
                     "type": "string"
@@ -16219,7 +16222,7 @@
                     "enum": [
                       "default_reply",
                       "welcome_message",
-                      "conversation_starter",
+                      "get_started",
                       "main_menu",
                       "ice_breaker"
                     ],
@@ -16269,13 +16272,6 @@
                       "type": "string"
                     },
                     "binding_type": {
-                      "enum": [
-                        "default_reply",
-                        "welcome_message",
-                        "conversation_starter",
-                        "main_menu",
-                        "ice_breaker"
-                      ],
                       "type": "string"
                     },
                     "channel": {
@@ -16297,12 +16293,21 @@
                     "created_at": {
                       "type": "string"
                     },
+                    "delete_after_sync": {
+                      "type": "boolean"
+                    },
+                    "desired_active": {
+                      "type": "boolean"
+                    },
                     "id": {
                       "type": "string"
                     },
                     "last_synced_at": {
                       "nullable": true,
                       "type": "string"
+                    },
+                    "last_synced_revision": {
+                      "type": "integer"
                     },
                     "organization_id": {
                       "type": "string"
@@ -16340,30 +16345,18 @@
                     "status": {
                       "type": "string"
                     },
+                    "sync_attempts": {
+                      "type": "integer"
+                    },
                     "sync_error": {
                       "nullable": true,
                       "type": "string"
                     },
+                    "sync_revision": {
+                      "type": "integer"
+                    },
                     "updated_at": {
                       "type": "string"
-                    },
-                    "warnings": {
-                      "items": {
-                        "properties": {
-                          "code": {
-                            "type": "string"
-                          },
-                          "message": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "code",
-                          "message"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
                     },
                     "workspace_id": {
                       "nullable": true,
@@ -16380,6 +16373,11 @@
                     "automation_id",
                     "config",
                     "status",
+                    "desired_active",
+                    "delete_after_sync",
+                    "sync_revision",
+                    "last_synced_revision",
+                    "sync_attempts",
                     "last_synced_at",
                     "sync_error",
                     "created_at",
@@ -16605,13 +16603,6 @@
                       "type": "string"
                     },
                     "binding_type": {
-                      "enum": [
-                        "default_reply",
-                        "welcome_message",
-                        "conversation_starter",
-                        "main_menu",
-                        "ice_breaker"
-                      ],
                       "type": "string"
                     },
                     "channel": {
@@ -16633,12 +16624,21 @@
                     "created_at": {
                       "type": "string"
                     },
+                    "delete_after_sync": {
+                      "type": "boolean"
+                    },
+                    "desired_active": {
+                      "type": "boolean"
+                    },
                     "id": {
                       "type": "string"
                     },
                     "last_synced_at": {
                       "nullable": true,
                       "type": "string"
+                    },
+                    "last_synced_revision": {
+                      "type": "integer"
                     },
                     "organization_id": {
                       "type": "string"
@@ -16676,30 +16676,18 @@
                     "status": {
                       "type": "string"
                     },
+                    "sync_attempts": {
+                      "type": "integer"
+                    },
                     "sync_error": {
                       "nullable": true,
                       "type": "string"
                     },
+                    "sync_revision": {
+                      "type": "integer"
+                    },
                     "updated_at": {
                       "type": "string"
-                    },
-                    "warnings": {
-                      "items": {
-                        "properties": {
-                          "code": {
-                            "type": "string"
-                          },
-                          "message": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "code",
-                          "message"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
                     },
                     "workspace_id": {
                       "nullable": true,
@@ -16716,6 +16704,11 @@
                     "automation_id",
                     "config",
                     "status",
+                    "desired_active",
+                    "delete_after_sync",
+                    "sync_revision",
+                    "last_synced_revision",
+                    "sync_attempts",
                     "last_synced_at",
                     "sync_error",
                     "created_at",
@@ -16792,49 +16785,23 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "automation_id": {
-                    "type": "string"
-                  },
-                  "binding_type": {
-                    "enum": [
-                      "default_reply",
-                      "welcome_message",
-                      "conversation_starter",
-                      "main_menu",
-                      "ice_breaker"
-                    ],
-                    "type": "string"
-                  },
-                  "channel": {
-                    "enum": [
-                      "instagram",
-                      "facebook",
-                      "whatsapp",
-                      "telegram"
-                    ],
+                    "minLength": 1,
                     "type": "string"
                   },
                   "config": {
                     "additionalProperties": {
                       "nullable": true
                     },
-                    "default": {},
                     "type": "object"
-                  },
-                  "social_account_id": {
-                    "type": "string"
                   },
                   "status": {
                     "enum": [
                       "active",
-                      "paused",
-                      "pending_sync",
-                      "sync_failed"
+                      "paused"
                     ],
-                    "type": "string"
-                  },
-                  "workspace_id": {
                     "type": "string"
                   }
                 },
@@ -16853,13 +16820,6 @@
                       "type": "string"
                     },
                     "binding_type": {
-                      "enum": [
-                        "default_reply",
-                        "welcome_message",
-                        "conversation_starter",
-                        "main_menu",
-                        "ice_breaker"
-                      ],
                       "type": "string"
                     },
                     "channel": {
@@ -16881,12 +16841,21 @@
                     "created_at": {
                       "type": "string"
                     },
+                    "delete_after_sync": {
+                      "type": "boolean"
+                    },
+                    "desired_active": {
+                      "type": "boolean"
+                    },
                     "id": {
                       "type": "string"
                     },
                     "last_synced_at": {
                       "nullable": true,
                       "type": "string"
+                    },
+                    "last_synced_revision": {
+                      "type": "integer"
                     },
                     "organization_id": {
                       "type": "string"
@@ -16924,30 +16893,18 @@
                     "status": {
                       "type": "string"
                     },
+                    "sync_attempts": {
+                      "type": "integer"
+                    },
                     "sync_error": {
                       "nullable": true,
                       "type": "string"
                     },
+                    "sync_revision": {
+                      "type": "integer"
+                    },
                     "updated_at": {
                       "type": "string"
-                    },
-                    "warnings": {
-                      "items": {
-                        "properties": {
-                          "code": {
-                            "type": "string"
-                          },
-                          "message": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "code",
-                          "message"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
                     },
                     "workspace_id": {
                       "nullable": true,
@@ -16964,6 +16921,11 @@
                     "automation_id",
                     "config",
                     "status",
+                    "desired_active",
+                    "delete_after_sync",
+                    "sync_revision",
+                    "last_synced_revision",
+                    "sync_attempts",
                     "last_synced_at",
                     "sync_error",
                     "created_at",
@@ -17422,6 +17384,10 @@
                     "created_at": {
                       "type": "string"
                     },
+                    "daily_cap": {
+                      "nullable": true,
+                      "type": "number"
+                    },
                     "filters": {
                       "additionalProperties": {
                         "nullable": true
@@ -17466,6 +17432,7 @@
                     "filters",
                     "allow_reentry",
                     "reentry_cooldown_min",
+                    "daily_cap",
                     "priority",
                     "specificity",
                     "created_at",
@@ -17542,6 +17509,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "allow_reentry": {
                     "default": true,
@@ -17563,9 +17531,149 @@
                     "default": {},
                     "type": "object"
                   },
+                  "daily_cap": {
+                    "exclusiveMinimum": true,
+                    "maximum": 1000000,
+                    "minimum": 0,
+                    "nullable": true,
+                    "type": "integer"
+                  },
                   "filters": {
-                    "additionalProperties": {
-                      "nullable": true
+                    "additionalProperties": false,
+                    "nullable": true,
+                    "properties": {
+                      "all": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
+                            "field": {
+                              "maxLength": 500,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "op": {
+                              "enum": [
+                                "eq",
+                                "neq",
+                                "contains",
+                                "not_contains",
+                                "starts_with",
+                                "ends_with",
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte",
+                                "in",
+                                "not_in",
+                                "exists",
+                                "not_exists"
+                              ],
+                              "type": "string"
+                            },
+                            "value": {
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "op"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "any": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
+                            "field": {
+                              "maxLength": 500,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "op": {
+                              "enum": [
+                                "eq",
+                                "neq",
+                                "contains",
+                                "not_contains",
+                                "starts_with",
+                                "ends_with",
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte",
+                                "in",
+                                "not_in",
+                                "exists",
+                                "not_exists"
+                              ],
+                              "type": "string"
+                            },
+                            "value": {
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "op"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "none": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
+                            "field": {
+                              "maxLength": 500,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "op": {
+                              "enum": [
+                                "eq",
+                                "neq",
+                                "contains",
+                                "not_contains",
+                                "starts_with",
+                                "ends_with",
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte",
+                                "in",
+                                "not_in",
+                                "exists",
+                                "not_exists"
+                              ],
+                              "type": "string"
+                            },
+                            "value": {
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "op"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      }
                     },
                     "type": "object"
                   },
@@ -17579,7 +17687,6 @@
                       "ad_click",
                       "ref_link_click",
                       "share_to_dm",
-                      "follow",
                       "schedule",
                       "field_changed",
                       "tag_applied",
@@ -17591,14 +17698,18 @@
                   },
                   "priority": {
                     "default": 100,
-                    "type": "number"
+                    "maximum": 1000000,
+                    "minimum": -1000000,
+                    "type": "integer"
                   },
                   "reentry_cooldown_min": {
                     "default": 60,
+                    "maximum": 525600,
                     "minimum": 0,
-                    "type": "number"
+                    "type": "integer"
                   },
                   "social_account_id": {
+                    "minLength": 1,
                     "type": "string"
                   },
                   "status": {
@@ -17644,6 +17755,10 @@
                     },
                     "created_at": {
                       "type": "string"
+                    },
+                    "daily_cap": {
+                      "nullable": true,
+                      "type": "number"
                     },
                     "filters": {
                       "additionalProperties": {
@@ -17708,6 +17823,7 @@
                     "filters",
                     "allow_reentry",
                     "reentry_cooldown_min",
+                    "daily_cap",
                     "priority",
                     "specificity",
                     "created_at",
@@ -18139,6 +18255,10 @@
                     "created_at": {
                       "type": "string"
                     },
+                    "daily_cap": {
+                      "nullable": true,
+                      "type": "number"
+                    },
                     "filters": {
                       "additionalProperties": {
                         "nullable": true
@@ -18202,6 +18322,7 @@
                     "filters",
                     "allow_reentry",
                     "reentry_cooldown_min",
+                    "daily_cap",
                     "priority",
                     "specificity",
                     "created_at",
@@ -19079,22 +19200,1216 @@
                     "type": "string"
                   },
                   "template": {
-                    "properties": {
-                      "config": {
-                        "additionalProperties": {
-                          "nullable": true
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "config": {
+                            "additionalProperties": false,
+                            "default": {},
+                            "properties": {},
+                            "type": "object"
+                          },
+                          "kind": {
+                            "enum": [
+                              "blank"
+                            ],
+                            "type": "string"
+                          }
                         },
-                        "default": {},
+                        "required": [
+                          "kind"
+                        ],
                         "type": "object"
                       },
-                      "kind": {
-                        "type": "string"
+                      {
+                        "properties": {
+                          "config": {
+                            "additionalProperties": false,
+                            "default": {},
+                            "properties": {},
+                            "type": "object"
+                          },
+                          "kind": {
+                            "enum": [
+                              "welcome_flow"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "config": {
+                            "additionalProperties": false,
+                            "default": {},
+                            "properties": {
+                              "fallback_reply": {
+                                "maxLength": 2000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "keywords": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "keyword": {
+                                      "maxLength": 256,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "maxLength": 40,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "reply": {
+                                      "maxLength": 2000,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "label",
+                                    "keyword",
+                                    "reply"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 20,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "kind": {
+                            "enum": [
+                              "faq_bot"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "config": {
+                            "additionalProperties": false,
+                            "default": {},
+                            "properties": {
+                              "capture_field": {
+                                "enum": [
+                                  "email",
+                                  "phone"
+                                ],
+                                "type": "string"
+                              },
+                              "tag": {
+                                "maxLength": 100,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "kind": {
+                            "enum": [
+                              "lead_capture"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "config": {
+                            "additionalProperties": false,
+                            "default": {},
+                            "properties": {
+                              "daily_cap": {
+                                "exclusiveMinimum": true,
+                                "maximum": 1000000,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "dm_message": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "blocks": {
+                                    "items": {
+                                      "properties": {
+                                        "buttons": {
+                                          "items": {
+                                            "properties": {
+                                              "id": {
+                                                "type": "string"
+                                              },
+                                              "label": {
+                                                "maxLength": 80,
+                                                "type": "string"
+                                              },
+                                              "phone": {
+                                                "type": "string"
+                                              },
+                                              "type": {
+                                                "enum": [
+                                                  "branch",
+                                                  "url",
+                                                  "call",
+                                                  "share"
+                                                ],
+                                                "type": "string"
+                                              },
+                                              "url": {
+                                                "format": "uri",
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "id",
+                                              "type",
+                                              "label"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "maxItems": 3,
+                                          "type": "array"
+                                        },
+                                        "id": {
+                                          "type": "string"
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        },
+                                        "type": {
+                                          "enum": [
+                                            "text"
+                                          ],
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "type",
+                                        "text"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "maxItems": 1,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "blocks"
+                                ],
+                                "type": "object"
+                              },
+                              "fallback_message": {
+                                "maxLength": 2000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "keyword_filter": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 50,
+                                "type": "array"
+                              },
+                              "once_per_user": {
+                                "type": "boolean"
+                              },
+                              "post_ids": {
+                                "items": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 100,
+                                "type": "array"
+                              },
+                              "public_reply": {
+                                "maxLength": 2000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "social_account_id": {
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "kind": {
+                            "enum": [
+                              "comment_to_dm"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "config": {
+                            "additionalProperties": false,
+                            "default": {},
+                            "properties": {
+                              "capture_field": {
+                                "enum": [
+                                  "email",
+                                  "phone"
+                                ],
+                                "type": "string"
+                              },
+                              "daily_cap": {
+                                "exclusiveMinimum": true,
+                                "maximum": 1000000,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "dm_message": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "blocks": {
+                                    "items": {
+                                      "oneOf": [
+                                        {
+                                          "properties": {
+                                            "buttons": {
+                                              "items": {
+                                                "properties": {
+                                                  "id": {
+                                                    "type": "string"
+                                                  },
+                                                  "label": {
+                                                    "maxLength": 80,
+                                                    "type": "string"
+                                                  },
+                                                  "phone": {
+                                                    "type": "string"
+                                                  },
+                                                  "type": {
+                                                    "enum": [
+                                                      "branch",
+                                                      "url",
+                                                      "call",
+                                                      "share"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  "url": {
+                                                    "format": "uri",
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "id",
+                                                  "type",
+                                                  "label"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "maxItems": 3,
+                                              "type": "array"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "text": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "text"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "text"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "caption": {
+                                              "type": "string"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "image"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "media_ref"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "caption": {
+                                              "type": "string"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "video"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "media_ref"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "audio"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "media_ref"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "file"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "media_ref"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "buttons": {
+                                              "items": {
+                                                "properties": {
+                                                  "id": {
+                                                    "type": "string"
+                                                  },
+                                                  "label": {
+                                                    "maxLength": 80,
+                                                    "type": "string"
+                                                  },
+                                                  "phone": {
+                                                    "type": "string"
+                                                  },
+                                                  "type": {
+                                                    "enum": [
+                                                      "branch",
+                                                      "url",
+                                                      "call",
+                                                      "share"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  "url": {
+                                                    "format": "uri",
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "id",
+                                                  "type",
+                                                  "label"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "maxItems": 3,
+                                              "type": "array"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "subtitle": {
+                                              "maxLength": 80,
+                                              "type": "string"
+                                            },
+                                            "title": {
+                                              "maxLength": 80,
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "card"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "title"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "cards": {
+                                              "items": {
+                                                "properties": {
+                                                  "buttons": {
+                                                    "items": {
+                                                      "properties": {
+                                                        "id": {
+                                                          "type": "string"
+                                                        },
+                                                        "label": {
+                                                          "maxLength": 80,
+                                                          "type": "string"
+                                                        },
+                                                        "phone": {
+                                                          "type": "string"
+                                                        },
+                                                        "type": {
+                                                          "enum": [
+                                                            "branch",
+                                                            "url",
+                                                            "call",
+                                                            "share"
+                                                          ],
+                                                          "type": "string"
+                                                        },
+                                                        "url": {
+                                                          "format": "uri",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "id",
+                                                        "type",
+                                                        "label"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "maxItems": 3,
+                                                    "type": "array"
+                                                  },
+                                                  "id": {
+                                                    "type": "string"
+                                                  },
+                                                  "media_ref": {
+                                                    "type": "string"
+                                                  },
+                                                  "subtitle": {
+                                                    "maxLength": 80,
+                                                    "type": "string"
+                                                  },
+                                                  "title": {
+                                                    "maxLength": 80,
+                                                    "type": "string"
+                                                  },
+                                                  "type": {
+                                                    "enum": [
+                                                      "card"
+                                                    ],
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "id",
+                                                  "type",
+                                                  "title"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "maxItems": 10,
+                                              "minItems": 1,
+                                              "type": "array"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "gallery"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "cards"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "seconds": {
+                                              "maximum": 10,
+                                              "minimum": 0.5,
+                                              "type": "number"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "delay"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "seconds"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    "maxItems": 20,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "blocks"
+                                ],
+                                "type": "object"
+                              },
+                              "keyword_filter": {
+                                "items": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 50,
+                                "type": "array"
+                              },
+                              "social_account_id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "story_ids": {
+                                "items": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 100,
+                                "nullable": true,
+                                "type": "array"
+                              },
+                              "success_tag": {
+                                "maxLength": 100,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "kind": {
+                            "enum": [
+                              "story_leads"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "config": {
+                            "additionalProperties": false,
+                            "default": {},
+                            "properties": {
+                              "daily_cap": {
+                                "exclusiveMinimum": true,
+                                "maximum": 1000000,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "dm_message": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "blocks": {
+                                    "items": {
+                                      "properties": {
+                                        "buttons": {
+                                          "items": {
+                                            "properties": {
+                                              "id": {
+                                                "type": "string"
+                                              },
+                                              "label": {
+                                                "maxLength": 80,
+                                                "type": "string"
+                                              },
+                                              "phone": {
+                                                "type": "string"
+                                              },
+                                              "type": {
+                                                "enum": [
+                                                  "branch",
+                                                  "url",
+                                                  "call",
+                                                  "share"
+                                                ],
+                                                "type": "string"
+                                              },
+                                              "url": {
+                                                "format": "uri",
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "id",
+                                              "type",
+                                              "label"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "maxItems": 3,
+                                          "type": "array"
+                                        },
+                                        "id": {
+                                          "type": "string"
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        },
+                                        "type": {
+                                          "enum": [
+                                            "text"
+                                          ],
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "type",
+                                        "text"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "maxItems": 1,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "blocks"
+                                ],
+                                "type": "object"
+                              },
+                              "entry_requirements": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "must_share_story": {
+                                    "type": "boolean"
+                                  },
+                                  "must_tag_friends": {
+                                    "maximum": 20,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "post_ids": {
+                                "items": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 100,
+                                "type": "array"
+                              },
+                              "public_reply": {
+                                "maxLength": 2000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "social_account_id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "trigger_keyword": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "winner_tag": {
+                                "maxLength": 100,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "kind": {
+                            "enum": [
+                              "follower_growth"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "config": {
+                            "additionalProperties": false,
+                            "default": {},
+                            "properties": {
+                              "cooldown_hours": {
+                                "maximum": 8760,
+                                "minimum": 0,
+                                "type": "number"
+                              },
+                              "daily_cap": {
+                                "exclusiveMinimum": true,
+                                "maximum": 1000000,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "dm_message": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "blocks": {
+                                    "items": {
+                                      "oneOf": [
+                                        {
+                                          "properties": {
+                                            "buttons": {
+                                              "items": {
+                                                "properties": {
+                                                  "id": {
+                                                    "type": "string"
+                                                  },
+                                                  "label": {
+                                                    "maxLength": 80,
+                                                    "type": "string"
+                                                  },
+                                                  "phone": {
+                                                    "type": "string"
+                                                  },
+                                                  "type": {
+                                                    "enum": [
+                                                      "branch",
+                                                      "url",
+                                                      "call",
+                                                      "share"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  "url": {
+                                                    "format": "uri",
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "id",
+                                                  "type",
+                                                  "label"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "maxItems": 3,
+                                              "type": "array"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "text": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "text"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "text"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "caption": {
+                                              "type": "string"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "image"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "media_ref"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "caption": {
+                                              "type": "string"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "video"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "media_ref"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "audio"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "media_ref"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "file"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "media_ref"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "buttons": {
+                                              "items": {
+                                                "properties": {
+                                                  "id": {
+                                                    "type": "string"
+                                                  },
+                                                  "label": {
+                                                    "maxLength": 80,
+                                                    "type": "string"
+                                                  },
+                                                  "phone": {
+                                                    "type": "string"
+                                                  },
+                                                  "type": {
+                                                    "enum": [
+                                                      "branch",
+                                                      "url",
+                                                      "call",
+                                                      "share"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  "url": {
+                                                    "format": "uri",
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "id",
+                                                  "type",
+                                                  "label"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "maxItems": 3,
+                                              "type": "array"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "media_ref": {
+                                              "type": "string"
+                                            },
+                                            "subtitle": {
+                                              "maxLength": 80,
+                                              "type": "string"
+                                            },
+                                            "title": {
+                                              "maxLength": 80,
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "card"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "title"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "cards": {
+                                              "items": {
+                                                "properties": {
+                                                  "buttons": {
+                                                    "items": {
+                                                      "properties": {
+                                                        "id": {
+                                                          "type": "string"
+                                                        },
+                                                        "label": {
+                                                          "maxLength": 80,
+                                                          "type": "string"
+                                                        },
+                                                        "phone": {
+                                                          "type": "string"
+                                                        },
+                                                        "type": {
+                                                          "enum": [
+                                                            "branch",
+                                                            "url",
+                                                            "call",
+                                                            "share"
+                                                          ],
+                                                          "type": "string"
+                                                        },
+                                                        "url": {
+                                                          "format": "uri",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "id",
+                                                        "type",
+                                                        "label"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "maxItems": 3,
+                                                    "type": "array"
+                                                  },
+                                                  "id": {
+                                                    "type": "string"
+                                                  },
+                                                  "media_ref": {
+                                                    "type": "string"
+                                                  },
+                                                  "subtitle": {
+                                                    "maxLength": 80,
+                                                    "type": "string"
+                                                  },
+                                                  "title": {
+                                                    "maxLength": 80,
+                                                    "type": "string"
+                                                  },
+                                                  "type": {
+                                                    "enum": [
+                                                      "card"
+                                                    ],
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "id",
+                                                  "type",
+                                                  "title"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "maxItems": 10,
+                                              "minItems": 1,
+                                              "type": "array"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "gallery"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "cards"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "properties": {
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "seconds": {
+                                              "maximum": 10,
+                                              "minimum": 0.5,
+                                              "type": "number"
+                                            },
+                                            "type": {
+                                              "enum": [
+                                                "delay"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "type",
+                                            "seconds"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    "maxItems": 20,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "blocks"
+                                ],
+                                "type": "object"
+                              },
+                              "social_account_id": {
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "kind": {
+                            "enum": [
+                              "follow_to_dm"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
                       }
-                    },
-                    "required": [
-                      "kind"
-                    ],
-                    "type": "object"
+                    ]
                   },
                   "workspace_id": {
                     "type": "string"
@@ -21279,6 +22594,10 @@
                           "created_at": {
                             "type": "string"
                           },
+                          "daily_cap": {
+                            "nullable": true,
+                            "type": "number"
+                          },
                           "filters": {
                             "additionalProperties": {
                               "nullable": true
@@ -21323,6 +22642,7 @@
                           "filters",
                           "allow_reentry",
                           "reentry_cooldown_min",
+                          "daily_cap",
                           "priority",
                           "specificity",
                           "created_at",
@@ -21407,6 +22727,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "allow_reentry": {
                     "default": true,
@@ -21428,9 +22749,149 @@
                     "default": {},
                     "type": "object"
                   },
+                  "daily_cap": {
+                    "exclusiveMinimum": true,
+                    "maximum": 1000000,
+                    "minimum": 0,
+                    "nullable": true,
+                    "type": "integer"
+                  },
                   "filters": {
-                    "additionalProperties": {
-                      "nullable": true
+                    "additionalProperties": false,
+                    "nullable": true,
+                    "properties": {
+                      "all": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
+                            "field": {
+                              "maxLength": 500,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "op": {
+                              "enum": [
+                                "eq",
+                                "neq",
+                                "contains",
+                                "not_contains",
+                                "starts_with",
+                                "ends_with",
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte",
+                                "in",
+                                "not_in",
+                                "exists",
+                                "not_exists"
+                              ],
+                              "type": "string"
+                            },
+                            "value": {
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "op"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "any": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
+                            "field": {
+                              "maxLength": 500,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "op": {
+                              "enum": [
+                                "eq",
+                                "neq",
+                                "contains",
+                                "not_contains",
+                                "starts_with",
+                                "ends_with",
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte",
+                                "in",
+                                "not_in",
+                                "exists",
+                                "not_exists"
+                              ],
+                              "type": "string"
+                            },
+                            "value": {
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "op"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "none": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
+                            "field": {
+                              "maxLength": 500,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "op": {
+                              "enum": [
+                                "eq",
+                                "neq",
+                                "contains",
+                                "not_contains",
+                                "starts_with",
+                                "ends_with",
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte",
+                                "in",
+                                "not_in",
+                                "exists",
+                                "not_exists"
+                              ],
+                              "type": "string"
+                            },
+                            "value": {
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "op"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      }
                     },
                     "type": "object"
                   },
@@ -21444,7 +22905,6 @@
                       "ad_click",
                       "ref_link_click",
                       "share_to_dm",
-                      "follow",
                       "schedule",
                       "field_changed",
                       "tag_applied",
@@ -21456,14 +22916,25 @@
                   },
                   "priority": {
                     "default": 100,
-                    "type": "number"
+                    "maximum": 1000000,
+                    "minimum": -1000000,
+                    "type": "integer"
                   },
                   "reentry_cooldown_min": {
                     "default": 60,
+                    "maximum": 525600,
                     "minimum": 0,
-                    "type": "number"
+                    "type": "integer"
                   },
                   "social_account_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "paused"
+                    ],
                     "type": "string"
                   }
                 },
@@ -21506,6 +22977,10 @@
                     },
                     "created_at": {
                       "type": "string"
+                    },
+                    "daily_cap": {
+                      "nullable": true,
+                      "type": "number"
                     },
                     "filters": {
                       "additionalProperties": {
@@ -21570,6 +23045,7 @@
                     "filters",
                     "allow_reentry",
                     "reentry_cooldown_min",
+                    "daily_cap",
                     "priority",
                     "specificity",
                     "created_at",
@@ -23665,6 +25141,7 @@
                               "advance",
                               "wait_input",
                               "wait_delay",
+                              "wait_event",
                               "end",
                               "fail"
                             ],
@@ -45652,7 +47129,7 @@
     },
     "/v1/media/confirm": {
       "post": {
-        "description": "After uploading a file to the presigned URL, call this endpoint to mark the media as ready.",
+        "description": "Mandatory final step for a presigned upload. Verifies the stored object and marks the pending media intent ready.",
         "operationId": "confirmMedia",
         "requestBody": {
           "content": {
@@ -45660,7 +47137,7 @@
               "schema": {
                 "properties": {
                   "storage_key": {
-                    "description": "The storage key from the presign response URL",
+                    "description": "The path portion of the canonical url returned by POST /v1/media/presign, without the leading slash",
                     "type": "string"
                   }
                 },
@@ -45825,7 +47302,7 @@
     },
     "/v1/media/presign": {
       "post": {
-        "description": "Generate a pre-signed URL for direct upload to R2. The client can PUT the file to the returned URL.",
+        "description": "Create a pending media upload intent and generate a create-only pre-signed R2 PUT URL. Send every header in upload_headers exactly as returned, including Content-Type and If-None-Match, then call POST /v1/media/confirm; confirmation is mandatory before using the canonical media URL.",
         "operationId": "presignMedia",
         "requestBody": {
           "content": {
@@ -45864,6 +47341,29 @@
                       "description": "Seconds until the upload URL expires",
                       "type": "integer"
                     },
+                    "id": {
+                      "description": "ID of the pending media upload intent",
+                      "type": "string"
+                    },
+                    "upload_headers": {
+                      "description": "Exact headers required by the pre-signed create-only PUT",
+                      "properties": {
+                        "Content-Type": {
+                          "type": "string"
+                        },
+                        "If-None-Match": {
+                          "enum": [
+                            "*"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "Content-Type",
+                        "If-None-Match"
+                      ],
+                      "type": "object"
+                    },
                     "upload_url": {
                       "description": "Pre-signed PUT URL for uploading",
                       "format": "uri",
@@ -45876,7 +47376,9 @@
                     }
                   },
                   "required": [
+                    "id",
                     "upload_url",
+                    "upload_headers",
                     "url",
                     "expires_in"
                   ],
@@ -47370,151 +48872,354 @@
                   "properties": {
                     "data": {
                       "items": {
-                        "properties": {
-                          "content": {
-                            "nullable": true,
-                            "type": "string"
-                          },
-                          "created_at": {
-                            "format": "date-time",
-                            "type": "string"
-                          },
-                          "id": {
-                            "description": "Post ID",
-                            "type": "string"
-                          },
-                          "media": {
-                            "items": {
-                              "properties": {
-                                "thumbnail": {
-                                  "description": "Read-only. Stable, hyper-optimized preview URL that persists after the full-res original expires. Ignored on write.",
-                                  "type": "string"
-                                },
-                                "type": {
-                                  "description": "Media type. Inferred from URL extension if omitted.",
-                                  "enum": [
-                                    "image",
-                                    "video",
-                                    "gif",
-                                    "document"
-                                  ],
-                                  "type": "string"
-                                },
-                                "url": {
-                                  "description": "Public URL of the media file",
-                                  "format": "uri",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "url"
-                              ],
-                              "type": "object"
-                            },
-                            "nullable": true,
-                            "type": "array"
-                          },
-                          "metrics": {
-                            "description": "Engagement metrics (reactions, comments, views, etc.)",
+                        "anyOf": [
+                          {
                             "properties": {
-                              "clicks": {
-                                "type": "number"
-                              },
-                              "comments": {
-                                "type": "number"
-                              },
-                              "engagement_rate": {
-                                "type": "number"
-                              },
-                              "impressions": {
-                                "type": "number"
-                              },
-                              "likes": {
-                                "type": "number"
-                              },
-                              "reach": {
-                                "type": "number"
-                              },
-                              "saves": {
-                                "type": "number"
-                              },
-                              "shares": {
-                                "type": "number"
-                              },
-                              "views": {
-                                "type": "number"
-                              }
-                            },
-                            "type": "object"
-                          },
-                          "published_at": {
-                            "description": "When the post was published",
-                            "nullable": true,
-                            "type": "string"
-                          },
-                          "recycled_from_id": {
-                            "description": "Source post ID if this is a recycled copy",
-                            "nullable": true,
-                            "type": "string"
-                          },
-                          "recycling": {
-                            "description": "Recycling configuration, if any",
-                            "nullable": true,
-                            "properties": {
-                              "content_variation_index": {
-                                "type": "number"
-                              },
-                              "content_variations": {
-                                "items": {
-                                  "type": "string"
-                                },
-                                "type": "array"
+                              "content": {
+                                "nullable": true,
+                                "type": "string"
                               },
                               "created_at": {
                                 "format": "date-time",
                                 "type": "string"
                               },
-                              "enabled": {
-                                "type": "boolean"
+                              "id": {
+                                "description": "Post ID",
+                                "type": "string"
                               },
-                              "expire_count": {
+                              "media": {
+                                "items": {
+                                  "properties": {
+                                    "thumbnail": {
+                                      "description": "Read-only. Stable, hyper-optimized preview URL that persists after the full-res original expires. Ignored on write.",
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "description": "Media type. Inferred from URL extension if omitted.",
+                                      "enum": [
+                                        "image",
+                                        "video",
+                                        "gif",
+                                        "document"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "description": "Public URL of the media file",
+                                      "format": "uri",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "type": "object"
+                                },
                                 "nullable": true,
-                                "type": "number"
+                                "type": "array"
                               },
-                              "expire_date": {
-                                "format": "date-time",
+                              "metrics": {
+                                "description": "Engagement metrics (reactions, comments, views, etc.)",
+                                "properties": {
+                                  "clicks": {
+                                    "type": "number"
+                                  },
+                                  "comments": {
+                                    "type": "number"
+                                  },
+                                  "engagement_rate": {
+                                    "type": "number"
+                                  },
+                                  "impressions": {
+                                    "type": "number"
+                                  },
+                                  "likes": {
+                                    "type": "number"
+                                  },
+                                  "reach": {
+                                    "type": "number"
+                                  },
+                                  "saves": {
+                                    "type": "number"
+                                  },
+                                  "shares": {
+                                    "type": "number"
+                                  },
+                                  "views": {
+                                    "type": "number"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "published_at": {
+                                "description": "When the post was published",
                                 "nullable": true,
                                 "type": "string"
                               },
-                              "gap": {
-                                "type": "number"
+                              "recycled_from_id": {
+                                "description": "Source post ID if this is a recycled copy",
+                                "nullable": true,
+                                "type": "string"
                               },
-                              "gap_freq": {
+                              "recycling": {
+                                "description": "Recycling configuration, if any",
+                                "nullable": true,
+                                "properties": {
+                                  "content_variation_index": {
+                                    "type": "number"
+                                  },
+                                  "content_variations": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "created_at": {
+                                    "format": "date-time",
+                                    "type": "string"
+                                  },
+                                  "enabled": {
+                                    "type": "boolean"
+                                  },
+                                  "expire_count": {
+                                    "nullable": true,
+                                    "type": "number"
+                                  },
+                                  "expire_date": {
+                                    "format": "date-time",
+                                    "nullable": true,
+                                    "type": "string"
+                                  },
+                                  "gap": {
+                                    "type": "number"
+                                  },
+                                  "gap_freq": {
+                                    "enum": [
+                                      "day",
+                                      "week",
+                                      "month"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "last_recycled_at": {
+                                    "format": "date-time",
+                                    "nullable": true,
+                                    "type": "string"
+                                  },
+                                  "next_recycle_at": {
+                                    "format": "date-time",
+                                    "nullable": true,
+                                    "type": "string"
+                                  },
+                                  "recycle_count": {
+                                    "type": "number"
+                                  },
+                                  "start_date": {
+                                    "format": "date-time",
+                                    "type": "string"
+                                  },
+                                  "updated_at": {
+                                    "format": "date-time",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "enabled",
+                                  "gap",
+                                  "gap_freq",
+                                  "start_date",
+                                  "expire_count",
+                                  "expire_date",
+                                  "content_variations",
+                                  "recycle_count",
+                                  "content_variation_index",
+                                  "next_recycle_at",
+                                  "last_recycled_at",
+                                  "created_at",
+                                  "updated_at"
+                                ],
+                                "type": "object"
+                              },
+                              "scheduled_at": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "status": {
                                 "enum": [
-                                  "day",
-                                  "week",
-                                  "month"
+                                  "draft",
+                                  "scheduled",
+                                  "publishing",
+                                  "published",
+                                  "failed",
+                                  "partial"
                                 ],
                                 "type": "string"
                               },
-                              "id": {
-                                "type": "string"
+                              "target_options": {
+                                "additionalProperties": {
+                                  "additionalProperties": {
+                                    "nullable": true
+                                  },
+                                  "type": "object"
+                                },
+                                "description": "Per-target customizations",
+                                "nullable": true,
+                                "type": "object"
                               },
-                              "last_recycled_at": {
-                                "format": "date-time",
+                              "targets": {
+                                "additionalProperties": {
+                                  "properties": {
+                                    "accounts": {
+                                      "items": {
+                                        "properties": {
+                                          "avatar_url": {
+                                            "description": "Account avatar URL",
+                                            "nullable": true,
+                                            "type": "string"
+                                          },
+                                          "delivery_state": {
+                                            "description": "Durable delivery state. An unknown outcome requires reconciliation and is never replayed automatically.",
+                                            "enum": [
+                                              "queued",
+                                              "in_flight",
+                                              "unknown",
+                                              "succeeded",
+                                              "failed"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "display_name": {
+                                            "description": "Account display name",
+                                            "nullable": true,
+                                            "type": "string"
+                                          },
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "platform_post_id": {
+                                            "description": "Platform-native post ID",
+                                            "nullable": true,
+                                            "type": "string"
+                                          },
+                                          "publish_operation_id": {
+                                            "description": "Stable provider-operation fence used to reconcile an unknown publish outcome",
+                                            "type": "string"
+                                          },
+                                          "target_id": {
+                                            "description": "Post target ID (pt_) — pass to /v1/ads/boost as post_target_id",
+                                            "nullable": true,
+                                            "type": "string"
+                                          },
+                                          "url": {
+                                            "description": "Published post URL on the platform",
+                                            "nullable": true,
+                                            "type": "string"
+                                          },
+                                          "username": {
+                                            "nullable": true,
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "username",
+                                          "display_name",
+                                          "avatar_url",
+                                          "url",
+                                          "platform_post_id",
+                                          "target_id",
+                                          "publish_operation_id",
+                                          "delivery_state"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "error": {
+                                      "properties": {
+                                        "code": {
+                                          "type": "string"
+                                        },
+                                        "detail": {
+                                          "description": "Raw platform error (HTTP status + response body), sanitized and truncated",
+                                          "type": "string"
+                                        },
+                                        "message": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "code",
+                                        "message"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "platform": {
+                                      "enum": [
+                                        "twitter",
+                                        "instagram",
+                                        "facebook",
+                                        "linkedin",
+                                        "tiktok",
+                                        "youtube",
+                                        "pinterest",
+                                        "reddit",
+                                        "bluesky",
+                                        "threads",
+                                        "telegram",
+                                        "snapchat",
+                                        "googlebusiness",
+                                        "whatsapp",
+                                        "mastodon",
+                                        "discord",
+                                        "sms",
+                                        "beehiiv",
+                                        "convertkit",
+                                        "mailchimp",
+                                        "listmonk",
+                                        null
+                                      ],
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "enum": [
+                                        "draft",
+                                        "scheduled",
+                                        "publishing",
+                                        "published",
+                                        "failed",
+                                        "partial"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "status",
+                                    "platform"
+                                  ],
+                                  "type": "object"
+                                },
+                                "description": "Per-target results",
+                                "type": "object"
+                              },
+                              "thread_group_id": {
+                                "description": "Thread group ID (non-null if part of a thread)",
                                 "nullable": true,
                                 "type": "string"
                               },
-                              "next_recycle_at": {
-                                "format": "date-time",
+                              "thread_position": {
+                                "description": "Position within thread (0 = root)",
                                 "nullable": true,
-                                "type": "string"
-                              },
-                              "recycle_count": {
                                 "type": "number"
                               },
-                              "start_date": {
-                                "format": "date-time",
+                              "timezone": {
+                                "description": "IANA timezone",
+                                "nullable": true,
                                 "type": "string"
                               },
                               "updated_at": {
@@ -47524,219 +49229,152 @@
                             },
                             "required": [
                               "id",
-                              "enabled",
-                              "gap",
-                              "gap_freq",
-                              "start_date",
-                              "expire_count",
-                              "expire_date",
-                              "content_variations",
-                              "recycle_count",
-                              "content_variation_index",
-                              "next_recycle_at",
-                              "last_recycled_at",
+                              "status",
+                              "content",
+                              "scheduled_at",
+                              "published_at",
+                              "targets",
+                              "media",
+                              "recycling",
+                              "recycled_from_id",
                               "created_at",
                               "updated_at"
                             ],
                             "type": "object"
                           },
-                          "scheduled_at": {
-                            "nullable": true,
-                            "type": "string"
-                          },
-                          "status": {
-                            "enum": [
-                              "draft",
-                              "scheduled",
-                              "publishing",
-                              "published",
-                              "failed",
-                              "partial"
+                          {
+                            "properties": {
+                              "account_avatar_url": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "account_name": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "content": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "created_at": {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              "id": {
+                                "description": "External post ID",
+                                "type": "string"
+                              },
+                              "media_type": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "media_urls": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "metrics": {
+                                "properties": {
+                                  "clicks": {
+                                    "type": "number"
+                                  },
+                                  "comments": {
+                                    "type": "number"
+                                  },
+                                  "impressions": {
+                                    "type": "number"
+                                  },
+                                  "likes": {
+                                    "type": "number"
+                                  },
+                                  "reach": {
+                                    "type": "number"
+                                  },
+                                  "saves": {
+                                    "type": "number"
+                                  },
+                                  "shares": {
+                                    "type": "number"
+                                  },
+                                  "views": {
+                                    "type": "number"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "platform": {
+                                "enum": [
+                                  "twitter",
+                                  "instagram",
+                                  "facebook",
+                                  "linkedin",
+                                  "tiktok",
+                                  "youtube",
+                                  "pinterest",
+                                  "reddit",
+                                  "bluesky",
+                                  "threads",
+                                  "telegram",
+                                  "snapchat",
+                                  "googlebusiness",
+                                  "whatsapp",
+                                  "mastodon",
+                                  "discord",
+                                  "sms",
+                                  "beehiiv",
+                                  "convertkit",
+                                  "mailchimp",
+                                  "listmonk"
+                                ],
+                                "type": "string"
+                              },
+                              "platform_post_id": {
+                                "type": "string"
+                              },
+                              "platform_url": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "published_at": {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              "social_account_id": {
+                                "type": "string"
+                              },
+                              "source": {
+                                "enum": [
+                                  "external"
+                                ],
+                                "type": "string"
+                              },
+                              "thumbnail_url": {
+                                "description": "Durable RelayAPI preview URL when generated; otherwise the latest provider thumbnail URL",
+                                "nullable": true,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "source",
+                              "platform",
+                              "social_account_id",
+                              "platform_post_id",
+                              "platform_url",
+                              "content",
+                              "media_urls",
+                              "media_type",
+                              "thumbnail_url",
+                              "account_name",
+                              "account_avatar_url",
+                              "metrics",
+                              "published_at",
+                              "created_at"
                             ],
-                            "type": "string"
-                          },
-                          "target_options": {
-                            "additionalProperties": {
-                              "additionalProperties": {
-                                "nullable": true
-                              },
-                              "type": "object"
-                            },
-                            "description": "Per-target customizations",
-                            "nullable": true,
                             "type": "object"
-                          },
-                          "targets": {
-                            "additionalProperties": {
-                              "properties": {
-                                "accounts": {
-                                  "items": {
-                                    "properties": {
-                                      "avatar_url": {
-                                        "description": "Account avatar URL",
-                                        "nullable": true,
-                                        "type": "string"
-                                      },
-                                      "delivery_state": {
-                                        "description": "Durable delivery state. An unknown outcome requires reconciliation and is never replayed automatically.",
-                                        "enum": [
-                                          "queued",
-                                          "in_flight",
-                                          "unknown",
-                                          "succeeded",
-                                          "failed"
-                                        ],
-                                        "type": "string"
-                                      },
-                                      "display_name": {
-                                        "description": "Account display name",
-                                        "nullable": true,
-                                        "type": "string"
-                                      },
-                                      "id": {
-                                        "type": "string"
-                                      },
-                                      "platform_post_id": {
-                                        "description": "Platform-native post ID",
-                                        "nullable": true,
-                                        "type": "string"
-                                      },
-                                      "publish_operation_id": {
-                                        "description": "Stable provider-operation fence used to reconcile an unknown publish outcome",
-                                        "type": "string"
-                                      },
-                                      "target_id": {
-                                        "description": "Post target ID (pt_) — pass to /v1/ads/boost as post_target_id",
-                                        "nullable": true,
-                                        "type": "string"
-                                      },
-                                      "url": {
-                                        "description": "Published post URL on the platform",
-                                        "nullable": true,
-                                        "type": "string"
-                                      },
-                                      "username": {
-                                        "nullable": true,
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [
-                                      "id",
-                                      "username",
-                                      "display_name",
-                                      "avatar_url",
-                                      "url",
-                                      "platform_post_id",
-                                      "target_id",
-                                      "publish_operation_id",
-                                      "delivery_state"
-                                    ],
-                                    "type": "object"
-                                  },
-                                  "type": "array"
-                                },
-                                "error": {
-                                  "properties": {
-                                    "code": {
-                                      "type": "string"
-                                    },
-                                    "detail": {
-                                      "description": "Raw platform error (HTTP status + response body), sanitized and truncated",
-                                      "type": "string"
-                                    },
-                                    "message": {
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": [
-                                    "code",
-                                    "message"
-                                  ],
-                                  "type": "object"
-                                },
-                                "platform": {
-                                  "enum": [
-                                    "twitter",
-                                    "instagram",
-                                    "facebook",
-                                    "linkedin",
-                                    "tiktok",
-                                    "youtube",
-                                    "pinterest",
-                                    "reddit",
-                                    "bluesky",
-                                    "threads",
-                                    "telegram",
-                                    "snapchat",
-                                    "googlebusiness",
-                                    "whatsapp",
-                                    "mastodon",
-                                    "discord",
-                                    "sms",
-                                    "beehiiv",
-                                    "convertkit",
-                                    "mailchimp",
-                                    "listmonk",
-                                    null
-                                  ],
-                                  "nullable": true,
-                                  "type": "string"
-                                },
-                                "status": {
-                                  "enum": [
-                                    "draft",
-                                    "scheduled",
-                                    "publishing",
-                                    "published",
-                                    "failed",
-                                    "partial"
-                                  ],
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "status",
-                                "platform"
-                              ],
-                              "type": "object"
-                            },
-                            "description": "Per-target results",
-                            "type": "object"
-                          },
-                          "thread_group_id": {
-                            "description": "Thread group ID (non-null if part of a thread)",
-                            "nullable": true,
-                            "type": "string"
-                          },
-                          "thread_position": {
-                            "description": "Position within thread (0 = root)",
-                            "nullable": true,
-                            "type": "number"
-                          },
-                          "timezone": {
-                            "description": "IANA timezone",
-                            "nullable": true,
-                            "type": "string"
-                          },
-                          "updated_at": {
-                            "format": "date-time",
-                            "type": "string"
                           }
-                        },
-                        "required": [
-                          "id",
-                          "status",
-                          "content",
-                          "scheduled_at",
-                          "published_at",
-                          "targets",
-                          "media",
-                          "recycling",
-                          "recycled_from_id",
-                          "created_at",
-                          "updated_at"
-                        ],
-                        "type": "object"
+                        ]
                       },
                       "type": "array"
                     },
@@ -57380,6 +59018,9 @@
                       "all": {
                         "items": {
                           "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
                             "field": {
                               "type": "string"
                             },
@@ -57417,6 +59058,9 @@
                       "any": {
                         "items": {
                           "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
                             "field": {
                               "type": "string"
                             },
@@ -57454,6 +59098,9 @@
                       "none": {
                         "items": {
                           "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
                             "field": {
                               "type": "string"
                             },
@@ -57908,6 +59555,9 @@
                       "all": {
                         "items": {
                           "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
                             "field": {
                               "type": "string"
                             },
@@ -57945,6 +59595,9 @@
                       "any": {
                         "items": {
                           "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
                             "field": {
                               "type": "string"
                             },
@@ -57982,6 +59635,9 @@
                       "none": {
                         "items": {
                           "properties": {
+                            "case_sensitive": {
+                              "type": "boolean"
+                            },
                             "field": {
                               "type": "string"
                             },
@@ -76082,6 +77738,169 @@
         "summary": "Restore an archived workspace",
         "tags": [
           "Workspaces"
+        ]
+      }
+    },
+    "/v1/ws-ticket": {
+      "get": {
+        "description": "Issues a single-use, short-lived ticket for an authenticated WebSocket upgrade. Pass the returned protocol as a WebSocket subprotocol; never put the ticket in a URL.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "expires_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "protocol": {
+                      "type": "string"
+                    },
+                    "ticket": {
+                      "maxLength": 32,
+                      "minLength": 32,
+                      "type": "string"
+                    },
+                    "ws_url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ticket",
+                    "protocol",
+                    "expires_at",
+                    "ws_url"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "A short-lived WebSocket capability"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The API key is missing or invalid"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The credential does not have organization-wide scope"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The credential has exceeded its request limit"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Create a WebSocket ticket",
+        "tags": [
+          "Realtime"
         ]
       }
     }

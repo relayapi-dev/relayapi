@@ -4,6 +4,7 @@ import {
 	createPublishResultPersistenceGate,
 	PUBLISH_RESULT_PERSIST_CONCURRENCY,
 	persistPublishTaskResult,
+	providerReconcileAt,
 	settleAndPersistPublishTask,
 } from "../services/publisher-runner";
 
@@ -161,6 +162,77 @@ describe("publisher result persistence", () => {
 		).toBe(false);
 		expect(state.events).toEqual(["begin", "target", "commit"]);
 		expect(state.sets.attempt).toBeUndefined();
+	});
+
+	it("persists accepted provider jobs without projecting them as published", async () => {
+		const state = persistenceDb({});
+		const saved = await persistPublishTaskResult(state.db as never, {
+			...successInput,
+			result: {
+				success: true,
+				provider_outcome: {
+					disposition: "accepted",
+					provider_operation_id: "job_123",
+					provider_state: "queued",
+				},
+			},
+		});
+
+		expect(saved).toBe(true);
+		expect(state.sets.target).toMatchObject({
+			status: "publishing",
+			deliveryState: "unknown",
+			platformPostId: null,
+			providerOperationId: "job_123",
+			providerDisposition: "accepted",
+			providerState: "queued",
+		});
+		expect(state.sets.target?.nextReconcileAt).toBeInstanceOf(Date);
+		expect(state.sets.attempt).toMatchObject({
+			state: "unknown",
+			providerPostId: null,
+			providerOperationId: "job_123",
+			providerDisposition: "accepted",
+		});
+	});
+
+	it("downgrades id-less terminal success to an unknown outcome", async () => {
+		const state = persistenceDb({});
+		await persistPublishTaskResult(state.db as never, {
+			...successInput,
+			result: {
+				success: true,
+				provider_outcome: {
+					disposition: "published",
+					provider_state: "complete",
+				},
+			},
+		});
+
+		expect(state.sets.target).toMatchObject({
+			status: "publishing",
+			deliveryState: "unknown",
+			platformPostId: null,
+			providerDisposition: "outcome_unknown",
+			errorCode: "PUBLISH_OUTCOME_UNKNOWN",
+		});
+		expect(state.sets.target?.nextReconcileAt).toBeInstanceOf(Date);
+		expect(state.sets.attempt).toMatchObject({
+			state: "unknown",
+			providerDisposition: "outcome_unknown",
+		});
+	});
+});
+
+describe("provider reconciliation scheduling", () => {
+	it("schedules ambiguous and partial outcomes instead of stranding them", () => {
+		const now = new Date("2026-07-18T12:00:00.000Z");
+		for (const disposition of ["outcome_unknown", "partial"] as const) {
+			expect(providerReconcileAt({ disposition }, now)?.toISOString()).toBe(
+				"2026-07-18T12:01:00.000Z",
+			);
+		}
+		expect(providerReconcileAt({ disposition: "failed" }, now)).toBeNull();
 	});
 });
 

@@ -20,7 +20,7 @@ This is a **Pro** feature. Short link configuration and the `/v1/short-links` en
 ```bash
 # Configure Dub.co as your provider
 curl -X PUT https://api.relayapi.dev/v1/short-links/config \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "mode": "always",
@@ -30,7 +30,7 @@ curl -X PUT https://api.relayapi.dev/v1/short-links/config \
 
 # Test the connection
 curl -X POST https://api.relayapi.dev/v1/short-links/test \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 ## Modes
@@ -61,7 +61,7 @@ The built-in `relayapi` provider is the fastest way to get started — no extern
 ```bash
 # Configure the built-in provider (no api_key needed)
 curl -X PUT https://api.relayapi.dev/v1/short-links/config \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"mode": "always", "provider": "relayapi"}'
 ```
@@ -74,7 +74,7 @@ All providers support custom short domains (e.g., `link.mybrand.com`). Pass the 
 
 ```bash
 curl -X PUT https://api.relayapi.dev/v1/short-links/config \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "mode": "always",
@@ -91,7 +91,7 @@ When URL shortening is active, all `http://` and `https://` URLs in the post con
 ```bash
 # Create a post with URL shortening (when mode is "ask")
 curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "content": "Check out our new blog post: https://myblog.com/a-very-long-url-slug",
@@ -113,7 +113,7 @@ You can shorten any URL independently of post creation:
 
 ```bash
 curl -X POST https://api.relayapi.dev/v1/short-links/shorten \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/my-long-url"}'
 ```
@@ -133,7 +133,7 @@ All shortened URLs are tracked in a `short_links` table with cached click counts
 ```bash
 # Get stats for a specific short link
 curl https://api.relayapi.dev/v1/short-links/sl_abc123/stats \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 Response:
@@ -153,7 +153,7 @@ View all short links created for a specific post:
 
 ```bash
 curl https://api.relayapi.dev/v1/short-links/by-post/post_abc123 \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 ## SDK Usage

@@ -1,5 +1,6 @@
 import { createDb, emailDeliveries, organization } from "@relayapi/db";
 import { and, eq, isNull, lte, or, sql } from "drizzle-orm";
+import { isSelfHosted, selfHostedFeatureEnabled } from "../lib/deployment-mode";
 import { processEmailMessage } from "../lib/email-queue/consumer";
 import type { EmailQueueMessage } from "../lib/email-queue/types";
 import type { Env } from "../types";
@@ -27,6 +28,10 @@ export async function consumeEmailQueue(
 	env: Env,
 ): Promise<void> {
 	for (const message of batch.messages) {
+		if (isSelfHosted(env) && !selfHostedFeatureEnabled(env, "email")) {
+			message.ack();
+			continue;
+		}
 		if (!isEmailQueueMessage(message.body)) {
 			await recordQueueFailure(
 				env,

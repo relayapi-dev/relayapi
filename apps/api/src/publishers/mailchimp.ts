@@ -5,6 +5,7 @@ import {
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
 } from "./types";
 
 /**
@@ -44,8 +45,121 @@ export function normalizeMailchimpScheduleTime(value: string): string {
 	return new Date(rounded).toISOString();
 }
 
+interface MailchimpCampaignState {
+	id?: string;
+	archive_url?: string;
+	status?: string;
+}
+
+function mailchimpCampaignResult(
+	campaign: MailchimpCampaignState,
+): PublishResult {
+	const campaignId = campaign.id?.trim();
+	if (!campaignId) {
+		return {
+			success: false,
+			provider_outcome: {
+				disposition: "outcome_unknown",
+				provider_state: campaign.status ?? "missing_campaign_id",
+			},
+			error: {
+				code: "PLATFORM_ERROR",
+				message: "Mailchimp campaign response did not include an ID.",
+			},
+		};
+	}
+
+	const state = campaign.status?.toLowerCase() ?? "unknown";
+	const shared = {
+		provider_operation_id: campaignId,
+		platform_post_id: campaignId,
+		platform_url: campaign.archive_url,
+		provider_state: state,
+	};
+	if (state === "sent") {
+		return {
+			success: true,
+			platform_post_id: campaignId,
+			platform_url: campaign.archive_url,
+			provider_outcome: { disposition: "sent", ...shared },
+		};
+	}
+	if (state === "schedule") {
+		return {
+			success: true,
+			platform_post_id: campaignId,
+			platform_url: campaign.archive_url,
+			provider_outcome: { disposition: "scheduled", ...shared },
+		};
+	}
+	if (state === "sending") {
+		return {
+			success: true,
+			platform_post_id: campaignId,
+			platform_url: campaign.archive_url,
+			provider_outcome: { disposition: "processing", ...shared },
+		};
+	}
+	if (state === "save" || state === "paused") {
+		return {
+			success: true,
+			platform_post_id: campaignId,
+			platform_url: campaign.archive_url,
+			provider_outcome: { disposition: "accepted", ...shared },
+		};
+	}
+	return {
+		success: false,
+		platform_post_id: campaignId,
+		platform_url: campaign.archive_url,
+		provider_outcome: {
+			disposition: "outcome_unknown",
+			...shared,
+		},
+		error: {
+			code: "PLATFORM_ERROR",
+			message: `Mailchimp returned an unrecognized campaign status: ${state}`,
+		},
+	};
+}
+
 export const mailchimpPublisher: Publisher = {
 	platform: "mailchimp",
+
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		try {
+			const campaignId =
+				request.platform_post_id ?? request.provider_operation_id;
+			const apiKey = request.account.access_token;
+			const datacenter = apiKey ? getMailchimpDatacenter(apiKey) : null;
+			if (!campaignId || !apiKey || !datacenter) {
+				throw new Error(
+					"CONTENT_ERROR: Mailchimp reconciliation requires a campaign ID and valid API key.",
+				);
+			}
+			const response = await fetch(
+				buildMailchimpApiUrl(
+					datacenter,
+					`/3.0/campaigns/${encodeURIComponent(campaignId)}`,
+				),
+				{
+					headers: { Authorization: `Basic ${btoa(`relayapi:${apiKey}`)}` },
+				},
+			);
+			if (!response.ok) {
+				const body = await response.text();
+				throw new PublishError(
+					`Mailchimp campaign status failed (${response.status})`,
+					{ statusCode: response.status, detail: body },
+				);
+			}
+			return mailchimpCampaignResult(
+				(await response.json()) as MailchimpCampaignState,
+			);
+		} catch (err) {
+			return classifyPublishError(err);
+		}
+	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
@@ -153,6 +267,7 @@ export const mailchimpPublisher: Publisher = {
 			const campaign = (await campaignRes.json()) as {
 				id?: string;
 				archive_url?: string;
+				status?: string;
 			};
 			const campaignId = campaign.id;
 			if (!campaignId) {
@@ -250,6 +365,14 @@ export const mailchimpPublisher: Publisher = {
 				success: true,
 				platform_post_id: campaignId,
 				platform_url: campaign.archive_url,
+				provider_outcome: {
+					disposition: scheduleTime ? "scheduled" : "accepted",
+					provider_operation_id: campaignId,
+					platform_post_id: campaignId,
+					platform_url: campaign.archive_url,
+					provider_state: scheduleTime ? "schedule" : "send_requested",
+					next_reconcile_at: scheduleTime,
+				},
 			};
 		} catch (err) {
 			// Campaign creation/content/scheduling is multi-step, so never replay the

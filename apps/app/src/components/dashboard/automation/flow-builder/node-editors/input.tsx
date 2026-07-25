@@ -40,6 +40,8 @@ interface InputConfig {
 	timeout_min?: number;
 	max_retries?: number;
 	skip_allowed?: boolean;
+	accepted_mime_types?: string[];
+	max_size_mb?: number;
 }
 
 export function InputEditor({
@@ -119,14 +121,18 @@ export function InputEditor({
 									<input
 										type="text"
 										value={choice.label}
-										onChange={(e) => patchChoice(idx, { label: e.target.value })}
+										onChange={(e) =>
+											patchChoice(idx, { label: e.target.value })
+										}
 										placeholder="Label"
 										className="h-9 flex-1 rounded-lg border border-[#d9dde6] bg-white px-2 text-[12px]"
 									/>
 									<input
 										type="text"
 										value={choice.value}
-										onChange={(e) => patchChoice(idx, { value: e.target.value })}
+										onChange={(e) =>
+											patchChoice(idx, { value: e.target.value })
+										}
 										placeholder="Value"
 										className="h-9 flex-1 rounded-lg border border-[#d9dde6] bg-white px-2 text-[12px]"
 									/>
@@ -195,17 +201,17 @@ export function InputEditor({
 					/>
 				</Field>
 				<Field
-					label="Max retries"
-					description="On invalid input, re-prompt up to this many times before the invalid port."
+					label="Maximum attempts"
+					description="Total reply attempts allowed. The final invalid reply routes through Invalid."
 				>
 					<input
 						type="number"
-						min={0}
+						min={1}
 						value={cfg.max_retries ?? ""}
 						onChange={(e) =>
 							patch({ max_retries: numberOrUndefined(e.target.value) })
 						}
-						placeholder="0"
+						placeholder="1"
 						className={INPUT_CLS}
 					/>
 				</Field>
@@ -232,7 +238,7 @@ export function InputEditor({
 							/>
 						</Field>
 					</div>
-				) : (
+				) : inputType === "text" ? (
 					<Field
 						label="Validation pattern"
 						description="Optional regular expression the reply must match."
@@ -247,7 +253,51 @@ export function InputEditor({
 							className={INPUT_CLS}
 						/>
 					</Field>
-				)}
+				) : null}
+				{inputType === "file" ? (
+					<>
+						<Field
+							label="Accepted MIME types"
+							description="Optional comma-separated list, such as image/jpeg, image/png."
+						>
+							<input
+								type="text"
+								value={(cfg.accepted_mime_types ?? []).join(", ")}
+								onChange={(event) => {
+									const accepted_mime_types = event.target.value
+										.split(",")
+										.map((value) => value.trim())
+										.filter(Boolean);
+									patch({
+										accepted_mime_types: accepted_mime_types.length
+											? accepted_mime_types
+											: undefined,
+									});
+								}}
+								placeholder="image/jpeg, image/png"
+								className={INPUT_CLS}
+							/>
+						</Field>
+						<Field
+							label="Maximum file size (MB)"
+							description="Applied when the channel supplies attachment size metadata."
+						>
+							<input
+								type="number"
+								min={0.1}
+								step="any"
+								value={cfg.max_size_mb ?? ""}
+								onChange={(event) =>
+									patch({
+										max_size_mb: numberOrUndefined(event.target.value),
+									})
+								}
+								placeholder="No limit"
+								className={INPUT_CLS}
+							/>
+						</Field>
+					</>
+				) : null}
 			</AdvancedDisclosure>
 		</FormShell>
 	);

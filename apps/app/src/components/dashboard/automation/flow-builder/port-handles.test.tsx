@@ -11,12 +11,9 @@
 // `<Handle>` counts, ids, and data-* attributes on a 3-output node.
 
 import { describe, expect, it } from "bun:test";
-import {
-	portHandleTop,
-	stylesForPort,
-} from "./port-handles";
 import { derivePorts } from "./derive-ports";
 import type { AutomationPort } from "./graph-types";
+import { portHandleTop, stylesForPort } from "./port-handles";
 
 describe("stylesForPort", () => {
 	// Monochrome by design: every role shares one neutral dot/chip treatment.
@@ -31,7 +28,12 @@ describe("stylesForPort", () => {
 		{ key: "error", direction: "output", role: "error" },
 		{ key: "invalid", direction: "output", role: "invalid" },
 		{ key: "success", direction: "output", role: "success" },
-		{ key: "button.cta", direction: "output", role: "interactive", label: "CTA" },
+		{
+			key: "button.cta",
+			direction: "output",
+			role: "interactive",
+			label: "CTA",
+		},
 		{ key: "timeout", direction: "output", role: "timeout" },
 		{ key: "skip", direction: "output", role: "skip" },
 		{ key: "next", direction: "output" },
@@ -78,7 +80,7 @@ describe("derivePorts x port-handles", () => {
 		expect(stylesForPort(firstOutput).dot).toContain("#98a6bd");
 	});
 
-	it("a message node with two branch buttons yields 3 output handles", () => {
+	it("a message node with two branch buttons yields 4 output handles", () => {
 		const ports = derivePorts({
 			kind: "message",
 			config: {
@@ -94,12 +96,29 @@ describe("derivePorts x port-handles", () => {
 			},
 		});
 		const outputs = ports.filter((p) => p.direction === "output");
-		// next + 2 branch buttons = 3 outputs
-		expect(outputs.length).toBe(3);
+		// next + error + 2 branch buttons = 4 truthful runtime outputs
+		expect(outputs.length).toBe(4);
 		expect(outputs.map((p) => p.key)).toEqual([
 			"next",
+			"error",
 			"button.yes",
 			"button.no",
 		]);
+	});
+
+	it("an implicit interactive wait exposes its configured timeout port", () => {
+		const ports = derivePorts({
+			kind: "message",
+			config: {
+				blocks: [
+					{
+						type: "text",
+						buttons: [{ id: "yes", type: "branch", label: "Yes" }],
+					},
+				],
+				no_response_timeout_min: 30,
+			},
+		});
+		expect(ports.some((port) => port.key === "no_response")).toBe(true);
 	});
 });

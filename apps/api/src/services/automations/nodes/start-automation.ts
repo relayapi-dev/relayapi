@@ -6,7 +6,7 @@
 // completion state before taking the `next` port on the current run.
 
 import { automations } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { enrollContact } from "../runner";
 import type { NodeHandler } from "../types";
 
@@ -26,6 +26,14 @@ export const startAutomationHandler: NodeHandler<StartAutomationConfig> = {
 				error: new Error("start_automation missing target_automation_id"),
 			};
 		}
+		if (cfg.target_automation_id === ctx.automationId) {
+			return {
+				result: "fail",
+				error: new Error(
+					"start_automation cannot target the current automation",
+				),
+			};
+		}
 		const db = ctx.db;
 		if (!db) {
 			return {
@@ -41,6 +49,9 @@ export const startAutomationHandler: NodeHandler<StartAutomationConfig> = {
 			where: and(
 				eq(automations.id, cfg.target_automation_id),
 				eq(automations.organizationId, ctx.organizationId),
+				ctx.workspaceId
+					? eq(automations.workspaceId, ctx.workspaceId)
+					: isNull(automations.workspaceId),
 			),
 		});
 		if (!target) {
@@ -57,8 +68,20 @@ export const startAutomationHandler: NodeHandler<StartAutomationConfig> = {
 				error: new Error("target automation not active"),
 			};
 		}
+		if (target.channel !== ctx.channel) {
+			return {
+				result: "fail",
+				error: new Error("target automation channel does not match the source"),
+			};
+		}
 
 		try {
+			const triggeringAccountId =
+				typeof ctx.env?.socialAccountId === "string"
+					? ctx.env.socialAccountId
+					: typeof ctx.context._triggering_social_account_id === "string"
+						? ctx.context._triggering_social_account_id
+						: null;
 			const { runId: spawnedRunId } = await enrollContact(db, {
 				automationId: cfg.target_automation_id,
 				organizationId: ctx.organizationId,
@@ -77,8 +100,7 @@ export const startAutomationHandler: NodeHandler<StartAutomationConfig> = {
 				// the child (after a delay / user_input wait) falls back to
 				// the newest `contact_channels` row — the same multi-account
 				// routing bug Plan 6 F2 fixed elsewhere.
-				socialAccountId:
-					(ctx.env?.socialAccountId as string | undefined) ?? null,
+				socialAccountId: triggeringAccountId,
 				contextOverrides: cfg.pass_context ? ctx.context : undefined,
 				env: ctx.env,
 			});

@@ -23,13 +23,13 @@ import { ActionList } from "./action-list";
 import { Preview } from "./preview";
 import {
 	ACTION_CATEGORIES,
-	defaultActionFor,
-	FALLBACK_ACTION_CATALOG,
 	type Action,
 	type ActionCatalogEntry,
 	type ActionCategory,
 	type ActionGroupConfig,
 	type ActionType,
+	defaultActionFor,
+	FALLBACK_ACTION_CATALOG,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -43,13 +43,20 @@ interface Props {
 	onChange(config: ActionGroupConfig): void;
 	/** Automation id — needed for the dry-run simulate endpoint. */
 	automationId?: string;
+	/** Used to hide actions that a platform cannot execute. */
+	automationChannel: string;
 }
 
 // ---------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------
 
-export function ActionEditor({ node, onChange, automationId }: Props) {
+export function ActionEditor({
+	node,
+	onChange,
+	automationId,
+	automationChannel,
+}: Props) {
 	const cfg = (node.config ?? {}) as { actions?: Action[] };
 	const actions = Array.isArray(cfg.actions) ? cfg.actions : [];
 
@@ -79,7 +86,10 @@ export function ActionEditor({ node, onChange, automationId }: Props) {
 				</div>
 				<ActionList actions={actions} onChange={setActions} />
 				<div className="mt-2">
-					<AddActionButton onAdd={addAction} />
+					<AddActionButton
+						onAdd={addAction}
+						automationChannel={automationChannel}
+					/>
 				</div>
 			</div>
 
@@ -102,9 +112,7 @@ export function ActionEditor({ node, onChange, automationId }: Props) {
 // ---------------------------------------------------------------------------
 
 function PortsHint({ actions }: { actions: Action[] }) {
-	const hasAbort = actions.some(
-		(a) => (a.on_error ?? "abort") === "abort",
-	);
+	const hasAbort = actions.some((a) => (a.on_error ?? "abort") === "abort");
 	return (
 		<div className="rounded-xl border border-[#eef2f7] bg-[#fbfcfe] p-3 text-[11px] text-[#475569]">
 			<div className="font-medium text-[#1f2937]">Ports on this node</div>
@@ -121,8 +129,8 @@ function PortsHint({ actions }: { actions: Action[] }) {
 				) : (
 					<li className="text-[#94a3b8]">
 						No <span className="font-mono">error</span> port — set at least one
-						action to{" "}
-						<span className="font-medium">Abort</span> to enable error routing.
+						action to <span className="font-medium">Abort</span> to enable error
+						routing.
 					</li>
 				)}
 			</ul>
@@ -134,21 +142,38 @@ function PortsHint({ actions }: { actions: Action[] }) {
 // Add-action dropdown — grouped by category per spec §12.2
 // ---------------------------------------------------------------------------
 
-function AddActionButton({ onAdd }: { onAdd(type: ActionType): void }) {
+function AddActionButton({
+	onAdd,
+	automationChannel,
+}: {
+	onAdd(type: ActionType): void;
+	automationChannel: string;
+}) {
 	const [open, setOpen] = useState(false);
 	const catalog = useAutomationCatalog();
 
 	const entries: ActionCatalogEntry[] = useMemo(() => {
 		const live = catalog.data?.action_types;
 		if (Array.isArray(live) && live.length > 0) {
-			return live.map((entry) => ({
-				type: entry.type as ActionType,
-				label: entry.label,
-				category: (entry.category as ActionCategory) ?? "contact_data",
-			}));
+			return live
+				.filter((entry) => entry.enabled !== false)
+				.filter(
+					(entry) =>
+						!entry.channels?.length ||
+						entry.channels.includes(automationChannel),
+				)
+				.map((entry) => ({
+					type: entry.type as ActionType,
+					label: entry.label,
+					category: (entry.category as ActionCategory) ?? "contact_data",
+					channels: entry.channels,
+				}));
 		}
-		return FALLBACK_ACTION_CATALOG;
-	}, [catalog.data]);
+		return FALLBACK_ACTION_CATALOG.filter(
+			(entry) =>
+				!entry.channels?.length || entry.channels.includes(automationChannel),
+		);
+	}, [automationChannel, catalog.data]);
 
 	const grouped = useMemo(() => {
 		const map = new Map<ActionCategory, ActionCatalogEntry[]>();
@@ -197,18 +222,10 @@ function AddActionButton({ onAdd }: { onAdd(type: ActionType): void }) {
 										}}
 										className={cn(
 											"flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-[#f0f1f4]",
-											entry.category === "v1_1_stubs" &&
-												"text-[#64748b]",
-											entry.category === "destructive" &&
-												"text-destructive",
+											entry.category === "destructive" && "text-destructive",
 										)}
 									>
 										<span className="font-medium">{entry.label}</span>
-										{entry.category === "v1_1_stubs" ? (
-											<span className="text-[10px] text-amber-600">
-												v1.1
-											</span>
-										) : null}
 									</button>
 								))}
 							</div>

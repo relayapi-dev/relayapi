@@ -12,7 +12,7 @@ Official Make.com (formerly Integromat) app for RelayAPI — post to 21 platform
 - **Delete Post** — Remove draft/scheduled/failed posts
 - **List Accounts** — All connected social accounts
 - **Get Account Health** — Token & permission status
-- **Presign Media URL** — Upload media files
+- **Presign Media URL** — Create a pending upload intent; the scenario must PUT the bytes and confirm it
 - **Get Usage** — Plan & usage stats
 
 ### Instant Triggers (4)

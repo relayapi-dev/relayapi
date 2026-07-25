@@ -1,12 +1,15 @@
 import { describe, expect, it, mock } from "bun:test";
+import { Hono } from "hono";
+import type { Env, Variables } from "../types";
 
 const TICKET = "a".repeat(32);
 const claim = mock(async (_db, _key, _kind, token: string) =>
 	token === TICKET ? { org_id: "org_1" } : null,
 );
+const issue = mock(async () => {});
 mock.module("../services/one-time-capability", () => ({
 	claimOneTimeCapability: claim,
-	issueOneTimeCapability: mock(async () => {}),
+	issueOneTimeCapability: issue,
 }));
 const dbColumn = (name: string) => ({ name });
 mock.module("@relayapi/db", () => ({
@@ -42,9 +45,30 @@ mock.module("@relayapi/db", () => ({
 	},
 }));
 
-const { websocketUpgrade } = await import("../routes/websocket");
+const { websocketTicket, websocketUpgrade } = await import(
+	"../routes/websocket"
+);
 
 describe("WebSocket one-time capability transport", () => {
+	it("marks issued bearer capabilities as non-cacheable", async () => {
+		const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+		app.use("*", async (c, next) => {
+			c.set("orgId", "org_1");
+			c.set("workspaceScope", "all");
+			c.set("db", {} as Variables["db"]);
+			await next();
+		});
+		app.route("/", websocketTicket);
+
+		const response = await app.request("https://api.example.test/", {}, {
+			ENCRYPTION_KEY: `test=${"a".repeat(64)}`,
+		} as Env);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toContain("no-store");
+		expect(issue).toHaveBeenCalledTimes(1);
+	});
+
 	it("rejects bearer capabilities in the URL", async () => {
 		const response = await websocketUpgrade.request(
 			`https://api.example.test/?ticket=${TICKET}`,

@@ -1,40 +1,94 @@
 ---
 title: Media Uploads
-description: Upload images, videos, and other media to include in your posts.
+description: Upload images, videos, audio, and PDFs to include in your posts.
 icon: Image
 ---
 
+import { Callout } from 'fumadocs-ui/components/callout';
+
 ## Overview
 
-RelayAPI supports media uploads through pre-signed URLs. Upload media first, then reference it in your posts.
+RelayAPI supports direct uploads through short-lived pre-signed URLs. A direct upload is complete only after all three steps succeed: create an upload intent, PUT the bytes, and confirm the object. After confirmation, attach the canonical `url` from the presign response to a post's `media` array.
 
 ## Upload Flow
 
-1. Request a pre-signed upload URL via `POST /v1/media/upload`
-2. Upload your file directly to the pre-signed URL
-3. Reference the media ID in your post's content
+1. Send `POST /v1/media/presign` with `filename`, `content_type`, and optional `workspace_id`.
+2. PUT the raw file bytes to `upload_url` with every entry from `upload_headers`. `Content-Type` must exactly match the normalized type signed in step 1, and `If-None-Match: *` makes the object key create-only.
+3. Send `POST /v1/media/confirm` with the storage key from the returned canonical `url`. Confirmation is mandatory: it verifies the stored MIME type and size and marks the media ready.
+4. Create a post with a media item such as `{ "url": presign.url, "type": "image" }`. Posts accept media objects containing `url` and an optional `type`; they do not accept a media ID in place of the object.
 
-```bash
-# Step 1: Get upload URL
-curl -X POST https://api.relayapi.dev/v1/media/upload \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
-  -H "Content-Type: application/json" \
-  -d '{"filename": "photo.jpg", "mime_type": "image/jpeg", "size": 1048576}'
+The presign response has this shape:
 
-# Step 2: Upload to the pre-signed URL
-curl -X PUT "https://media.relayapi.dev/upload/..." \
-  -H "Content-Type: image/jpeg" \
-  --data-binary @photo.jpg
+```json
+{
+  "id": "med_abc123",
+  "upload_url": "https://<account>.r2.cloudflarestorage.com/relayapi-media/...?X-Amz-Signature=...",
+  "upload_headers": {
+    "Content-Type": "image/jpeg",
+    "If-None-Match": "*"
+  },
+  "url": "https://media.relayapi.dev/org_123/file_abc/photo.jpg",
+  "expires_in": 3600
+}
 ```
 
-## Supported Formats
+`id` identifies the pending upload intent. `url` is the canonical media URL to retain and place in posts; `upload_url` is only for the PUT and expires after `expires_in` seconds. Presigned URLs remain usable until they expire, so RelayAPI signs `If-None-Match: *` and requires clients to send it to prevent a later PUT from replacing confirmed bytes.
 
-| Type | Formats | Max Size |
-|------|---------|----------|
-| Image | JPEG, PNG, GIF, WebP | 10 MB |
-| Video | MP4, MOV, AVI | 100 MB |
-| Document | PDF | 25 MB |
+```bash
+# Step 1: Create the upload intent
+presign="$(curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/media/presign \
+  -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"filename":"photo.jpg","content_type":"image/jpeg"}')"
+
+upload_url="$(printf '%s' "$presign" | jq -r '.upload_url')"
+upload_content_type="$(printf '%s' "$presign" | jq -r '.upload_headers["Content-Type"]')"
+upload_precondition="$(printf '%s' "$presign" | jq -r '.upload_headers["If-None-Match"]')"
+media_url="$(printf '%s' "$presign" | jq -r '.url')"
+storage_key="${media_url#https://media.relayapi.dev/}"
+
+# Step 2: PUT once with every exact header signed in step 1
+curl --fail-with-body -sS -X PUT "$upload_url" \
+  -H "Content-Type: $upload_content_type" \
+  -H "If-None-Match: $upload_precondition" \
+  --data-binary @photo.jpg
+
+# Step 3: Confirm the object (mandatory)
+confirmed="$(jq -n --arg storage_key "$storage_key" '{storage_key: $storage_key}' | \
+  curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/media/confirm \
+    -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+    -H "Content-Type: application/json" \
+    --data-binary @-)"
+
+# Step 4: Attach the canonical media URL to a post
+jq -n --arg media_url "$media_url" '{
+  content: "Check out this photo!",
+  targets: ["instagram"],
+  scheduled_at: "now",
+  media: [{url: $media_url, type: "image"}]
+}' | curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  --data-binary @-
+```
+
+<Callout type="info">
+The confirmation response is the ready media record, including `id`, `url`, `filename`, `mime_type`, `size`, and `created_at`. Keep using the canonical `url` from the presign response in future or scheduled posts; the read URL returned during confirmation may be short-lived.
+</Callout>
+
+## Supported Formats and Size
+
+Every upload is limited to **50 MiB** (`52,428,800` bytes), regardless of media type.
+
+| Type | Allowed MIME types |
+|------|--------------------|
+| Image | `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `image/heic`, `image/heif`, `image/avif` |
+| Video | `video/mp4`, `video/webm`, `video/quicktime`, `video/mpeg` |
+| Audio | `audio/mpeg`, `audio/mp4`, `audio/webm`, `audio/wav`, `audio/ogg` |
+| Document | `application/pdf` |
+
+Generic `application/octet-stream`, SVG, HTML, and MIME types not listed above are rejected. The pre-signed PUT is bound to the declared `content_type`; changing the header on the PUT invalidates the signed request.
 
 ## Platform-Specific Limits
 
-Each platform has its own media requirements. RelayAPI automatically validates and, where possible, converts media to meet platform specifications. See individual [platform pages](/platforms) for details.
+Each platform can impose stricter dimensions, duration, codec, aspect-ratio, or file-size requirements. RelayAPI enforces the global type and 50 MiB limits above, but it does not promise automatic media conversion. Review the relevant [platform page](/platforms) before publishing.

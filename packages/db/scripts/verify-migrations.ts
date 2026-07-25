@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { is, SQL } from "drizzle-orm";
 import {
 	getTableConfig,
@@ -7,6 +8,7 @@ import {
 } from "drizzle-orm/pg-core";
 import postgres from "postgres";
 import {
+	AUTH_IDENTITY_INVARIANT_CONTRACTS,
 	ORGANIZATION_PROVISIONING_CONTRACT,
 	PARENT_IDENTITY_PROJECTION_FUNCTION,
 	PARENT_IDENTITY_PROJECTIONS,
@@ -216,6 +218,9 @@ type ExpectedDatabaseTrigger = {
 	triggerType: number;
 	watchedColumns: string[];
 	arguments: string[];
+	isConstraintTrigger?: boolean;
+	isDeferrable?: boolean;
+	isInitiallyDeferred?: boolean;
 };
 
 type ExpectedGeneratedFunction = {
@@ -249,6 +254,16 @@ const BEFORE_INSERT_OR_UPDATE_ROW =
 	TRIGGER_TYPE_INSERT |
 	TRIGGER_TYPE_UPDATE;
 const AFTER_INSERT_ROW = TRIGGER_TYPE_ROW | TRIGGER_TYPE_INSERT;
+const AFTER_INSERT_OR_UPDATE_ROW =
+	TRIGGER_TYPE_ROW | TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE;
+const BEFORE_DELETE_ROW =
+	TRIGGER_TYPE_ROW | TRIGGER_TYPE_BEFORE | TRIGGER_TYPE_DELETE;
+const BEFORE_INSERT_DELETE_OR_UPDATE_ROW =
+	TRIGGER_TYPE_ROW |
+	TRIGGER_TYPE_BEFORE |
+	TRIGGER_TYPE_INSERT |
+	TRIGGER_TYPE_DELETE |
+	TRIGGER_TYPE_UPDATE;
 const AFTER_INSERT_DELETE_OR_UPDATE_ROW =
 	TRIGGER_TYPE_ROW |
 	TRIGGER_TYPE_INSERT |
@@ -279,6 +294,71 @@ function expectedDatabaseTriggers(): ExpectedDatabaseTrigger[] {
 			functionSchema: provisioning.functionSchema,
 			functionName: provisioning.functionName,
 			triggerType: AFTER_INSERT_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.activeOrganizationOwner.triggerName,
+			tableSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.activeOrganizationOwner.tableSchema,
+			tableName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.activeOrganizationOwner.tableName,
+			functionSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.activeOrganizationOwner
+					.functionSchema,
+			functionName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.activeOrganizationOwner.functionName,
+			triggerType: AFTER_INSERT_OR_UPDATE_ROW,
+			watchedColumns: [
+				...AUTH_IDENTITY_INVARIANT_CONTRACTS.activeOrganizationOwner
+					.watchedColumns,
+			],
+			arguments: [],
+			isConstraintTrigger: true,
+			isDeferrable: true,
+			isInitiallyDeferred: true,
+		},
+		{
+			triggerName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberOwnerAndCredentialExit
+					.triggerName,
+			tableSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberOwnerAndCredentialExit
+					.tableSchema,
+			tableName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberOwnerAndCredentialExit
+					.tableName,
+			functionSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberOwnerAndCredentialExit
+					.functionSchema,
+			functionName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberOwnerAndCredentialExit
+					.functionName,
+			triggerType: BEFORE_INSERT_DELETE_OR_UPDATE_ROW,
+			watchedColumns: [
+				...AUTH_IDENTITY_INVARIANT_CONTRACTS.memberOwnerAndCredentialExit
+					.watchedColumns,
+			],
+			arguments: [],
+		},
+		{
+			triggerName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userDashboardPrincipalCleanup
+					.triggerName,
+			tableSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userDashboardPrincipalCleanup
+					.tableSchema,
+			tableName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userDashboardPrincipalCleanup
+					.tableName,
+			functionSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userDashboardPrincipalCleanup
+					.functionSchema,
+			functionName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userDashboardPrincipalCleanup
+					.functionName,
+			triggerType: BEFORE_DELETE_ROW,
 			watchedColumns: [],
 			arguments: [],
 		},
@@ -377,7 +457,7 @@ function extractGeneratedFunctionSource(
 
 function expectedGeneratedFunctions(): ExpectedGeneratedFunction[] {
 	const renderedSql = renderCustomMigrationSql();
-	return [
+	const generatedContracts = [
 		{
 			functionSchema: ORGANIZATION_PROVISIONING_CONTRACT.functionSchema,
 			functionName: ORGANIZATION_PROVISIONING_CONTRACT.functionName,
@@ -406,6 +486,23 @@ function expectedGeneratedFunctions(): ExpectedGeneratedFunction[] {
 			contract.functionName,
 		),
 	}));
+	const identityMigrationSql = readFileSync(
+		new URL("../drizzle/0005_atomic_identity_deletion.sql", import.meta.url),
+		"utf8",
+	);
+	const identityContracts = Object.values(
+		AUTH_IDENTITY_INVARIANT_CONTRACTS,
+	).map((contract) => ({
+		functionSchema: contract.functionSchema,
+		functionName: contract.functionName,
+		functionConfig: ["search_path=pg_catalog, auth"],
+		functionSource: extractGeneratedFunctionSource(
+			identityMigrationSql,
+			contract.functionSchema,
+			contract.functionName,
+		),
+	}));
+	return [...generatedContracts, ...identityContracts];
 }
 
 function databaseTriggerKey(
@@ -427,13 +524,16 @@ function isRelayApiGeneratedTrigger(row: DatabaseContractTriggerRow): boolean {
 		PARENT_IDENTITY_PROJECTION_FUNCTION.functionName,
 		WORKSPACE_REQUIREMENT_CONTRACT.functionName,
 		SEGMENT_MEMBER_COUNT_CONTRACT.functionName,
+		...Object.values(AUTH_IDENTITY_INVARIANT_CONTRACTS).map(
+			(contract) => contract.functionName,
+		),
 	]);
 	return (
 		row.trigger_name.startsWith("project_") ||
 		row.trigger_name.startsWith("zz_require_workspace_") ||
 		row.trigger_name.startsWith("provision_organization_defaults") ||
 		row.trigger_name.startsWith("maintain_segment_member_count") ||
-		(row.function_schema === "public" &&
+		((row.function_schema === "public" || row.function_schema === "auth") &&
 			generatedFunctionNames.has(row.function_name))
 	);
 }
@@ -1452,6 +1552,11 @@ async function verify(): Promise<void> {
 							OR starts_with(function_row.proname, 'project_')
 							OR starts_with(function_row.proname, 'enforce_workspace_requirement')
 							OR starts_with(function_row.proname, 'maintain_segment_member_count')
+							OR function_row.proname IN (
+								'enforce_active_organization_owner',
+								'enforce_organization_owner_invariant',
+								'delete_dashboard_principals_before_user'
+							)
 						)
 					ORDER BY
 						function_namespace.nspname,
@@ -1573,9 +1678,12 @@ async function verify(): Promise<void> {
 				);
 			}
 			if (
-				actualTrigger.is_constraint_trigger ||
-				actualTrigger.is_deferrable ||
-				actualTrigger.initially_deferred ||
+				actualTrigger.is_constraint_trigger !==
+					(expectedTrigger.isConstraintTrigger ?? false) ||
+				actualTrigger.is_deferrable !==
+					(expectedTrigger.isDeferrable ?? false) ||
+				actualTrigger.initially_deferred !==
+					(expectedTrigger.isInitiallyDeferred ?? false) ||
 				actualTrigger.has_parent_trigger ||
 				actualTrigger.old_transition_table !== null ||
 				actualTrigger.new_transition_table !== null

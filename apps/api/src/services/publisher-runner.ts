@@ -11,9 +11,19 @@ import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { decryptAccountToken } from "../lib/account-token-crypto";
 import { mapConcurrently } from "../lib/concurrency";
 import { notifyRealtime } from "../lib/notify-post-update";
-import { presignRelayMediaUrls } from "../lib/r2-presign";
-import type { PublishRequest, PublishResult } from "../publishers";
+import { resolveRelayMediaForPublish } from "../lib/r2-presign";
+import { RelayMediaPolicyError } from "../lib/relay-media-policy";
+import type {
+	ProviderOutcome,
+	PublishRequest,
+	PublishResult,
+} from "../publishers";
 import { getPublisher } from "../publishers";
+import {
+	hasTerminalProviderEvidence,
+	isNonTerminalProviderOutcome,
+	isTerminalProviderSuccess,
+} from "../publishers/types";
 import type { Platform } from "../schemas/common";
 import type { Env } from "../types";
 import {
@@ -220,6 +230,20 @@ export function canRetryTokenExpiredPublish(
 export function requiresPublishOutcomeReconciliation(
 	result: PublishResult,
 ): boolean {
+	if (
+		result.provider_outcome?.disposition === "outcome_unknown" ||
+		result.provider_outcome?.disposition === "partial"
+	) {
+		return true;
+	}
+	if (
+		result.provider_outcome &&
+		(isTerminalProviderSuccess(result.provider_outcome) ||
+			isNonTerminalProviderOutcome(result.provider_outcome) ||
+			result.provider_outcome.disposition === "failed")
+	) {
+		return false;
+	}
 	return (
 		!result.success &&
 		[
@@ -231,6 +255,69 @@ export function requiresPublishOutcomeReconciliation(
 		result.retry?.disposition !== "safe_to_retry" &&
 		result.outcome?.disposition !== "definitive_rejection"
 	);
+}
+
+/**
+ * Convert legacy publisher results into the truthful lifecycle model. Updated
+ * adapters provide `provider_outcome` directly; this compatibility path refuses
+ * to call an id-less `success: true` published.
+ */
+export function normalizeProviderOutcome(
+	result: PublishResult,
+): ProviderOutcome {
+	if (result.provider_outcome) {
+		if (
+			isTerminalProviderSuccess(result.provider_outcome) &&
+			!hasTerminalProviderEvidence(result.provider_outcome)
+		) {
+			return {
+				disposition: "outcome_unknown",
+				provider_operation_id: result.provider_outcome.provider_operation_id,
+				provider_state: result.provider_outcome.provider_state,
+				effects: result.provider_outcome.effects,
+			};
+		}
+		return result.provider_outcome;
+	}
+	if (result.success) {
+		if (result.platform_post_id?.trim()) {
+			return {
+				disposition: "published",
+				platform_post_id: result.platform_post_id,
+				platform_url: result.platform_url,
+			};
+		}
+		return { disposition: "outcome_unknown" };
+	}
+	return {
+		disposition: requiresPublishOutcomeReconciliation(result)
+			? "outcome_unknown"
+			: "failed",
+	};
+}
+
+export function providerReconcileAt(
+	outcome: ProviderOutcome,
+	now = new Date(),
+): Date | null {
+	if (outcome.next_reconcile_at) {
+		const parsed = new Date(outcome.next_reconcile_at);
+		if (Number.isFinite(parsed.getTime()) && parsed.getTime() > now.getTime()) {
+			return parsed;
+		}
+	}
+	if (
+		outcome.disposition === "outcome_unknown" ||
+		outcome.disposition === "partial"
+	) {
+		return new Date(now.getTime() + 60_000);
+	}
+	if (!isNonTerminalProviderOutcome(outcome)) return null;
+	const delayMs =
+		outcome.disposition === "processing" || outcome.disposition === "accepted"
+			? 15_000
+			: 15 * 60_000;
+	return new Date(now.getTime() + delayMs);
 }
 
 export type PublishResultPersistenceGate = <T>(
@@ -294,7 +381,24 @@ export async function persistPublishTaskResult(
 	input: PublishTaskPersistenceInput,
 ): Promise<boolean> {
 	const completedAt = new Date();
-	const unknown = requiresPublishOutcomeReconciliation(input.result);
+	const providerOutcome = normalizeProviderOutcome(input.result);
+	const terminalSuccess = isTerminalProviderSuccess(providerOutcome);
+	const nonterminal = isNonTerminalProviderOutcome(providerOutcome);
+	const unknown = ["partial", "outcome_unknown"].includes(
+		providerOutcome.disposition,
+	);
+	const nextReconcileAt = providerReconcileAt(providerOutcome, completedAt);
+	const platformPostId =
+		providerOutcome.platform_post_id ?? input.result.platform_post_id ?? null;
+	const platformUrl =
+		providerOutcome.platform_url ?? input.result.platform_url ?? null;
+	const providerFields = {
+		providerDisposition: providerOutcome.disposition,
+		providerOperationId: providerOutcome.provider_operation_id ?? null,
+		providerState: providerOutcome.provider_state ?? null,
+		providerEffects: providerOutcome.effects ?? null,
+		nextReconcileAt,
+	};
 	const parentFence = sql`EXISTS (
 		SELECT 1 FROM posts AS publish_parent
 		WHERE publish_parent.id = ${input.postId}
@@ -307,12 +411,13 @@ export async function persistPublishTaskResult(
 		const [savedTarget] = await tx
 			.update(postTargets)
 			.set(
-				input.result.success
+				terminalSuccess
 					? {
 							status: "published",
 							deliveryState: "succeeded",
-							platformPostId: input.result.platform_post_id ?? null,
-							platformUrl: input.result.platform_url ?? null,
+							platformPostId,
+							platformUrl,
+							...providerFields,
 							publishedAt: completedAt,
 							error: null,
 							errorCode: null,
@@ -320,27 +425,49 @@ export async function persistPublishTaskResult(
 							leaseExpiresAt: null,
 							updatedAt: completedAt,
 						}
-					: unknown
+					: nonterminal
 						? {
 								status: "publishing",
+								// Keep the existing coarse projection compatible. The
+								// providerDisposition distinguishes known nonterminal state
+								// from an actually ambiguous provider outcome.
 								deliveryState: "unknown",
-								error:
-									input.result.error?.message ?? "Provider outcome unknown",
-								errorCode: "PUBLISH_OUTCOME_UNKNOWN",
-								errorDetail: input.result.error?.detail ?? null,
+								platformPostId,
+								platformUrl,
+								...providerFields,
+								error: null,
+								errorCode: null,
+								errorDetail: null,
 								leaseExpiresAt: null,
 								updatedAt: completedAt,
 							}
-						: {
-								status: "failed",
-								deliveryState: "failed",
-								error: input.result.error?.message ?? "Unknown error",
-								errorCode: input.result.error?.code ?? "PUBLISH_FAILED",
-								errorDetail: input.result.error?.detail ?? null,
-								publishedAt: null,
-								leaseExpiresAt: null,
-								updatedAt: completedAt,
-							},
+						: unknown
+							? {
+									status: "publishing",
+									deliveryState: "unknown",
+									platformPostId,
+									platformUrl,
+									...providerFields,
+									error:
+										input.result.error?.message ?? "Provider outcome unknown",
+									errorCode: "PUBLISH_OUTCOME_UNKNOWN",
+									errorDetail: input.result.error?.detail ?? null,
+									leaseExpiresAt: null,
+									updatedAt: completedAt,
+								}
+							: {
+									status: "failed",
+									deliveryState: "failed",
+									platformPostId,
+									platformUrl,
+									...providerFields,
+									error: input.result.error?.message ?? "Unknown error",
+									errorCode: input.result.error?.code ?? "PUBLISH_FAILED",
+									errorDetail: input.result.error?.detail ?? null,
+									publishedAt: null,
+									leaseExpiresAt: null,
+									updatedAt: completedAt,
+								},
 			)
 			.where(
 				and(
@@ -368,27 +495,58 @@ export async function persistPublishTaskResult(
 		const [savedAttempt] = await tx
 			.update(publishAttempts)
 			.set(
-				input.result.success
+				terminalSuccess
 					? {
 							state: "succeeded",
-							providerPostId: input.result.platform_post_id ?? null,
+							providerPostId: platformPostId,
+							providerOperationId:
+								providerOutcome.provider_operation_id ?? null,
+							providerDisposition: providerOutcome.disposition,
+							providerState: providerOutcome.provider_state ?? null,
+							providerEffects: providerOutcome.effects ?? null,
 							completedAt,
 							error: null,
 							leaseExpiresAt: completedAt,
 						}
-					: unknown
+					: nonterminal
 						? {
 								state: "unknown",
-								error:
-									input.result.error?.message ?? "Provider outcome unknown",
+								providerPostId: platformPostId,
+								providerOperationId:
+									providerOutcome.provider_operation_id ?? null,
+								providerDisposition: providerOutcome.disposition,
+								providerState: providerOutcome.provider_state ?? null,
+								providerEffects: providerOutcome.effects ?? null,
+								completedAt,
+								error: null,
 								leaseExpiresAt: completedAt,
 							}
-						: {
-								state: "failed",
-								completedAt,
-								error: input.result.error?.message ?? "Publish rejected",
-								leaseExpiresAt: completedAt,
-							},
+						: unknown
+							? {
+									state: "unknown",
+									providerPostId: platformPostId,
+									providerOperationId:
+										providerOutcome.provider_operation_id ?? null,
+									providerDisposition: providerOutcome.disposition,
+									providerState: providerOutcome.provider_state ?? null,
+									providerEffects: providerOutcome.effects ?? null,
+									completedAt,
+									error:
+										input.result.error?.message ?? "Provider outcome unknown",
+									leaseExpiresAt: completedAt,
+								}
+							: {
+									state: "failed",
+									providerPostId: platformPostId,
+									providerOperationId:
+										providerOutcome.provider_operation_id ?? null,
+									providerDisposition: providerOutcome.disposition,
+									providerState: providerOutcome.provider_state ?? null,
+									providerEffects: providerOutcome.effects ?? null,
+									completedAt,
+									error: input.result.error?.message ?? "Publish rejected",
+									leaseExpiresAt: completedAt,
+								},
 			)
 			.where(
 				and(
@@ -414,12 +572,20 @@ export async function persistPublishTaskResult(
  * Docs: https://developers.cloudflare.com/r2/api/s3/presigned-urls/
  */
 async function resolveMediaUrls(
+	db: ReturnType<typeof createDb>,
 	env: Env,
 	mediaItems: PublishRequest["media"],
+	targetOptions: Record<string, Record<string, unknown>> | null,
 	orgId: string,
-): Promise<PublishRequest["media"]> {
-	return (
-		(await presignRelayMediaUrls(env, mediaItems, 3600, orgId)) ?? mediaItems
+): Promise<{
+	mediaItems: PublishRequest["media"];
+	targetOptions: Record<string, Record<string, unknown>> | null;
+}> {
+	return resolveRelayMediaForPublish(
+		db,
+		env,
+		{ mediaItems, targetOptions },
+		orgId,
 	);
 }
 
@@ -481,11 +647,30 @@ export async function publishToTargets(
 	)`;
 	const responseTargets: Record<string, PublishTargetResult> = {};
 	const successCounts: Record<string, number> = {};
+	const activeCounts: Record<string, number> = {};
 	const failureCounts: Record<string, number> = {};
 	const unknownCounts: Record<string, number> = {};
 
-	// Resolve media.relayapi.dev URLs to presigned R2 GET URLs
-	const resolvedMedia = await resolveMediaUrls(env, mediaItems, orgId);
+	// Resolve the complete provider payload, including nested target options. A
+	// legacy/corrupt Relay URL is converted into a definitive pre-boundary target
+	// failure below and never reaches a provider.
+	let mediaPolicyFailure: RelayMediaPolicyError | null = null;
+	let resolvedMedia = mediaItems;
+	let resolvedTargetOptions = targetOptions;
+	try {
+		const resolved = await resolveMediaUrls(
+			db,
+			env,
+			mediaItems,
+			targetOptions,
+			orgId,
+		);
+		resolvedMedia = resolved.mediaItems;
+		resolvedTargetOptions = resolved.targetOptions;
+	} catch (error) {
+		if (!(error instanceof RelayMediaPolicyError)) throw error;
+		mediaPolicyFailure = error;
+	}
 
 	// Batch-fetch all account details upfront in one query
 	const allAccountIds = [
@@ -622,6 +807,30 @@ export async function publishToTargets(
 			});
 			if (!claimedTarget) continue;
 
+			if (mediaPolicyFailure) {
+				const recorded = await recordPreBoundaryFailure(
+					claimedTarget.id,
+					attemptId,
+					claimedTarget.publishOperationId,
+					mediaPolicyFailure.message,
+					"MEDIA_NOT_READY",
+				);
+				if (!recorded) continue;
+				immediateResultCount++;
+				entry.accounts.push({
+					id: account.id,
+					username: account.username,
+					url: null,
+				});
+				failureCounts[target.key] = (failureCounts[target.key] ?? 0) + 1;
+				entry.status = "failed";
+				entry.error = {
+					code: "MEDIA_NOT_READY",
+					message: mediaPolicyFailure.message,
+				};
+				continue;
+			}
+
 			if (!publisher) {
 				const failureMessage = `Platform ${target.platform} not supported`;
 				const recorded = await recordPreBoundaryFailure(
@@ -651,7 +860,7 @@ export async function publishToTargets(
 			if (!fullAccount) continue;
 
 			let targetOpts =
-				(targetOptions?.[target.key] as Record<string, unknown>) ?? {};
+				(resolvedTargetOptions?.[target.key] as Record<string, unknown>) ?? {};
 			if (target.platform === "sms") {
 				const phoneNumbers = Array.isArray(targetOpts.phone_numbers)
 					? targetOpts.phone_numbers.filter(
@@ -915,13 +1124,21 @@ export async function publishToTargets(
 
 		const entry = responseTargets[task.targetKey];
 		if (!entry) return true;
-		if (result.success) {
+		const providerOutcome = normalizeProviderOutcome(result);
+		if (isTerminalProviderSuccess(providerOutcome)) {
 			entry.accounts.push({
 				id: task.accountId,
 				username: task.username,
-				url: result.platform_url ?? null,
+				url: providerOutcome.platform_url ?? result.platform_url ?? null,
 			});
 			successCounts[task.targetKey] = (successCounts[task.targetKey] ?? 0) + 1;
+		} else if (isNonTerminalProviderOutcome(providerOutcome)) {
+			entry.accounts.push({
+				id: task.accountId,
+				username: task.username,
+				url: providerOutcome.platform_url ?? null,
+			});
+			activeCounts[task.targetKey] = (activeCounts[task.targetKey] ?? 0) + 1;
 		} else if (requiresPublishOutcomeReconciliation(result)) {
 			entry.accounts.push({
 				id: task.accountId,
@@ -980,11 +1197,14 @@ export async function publishToTargets(
 		const entry = responseTargets[target.key];
 		if (!entry) continue;
 		const hasSuccess = (successCounts[target.key] ?? 0) > 0;
+		const hasActive = (activeCounts[target.key] ?? 0) > 0;
 		const hasFailure = (failureCounts[target.key] ?? 0) > 0;
 		const hasUnknown = (unknownCounts[target.key] ?? 0) > 0;
 		const hasAttempts = entry.accounts.length > 0;
 		if (!hasAttempts) {
 			entry.status = "failed";
+		} else if (hasActive) {
+			entry.status = "publishing";
 		} else if (hasUnknown) {
 			entry.status = "unknown";
 		} else if (hasSuccess && hasFailure) {

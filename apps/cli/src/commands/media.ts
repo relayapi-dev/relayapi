@@ -1,4 +1,5 @@
-import { basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
 import * as prompts from "@clack/prompts";
 import type { Command } from "commander";
 import { createClient } from "../client.js";
@@ -68,18 +69,24 @@ export function registerMediaCommands(program: Command): void {
 		.argument("<filepath>", "Path to file")
 		.action(async (filepath: string) => {
 			await withErrorHandler(async () => {
-				const file = Bun.file(filepath);
-				if (!(await file.exists())) {
-					console.error(`File not found: ${filepath}`);
-					process.exit(1);
+				let buffer: Buffer;
+				try {
+					buffer = await readFile(filepath);
+				} catch (error) {
+					if (
+						error instanceof Error &&
+						"code" in error &&
+						(error as NodeJS.ErrnoException).code === "ENOENT"
+					) {
+						throw new Error(`File not found: ${filepath}`);
+					}
+					throw error;
 				}
-
-				const buffer = await file.arrayBuffer();
 				const filename = basename(filepath);
 				const client = createClient();
 				const result = await client.media.upload(buffer, {
 					filename,
-					content_type: file.type,
+					content_type: contentTypeFor(filename),
 				});
 				outputJson(result);
 				outputSuccess(`Uploaded ${filename} (${formatBytes(result.size)})`);
@@ -107,6 +114,24 @@ export function registerMediaCommands(program: Command): void {
 				outputSuccess(`Deleted ${id}`);
 			});
 		});
+}
+
+function contentTypeFor(filename: string): string {
+	const types: Record<string, string> = {
+		".avif": "image/avif",
+		".gif": "image/gif",
+		".jpeg": "image/jpeg",
+		".jpg": "image/jpeg",
+		".m4a": "audio/mp4",
+		".mov": "video/quicktime",
+		".mp3": "audio/mpeg",
+		".mp4": "video/mp4",
+		".pdf": "application/pdf",
+		".png": "image/png",
+		".webm": "video/webm",
+		".webp": "image/webp",
+	};
+	return types[extname(filename).toLowerCase()] ?? "application/octet-stream";
 }
 
 function formatBytes(bytes: number): string {

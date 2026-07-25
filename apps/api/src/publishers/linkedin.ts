@@ -14,6 +14,7 @@ import {
 	classifyPublishError,
 	type EngagementAccount,
 	type EngagementActionResult,
+	type ProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
@@ -182,6 +183,7 @@ async function uploadImage(
 		);
 	}
 
+	await pollAssetStatus(auth, imageUrn, "images");
 	return imageUrn;
 }
 
@@ -338,7 +340,7 @@ async function uploadVideo(
 	}
 
 	// Poll for processing completion
-	await pollVideoStatus(auth, videoUrn);
+	await pollAssetStatus(auth, videoUrn, "videos");
 
 	return videoUrn;
 }
@@ -346,28 +348,31 @@ async function uploadVideo(
 /**
  * Poll video processing status until READY.
  */
-async function pollVideoStatus(
+async function pollAssetStatus(
 	auth: LinkedInAuth,
-	videoUrn: string,
+	assetUrn: string,
+	resource: "images" | "videos" | "documents",
 ): Promise<void> {
 	const maxAttempts = 60;
 	const pollInterval = 5000; // 5 seconds
 
 	for (let i = 0; i < maxAttempts; i++) {
-		await new Promise((resolve) => setTimeout(resolve, pollInterval));
+		if (i > 0) {
+			await new Promise((resolve) => setTimeout(resolve, pollInterval));
+		}
 
-		const encodedUrn = encodeURIComponent(videoUrn);
-		// LinkedIn Videos API — Get video status
-		// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api
+		const encodedUrn = encodeURIComponent(assetUrn);
+		// Official Images, Videos, and Documents API references expose the same
+		// WAITING_UPLOAD / PROCESSING / PROCESSING_FAILED / AVAILABLE lifecycle.
 		const res = await linkedinFetch(
-			`${LINKEDIN_API_BASE}/rest/videos/${encodedUrn}`,
+			`${LINKEDIN_API_BASE}/rest/${resource}/${encodedUrn}`,
 			auth,
 			{ method: "GET" },
 		);
 
 		if (!res.ok) {
 			throw new PublishError(
-				`LinkedIn video status check failed: ${res.statusText}`,
+				`LinkedIn ${resource} status check failed: ${res.statusText}`,
 				{
 					statusCode: res.status,
 					detail: `HTTP ${res.status} ${res.statusText}`,
@@ -379,17 +384,20 @@ async function pollVideoStatus(
 			status: string;
 		};
 
-		// LinkedIn video status values: PROCESSING, AVAILABLE, PROCESSING_FAILED, WAITING_UPLOAD
+		// Documented status values: PROCESSING, AVAILABLE,
+		// PROCESSING_FAILED, WAITING_UPLOAD.
 		if (data.status === "AVAILABLE") {
 			return;
 		}
 
 		if (data.status === "PROCESSING_FAILED") {
-			throw new Error("LinkedIn video processing failed");
+			throw new Error(`LinkedIn ${resource} processing failed`);
 		}
 	}
 
-	throw new Error("LinkedIn video processing timed out");
+	throw new PublishError(`LinkedIn ${resource} processing timed out`, {
+		code: "PUBLISH_OUTCOME_UNKNOWN",
+	});
 }
 
 /**
@@ -465,6 +473,7 @@ async function uploadDocument(
 		);
 	}
 
+	await pollAssetStatus(auth, documentUrn, "documents");
 	return documentUrn;
 }
 
@@ -476,7 +485,7 @@ async function postFirstComment(
 	postUrn: string,
 	authorUrn: string,
 	commentText: string,
-): Promise<void> {
+): Promise<string | undefined> {
 	const encodedPostUrn = encodeURIComponent(postUrn);
 	// LinkedIn Comments API — Post a comment on a post
 	// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/comments-api
@@ -504,6 +513,12 @@ async function postFirstComment(
 			{ statusCode: res.status, detail: raw },
 		);
 	}
+	const headerId = res.headers.get("x-restli-id") ?? undefined;
+	const data = (await res.json().catch(() => ({}))) as {
+		id?: string;
+		commentUrn?: string;
+	};
+	return data.commentUrn ?? data.id ?? headerId;
 }
 
 /**
@@ -828,16 +843,49 @@ export const linkedinPublisher: Publisher = {
 				res.headers.get("x-linkedin-id") ??
 				"";
 
+			if (!postUrn.trim()) {
+				return {
+					success: false,
+					provider_outcome: {
+						disposition: "outcome_unknown",
+						provider_state: "created_without_post_id",
+					},
+					error: {
+						code: "PUBLISH_OUTCOME_UNKNOWN",
+						message:
+							"LinkedIn created the post but did not return the required x-restli-id header.",
+					},
+				};
+			}
+
+			const effects: ProviderEffect[] = [];
 			// Post first comment if requested
 			const firstComment = opts.first_comment as string | undefined;
-			if (firstComment && postUrn) {
+			if (firstComment) {
 				try {
-					await postFirstComment(auth, postUrn, authorUrn, firstComment);
-				} catch (commentErr) {
-					console.error(
-						`LinkedIn first comment failed for post ${postUrn}:`,
-						commentErr,
+					const commentId = await postFirstComment(
+						auth,
+						postUrn,
+						authorUrn,
+						firstComment,
 					);
+					effects.push({
+						name: "first_comment",
+						status: commentId ? "succeeded" : "outcome_unknown",
+						provider_id: commentId,
+					});
+				} catch (commentErr) {
+					effects.push({
+						name: "first_comment",
+						status: "failed",
+						error: {
+							code: "PLATFORM_ERROR",
+							message:
+								commentErr instanceof Error
+									? commentErr.message
+									: "LinkedIn first comment failed",
+						},
+					});
 				}
 			}
 
@@ -848,6 +896,13 @@ export const linkedinPublisher: Publisher = {
 				success: true,
 				platform_post_id: postUrn,
 				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: "published",
+					platform_post_id: postUrn,
+					platform_url: platformUrl,
+					provider_state: "PUBLISHED",
+					effects,
+				},
 			};
 		} catch (err) {
 			return classifyPublishError(err, { safeToRetryRateLimit: true });

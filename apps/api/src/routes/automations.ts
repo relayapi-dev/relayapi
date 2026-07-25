@@ -4,7 +4,12 @@
 // Manychat-parity engine. See spec §9.1 + §7 for the endpoint surface.
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { automationEntrypoints, automations } from "@relayapi/db";
+import {
+	automationEntrypoints,
+	automationScheduledJobs,
+	automations,
+	socialAccounts,
+} from "@relayapi/db";
 import { and, desc, eq, ilike, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import {
@@ -16,6 +21,11 @@ import {
 	assertWorkspaceScope,
 	isWorkspaceScopeDenied,
 } from "../lib/workspace-scope";
+import {
+	EntrypointFilterGroupSchema,
+	isEntrypointKindSupportedOnChannel,
+	validateEntrypointConfig,
+} from "../schemas/automation-entrypoints";
 import type { Graph } from "../schemas/automation-graph";
 import { GraphSchema } from "../schemas/automation-graph";
 import {
@@ -184,7 +194,14 @@ const SimulateResponseSchema = z.object({
 			node_kind: z.string(),
 			entered_via_port_key: z.string().nullable(),
 			exited_via_port_key: z.string().nullable(),
-			outcome: z.enum(["advance", "wait_input", "wait_delay", "end", "fail"]),
+			outcome: z.enum([
+				"advance",
+				"wait_input",
+				"wait_delay",
+				"wait_event",
+				"end",
+				"fail",
+			]),
 			payload: z.any().optional(),
 		}),
 	),
@@ -350,6 +367,7 @@ app.openapi(createAutomation, async (c) => {
 		filters?: Record<string, unknown> | null;
 		allowReentry?: boolean;
 		reentryCooldownMin?: number;
+		dailyCap?: number | null;
 		priority?: number;
 	};
 	let entrypoints: EntrypointRow[] = [];
@@ -382,14 +400,19 @@ app.openapi(createAutomation, async (c) => {
 		// fill them in — this matches what PUT /{id}/graph already does and
 		// guarantees the persisted graph renders handles on the dashboard canvas.
 		// `applyDerivedPorts` runs even when errors are present, so we always use
-		// `canonicalGraph`. A non-empty errors array here indicates a template
-		// builder bug; surface it as a stderr warning but proceed so the create
-		// isn't blocked by a stale template.
-		const validation = validateGraph(built.graph);
+		// `canonicalGraph`. A non-empty error list is a server-side preset defect;
+		// never persist a flow the runtime already knows is invalid.
+		const validation = validateGraph(built.graph, body.channel);
 		if (validation.errors.length > 0) {
-			console.warn(
-				`[automations] template "${body.template.kind}" produced graph with validation errors`,
-				validation.errors,
+			return c.json(
+				{
+					error: {
+						code: "INVALID_TEMPLATE",
+						message: `template ${body.template.kind} produced an invalid graph`,
+						details: { errors: validation.errors },
+					},
+				},
+				400,
 			);
 		}
 		graph = validation.canonicalGraph;
@@ -399,24 +422,152 @@ app.openapi(createAutomation, async (c) => {
 		entrypoints = built.entrypoints;
 	}
 
-	const [inserted] = await db
-		.insert(automations)
-		.values({
-			organizationId: orgId,
-			workspaceId: scope.workspaceId,
-			name,
-			description,
-			channel: body.channel,
-			status: "draft",
-			graph,
-			createdFromTemplate,
-			templateConfig,
-			// API key auth doesn't map cleanly to a user_id; createdBy is the
-			// auth.user.id FK — leave null when the request comes via an API key.
-			// The audit trail of which key created the automation is in request logs.
-			createdBy: null,
-		})
-		.returning();
+	// Template builders are privileged graph factories, but their generated
+	// entrypoints still cross the same public runtime boundary as entrypoints
+	// created through /automation-entrypoints. Canonicalize and validate them
+	// before persistence so a preset can never bypass kind/channel/config
+	// validation as those two paths evolve independently.
+	const canonicalEntrypoints: EntrypointRow[] = [];
+	for (const entrypoint of entrypoints) {
+		if (!isEntrypointKindSupportedOnChannel(entrypoint.kind, body.channel)) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_TEMPLATE",
+						message: `${entrypoint.kind} is not supported on ${body.channel}`,
+					},
+				},
+				400,
+			);
+		}
+		const parsedConfig = validateEntrypointConfig(
+			entrypoint.kind,
+			entrypoint.config ?? {},
+		);
+		if (!parsedConfig.success) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_TEMPLATE",
+						message: `template produced invalid ${entrypoint.kind} config`,
+						details: { errors: parsedConfig.error.issues },
+					},
+				},
+				400,
+			);
+		}
+		const parsedFilters =
+			entrypoint.filters == null
+				? null
+				: EntrypointFilterGroupSchema.safeParse(entrypoint.filters);
+		if (parsedFilters && !parsedFilters.success) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_TEMPLATE",
+						message: "template produced invalid entrypoint filters",
+						details: { errors: parsedFilters.error.issues },
+					},
+				},
+				400,
+			);
+		}
+		canonicalEntrypoints.push({
+			...entrypoint,
+			config: parsedConfig.data as Record<string, unknown>,
+			filters: parsedFilters ? parsedFilters.data : null,
+		});
+	}
+	entrypoints = canonicalEntrypoints;
+
+	// Give template creation the same account ownership, workspace, platform,
+	// and lifecycle checks as direct entrypoint creation. The composite DB
+	// foreign key is the final tenant-scope backstop; this check supplies a
+	// deterministic client error and also rejects inactive/wrong-platform rows.
+	const accountIds = new Set(
+		entrypoints.flatMap((entrypoint) =>
+			entrypoint.socialAccountId ? [entrypoint.socialAccountId] : [],
+		),
+	);
+	for (const accountId of accountIds) {
+		const [account] = await db
+			.select({
+				id: socialAccounts.id,
+				workspaceId: socialAccounts.workspaceId,
+				platform: socialAccounts.platform,
+				lifecycleStatus: socialAccounts.lifecycleStatus,
+			})
+			.from(socialAccounts)
+			.where(
+				and(
+					eq(socialAccounts.id, accountId),
+					eq(socialAccounts.organizationId, orgId),
+				),
+			)
+			.limit(1);
+		if (
+			!account ||
+			account.workspaceId !== scope.workspaceId ||
+			account.platform !== body.channel ||
+			account.lifecycleStatus !== "active"
+		) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_ACCOUNT",
+						message:
+							"Template account must be active and belong to the automation workspace and channel",
+					},
+				},
+				400,
+			);
+		}
+	}
+
+	const inserted = await db.transaction(async (tx) => {
+		const [automation] = await tx
+			.insert(automations)
+			.values({
+				organizationId: orgId,
+				workspaceId: scope.workspaceId,
+				name,
+				description,
+				channel: body.channel,
+				status: "draft",
+				graph,
+				createdFromTemplate,
+				templateConfig,
+				createdBy: null,
+			})
+			.returning();
+		if (!automation) return null;
+
+		if (entrypoints.length > 0) {
+			await tx.insert(automationEntrypoints).values(
+				entrypoints.map((ep) => ({
+					organizationId: orgId,
+					scopeKey: workspaceScopeKey(automation.workspaceId),
+					automationId: automation.id,
+					channel: body.channel,
+					kind: ep.kind,
+					socialAccountId: ep.socialAccountId ?? null,
+					config: ep.config ?? {},
+					filters: ep.filters ?? null,
+					allowReentry: ep.allowReentry ?? true,
+					reentryCooldownMin: ep.reentryCooldownMin ?? 60,
+					dailyCap: ep.dailyCap ?? null,
+					priority: ep.priority ?? 100,
+					specificity: computeSpecificity(
+						ep.kind,
+						ep.config ?? {},
+						ep.filters ?? null,
+						ep.socialAccountId ?? null,
+					),
+				})),
+			);
+		}
+		return automation;
+	});
 	if (!inserted) {
 		return c.json(
 			{
@@ -426,30 +577,6 @@ app.openapi(createAutomation, async (c) => {
 				},
 			},
 			400,
-		);
-	}
-
-	if (entrypoints.length > 0) {
-		await db.insert(automationEntrypoints).values(
-			entrypoints.map((ep) => ({
-				organizationId: orgId,
-				scopeKey: workspaceScopeKey(inserted.workspaceId),
-				automationId: inserted.id,
-				channel: body.channel,
-				kind: ep.kind,
-				socialAccountId: ep.socialAccountId ?? null,
-				config: ep.config ?? {},
-				filters: ep.filters ?? null,
-				allowReentry: ep.allowReentry ?? true,
-				reentryCooldownMin: ep.reentryCooldownMin ?? 60,
-				priority: ep.priority ?? 100,
-				specificity: computeSpecificity(
-					ep.kind,
-					ep.config ?? {},
-					ep.filters ?? null,
-					ep.socialAccountId ?? null,
-				),
-			})),
 		);
 	}
 
@@ -687,42 +814,88 @@ async function loadScopedAutomation(
 	return row;
 }
 
-function hasFatalErrors(row: AutomationRow): boolean {
-	if (row.validationErrors == null) return false;
-	const errs = row.validationErrors as Array<unknown>;
-	return Array.isArray(errs) && errs.length > 0;
-}
-
 async function setStatus(
 	c: AppContext,
 	id: string,
 	status: "draft" | "active" | "paused" | "archived",
 ): Promise<AutomationRow | null> {
 	const db = c.get("db");
-	const [updated] = await db
-		.update(automations)
-		.set({ status, updatedAt: new Date() })
-		.where(eq(automations.id, id))
-		.returning();
-	return updated ?? null;
+	const orgId = c.get("orgId");
+	return db.transaction(async (tx) => {
+		const [updated] = await tx
+			.update(automations)
+			.set({ status, updatedAt: new Date() })
+			.where(and(eq(automations.id, id), eq(automations.organizationId, orgId)))
+			.returning();
+		if (!updated) return null;
+		if (status !== "active") {
+			await tx
+				.delete(automationScheduledJobs)
+				.where(
+					and(
+						eq(automationScheduledJobs.automationId, id),
+						eq(automationScheduledJobs.jobType, "scheduled_trigger"),
+						eq(automationScheduledJobs.status, "pending"),
+					),
+				);
+		}
+		return updated;
+	});
 }
 
-async function runValidation(
+async function validateAndActivate(
 	c: AppContext,
-	row: AutomationRow,
-): Promise<AutomationRow> {
+	id: string,
+): Promise<{
+	row: AutomationRow;
+	errors: ReturnType<typeof validateGraph>["errors"];
+} | null> {
 	const db = c.get("db");
-	const validation = validateGraph(row.graph as Graph);
-	const [updated] = await db
-		.update(automations)
-		.set({
-			validationErrors: validation.errors.length ? validation.errors : null,
-			lastValidatedAt: new Date(),
-			updatedAt: new Date(),
-		})
-		.where(eq(automations.id, row.id))
-		.returning();
-	return updated ?? row;
+	const orgId = c.get("orgId");
+	return db.transaction(async (tx) => {
+		// Lock and validate the authoritative graph snapshot in the same
+		// transaction that activates it. Otherwise a concurrent graph replacement
+		// can land between validation and the status update and make an invalid
+		// graph active.
+		const [current] = await tx
+			.select()
+			.from(automations)
+			.where(and(eq(automations.id, id), eq(automations.organizationId, orgId)))
+			.limit(1)
+			.for("update");
+		if (!current) return null;
+		const validation = validateGraph(current.graph as Graph, current.channel);
+		const [updated] = await tx
+			.update(automations)
+			.set({
+				validationErrors: validation.errors.length ? validation.errors : null,
+				lastValidatedAt: new Date(),
+				...(validation.errors.length === 0
+					? { status: "active" as const }
+					: {}),
+				updatedAt: new Date(),
+			})
+			.where(eq(automations.id, current.id))
+			.returning();
+		if (
+			updated &&
+			validation.errors.length === 0 &&
+			current.status !== "active"
+		) {
+			// Retire any legacy/stale occurrence left from the inactive period before
+			// armAllScheduleEntrypointsForAutomation computes one fresh successor.
+			await tx
+				.delete(automationScheduledJobs)
+				.where(
+					and(
+						eq(automationScheduledJobs.automationId, current.id),
+						eq(automationScheduledJobs.jobType, "scheduled_trigger"),
+						eq(automationScheduledJobs.status, "pending"),
+					),
+				);
+		}
+		return updated ? { row: updated, errors: validation.errors } : null;
+	});
 }
 
 // Activate
@@ -754,29 +927,28 @@ app.openapi(activateAutomation, async (c) => {
 	const { id } = c.req.valid("param");
 	const row = await loadScopedAutomation(c, id);
 	if (!row) return notFound(c);
-	const revalidated = await runValidation(c, row);
-	if (hasFatalErrors(revalidated)) {
+	const activation = await validateAndActivate(c, id);
+	if (!activation) return notFound(c);
+	if (activation.errors.length > 0) {
 		return c.json(
 			{
 				error: {
 					code: "INVALID_GRAPH",
 					message: "Cannot activate — the graph has validation errors.",
 					details: {
-						validation_errors: revalidated.validationErrors ?? [],
+						validation_errors: activation.errors,
 					},
 				},
 			},
 			422,
 		);
 	}
-	const updated = await setStatus(c, id, "active");
-	if (!updated) return notFound(c);
 	// Arm every schedule entrypoint belonging to this automation so
 	// activating a flow that was previously paused / draft immediately
 	// seeds the scheduled_trigger queue. Idempotent via the ±1s dedupe
 	// in insertNextScheduledJobIfNotExists.
 	await armAllScheduleEntrypointsForAutomation(c.get("db"), id);
-	return c.json(serializeAutomation(updated), 200);
+	return c.json(serializeAutomation(activation.row), 200);
 });
 
 const pauseAutomation = createRoute({
@@ -836,27 +1008,26 @@ app.openapi(resumeAutomation, async (c) => {
 	const { id } = c.req.valid("param");
 	const row = await loadScopedAutomation(c, id);
 	if (!row) return notFound(c);
-	const revalidated = await runValidation(c, row);
-	if (hasFatalErrors(revalidated)) {
+	const activation = await validateAndActivate(c, id);
+	if (!activation) return notFound(c);
+	if (activation.errors.length > 0) {
 		return c.json(
 			{
 				error: {
 					code: "INVALID_GRAPH",
 					message: "Cannot resume — the graph has validation errors.",
 					details: {
-						validation_errors: revalidated.validationErrors ?? [],
+						validation_errors: activation.errors,
 					},
 				},
 			},
 			422,
 		);
 	}
-	const updated = await setStatus(c, id, "active");
-	if (!updated) return notFound(c);
 	// Same as activate — seed scheduled_trigger rows for schedule
 	// entrypoints so a paused automation resuming mid-day picks up.
 	await armAllScheduleEntrypointsForAutomation(c.get("db"), id);
-	return c.json(serializeAutomation(updated), 200);
+	return c.json(serializeAutomation(activation.row), 200);
 });
 
 const archiveAutomation = createRoute({
@@ -957,20 +1128,41 @@ app.openapi(replaceGraph, async (c) => {
 	if (!row) return notFound(c);
 
 	const db = c.get("db");
-	const validation = validateGraph(body.graph as Graph);
-
-	// Force-pause if the current row is active and we've introduced fatal errors.
-	const forcePause = validation.errors.length > 0 && row.status === "active";
-	const nextStatus = forcePause ? "paused" : row.status;
+	const validation = validateGraph(body.graph as Graph, row.channel);
 
 	let sealedGraph: Graph;
 	let updated: AutomationRow | undefined;
 	try {
 		const result = await db.transaction(async (tx) => {
+			// Serialize graph replacement with activation/pause/archive operations.
+			// The status decision must use the latest locked row, not the snapshot
+			// loaded for authorization before the transaction.
+			const [current] = await tx
+				.select({
+					id: automations.id,
+					organizationId: automations.organizationId,
+					status: automations.status,
+				})
+				.from(automations)
+				.where(
+					and(
+						eq(automations.id, id),
+						eq(automations.organizationId, row.organizationId),
+					),
+				)
+				.limit(1)
+				.for("update");
+			if (!current) {
+				return { graph: validation.canonicalGraph, saved: undefined };
+			}
+			const nextStatus =
+				validation.errors.length > 0 && current.status === "active"
+					? "paused"
+					: current.status;
 			const graph = await sealAutomationGraphSecrets(
 				tx as unknown as Parameters<typeof sealAutomationGraphSecrets>[0],
 				c.env.ENCRYPTION_KEY,
-				row.organizationId,
+				current.organizationId,
 				id,
 				validation.canonicalGraph,
 			);
@@ -1140,6 +1332,7 @@ app.openapi(simulateAutomationRoute, async (c) => {
 
 	const result = await simulate({
 		graph: redactAutomationGraphSecrets(row.graph as Graph),
+		channel: row.channel,
 		startNodeKey: body.start_node_key,
 		testContext: body.test_context,
 		branchChoices: body.branch_choices,

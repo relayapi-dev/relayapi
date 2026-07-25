@@ -14,6 +14,7 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { createMiddleware } from "hono/factory";
 import { parseApiKeyWorkspaceScope } from "../lib/api-key-workspace-scope";
+import { deploymentEntitlements } from "../lib/deployment-mode";
 import { getRequestDb } from "../lib/request-db";
 import type { Env, KVKeyData, Variables } from "../types";
 
@@ -141,9 +142,11 @@ export async function hydrateApiKey(
 		currentPeriodStart: joined.subPeriodStart,
 		currentPeriodEnd: joined.subPeriodEnd,
 	});
-	const plan = billing.entitlement;
+	const selfHosted = deploymentEntitlements(env);
+	const plan = selfHosted?.plan ?? billing.entitlement;
 	const callsIncluded =
-		plan === "pro" ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded;
+		selfHosted?.callsIncluded ??
+		(plan === "pro" ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded);
 
 	const permissionsArray = (row.permissions ?? "read,write")
 		.split(",")
@@ -181,10 +184,17 @@ export async function hydrateApiKey(
 		expires_at: row.expiresAt?.toISOString() ?? null,
 		plan,
 		calls_included: callsIncluded,
-		ai_enabled: sub?.aiEnabled ?? false,
-		daily_tool_limit: sub?.dailyToolLimit ?? (plan === "pro" ? 10 : 2),
-		period_start: billing.usagePeriod?.start.toISOString() ?? null,
-		period_end: billing.usagePeriod?.end.toISOString() ?? null,
+		ai_enabled: selfHosted?.aiEnabled ?? sub?.aiEnabled ?? false,
+		daily_tool_limit:
+			selfHosted?.dailyToolLimit ??
+			sub?.dailyToolLimit ??
+			(plan === "pro" ? 10 : 2),
+		period_start: selfHosted
+			? null
+			: (billing.usagePeriod?.start.toISOString() ?? null),
+		period_end: selfHosted
+			? null
+			: (billing.usagePeriod?.end.toISOString() ?? null),
 	};
 
 	const kvWrite = env.KV.put(`apikey:${hashedKey}`, JSON.stringify(data), {
@@ -323,8 +333,10 @@ export const authMiddleware = createMiddleware<{
 	}
 
 	// SECURITY: default to "free" — never grant Pro without explicit proof
-	const plan = data.plan ?? "free";
-	const callsIncluded = data.calls_included ?? PRICING.freeCallsIncluded;
+	const selfHosted = deploymentEntitlements(c.env);
+	const plan = selfHosted?.plan ?? data.plan ?? "free";
+	const callsIncluded =
+		selfHosted?.callsIncluded ?? data.calls_included ?? PRICING.freeCallsIncluded;
 
 	c.set("orgId", data.org_id);
 	c.set("keyId", data.key_id);
@@ -334,9 +346,14 @@ export const authMiddleware = createMiddleware<{
 	c.set("principalId", data.principal_id ?? null);
 	c.set("plan", plan);
 	c.set("callsIncluded", callsIncluded);
-	c.set("aiEnabled", data.ai_enabled ?? false);
-	c.set("dailyToolLimit", data.daily_tool_limit ?? (plan === "pro" ? 10 : 2));
-	c.set("periodStart", data.period_start ?? null);
-	c.set("periodEnd", data.period_end ?? null);
+	c.set("aiEnabled", selfHosted?.aiEnabled ?? data.ai_enabled ?? false);
+	c.set(
+		"dailyToolLimit",
+		selfHosted?.dailyToolLimit ??
+			data.daily_tool_limit ??
+			(plan === "pro" ? 10 : 2),
+	);
+	c.set("periodStart", selfHosted ? null : (data.period_start ?? null));
+	c.set("periodEnd", selfHosted ? null : (data.period_end ?? null));
 	return next();
 });

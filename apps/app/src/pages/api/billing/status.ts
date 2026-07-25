@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { eq, organizationSubscriptions } from "@relayapi/db";
 import type { APIRoute } from "astro";
 import Stripe from "stripe";
+import { isSelfHostedDeployment } from "@/lib/deployment-mode";
 
 export const GET: APIRoute = async (context) => {
   const user = context.locals.user;
@@ -12,6 +13,19 @@ export const GET: APIRoute = async (context) => {
       headers: { "Content-Type": "application/json" },
     });
   }
+	if (isSelfHostedDeployment(env)) {
+		return Response.json({
+			subscription: {
+				status: "active",
+				cancelAtPeriodEnd: false,
+				currentPeriodEnd: null,
+				hasStripeCustomer: false,
+				hasStripeSubscription: false,
+				community: true,
+			},
+			invoices: [],
+		});
+	}
 
   const db = context.locals.db;
   const orgId = org.id as string;

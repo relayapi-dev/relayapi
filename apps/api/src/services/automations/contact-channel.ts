@@ -1,5 +1,5 @@
-import { contactChannels } from "@relayapi/db";
 import type { Database } from "@relayapi/db";
+import { contactChannels } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 
 export async function findScopedContactChannel(

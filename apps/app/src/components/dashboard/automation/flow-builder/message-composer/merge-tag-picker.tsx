@@ -2,11 +2,11 @@
 //
 // Dropdown shown next to text inputs inside the composer. Triggered by the
 // `@` / `{{` combobox affordance (the hook), or by clicking the "Insert tag"
-// button. Groups follow spec §11.9.
+// button. Groups match the worker's merge-tag resolver.
 
+import { Braces, ChevronDown } from "lucide-react";
 import type { RefObject } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ChevronDown, Braces } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -22,36 +22,9 @@ const CONTACT_TAGS: Group = {
 	label: "Contact",
 	description: "Fields from the enrolled contact",
 	tags: [
-		{ token: "{{contact.first_name}}", label: "First name" },
-		{ token: "{{contact.last_name}}", label: "Last name" },
+		{ token: "{{contact.name}}", label: "Name" },
 		{ token: "{{contact.email}}", label: "Email" },
 		{ token: "{{contact.phone}}", label: "Phone" },
-		{
-			token: "{{contact.custom_fields.}}",
-			label: "Custom field",
-			description:
-				"Replace with the exact custom-field key, e.g. custom_fields.shirt_size",
-		},
-	],
-};
-
-const RUN_TAGS: Group = {
-	key: "run",
-	label: "Run",
-	description: "Metadata about this automation run",
-	tags: [
-		{ token: "{{run.id}}", label: "Run ID" },
-		{ token: "{{run.started_at}}", label: "Started at" },
-	],
-};
-
-const ACCOUNT_TAGS: Group = {
-	key: "account",
-	label: "Account",
-	description: "The social account the message is sent from",
-	tags: [
-		{ token: "{{account.name}}", label: "Account name" },
-		{ token: "{{account.handle}}", label: "Account handle" },
 	],
 };
 
@@ -88,12 +61,7 @@ export function MergeTagPicker({
 	const [customContextKey, setCustomContextKey] = useState("");
 
 	const groups = useMemo<Group[]>(
-		() => [
-			CONTACT_TAGS,
-			contextGroup(customContextKey),
-			RUN_TAGS,
-			ACCOUNT_TAGS,
-		],
+		() => [CONTACT_TAGS, contextGroup(customContextKey)],
 		[customContextKey],
 	);
 
@@ -136,7 +104,7 @@ export function MergeTagPicker({
 										type="text"
 										value={customContextKey}
 										onChange={(e) => setCustomContextKey(e.target.value)}
-										placeholder="context key (e.g. shirt_size)"
+										placeholder="context key (e.g. fields.shirt_size)"
 										className="h-7 w-full rounded border border-[#d9dde6] px-2 text-[11px] outline-none focus:border-[#c0c6d0]"
 									/>
 								</div>

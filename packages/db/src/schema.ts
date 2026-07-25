@@ -80,7 +80,7 @@ export const session = authSchema.table(
 		id: text("id").primaryKey(),
 		userId: text("userId")
 			.notNull()
-			.references(() => user.id),
+			.references(() => user.id, { onDelete: "cascade" }),
 		token: text("token").notNull(),
 		expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
 		ipAddress: text("ipAddress"),
@@ -104,7 +104,7 @@ export const account = authSchema.table("account", {
 	id: text("id").primaryKey(),
 	userId: text("userId")
 		.notNull()
-		.references(() => user.id),
+		.references(() => user.id, { onDelete: "cascade" }),
 	accountId: text("accountId").notNull(),
 	providerId: text("providerId").notNull(),
 	accessToken: text("accessToken"),
@@ -126,18 +126,25 @@ export const account = authSchema.table("account", {
 		.notNull(),
 });
 
-export const verification = authSchema.table("verification", {
-	id: text("id").primaryKey(),
-	identifier: text("identifier").notNull(),
-	value: text("value").notNull(),
-	expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
-	createdAt: timestamp("createdAt", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updatedAt", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
+export const verification = authSchema.table(
+	"verification",
+	{
+		id: text("id").primaryKey(),
+		identifier: text("identifier").notNull(),
+		value: text("value").notNull(),
+		expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
+		createdAt: timestamp("createdAt", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updatedAt", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("verification_identifier_idx").on(table.identifier),
+		index("verification_expires_idx").on(table.expiresAt),
+	],
+);
 
 export const apikey = authSchema.table(
 	"apikey",
@@ -148,7 +155,9 @@ export const apikey = authSchema.table(
 		start: text("start"),
 		prefix: text("prefix"),
 		key: text("key").notNull(), // hashed
-		referenceId: text("referenceId"), // points to user.id (who created the key)
+		referenceId: text("referenceId").references(() => user.id, {
+			onDelete: "set null",
+		}), // points to user.id (who created the key)
 		organizationId: text("organizationId"), // the org this key belongs to
 		refillInterval: text("refillInterval"),
 		refillAmount: integer("refillAmount"),
@@ -282,22 +291,32 @@ export const organizationCreationReservations = authSchema.table(
 	],
 );
 
-export const invitation = authSchema.table("invitation", {
-	id: text("id").primaryKey(),
-	email: text("email").notNull(),
-	inviterId: text("inviterId")
-		.notNull()
-		.references(() => user.id, { onDelete: "cascade" }),
-	organizationId: text("organizationId")
-		.notNull()
-		.references(() => organization.id, { onDelete: "cascade" }),
-	role: text("role"),
-	status: text("status").notNull(),
-	expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
-	createdAt: timestamp("createdAt", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
+export const invitation = authSchema.table(
+	"invitation",
+	{
+		id: text("id").primaryKey(),
+		email: text("email").notNull(),
+		inviterId: text("inviterId")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		organizationId: text("organizationId")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		role: text("role"),
+		status: text("status").notNull(),
+		expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
+		createdAt: timestamp("createdAt", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		index("invitation_email_status_expires_idx").on(
+			sql`lower(${table.email})`,
+			table.status,
+			table.expiresAt,
+		),
+	],
+);
 
 // ---------------------------------------------------------------------------
 // Enums (public schema)
@@ -791,13 +810,15 @@ export const inviteTokens = pgTable(
 			.references(() => organization.id, { onDelete: "cascade" }),
 		createdBy: text("created_by")
 			.notNull()
-			.references(() => user.id),
+			.references(() => user.id, { onDelete: "cascade" }),
 		tokenHash: text("token_hash").notNull(),
 		scope: text("scope").notNull(), // "all" | "workspaces"
 		scopedWorkspaceIds: jsonb("scoped_workspace_ids").$type<string[]>(),
 		role: text("role").notNull(), // "owner" | "admin" | "member"
 		used: boolean("used").notNull().default(false),
-		usedBy: text("used_by").references(() => user.id),
+		usedBy: text("used_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
 		usedAt: timestamp("used_at", { withTimezone: true }),
 		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -1158,7 +1179,9 @@ export const posts = pgTable(
 			(): AnyPgColumn => posts.id,
 			{ onDelete: "set null" },
 		),
-		createdBy: text("created_by").references(() => user.id),
+		createdBy: text("created_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
 		// Aggregated metrics snapshot for fast Sent tab display
 		metricsSnapshot: jsonb("metrics_snapshot")
 			.$type<{
@@ -1484,6 +1507,34 @@ export const postTargets = pgTable(
 		}),
 		platformPostId: text("platform_post_id"),
 		platformUrl: text("platform_url"),
+		providerDisposition: text("provider_disposition", {
+			enum: [
+				"published",
+				"sent",
+				"delivered",
+				"scheduled",
+				"accepted",
+				"processing",
+				"pending_review",
+				"awaiting_user_action",
+				"partial",
+				"failed",
+				"outcome_unknown",
+			],
+		}),
+		providerOperationId: text("provider_operation_id"),
+		providerState: text("provider_state"),
+		providerEffects:
+			jsonb("provider_effects").$type<
+				Array<{
+					name: string;
+					status: "succeeded" | "failed" | "unsupported" | "outcome_unknown";
+					provider_id?: string;
+					error?: { code: string; message: string };
+				}>
+			>(),
+		nextReconcileAt: timestamp("next_reconcile_at", { withTimezone: true }),
+		reconcileAttempts: integer("reconcile_attempts").notNull().default(0),
 		error: text("error"),
 		errorCode: text("error_code"),
 		errorDetail: text("error_detail"),
@@ -1551,6 +1602,14 @@ export const postTargets = pgTable(
 			"post_targets_lease_order_check",
 			sql`${table.leaseExpiresAt} IS NULL OR (${table.claimedAt} IS NOT NULL AND ${table.leaseExpiresAt} > ${table.claimedAt})`,
 		),
+		check(
+			"post_targets_reconcile_attempts_nonnegative_check",
+			sql`${table.reconcileAttempts} >= 0`,
+		),
+		check(
+			"post_targets_provider_disposition_check",
+			sql`${table.providerDisposition} IS NULL OR ${table.providerDisposition} IN ('published', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')`,
+		),
 		uniqueIndex("post_targets_publish_operation_idx").on(
 			table.publishOperationId,
 		),
@@ -1561,6 +1620,11 @@ export const postTargets = pgTable(
 		index("post_targets_post_status_idx").on(table.postId, table.status),
 		index("post_targets_social_account_id_idx").on(table.socialAccountId),
 		index("post_targets_updated_at_idx").on(table.updatedAt),
+		index("post_targets_reconcile_due_idx")
+			.on(table.nextReconcileAt, table.id)
+			.where(
+				sql`${table.deliveryState} = 'unknown' AND ${table.nextReconcileAt} IS NOT NULL`,
+			),
 	],
 );
 
@@ -1582,6 +1646,32 @@ export const publishAttempts = pgTable(
 		}),
 		completedAt: timestamp("completed_at", { withTimezone: true }),
 		providerPostId: text("provider_post_id"),
+		providerOperationId: text("provider_operation_id"),
+		providerDisposition: text("provider_disposition", {
+			enum: [
+				"published",
+				"sent",
+				"delivered",
+				"scheduled",
+				"accepted",
+				"processing",
+				"pending_review",
+				"awaiting_user_action",
+				"partial",
+				"failed",
+				"outcome_unknown",
+			],
+		}),
+		providerState: text("provider_state"),
+		providerEffects:
+			jsonb("provider_effects").$type<
+				Array<{
+					name: string;
+					status: "succeeded" | "failed" | "unsupported" | "outcome_unknown";
+					provider_id?: string;
+					error?: { code: string; message: string };
+				}>
+			>(),
 		error: text("error"),
 	},
 	(table) => [
@@ -1607,6 +1697,10 @@ export const publishAttempts = pgTable(
 		check(
 			"publish_attempts_timestamp_order_check",
 			sql`${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.claimedAt}`,
+		),
+		check(
+			"publish_attempts_provider_disposition_check",
+			sql`${table.providerDisposition} IS NULL OR ${table.providerDisposition} IN ('published', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')`,
 		),
 		index("publish_attempts_target_claimed_idx").on(
 			table.postTargetId,
@@ -1869,7 +1963,9 @@ export const media = pgTable(
 		width: integer("width"),
 		height: integer("height"),
 		duration: integer("duration"),
-		uploadedBy: text("uploaded_by").references(() => user.id),
+		uploadedBy: text("uploaded_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
 		workspaceId: text("workspace_id").references(() => workspaces.id, {
 			onDelete: "restrict",
 		}),
@@ -6873,7 +6969,10 @@ export const automationChannelEnum = pgEnum("automation_channel", [
 export const automationBindingTypeEnum = pgEnum("automation_binding_type", [
 	"default_reply",
 	"welcome_message",
+	// Retained as a database-only compatibility value during the get_started
+	// rollout. API schemas never accept it and the migration rewrites old rows.
 	"conversation_starter",
+	"get_started",
 	"main_menu",
 	"ice_breaker",
 ]);
@@ -7024,6 +7123,7 @@ export const automationEntrypoints = pgTable(
 		filters: jsonb("filters"),
 		allowReentry: boolean("allow_reentry").notNull().default(true),
 		reentryCooldownMin: integer("reentry_cooldown_min").notNull().default(60),
+		dailyCap: integer("daily_cap"),
 		priority: integer("priority").notNull().default(100),
 		specificity: integer("specificity").notNull().default(0),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -7042,6 +7142,11 @@ export const automationEntrypoints = pgTable(
 		unique("automation_entrypoints_id_automation_org_scope_uniq").on(
 			table.id,
 			table.automationId,
+			table.organizationId,
+			table.scopeKey,
+		),
+		unique("automation_entrypoints_id_org_scope_uniq").on(
+			table.id,
 			table.organizationId,
 			table.scopeKey,
 		),
@@ -7069,7 +7174,9 @@ export const automationEntrypoints = pgTable(
 		),
 		check(
 			"automation_entrypoints_numeric_check",
-			sql`${table.reentryCooldownMin} >= 0 AND ${table.specificity} >= 0`,
+			sql`${table.reentryCooldownMin} >= 0
+				AND (${table.dailyCap} IS NULL OR ${table.dailyCap} > 0)
+				AND ${table.specificity} >= 0`,
 		),
 		check(
 			"automation_entrypoints_timestamp_order_check",
@@ -7091,6 +7198,57 @@ export const automationEntrypoints = pgTable(
 		uniqueIndex("idx_automation_entrypoints_webhook_slug")
 			.on(sql`(${table.config}->>'webhook_slug')`)
 			.where(sql`${table.kind} = 'webhook_inbound'`),
+	],
+);
+
+/**
+ * Atomic calendar-day admission counter for one entrypoint. The matcher bumps
+ * this row inside the same transaction that creates the run, so concurrent
+ * webhook deliveries cannot overshoot a configured daily cap.
+ */
+export const automationEntrypointDailyCounts = pgTable(
+	"automation_entrypoint_daily_counts",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("aedc_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
+		entrypointId: text("entrypoint_id").notNull(),
+		day: text("day").notNull(),
+		count: integer("count").notNull().default(0),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.entrypointId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				automationEntrypoints.id,
+				automationEntrypoints.organizationId,
+				automationEntrypoints.scopeKey,
+			],
+			name: "automation_entrypoint_daily_counts_entrypoint_org_scope_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("automation_entrypoint_daily_counts_entrypoint_day_uniq").on(
+			table.entrypointId,
+			table.day,
+		),
+		check(
+			"automation_entrypoint_daily_counts_day_check",
+			sql`${table.day} ~ '^\\d{4}-\\d{2}-\\d{2}$'`,
+		),
+		check(
+			"automation_entrypoint_daily_counts_count_check",
+			sql`${table.count} >= 0`,
+		),
+		index("automation_entrypoint_daily_counts_org_day_idx").on(
+			table.organizationId,
+			table.day,
+		),
 	],
 );
 
@@ -7203,6 +7361,12 @@ export const automationBindings = pgTable(
 		automationId: text("automation_id").notNull(),
 		config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
 		status: text("status").notNull().default("active"),
+		desiredActive: boolean("desired_active").notNull().default(true),
+		deleteAfterSync: boolean("delete_after_sync").notNull().default(false),
+		syncRevision: integer("sync_revision").notNull().default(0),
+		lastSyncedRevision: integer("last_synced_revision").notNull().default(0),
+		syncAttempts: integer("sync_attempts").notNull().default(0),
+		lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
 		lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
 		syncError: text("sync_error"),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -7248,6 +7412,13 @@ export const automationBindings = pgTable(
 		check(
 			"automation_bindings_status_check",
 			sql`${table.status} IN ('active', 'paused', 'pending_sync', 'sync_failed', 'inactive')`,
+		),
+		check(
+			"automation_bindings_sync_counters_check",
+			sql`${table.syncRevision} >= 0
+				AND ${table.lastSyncedRevision} >= 0
+				AND ${table.lastSyncedRevision} <= ${table.syncRevision}
+				AND ${table.syncAttempts} >= 0`,
 		),
 		check(
 			"automation_bindings_timestamp_order_check",
@@ -7363,7 +7534,7 @@ export const automationRuns = pgTable(
 		),
 		check(
 			"automation_runs_waiting_for_check",
-			sql`${table.waitingFor} IS NULL OR ${table.waitingFor} IN ('input', 'delay', 'external_event')`,
+			sql`${table.waitingFor} IS NULL OR ${table.waitingFor} IN ('input', 'delay', 'inbound_event', 'external_event')`,
 		),
 		check(
 			"automation_runs_wait_state_check",
@@ -7403,6 +7574,65 @@ export const automationRuns = pgTable(
 		uniqueIndex("idx_automation_runs_trigger_occurrence_uniq").on(
 			table.automationId,
 			table.triggerOccurrenceId,
+		),
+	],
+);
+
+/** Immutable conversion facts emitted by automation actions. */
+export const automationConversionEvents = pgTable(
+	"automation_conversion_events",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("acv_")),
+		organizationId: text("organization_id").notNull(),
+		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
+		automationId: text("automation_id").notNull(),
+		runId: text("run_id").notNull(),
+		contactId: text("contact_id").notNull(),
+		occurrenceId: text("occurrence_id").notNull(),
+		eventName: text("event_name").notNull(),
+		value: text("value"),
+		currency: varchar("currency", { length: 3 }),
+		metadata: jsonb("metadata"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.runId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				automationRuns.id,
+				automationRuns.organizationId,
+				automationRuns.scopeKey,
+			],
+			name: "automation_conversion_events_run_org_scope_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.automationId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				automations.id,
+				automations.organizationId,
+				automations.scopeKey,
+			],
+			name: "automation_conversion_events_automation_org_scope_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.contactId, table.organizationId, table.scopeKey],
+			foreignColumns: [contacts.id, contacts.organizationId, contacts.scopeKey],
+			name: "automation_conversion_events_contact_org_scope_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("automation_conversion_events_occurrence_uniq").on(
+			table.occurrenceId,
+		),
+		index("automation_conversion_events_org_created_idx").on(
+			table.organizationId,
+			table.createdAt,
+		),
+		index("automation_conversion_events_contact_created_idx").on(
+			table.contactId,
+			table.createdAt,
 		),
 	],
 );
@@ -7609,7 +7839,7 @@ export const automationStepRuns = pgTable(
 	(table) => [
 		check(
 			"automation_step_runs_outcome_check",
-			sql`${table.outcome} IN ('ok', 'wait_input', 'wait_delay', 'end', 'failed', 'graph_changed')`,
+			sql`${table.outcome} IN ('ok', 'wait_input', 'wait_delay', 'wait_event', 'end', 'failed', 'graph_changed')`,
 		),
 		check(
 			"automation_step_runs_duration_nonnegative_check",
@@ -7674,7 +7904,7 @@ export const automationScheduledJobs = pgTable(
 		),
 		check(
 			"automation_scheduled_jobs_type_check",
-			sql`${table.jobType} IN ('resume_run', 'input_timeout', 'scheduled_trigger', 'webhook_reception_failure')`,
+			sql`${table.jobType} IN ('resume_run', 'input_timeout', 'event_timeout', 'scheduled_trigger', 'webhook_reception_failure')`,
 		),
 		check(
 			"automation_scheduled_jobs_lease_state_check",

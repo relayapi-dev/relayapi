@@ -51,6 +51,12 @@ export type HandlerResult =
 	| { result: "advance"; via_port: string; payload?: unknown }
 	| { result: "wait_input"; timeout_at?: Date; payload?: unknown }
 	| { result: "wait_delay"; resume_at: Date; payload?: unknown }
+	| {
+			result: "wait_event";
+			event_kinds: string[];
+			timeout_at?: Date;
+			payload?: unknown;
+	  }
 	| { result: "end"; exit_reason: string; payload?: unknown }
 	| { result: "fail"; error: Error; payload?: unknown };
 

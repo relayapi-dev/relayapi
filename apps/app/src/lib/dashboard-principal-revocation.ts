@@ -1,4 +1,9 @@
-import { apikey, session as authSession, type createDb } from "@relayapi/db";
+import {
+	apikey,
+	session as authSession,
+	type createDb,
+	member,
+} from "@relayapi/db";
 import { and, eq, sql } from "drizzle-orm";
 import { clearClientCache } from "./relay";
 
@@ -9,10 +14,9 @@ interface KeyCache {
 }
 
 /**
- * Revoke a member's principal-bound dashboard credentials before the Better
- * Auth membership deletion commits. Both administrator removal and voluntary
- * leave therefore take effect immediately in PostgreSQL, KV, sessions, and the
- * local SDK cache.
+ * Revoke principal-bound dashboard credentials after membership removal.
+ * The authoritative absence check makes this safe even if a caller is invoked
+ * for a rejected or concurrently lost owner exit.
  */
 export async function revokeDashboardPrincipal(
 	db: Database,
@@ -20,6 +24,15 @@ export async function revokeDashboardPrincipal(
 	organizationId: string,
 	userId: string,
 ): Promise<void> {
+	const membershipStillExists = await db
+		.select({ id: member.id })
+		.from(member)
+		.where(
+			and(eq(member.organizationId, organizationId), eq(member.userId, userId)),
+		)
+		.limit(1);
+	if (membershipStillExists.length > 0) return;
+
 	const keys = await db.transaction(async (tx) => {
 		const rows = await tx
 			.select({ key: apikey.key })

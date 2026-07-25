@@ -1,10 +1,16 @@
 import { swaggerUI } from "@hono/swagger-ui";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
+import { isSelfHosted } from "./lib/deployment-mode";
 import { perfLogMiddleware, timed } from "./lib/perf";
 import { authMiddleware } from "./middleware/auth";
 import { bodyCacheMiddleware } from "./middleware/body-cache";
 import { dbContextMiddleware } from "./middleware/db-context";
+import {
+	apiErrorHandler,
+	apiNotFoundHandler,
+	errorContractMiddleware,
+} from "./middleware/error-contract";
 import {
 	aiEnabledMiddleware,
 	proOnlyMiddleware,
@@ -80,16 +86,24 @@ import type { Env, Variables } from "./types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
-// Global error handler — prevent stack traces from leaking to clients
-app.onError((err, c) => {
-	console.error("Unhandled error:", err);
-	return c.json(
-		{
-			error: { code: "INTERNAL_ERROR", message: "An internal error occurred" },
-		},
-		500,
-	);
+// Keep the API itself fail-safe if the zone-level redirect is ever disabled.
+// Local development and deterministic OpenAPI generation use other hosts and
+// remain available over HTTP.
+app.use("*", async (c, next) => {
+	const url = new URL(c.req.url);
+	if (url.protocol === "http:" && url.hostname === "api.relayapi.dev") {
+		return Response.redirect(
+			`https://api.relayapi.dev${url.pathname}${url.search}`,
+			308,
+		);
+	}
+	await next();
 });
+
+// Normalize errors from both the root app and mounted route applications.
+app.onError(apiErrorHandler);
+app.notFound(apiNotFoundHandler);
+app.use("*", errorContractMiddleware);
 
 // Perf instrumentation (no-op unless PERF_LOGS=1) — first, so `total` covers
 // the entire middleware pipeline + handler
@@ -124,6 +138,15 @@ app.route("/health", health);
 app.route("/r", shortLinkRedirect);
 
 // Stripe webhooks (no auth — uses Stripe signature verification)
+app.use("/webhooks/stripe/*", async (c, next) => {
+	if (isSelfHosted(c.env)) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Not found" } },
+			404,
+		);
+	}
+	await next();
+});
 app.route("/webhooks/stripe", stripeWebhooks);
 
 // Platform webhooks (no auth — uses HMAC/challenge verification per platform)

@@ -454,36 +454,6 @@
 			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
 		},
 		{
-			"advisory": "GHSA-q3j6-qgpj-74h6",
-			"package": "fast-uri",
-			"version": "3.1.0",
-			"dependencyPath": "fast-uri",
-			"artifact": "packages/mcp",
-			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
-		},
-		{
-			"advisory": "GHSA-q8mj-m7cp-5q26",
-			"package": "qs",
-			"version": "6.15.1",
-			"dependencyPath": "qs",
-			"artifact": "apps/docs",
-			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of apps/docs; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
-		},
-		{
-			"advisory": "GHSA-q8mj-m7cp-5q26",
-			"package": "qs",
-			"version": "6.15.1",
-			"dependencyPath": "qs",
-			"artifact": "packages/mcp",
-			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
-		},
-		{
 			"advisory": "GHSA-qffp-2rhf-9h96",
 			"package": "tar",
 			"version": "6.2.1",
@@ -598,16 +568,6 @@
 			"package": "ip-address",
 			"version": "10.1.0",
 			"dependencyPath": "ip-address",
-			"artifact": "packages/mcp",
-			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
-		},
-		{
-			"advisory": "GHSA-v39h-62p7-jpjc",
-			"package": "fast-uri",
-			"version": "3.1.0",
-			"dependencyPath": "fast-uri",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
 			"expiresOn": "2026-08-12",

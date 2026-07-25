@@ -56,6 +56,34 @@ async function waFetch(
 	return data;
 }
 
+function whatsappAccepted(data: WhatsAppMessageResponse): PublishResult {
+	const messageId = data.messages?.[0]?.id?.trim();
+	if (!messageId) {
+		return {
+			success: false,
+			provider_outcome: {
+				disposition: "outcome_unknown",
+				provider_state: "accepted_without_message_id",
+			},
+			error: {
+				code: "PUBLISH_OUTCOME_UNKNOWN",
+				message:
+					"WhatsApp accepted the request but did not return a message ID.",
+			},
+		};
+	}
+	return {
+		success: true,
+		platform_post_id: messageId,
+		provider_outcome: {
+			disposition: "accepted",
+			provider_operation_id: messageId,
+			platform_post_id: messageId,
+			provider_state: "accepted",
+		},
+	};
+}
+
 export const whatsappPublisher: Publisher = {
 	platform: "whatsapp",
 
@@ -100,12 +128,7 @@ export const whatsappPublisher: Publisher = {
 				};
 
 				const data = await waFetch(phoneNumberId, accessToken, body);
-				const messageId = data.messages?.[0]?.id;
-
-				return {
-					success: true,
-					platform_post_id: messageId,
-				};
+				return whatsappAccepted(data);
 			}
 
 			// Interactive message (buttons or list)
@@ -125,7 +148,7 @@ export const whatsappPublisher: Publisher = {
 					interactive,
 				};
 				const data = await waFetch(phoneNumberId, accessToken, body);
-				return { success: true, platform_post_id: data.messages?.[0]?.id };
+				return whatsappAccepted(data);
 			}
 
 			// Location message
@@ -144,7 +167,7 @@ export const whatsappPublisher: Publisher = {
 					location,
 				};
 				const data = await waFetch(phoneNumberId, accessToken, body);
-				return { success: true, platform_post_id: data.messages?.[0]?.id };
+				return whatsappAccepted(data);
 			}
 
 			// Reaction message
@@ -161,7 +184,7 @@ export const whatsappPublisher: Publisher = {
 					reaction,
 				};
 				const data = await waFetch(phoneNumberId, accessToken, body);
-				return { success: true, platform_post_id: data.messages?.[0]?.id };
+				return whatsappAccepted(data);
 			}
 
 			// Contact card message
@@ -183,7 +206,7 @@ export const whatsappPublisher: Publisher = {
 					contacts,
 				};
 				const data = await waFetch(phoneNumberId, accessToken, body);
-				return { success: true, platform_post_id: data.messages?.[0]?.id };
+				return whatsappAccepted(data);
 			}
 
 			const content = (opts.content as string) ?? request.content ?? "";
@@ -263,12 +286,7 @@ export const whatsappPublisher: Publisher = {
 				};
 
 				const data = await waFetch(phoneNumberId, accessToken, body);
-				const messageId = data.messages?.[0]?.id;
-
-				return {
-					success: true,
-					platform_post_id: messageId,
-				};
+				return whatsappAccepted(data);
 			}
 
 			// Text message
@@ -304,12 +322,7 @@ export const whatsappPublisher: Publisher = {
 			};
 
 			const data = await waFetch(phoneNumberId, accessToken, body);
-			const messageId = data.messages?.[0]?.id;
-
-			return {
-				success: true,
-				platform_post_id: messageId,
-			};
+			return whatsappAccepted(data);
 		} catch (err) {
 			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}

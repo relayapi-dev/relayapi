@@ -270,7 +270,7 @@ async function createPhotoStory(
 async function createVideoStory(
 	auth: FacebookAuth,
 	videoUrl: string,
-): Promise<{ id: string }> {
+): Promise<{ operationId: string; postId?: string }> {
 	// Step 1: Start upload
 	const startResult = await graphPost(`/${auth.page_id}/video_stories`, auth, {
 		upload_phase: "start",
@@ -331,10 +331,10 @@ async function createVideoStory(
 		video_id: videoId,
 	});
 	return {
-		id:
-			(finishResult.post_id as string) ??
-			(finishResult.id as string) ??
-			videoId,
+		operationId: videoId,
+		postId:
+			(finishResult.post_id as string | undefined) ??
+			(finishResult.id as string | undefined),
 	};
 }
 
@@ -349,7 +349,7 @@ async function createReel(
 	videoUrl: string,
 	description?: string,
 	title?: string,
-): Promise<{ id: string }> {
+): Promise<{ operationId: string; postId?: string }> {
 	// Facebook Graph API: Start reel upload (phase 1)
 	// Docs: https://developers.facebook.com/docs/video-api/guides/reels-publishing
 	const startResult = await graphPost(`/${auth.page_id}/video_reels`, auth, {
@@ -428,7 +428,10 @@ async function createReel(
 		auth,
 		finishBody,
 	);
-	return { id: (finishResult.post_id as string) ?? videoId };
+	return {
+		operationId: videoId,
+		postId: finishResult.post_id as string | undefined,
+	};
 }
 
 /**
@@ -510,16 +513,38 @@ export const facebookPublisher: Publisher = {
 				if (!firstMedia) throw new Error("No media found");
 				if (firstMedia.type === "video") {
 					const result = await createVideoStory(auth, firstMedia.url);
-					postId = result.id;
+					return {
+						success: true,
+						platform_post_id: result.postId,
+						platform_url: `https://www.facebook.com/${pageId}`,
+						provider_outcome: {
+							disposition: "processing",
+							provider_operation_id: result.operationId,
+							platform_post_id: result.postId,
+							platform_url: `https://www.facebook.com/${pageId}`,
+							provider_state: "video_story_finish_accepted",
+						},
+					};
 				} else {
 					const result = await createPhotoStory(auth, firstMedia.url);
 					postId = result.id;
+				}
+				if (!postId?.trim()) {
+					throw new Error(
+						"Facebook photo story response did not include a post ID.",
+					);
 				}
 
 				return {
 					success: true,
 					platform_post_id: postId,
 					platform_url: `https://www.facebook.com/${pageId}`,
+					provider_outcome: {
+						disposition: "published",
+						platform_post_id: postId,
+						platform_url: `https://www.facebook.com/${pageId}`,
+						provider_state: "created",
+					},
 				};
 			}
 
@@ -544,12 +569,22 @@ export const facebookPublisher: Publisher = {
 					content || undefined,
 					title,
 				);
-				postId = result.id;
 
 				return {
 					success: true,
-					platform_post_id: postId,
-					platform_url: `https://www.facebook.com/reel/${postId}`,
+					platform_post_id: result.postId,
+					platform_url: result.postId
+						? `https://www.facebook.com/reel/${result.postId}`
+						: undefined,
+					provider_outcome: {
+						disposition: "processing",
+						provider_operation_id: result.operationId,
+						platform_post_id: result.postId,
+						platform_url: result.postId
+							? `https://www.facebook.com/reel/${result.postId}`
+							: undefined,
+						provider_state: "reel_finish_accepted",
+					},
 				};
 			}
 
@@ -631,6 +666,9 @@ export const facebookPublisher: Publisher = {
 					// Non-fatal — the post was already published
 				}
 			}
+			if (!postId?.trim()) {
+				throw new Error("Facebook response did not include a post ID.");
+			}
 
 			// Use permalink_url from API response when available, fall back to constructed URL
 			// Post IDs are typically PAGEID_POSTID format
@@ -645,6 +683,14 @@ export const facebookPublisher: Publisher = {
 				success: true,
 				platform_post_id: postId,
 				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: videos.length > 0 ? "processing" : "published",
+					provider_operation_id: videos.length > 0 ? postId : undefined,
+					platform_post_id: postId,
+					platform_url: platformUrl,
+					provider_state:
+						videos.length > 0 ? "video_upload_accepted" : "created",
+				},
 			};
 		} catch (err) {
 			return classifyPublishError(err, { safeToRetryRateLimit: true });

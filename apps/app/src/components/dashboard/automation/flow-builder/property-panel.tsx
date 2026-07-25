@@ -16,12 +16,14 @@ import {
 	CornerDownRight,
 	GitBranch,
 	Globe,
+	Hourglass,
 	MessageSquare,
 	Play,
 	Settings2,
 	Shuffle,
 	StopCircle,
 	Trash2,
+	UserCheck,
 	Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -43,7 +45,9 @@ import {
 	InputEditor,
 	type NodeSummary,
 	RandomizerEditor,
+	SocialProfileCheckEditor,
 	StartAutomationEditor,
+	WaitEventEditor,
 } from "./node-editors";
 
 // Full-width on mobile (the canvas column is hidden behind it there); fixed
@@ -61,6 +65,8 @@ const PANEL_TITLE_OVERRIDES: Record<string, string> = {
 	start_automation: "Start Automation",
 	goto: "Go To Step",
 	end: "End Automation",
+	wait_event: "Wait for Event",
+	social_profile_check: "Social Profile Check",
 };
 
 const PANEL_DESCRIPTIONS: Record<string, string> = {
@@ -74,6 +80,8 @@ const PANEL_DESCRIPTIONS: Record<string, string> = {
 	start_automation: "Enroll the contact into another automation",
 	goto: "Jump back to an earlier node",
 	end: "Terminate the run explicitly",
+	wait_event: "Pause until a selected inbound event arrives",
+	social_profile_check: "Branch on the live Instagram follow relationship",
 };
 
 function titleize(value: string): string {
@@ -95,6 +103,8 @@ const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 	start_automation: CornerDownRight,
 	goto: CornerDownRight,
 	end: StopCircle,
+	wait_event: Hourglass,
+	social_profile_check: UserCheck,
 };
 
 // ---------------------------------------------------------------------------
@@ -112,6 +122,7 @@ interface Props {
 	automationId: string;
 	node: PropertyPanelNode | null;
 	automationChannel: string;
+	automationWorkspaceId: string | null;
 	onChange: (patch: {
 		key?: string;
 		notes?: string;
@@ -132,6 +143,7 @@ export function PropertyPanel({
 	automationId,
 	node,
 	automationChannel,
+	automationWorkspaceId,
 	onChange,
 	onDelete,
 	onClose,
@@ -163,8 +175,7 @@ export function PropertyPanel({
 		/^[a-zA-Z][a-zA-Z0-9_]*$/.test(localKey) &&
 		(localKey === node.key || !existingKeys.includes(localKey));
 	const title = PANEL_TITLE_OVERRIDES[node.kind] ?? titleize(node.kind);
-	const description =
-		PANEL_DESCRIPTIONS[node.kind] ?? "Configure this step";
+	const description = PANEL_DESCRIPTIONS[node.kind] ?? "Configure this step";
 	const HeaderIcon = KIND_ICON[node.kind] ?? Settings2;
 	const platformIcon = platformIcons[automationChannel];
 
@@ -172,6 +183,7 @@ export function PropertyPanel({
 		node,
 		automationId,
 		automationChannel,
+		automationWorkspaceId,
 		onChange,
 		nodeSummaries,
 	});
@@ -330,12 +342,14 @@ function renderEditor({
 	node,
 	automationId,
 	automationChannel,
+	automationWorkspaceId,
 	onChange,
 	nodeSummaries,
 }: {
 	node: PropertyPanelNode;
 	automationId: string;
 	automationChannel: string;
+	automationWorkspaceId: string | null;
 	onChange: (patch: { config?: Record<string, unknown> }) => void;
 	nodeSummaries: NodeSummary[];
 }) {
@@ -376,6 +390,7 @@ function renderEditor({
 			<ActionEditor
 				node={{ key: node.key, kind: "action_group", config: node.config }}
 				automationId={automationId}
+				automationChannel={automationChannel}
 				onChange={(nextConfig) =>
 					onChange({
 						config: { ...node.config, actions: nextConfig.actions },
@@ -392,6 +407,16 @@ function renderEditor({
 			return <InputEditor config={node.config} onChange={setConfig} />;
 		case "delay":
 			return <DelayEditor config={node.config} onChange={setConfig} />;
+		case "wait_event":
+			return (
+				<WaitEventEditor
+					config={node.config}
+					onChange={setConfig}
+					channel={automationChannel}
+				/>
+			);
+		case "social_profile_check":
+			return <SocialProfileCheckEditor />;
 		case "condition":
 			return <ConditionEditor config={node.config} onChange={setConfig} />;
 		case "randomizer":
@@ -402,6 +427,8 @@ function renderEditor({
 					config={node.config}
 					onChange={setConfig}
 					automationId={automationId}
+					automationChannel={automationChannel}
+					automationWorkspaceId={automationWorkspaceId}
 				/>
 			);
 		case "goto":
@@ -414,7 +441,7 @@ function renderEditor({
 				/>
 			);
 		case "end":
-			return <EndEditor />;
+			return <EndEditor config={node.config} onChange={setConfig} />;
 	}
 
 	return (

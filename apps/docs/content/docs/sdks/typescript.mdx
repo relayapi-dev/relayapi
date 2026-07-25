@@ -82,22 +82,29 @@ for (const acc of accounts.data) {
 ### Upload Media
 
 ```typescript
+import { readFile } from 'node:fs/promises';
+
 // Get a presigned upload URL
 const presign = await client.media.getPresignURL({
   filename: 'photo.jpg',
   content_type: 'image/jpeg',
 });
 
-// Upload the file directly to the URL
-import { readFile } from 'node:fs/promises';
+// PUT once using every exact header returned with the presign
 const file = await readFile('photo.jpg');
-await fetch(presign.upload_url, {
+const upload = await fetch(presign.upload_url, {
   method: 'PUT',
   body: file,
-  headers: { 'Content-Type': 'image/jpeg' },
+  headers: presign.upload_headers,
 });
+if (!upload.ok) throw new Error(`Media upload failed: ${upload.status}`);
 
-// Use the public URL in a post
+// Confirm the object so the pending upload becomes ready
+const storageKey = decodeURIComponent(new URL(presign.url).pathname.slice(1));
+const confirmed = await client.media.confirm({ storage_key: storageKey });
+if (confirmed.id !== presign.id) throw new Error('Confirmed the wrong media intent');
+
+// Posts take a media object with the canonical URL, not the media ID
 const post = await client.posts.create({
   content: 'Check out this photo!',
   targets: ['instagram'],

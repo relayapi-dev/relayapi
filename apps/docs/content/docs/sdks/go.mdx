@@ -95,13 +95,61 @@ for _, acc := range accounts.Data {
 ### Upload Media
 
 ```go
+import (
+    "context"
+    "net/http"
+    "net/url"
+    "os"
+    "strings"
+)
+
 // Get a presigned upload URL
 presign, err := client.Media.GetPresignURL(context.TODO(), relaygo.MediaGetPresignURLParams{
     Filename:    relaygo.F("photo.jpg"),
     ContentType: relaygo.F("image/jpeg"),
 })
+if err != nil {
+    panic(err.Error())
+}
 
-// PUT the file directly to presign.UploadURL, then reference presign.URL in a post
+// PUT the bytes once using both headers required by the presign contract
+file, err := os.Open("photo.jpg")
+if err != nil {
+    panic(err.Error())
+}
+defer file.Close()
+request, err := http.NewRequestWithContext(context.TODO(), http.MethodPut, presign.UploadURL, file)
+if err != nil {
+    panic(err.Error())
+}
+request.Header.Set("Content-Type", "image/jpeg")
+request.Header.Set("If-None-Match", "*")
+upload, err := http.DefaultClient.Do(request)
+if err != nil {
+    panic(err.Error())
+}
+defer upload.Body.Close()
+if upload.StatusCode < 200 || upload.StatusCode >= 300 {
+    panic(upload.Status)
+}
+
+// Confirm the object so the pending upload becomes ready
+mediaURL, err := url.Parse(presign.URL)
+if err != nil {
+    panic(err.Error())
+}
+storageKey := strings.TrimPrefix(mediaURL.Path, "/")
+confirmed, err := client.Media.Confirm(context.TODO(), relaygo.MediaConfirmParams{
+    StorageKey: relaygo.F(storageKey),
+})
+if err != nil {
+    panic(err.Error())
+}
+if confirmed.ID != presign.ID {
+    panic("confirmed the wrong media intent")
+}
+
+// Posts take a media object with the canonical URL, not the media ID
 post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
     Content: relaygo.F("Check out this photo!"),
     Targets: relaygo.F([]string{"instagram"}),

@@ -2,27 +2,30 @@
 //
 // Binding CRUD for the Manychat-parity automation engine (spec §9.4).
 //
-// Bindings connect a social account + binding slot (default_reply, welcome,
-// conversation_starter, main_menu, ice_breaker) to a specific automation.
-// Live types (default_reply, welcome_message) become "active" immediately;
-// stubbed types (conversation_starter, main_menu, ice_breaker) start in
-// "pending_sync" and get reconciled by the platform sync worker later.
+// Bindings connect a social account + binding slot to a specific automation.
+// Provider-owned profile bindings use a revisioned async synchronization
+// protocol so stale queue deliveries can never overwrite a newer edit.
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { automationBindings, automations, socialAccounts } from "@relayapi/db";
-import { and, desc, eq, type SQL } from "drizzle-orm";
+import { and, desc, eq, type SQL, sql } from "drizzle-orm";
+import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Context } from "hono";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
-	canAccessWorkspaceScope,
 } from "../lib/workspace-scope";
 import {
 	BindingConfigByType,
 	BindingCreateSchema,
+	BindingTypeSchema,
 	BindingUpdateSchema,
+	getBindingConfigChannelError,
+	isBindingTypeSupportedOnChannel,
+	isProviderBindingType,
 } from "../schemas/automation-bindings";
 import { ErrorResponse } from "../schemas/common";
+import { enqueueAutomationBindingSync } from "../services/automations/binding-sync";
 import type { Env, Variables } from "../types";
 import {
 	aggregateInsights,
@@ -40,37 +43,23 @@ type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 type BindingRow = typeof automationBindings.$inferSelect;
 
-const STUBBED_TYPES = new Set([
-	"conversation_starter",
-	"main_menu",
-	"ice_breaker",
-]);
-
-function defaultStatusFor(bindingType: string): "active" | "pending_sync" {
-	return STUBBED_TYPES.has(bindingType) ? "pending_sync" : "active";
-}
-
-const BindingWarningSchema = z.object({
-	code: z.string(),
-	message: z.string(),
-});
-
 const BindingResponseSchema = z.object({
 	id: z.string(),
 	organization_id: z.string(),
 	workspace_id: z.string().nullable(),
 	social_account_id: z.string(),
 	channel: z.enum(["instagram", "facebook", "whatsapp", "telegram"]),
-	binding_type: z.enum([
-		"default_reply",
-		"welcome_message",
-		"conversation_starter",
-		"main_menu",
-		"ice_breaker",
-	]),
+	// Kept as a string for read compatibility with legacy rows. Create/update
+	// inputs and the catalog expose only the five supported binding types.
+	binding_type: z.string(),
 	automation_id: z.string(),
 	config: z.record(z.string(), z.any()).nullable(),
 	status: z.string(),
+	desired_active: z.boolean(),
+	delete_after_sync: z.boolean(),
+	sync_revision: z.number().int(),
+	last_synced_revision: z.number().int(),
+	sync_attempts: z.number().int(),
 	last_synced_at: z.string().nullable(),
 	sync_error: z.string().nullable(),
 	created_at: z.string(),
@@ -87,7 +76,6 @@ const BindingResponseSchema = z.object({
 		})
 		.nullable()
 		.optional(),
-	warnings: z.array(BindingWarningSchema).optional(),
 });
 
 type BindingAccountSummary = {
@@ -97,29 +85,9 @@ type BindingAccountSummary = {
 	avatarUrl: string | null;
 };
 
-/**
- * Stubbed binding types don't actually push to the platform yet — the
- * persistence layer accepts the config but the platform sync worker that
- * would reconcile it into Messenger/WhatsApp UX ships in v1.1. Surface this
- * explicitly on create/update responses so the dashboard can render a banner
- * instead of claiming the binding is live.
- */
-export function buildBindingWarnings(
-	bindingType: string,
-): z.infer<typeof BindingWarningSchema>[] | undefined {
-	if (!STUBBED_TYPES.has(bindingType)) return undefined;
-	return [
-		{
-			code: "binding_pending_sync",
-			message:
-				"Platform sync ships in v1.1; configuration is saved but not yet pushed to the platform.",
-		},
-	];
-}
-
 function serializeBinding(
 	row: BindingRow,
-	opts?: { includeWarnings?: boolean; account?: BindingAccountSummary | null },
+	opts?: { account?: BindingAccountSummary | null },
 ): z.infer<typeof BindingResponseSchema> {
 	const base: z.infer<typeof BindingResponseSchema> = {
 		id: row.id,
@@ -127,12 +95,15 @@ function serializeBinding(
 		workspace_id: row.workspaceId ?? null,
 		social_account_id: row.socialAccountId,
 		channel: row.channel as z.infer<typeof BindingResponseSchema>["channel"],
-		binding_type: row.bindingType as z.infer<
-			typeof BindingResponseSchema
-		>["binding_type"],
+		binding_type: row.bindingType,
 		automation_id: row.automationId,
 		config: (row.config as Record<string, unknown> | null) ?? null,
 		status: row.status,
+		desired_active: row.desiredActive,
+		delete_after_sync: row.deleteAfterSync,
+		sync_revision: row.syncRevision,
+		last_synced_revision: row.lastSyncedRevision,
+		sync_attempts: row.syncAttempts,
 		last_synced_at: row.lastSyncedAt?.toISOString() ?? null,
 		sync_error: row.syncError ?? null,
 		created_at: row.createdAt.toISOString(),
@@ -147,10 +118,6 @@ function serializeBinding(
 			display_name: opts.account.displayName ?? null,
 			avatar_url: opts.account.avatarUrl ?? null,
 		};
-	}
-	if (opts?.includeWarnings) {
-		const warnings = buildBindingWarnings(row.bindingType);
-		if (warnings) base.warnings = warnings;
 	}
 	return base;
 }
@@ -192,6 +159,24 @@ function validateBindingConfig(bindingType: string, config: unknown) {
 	return schema.safeParse(config);
 }
 
+async function enqueueProviderSyncSafely(
+	c: AppContext,
+	binding: Pick<BindingRow, "id" | "organizationId" | "syncRevision">,
+): Promise<void> {
+	try {
+		await enqueueAutomationBindingSync(c.get("db"), c.env, binding);
+	} catch (error) {
+		// The scheduled reconciler re-enqueues rows whose revision has not been
+		// acknowledged. The CRUD operation therefore remains durable even if the
+		// queue is temporarily unavailable.
+		console.error("failed to enqueue automation binding sync", {
+			bindingId: binding.id,
+			revision: binding.syncRevision,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Schemas
 // ---------------------------------------------------------------------------
@@ -200,7 +185,7 @@ const IdParams = z.object({ id: z.string() });
 
 const ListQuery = z.object({
 	social_account_id: z.string().optional(),
-	binding_type: z.string().optional(),
+	binding_type: BindingTypeSchema.optional(),
 	automation_id: z.string().optional(),
 	workspace_id: z.string().optional(),
 });
@@ -371,7 +356,33 @@ app.openapi(createBinding, async (c) => {
 			400,
 		);
 	}
-
+	if (!isBindingTypeSupportedOnChannel(body.binding_type, body.channel)) {
+		return c.json(
+			{
+				error: {
+					code: "UNSUPPORTED_BINDING_CHANNEL",
+					message: `${body.binding_type} is not supported on ${body.channel}`,
+				},
+			},
+			400,
+		);
+	}
+	const channelConfigError = getBindingConfigChannelError(
+		body.binding_type,
+		body.channel,
+		parsed.data as Record<string, unknown>,
+	);
+	if (channelConfigError) {
+		return c.json(
+			{
+				error: {
+					code: "VALIDATION_ERROR",
+					message: channelConfigError,
+				},
+			},
+			400,
+		);
+	}
 	// Verify the social account belongs to this org. Without this, a caller can
 	// bind to another org's account id and then read its handle/display name/
 	// avatar back via GET /{id} (account-identity disclosure).
@@ -427,6 +438,7 @@ app.openapi(createBinding, async (c) => {
 	}
 
 	try {
+		const providerBinding = isProviderBindingType(body.binding_type);
 		const [inserted] = await db
 			.insert(automationBindings)
 			.values({
@@ -437,7 +449,10 @@ app.openapi(createBinding, async (c) => {
 				bindingType: body.binding_type,
 				automationId: body.automation_id,
 				config: parsed.data as Record<string, unknown>,
-				status: defaultStatusFor(body.binding_type),
+				status: providerBinding ? "pending_sync" : "active",
+				desiredActive: true,
+				deleteAfterSync: false,
+				syncRevision: providerBinding ? 1 : 0,
 			})
 			.returning();
 		if (!inserted) {
@@ -451,7 +466,8 @@ app.openapi(createBinding, async (c) => {
 				400,
 			);
 		}
-		return c.json(serializeBinding(inserted, { includeWarnings: true }), 201);
+		if (providerBinding) await enqueueProviderSyncSafely(c, inserted);
+		return c.json(serializeBinding(inserted), 201);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (/uniq|duplicate|unique/i.test(message)) {
@@ -556,30 +572,29 @@ app.openapi(updateBinding, async (c) => {
 	const existing = scoped.row;
 	const orgId = c.get("orgId");
 	const db = c.get("db");
-
-	const patch: Partial<typeof automationBindings.$inferInsert> = {
-		updatedAt: new Date(),
-	};
-	if (body.channel !== undefined) patch.channel = body.channel;
-	if (body.binding_type !== undefined) patch.bindingType = body.binding_type;
-	if (body.social_account_id !== undefined)
-		patch.socialAccountId = body.social_account_id;
-	if (body.automation_id !== undefined) patch.automationId = body.automation_id;
-	if (body.status !== undefined) patch.status = body.status;
-	if (body.workspace_id !== undefined) {
-		patch.workspaceId = body.workspace_id ?? null;
+	if (
+		!isBindingTypeSupportedOnChannel(existing.bindingType, existing.channel)
+	) {
+		return c.json(
+			{
+				error: {
+					code: "UNSUPPORTED_BINDING_CHANNEL",
+					message: `${existing.bindingType} is not supported on ${existing.channel}`,
+				},
+			},
+			400,
+		);
 	}
 
-	if (body.config !== undefined || body.binding_type !== undefined) {
-		const bindingType = body.binding_type ?? existing.bindingType;
-		const cfg = body.config ?? (existing.config as Record<string, unknown>);
-		const parsed = validateBindingConfig(bindingType, cfg);
+	let parsedConfig: Record<string, unknown> | undefined;
+	if (body.config !== undefined) {
+		const parsed = validateBindingConfig(existing.bindingType, body.config);
 		if (!parsed.success) {
 			return c.json(
 				{
 					error: {
 						code: "VALIDATION_ERROR",
-						message: `invalid config for binding_type ${bindingType}`,
+						message: `invalid config for binding_type ${existing.bindingType}`,
 						details: {
 							errors: "error" in parsed ? (parsed.error?.issues ?? []) : [],
 						},
@@ -588,19 +603,59 @@ app.openapi(updateBinding, async (c) => {
 				400,
 			);
 		}
-		patch.config = parsed.data as Record<string, unknown>;
+		parsedConfig = parsed.data as Record<string, unknown>;
+		const channelConfigError = getBindingConfigChannelError(
+			existing.bindingType,
+			existing.channel,
+			parsedConfig,
+		);
+		if (channelConfigError) {
+			return c.json(
+				{
+					error: {
+						code: "VALIDATION_ERROR",
+						message: channelConfigError,
+					},
+				},
+				400,
+			);
+		}
 	}
 
-	const prospective = {
-		automationId: body.automation_id ?? existing.automationId,
-		accountId: body.social_account_id ?? existing.socialAccountId,
-		workspaceId:
-			body.workspace_id !== undefined
-				? (body.workspace_id ?? null)
-				: existing.workspaceId,
-		channel: body.channel ?? existing.channel,
-	};
-	const workspaceScope = c.get("workspaceScope");
+	const providerBinding = isProviderBindingType(existing.bindingType);
+	const desiredActive =
+		body.status === undefined
+			? existing.desiredActive
+			: body.status === "active";
+	const patch: PgUpdateSetSource<typeof automationBindings> = providerBinding
+		? {
+				...(body.automation_id === undefined
+					? {}
+					: { automationId: body.automation_id }),
+				...(parsedConfig === undefined ? {} : { config: parsedConfig }),
+				desiredActive,
+				deleteAfterSync: false,
+				status: "pending_sync",
+				syncRevision: sql`${automationBindings.syncRevision} + 1`,
+				syncAttempts: 0,
+				lastEnqueuedAt: null,
+				syncError: null,
+				updatedAt: new Date(),
+			}
+		: {
+				...(body.automation_id === undefined
+					? {}
+					: { automationId: body.automation_id }),
+				...(parsedConfig === undefined ? {} : { config: parsedConfig }),
+				...(body.status === undefined ? {} : { status: body.status }),
+				desiredActive,
+				updatedAt: new Date(),
+			};
+	const prospectiveAutomationId = body.automation_id ?? existing.automationId;
+
+	// Lock the authoritative parent rows in a stable order before mutation so
+	// account lifecycle/platform and automation scope/channel cannot change
+	// between validation and the binding update.
 	const result = await db.transaction(async (tx) => {
 		const [automation] = await tx
 			.select({
@@ -611,16 +666,13 @@ app.openapi(updateBinding, async (c) => {
 			.from(automations)
 			.where(
 				and(
-					eq(automations.id, prospective.automationId),
+					eq(automations.id, prospectiveAutomationId),
 					eq(automations.organizationId, orgId),
 				),
 			)
 			.limit(1)
 			.for("update");
 		if (!automation) return { kind: "automation_not_found" } as const;
-		if (!canAccessWorkspaceScope(workspaceScope, automation.workspaceId)) {
-			return { kind: "workspace_denied" } as const;
-		}
 
 		const [account] = await tx
 			.select({
@@ -632,7 +684,7 @@ app.openapi(updateBinding, async (c) => {
 			.from(socialAccounts)
 			.where(
 				and(
-					eq(socialAccounts.id, prospective.accountId),
+					eq(socialAccounts.id, existing.socialAccountId),
 					eq(socialAccounts.organizationId, orgId),
 				),
 			)
@@ -640,9 +692,9 @@ app.openapi(updateBinding, async (c) => {
 			.for("update");
 		if (!account) return { kind: "account_not_found" } as const;
 		if (
-			prospective.workspaceId !== automation.workspaceId ||
+			existing.workspaceId !== automation.workspaceId ||
 			account.workspaceId !== automation.workspaceId ||
-			prospective.channel !== automation.channel ||
+			existing.channel !== automation.channel ||
 			account.platform !== automation.channel ||
 			account.lifecycleStatus !== "active"
 		) {
@@ -676,17 +728,6 @@ app.openapi(updateBinding, async (c) => {
 			404,
 		);
 	}
-	if (result.kind === "workspace_denied") {
-		return c.json(
-			{
-				error: {
-					code: "WORKSPACE_ACCESS_DENIED",
-					message: "This API key does not have access to this workspace",
-				},
-			} as never,
-			403 as never,
-		);
-	}
 	if (result.kind === "invalid_tuple") {
 		return c.json(
 			{
@@ -700,7 +741,8 @@ app.openapi(updateBinding, async (c) => {
 		);
 	}
 	if (result.kind === "not_found") return notFound(c);
-	return c.json(serializeBinding(result.row, { includeWarnings: true }), 200);
+	if (providerBinding) await enqueueProviderSyncSafely(c, result.row);
+	return c.json(serializeBinding(result.row), 200);
 });
 
 const deleteBinding = createRoute({
@@ -727,7 +769,25 @@ app.openapi(deleteBinding, async (c) => {
 	if ("denied" in scoped) return scoped.denied as never;
 
 	const db = c.get("db");
-	await db.delete(automationBindings).where(eq(automationBindings.id, id));
+	if (isProviderBindingType(scoped.row.bindingType)) {
+		const [updated] = await db
+			.update(automationBindings)
+			.set({
+				desiredActive: false,
+				deleteAfterSync: true,
+				status: "pending_sync",
+				syncRevision: sql`${automationBindings.syncRevision} + 1`,
+				syncAttempts: 0,
+				lastEnqueuedAt: null,
+				syncError: null,
+				updatedAt: new Date(),
+			})
+			.where(eq(automationBindings.id, id))
+			.returning();
+		if (updated) await enqueueProviderSyncSafely(c, updated);
+	} else {
+		await db.delete(automationBindings).where(eq(automationBindings.id, id));
+	}
 	return c.body(null, 204);
 });
 

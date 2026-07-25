@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { revokeDashboardPrincipal } from "./dashboard-principal-revocation";
 
-function createRevocationDb() {
+function createRevocationDb(membershipExists = false) {
 	const updatedTables: unknown[] = [];
+	let transactionCalls = 0;
 	const tx = {
 		select: () => ({
 			from: () => ({
@@ -18,11 +19,24 @@ function createRevocationDb() {
 	};
 	return {
 		db: {
+			select: () => ({
+				from: () => ({
+					where: () => ({
+						limit: async () => (membershipExists ? [{ id: "member_1" }] : []),
+					}),
+				}),
+			}),
 			transaction: async <T>(
 				callback: (transaction: typeof tx) => Promise<T>,
-			) => callback(tx),
+			) => {
+				transactionCalls += 1;
+				return callback(tx);
+			},
 		},
 		updatedTables,
+		get transactionCalls() {
+			return transactionCalls;
+		},
 	};
 }
 
@@ -59,5 +73,21 @@ describe("dashboard principal membership revocation", () => {
 				"user_123",
 			),
 		).rejects.toThrow("KV unavailable");
+	});
+
+	it("leaves credentials, sessions, and caches unchanged while membership remains", async () => {
+		const state = createRevocationDb(true);
+		const deleted: string[] = [];
+
+		await revokeDashboardPrincipal(
+			state.db as never,
+			{ delete: async (key) => void deleted.push(key) },
+			"org_123",
+			"user_123",
+		);
+
+		expect(state.transactionCalls).toBe(0);
+		expect(state.updatedTables).toHaveLength(0);
+		expect(deleted).toHaveLength(0);
 	});
 });

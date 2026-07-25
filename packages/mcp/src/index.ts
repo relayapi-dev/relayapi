@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createRelayClient } from "./client";
-import { loadConfig } from "./config";
-import { createServer } from "./server";
+import { createRelayClient } from "./client.js";
+import { loadConfig } from "./config.js";
+import { createServer } from "./server.js";
 
 /**
  * Entry point for the RelayAPI MCP server.
@@ -33,10 +33,7 @@ async function main(): Promise<void> {
 
 	const config = loadConfig();
 	const client = createRelayClient(config);
-	// Loose cast: the MCP server only uses the automations surface, which the
-	// SDK instance provides at runtime; a nominal type mismatch on the SDK's
-	// richer generics is not worth propagating through the tool registrations.
-	const server = createServer(client as unknown as Parameters<typeof createServer>[0]);
+	const server = createServer(client);
 
 	const transport = new StdioServerTransport();
 	await server.connect(transport);

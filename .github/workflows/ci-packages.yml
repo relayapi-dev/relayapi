@@ -1,0 +1,88 @@
+name: CI — Published Packages
+
+on:
+  pull_request:
+    paths:
+      - "packages/sdk/**"
+      - "apps/cli/**"
+      - "packages/mcp/**"
+      - "packages/self-host/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/ci-packages.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package-contracts:
+    name: Packed install contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.12.0"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify SDK package
+        working-directory: packages/sdk
+        run: |
+          bun run typecheck
+          bun test
+          bun run test:package
+
+      - name: Verify CLI package
+        working-directory: apps/cli
+        run: |
+          bun run typecheck
+          bun test
+          bun run test:package
+
+      - name: Verify MCP package
+        working-directory: packages/mcp
+        run: |
+          bun run typecheck
+          bun test
+          bun run test:package
+
+      - name: Verify self-host package
+        working-directory: packages/self-host
+        run: |
+          bun run typecheck
+          bun test
+          bun run test:package
+
+  mcp-node18-runtime:
+    name: MCP packed runtime (Node 18 floor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "18.20.8"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build, pack, install, and execute MCP on Node 18
+        working-directory: packages/mcp
+        run: bun run test:package

@@ -1,4 +1,5 @@
 import type { Env } from "../types";
+import { thumbnailPublicHost } from "./deployment-mode";
 
 /**
  * Hyper-optimized post preview thumbnails.
@@ -56,12 +57,15 @@ export function thumbnailKeyFor(storageKey: string): string {
 }
 
 /** Stable public URL for a thumbnail, path-segment encoded for safe <img src>. */
-export function thumbnailUrlFor(storageKey: string): string {
+export function thumbnailUrlFor(
+	storageKey: string,
+	host = RELAY_THUMBNAIL_HOST,
+): string {
 	const encoded = thumbnailKeyFor(storageKey)
 		.split("/")
 		.map((segment) => encodeURIComponent(segment))
 		.join("/");
-	return `https://${RELAY_THUMBNAIL_HOST}/${encoded}`;
+	return `https://${host}/${encoded}`;
 }
 
 export type ThumbnailGenerationResult =
@@ -153,7 +157,7 @@ async function transformAndStoreThumbnail(
 		return {
 			status: "generated",
 			thumbnailKey,
-			thumbnailUrl: thumbnailUrlFor(storageKey),
+			thumbnailUrl: thumbnailUrlFor(storageKey, thumbnailPublicHost(env)),
 		};
 	} catch (err) {
 		console.error(`[Thumbnail] Generation failed for ${storageKey}:`, err);

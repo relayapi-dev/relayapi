@@ -8,10 +8,25 @@ const enrollContact = mock(
 	},
 );
 
+class EnrollmentBlockedError extends Error {
+	constructor(
+		public readonly reason:
+			| "active_run"
+			| "reentry_disabled"
+			| "reentry_cooldown"
+			| "daily_cap",
+	) {
+		super(`automation enrollment blocked: ${reason}`);
+		this.name = "EnrollmentBlockedError";
+	}
+}
+
 mock.module("../services/automations/runner", () => ({
+	EnrollmentBlockedError,
 	enrollContact,
 	incrementCounter: async () => {},
 	runLoop: async () => ({ status: "completed", exit_reason: "completed" }),
+	transitionRunTerminal: async () => true,
 	updateRunOptimistic: async () => true,
 }));
 
@@ -61,6 +76,9 @@ function matcherDb() {
 			return chain;
 		},
 		query: {
+			automationRuns: {
+				findFirst: async () => null,
+			},
 			contacts: {
 				findFirst: async () => ({ id: "ct_1", tags: [] }),
 			},

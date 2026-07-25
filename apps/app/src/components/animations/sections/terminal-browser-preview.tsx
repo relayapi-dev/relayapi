@@ -110,7 +110,7 @@ export function TerminalBrowserPreviewBlock() {
             >
                 <CloningStatusIndicator status={status} />
                 <TerminalWindow
-                    command={`curl -X POST https://api.relay.com/v1/posts -H "Authorization: Bearer rlay_live_..."`}
+                    command={`curl -X POST https://api.relay.com/v1/posts -H "Authorization: Bearer $RELAY_API_KEY"`}
                     output={[
                         "Connecting to api.relay.com...",
                         "Publishing to Twitter/X... ✓",

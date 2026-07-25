@@ -15,6 +15,7 @@ export type ActionType =
 	| "tag_remove"
 	| "field_set"
 	| "field_clear"
+	| "contact_field_set"
 	// Segments + subscriptions
 	| "segment_add"
 	| "segment_remove"
@@ -37,9 +38,8 @@ export type ActionType =
 	| "resume_automations_for_contact"
 	// Destructive
 	| "delete_contact"
-	// Conversion
+	// Conversion and provider-backed conversation actions
 	| "log_conversion_event"
-	// v1.1 stubs
 	| "change_main_menu";
 
 export type SubscriptionChannel =
@@ -85,6 +85,11 @@ export interface FieldSetAction extends BaseAction {
 export interface FieldClearAction extends BaseAction {
 	type: "field_clear";
 	field: string;
+}
+export interface ContactFieldSetAction extends BaseAction {
+	type: "contact_field_set";
+	field: "name" | "email" | "phone";
+	value: string;
 }
 
 export interface SegmentAddAction extends BaseAction {
@@ -178,7 +183,16 @@ export interface LogConversionEventAction extends BaseAction {
 
 export interface ChangeMainMenuAction extends BaseAction {
 	type: "change_main_menu";
-	menu_payload?: unknown;
+	menu_payload: MainMenuPayload;
+}
+
+export type MainMenuItem =
+	| { label: string; action: "postback"; payload: string }
+	| { label: string; action: "url"; url: string };
+
+export interface MainMenuPayload {
+	items: MainMenuItem[];
+	composer_input_disabled: boolean;
 }
 
 export type Action =
@@ -186,6 +200,7 @@ export type Action =
 	| TagRemoveAction
 	| FieldSetAction
 	| FieldClearAction
+	| ContactFieldSetAction
 	| SegmentAddAction
 	| SegmentRemoveAction
 	| SubscribeListAction
@@ -216,6 +231,7 @@ export interface ActionCatalogEntry {
 	type: ActionType;
 	label: string;
 	category: ActionCategory;
+	channels?: string[];
 }
 
 export type ActionCategory =
@@ -225,8 +241,7 @@ export type ActionCategory =
 	| "external"
 	| "automation_controls"
 	| "destructive"
-	| "conversion"
-	| "v1_1_stubs";
+	| "conversion";
 
 export const ACTION_CATEGORIES: Array<{
 	key: ActionCategory;
@@ -239,7 +254,6 @@ export const ACTION_CATEGORIES: Array<{
 	{ key: "automation_controls", label: "Automation controls" },
 	{ key: "conversion", label: "Conversion" },
 	{ key: "destructive", label: "Destructive" },
-	{ key: "v1_1_stubs", label: "Coming in v1.1" },
 ];
 
 /** Hard-coded fallback when the live catalog isn't available yet. */
@@ -248,6 +262,11 @@ export const FALLBACK_ACTION_CATALOG: ActionCatalogEntry[] = [
 	{ type: "tag_remove", label: "Remove tag", category: "contact_data" },
 	{ type: "field_set", label: "Set field", category: "contact_data" },
 	{ type: "field_clear", label: "Clear field", category: "contact_data" },
+	{
+		type: "contact_field_set",
+		label: "Set contact field",
+		category: "contact_data",
+	},
 	{ type: "segment_add", label: "Add to segment", category: "subscriptions" },
 	{
 		type: "segment_remove",
@@ -328,15 +347,15 @@ export const FALLBACK_ACTION_CATALOG: ActionCatalogEntry[] = [
 	},
 	{
 		type: "change_main_menu",
-		label: "Change main menu",
-		category: "v1_1_stubs",
+		label: "Change Messenger menu",
+		category: "conversation",
+		channels: ["facebook"],
 	},
 ];
 
 // -- id factory -----------------------------------------------------------
 
-const ID_ALPHABET =
-	"23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const ID_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 /** 8-char opaque id, matches the node-key / block-id generator style. */
 export function generateActionId(): string {
@@ -376,6 +395,8 @@ export function defaultActionFor(
 			return { id, type, on_error, field: "", value: "" };
 		case "field_clear":
 			return { id, type, on_error, field: "" };
+		case "contact_field_set":
+			return { id, type, on_error, field: "name", value: "" };
 		case "segment_add":
 		case "segment_remove":
 			return { id, type, on_error, segment_id: "" };
@@ -422,7 +443,15 @@ export function defaultActionFor(
 		case "log_conversion_event":
 			return { id, type, on_error, event_name: "" };
 		case "change_main_menu":
-			return { id, type, on_error };
+			return {
+				id,
+				type,
+				on_error,
+				menu_payload: {
+					items: [{ label: "Help", action: "postback", payload: "HELP" }],
+					composer_input_disabled: false,
+				},
+			};
 	}
 }
 
@@ -455,6 +484,10 @@ export function summarizeAction(action: Action): string {
 				: "Set field";
 		case "field_clear":
 			return action.field ? `Clear ${action.field}` : "Clear field";
+		case "contact_field_set":
+			return action.value
+				? `Set contact ${action.field} = ${truncate(action.value, 32)}`
+				: `Set contact ${action.field}`;
 		case "segment_add":
 			return action.segment_id
 				? `Add to segment ${short(action.segment_id)}`
@@ -516,7 +549,7 @@ export function summarizeAction(action: Action): string {
 				? `Log "${action.event_name}"${action.value ? ` (${action.value})` : ""}`
 				: "Log conversion event";
 		case "change_main_menu":
-			return "Change main menu (v1.1)";
+			return `Change Messenger menu (${action.menu_payload.items.length} item${action.menu_payload.items.length === 1 ? "" : "s"})`;
 	}
 }
 
@@ -557,6 +590,10 @@ export function validateAction(action: Action): ValidationProblem[] {
 		case "field_clear":
 			if (!action.field.trim())
 				problems.push({ path: "field", message: "Field key is required." });
+			break;
+		case "contact_field_set":
+			if (!action.value.trim())
+				problems.push({ path: "value", message: "Value is required." });
 			break;
 		case "segment_add":
 		case "segment_remove":
@@ -639,7 +676,46 @@ export function validateAction(action: Action): ValidationProblem[] {
 					path: "event_name",
 					message: "Event name is required.",
 				});
+			if (action.value !== undefined && action.value.trim() === "")
+				problems.push({
+					path: "value",
+					message: "Remove the value or enter an amount.",
+				});
+			if (
+				action.currency !== undefined &&
+				!/^[A-Za-z]{3}$/.test(action.currency)
+			)
+				problems.push({
+					path: "currency",
+					message: "Currency must be a three-letter code such as GBP or USD.",
+				});
 			break;
+		case "change_main_menu": {
+			const items = action.menu_payload.items;
+			if (items.length < 1 || items.length > 20)
+				problems.push({
+					path: "menu_payload.items",
+					message: "Messenger menus require between 1 and 20 items.",
+				});
+			for (const [index, item] of items.entries()) {
+				if (!item.label.trim())
+					problems.push({
+						path: `menu_payload.items.${index}.label`,
+						message: "Menu item label is required.",
+					});
+				if (item.action === "postback" && !item.payload.trim())
+					problems.push({
+						path: `menu_payload.items.${index}.payload`,
+						message: "Postback payload is required.",
+					});
+				if (item.action === "url" && !/^https:\/\//i.test(item.url))
+					problems.push({
+						path: `menu_payload.items.${index}.url`,
+						message: "Menu URLs must start with https://.",
+					});
+			}
+			break;
+		}
 		case "delete_contact":
 			if (action.confirm !== true)
 				problems.push({
@@ -648,7 +724,7 @@ export function validateAction(action: Action): ValidationProblem[] {
 				});
 			break;
 		// No required fields — opt_*_channel / unassign / conversation_open/close /
-		// resume / change_main_menu.
+		// resume.
 		default:
 			break;
 	}

@@ -10,6 +10,10 @@ import {
 	hasCurrentDashboardCredentialPermissions,
 } from "./credential-authorization";
 import { clearClientCache } from "./relay";
+import {
+	IS_SELF_HOSTED_BUILD,
+	SELF_HOSTED_AI_ENABLED,
+} from "./deployment-mode";
 
 const DASHBOARD_KEY_TTL_SECONDS = 12 * 60 * 60;
 // Expire the retrievable raw key before the database credential. This leaves
@@ -122,7 +126,7 @@ async function ensureAuthorizedDashboardCredential(
 		currentPeriodStart: subscription?.currentPeriodStart,
 		currentPeriodEnd: subscription?.currentPeriodEnd,
 	});
-	const plan = decision.entitlement;
+	const plan = IS_SELF_HOSTED_BUILD ? "pro" : decision.entitlement;
 	const rawKey = generateRawKey();
 	const hashedKey = await hashKey(rawKey);
 	const keyId = generateId("key_");
@@ -193,13 +197,24 @@ async function ensureAuthorizedDashboardCredential(
 			principal_id: userId,
 			expires_at: expiresAt.toISOString(),
 			plan,
-			calls_included:
-				plan === "pro" ? PRICING.proCallsIncluded : PRICING.freeCallsIncluded,
-			ai_enabled: subscription?.aiEnabled ?? false,
+			calls_included: IS_SELF_HOSTED_BUILD
+				? Number.MAX_SAFE_INTEGER
+				: plan === "pro"
+					? PRICING.proCallsIncluded
+					: PRICING.freeCallsIncluded,
+			ai_enabled: IS_SELF_HOSTED_BUILD
+				? SELF_HOSTED_AI_ENABLED
+				: (subscription?.aiEnabled ?? false),
 			daily_tool_limit:
-				subscription?.dailyToolLimit ?? (plan === "pro" ? 10 : 2),
-			period_start: decision.usagePeriod?.start.toISOString() ?? null,
-			period_end: decision.usagePeriod?.end.toISOString() ?? null,
+				IS_SELF_HOSTED_BUILD
+					? Number.MAX_SAFE_INTEGER
+					: subscription?.dailyToolLimit ?? (plan === "pro" ? 10 : 2),
+			period_start: IS_SELF_HOSTED_BUILD
+				? null
+				: (decision.usagePeriod?.start.toISOString() ?? null),
+			period_end: IS_SELF_HOSTED_BUILD
+				? null
+				: (decision.usagePeriod?.end.toISOString() ?? null),
 		}),
 		{ expirationTtl: API_KEY_CACHE_TTL_SECONDS },
 	);

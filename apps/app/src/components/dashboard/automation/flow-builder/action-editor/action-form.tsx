@@ -6,31 +6,33 @@
 
 import { useMemo } from "react";
 import { useAutomationCatalog } from "../use-catalog";
-import { AutomationControlsUnknownHint } from "./unknown-hint";
+import {
+	PauseContactForm,
+	ResumeContactForm,
+} from "./action-forms/automation-controls";
 import { ReplyToCommentForm } from "./action-forms/comment";
+import { DeleteContactForm } from "./action-forms/contact";
 import {
 	AssignConversationForm,
 	NoFieldsInfo,
 	SnoozeConversationForm,
 } from "./action-forms/conversation";
-import { ChangeMainMenuForm } from "./action-forms/change-main-menu";
-import { ChannelOptForm, ListSubscriptionForm } from "./action-forms/subscription";
-import { DeleteContactForm } from "./action-forms/contact";
-import { FieldActionForm } from "./action-forms/field";
-import { LogConversionForm } from "./action-forms/conversion";
-import { NotifyAdminForm } from "./action-forms/notify";
 import {
-	PauseContactForm,
-	ResumeContactForm,
-} from "./action-forms/automation-controls";
+	ContactFieldSetForm,
+	ConversionEventForm,
+} from "./action-forms/data-and-conversion";
+import { FieldActionForm } from "./action-forms/field";
+import { ChangeMainMenuForm } from "./action-forms/main-menu";
+import { NotifyAdminForm } from "./action-forms/notify";
 import { SegmentActionForm } from "./action-forms/segment";
+import {
+	ChannelOptForm,
+	ListSubscriptionForm,
+} from "./action-forms/subscription";
 import { TagActionForm } from "./action-forms/tag";
 import { WebhookOutForm } from "./action-forms/webhook";
-import {
-	validateAction,
-	type Action,
-	type ValidationProblem,
-} from "./types";
+import { type Action, type ValidationProblem, validateAction } from "./types";
+import { AutomationControlsUnknownHint } from "./unknown-hint";
 
 interface Props {
 	action: Action;
@@ -43,7 +45,9 @@ export function ActionForm({ action, onChange }: Props) {
 	const errors = problemsToErrorMap(problems);
 
 	const knownTypes = new Set(
-		(catalog.data?.action_types ?? []).map((t) => t.type),
+		(catalog.data?.action_types ?? [])
+			.filter((entry) => entry.enabled !== false)
+			.map((entry) => entry.type),
 	);
 	// If the catalog is loaded but this action type isn't in it, treat it as
 	// an "unknown" type — still render *something* so the row remains usable.
@@ -63,16 +67,16 @@ export function ActionForm({ action, onChange }: Props) {
 		case "tag_add":
 		case "tag_remove":
 			return (
-				<TagActionForm
-					action={action}
-					onChange={onChange}
-					error={errors.tag}
-				/>
+				<TagActionForm action={action} onChange={onChange} error={errors.tag} />
 			);
 		case "field_set":
 		case "field_clear":
 			return (
-				<FieldActionForm
+				<FieldActionForm action={action} onChange={onChange} errors={errors} />
+			);
+		case "contact_field_set":
+			return (
+				<ContactFieldSetForm
 					action={action}
 					onChange={onChange}
 					errors={errors}
@@ -131,11 +135,7 @@ export function ActionForm({ action, onChange }: Props) {
 			);
 		case "notify_admin":
 			return (
-				<NotifyAdminForm
-					action={action}
-					onChange={onChange}
-					errors={errors}
-				/>
+				<NotifyAdminForm action={action} onChange={onChange} errors={errors} />
 			);
 		case "webhook_out":
 			return (
@@ -143,11 +143,7 @@ export function ActionForm({ action, onChange }: Props) {
 			);
 		case "pause_automations_for_contact":
 			return (
-				<PauseContactForm
-					action={action}
-					onChange={onChange}
-					errors={errors}
-				/>
+				<PauseContactForm action={action} onChange={onChange} errors={errors} />
 			);
 		case "resume_automations_for_contact":
 			return <ResumeContactForm action={action} onChange={onChange} />;
@@ -161,20 +157,28 @@ export function ActionForm({ action, onChange }: Props) {
 			);
 		case "log_conversion_event":
 			return (
-				<LogConversionForm
+				<ConversionEventForm
 					action={action}
 					onChange={onChange}
 					errors={errors}
 				/>
 			);
 		case "change_main_menu":
-			return <ChangeMainMenuForm action={action} onChange={onChange} />;
+			return (
+				<ChangeMainMenuForm
+					action={action}
+					onChange={onChange}
+					errors={errors}
+				/>
+			);
 		default: {
-			// Exhaustiveness — unreachable in well-typed code, but we return a
-			// stub rather than crashing if an ActionType is added elsewhere.
-			const _exhaust: never = action;
-			void _exhaust;
-			return null;
+			return (
+				<AutomationControlsUnknownHint
+					action={action}
+					onChange={onChange}
+					knownTypes={Array.from(knownTypes)}
+				/>
+			);
 		}
 	}
 }

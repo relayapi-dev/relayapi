@@ -10,6 +10,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	automationEntrypoints,
+	automationScheduledJobs,
 	automations,
 	generateId,
 	socialAccounts,
@@ -21,10 +22,14 @@ import { assertWorkspaceScope } from "../lib/workspace-scope";
 import {
 	EntrypointCreateSchema,
 	EntrypointUpdateSchema,
+	isEntrypointKindSupportedOnChannel,
 	validateEntrypointConfig,
 } from "../schemas/automation-entrypoints";
 import { ErrorResponse } from "../schemas/common";
-import { armScheduleEntrypoint } from "../services/automations/scheduler";
+import {
+	armScheduleEntrypoint,
+	validateScheduleEntrypointFilters,
+} from "../services/automations/scheduler";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
 import type { Env, Variables } from "../types";
 import {
@@ -66,6 +71,7 @@ const EntrypointResponseSchema = z.object({
 	filters: z.record(z.string(), z.any()).nullable(),
 	allow_reentry: z.boolean(),
 	reentry_cooldown_min: z.number(),
+	daily_cap: z.number().nullable(),
 	priority: z.number(),
 	specificity: z.number(),
 	created_at: z.string(),
@@ -106,6 +112,7 @@ function serializeEntrypoint(
 		filters: (row.filters as Record<string, unknown> | null) ?? null,
 		allow_reentry: row.allowReentry,
 		reentry_cooldown_min: row.reentryCooldownMin,
+		daily_cap: row.dailyCap,
 		priority: row.priority,
 		specificity: row.specificity,
 		created_at: row.createdAt.toISOString(),
@@ -285,6 +292,17 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 			400,
 		);
 	}
+	if (!isEntrypointKindSupportedOnChannel(body.kind, body.channel)) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_CHANNEL",
+					message: `${body.kind} is not supported on ${body.channel}`,
+				},
+			},
+			400,
+		);
+	}
 	if (body.social_account_id) {
 		const [account] = await c
 			.get("db")
@@ -353,6 +371,22 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 		);
 	}
 	config = parsed.data as Record<string, unknown>;
+	if (body.kind === "schedule" && (body.status ?? "active") === "active") {
+		const filterValidation = validateScheduleEntrypointFilters(
+			body.filters ?? null,
+		);
+		if (!filterValidation.valid) {
+			return c.json(
+				{
+					error: {
+						code: "VALIDATION_ERROR",
+						message: filterValidation.error,
+					},
+				},
+				400,
+			);
+		}
+	}
 
 	if (body.kind === "webhook_inbound" && plaintextSecret) {
 		config.webhook_secret = await encryptToken(
@@ -418,8 +452,10 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 			filters: body.filters ?? null,
 			allowReentry: body.allow_reentry ?? true,
 			reentryCooldownMin: body.reentry_cooldown_min ?? 60,
+			dailyCap: body.daily_cap ?? null,
 			priority: body.priority ?? 100,
 			specificity,
+			status: body.status ?? "active",
 		})
 		.returning();
 	if (!inserted) {
@@ -529,6 +565,7 @@ app.openapi(updateEntrypoint, async (c) => {
 	if ("denied" in scoped) return scoped.denied as never;
 	const { ep: existing, automation } = scoped;
 	const prospectiveChannel = body.channel ?? existing.channel;
+	const prospectiveKind = body.kind ?? existing.kind;
 	const prospectiveAccountId =
 		body.social_account_id !== undefined
 			? (body.social_account_id ?? null)
@@ -539,6 +576,19 @@ app.openapi(updateEntrypoint, async (c) => {
 				error: {
 					code: "INVALID_CHANNEL",
 					message: "Entrypoint channel must match the automation channel",
+				},
+			},
+			400,
+		);
+	}
+	if (
+		!isEntrypointKindSupportedOnChannel(prospectiveKind, prospectiveChannel)
+	) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_CHANNEL",
+					message: `${prospectiveKind} is not supported on ${prospectiveChannel}`,
 				},
 			},
 			400,
@@ -579,6 +629,26 @@ app.openapi(updateEntrypoint, async (c) => {
 			);
 		}
 	}
+	const prospectiveStatus = body.status ?? existing.status;
+	if (prospectiveKind === "schedule" && prospectiveStatus === "active") {
+		const prospectiveFilters =
+			body.filters !== undefined
+				? (body.filters ?? null)
+				: (existing.filters as Record<string, unknown> | null);
+		const filterValidation =
+			validateScheduleEntrypointFilters(prospectiveFilters);
+		if (!filterValidation.valid) {
+			return c.json(
+				{
+					error: {
+						code: "VALIDATION_ERROR",
+						message: filterValidation.error,
+					},
+				},
+				400,
+			);
+		}
+	}
 
 	const patch: Partial<typeof automationEntrypoints.$inferInsert> = {
 		updatedAt: new Date(),
@@ -592,6 +662,7 @@ app.openapi(updateEntrypoint, async (c) => {
 	if (body.reentry_cooldown_min !== undefined) {
 		patch.reentryCooldownMin = body.reentry_cooldown_min;
 	}
+	if (body.daily_cap !== undefined) patch.dailyCap = body.daily_cap;
 	if (body.priority !== undefined) patch.priority = body.priority;
 	if (body.status !== undefined) patch.status = body.status;
 	if (body.filters !== undefined) {
@@ -717,11 +788,43 @@ app.openapi(updateEntrypoint, async (c) => {
 		}
 	}
 
-	const [updated] = await db
-		.update(automationEntrypoints)
-		.set(patch)
-		.where(eq(automationEntrypoints.id, id))
-		.returning();
+	const previousScheduleConfig = (existing.config ?? {}) as {
+		cron?: string;
+		timezone?: string;
+	};
+	const prospectiveScheduleConfig = (resolvedConfig ??
+		existing.config ??
+		{}) as {
+		cron?: string;
+		timezone?: string;
+	};
+	const cronChanged =
+		previousScheduleConfig.cron !== prospectiveScheduleConfig.cron ||
+		previousScheduleConfig.timezone !== prospectiveScheduleConfig.timezone;
+	const shouldRetirePendingScheduleJobs =
+		(existing.kind === "schedule" || prospectiveKind === "schedule") &&
+		(existing.kind !== prospectiveKind ||
+			existing.status !== prospectiveStatus ||
+			cronChanged);
+	const updated = await db.transaction(async (tx) => {
+		const [row] = await tx
+			.update(automationEntrypoints)
+			.set(patch)
+			.where(eq(automationEntrypoints.id, id))
+			.returning();
+		if (row && shouldRetirePendingScheduleJobs) {
+			await tx
+				.delete(automationScheduledJobs)
+				.where(
+					and(
+						eq(automationScheduledJobs.entrypointId, id),
+						eq(automationScheduledJobs.jobType, "scheduled_trigger"),
+						eq(automationScheduledJobs.status, "pending"),
+					),
+				);
+		}
+		return row;
+	});
 	if (!updated) return notFound(c);
 
 	// Re-arm on transitions that could have introduced or changed a
@@ -734,16 +837,6 @@ app.openapi(updateEntrypoint, async (c) => {
 	const wasActive = existing.status === "active";
 	const isActive = updated.status === "active";
 	const kindChanged = existing.kind !== updated.kind;
-	const prevCfg = (existing.config ?? {}) as {
-		cron?: string;
-		timezone?: string;
-	};
-	const nextCfg = (updated.config ?? {}) as {
-		cron?: string;
-		timezone?: string;
-	};
-	const cronChanged =
-		prevCfg.cron !== nextCfg.cron || prevCfg.timezone !== nextCfg.timezone;
 	const becameActive = !wasActive && isActive;
 	const shouldRearm =
 		updated.kind === "schedule" &&

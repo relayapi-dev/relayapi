@@ -19,15 +19,36 @@ import type {
 export type AutomationBindingType =
 	| "default_reply"
 	| "welcome_message"
-	| "conversation_starter"
+	| "get_started"
 	| "main_menu"
 	| "ice_breaker";
 
 export type AutomationBindingStatus =
 	| "active"
-	| "paused"
-	| "pending_sync"
-	| "sync_failed";
+	| "paused";
+
+export interface GetStartedBindingConfig {
+	payload: string;
+}
+
+export type MainMenuBindingItem =
+	| { label: string; action: "postback"; payload: string }
+	| { label: string; action: "url"; url: string };
+
+export interface MainMenuBindingConfig {
+	items: MainMenuBindingItem[];
+	composer_input_disabled?: boolean;
+}
+
+export interface IceBreakerBindingConfig {
+	questions: Array<{ question: string; payload: string }>;
+}
+
+export type AutomationBindingConfig =
+	| Record<string, never>
+	| GetStartedBindingConfig
+	| MainMenuBindingConfig
+	| IceBreakerBindingConfig;
 
 export interface AutomationBindingResponse {
 	id: string;
@@ -35,10 +56,19 @@ export interface AutomationBindingResponse {
 	workspace_id: string | null;
 	social_account_id: string;
 	channel: AutomationChannel;
-	binding_type: AutomationBindingType;
+	/**
+	 * Read-compatible with legacy rows. New writes accept only
+	 * `AutomationBindingType`.
+	 */
+	binding_type: string;
 	automation_id: string;
 	config: Record<string, unknown> | null;
 	status: string;
+	desired_active: boolean;
+	delete_after_sync: boolean;
+	sync_revision: number;
+	last_synced_revision: number;
+	sync_attempts: number;
 	last_synced_at: string | null;
 	sync_error: string | null;
 	created_at: string;
@@ -66,17 +96,39 @@ export interface AutomationBindingListParams {
 	workspace_id?: string;
 }
 
-export interface AutomationBindingCreateParams {
+interface AutomationBindingCreateBase {
 	social_account_id: string;
-	channel: AutomationChannel;
-	binding_type: AutomationBindingType;
 	automation_id: string;
-	config?: Record<string, unknown>;
 	workspace_id?: string;
 }
 
-export interface AutomationBindingUpdateParams
-	extends Partial<AutomationBindingCreateParams> {
+export type AutomationBindingCreateParams = AutomationBindingCreateBase &
+	(
+		| {
+				channel: AutomationChannel;
+				binding_type: "default_reply" | "welcome_message";
+				config?: Record<string, never>;
+		  }
+		| {
+				channel: "facebook";
+				binding_type: "get_started";
+				config: GetStartedBindingConfig;
+		  }
+		| {
+				channel: "instagram" | "facebook";
+				binding_type: "main_menu";
+				config: MainMenuBindingConfig;
+		  }
+		| {
+				channel: "instagram";
+				binding_type: "ice_breaker";
+				config: IceBreakerBindingConfig;
+		  }
+	);
+
+export interface AutomationBindingUpdateParams {
+	automation_id?: string;
+	config?: AutomationBindingConfig;
 	status?: AutomationBindingStatus;
 }
 
@@ -119,8 +171,8 @@ export class AutomationBindings extends APIResource {
 	}
 
 	/**
-	 * Update a binding. Throws `404 NOT_FOUND` when `social_account_id` or
-	 * `automation_id` references a resource not owned by the caller's org.
+	 * Update a binding's automation, config, or desired active/paused state. The
+	 * binding's account, channel, workspace, and type are immutable.
 	 */
 	update(
 		id: string,

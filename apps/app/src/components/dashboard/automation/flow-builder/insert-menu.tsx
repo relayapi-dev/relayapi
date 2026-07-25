@@ -17,10 +17,7 @@
 // pinned above the categorised list.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type {
-	AutomationCatalog,
-	CatalogNodeKind,
-} from "./use-catalog";
+import type { AutomationCatalog, CatalogNodeKind } from "./use-catalog";
 import { cn } from "@/lib/utils";
 
 const RECENT_STORAGE_KEY = "relayapi:automation:insert-menu:recent:v1";
@@ -69,7 +66,9 @@ function readRecent(): string[] {
 		if (!raw) return [];
 		const parsed = JSON.parse(raw);
 		return Array.isArray(parsed)
-			? parsed.filter((v): v is string => typeof v === "string").slice(0, RECENT_LIMIT)
+			? parsed
+					.filter((v): v is string => typeof v === "string")
+					.slice(0, RECENT_LIMIT)
 			: [];
 	} catch {
 		return [];
@@ -106,7 +105,8 @@ export function filterKinds(
 	const q = query.trim().toLowerCase();
 	if (!q) return kinds;
 	return kinds.filter((k) => {
-		const hay = `${k.label} ${k.category} ${k.description ?? ""} ${k.kind}`.toLowerCase();
+		const hay =
+			`${k.label} ${k.category} ${k.description ?? ""} ${k.kind}`.toLowerCase();
 		return hay.includes(q);
 	});
 }
@@ -234,6 +234,7 @@ export function InsertMenu({
 	if (!open) return null;
 
 	const commit = (row: Row) => {
+		if (!row.supported) return;
 		const next = pushRecent(row.kind.kind);
 		setRecent(next);
 		onInsert(
@@ -344,14 +345,17 @@ export function InsertMenu({
 											<button
 												key={`${section}:${row.kind.kind}`}
 												type="button"
+												disabled={!row.supported}
 												data-row-index={index}
 												onMouseEnter={() => setHighlightIndex(index)}
 												onClick={() => commit(row)}
 												className={cn(
 													"flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left",
-													selected
-														? "bg-[#f0f1f4]"
-														: "hover:bg-slate-50",
+													!row.supported
+														? "cursor-not-allowed opacity-60"
+														: selected
+															? "bg-[#f0f1f4]"
+															: "hover:bg-slate-50",
 												)}
 											>
 												<div className="min-w-0 flex-1">

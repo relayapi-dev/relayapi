@@ -1,65 +1,64 @@
-import type { MessageBlock, QuickReply } from "../../../schemas/automation-graph";
+import type { MessageBlock } from "../../../schemas/automation-graph";
 import { autoLayoutGraph } from "./_layout";
 import type { TemplateBuildInput, TemplateBuildOutput } from "./index";
 
-// TODO (v1.1): the rate-limit fields below (`max_sends_per_day`,
-// `cooldown_between_sends_ms`, `skip_if_already_messaged`) are accepted from
-// the template picker UI but are NOT yet enforced by the follow-entrypoint
-// matcher. Deferred to the v1.1 rate-limiting work. For now we intentionally
-// do NOT persist them on the emitted entrypoint config — the matcher would
-// ignore them, and leaving them in the DB config makes it look like they
-// work. Strip them at build time and revisit once the matcher honours them.
 type FollowToDmConfig = {
 	social_account_id?: string;
-	dm_message?: { blocks: MessageBlock[]; quick_replies?: QuickReply[] };
-	max_sends_per_day?: number;
-	cooldown_between_sends_ms?: number;
-	skip_if_already_messaged?: boolean;
+	dm_message?: { blocks: MessageBlock[] };
+	daily_cap?: number;
+	cooldown_hours?: number;
 };
 
 export function buildFollowToDm(
 	input: TemplateBuildInput,
 ): TemplateBuildOutput {
+	if (input.channel !== "instagram") {
+		throw new Error("follow_to_dm is only available for Instagram");
+	}
 	const cfg = (input.config ?? {}) as FollowToDmConfig;
 	const socialAccountId = input.socialAccountId ?? cfg.social_account_id;
-
-	const blocks: MessageBlock[] =
-		cfg.dm_message?.blocks && cfg.dm_message.blocks.length > 0
-			? cfg.dm_message.blocks
-			: [
-					{
-						id: "txt_welcome_follower",
-						type: "text",
-						text: "Thanks for following! Glad to have you.",
-					},
-				];
+	const blocks: MessageBlock[] = cfg.dm_message?.blocks?.length
+		? cfg.dm_message.blocks
+		: [
+				{
+					id: "txt_welcome_follower",
+					type: "text",
+					text: "Thanks for following! Glad to have you here.",
+				},
+			];
 
 	return {
-		name: "Follow → DM",
+		name: "Follower-first DM",
 		description:
-			"Sends a welcome DM to new followers and tags them for easy filtering.",
+			"On a follower's first inbound Instagram DM, verifies the follow relationship before welcoming them.",
 		graph: autoLayoutGraph({
 			schema_version: 1,
-			root_node_key: "welcome",
+			root_node_key: "check_follow",
 			nodes: [
+				{
+					key: "check_follow",
+					kind: "social_profile_check",
+					title: "Does this person follow us?",
+					config: { field: "is_user_follow_business" },
+					ports: [],
+				},
 				{
 					key: "welcome",
 					kind: "message",
-					title: "Welcome DM",
+					title: "Welcome follower",
 					config: {
 						blocks,
-						quick_replies: cfg.dm_message?.quick_replies,
 					},
 					ports: [],
 				},
 				{
 					key: "tag",
 					kind: "action_group",
-					title: "Tag as new follower",
+					title: "Tag follower",
 					config: {
 						actions: [
 							{
-								id: "act_tag_new_follower",
+								id: "act_tag_follower",
 								type: "tag_add",
 								tag: "new_follower",
 								on_error: "continue",
@@ -71,12 +70,37 @@ export function buildFollowToDm(
 				{
 					key: "done",
 					kind: "end",
-					title: "End",
-					config: { reason: "completed" },
+					title: "Welcomed",
+					config: { reason: "follower_welcomed" },
+					ports: [],
+				},
+				{
+					key: "not_follower",
+					kind: "end",
+					title: "Not a follower",
+					config: { reason: "not_a_follower" },
 					ports: [],
 				},
 			],
 			edges: [
+				{
+					from_node: "check_follow",
+					from_port: "follows",
+					to_node: "welcome",
+					to_port: "in",
+				},
+				{
+					from_node: "check_follow",
+					from_port: "not_follows",
+					to_node: "not_follower",
+					to_port: "in",
+				},
+				{
+					from_node: "check_follow",
+					from_port: "error",
+					to_node: "not_follower",
+					to_port: "in",
+				},
 				{
 					from_node: "welcome",
 					from_port: "next",
@@ -93,14 +117,12 @@ export function buildFollowToDm(
 		}),
 		entrypoints: [
 			{
-				kind: "follow",
-				// The matcher only needs the social_account scope (handled via the
-				// top-level `socialAccountId`); nothing on `config` is read today.
-				// See the TODO at the top of this file — v1.1 will expose the
-				// per-day / cooldown / dedupe knobs here once the matcher wires
-				// them up.
-				config: {},
+				kind: "dm_received",
+				config: { first_message_only: true },
 				socialAccountId: socialAccountId ?? null,
+				allowReentry: false,
+				reentryCooldownMin: Math.round((cfg.cooldown_hours ?? 0) * 60),
+				dailyCap: cfg.daily_cap ?? null,
 			},
 		],
 	};

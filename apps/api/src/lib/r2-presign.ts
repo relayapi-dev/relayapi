@@ -1,7 +1,16 @@
+import type { Database } from "@relayapi/db";
 import { AwsClient } from "aws4fetch";
 import type { Env } from "../types";
+import { mediaPublicHost } from "./deployment-mode";
+import { validateStoredMediaObject } from "./media-storage-policy";
+import {
+	loadRelayMediaPolicy,
+	type RelayMediaPolicy,
+	RelayMediaPolicyError,
+	relayMediaReferenceFromUrl,
+} from "./relay-media-policy";
 
-export const RELAY_MEDIA_HOST = "media.relayapi.dev";
+export { RELAY_MEDIA_HOST } from "./relay-media-policy";
 export const RELAY_R2_BUCKET = "relayapi-media";
 
 /**
@@ -94,15 +103,17 @@ export async function presignR2Url(
 	const pinContentType = method === "PUT" && !!contentType;
 	if (pinContentType && contentType) {
 		headers["content-type"] = contentType;
+		// A presigned PUT URL remains reusable until expiry. Require object
+		// creation so it cannot overwrite bytes after confirmation.
+		headers["if-none-match"] = "*";
 	}
 
 	const signed = await client.sign(url.toString(), {
 		method,
 		headers,
 		// content-type is in aws4fetch's UNSIGNABLE_HEADERS, so allHeaders is
-		// required to pin it into the PUT signature — matching the prior AWS SDK
-		// PutObjectCommand({ ContentType }) behavior. The client must then send
-		// the same Content-Type header when uploading to the presigned URL.
+		// required to pin it together with the create-only precondition. The
+		// client must send both headers exactly as returned by the API.
 		aws: { signQuery: true, allHeaders: pinContentType },
 	});
 	return signed.url;
@@ -112,7 +123,7 @@ export async function presignR2Url(
  * Generate a presigned GET (view) URL, served from the KV cache when warm.
  * Use this for any read path that signs the same storage key repeatedly.
  */
-export async function presignViewUrlWithCache(
+async function presignViewUrlWithCache(
 	env: Env,
 	client: AwsClient,
 	storageKey: string,
@@ -138,65 +149,189 @@ export async function presignViewUrlWithCache(
 
 	if (kv) {
 		// Fire-and-forget cache write; don't block the response on KV put.
-		kv.put(kvKey, presignedUrl, {
-			expirationTtl: Math.min(PRESIGN_CACHE_TTL_SECONDS, expiresIn - 60),
-		}).catch(() => {
-			// Cache write failures are non-fatal.
-		});
+		void kv
+			.put(kvKey, presignedUrl, {
+				expirationTtl: Math.min(PRESIGN_CACHE_TTL_SECONDS, expiresIn - 60),
+			})
+			.catch(() => {
+				// Cache write failures are non-fatal.
+			});
 	}
 
 	return presignedUrl;
 }
 
-export async function presignRelayMediaUrls<T extends { url: string | null }>(
+export class RelayMediaSigningUnavailableError extends Error {
+	constructor() {
+		super("Relay media GET signing is not configured");
+		this.name = "RelayMediaSigningUnavailableError";
+	}
+}
+
+async function presignRelayMediaValue<T>(
+	db: Database,
 	env: Env,
-	mediaArr: T[] | null,
-	expiresIn: number = 3600,
-	orgId: string | null = null,
-): Promise<T[] | null> {
-	if (!mediaArr || mediaArr.length === 0) return mediaArr;
+	value: T,
+	expiresIn: number,
+	organizationId: string,
+	rejectInvalid: boolean,
+	preloadedPolicy?: RelayMediaPolicy,
+): Promise<T> {
+	const policy =
+		preloadedPolicy ??
+		(await loadRelayMediaPolicy(
+			db,
+			organizationId,
+			value,
+			mediaPublicHost(env),
+		));
+	const violation = policy.violationFor(value);
+	if (violation && rejectInvalid) throw new RelayMediaPolicyError(violation);
+	if (policy.references.length === 0) return value;
+	if (rejectInvalid) {
+		const referencesByKey = new Map(
+			policy.references.flatMap((reference) =>
+				reference.storageKey
+					? [[reference.storageKey, reference] as const]
+					: [],
+			),
+		);
+		const references = [...referencesByKey.entries()];
+		// Keep R2 metadata checks bounded while avoiding one serial network roundtrip
+		// per attachment. Every key is checked immediately before GET signing.
+		for (let offset = 0; offset < references.length; offset += 6) {
+			await Promise.all(
+				references
+					.slice(offset, offset + 6)
+					.map(async ([storageKey, reference]) => {
+						const expected = policy.readyMediaByStorageKey.get(storageKey);
+						if (!expected) return;
+						const object = await env.MEDIA_BUCKET.head(storageKey);
+						if (!object) {
+							throw new RelayMediaPolicyError({
+								url: reference.url,
+								storageKey,
+								reason: "not_ready_or_not_owned",
+							});
+						}
+						const actual = validateStoredMediaObject(object);
+						if (!actual.ok) {
+							throw new RelayMediaPolicyError({
+								url: reference.url,
+								storageKey,
+								reason: "stored_object_invalid",
+							});
+						}
+						if (
+							actual.size !== expected.size ||
+							actual.mimeType !== expected.mimeType
+						) {
+							throw new RelayMediaPolicyError({
+								url: reference.url,
+								storageKey,
+								reason: "stored_object_drift",
+							});
+						}
+					}),
+			);
+		}
+	}
 
 	const client = getCachedR2Client(env);
-	if (!client) return mediaArr;
-	if (!mediaArr.some((item) => item.url?.includes(RELAY_MEDIA_HOST)))
-		return mediaArr;
+	if (!client) {
+		if (
+			rejectInvalid &&
+			policy.references.some(
+				(reference) =>
+					reference.storageKey &&
+					policy.readyStorageKeys.has(reference.storageKey),
+			)
+		) {
+			throw new RelayMediaSigningUnavailableError();
+		}
+		return value;
+	}
 
-	// Dedup presign work within this call — the same storage key appearing on
-	// multiple items only gets signed once even if the KV cache misses.
 	const presignedByKey = new Map<string, Promise<string>>();
+	const presignKey = (storageKey: string): Promise<string> => {
+		let result = presignedByKey.get(storageKey);
+		if (!result) {
+			result = presignViewUrlWithCache(env, client, storageKey, expiresIn);
+			presignedByKey.set(storageKey, result);
+		}
+		return result;
+	};
 
-	return Promise.all(
-		mediaArr.map(async (item) => {
-			if (!item.url?.includes(RELAY_MEDIA_HOST)) return item;
-
-			try {
-				const urlObj = new URL(item.url);
-				const storageKey = decodeURIComponent(urlObj.pathname.slice(1));
-
-				// SECURITY: When an orgId is supplied, only sign storage keys that
-				// belong to that org. Post media URLs are arbitrary client input;
-				// without this guard, presignRelayMediaUrls would sign a GET for any
-				// key learned from another org (cross-org R2 read oracle), mirroring
-				// the guard in confirmMedia. Internal callers that pass no orgId keep
-				// the previous unguarded behavior.
-				if (orgId !== null && !storageKey.startsWith(`${orgId}/`)) {
-					return item;
-				}
-
-				let presignedUrl = presignedByKey.get(storageKey);
-				if (!presignedUrl) {
-					presignedUrl = presignViewUrlWithCache(
-						env,
-						client,
-						storageKey,
-						expiresIn,
-					);
-					presignedByKey.set(storageKey, presignedUrl);
-				}
-				return { ...item, url: await presignedUrl } as T;
-			} catch {
-				return item;
+	const transform = async (candidate: unknown): Promise<unknown> => {
+		if (typeof candidate === "string") {
+			const reference = relayMediaReferenceFromUrl(
+				candidate,
+				mediaPublicHost(env),
+			);
+			if (
+				reference?.storageKey &&
+				policy.readyStorageKeys.has(reference.storageKey)
+			) {
+				return presignKey(reference.storageKey);
 			}
-		}),
+			return candidate;
+		}
+		if (Array.isArray(candidate)) {
+			return Promise.all(candidate.map((item) => transform(item)));
+		}
+		if (!candidate || typeof candidate !== "object") return candidate;
+		const prototype = Object.getPrototypeOf(candidate);
+		if (prototype !== Object.prototype && prototype !== null) return candidate;
+		const entries = await Promise.all(
+			Object.entries(candidate as Record<string, unknown>).map(
+				async ([key, item]) => [key, await transform(item)] as const,
+			),
+		);
+		return Object.fromEntries(entries);
+	};
+
+	return (await transform(value)) as T;
+}
+
+export async function presignRelayMediaUrls<T extends { url: string | null }>(
+	db: Database,
+	env: Env,
+	mediaArr: T[] | null,
+	expiresIn: number,
+	organizationId: string,
+	preloadedPolicy?: RelayMediaPolicy,
+): Promise<T[] | null> {
+	if (!mediaArr || mediaArr.length === 0) return mediaArr;
+	return presignRelayMediaValue(
+		db,
+		env,
+		mediaArr,
+		expiresIn,
+		organizationId,
+		false,
+		preloadedPolicy,
+	);
+}
+
+/**
+ * Final provider-boundary fence. It rejects any Relay URL that is malformed,
+ * cross-tenant, pending, deleted, oversized, or tied to a disallowed MIME row,
+ * then replaces every accepted Relay URL (including nested target options) with
+ * a short-lived R2 GET URL. External HTTP(S) URLs are preserved unchanged.
+ */
+export async function resolveRelayMediaForPublish<T>(
+	db: Database,
+	env: Env,
+	value: T,
+	organizationId: string,
+	expiresIn: number = 3600,
+): Promise<T> {
+	return presignRelayMediaValue(
+		db,
+		env,
+		value,
+		expiresIn,
+		organizationId,
+		true,
 	);
 }

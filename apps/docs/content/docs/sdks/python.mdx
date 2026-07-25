@@ -79,18 +79,30 @@ for acc in accounts.data:
 ### Upload Media
 
 ```python
+from urllib.parse import unquote, urlsplit
+
 # Get a presigned upload URL
 presign = client.media.presign(
     filename="photo.jpg",
     content_type="image/jpeg",
 )
 
-# Upload the file directly to the URL
+# PUT once using both headers required by the presign contract
 import httpx
 with open("photo.jpg", "rb") as f:
-    httpx.put(presign.upload_url, content=f.read(), headers={"Content-Type": "image/jpeg"})
+    upload = httpx.put(
+        presign.upload_url,
+        content=f.read(),
+        headers={"Content-Type": "image/jpeg", "If-None-Match": "*"},
+    )
+upload.raise_for_status()
 
-# Use the public URL in a post
+# Confirm the object so the pending upload becomes ready
+storage_key = unquote(urlsplit(presign.url).path.lstrip("/"))
+confirmed = client.media.confirm(storage_key=storage_key)
+assert confirmed.id == presign.id
+
+# Posts take a media object with the canonical URL, not the media ID
 post = client.posts.create(
     content="Check out this photo!",
     targets=["instagram"],

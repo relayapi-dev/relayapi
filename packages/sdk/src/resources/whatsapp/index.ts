@@ -38,13 +38,6 @@ export {
   type FlowSendParams,
 } from './flows';
 export {
-  Groups,
-  type GroupCreateResponse,
-  type GroupListResponse,
-  type GroupCreateParams,
-  type GroupListParams,
-} from './groups';
-export {
   Templates,
   type TemplateCreateResponse,
   type TemplateRetrieveResponse,

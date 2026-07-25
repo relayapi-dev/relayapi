@@ -22,7 +22,14 @@ export const MediaPresignRequest = z.object({
 });
 
 export const MediaPresignResponse = z.object({
+	id: z.string().describe("ID of the pending media upload intent"),
 	upload_url: z.string().url().describe("Pre-signed PUT URL for uploading"),
+	upload_headers: z
+		.object({
+			"Content-Type": z.string(),
+			"If-None-Match": z.literal("*"),
+		})
+		.describe("Exact headers required by the pre-signed create-only PUT"),
 	url: z.string().url().describe("Public URL after upload completes"),
 	expires_in: z.number().int().describe("Seconds until the upload URL expires"),
 });

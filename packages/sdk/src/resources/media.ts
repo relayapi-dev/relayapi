@@ -35,8 +35,9 @@ export class Media extends APIResource {
   }
 
   /**
-   * Generate a pre-signed URL for direct upload to R2. The client can PUT the file
-   * to the returned URL.
+   * Create a pending media upload intent and generate a pre-signed R2 PUT URL. PUT
+   * the file with the exact declared Content-Type, then call confirm(); confirmation
+   * is mandatory before using the canonical media URL.
    */
   getPresignURL(
     body: MediaGetPresignURLParams,
@@ -46,7 +47,8 @@ export class Media extends APIResource {
   }
 
   /**
-   * Confirm that a presigned upload completed successfully.
+   * Mandatory final step for a presigned upload. Verifies the stored object and
+   * marks the pending media intent ready.
    */
   confirm(body: MediaConfirmParams, options?: RequestOptions): APIPromise<MediaRetrieveResponse> {
     return this._client.post('/v1/media/confirm', { body, ...options });
@@ -121,6 +123,11 @@ export interface MediaRetrieveResponse {
 
 export interface MediaGetPresignURLResponse {
   /**
+   * ID of the pending media upload intent
+   */
+  id: string;
+
+  /**
    * Seconds until the upload URL expires
    */
   expires_in: number;
@@ -131,9 +138,22 @@ export interface MediaGetPresignURLResponse {
   upload_url: string;
 
   /**
+   * Exact headers required by the pre-signed create-only PUT
+   */
+  upload_headers: MediaGetPresignURLResponse.UploadHeaders;
+
+  /**
    * Public URL after upload completes
    */
   url: string;
+}
+
+export namespace MediaGetPresignURLResponse {
+  export interface UploadHeaders {
+    'Content-Type': string;
+
+    'If-None-Match': '*';
+  }
 }
 
 export interface MediaUploadResponse {
@@ -177,7 +197,8 @@ export interface MediaGetPresignURLParams {
 
 export interface MediaConfirmParams {
   /**
-   * The storage key from the presign response URL
+   * The path portion of the canonical url returned by getPresignURL(), without the
+   * leading slash
    */
   storage_key: string;
 }

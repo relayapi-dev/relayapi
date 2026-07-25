@@ -4,6 +4,7 @@ import {
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
 } from "./types";
 
 const TIKTOK_API = "https://open.tiktokapis.com/v2";
@@ -80,10 +81,11 @@ export function parseTikTokStatusResponse(raw: string): TikTokStatusResponse {
 async function pollPublishStatus(
 	accessToken: string,
 	publishId: string,
-	maxAttempts = 30,
+	maxAttempts = 1,
 	intervalMs = 5000,
 ): Promise<TikTokStatusResponse> {
 	let httpFailures = 0;
+	let lastStatus: TikTokStatusResponse | null = null;
 	for (let i = 0; i < maxAttempts; i++) {
 		if (i > 0) {
 			await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -138,6 +140,7 @@ async function pollPublishStatus(
 		// Status responses are small provider JSON documents. Read the bounded body
 		// as text so documented int64 post ids can be preserved exactly.
 		const status = parseTikTokStatusResponse(await res.text());
+		lastStatus = status;
 
 		if (status.error?.code && status.error.code !== "ok") {
 			throw new PublishError(
@@ -168,14 +171,144 @@ async function pollPublishStatus(
 		// PROCESSING_UPLOAD or PROCESSING_DOWNLOAD — keep polling
 	}
 
-	throw new PublishError(
-		"TikTok publish status polling timed out after the publish job was accepted",
-		{ code: "PUBLISH_OUTCOME_UNKNOWN" },
-	);
+	if (lastStatus?.data?.status) return lastStatus;
+	throw new PublishError("TikTok publish status could not be observed", {
+		code: "PUBLISH_OUTCOME_UNKNOWN",
+	});
+}
+
+function tiktokStatusResult(
+	publishId: string,
+	status: TikTokStatusResponse,
+): PublishResult {
+	if (status.error?.code && status.error.code !== "ok") {
+		return {
+			success: false,
+			provider_outcome: {
+				disposition: "outcome_unknown",
+				provider_operation_id: publishId,
+				provider_state: status.error.code,
+			},
+			error: {
+				code: status.error.code,
+				message:
+					status.error.message ?? "TikTok publish status is unavailable.",
+			},
+		};
+	}
+
+	const providerState = status.data?.status;
+	if (providerState === "FAILED") {
+		return {
+			success: false,
+			provider_outcome: {
+				disposition: "failed",
+				provider_operation_id: publishId,
+				provider_state: providerState,
+			},
+			error: {
+				code: "TIKTOK_PUBLISH_FAILED",
+				message: status.data?.fail_reason ?? "TikTok publish failed.",
+			},
+		};
+	}
+	if (providerState === "SEND_TO_USER_INBOX") {
+		return {
+			success: true,
+			provider_outcome: {
+				disposition: "awaiting_user_action",
+				provider_operation_id: publishId,
+				provider_state: providerState,
+			},
+		};
+	}
+	if (providerState === "PUBLISH_COMPLETE") {
+		const postId = status.data?.publicaly_available_post_id?.[0];
+		if (!postId) {
+			return {
+				success: false,
+				provider_outcome: {
+					disposition: "outcome_unknown",
+					provider_operation_id: publishId,
+					provider_state: providerState,
+				},
+				error: {
+					code: "PUBLISH_OUTCOME_UNKNOWN",
+					message:
+						"TikTok completed the publish job but did not expose a public post ID.",
+				},
+			};
+		}
+		return {
+			success: true,
+			platform_post_id: postId,
+			provider_outcome: {
+				disposition: "published",
+				provider_operation_id: publishId,
+				provider_state: providerState,
+				platform_post_id: postId,
+			},
+		};
+	}
+	if (
+		providerState === "PROCESSING_UPLOAD" ||
+		providerState === "PROCESSING_DOWNLOAD"
+	) {
+		return {
+			success: true,
+			provider_outcome: {
+				disposition: "processing",
+				provider_operation_id: publishId,
+				provider_state: providerState,
+			},
+		};
+	}
+	return {
+		success: false,
+		provider_outcome: {
+			disposition: "outcome_unknown",
+			provider_operation_id: publishId,
+			provider_state: providerState ?? "MISSING_STATUS",
+		},
+		error: {
+			code: "PUBLISH_OUTCOME_UNKNOWN",
+			message: "TikTok returned an undocumented or missing publish status.",
+		},
+	};
 }
 
 export const tiktokPublisher: Publisher = {
 	platform: "tiktok",
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		if (!request.provider_operation_id) {
+			return {
+				success: false,
+				provider_outcome: { disposition: "outcome_unknown" },
+				error: {
+					code: "MISSING_PROVIDER_OPERATION_ID",
+					message: "TikTok reconciliation requires the original publish_id.",
+				},
+			};
+		}
+		try {
+			const status = await pollPublishStatus(
+				request.account.access_token,
+				request.provider_operation_id,
+				1,
+			);
+			return tiktokStatusResult(request.provider_operation_id, status);
+		} catch (error) {
+			const result = classifyPublishError(error);
+			return {
+				...result,
+				provider_outcome: {
+					disposition: "outcome_unknown",
+					provider_operation_id: request.provider_operation_id,
+					provider_state: request.provider_state ?? undefined,
+				},
+			};
+		}
+	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
@@ -453,43 +586,7 @@ async function publishVideo(
 	// Poll for completion
 	const status = await pollPublishStatus(accessToken, publishId);
 
-	if (status.error?.code && status.error.code !== "ok") {
-		return {
-			success: false,
-			error: {
-				code: status.error.code,
-				message: status.error.message ?? "TikTok publish failed.",
-			},
-		};
-	}
-
-	if (status.data?.status === "FAILED") {
-		return {
-			success: false,
-			error: {
-				code: "TIKTOK_PUBLISH_FAILED",
-				message: status.data.fail_reason ?? "TikTok publish failed.",
-			},
-		};
-	}
-
-	// SEND_TO_USER_INBOX means content was sent to user's TikTok inbox for review
-	if (status.data?.status === "SEND_TO_USER_INBOX") {
-		return {
-			success: true,
-			platform_post_id: publishId,
-			platform_url: "https://www.tiktok.com/messages?lang=en",
-		};
-	}
-
-	const postIds = status.data?.publicaly_available_post_id;
-	const postId = postIds?.[0];
-
-	return {
-		success: true,
-		platform_post_id: postId ?? publishId,
-		platform_url: undefined,
-	};
+	return tiktokStatusResult(publishId, status);
 }
 
 async function publishPhotos(
@@ -628,41 +725,5 @@ async function publishPhotos(
 	// Poll for completion
 	const status = await pollPublishStatus(accessToken, publishId);
 
-	if (status.error?.code && status.error.code !== "ok") {
-		return {
-			success: false,
-			error: {
-				code: status.error.code,
-				message: status.error.message ?? "TikTok publish failed.",
-			},
-		};
-	}
-
-	if (status.data?.status === "FAILED") {
-		return {
-			success: false,
-			error: {
-				code: "TIKTOK_PUBLISH_FAILED",
-				message: status.data.fail_reason ?? "TikTok publish failed.",
-			},
-		};
-	}
-
-	// SEND_TO_USER_INBOX means content was sent to user's TikTok inbox for review
-	if (status.data?.status === "SEND_TO_USER_INBOX") {
-		return {
-			success: true,
-			platform_post_id: publishId,
-			platform_url: "https://www.tiktok.com/messages?lang=en",
-		};
-	}
-
-	const postIds = status.data?.publicaly_available_post_id;
-	const postId = postIds?.[0];
-
-	return {
-		success: true,
-		platform_post_id: postId ?? publishId,
-		platform_url: undefined,
-	};
+	return tiktokStatusResult(publishId, status);
 }

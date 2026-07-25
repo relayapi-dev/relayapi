@@ -7,8 +7,9 @@ interface TemplateContext {
 
 /**
  * Recursively resolves merge-tag templates inside JSON-like config values.
- * This lets nodes interpolate `{{contact.*}}` / `{{state.*}}` in strings,
- * nested objects, arrays, headers, and request/webhook payloads.
+ * This lets nodes interpolate `{{contact.*}}` / `{{context.*}}` (or the
+ * `{{state.*}}` alias) in strings, nested objects, arrays, headers, and
+ * request/webhook payloads.
  */
 export function resolveTemplatedValue(
 	value: unknown,

@@ -9,11 +9,23 @@ import {
 	threadExecutions,
 } from "@relayapi/db";
 import { and, asc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { resolveRelayMediaForPublish } from "../lib/r2-presign";
+import { RelayMediaPolicyError } from "../lib/relay-media-policy";
 import { getPublisher } from "../publishers";
-import type { MediaAttachment, PublishResult } from "../publishers/types";
+import {
+	isNonTerminalProviderOutcome,
+	isTerminalProviderSuccess,
+	type MediaAttachment,
+	type PublishResult,
+} from "../publishers/types";
 import type { Platform } from "../schemas/common";
 import type { Env } from "../types";
 import { dispatchPublishOutbox, publishOutboxRow } from "./publish-outbox";
+import {
+	normalizeProviderOutcome,
+	providerReconcileAt,
+	requiresPublishOutcomeReconciliation,
+} from "./publisher-runner";
 import { refreshTokenIfNeeded } from "./token-refresh-coordinator";
 import {
 	enqueuePersistedWebhookEvent,
@@ -296,6 +308,22 @@ export async function publishThreadPosition(
 		const postTargetList = targetsByPost.get(post.id) ?? [];
 		const overrides = (post.platformOverrides ?? {}) as Record<string, unknown>;
 		const mediaItems = (overrides._media as MediaAttachment[]) ?? [];
+		let mediaPolicyFailure: RelayMediaPolicyError | null = null;
+		let resolvedMediaItems = mediaItems;
+		let resolvedOverrides = overrides;
+		try {
+			const resolved = await resolveRelayMediaForPublish(
+				db,
+				env,
+				{ mediaItems, overrides },
+				orgId,
+			);
+			resolvedMediaItems = resolved.mediaItems;
+			resolvedOverrides = resolved.overrides;
+		} catch (error) {
+			if (!(error instanceof RelayMediaPolicyError)) throw error;
+			mediaPolicyFailure = error;
+		}
 
 		// Atomically claim this thread item before any platform calls. Cloudflare Queues
 		// are at-least-once and handleThreadPublish retries the whole position on any
@@ -433,6 +461,39 @@ export async function publishThreadPosition(
 				continue;
 			}
 
+			if (mediaPolicyFailure) {
+				await db.transaction(async (tx) => {
+					const [saved] = await tx
+						.update(postTargets)
+						.set({
+							status: "failed",
+							deliveryState: "failed",
+							error: mediaPolicyFailure.message,
+							errorCode: "MEDIA_NOT_READY",
+							updatedAt: new Date(),
+						})
+						.where(
+							and(
+								eq(postTargets.id, target.id),
+								eq(postTargets.attemptId, attemptId),
+								executionFence,
+							),
+						)
+						.returning({ id: postTargets.id });
+					if (!saved) throw new ThreadExecutionLeaseLostError();
+					await tx
+						.update(publishAttempts)
+						.set({
+							state: "failed",
+							completedAt: new Date(),
+							error: mediaPolicyFailure.message,
+						})
+						.where(eq(publishAttempts.id, attemptId));
+				});
+				failCount++;
+				continue;
+			}
+
 			const account = accountMap.get(target.socialAccountId);
 			if (!account) {
 				await db.transaction(async (tx) => {
@@ -539,7 +600,8 @@ export async function publishThreadPosition(
 
 				// Build target_options with reply_to for non-root items
 				const targetOpts: Record<string, unknown> = {
-					...((overrides[target.platform] as Record<string, unknown>) ?? {}),
+					...((resolvedOverrides[target.platform] as Record<string, unknown>) ??
+						{}),
 				};
 
 				if ((post.threadPosition ?? 0) > 0) {
@@ -618,7 +680,7 @@ export async function publishThreadPosition(
 				const result: PublishResult = await publisher.publish({
 					operation_id: target.publishOperationId,
 					content: post.content ?? "",
-					media: mediaItems,
+					media: resolvedMediaItems,
 					target_options: targetOpts,
 					account: {
 						id: account.id,
@@ -631,17 +693,41 @@ export async function publishThreadPosition(
 					},
 				});
 
-				if (result.success) {
+				const observedAt = new Date();
+				let providerOutcome = normalizeProviderOutcome(result);
+				// A reply chain cannot advance from a job/upload/request ID. Even a
+				// terminal batch-style result must contain one real content ID here.
+				if (
+					isTerminalProviderSuccess(providerOutcome) &&
+					!providerOutcome.platform_post_id?.trim()
+				) {
+					providerOutcome = {
+						disposition: "outcome_unknown",
+						provider_operation_id: providerOutcome.provider_operation_id,
+						provider_state: providerOutcome.provider_state,
+						effects: providerOutcome.effects,
+					};
+				}
+				const providerFields = {
+					providerDisposition: providerOutcome.disposition,
+					providerOperationId: providerOutcome.provider_operation_id ?? null,
+					providerState: providerOutcome.provider_state ?? null,
+					providerEffects: providerOutcome.effects ?? null,
+				};
+
+				if (isTerminalProviderSuccess(providerOutcome)) {
 					await db.transaction(async (tx) => {
 						const [saved] = await tx
 							.update(postTargets)
 							.set({
 								status: "published",
 								deliveryState: "succeeded",
-								platformPostId: result.platform_post_id ?? null,
-								platformUrl: result.platform_url ?? null,
-								publishedAt: new Date(),
-								updatedAt: new Date(),
+								platformPostId: providerOutcome.platform_post_id ?? null,
+								platformUrl: providerOutcome.platform_url ?? null,
+								...providerFields,
+								nextReconcileAt: null,
+								publishedAt: observedAt,
+								updatedAt: observedAt,
 							})
 							.where(
 								and(
@@ -656,24 +742,67 @@ export async function publishThreadPosition(
 							.update(publishAttempts)
 							.set({
 								state: "succeeded",
-								providerPostId: result.platform_post_id ?? null,
-								completedAt: new Date(),
+								providerPostId: providerOutcome.platform_post_id ?? null,
+								...providerFields,
+								completedAt: observedAt,
 							})
 							.where(eq(publishAttempts.id, attemptId));
 					});
 
 					// Store this post's platform ID for the next item's reply chain
-					if (result.platform_post_id) {
+					if (providerOutcome.platform_post_id) {
 						previousPlatformPostIds.set(
 							target.socialAccountId,
-							result.platform_post_id,
+							providerOutcome.platform_post_id,
 						);
 					}
 					successCount++;
+				} else if (isNonTerminalProviderOutcome(providerOutcome)) {
+					const nextReconcileAt =
+						providerReconcileAt(providerOutcome, observedAt) ??
+						new Date(observedAt.getTime() + 15_000);
+					await db.transaction(async (tx) => {
+						const [saved] = await tx
+							.update(postTargets)
+							.set({
+								status: "publishing",
+								deliveryState: "unknown",
+								platformPostId: providerOutcome.platform_post_id ?? null,
+								platformUrl: providerOutcome.platform_url ?? null,
+								...providerFields,
+								nextReconcileAt,
+								leaseExpiresAt: null,
+								error: null,
+								errorCode: null,
+								updatedAt: observedAt,
+							})
+							.where(
+								and(
+									eq(postTargets.id, target.id),
+									eq(postTargets.attemptId, attemptId),
+									executionFence,
+								),
+							)
+							.returning({ id: postTargets.id });
+						if (!saved) throw new ThreadExecutionLeaseLostError();
+						await tx
+							.update(publishAttempts)
+							.set({
+								state: "unknown",
+								providerPostId: providerOutcome.platform_post_id ?? null,
+								...providerFields,
+								completedAt: observedAt,
+								leaseExpiresAt: observedAt,
+								error: null,
+							})
+							.where(eq(publishAttempts.id, attemptId));
+					});
+					unknownCount++;
+					failCount++;
 				} else if (
-					["PLATFORM_ERROR", "RATE_LIMITED", "PUBLISH_FAILED"].includes(
-						result.error?.code ?? "PUBLISH_FAILED",
-					)
+					providerOutcome.disposition === "partial" ||
+					providerOutcome.disposition === "outcome_unknown" ||
+					requiresPublishOutcomeReconciliation(result)
 				) {
 					await db.transaction(async (tx) => {
 						const [saved] = await tx
@@ -681,6 +810,10 @@ export async function publishThreadPosition(
 							.set({
 								status: "publishing",
 								deliveryState: "unknown",
+								platformPostId: providerOutcome.platform_post_id ?? null,
+								platformUrl: providerOutcome.platform_url ?? null,
+								...providerFields,
+								nextReconcileAt: null,
 								error: result.error?.message ?? "Provider outcome unknown",
 								errorCode: "PUBLISH_OUTCOME_UNKNOWN",
 								updatedAt: new Date(),
@@ -698,6 +831,9 @@ export async function publishThreadPosition(
 							.update(publishAttempts)
 							.set({
 								state: "unknown",
+								providerPostId: providerOutcome.platform_post_id ?? null,
+								...providerFields,
+								completedAt: observedAt,
 								error: result.error?.message ?? "Provider outcome unknown",
 							})
 							.where(eq(publishAttempts.id, attemptId));
@@ -711,7 +847,13 @@ export async function publishThreadPosition(
 							.set({
 								status: "failed",
 								deliveryState: "failed",
+								platformPostId: providerOutcome.platform_post_id ?? null,
+								platformUrl: providerOutcome.platform_url ?? null,
+								...providerFields,
+								nextReconcileAt: null,
 								error: result.error?.message ?? "Unknown error",
+								errorCode: result.error?.code ?? "PUBLISH_FAILED",
+								errorDetail: result.error?.detail ?? null,
 								updatedAt: new Date(),
 							})
 							.where(
@@ -727,7 +869,8 @@ export async function publishThreadPosition(
 							.update(publishAttempts)
 							.set({
 								state: "failed",
-								completedAt: new Date(),
+								...providerFields,
+								completedAt: observedAt,
 								error: result.error?.message ?? "Publish rejected",
 							})
 							.where(eq(publishAttempts.id, attemptId));

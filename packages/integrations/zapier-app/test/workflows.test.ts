@@ -115,6 +115,10 @@ describe('Zapier workflow contracts', () => {
         return {
           data: {
             upload_url: 'https://account.r2.cloudflarestorage.com/bucket/key?signature=1',
+            upload_headers: {
+              'Content-Type': 'image/jpeg',
+              'If-None-Match': '*',
+            },
             url: 'https://media.relayapi.dev/org_123/file_123/photo%20one.jpg',
           },
         };
@@ -144,7 +148,10 @@ describe('Zapier workflow contracts', () => {
     expect(request).toHaveBeenCalledTimes(4);
     expect(request.mock.calls[2]?.[0]).toMatchObject({
       method: 'PUT',
-      headers: { 'Content-Type': 'image/jpeg' },
+      headers: {
+        'Content-Type': 'image/jpeg',
+        'If-None-Match': '*',
+      },
       body: fileBody,
       raw: true,
     });

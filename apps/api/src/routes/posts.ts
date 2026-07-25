@@ -12,7 +12,6 @@ import {
 	postRecyclingConfigs,
 	posts,
 	postTargets,
-	publishAttempts,
 	publishOutbox,
 	shortLinkConfigs,
 	shortLinks,
@@ -26,6 +25,7 @@ import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { decryptAccountToken } from "../lib/account-token-crypto";
 import { maybeDecrypt } from "../lib/crypto";
 import { parseCsv } from "../lib/csv-parser";
+import { mediaPublicHost } from "../lib/deployment-mode";
 import {
 	getLinkedInRestHeaders,
 	LINKEDIN_REST_BASE,
@@ -38,6 +38,11 @@ import {
 	type TimestampIdCursor,
 } from "../lib/pagination-cursor";
 import { presignRelayMediaUrls, RELAY_MEDIA_HOST } from "../lib/r2-presign";
+import {
+	loadRelayMediaPolicy,
+	type RelayMediaPolicy,
+	type RelayMediaViolation,
+} from "../lib/relay-media-policy";
 import {
 	inheritOperationalCreateScope,
 	workspaceScopeKey,
@@ -69,6 +74,10 @@ import {
 	UpdatePostBody,
 } from "../schemas/posts";
 import { chooseCrossPostSourceTarget } from "../services/cross-post-processor";
+import {
+	lockProviderReconciliationScope,
+	persistManualProviderReconciliation,
+} from "../services/provider-reconciliation-persistence";
 import {
 	dispatchPublishOutbox,
 	publishOutboxRow,
@@ -117,11 +126,47 @@ function responseMediaType(value: string | null): MediaItem["type"] {
 }
 
 async function presignMediaUrls(
+	db: Database,
 	env: Env,
 	mediaArr: MediaItem[] | null,
 	orgId: string,
+	preloadedPolicy?: RelayMediaPolicy,
 ): Promise<MediaItem[] | null> {
-	return presignRelayMediaUrls(env, mediaArr, PRESIGN_GET_EXPIRES, orgId);
+	return presignRelayMediaUrls(
+		db,
+		env,
+		mediaArr,
+		PRESIGN_GET_EXPIRES,
+		orgId,
+		preloadedPolicy,
+	);
+}
+
+function mediaPolicyInput(value: {
+	media?: unknown;
+	target_options?: unknown;
+}): unknown {
+	return { media: value.media, target_options: value.target_options };
+}
+
+function mediaPolicyError(violation: RelayMediaViolation) {
+	return {
+		error: {
+			code: "MEDIA_NOT_READY",
+			message:
+				violation.reason === "invalid_relay_url"
+					? "Relay-hosted media must use its canonical HTTPS URL"
+					: "Relay-hosted media must belong to this organization and be ready before it can be used",
+			details: { url: violation.url },
+		},
+	};
+}
+
+function violationForPostInput(
+	policy: RelayMediaPolicy,
+	value: { media?: unknown; target_options?: unknown },
+): RelayMediaViolation | null {
+	return policy.violationFor(mediaPolicyInput(value));
 }
 
 /**
@@ -1001,6 +1046,20 @@ app.openapi(listPosts, async (c) => {
 
 	const hasMore = allPosts.length > limit;
 	const data = allPosts.slice(0, limit);
+	const pageRelayMediaPolicy = includeMedia
+		? await loadRelayMediaPolicy(
+				db,
+				orgId,
+				data.map((post) => {
+					const overrides = post.platformOverrides as Record<
+						string,
+						unknown
+					> | null;
+					return overrides?._media ?? null;
+				}),
+				mediaPublicHost(c.env),
+			)
+		: undefined;
 
 	const postIds = data.map((p) => p.id);
 
@@ -1142,9 +1201,11 @@ app.openapi(listPosts, async (c) => {
 				if (!mediaArr) {
 					mediaArr = includeMedia
 						? await presignMediaUrls(
+								db,
 								c.env,
 								attachThumbnails(rawMedia, thumbMap),
 								orgId,
+								pageRelayMediaPolicy,
 							)
 						: rawMedia;
 				}
@@ -1257,9 +1318,11 @@ app.openapi(listPosts, async (c) => {
 					? (overrides._media as MediaItem[])
 					: null;
 				mediaArr = await presignMediaUrls(
+					db,
 					c.env,
 					attachThumbnails(rawMedia, leanThumbMap),
 					orgId,
+					pageRelayMediaPolicy,
 				);
 			}
 			return {
@@ -1585,6 +1648,16 @@ app.openapi(createPostRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const relayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		mediaPolicyInput(body),
+		mediaPublicHost(c.env),
+	);
+	const mediaViolation = violationForPostInput(relayMediaPolicy, body);
+	if (mediaViolation) {
+		return c.json(mediaPolicyError(mediaViolation), 400 as never);
+	}
 
 	const isDraft = body.scheduled_at === "draft";
 	const isAuto = body.scheduled_at === "auto";
@@ -2172,6 +2245,7 @@ app.openapi(createPostRoute, async (c) => {
 		);
 
 		const presignedMedia = await presignMediaUrls(
+			db,
 			c.env,
 			body.media ?? null,
 			orgId,
@@ -2207,6 +2281,7 @@ app.openapi(createPostRoute, async (c) => {
 	);
 
 	const presignedMedia = await presignMediaUrls(
+		db,
 		c.env,
 		body.media ?? null,
 		orgId,
@@ -2352,6 +2427,7 @@ app.openapi(getPost, async (c) => {
 	// Fall back to presigned R2 URLs, attaching durable thumbnails first.
 	if (!mediaArr) {
 		mediaArr = await presignMediaUrls(
+			db,
 			c.env,
 			attachThumbnails(rawMedia, thumbMap),
 			orgId,
@@ -2419,6 +2495,16 @@ app.openapi(updatePostRoute, async (c) => {
 			},
 			400,
 		);
+	}
+	const relayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		mediaPolicyInput(body),
+		mediaPublicHost(c.env),
+	);
+	const mediaViolation = violationForPostInput(relayMediaPolicy, body);
+	if (mediaViolation) {
+		return c.json(mediaPolicyError(mediaViolation), 400 as never);
 	}
 
 	const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -2705,6 +2791,7 @@ app.openapi(updatePostRoute, async (c) => {
 	const finalOverrides =
 		(updated.platformOverrides as Record<string, unknown>) ?? {};
 	const responseMedia = await presignMediaUrls(
+		db,
 		c.env,
 		finalOverrides._media ? (finalOverrides._media as MediaItem[]) : null,
 		orgId,
@@ -3020,8 +3107,26 @@ app.openapi(reconcilePublishTarget, async (c) => {
 
 	const now = new Date();
 	const result = await db.transaction(async (tx) => {
+		const scope = await lockProviderReconciliationScope(tx, {
+			postId: id,
+			organizationId: orgId,
+			threadGroupId: post.threadGroupId,
+		});
+		if (!scope.locked) {
+			return {
+				conflict:
+					scope.conflict === "thread"
+						? ("thread" as const)
+						: ("target" as const),
+			};
+		}
+		const lockedPost = scope.post;
+		if (!lockedPost.threadGroupId && lockedPost.publishLeaseId !== null) {
+			return { conflict: "target" as const };
+		}
+
 		const threadLeaseId = `reconcile:${crypto.randomUUID()}`;
-		if (post.threadGroupId) {
+		if (lockedPost.threadGroupId) {
 			// Serialize reconciliation for every unknown target in a thread. Two
 			// operators may resolve different targets concurrently; without a row
 			// fence both transactions can observe the other target as unresolved and
@@ -3037,7 +3142,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				})
 				.where(
 					and(
-						eq(threadExecutions.threadGroupId, post.threadGroupId),
+						eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 						eq(threadExecutions.organizationId, orgId),
 						eq(threadExecutions.status, "unknown"),
 					),
@@ -3047,46 +3152,26 @@ app.openapi(reconcilePublishTarget, async (c) => {
 		}
 
 		const succeeded = body.outcome === "succeeded";
-		const standaloneExecutionFence = post.threadGroupId
-			? sql`TRUE`
-			: sql`EXISTS (
-				SELECT 1 FROM posts AS reconcile_parent
-				WHERE reconcile_parent.id = ${id}
-					AND reconcile_parent.organization_id = ${orgId}
-					AND reconcile_parent.publish_lease_id IS NULL
-			)`;
-		const [target] = await tx
-			.update(postTargets)
-			.set({
-				status: succeeded ? "published" : "failed",
-				deliveryState: succeeded ? "succeeded" : "failed",
-				platformPostId: succeeded ? body.provider_post_id : null,
-				platformUrl: succeeded ? (body.provider_url ?? null) : null,
-				publishedAt: succeeded ? now : null,
-				error: succeeded ? null : body.error_message,
-				errorCode: succeeded ? null : body.error_code,
-				errorDetail: null,
-				leaseExpiresAt: null,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(postTargets.id, targetId),
-					eq(postTargets.postId, id),
-					eq(postTargets.publishOperationId, body.publish_operation_id),
-					eq(postTargets.deliveryState, "unknown"),
-					standaloneExecutionFence,
-				),
-			)
-			.returning({ id: postTargets.id });
-		if (!target) {
-			if (post.threadGroupId) {
+		const saved = await persistManualProviderReconciliation(tx, {
+			targetId,
+			postId: id,
+			organizationId: orgId,
+			publishOperationId: body.publish_operation_id,
+			succeeded,
+			providerPostId: succeeded ? body.provider_post_id : null,
+			providerUrl: succeeded ? (body.provider_url ?? null) : null,
+			errorCode: succeeded ? null : body.error_code,
+			errorMessage: succeeded ? null : body.error_message,
+			observedAt: now,
+		});
+		if (!saved) {
+			if (lockedPost.threadGroupId) {
 				await tx
 					.update(threadExecutions)
 					.set({ leaseId: null, leaseExpiresAt: null, updatedAt: now })
 					.where(
 						and(
-							eq(threadExecutions.threadGroupId, post.threadGroupId),
+							eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 							eq(threadExecutions.organizationId, orgId),
 							eq(threadExecutions.status, "unknown"),
 							eq(threadExecutions.leaseId, threadLeaseId),
@@ -3095,23 +3180,6 @@ app.openapi(reconcilePublishTarget, async (c) => {
 			}
 			return { conflict: "target" as const };
 		}
-
-		await tx
-			.update(publishAttempts)
-			.set({
-				state: succeeded ? "succeeded" : "failed",
-				providerPostId: succeeded ? body.provider_post_id : null,
-				error: succeeded ? null : body.error_message,
-				completedAt: now,
-				leaseExpiresAt: now,
-			})
-			.where(
-				and(
-					eq(publishAttempts.postTargetId, targetId),
-					eq(publishAttempts.publishOperationId, body.publish_operation_id),
-					eq(publishAttempts.state, "unknown"),
-				),
-			);
 
 		const targetStates = await tx
 			.select({
@@ -3141,11 +3209,11 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				publishedAt:
 					postStatus === "published" ||
 					(postStatus === "partial" && hasPublishedTarget)
-						? (post.publishedAt ?? now)
+						? (lockedPost.publishedAt ?? now)
 						: postStatus === "failed"
 							? null
-							: post.publishedAt,
-				terminalReason: hasNonterminal ? post.terminalReason : null,
+							: lockedPost.publishedAt,
+				terminalReason: hasNonterminal ? lockedPost.terminalReason : null,
 				revision: sql`${posts.revision} + 1`,
 				updatedAt: now,
 			})
@@ -3154,7 +3222,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 		let threadStatus: "queued" | "completed" | "failed" | "unknown" | null =
 			null;
 		let threadCompleted = false;
-		if (post.threadGroupId) {
+		if (lockedPost.threadGroupId) {
 			const groupPosts = await tx
 				.select({
 					id: posts.id,
@@ -3163,7 +3231,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				.from(posts)
 				.where(
 					and(
-						eq(posts.threadGroupId, post.threadGroupId),
+						eq(posts.threadGroupId, lockedPost.threadGroupId),
 						eq(posts.organizationId, orgId),
 					),
 				);
@@ -3187,7 +3255,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 					.set({ leaseId: null, leaseExpiresAt: null, updatedAt: now })
 					.where(
 						and(
-							eq(threadExecutions.threadGroupId, post.threadGroupId),
+							eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 							eq(threadExecutions.organizationId, orgId),
 							eq(threadExecutions.status, "unknown"),
 							eq(threadExecutions.leaseId, threadLeaseId),
@@ -3196,12 +3264,14 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				threadStatus = "unknown";
 			} else if (postStatus === "failed") {
 				const downstreamIds = groupPosts
-					.filter((item) => (item.position ?? 0) > (post.threadPosition ?? 0))
+					.filter(
+						(item) => (item.position ?? 0) > (lockedPost.threadPosition ?? 0),
+					)
 					.map((item) => item.id);
 				if (downstreamIds.length > 0) {
 					const failure = {
 						code: "THREAD_ANCESTOR_FAILED",
-						message: `Thread position ${post.threadPosition ?? 0} was reconciled as failed`,
+						message: `Thread position ${lockedPost.threadPosition ?? 0} was reconciled as failed`,
 					};
 					await tx
 						.update(posts)
@@ -3237,7 +3307,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 					.update(threadExecutions)
 					.set({
 						status: "failed",
-						failedPosition: post.threadPosition ?? 0,
+						failedPosition: lockedPost.threadPosition ?? 0,
 						failure: {
 							code: "THREAD_ANCESTOR_FAILED",
 							message: "Reconciled provider outcome was failed",
@@ -3248,7 +3318,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 					})
 					.where(
 						and(
-							eq(threadExecutions.threadGroupId, post.threadGroupId),
+							eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 							eq(threadExecutions.organizationId, orgId),
 							eq(threadExecutions.status, "unknown"),
 							eq(threadExecutions.leaseId, threadLeaseId),
@@ -3258,7 +3328,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 			} else {
 				const nextPosition = groupPosts
 					.map((item) => item.position ?? 0)
-					.filter((position) => position > (post.threadPosition ?? 0))
+					.filter((position) => position > (lockedPost.threadPosition ?? 0))
 					.sort((a, b) => a - b)[0];
 				if (nextPosition === undefined) {
 					await tx
@@ -3273,7 +3343,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 						})
 						.where(
 							and(
-								eq(threadExecutions.threadGroupId, post.threadGroupId),
+								eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 								eq(threadExecutions.organizationId, orgId),
 								eq(threadExecutions.status, "unknown"),
 								eq(threadExecutions.leaseId, threadLeaseId),
@@ -3295,7 +3365,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 						})
 						.where(
 							and(
-								eq(threadExecutions.threadGroupId, post.threadGroupId),
+								eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 								eq(threadExecutions.organizationId, orgId),
 								eq(threadExecutions.status, "unknown"),
 								eq(threadExecutions.leaseId, threadLeaseId),
@@ -3306,9 +3376,9 @@ app.openapi(reconcilePublishTarget, async (c) => {
 						.values(
 							publishOutboxRow({
 								organizationId: orgId,
-								threadGroupId: post.threadGroupId,
+								threadGroupId: lockedPost.threadGroupId,
 								threadPosition: nextPosition,
-								operationId: `thread:${post.threadGroupId}:reconcile:${body.publish_operation_id}:${nextPosition}`,
+								operationId: `thread:${lockedPost.threadGroupId}:reconcile:${body.publish_operation_id}:${nextPosition}`,
 							}),
 						)
 						.onConflictDoNothing();
@@ -3337,16 +3407,16 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				),
 			);
 		}
-		if (threadCompleted && post.threadGroupId) {
+		if (threadCompleted && lockedPost.threadGroupId) {
 			persistedEvents.push(
 				await persistWebhookEventInTransaction(
 					tx,
 					orgId,
 					"thread.published",
-					{ thread_group_id: post.threadGroupId },
+					{ thread_group_id: lockedPost.threadGroupId },
 					{
-						workspaceId: post.workspaceId,
-						occurrenceId: `thread:${post.threadGroupId}:published`,
+						workspaceId: lockedPost.workspaceId,
+						occurrenceId: `thread:${lockedPost.threadGroupId}:published`,
 					},
 				),
 			);
@@ -3416,6 +3486,12 @@ app.openapi(bulkCreatePosts, async (c) => {
 	const { posts: postItems } = c.req.valid("json");
 	const db = c.get("db");
 	const wsScope = c.get("workspaceScope");
+	const bulkRelayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		postItems.map(mediaPolicyInput),
+		mediaPublicHost(c.env),
+	);
 
 	// Pre-fetch org accounts once for all items (resolveTargets fetches them each time)
 	const prefetchConditions = [
@@ -3441,6 +3517,15 @@ app.openapi(bulkCreatePosts, async (c) => {
 	const autoScheduledTimes: Date[] = []; // Accumulate auto-scheduled times to avoid collisions within batch
 	for (const item of postItems) {
 		try {
+			const mediaViolation = violationForPostInput(bulkRelayMediaPolicy, item);
+			if (mediaViolation) {
+				results.push({
+					status: "error",
+					error: mediaPolicyError(mediaViolation).error,
+				});
+				failed++;
+				continue;
+			}
 			const targetResolution = await resolveTargets(
 				db,
 				orgId,
@@ -4444,6 +4529,33 @@ app.openapi(bulkCsvUpload, async (c) => {
 			400,
 		);
 	}
+	// Build one request-wide readiness snapshot before the row loop. Invalid JSON
+	// remains a normal per-row validation error; valid nested target options are
+	// included so a Relay URL cannot bypass the media column policy.
+	const csvRelayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		rows.map((row) => {
+			const mediaUrls = (row.media_urls ?? "")
+				.split(";")
+				.map((url) => url.trim())
+				.filter(Boolean)
+				.map((url) => ({ url }));
+			let targetOptions: unknown;
+			try {
+				targetOptions = row.target_options
+					? JSON.parse(row.target_options)
+					: undefined;
+			} catch {
+				targetOptions = undefined;
+			}
+			return mediaPolicyInput({
+				media: mediaUrls,
+				target_options: targetOptions,
+			});
+		}),
+		mediaPublicHost(c.env),
+	);
 
 	// Pre-fetch org accounts once, filtered by workspace scope
 	const csvPrefetchConditions = [eq(socialAccounts.organizationId, orgId)];
@@ -4569,6 +4681,16 @@ app.openapi(bulkCsvUpload, async (c) => {
 			}
 
 			const item = parsed.data;
+			const mediaViolation = violationForPostInput(csvRelayMediaPolicy, item);
+			if (mediaViolation) {
+				results.push({
+					row: rowNum,
+					status: "error",
+					error: mediaPolicyError(mediaViolation).error,
+				});
+				failed++;
+				continue;
+			}
 
 			// Resolve targets
 			const targetResolution = await resolveTargets(

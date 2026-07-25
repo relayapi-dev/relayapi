@@ -10,6 +10,7 @@ import {
 	user,
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
+import { isSelfHosted, selfHostedFeatureEnabled } from "../lib/deployment-mode";
 import { sendEmail } from "../lib/email-queue/producer";
 import { notifyRealtime } from "../lib/notify-post-update";
 import type { Env } from "../types";
@@ -107,7 +108,9 @@ export async function sendNotification(
 		? ((prefRow[column] as ChannelPrefs) ?? DEFAULT_PREFS[type])
 		: DEFAULT_PREFS[type];
 
-	const shouldEmail = prefs.email || ALWAYS_EMAIL.has(type);
+	const shouldEmail =
+		(!isSelfHosted(env) || selfHostedFeatureEnabled(env, "email")) &&
+		(prefs.email || ALWAYS_EMAIL.has(type));
 
 	// Run push insert + email send in parallel
 	const tasks: Promise<unknown>[] = [];
@@ -237,7 +240,9 @@ export async function sendNotificationToOrg(
 			});
 		}
 
-		const shouldEmail = prefs.email || ALWAYS_EMAIL.has(type);
+		const shouldEmail =
+			(!isSelfHosted(env) || selfHostedFeatureEnabled(env, "email")) &&
+			(prefs.email || ALWAYS_EMAIL.has(type));
 		if (shouldEmail) {
 			const userRow = userMap.get(userId);
 			if (userRow?.email) {

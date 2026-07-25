@@ -5,16 +5,19 @@ export function buildLeadCapture(
 	input: TemplateBuildInput,
 ): TemplateBuildOutput {
 	const tagName =
-		typeof input.config?.tag === "string" ? (input.config.tag as string) : "lead";
-	const emailField =
-		typeof input.config?.capture_field === "string"
-			? (input.config.capture_field as string)
-			: "email";
+		typeof input.config?.tag === "string"
+			? (input.config.tag as string)
+			: "lead";
+	const captureField =
+		input.config?.capture_field === "phone" ? "phone" : "email";
+	const capturePrompt =
+		captureField === "phone"
+			? "Welcome! What phone number should we use to reach you?"
+			: "Welcome! What email address should we use to reach you?";
 
 	return {
 		name: "Lead capture",
-		description:
-			"Asks a visitor for their email, tags them as a lead, and confirms.",
+		description: `Asks a visitor for their ${captureField}, tags them as a lead, and confirms.`,
 		graph: autoLayoutGraph({
 			schema_version: 1,
 			root_node_key: "welcome",
@@ -28,7 +31,7 @@ export function buildLeadCapture(
 							{
 								id: "txt_intro",
 								type: "text",
-								text: "Welcome! I'd love to know more about you.",
+								text: capturePrompt,
 							},
 						],
 					},
@@ -37,10 +40,10 @@ export function buildLeadCapture(
 				{
 					key: "ask_email",
 					kind: "input",
-					title: "Capture email",
+					title: `Capture ${captureField}`,
 					config: {
-						field: emailField,
-						input_type: "email",
+						field: captureField,
+						input_type: captureField,
 						max_retries: 2,
 					},
 					ports: [],
@@ -48,7 +51,7 @@ export function buildLeadCapture(
 				{
 					key: "save",
 					kind: "action_group",
-					title: "Tag + save email",
+					title: `Tag + save ${captureField}`,
 					config: {
 						actions: [
 							{
@@ -59,9 +62,9 @@ export function buildLeadCapture(
 							},
 							{
 								id: "act_field",
-								type: "field_set",
-								field: emailField,
-								value: `{{state.${emailField}}}`,
+								type: "contact_field_set",
+								field: captureField,
+								value: `{{state.${captureField}}}`,
 								on_error: "continue",
 							},
 						],
